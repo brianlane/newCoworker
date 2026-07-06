@@ -180,7 +180,7 @@ export function MemoryEditor({
         <p className="text-sm text-amber-200/90 border border-amber-500/40 rounded-lg px-3 py-2 bg-amber-950/30">
           Starter tier: combined Soul + Identity + Memory + Website is large (~{starterBudget.estimatedTotal}{" "}
           estimated tokens vs ~{starterBudget.maxTokens} target). Very long vault text can slow responses on
-          your coworker&apos;s KVM2 instance—consider trimming less-used detail or re-crawling a shorter
+          your coworker&apos;s KVM2 instance; consider trimming less-used detail or re-crawling a shorter
           landing page.
         </p>
       )}

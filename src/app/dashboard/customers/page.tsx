@@ -107,7 +107,7 @@ export default async function DashboardCustomersPage() {
       <div>
         <h1 className="text-2xl font-bold text-parchment">Contacts</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Everyone in one place — customers, your team, the owner, and the people
+          Everyone in one place: customers, your team, the owner, and the people
           and services you work with
         </p>
       </div>

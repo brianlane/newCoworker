@@ -295,30 +295,30 @@ describe("buildDigestEventLinks", () => {
     const events = buildDigestEventLinks(activity);
     expect(events).toEqual([
       {
-        label: "Call — +15551111111 (completed)",
+        label: "Call: +15551111111 (completed)",
         href: "/dashboard/calls",
         at: "2026-06-11T10:00:00Z"
       },
       {
-        label: "Call — unknown caller (missed)",
+        label: "Call: unknown caller (missed)",
         href: "/dashboard/calls",
         at: "2026-06-11T11:00:00Z"
       },
       {
-        label: "AiFlow — ReferralExchange lead (done)",
+        label: "AiFlow: ReferralExchange lead (done)",
         href: "/dashboard/aiflows",
         at: "2026-06-11T12:00:00Z"
       },
       {
-        label: "New customer — Domenico Siciliano (+14695555555)",
+        label: "New customer: Domenico Siciliano (+14695555555)",
         href: "/dashboard/customers/%2B14695555555"
       },
       {
-        label: "New customer — +14805555555",
+        label: "New customer: +14805555555",
         href: "/dashboard/customers/%2B14805555555"
       },
-      { label: "Texts — 2 received, 1 sent", href: "/dashboard/messages" },
-      { label: "Dashboard chat — 3 turns", href: "/dashboard/chat" }
+      { label: "Texts: 2 received, 1 sent", href: "/dashboard/messages" },
+      { label: "Dashboard chat: 3 turns", href: "/dashboard/chat" }
     ]);
   });
 
@@ -329,8 +329,8 @@ describe("buildDigestEventLinks", () => {
       smsOutbound: 4
     });
     expect(events).toEqual([
-      { label: "Texts — 0 received, 4 sent", href: "/dashboard/messages" },
-      { label: "Dashboard chat — 1 turn", href: "/dashboard/chat" }
+      { label: "Texts: 0 received, 4 sent", href: "/dashboard/messages" },
+      { label: "Dashboard chat: 1 turn", href: "/dashboard/chat" }
     ]);
   });
 
@@ -361,12 +361,12 @@ describe("buildDigestEventLinks", () => {
     });
     expect(events).toEqual([
       {
-        label: "Texts with +14695555555 — 2 received, 1 sent",
+        label: "Texts with +14695555555: 2 received, 1 sent",
         href: "/dashboard/messages/%2B14695555555",
         at: "2026-06-11T12:00:00Z"
       },
       {
-        label: "Texts with 73339 — 1 received, 1 sent",
+        label: "Texts with 73339: 1 received, 1 sent",
         href: "/dashboard/messages/73339",
         at: "2026-06-11T09:00:00Z"
       }
@@ -380,7 +380,7 @@ describe("buildDigestEventLinks", () => {
       smsOutbound: 0,
       smsThreads: []
     });
-    expect(events).toEqual([{ label: "Texts — 1 received, 0 sent", href: "/dashboard/messages" }]);
+    expect(events).toEqual([{ label: "Texts: 1 received, 0 sent", href: "/dashboard/messages" }]);
   });
 
   it("adds an index roll-up alongside per-thread links when some texts are unparsed", () => {
@@ -395,11 +395,11 @@ describe("buildDigestEventLinks", () => {
     });
     expect(events).toEqual([
       {
-        label: "Texts with +14695555555 — 2 received, 1 sent",
+        label: "Texts with +14695555555: 2 received, 1 sent",
         href: "/dashboard/messages/%2B14695555555",
         at: "2026-06-11T12:00:00Z"
       },
-      { label: "Texts — 3 received, 1 sent", href: "/dashboard/messages" }
+      { label: "Texts: 3 received, 1 sent", href: "/dashboard/messages" }
     ]);
   });
 
@@ -421,8 +421,8 @@ describe("buildDigestEventLinks", () => {
     });
     expect(events).toHaveLength(DIGEST_EVENT_LINKS_MAX);
     // Even buried behind 35 calls, the texts and chat are guaranteed a slot.
-    expect(events.at(-1)).toEqual({ label: "Dashboard chat — 2 turns", href: "/dashboard/chat" });
-    expect(events.at(-2)).toEqual({ label: "Texts — 4 received, 0 sent", href: "/dashboard/messages" });
+    expect(events.at(-1)).toEqual({ label: "Dashboard chat: 2 turns", href: "/dashboard/chat" });
+    expect(events.at(-2)).toEqual({ label: "Texts: 4 received, 0 sent", href: "/dashboard/messages" });
   });
 
   it("reserves chat from the cap even when there are no texts", () => {
@@ -433,7 +433,7 @@ describe("buildDigestEventLinks", () => {
     }));
     const events = buildDigestEventLinks({ ...emptyActivity(), chatTurns: 1, calls });
     expect(events).toHaveLength(DIGEST_EVENT_LINKS_MAX);
-    expect(events.at(-1)).toEqual({ label: "Dashboard chat — 1 turn", href: "/dashboard/chat" });
+    expect(events.at(-1)).toEqual({ label: "Dashboard chat: 1 turn", href: "/dashboard/chat" });
   });
 });
 

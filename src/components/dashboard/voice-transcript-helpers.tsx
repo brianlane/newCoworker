@@ -64,7 +64,7 @@ export function formatDuration(startIso: string, endIso: string | null): string 
   if (!endIso) return "in progress";
   const start = Date.parse(startIso);
   const end = Date.parse(endIso);
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "—";
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "–";
   const seconds = Math.round((end - start) / 1000);
   if (seconds < 60) return `${seconds}s`;
   const minutes = Math.floor(seconds / 60);

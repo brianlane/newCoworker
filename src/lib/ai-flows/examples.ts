@@ -42,7 +42,7 @@ const DEFAULT_COPY: AiFlowExampleCopy = {
   tipVar: "contact_phone",
   pinExample: "all new leads to one team member",
   whenValuePlaceholder: "urgent",
-  emailSubjectExample: "{{vars.lead_name}} — new inquiry"
+  emailSubjectExample: "{{vars.lead_name}}: new inquiry"
 };
 
 /**

@@ -240,7 +240,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Dedicated Private Server",
         description:
-          "Every business runs on its own server. Conversations and business knowledge stay on your infrastructure.",
+          "Every business runs on a private server dedicated to it alone, so conversations and business knowledge are never pooled with other companies.",
         Icon: Server
       },
       {

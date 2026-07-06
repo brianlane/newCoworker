@@ -67,7 +67,7 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-parchment">
-            {filteredFlow ? `${filteredFlow.name} — runs` : "AiFlow runs"}
+            {filteredFlow ? `${filteredFlow.name}: runs` : "AiFlow runs"}
           </h1>
           <p className="mt-1 text-sm text-parchment/50">
             {filteredFlow

@@ -143,7 +143,7 @@ function alertLabel(row: ActivityAlertRow): string {
     payloadString(row.log_payload, "reason") ??
     payloadString(row.log_payload, "callerName") ??
     row.task_type.replace(/_/g, " ");
-  return `Urgent — ${detail}`;
+  return `Urgent: ${detail}`;
 }
 
 /**
@@ -163,7 +163,7 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
     items.push({
       id: `call:${i}:${c.started_at}`,
       kind: "call",
-      label: `Call — ${c.caller_e164 ? named(c.caller_e164) : "unknown caller"} (${c.status})`,
+      label: `Call: ${c.caller_e164 ? named(c.caller_e164) : "unknown caller"} (${c.status})`,
       href: "/dashboard/calls",
       at: c.started_at
     });
@@ -210,7 +210,7 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
   input.emails.forEach((r, i) => {
     const inbound = r.direction === "inbound";
     const who = (inbound ? r.from_email : r.to_email) ?? "unknown address";
-    const subject = r.subject?.trim() ? ` — “${r.subject.trim()}”` : "";
+    const subject = r.subject?.trim() ? `: “${r.subject.trim()}”` : "";
     items.push({
       id: `email:${i}:${r.created_at}`,
       kind: inbound ? "email_inbound" : "email_outbound",
@@ -234,7 +234,7 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
     items.push({
       id: `aiflow:${i}:${r.created_at}`,
       kind: "aiflow",
-      label: `AiFlow — ${flowName(r.ai_flows)} (${r.status})`,
+      label: `AiFlow: ${flowName(r.ai_flows)} (${r.status})`,
       // Deep-link to this exact run on the flow's runs page so clicking a
       // failed run opens its steps/error (and screenshots), not the flow list.
       href: `/dashboard/aiflows/runs?flowId=${encodeURIComponent(r.flow_id)}&run=${encodeURIComponent(r.id)}`,
@@ -251,7 +251,7 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
     items.push({
       id: `customer:${i}:${r.created_at}`,
       kind: "customer",
-      label: `New customer — ${who}`,
+      label: `New customer: ${who}`,
       href: `/dashboard/customers/${encodeURIComponent(r.customer_e164)}`,
       at: r.created_at
     });

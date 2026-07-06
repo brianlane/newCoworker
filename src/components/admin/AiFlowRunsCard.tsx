@@ -95,7 +95,7 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
                 )}
                 {run.status === "queued" && run.earliest_claim_at && (
                   <p className="text-xs text-parchment/50">
-                    Quiet hours — resumes at{" "}
+                    Quiet hours; resumes at{" "}
                     <LocalTime iso={run.earliest_claim_at} className="text-parchment/70" />
                   </p>
                 )}
@@ -112,7 +112,7 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
                     <span className="font-mono text-parchment/70">
                       step {s.step_index} ({s.step_type})
                     </span>
-                    {s.error ? ` — ${s.error}` : " failed"}
+                    {s.error ? `: ${s.error}` : " failed"}
                   </p>
                 ))}
                 {steps && steps.length > 0 && (

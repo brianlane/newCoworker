@@ -111,7 +111,7 @@ function RecipientsRow({
       </span>
       <span className="text-sm text-parchment break-all">
         {parts.length === 0
-          ? "—"
+          ? "–"
           : parts.map((part, i) => {
               const addr = extractEmailAddress(part);
               const contact = addr ? emailContacts[addr] : undefined;
@@ -281,7 +281,7 @@ function ReadingPane({
         </div>
         {state.status === "error" && (
           <p className="mt-1 text-[10px] text-spark-orange/80">
-            Couldn&apos;t load the full message — showing the stored preview.
+            Couldn&apos;t load the full message; showing the stored preview.
           </p>
         )}
         {state.status === "loaded" && !hasFullBody && (
@@ -552,7 +552,7 @@ export function EmailsList({
                       {r.direction === "inbound"
                         ? `From ${r.from_email ?? "unknown"}`
                         : `To ${r.to_email ?? "unknown"}`}
-                      {r.body_preview ? ` — ${r.body_preview}` : ""}
+                      {r.body_preview ? `: ${r.body_preview}` : ""}
                     </p>
                     {!selected && (r.cc_email || r.bcc_email) && (
                       <p className="text-[10px] text-parchment/40 mt-0.5 truncate">

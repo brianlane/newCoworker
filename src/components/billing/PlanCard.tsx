@@ -60,7 +60,7 @@ export type PlanCardProps = {
 };
 
 function formatDate(iso: string | null | undefined): string {
-  if (!iso) return "—";
+  if (!iso) return "–";
   try {
     return new Date(iso).toLocaleDateString(undefined, {
       year: "numeric",
@@ -73,14 +73,14 @@ function formatDate(iso: string | null | undefined): string {
 }
 
 function tierLabel(tier: PlanTier | null): string {
-  if (!tier) return "—";
+  if (!tier) return "–";
   if (tier === "starter") return "Starter";
   if (tier === "standard") return "Standard";
   return "Enterprise";
 }
 
 function periodLabel(p: BillingPeriod | null): string {
-  if (!p) return "—";
+  if (!p) return "–";
   if (p === "monthly") return "Monthly";
   if (p === "annual") return "12 months";
   return "24 months";
@@ -357,7 +357,7 @@ export function PlanCard(props: PlanCardProps) {
             {contractAutoRenew ? (
               <>
                 On {formatDate(renewalAt)} your plan renews for another {termMonthsLabel} at the
-                contract rate of <span className="font-mono">{contractRate}</span> —{" "}
+                contract rate of <span className="font-mono">{contractRate}</span>;{" "}
                 <span className="font-mono">{contractTotal}</span> billed upfront.
               </>
             ) : (
@@ -383,7 +383,7 @@ export function PlanCard(props: PlanCardProps) {
           <p className="text-xs text-parchment/50">
             Your original {termMonthsLabel} term has ended, so you&apos;re billed month-to-month at{" "}
             <span className="font-mono">{rolloverRate}</span>. Start a new {termMonthsLabel}{" "}
-            contract to get back to <span className="font-mono">{contractRate}</span> —{" "}
+            contract to get back to <span className="font-mono">{contractRate}</span>;{" "}
             <span className="font-mono">{contractTotal}</span> billed today.
           </p>
           <Button

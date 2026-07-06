@@ -134,18 +134,18 @@ describe("notifications/display", () => {
           kind: "digest",
           payload: {
             events: [
-              { label: "Call — +15551111111 (completed)", href: "/dashboard/calls", at: "2026-06-11T10:00:00Z" },
-              { label: " Texts — 2 received, 1 sent ", href: "/dashboard/messages" }
+              { label: "Call: +15551111111 (completed)", href: "/dashboard/calls", at: "2026-06-11T10:00:00Z" },
+              { label: " Texts: 2 received, 1 sent ", href: "/dashboard/messages" }
             ]
           }
         })
       ).toEqual([
         {
-          label: "Call — +15551111111 (completed)",
+          label: "Call: +15551111111 (completed)",
           href: "/dashboard/calls",
           at: "2026-06-11T10:00:00Z"
         },
-        { label: "Texts — 2 received, 1 sent", href: "/dashboard/messages" }
+        { label: "Texts: 2 received, 1 sent", href: "/dashboard/messages" }
       ]);
     });
 
@@ -198,18 +198,18 @@ describe("notifications/display", () => {
 
   describe("applyContactNamesToEventLinks", () => {
     const events = [
-      { label: "Texts with +15550001111 — 0 received, 10 sent", href: "/dashboard/messages/%2B15550001111" },
-      { label: "New customer — Mike Haas (+15550001111)", href: "/dashboard/customers/%2B15550001111" },
-      { label: "Call — +15550009999 (completed)", href: "/dashboard/calls" }
+      { label: "Texts with +15550001111: 0 received, 10 sent", href: "/dashboard/messages/%2B15550001111" },
+      { label: "New customer: Mike Haas (+15550001111)", href: "/dashboard/customers/%2B15550001111" },
+      { label: "Call: +15550009999 (completed)", href: "/dashboard/calls" }
     ];
 
     it("substitutes known names into text-thread labels only", () => {
       const names = new Map([["+15550001111", "Mike Haas"]]);
       expect(applyContactNamesToEventLinks(events, names)).toEqual([
-        { label: "Texts with Mike Haas — 0 received, 10 sent", href: "/dashboard/messages/%2B15550001111" },
+        { label: "Texts with Mike Haas: 0 received, 10 sent", href: "/dashboard/messages/%2B15550001111" },
         // Customer + call events are left untouched (already named / no thread link).
-        { label: "New customer — Mike Haas (+15550001111)", href: "/dashboard/customers/%2B15550001111" },
-        { label: "Call — +15550009999 (completed)", href: "/dashboard/calls" }
+        { label: "New customer: Mike Haas (+15550001111)", href: "/dashboard/customers/%2B15550001111" },
+        { label: "Call: +15550009999 (completed)", href: "/dashboard/calls" }
       ]);
     });
 

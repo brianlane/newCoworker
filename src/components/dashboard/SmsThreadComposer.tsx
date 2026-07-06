@@ -49,12 +49,12 @@ export function SmsThreadComposer({ businessId, toE164, rcsEnabled = false }: Pr
       // Sent but not saved to history (e.g. owner_manual migration not applied
       // yet): a refresh wouldn't show it, so warn instead of silently dropping.
       if (json.data?.logged === false) {
-        setError("Sent, but it couldn't be saved to history yet — it may not appear above.");
+        setError("Sent, but it couldn't be saved to history yet; it may not appear above.");
         return;
       }
       router.refresh();
     } catch {
-      setError("Network error — please try again.");
+      setError("Network error; please try again.");
     } finally {
       setBusy(false);
     }

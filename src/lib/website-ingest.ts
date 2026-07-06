@@ -177,13 +177,13 @@ export interface WebsiteIngestOptions {
  */
 export function humanizeFetchError(message: string): string {
   if (message === "status_403" || message === "status_401") {
-    return "Your site blocked our crawler (HTTP 403/401). This usually means a CDN like Cloudflare has bot protection enabled — open your homepage, right-click → View Page Source, copy everything, and paste it below so we can summarize it for you.";
+    return "Your site blocked our crawler (HTTP 403/401). This usually means a CDN like Cloudflare has bot protection enabled. Open your homepage, right-click → View Page Source, copy everything, and paste it below so we can summarize it for you.";
   }
   if (message === "status_429") {
     return "Your site rate-limited our crawler (HTTP 429). Wait a minute and click Re-crawl, or paste a manual summary below.";
   }
   if (message.startsWith("status_5")) {
-    return `Your site returned a server error (HTTP ${message.slice(7)}). It may be temporarily down — try again later, or paste a manual summary below.`;
+    return `Your site returned a server error (HTTP ${message.slice(7)}). It may be temporarily down. Try again later, or paste a manual summary below.`;
   }
   if (message.startsWith("status_")) {
     return `Your site returned HTTP ${message.slice(7)}. Verify the URL or paste a manual summary below.`;

@@ -134,7 +134,7 @@ export function ZapierApiKeysCard({ businessId, initialKeys, activeHooks }: Prop
           <h3 className="text-sm font-semibold text-parchment">Zapier &amp; API access</h3>
           <p className="text-xs text-parchment/50 mt-1">
             Create an API key and paste it into Zapier to connect your coworker
-            to 7,000+ apps — trigger Zaps on new texts, calls, and emails, or
+            to 7,000+ apps: trigger Zaps on new texts, calls, and emails, or
             send texts from other tools.
           </p>
         </div>
@@ -143,7 +143,7 @@ export function ZapierApiKeysCard({ businessId, initialKeys, activeHooks }: Prop
       {freshKey ? (
         <div className="mt-3 rounded-md border border-signal-teal/40 bg-signal-teal/5 p-3 space-y-2">
           <p className="text-xs text-parchment/80">
-            Your new key <span className="font-medium">{freshKey.name}</span> — copy it
+            Your new key <span className="font-medium">{freshKey.name}</span> is ready; copy it
             now, it won&apos;t be shown again:
           </p>
           <div className="flex items-center gap-2">

@@ -106,7 +106,7 @@ export function CancelSheet({
               </>
             ) : (
               <>
-                Choose how to stop your subscription. These are the only two options —
+                Choose how to stop your subscription. These are the only two options;
                 prorated refunds are not offered.
               </>
             )}
@@ -119,7 +119,7 @@ export function CancelSheet({
             <p className="text-xs text-parchment/60">
               We refund your last charge (excluding the one-time carrier registration fee),
               shut down your VPS immediately, and keep your data for 30 days so you can
-              reactivate without losing anything. This is your one-time lifetime refund —
+              reactivate without losing anything. This is your one-time lifetime refund;
               it can only be used once.
             </p>
             <Button

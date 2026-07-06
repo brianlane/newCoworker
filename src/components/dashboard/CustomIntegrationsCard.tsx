@@ -430,7 +430,7 @@ export function CustomIntegrationsCard({ businessId, initialIntegrations }: Prop
             Custom integrations
           </h3>
           <p className="text-xs text-parchment/50 mt-1">
-            Connect the apps and services your coworker should use — CRMs,
+            Connect the apps and services your coworker should use: CRMs,
             scheduling tools, order systems, anything with an API. Your
             sign-in details are stored encrypted and never sent to the AI.
           </p>
@@ -746,7 +746,7 @@ export function CustomIntegrationsCard({ businessId, initialIntegrations }: Prop
                 setForm((f) => ({ ...f, isActive: e.target.checked }))
               }
             />
-            Active — your coworker can call this service
+            Active; your coworker can call this service
           </label>
 
           {error ? (

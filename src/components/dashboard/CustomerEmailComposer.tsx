@@ -76,7 +76,7 @@ export function CustomerEmailComposer({ businessId, customerE164, email }: Props
   return (
     <div className="space-y-3 border-t border-parchment/10 pt-3">
       <p className="text-[11px] text-parchment/50">
-        To <span className="font-mono text-parchment/70">{email}</span> — sent
+        To <span className="font-mono text-parchment/70">{email}</span>, sent
         from your connected mailbox.
       </p>
       {error && <p className="text-xs text-red-300">{error}</p>}

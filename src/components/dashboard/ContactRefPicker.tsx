@@ -81,7 +81,7 @@ export function ContactRefPicker({
             <optgroup label="Employees">
               {employees.map((p) => (
                 <option key={`${p.source}:${p.id}`} value={`${p.source}:${p.id}`}>
-                  {p.name} — {p.phone}
+                  {p.name}: {p.phone}
                 </option>
               ))}
             </optgroup>
@@ -90,7 +90,7 @@ export function ContactRefPicker({
             <optgroup label="Contacts">
               {contacts.map((p) => (
                 <option key={`${p.source}:${p.id}`} value={`${p.source}:${p.id}`}>
-                  {p.name} — {p.phone}
+                  {p.name}: {p.phone}
                 </option>
               ))}
             </optgroup>

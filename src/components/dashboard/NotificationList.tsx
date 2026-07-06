@@ -41,29 +41,29 @@ function describeReason(payload: Record<string, unknown>): string | null {
   if (typeof reason !== "string" || reason.length === 0) return null;
   switch (reason) {
     case "unsubscribed":
-      return "Skipped — you've unsubscribed from all alerts";
+      return "Skipped: you've unsubscribed from all alerts";
     case "no_email":
-      return "Skipped — no email on file";
+      return "Skipped: no email on file";
     case "no_phone":
-      return "Skipped — no phone on file";
+      return "Skipped: no phone on file";
     case "email_urgent_disabled":
-      return "Skipped — urgent email disabled";
+      return "Skipped: urgent email disabled";
     case "sms_urgent_disabled":
-      return "Skipped — urgent SMS disabled";
+      return "Skipped: urgent SMS disabled";
     case "email_digest_disabled":
-      return "Skipped — daily digest disabled";
+      return "Skipped: daily digest disabled";
     case "email_digest_weekly_disabled":
-      return "Skipped — weekly digest disabled";
+      return "Skipped: weekly digest disabled";
     case "dashboard_alerts_disabled":
-      return "Skipped — dashboard alerts disabled";
+      return "Skipped: dashboard alerts disabled";
     case "no_activity":
-      return "Skipped — no activity in this digest window";
+      return "Skipped: no activity in this digest window";
     case "resend_unconfigured":
-      return "Skipped — email service not configured";
+      return "Skipped: email service not configured";
     case "telnyx_unconfigured":
-      return "Skipped — SMS service not configured";
+      return "Skipped: SMS service not configured";
     default:
-      return `Skipped — ${reason}`;
+      return `Skipped: ${reason}`;
   }
 }
 

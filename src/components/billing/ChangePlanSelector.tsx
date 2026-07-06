@@ -196,7 +196,7 @@ export function ChangePlanSelector({
               : ""}.
             Your current plan will be canceled immediately with no proration or refund.{" "}
             {selectedTier === currentTier
-              ? "Since your tier isn't changing, your workspace stays exactly where it is — only your billing changes."
+              ? "Since your tier isn't changing, your workspace stays exactly where it is; only your billing changes."
               : "We'll migrate your workspace data to a fresh VPS at the new tier."}
           </p>
           <div className="flex items-center gap-3">

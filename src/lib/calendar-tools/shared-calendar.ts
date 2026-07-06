@@ -301,7 +301,7 @@ export async function mirrorTimeOffEvent(
     if (!shared) return null;
     const { calendarId, conn } = shared;
     const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
-    const summary = `${memberName} — out of office`;
+    const summary = `${memberName}: out of office`;
     const endExclusive = nextDayIsoDate(endsOn);
 
     if (conn.provider === "google") {

@@ -240,7 +240,7 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
                   {n.region_information
                     ?.map((r) => r.region_name)
                     .filter(Boolean)
-                    .join(", ") || "—"}
+                    .join(", ") || "–"}
                   {n.cost_information?.monthly_cost
                     ? ` · $${n.cost_information.monthly_cost}/mo`
                     : ""}

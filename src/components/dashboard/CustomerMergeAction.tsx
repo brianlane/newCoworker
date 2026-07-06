@@ -36,7 +36,7 @@ export function CustomerMergeAction(props: Props) {
       ? `${selected.displayName} (${selected.customerE164})`
       : selected.customerE164;
     const ok = window.confirm(
-      `Merge this customer into ${targetLabel}?\n\nNotes, summary, and interaction counts are combined onto ${targetLabel}, and ${props.customerE164} becomes an alias of that profile — future texts or calls from it update the merged profile. This cannot be undone.`
+      `Merge this customer into ${targetLabel}?\n\nNotes, summary, and interaction counts are combined onto ${targetLabel}, and ${props.customerE164} becomes an alias of that profile; future texts or calls from it update the merged profile. This cannot be undone.`
     );
     if (!ok) return;
     setMerging(true);
@@ -100,7 +100,7 @@ export function CustomerMergeAction(props: Props) {
             {props.candidates.map((c) => (
               <option key={c.customerE164} value={c.customerE164}>
                 {c.displayName
-                  ? `${c.displayName} — ${c.customerE164}`
+                  ? `${c.displayName}: ${c.customerE164}`
                   : c.customerE164}
               </option>
             ))}

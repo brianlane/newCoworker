@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
@@ -68,7 +69,7 @@ const comparisonRows: ComparisonRow[] = [
   { label: "Lossless permanent memory", starter: CHECK, standard: CHECK, enterprise: CHECK },
   { label: "Bring your own number (port-in)", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "RCS branded messaging", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Zapier (8,000+ apps), API & webhooks", starter: DASH, standard: CHECK, enterprise: CHECK },
+  { label: "Zapier (8,000+ apps) & developer API", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Texts during calls & missed-call auto-text", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Scheduled texts & message templates", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "AI call summaries & caller sentiment", starter: DASH, standard: CHECK, enterprise: CHECK },
@@ -168,10 +169,14 @@ function buildPricingFaq(): FaqItem[] {
       question: "What does white-glove onboarding include?",
       answer: (
         <>
-          Two one-time packages: <b>White-glove setup ($750)</b> covers guided setup, number
-          porting, and a live 1:1 training call; <b>White-glove buildout ($2,000)</b> adds
-          everything in setup plus a full custom AiFlow buildout. Both include 30 days of priority call and
-          video support. Add either from your Billing page after signup.
+          Two one-time packages: <b>White-glove setup</b> covers guided setup, number porting,
+          and a live 1:1 training call; <b>White-glove buildout</b> adds everything in setup
+          plus a full custom AiFlow buildout. Both include 30 days of priority call and video
+          support.{" "}
+          <Link href="/contact?topic=white-glove" className="text-signal-teal hover:underline">
+            Tell us you&apos;re interested
+          </Link>{" "}
+          and a specialist will reach out.
         </>
       )
     }

@@ -62,7 +62,7 @@ export async function listSendFromOptions(
   const localPart = mailbox?.local_part ?? businessId.toLowerCase();
   const coworkerAddress = tenantMailboxAddress(localPart);
   const options: SendFromOption[] = [
-    { id: "", label: `AI coworker — ${coworkerAddress}`, email: coworkerAddress }
+    { id: "", label: `AI coworker: ${coworkerAddress}`, email: coworkerAddress }
   ];
 
   const conns = await listWorkspaceOAuthConnections(businessId);
@@ -71,7 +71,7 @@ export async function listSendFromOptions(
     const email = connectionEmail(c.metadata);
     options.push({
       id: c.id,
-      label: email ? `${providerLabel(c.provider_config_key)} — ${email}` : providerLabel(c.provider_config_key),
+      label: email ? `${providerLabel(c.provider_config_key)}: ${email}` : providerLabel(c.provider_config_key),
       email
     });
   }

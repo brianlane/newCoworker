@@ -47,7 +47,7 @@ export async function POST(request: Request, { params }: Ctx) {
     if (flow.definition?.trigger?.channel === "voice") {
       return errorResponse(
         "VALIDATION_ERROR",
-        "Voice flows run when a call comes in — place a call from the trigger number to test."
+        "Voice flows run when a call comes in; place a call from the trigger number to test."
       );
     }
 

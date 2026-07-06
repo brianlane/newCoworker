@@ -46,7 +46,7 @@ export function SortControl({
       <button
         type="button"
         onClick={() => onChange(field, dir === "asc" ? "desc" : "asc")}
-        title={dir === "asc" ? "Ascending — click for descending" : "Descending — click for ascending"}
+        title={dir === "asc" ? "Ascending; click for descending" : "Descending; click for ascending"}
         aria-label={`Sort by ${current?.label ?? field}, ${dir === "asc" ? "ascending" : "descending"}`}
         className="rounded-md border border-parchment/15 p-1 text-parchment/70 hover:bg-parchment/5 hover:text-parchment transition-colors"
       >

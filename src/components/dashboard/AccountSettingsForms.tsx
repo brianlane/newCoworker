@@ -138,7 +138,7 @@ export function AccountSettingsForms({
       setNewEmail("");
       setEmailStatus({
         kind: "success",
-        message: `Almost done — we sent a confirmation link to ${trimmed}. Click it to finish the change. Your current email stays active until then.`
+        message: `Almost done. We sent a confirmation link to ${trimmed}. Click it to finish the change. Your current email stays active until then.`
       });
     } catch {
       setEmailStatus({ kind: "error", message: "Network error. Please try again." });

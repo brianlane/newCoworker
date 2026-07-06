@@ -138,7 +138,7 @@ export default async function AdminDashboardPage() {
         {/* Signup sparkline */}
         <Card className="lg:col-span-2">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
-            New Signups — Last 6 Months
+            New Signups: Last 6 Months
           </h2>
           <div className="flex items-end gap-2 h-28">
             {sparkMonths.map((m) => (
@@ -220,13 +220,13 @@ export default async function AdminDashboardPage() {
       <Card>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
-            System Errors — All Clients
+            System Errors: All Clients
           </h2>
           {systemErrors.length > 0 && <Badge variant="error">{systemErrors.length}</Badge>}
         </div>
         {systemErrors.length === 0 ? (
           <p className="text-sm text-parchment/40 text-center py-4">
-            No system errors — all clear.
+            No system errors; all clear.
           </p>
         ) : (
           <ul className="divide-y divide-parchment/8">
@@ -264,7 +264,7 @@ export default async function AdminDashboardPage() {
       <Card>
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
-            VPS Inventory — Reuse Pool
+            VPS Inventory: Reuse Pool
           </h2>
           {vpsInventory.filter((v) => v.state === "available").length > 0 && (
             <Badge variant="success">
@@ -274,7 +274,7 @@ export default async function AdminDashboardPage() {
         </div>
         {vpsInventory.length === 0 ? (
           <p className="text-sm text-parchment/40 text-center py-4">
-            No boxes tracked — every provision purchases new.
+            No boxes tracked; every provision purchases new.
           </p>
         ) : (
           <ul className="divide-y divide-parchment/8">
@@ -322,7 +322,7 @@ export default async function AdminDashboardPage() {
             )}
           </div>
           {alerts.length === 0 ? (
-            <p className="text-sm text-parchment/40 text-center py-4">No alerts — all clear.</p>
+            <p className="text-sm text-parchment/40 text-center py-4">No alerts; all clear.</p>
           ) : (
             <ul className="divide-y divide-parchment/8">
               {alerts.map((log) => (

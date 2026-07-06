@@ -197,7 +197,7 @@ export async function activatePortedNumber(
           },
           emailBody:
             `Your number ${formatDid(row.phone_e164)} finished porting, and we're completing the final connection to your AI coworker. ` +
-            `No action is needed from you — our team has been notified and calls/texts will be live shortly.`
+            `No action is needed from you. Our team has been notified and calls/texts will be live shortly.`
         });
       } catch (err) {
         logger.warn("byon: activation-failure notification failed", {

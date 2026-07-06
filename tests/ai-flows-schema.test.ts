@@ -574,7 +574,7 @@ describe("route_to_team step", () => {
 
   it("allows {{agent.name}}/{{agent.phone}} only inside route_to_team", () => {
     const bad = JSON.parse(JSON.stringify(routedInput));
-    // notify_owner cannot reference an agent — no agent in scope there.
+    // notify_owner cannot reference an agent; no agent in scope there.
     bad.steps.push({ id: "n", type: "notify_owner", message: "by {{agent.name}}" });
     const def = aiFlowDefinitionSchema.parse(bad);
     expect(
@@ -1100,7 +1100,7 @@ describe("Clever engine: send_sms replyToGroup", () => {
     const def = baseDef();
     def.steps = [{ id: "g", type: "send_sms", body: "hi" }] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toEqual([
-      'Step "g" sends a text but has no recipient — set "to", "toAgentName", "toRef", or turn on replyToGroup.'
+      'Step "g" sends a text but has no recipient; set "to", "toAgentName", "toRef", or turn on replyToGroup.'
     ]);
   });
 
@@ -1139,7 +1139,7 @@ describe("Clever engine: send_sms toAgentName", () => {
       { id: "g", type: "send_sms", to: "{{vars.x}}", toAgentName: "Dave", body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "g" sets more than one recipient — use only one of "to", "toAgentName", "toRef", or replyToGroup.'
+      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toRef", or replyToGroup.'
     );
   });
 
@@ -1200,7 +1200,7 @@ describe("Dynamic contact refs: send_sms toRef", () => {
       { id: "g", type: "send_sms", to: "{{vars.x}}", toRef: contactRef, body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "g" sets more than one recipient — use only one of "to", "toAgentName", "toRef", or replyToGroup.'
+      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toRef", or replyToGroup.'
     );
   });
 
@@ -1274,7 +1274,7 @@ describe("Dynamic contact refs: route_to_team agentRef", () => {
       routedWith({ agentName: "Dave", agentRef: employeeRef })
     );
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "r" pins to both agentName and agentRef — use only one.'
+      'Step "r" pins to both agentName and agentRef; use only one.'
     );
   });
 
@@ -1285,7 +1285,7 @@ describe("Dynamic contact refs: route_to_team agentRef", () => {
       })
     );
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "r" routes to a contact, but route_to_team can only pin a team member — use an employee reference.'
+      'Step "r" routes to a contact, but route_to_team can only pin a team member; use an employee reference.'
     );
   });
 });
@@ -1330,7 +1330,7 @@ describe("Clever weekly update: browse_action forEachLink", () => {
     ] as AiFlowDefinition["steps"];
     const issues = validateDefinitionSemantics(def);
     expect(issues).toContain(
-      'Step "loop" can\'t combine forEachLink with fields — extraction has no single page in a loop.'
+      'Step "loop" can\'t combine forEachLink with fields; extraction has no single page in a loop.'
     );
     expect(issues).toContain('Step "loop" can\'t combine forEachLink with screenshot.');
     expect(issues).toContain('Step "loop" can\'t combine forEachLink with rememberUrlKeyedByVar.');
@@ -1456,7 +1456,7 @@ describe("Clever auto-update: recall_url + rememberUrlKeyedByVar", () => {
       steps: [{ id: "r", type: "recall_url", saveAs: "connection_url" }]
     };
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "r" recalls a URL but has no key source — set keyFromTrigger or keyVars.'
+      'Step "r" recalls a URL but has no key source; set keyFromTrigger or keyVars.'
     );
   });
 
@@ -1631,7 +1631,7 @@ describe("voice trigger + voice steps", () => {
         steps: [{ id: "r", type: "ring_handoff" }]
       });
       expect(validateDefinitionSemantics(def)).toContain(
-        'Step "r" has no number to ring — set toE164 or pick a saved contact (toRef).'
+        'Step "r" has no number to ring; set toE164 or pick a saved contact (toRef).'
       );
     });
 
@@ -1642,7 +1642,7 @@ describe("voice trigger + voice steps", () => {
         steps: [{ id: "t", type: "voice_transfer", toE164: "+16026951142", toRef: empRef }]
       });
       expect(validateDefinitionSemantics(def)).toContain(
-        'Step "t" sets both toE164 and toRef — use only one.'
+        'Step "t" sets both toE164 and toRef; use only one.'
       );
     });
 
@@ -1656,7 +1656,7 @@ describe("voice trigger + voice steps", () => {
         ]
       });
       expect(validateDefinitionSemantics(neither)).toContain(
-        'Step "ai" has nowhere to send the call summary — set notifyE164 or pick a saved contact (notifyRef).'
+        'Step "ai" has nowhere to send the call summary; set notifyE164 or pick a saved contact (notifyRef).'
       );
       const both = aiFlowDefinitionSchema.parse({
         version: 1,
@@ -1667,7 +1667,7 @@ describe("voice trigger + voice steps", () => {
         ]
       });
       expect(validateDefinitionSemantics(both)).toContain(
-        'Step "ai" sets both notifyE164 and notifyRef — use only one.'
+        'Step "ai" sets both notifyE164 and notifyRef; use only one.'
       );
     });
 
@@ -1686,7 +1686,7 @@ describe("voice trigger + voice steps", () => {
         steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
       });
       expect(validateDefinitionSemantics(both)).toContain(
-        "The trigger sets both fromE164 and fromRef — use only one."
+        "The trigger sets both fromE164 and fromRef; use only one."
       );
     });
 
@@ -1706,7 +1706,7 @@ describe("voice trigger + voice steps", () => {
         steps: [{ id: "n", type: "notify_owner", message: "hi" }]
       });
       expect(validateDefinitionSemantics(neither)).toContain(
-        'A "from matches" condition needs a sender — enter text or pick a saved contact.'
+        'A "from matches" condition needs a sender; enter text or pick a saved contact.'
       );
       const both = aiFlowDefinitionSchema.parse({
         version: 1,
@@ -1717,7 +1717,7 @@ describe("voice trigger + voice steps", () => {
         steps: [{ id: "n", type: "notify_owner", message: "hi" }]
       });
       expect(validateDefinitionSemantics(both)).toContain(
-        'A "from matches" condition sets both a text value and a saved contact — use only one.'
+        'A "from matches" condition sets both a text value and a saved contact; use only one.'
       );
     });
 
@@ -1736,7 +1736,7 @@ describe("voice trigger + voice steps", () => {
         ]
       });
       expect(validateDefinitionSemantics(both)).toContain(
-        'Step "c" sets both toE164 and toRef — use only one.'
+        'Step "c" sets both toE164 and toRef; use only one.'
       );
       const neither = parseAiFlowDefinition({
         version: 1,
@@ -1767,7 +1767,7 @@ describe("voice trigger + voice steps", () => {
       steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
     });
     expect(validateDefinitionSemantics(parsed)).toContain(
-      'Step "r" is a voice step ("ring_handoff") but the trigger is "sms" — voice steps need a voice trigger.'
+      'Step "r" is a voice step ("ring_handoff") but the trigger is "sms"; voice steps need a voice trigger.'
     );
   });
 
@@ -1782,7 +1782,7 @@ describe("voice trigger + voice steps", () => {
       ]
     });
     expect(validateDefinitionSemantics(parsed)).toContain(
-      "voice_ai_intake must be the last step — it only takes over after every ring_handoff missed."
+      "voice_ai_intake must be the last step; it only takes over after every ring_handoff missed."
     );
   });
 
@@ -1811,7 +1811,7 @@ describe("voice trigger + voice steps", () => {
       ]
     });
     expect(validateDefinitionSemantics(parsed)).toContain(
-      "A voice_transfer flow connects the caller straight to one number — it must be the only step (no ring_handoff/voice_ai_intake)."
+      "A voice_transfer flow connects the caller straight to one number; it must be the only step (no ring_handoff/voice_ai_intake)."
     );
   });
 
@@ -1889,7 +1889,7 @@ describe("voice trigger + voice steps", () => {
       steps: [{ id: "r", type: "ring_handoff", toE164: "+16025245719" }]
     });
     expect(validateDefinitionSemantics(parsed)).toContain(
-      "An inbound voice flow needs a caller — set fromE164 or pick a saved contact (fromRef) on its trigger."
+      "An inbound voice flow needs a caller; set fromE164 or pick a saved contact (fromRef) on its trigger."
     );
   });
 

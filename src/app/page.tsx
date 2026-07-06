@@ -69,7 +69,7 @@ const features: Feature[] = [
   {
     title: "8,000+ App Integrations",
     description:
-      "Connect your coworker to Zapier, Google Workspace, Microsoft 365, and your CRM, plus a public API and webhooks for anything custom.",
+      "Connect your coworker to Zapier, Google Workspace, Microsoft 365, and your CRM. One connection unlocks 8,000+ everyday business apps.",
     Icon: Zap
   },
   {
@@ -213,7 +213,7 @@ export default function HomePage() {
             value: `${TIER_LIMITS.standard.maxConcurrentCalls} calls`,
             label: "Handled at once on Standard, so there are no busy signals during your rush"
           },
-          { value: "8,000+", label: "Apps connected through Zapier, plus API & webhooks" },
+          { value: "8,000+", label: "Everyday apps connected through Zapier, no code required" },
           { value: "1 server", label: "Dedicated to your business, so your data stays yours" }
         ]}
       />
@@ -275,7 +275,7 @@ export default function HomePage() {
             <ul className="space-y-3">
               {[
                 "Dedicated private server per business with no shared tenancy",
-                "Conversation transcripts stored on your server, not our dashboard",
+                "Conversation transcripts stored on your coworker's dedicated server, not our dashboard",
                 "Permanent, lossless memory that stays under your control",
                 "Deny-by-default security posture with per-business credentials"
               ].map((item) => (

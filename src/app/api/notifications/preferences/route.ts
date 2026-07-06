@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     if (await isViewAsActive(user)) {
       return errorResponse(
         "FORBIDDEN",
-        "View-as is read-only — exit view-as to make changes",
+        "View-as is read-only; exit view-as to make changes",
         403
       );
     }

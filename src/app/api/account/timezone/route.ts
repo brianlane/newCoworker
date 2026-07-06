@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     // SIGNED-IN user's email, so an impersonating admin's write would land
     // on the wrong business. Refuse instead (see isViewAsActive).
     if (await isViewAsActive(user)) {
-      return errorResponse("FORBIDDEN", "View-as is read-only — exit view-as to make changes", 403);
+      return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
     }
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
 

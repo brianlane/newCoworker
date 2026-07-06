@@ -121,7 +121,7 @@ export async function POST(request: Request) {
     if (sendAt.getTime() < now + 60 * 1000) {
       return errorResponse(
         "VALIDATION_ERROR",
-        "Send time must be at least a minute from now — use Send for immediate messages."
+        "Send time must be at least a minute from now; use Send for immediate messages."
       );
     }
     if (sendAt.getTime() > now + SCHEDULED_SMS_MAX_DAYS_AHEAD * 24 * 60 * 60 * 1000) {

@@ -173,21 +173,21 @@ export default async function BillingPage(props: {
     searchParams.planChanged === "1"
       ? {
           kind: "ok" as const,
-          text: "Plan change submitted. We're migrating your workspace to the new VPS — this can take a few minutes."
+          text: "Plan change submitted. We're migrating your workspace to the new VPS; this can take a few minutes."
         }
       : null;
   const reactivatedBanner =
     searchParams.reactivated === "1"
       ? {
           kind: "ok" as const,
-          text: "Reactivation submitted. We're restoring your workspace onto a fresh VPS — this can take a few minutes."
+          text: "Reactivation submitted. We're restoring your workspace onto a fresh VPS; this can take a few minutes."
         }
       : null;
   const whiteGloveBanner =
     searchParams.whiteGlove === "success"
       ? {
           kind: "ok" as const,
-          text: "Thanks! Your white-glove onboarding is confirmed — check your email for the booking link."
+          text: "Thanks! Your white-glove onboarding is confirmed; check your email for the booking link."
         }
       : searchParams.whiteGlove === "cancelled"
         ? { kind: "warn" as const, text: "Checkout cancelled. No charge was made." }
@@ -413,7 +413,7 @@ export default async function BillingPage(props: {
                 Texts sent this month
               </dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
-                {smsMonthUsed === null ? "—" : smsMonthUsed.toLocaleString()}
+                {smsMonthUsed === null ? "–" : smsMonthUsed.toLocaleString()}
               </dd>
               <dd className="text-[11px] text-parchment/40">
                 {smsMonthlyCap === null || smsMonthlyCap === Infinity
@@ -437,7 +437,7 @@ export default async function BillingPage(props: {
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {chatSpend
                   ? `$${(chatSpend.spendMicros / 1_000_000).toFixed(2)} / $${(chatSpend.effectiveCapMicros / 1_000_000).toFixed(2)}`
-                  : "—"}
+                  : "–"}
               </dd>
               <dd className="text-[11px] text-parchment/40">
                 {chatSpend && chatSpend.creditMicros > 0
@@ -485,7 +485,7 @@ export default async function BillingPage(props: {
               {ownedWhiteGlove.name} purchased.{" "}
               {priorityOpen && prioritySupportUntilIso
                 ? `Priority call & video support is open until ${new Date(prioritySupportUntilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
-                : "Your priority call & video window has ended — support continues by email."}
+                : "Your priority call & video window has ended; support continues by email."}
             </p>
             {priorityOpen && bookingUrl && (
               <p className="text-xs text-parchment/50">

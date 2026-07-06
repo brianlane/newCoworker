@@ -89,7 +89,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             <div className="grid grid-cols-1 gap-4 max-w-xl">
               <IntegrationCard
                 title="Workspace"
-                description="Gmail, Google Calendar, Drive, Microsoft 365, Slack, Zoom, and more — add each integration simply with Nango."
+                description="Gmail, Google Calendar, Drive, Microsoft 365, Slack, Zoom, and more; add each integration simply with Nango."
                 icon={Inbox}
                 status={workspaceConnected ? "connected" : "disconnected"}
               >

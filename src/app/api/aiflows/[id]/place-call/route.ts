@@ -76,7 +76,7 @@ export async function POST(request: Request, { params }: Ctx) {
         reason === "quota_exhausted"
           ? "Out of voice minutes for this billing period."
           : reason === "concurrent_limit"
-            ? "Too many calls in progress right now — try again shortly."
+            ? "Too many calls in progress right now; try again shortly."
             : reason === "invalid_callee"
               ? "Enter a valid phone number to call."
               : reason === "no_caller_id" || reason === "no_telnyx_connection"

@@ -40,7 +40,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           <h1 className="text-2xl font-bold text-parchment">AiFlows</h1>
           <p className="mt-1 text-sm text-parchment/50">
             Automate multi-step workflows: start from an inbound text or email, on a
-            schedule, or on demand — browse links, extract details, ask for approval, and
+            schedule, or on demand: browse links, extract details, ask for approval, and
             send texts or emails.
           </p>
         </div>

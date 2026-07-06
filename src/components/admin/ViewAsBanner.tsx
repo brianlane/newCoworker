@@ -30,7 +30,7 @@ export function ViewAsBanner({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       window.location.href = `/admin/${businessId}`;
     } catch {
-      setError("Couldn't exit view-as — try again.");
+      setError("Couldn't exit view-as; try again.");
       setExiting(false);
     }
   };
@@ -45,7 +45,7 @@ export function ViewAsBanner({
             {tier}
           </span>
           <span className="ml-2 text-parchment/40 text-xs">
-            read-only — account &amp; billing actions are disabled
+            read-only; account &amp; billing actions are disabled
           </span>
         </span>
       </div>

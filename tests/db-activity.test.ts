@@ -59,7 +59,7 @@ describe("buildActivityFeed", () => {
     );
     expect(item).toMatchObject({
       kind: "call",
-      label: "Call — +15550001111 (completed)",
+      label: "Call: +15550001111 (completed)",
       href: "/dashboard/calls",
       at: "2026-01-01T10:00:00Z"
     });
@@ -70,7 +70,7 @@ describe("buildActivityFeed", () => {
     const [item] = buildActivityFeed(
       emptyInput({ calls: [{ caller_e164: null, status: "missed", started_at: "2026-01-01T10:00:00Z" }] })
     );
-    expect(item.label).toBe("Call — unknown caller (missed)");
+    expect(item.label).toBe("Call: unknown caller (missed)");
   });
 
   it("maps inbound SMS with parseable counterpart and skips unparseable ones", () => {
@@ -144,8 +144,8 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(items.map((i) => i.label)).toEqual([
-      "Call — Mike Haas (completed)",
-      "Call — +19998887777 (missed)",
+      "Call: Mike Haas (completed)",
+      "Call: +19998887777 (missed)",
       "Text from Pat (employee)",
       "Text to Mike Haas",
       "Text to Pat (employee)"
@@ -168,8 +168,8 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(items.map((i) => i.label)).toEqual([
-      "New customer — Pat (override) (+15550004444)",
-      "New customer — Owner (+15550005555)"
+      "New customer: Pat (override) (+15550004444)",
+      "New customer: Owner (+15550005555)"
     ]);
   });
 
@@ -215,7 +215,7 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(items.map((i) => i.label)).toEqual([
-      "Email from lead@example.com — “Need a quote”",
+      "Email from lead@example.com: “Need a quote”",
       "Email to lead@example.com",
       "Email to unknown address"
     ]);
@@ -241,9 +241,9 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(items.map((i) => i.label)).toEqual([
-      "AiFlow — Lead intake (completed)",
-      "AiFlow — Nightly sync (failed)",
-      "AiFlow — AiFlow (completed)"
+      "AiFlow: Lead intake (completed)",
+      "AiFlow: Nightly sync (failed)",
+      "AiFlow: AiFlow (completed)"
     ]);
     // Deep links to the exact run on the flow's runs page (not the flow list).
     expect(items[0]).toMatchObject({
@@ -259,7 +259,7 @@ describe("buildActivityFeed", () => {
         flows: [{ id: "run-x", flow_id: "flow-x", status: "completed", created_at: "2026-01-05T10:00:00Z", ai_flows: [] }]
       })
     );
-    expect(item.label).toBe("AiFlow — AiFlow (completed)");
+    expect(item.label).toBe("AiFlow: AiFlow (completed)");
   });
 
   it("maps new customers with and without a display name", () => {
@@ -273,10 +273,10 @@ describe("buildActivityFeed", () => {
     );
     expect(items[0]).toMatchObject({
       kind: "customer",
-      label: "New customer — Jane Doe (+15550004444)",
+      label: "New customer: Jane Doe (+15550004444)",
       href: "/dashboard/customers/%2B15550004444"
     });
-    expect(items[1].label).toBe("New customer — +15550005555");
+    expect(items[1].label).toBe("New customer: +15550005555");
   });
 
   it("labels urgent alerts by reason, then caller name, then task type", () => {
@@ -302,9 +302,9 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(items.map((i) => i.label)).toEqual([
-      "Urgent — Pipe burst",
-      "Urgent — Pat",
-      "Urgent — sms reply"
+      "Urgent: Pipe burst",
+      "Urgent: Pat",
+      "Urgent: sms reply"
     ]);
     expect(items[0]).toMatchObject({ kind: "alert", href: "/dashboard/notifications" });
   });
@@ -321,7 +321,7 @@ describe("buildActivityFeed", () => {
         ]
       })
     );
-    expect(item.label).toBe("Urgent — call");
+    expect(item.label).toBe("Urgent: call");
   });
 
   it("reserves slots for alerts so routine events can't push them off", () => {
@@ -340,7 +340,7 @@ describe("buildActivityFeed", () => {
     expect(items).toHaveLength(2);
     // Newest routine call shown, but the old alert is retained (last by recency).
     expect(items.map((i) => i.kind)).toEqual(["call", "alert"]);
-    expect(items[1].label).toBe("Urgent — Gas leak");
+    expect(items[1].label).toBe("Urgent: Gas leak");
   });
 
   it("caps alerts at half the feed so newer activity still appears", () => {
@@ -554,7 +554,7 @@ describe("getRecentActivity", () => {
 
     const items = await getRecentActivity("biz-1", 10, db as never);
     expect(items.map((i) => i.kind)).toEqual(["email_inbound"]);
-    expect(items[0].label).toBe("Email from lead@example.com — “Quote?”");
+    expect(items[0].label).toBe("Email from lead@example.com: “Quote?”");
   });
 
   it("bounds every source to the recency window and filters to urgent alerts", async () => {
@@ -637,11 +637,11 @@ describe("getRecentActivity", () => {
       db
     );
     const labels = items.map((i) => i.label);
-    expect(labels).toContain("Call — Mike Haas (completed)");
-    expect(labels).toContain("Call — unknown caller (missed)");
+    expect(labels).toContain("Call: Mike Haas (completed)");
+    expect(labels).toContain("Call: unknown caller (missed)");
     expect(labels).toContain("Text from +15550002222");
     expect(labels).toContain("Text to +15550003333");
-    expect(labels).toContain("New customer — +15550004444");
+    expect(labels).toContain("New customer: +15550004444");
   });
 
   it("falls back to raw numbers when the contact resolver fails", async () => {
@@ -698,7 +698,7 @@ describe("getAllRecentActivity", () => {
 
     const items = await getAllRecentActivity("biz-1", 50, db as never);
     expect(items.map((i) => i.kind)).toEqual(["alert", "aiflow"]);
-    expect(items[1].label).toBe("AiFlow — ReferralExchange lead (completed)");
+    expect(items[1].label).toBe("AiFlow: ReferralExchange lead (completed)");
   });
 
   it("creates a service client and uses ACTIVITY_FEED_MAX when no limit is given", async () => {

@@ -233,7 +233,7 @@ export async function importEmployeesCsv(
           if (await applyUpdate()) {
             summary.updated += 1;
           } else {
-            throw new Error(`A concurrent change kept ${phone} from being saved — re-import this row.`);
+            throw new Error(`A concurrent change kept ${phone} from being saved; re-import this row.`);
           }
         } else {
           summary.created += 1;

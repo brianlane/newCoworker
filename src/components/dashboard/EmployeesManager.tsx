@@ -190,7 +190,7 @@ export function EmployeesManager(props: Props) {
             <p className="text-[11px] text-parchment/50 mt-0.5">
               {sharedCalendar.calendarId
                 ? `Appointments your coworker books land here. Shared with ${sharedCalendar.sharedWith.length} employee${sharedCalendar.sharedWith.length === 1 ? "" : "s"}.`
-                : "Created automatically on the first booking — or set it up now and share it with your team."}
+                : "Created automatically on the first booking, or set it up now and share it with your team."}
               {" "}Time off shows up on it as all-day events.
             </p>
             {shareMsg && <p className="text-[11px] text-claw-green mt-1">{shareMsg}</p>}
@@ -434,7 +434,7 @@ function EmployeeCard({
             <p className="text-[11px] text-parchment/40 mt-0.5">
               {formatScheduleText(member.weekly_schedule)
                 ? `Works ${formatScheduleText(member.weekly_schedule)}`
-                : "No schedule — always available"}
+                : "No schedule; always available"}
               {formatScheduleText(member.preferred_windows) &&
                 ` • prefers ${formatScheduleText(member.preferred_windows)}`}
             </p>
@@ -494,7 +494,7 @@ function EmployeeCard({
           <label className="block text-xs text-parchment/70">
             Weekly schedule{" "}
             <span className="text-parchment/40">
-              (optional — outside these hours they aren&apos;t offered leads)
+              (optional; outside these hours they aren&apos;t offered leads)
             </span>
             <input
               type="text"
@@ -507,7 +507,7 @@ function EmployeeCard({
           <label className="block text-xs text-parchment/70">
             Preferred lead times{" "}
             <span className="text-parchment/40">
-              (optional — bumps them to the front of the rotation during these hours)
+              (optional; bumps them to the front of the rotation during these hours)
             </span>
             <input
               type="text"

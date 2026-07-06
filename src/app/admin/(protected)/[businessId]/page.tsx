@@ -150,7 +150,7 @@ export default async function BusinessDetailPage({
                 </div>
                 <div>
                   <dt className="text-parchment/40 text-xs">Billing Period</dt>
-                  <dd className="text-parchment capitalize">{subscription.billing_period ?? "—"}</dd>
+                  <dd className="text-parchment capitalize">{subscription.billing_period ?? "–"}</dd>
                 </div>
                 <div>
                   <dt className="text-parchment/40 text-xs">Renewal</dt>
@@ -158,14 +158,14 @@ export default async function BusinessDetailPage({
                     {subscription.renewal_at ? (
                       <LocalDateTime iso={subscription.renewal_at} style="date" />
                     ) : (
-                      "—"
+                      "–"
                     )}
                   </dd>
                 </div>
                 <div>
                   <dt className="text-parchment/40 text-xs">Stripe Customer</dt>
                   <dd className="text-parchment font-mono text-xs truncate max-w-[160px]">
-                    {subscription.stripe_customer_id ?? "—"}
+                    {subscription.stripe_customer_id ?? "–"}
                   </dd>
                 </div>
               </dl>
@@ -188,7 +188,7 @@ export default async function BusinessDetailPage({
         <dl className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm mb-4">
           <div>
             <dt className="text-parchment/40 text-xs">VPS ID</dt>
-            <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "—"}</dd>
+            <dd className="text-parchment font-mono">{business.hostinger_vps_id ?? "–"}</dd>
           </div>
           <div>
             <dt className="text-parchment/40 text-xs">Hardware size</dt>
@@ -275,7 +275,7 @@ export default async function BusinessDetailPage({
                       <Badge variant="neutral" className="text-[10px] uppercase">
                         {src}
                       </Badge>
-                      <span className="text-xs text-signal-teal font-medium">{p.percent ?? "—"}%</span>
+                      <span className="text-xs text-signal-teal font-medium">{p.percent ?? "–"}%</span>
                       <Badge variant={getLogBadgeVariant(log.status)}>{formatAdminLabel(log.status)}</Badge>
                     </div>
                   </div>

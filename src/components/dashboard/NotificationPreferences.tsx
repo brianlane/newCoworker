@@ -169,28 +169,28 @@ export function NotificationPreferences({ businessId, initial }: Props) {
 
       <div className="space-y-4">
         <ToggleRow
-          label="SMS — urgent alerts"
+          label="SMS: urgent alerts"
           description="Text when your coworker flags something critical."
           checked={smsUrgent}
           onChange={setSmsUrgent}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
-          label="Email — daily digest"
+          label="Email: daily digest"
           description="Summary of activity sent to your inbox each morning."
           checked={emailDigest}
           onChange={setEmailDigest}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
-          label="Email — weekly digest"
+          label="Email: weekly digest"
           description="Roll-up of the past week's activity, sent Monday mornings."
           checked={emailDigestWeekly}
           onChange={setEmailDigestWeekly}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
-          label="Email — urgent alerts"
+          label="Email: urgent alerts"
           description="Immediate email for high-priority events."
           checked={emailUrgent}
           onChange={setEmailUrgent}

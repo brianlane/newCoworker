@@ -506,7 +506,7 @@ function extractSafeHeaders(headers: Headers): Record<string, string> {
 export async function GET() {
   return errorResponse(
     "VALIDATION_ERROR",
-    "GET not supported on this route — use POST",
+    "GET not supported on this route; use POST",
     405
   );
 }

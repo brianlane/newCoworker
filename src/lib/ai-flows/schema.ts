@@ -9,8 +9,8 @@
  * surfaceable error messages a no-code builder needs.
  *
  * Two layers:
- *   1. `aiFlowDefinitionSchema` (zod) — shape + bounds.
- *   2. `validateDefinitionSemantics` — cross-step invariants zod can't express:
+ *   1. `aiFlowDefinitionSchema` (zod); shape + bounds.
+ *   2. `validateDefinitionSemantics`; cross-step invariants zod can't express:
  *      unique step ids, and a variable-flow check so a template never references
  *      a `{{vars.x}}` / `{{trigger.x}}` that isn't in scope at that point.
  */
@@ -38,7 +38,7 @@ export const FLOW_STEP_TYPES = [
   "recall_url",
   "upsert_customer",
   // Voice-channel steps (real-time call routing, executed by the Telnyx voice
-  // webhook state machine — NOT the async ai-flow-worker). Only valid under a
+  // webhook state machine; NOT the async ai-flow-worker). Only valid under a
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
   "ring_handoff",
   "voice_ai_intake",
@@ -71,8 +71,8 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
 /**
  * Vars the ENGINE itself maintains (not produced by any step). Always in scope:
  *   - `actions_taken`: the worker appends a human description of each outbound
- *     contact (SMS / email / routing), so a later step — e.g. a browse_action
- *     timeline note — can template "what did this flow actually do".
+ *     contact (SMS / email / routing), so a later step; e.g. a browse_action
+ *     timeline note; can template "what did this flow actually do".
  *   - `claimed_agent`: set by `route_to_team` to the claiming teammate's name
  *     (or "none" on owner-fallback / no claim), so LATER steps can gate on
  *     `when: { var: "claimed_agent", notEquals: "none" }` to run only after a
@@ -87,7 +87,7 @@ export const BROWSE_ACTION_KINDS = [
   "fill_selector",
   "fill_placeholder",
   // Repeatedly click an element matching `target`'s visible text until it is
-  // no longer present (bounded). Zero matches is success, not a failure — for
+  // no longer present (bounded). Zero matches is success, not a failure; for
   // multi-step wizards whose "Next" button count varies between leads.
   "click_text_while_present",
   // Click by ARIA role (`target`) + accessible name (`valueTemplate`), for
@@ -112,7 +112,7 @@ export const TRIGGER_SCOPE_KEYS = ["url", "windowText", "from", "to", "participa
 /**
  * Top-level keys of the `{{now.*}}` scope the worker injects each run (relative
  * dates in the business timezone; see engine.buildNowScope). Nested parts like
- * `now.tomorrow.weekday` are not enumerated — the validator only checks the
+ * `now.tomorrow.weekday` are not enumerated; the validator only checks the
  * first scope segment.
  */
 export const NOW_SCOPE_KEYS = ["today", "tomorrow", "in7Days", "afternoonTime"] as const;
@@ -236,7 +236,7 @@ const tenantEmailTriggerSchema = z.object({
 /**
  * Inbound-voice trigger: a call FROM `fromE164` to one of the business's voice
  * numbers fires this flow. Unlike every other channel this does NOT enqueue an
- * ai_flow_run — the Telnyx voice webhook (telnyx-voice-inbound) resolves the
+ * ai_flow_run; the Telnyx voice webhook (telnyx-voice-inbound) resolves the
  * matching enabled voice flow in real time and drives the call-control state
  * machine directly from its compiled steps. The flow row exists purely so the
  * routing is authored/visible/CRUD-able in the AiFlows UI like any other flow.
@@ -246,7 +246,7 @@ const voiceTriggerSchema = z
     channel: z.literal("voice"),
     // Inbound flows: a call FROM `fromE164` fires the flow (resolved by
     // telnyx-voice-inbound). Inbound needs exactly one of fromE164 / fromRef,
-    // outbound neither — enforced by direction in validateVoiceFlow.
+    // outbound neither; enforced by direction in validateVoiceFlow.
     fromE164: e164.optional(),
     // Dynamic caller match: the flow fires when the caller is one of the
     // referenced saved person's LIVE numbers (employee phone, or contact
@@ -303,8 +303,8 @@ const extractFieldSchema = z.object({
 /**
  * A browse_extract link capture: find the first `<a>` on the page whose visible
  * text contains `matchText` and save its resolved href as `{{vars.<name>}}`
- * (empty string if no match). Used to grab a button's destination URL — e.g.
- * HomeLight's "Call me to claim referral" link — which plain text extraction
+ * (empty string if no match). Used to grab a button's destination URL; e.g.
+ * HomeLight's "Call me to claim referral" link; which plain text extraction
  * loses.
  */
 const extractLinkSchema = z.object({
@@ -333,7 +333,7 @@ const stepId = z.string().min(1).max(60);
 
 /**
  * Lead-contact quiet hours on a send_sms step: never text inside
- * [noSendAfter, resumeAt) local time — the run defers to resumeAt and texts
+ * [noSendAfter, resumeAt) local time; the run defers to resumeAt and texts
  * then; when the flow extracted a lead email into `emailFallbackVar` the same
  * body is also emailed immediately.
  */
@@ -400,7 +400,7 @@ const stepSchema = z.discriminatedUnion("type", [
       type: z.literal("browse_extract"),
       urlVar: varName,
       // Either pull structured text fields, capture link hrefs by button text,
-      // or both — but the step must do at least one (refined below).
+      // or both; but the step must do at least one (refined below).
       fields: z.array(extractFieldSchema).min(1).max(15).optional(),
       extractLinks: z.array(extractLinkSchema).min(1).max(10).optional(),
       auth: browseAuthSchema.optional(),
@@ -408,8 +408,8 @@ const stepSchema = z.discriminatedUnion("type", [
       // Terminal-state guard (mirrors browse_action.skipWhenText): when the
       // fetched page contains this marker text (case-insensitive) there is
       // nothing to read (e.g. a lead another agent already claimed shows a
-      // banner instead of the contact card), so the run ENDS gracefully — the
-      // step is recorded "skipped" and the run finishes as done — instead of
+      // banner instead of the contact card), so the run ENDS gracefully; the
+      // step is recorded "skipped" and the run finishes as done; instead of
       // extracting empty fields and failing downstream.
       skipWhenText: z.string().min(1).max(200).optional(),
       when: whenSchema.optional()
@@ -419,7 +419,7 @@ const stepSchema = z.discriminatedUnion("type", [
     }),
   // Browser-free sibling of browse_extract: pull the same structured fields out
   // of the inbound message text ({{trigger.windowText}}) instead of a fetched
-  // page. No urlVar/auth/screenshot — the worker runs the SAME Gemini
+  // page. No urlVar/auth/screenshot; the worker runs the SAME Gemini
   // extraction on the trigger text. Produces {{vars.<field>}} like browse_extract.
   z.object({
     id: stepId,
@@ -429,14 +429,14 @@ const stepSchema = z.discriminatedUnion("type", [
   }),
   // Read a recent message from a connected mailbox (the same Nango Gmail/Outlook
   // connections the email trigger + send_email "From" dropdown use) and run the
-  // SAME Gemini extraction over it as extract_text — for pulling lead details out
+  // SAME Gemini extraction over it as extract_text; for pulling lead details out
   // of an alert email mid-flow (e.g. HomeLight's "Client Details" email as a
   // fallback when the portal contact card is delayed). The worker finds the most
   // recent inbox message whose sender contains `fromContains` AND whose text
   // contains EVERY rendered `matchTemplates` term (so e.g. first name AND city
-  // both must appear — this disambiguates two leads who share a first name within
+  // both must appear; this disambiguates two leads who share a first name within
   // the window), within `lookbackMinutes`. With `fillOnlyEmpty`, a field is
-  // written only when its var is currently empty/"none" — so an earlier
+  // written only when its var is currently empty/"none"; so an earlier
   // browse_extract's values win and the email merely backfills the gaps. Produces
   // {{vars.<field>}} like extract_text.
   z.object({
@@ -471,7 +471,7 @@ const stepSchema = z.discriminatedUnion("type", [
     replyToGroup: z.boolean().optional(),
     /**
      * Send to a single named roster member (ai_flow_team_members) instead of a
-     * templated address — the worker resolves their current phone at run time,
+     * templated address; the worker resolves their current phone at run time,
      * so the number stays correct as the roster changes. When set, the body may
      * reference {{agent.name}}/{{agent.phone}} (the resolved member).
      */
@@ -528,7 +528,7 @@ const stepSchema = z.discriminatedUnion("type", [
     claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
     agentName: z.string().min(1).max(120).optional(),
     // Pin the offer to a saved roster member by reference (employee source only;
-    // mutually exclusive with agentName — enforced in validateDefinitionSemantics).
+    // mutually exclusive with agentName; enforced in validateDefinitionSemantics).
     agentRef: contactRefSchema.optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
@@ -539,7 +539,7 @@ const stepSchema = z.discriminatedUnion("type", [
     // (round-robin) never mis-records a "2, can't take it" reply as a claim.
     claimTimeframeOption: z.number().int().min(1).max(9).optional(),
     // The reply digit that means "claim a lead AFTER its offer window lapsed"
-    // (retroactive/late claim) WITH a timeframe — a teammate replies
+    // (retroactive/late claim) WITH a timeframe; a teammate replies
     // "<digit>, <eta>" to re-open a lapsed offer and state when they'll reach
     // out. Distinct from claimTimeframeOption (the live option) so a lapsed
     // lead has its own numbered affordance instead of the old magic "86" (which
@@ -573,8 +573,8 @@ const stepSchema = z.discriminatedUnion("type", [
     forEachLinkMatchVar: varName.optional(),
     // Terminal-state guard: when an action fails AND the page contains this
     // marker text (case-insensitive), the goal is already met (e.g. a lead
-    // another agent already claimed) so the run ENDS gracefully — the step is
-    // recorded "skipped" and the run finishes as done — instead of failing.
+    // another agent already claimed) so the run ENDS gracefully; the step is
+    // recorded "skipped" and the run finishes as done; instead of failing.
     skipWhenText: z.string().min(1).max(200).optional(),
     when: whenSchema.optional()
   }),
@@ -609,7 +609,7 @@ const stepSchema = z.discriminatedUnion("type", [
     id: stepId,
     type: z.literal("ring_handoff"),
     // Exactly one of toE164 / toRef supplies the number to ring (enforced in
-    // validateVoiceFlow — a discriminatedUnion member can't hold a refine).
+    // validateVoiceFlow; a discriminatedUnion member can't hold a refine).
     toE164: e164.optional(),
     // Dynamic dial target: a saved employee/contact whose CURRENT number is
     // resolved just before the voice flow compiles (resolve-before-compile).
@@ -656,7 +656,7 @@ const stepSchema = z.discriminatedUnion("type", [
   z.object({
     id: stepId,
     type: z.literal("outbound_call"),
-    // Default callee: at most one of toE164 / toRef (both optional — the
+    // Default callee: at most one of toE164 / toRef (both optional; the
     // "Place call" entry point may supply the callee per call).
     toE164: e164.optional(),
     toRef: contactRefSchema.optional(),
@@ -766,7 +766,7 @@ const VOICE_STEPS = new Set<string>(VOICE_STEP_TYPES);
  *   - every step must be a voice step (ring_handoff/voice_ai_intake/voice_transfer);
  *   - a flow is EITHER a single blind transfer (exactly one voice_transfer, nothing
  *     else) OR a handoff chain (>= 1 ring_handoff, then an OPTIONAL single trailing
- *     voice_ai_intake) — the two shapes never mix;
+ *     voice_ai_intake); the two shapes never mix;
  *   - voice_ai_intake must be the LAST step and needs a preceding ring_handoff
  *     (the product always rings a human before the AI takes over).
  * Returns human-readable issues (step-id uniqueness is checked by the caller).
@@ -777,7 +777,7 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
   const nonVoice = steps.filter((s) => !VOICE_STEPS.has(s.type));
   for (const s of nonVoice) {
     issues.push(
-      `Step "${s.id}" is a "${s.type}" step but this is a voice flow — voice flows use only ring_handoff, voice_ai_intake, voice_transfer, or outbound_call.`
+      `Step "${s.id}" is a "${s.type}" step but this is a voice flow; voice flows use only ring_handoff, voice_ai_intake, voice_transfer, or outbound_call.`
     );
   }
   // If any non-voice step slipped in, the shape rules below would be misleading.
@@ -785,7 +785,7 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
 
   // Per-step number sources: each dial/notify target is EITHER a hardcoded
   // E.164 OR a dynamic contact reference (resolved live just before the call
-  // routes), never both and never neither — a step with no resolvable number
+  // routes), never both and never neither; a step with no resolvable number
   // would strand the caller. Checked before the shape rules (which have early
   // returns) so every step gets a source check regardless of flow shape.
   for (const s of steps) {
@@ -794,8 +794,8 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
       if (sources !== 1) {
         issues.push(
           sources === 0
-            ? `Step "${s.id}" has no number to ring — set toE164 or pick a saved contact (toRef).`
-            : `Step "${s.id}" sets both toE164 and toRef — use only one.`
+            ? `Step "${s.id}" has no number to ring; set toE164 or pick a saved contact (toRef).`
+            : `Step "${s.id}" sets both toE164 and toRef; use only one.`
         );
       }
     }
@@ -804,14 +804,14 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
       if (notifySources !== 1) {
         issues.push(
           notifySources === 0
-            ? `Step "${s.id}" has nowhere to send the call summary — set notifyE164 or pick a saved contact (notifyRef).`
-            : `Step "${s.id}" sets both notifyE164 and notifyRef — use only one.`
+            ? `Step "${s.id}" has nowhere to send the call summary; set notifyE164 or pick a saved contact (notifyRef).`
+            : `Step "${s.id}" sets both notifyE164 and notifyRef; use only one.`
         );
       }
       // outbound_call's default callee is optional (the "Place call" entry may
       // supply it per call) but still at most ONE source.
       if (s.type === "outbound_call" && s.toE164 && s.toRef) {
-        issues.push(`Step "${s.id}" sets both toE164 and toRef — use only one.`);
+        issues.push(`Step "${s.id}" sets both toE164 and toRef; use only one.`);
       }
     }
   }
@@ -840,10 +840,10 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
   }
   if (!trigger.fromE164 && !trigger.fromRef) {
     issues.push(
-      "An inbound voice flow needs a caller — set fromE164 or pick a saved contact (fromRef) on its trigger."
+      "An inbound voice flow needs a caller; set fromE164 or pick a saved contact (fromRef) on its trigger."
     );
   } else if (trigger.fromE164 && trigger.fromRef) {
-    issues.push("The trigger sets both fromE164 and fromRef — use only one.");
+    issues.push("The trigger sets both fromE164 and fromRef; use only one.");
   }
 
   const transfers = steps.filter((s) => s.type === "voice_transfer");
@@ -854,7 +854,7 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
     // Blind-transfer flow: it must be the ONLY step.
     if (steps.length !== 1) {
       issues.push(
-        "A voice_transfer flow connects the caller straight to one number — it must be the only step (no ring_handoff/voice_ai_intake)."
+        "A voice_transfer flow connects the caller straight to one number; it must be the only step (no ring_handoff/voice_ai_intake)."
       );
     }
     return issues;
@@ -873,7 +873,7 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
     const last = steps[steps.length - 1];
     if (last.type !== "voice_ai_intake") {
       issues.push(
-        "voice_ai_intake must be the last step — it only takes over after every ring_handoff missed."
+        "voice_ai_intake must be the last step; it only takes over after every ring_handoff missed."
       );
     }
     if (rings.length === 0) {
@@ -904,16 +904,16 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     if (c.type !== "from_matches") continue;
     if (!c.value && !c.ref) {
       issues.push(
-        'A "from matches" condition needs a sender — enter text or pick a saved contact.'
+        'A "from matches" condition needs a sender; enter text or pick a saved contact.'
       );
     } else if (c.value && c.ref) {
       issues.push(
-        'A "from matches" condition sets both a text value and a saved contact — use only one.'
+        'A "from matches" condition sets both a text value and a saved contact; use only one.'
       );
     }
   }
 
-  // Voice flows run on the real-time call path and have no vars/templates — they
+  // Voice flows run on the real-time call path and have no vars/templates; they
   // get their own shape rules. We still enforce step-id uniqueness here so the
   // editor's per-step errors stay consistent across channels.
   if (def.trigger.channel === "voice") {
@@ -926,18 +926,18 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   }
 
   // A voice step under a non-voice trigger can never execute (the batch worker
-  // has no handler for it) — reject it rather than silently no-op at run time.
+  // has no handler for it); reject it rather than silently no-op at run time.
   for (const step of def.steps) {
     if (VOICE_STEPS.has(step.type)) {
       issues.push(
-        `Step "${step.id}" is a voice step ("${step.type}") but the trigger is "${def.trigger.channel}" — voice steps need a voice trigger.`
+        `Step "${step.id}" is a voice step ("${step.type}") but the trigger is "${def.trigger.channel}"; voice steps need a voice trigger.`
       );
     }
   }
 
   const vars = new Set<string>();
   // True once an earlier browse step (browse_extract or browse_action) has
-  // `screenshot: true` — the prerequisite for any later step's attachScreenshot.
+  // `screenshot: true`; the prerequisite for any later step's attachScreenshot.
   let screenshotCaptured = false;
 
   for (const step of def.steps) {
@@ -1002,11 +1002,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
 
     // browse_action.forEachLink loops the actions over many list rows, so the
     // single-page features (same-pass extraction, one screenshot, remembering one
-    // URL) don't apply — reject the combination rather than silently ignore it.
+    // URL) don't apply; reject the combination rather than silently ignore it.
     if (step.type === "browse_action" && step.forEachLink) {
       if (step.fields && step.fields.length > 0) {
         issues.push(
-          `Step "${step.id}" can't combine forEachLink with fields — extraction has no single page in a loop.`
+          `Step "${step.id}" can't combine forEachLink with fields; extraction has no single page in a loop.`
         );
       }
       if (step.screenshot) {
@@ -1061,7 +1061,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
       if (step.keyFromTrigger === undefined && (step.keyVars?.length ?? 0) === 0) {
         issues.push(
-          `Step "${step.id}" recalls a URL but has no key source — set keyFromTrigger or keyVars.`
+          `Step "${step.id}" recalls a URL but has no key source; set keyFromTrigger or keyVars.`
         );
       }
       if (step.keyFromTrigger === "participants" && def.trigger.channel !== "sms") {
@@ -1092,7 +1092,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     // screenshot attachment only exists on the AI coworker's own Resend path.
     if (step.type === "send_email" && step.attachScreenshot && step.fromConnectionId) {
       issues.push(
-        `Step "${step.id}" attaches a screenshot but sends from a connected mailbox — attachments are only supported when sending from your AI coworker's email.`
+        `Step "${step.id}" attaches a screenshot but sends from a connected mailbox; attachments are only supported when sending from your AI coworker's email.`
       );
     }
 
@@ -1113,11 +1113,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       const count = sources.filter(Boolean).length;
       if (count === 0) {
         issues.push(
-          `Step "${step.id}" sends a text but has no recipient — set "to", "toAgentName", "toRef", or turn on replyToGroup.`
+          `Step "${step.id}" sends a text but has no recipient; set "to", "toAgentName", "toRef", or turn on replyToGroup.`
         );
       } else if (count > 1) {
         issues.push(
-          `Step "${step.id}" sets more than one recipient — use only one of "to", "toAgentName", "toRef", or replyToGroup.`
+          `Step "${step.id}" sets more than one recipient; use only one of "to", "toAgentName", "toRef", or replyToGroup.`
         );
       }
       if (step.replyToGroup && def.trigger.channel !== "sms") {
@@ -1162,28 +1162,28 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       step.claimTimeframeOption === step.lateClaimOption
     ) {
       issues.push(
-        `Step "${step.id}" uses the same digit for claimTimeframeOption and lateClaimOption — they must differ.`
+        `Step "${step.id}" uses the same digit for claimTimeframeOption and lateClaimOption; they must differ.`
       );
     }
 
     // route_to_team pins an offer to ONE roster member: by name (agentName) or by
     // a saved reference (agentRef). Use at most one, and a ref must be an EMPLOYEE
-    // — a contact is not on the roster and could never claim the offer.
+    //; a contact is not on the roster and could never claim the offer.
     if (step.type === "route_to_team") {
       if (step.agentName && step.agentRef) {
         issues.push(
-          `Step "${step.id}" pins to both agentName and agentRef — use only one.`
+          `Step "${step.id}" pins to both agentName and agentRef; use only one.`
         );
       }
       if (step.agentRef && step.agentRef.source !== "employee") {
         issues.push(
-          `Step "${step.id}" routes to a contact, but route_to_team can only pin a team member — use an employee reference.`
+          `Step "${step.id}" routes to a contact, but route_to_team can only pin a team member; use an employee reference.`
         );
       }
     }
 
     // A `when` guard may only reference a var an EARLIER step produced (same
-    // scope rule as urlVar/templates — checked before this step's own vars are
+    // scope rule as urlVar/templates; checked before this step's own vars are
     // registered below).
     if (step.when && !vars.has(step.when.var) && !ENGINE_VARS.has(step.when.var)) {
       issues.push(

@@ -74,7 +74,7 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
         <div className="text-center py-8">
           <p className="text-parchment/60">No contacts yet.</p>
           <p className="text-xs text-parchment/40 mt-2">
-            Once someone texts or calls — or you add a contact — they&apos;ll appear here.
+            Once someone texts or calls (or you add a contact), they&apos;ll appear here.
           </p>
         </div>
       </Card>
