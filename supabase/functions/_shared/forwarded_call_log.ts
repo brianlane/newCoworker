@@ -14,38 +14,46 @@
  *
  * The row carries no transcript turns (there was no AI conversation) and is
  * written with `summarized_at` set so the call-summary sweep never dispatches it.
- * Upserts on the unique `call_control_id`, so the same call is one row no matter
- * how many webhook deliveries land, and a later `answered` correctly supersedes
- * an earlier `missed` (a dropped call.bridged then a normal_clearing hangup).
+ * Keyed on the unique `call_control_id`, so the same call is one row no matter
+ * how many webhook deliveries land. Outcome precedence is answered > missed:
+ *   - 'answered' UPSERTS (overwrites), so it supersedes an earlier 'missed'
+ *     from a reordered webhook and refreshes ended_at on the final hangup.
+ *   - 'missed' is INSERT-ONLY (ignoreDuplicates): it can never downgrade an
+ *     answered row. The Telnyx wt hangup can carry a non-normal_clearing cause
+ *     even after the human answered (call.bridged fired) — without this the
+ *     hangup would flip a completed call to missed. A blocked missed insert
+ *     returns 'superseded' so the caller skips the missed-call follow-ups.
  *
  * Best-effort by contract: NEVER throws — recording a call for the log must never
  * break live call routing. Dependency-injected (structural supabase type) so it
  * is unit-tested from vitest under the shared 100% coverage gate.
  */
 
-type Row = { data: unknown; error: { message: string } | null };
+type Rows = { data: unknown[] | null; error: { message: string } | null };
 
 export interface ForwardedCallLogSupabase {
   from(table: string): {
     upsert(
       values: Record<string, unknown>,
-      opts: { onConflict: string }
-    ): PromiseLike<Row>;
+      opts: { onConflict: string; ignoreDuplicates?: boolean }
+    ): { select(columns: string): PromiseLike<Rows> };
   };
 }
 
 export type ForwardedCallOutcome = "answered" | "missed";
 
 export type ForwardedCallLogResult = {
-  status: "recorded" | "skipped" | "failed";
-  /** no_call | no_business | <db error>. Unset on "recorded". */
+  /** superseded = missed blocked by an existing (answered) row for this call. */
+  status: "recorded" | "superseded" | "skipped" | "failed";
+  /** no_call | no_business | <db error>. Unset on "recorded"/"superseded". */
   reason?: string;
 };
 
 /**
- * Upsert a forwarded-call row. `answered` maps to status 'completed' and
+ * Record a forwarded-call row. `answered` maps to status 'completed' and
  * stamps ended_at (the leg is over by the time we know the outcome); `missed`
- * maps to status 'missed' with no ended_at (nobody ever picked up).
+ * maps to status 'missed' with no ended_at (nobody ever picked up). See the
+ * module docstring for the answered-over-missed precedence semantics.
  */
 export async function recordForwardedCall(
   supabase: ForwardedCallLogSupabase,
@@ -91,10 +99,15 @@ export async function recordForwardedCall(
       updated_at: now
     };
 
-    const { error } = await supabase
+    // answered: overwrite (supersedes an earlier missed, refreshes ended_at).
+    // missed: insert-only — never downgrade an existing (answered) row; the
+    // returned rows tell us whether the insert actually landed.
+    const { data, error } = await supabase
       .from("voice_call_transcripts")
-      .upsert(row, { onConflict: "call_control_id" });
+      .upsert(row, { onConflict: "call_control_id", ignoreDuplicates: !answered })
+      .select("call_control_id");
     if (error) return { status: "failed", reason: error.message };
+    if (!answered && (data ?? []).length === 0) return { status: "superseded" };
     return { status: "recorded" };
   } catch (err) {
     return { status: "failed", reason: err instanceof Error ? err.message : String(err) };

@@ -1069,6 +1069,10 @@ async function logForwardedCallOutcome(
       console.error("forwarded call log failed", args.context, rec.reason);
     }
     if (args.outcome !== "missed") return;
+    // `superseded`: an answered row already exists for this call (missed is
+    // insert-only, so a reordered/duplicate hangup can't downgrade it) — the
+    // human DID answer, so the missed-call follow-ups must not fire.
+    if (rec.status === "superseded") return;
 
     const missedAt = new Date();
     const autotext = await sendMissedCallAutotext(supabase, {
@@ -1154,6 +1158,20 @@ async function handleWarmTransferLifecycle(
       outcome: "success",
       dedupeKey
     });
+    // Record ANSWERED at the bridge, not just at hangup: the eventual hangup
+    // can carry a non-normal_clearing cause even though the human answered,
+    // and this row is what blocks that hangup's insert-only `missed` write
+    // (see forwarded_call_log.ts precedence). The hangup's answered upsert
+    // then refreshes ended_at with the real call end.
+    await logForwardedCallOutcome(deps, {
+      businessId: wt.businessId,
+      callControlId: legId,
+      callerE164: wt.callerE164 || null,
+      forwardedToE164: wt.recipientE164 || null,
+      startedAtIso: String(payload["start_time"] ?? "") || null,
+      outcome: "answered",
+      context: "warm_transfer"
+    });
     return { handled: true, response: jsonOk("wt_bridged") };
   }
 
@@ -1171,10 +1189,12 @@ async function handleWarmTransferLifecycle(
     outcome: answered ? "success" : "failed",
     dedupeKey
   });
-  // The hangup is the transfer leg's ONE terminal event, so record the call-log
-  // row here (not on call.bridged): the outcome is final and `start_time` →
-  // now spans the leg's real duration. Upsert on the leg id keeps a webhook
-  // redelivery idempotent. Missed → caller auto-text + blocked ledger + spike.
+  // Terminal record. normal_clearing → answered upsert (refreshes ended_at to
+  // the real call end over the bridged-time row). Any other cause → missed,
+  // but insert-only: if call.bridged already recorded answered, the missed
+  // write is superseded and the follow-ups are skipped — the cause alone is
+  // not proof nobody answered. Missed → caller auto-text + blocked ledger +
+  // spike.
   await logForwardedCallOutcome(deps, {
     businessId: wt.businessId,
     callControlId: legId,
