@@ -34,7 +34,7 @@ export function ContactForm() {
           businessName: data.get("businessName"),
           subject: data.get("subject"),
           message: data.get("message"),
-          website: data.get("website")
+          extraField: data.get("extra_field")
         })
       });
       if (!res.ok) {
@@ -149,10 +149,18 @@ export function ContactForm() {
         />
       </div>
 
-      {/* Honeypot: hidden from real users, bots fill it and get discarded. */}
+      {/* Honeypot: hidden from real users, bots fill it and get discarded.
+          Deliberately NOT named like a real field (website/url/phone), so
+          browser autofill heuristics never populate it for real visitors. */}
       <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
-        <label htmlFor="contact-website">Website</label>
-        <input id="contact-website" name="website" type="text" tabIndex={-1} autoComplete="off" />
+        <label htmlFor="contact-extra-field">Leave this field empty</label>
+        <input
+          id="contact-extra-field"
+          name="extra_field"
+          type="text"
+          tabIndex={-1}
+          autoComplete="off"
+        />
       </div>
 
       {error ? <p className="mt-4 text-sm text-spark-orange">{error}</p> : null}

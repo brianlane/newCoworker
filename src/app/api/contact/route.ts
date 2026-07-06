@@ -32,8 +32,12 @@ type ContactPayload = {
   businessName: string;
   subject: string;
   message: string;
-  /** Honeypot: real users never fill this hidden field. */
-  website: string;
+  /**
+   * Honeypot: real users never fill this hidden field. Named so browser
+   * autofill heuristics (website/url/org/phone) never populate it and
+   * silently drop a legitimate submission.
+   */
+  extraField: string;
 };
 
 function readString(value: unknown, max: number): string {
@@ -49,7 +53,7 @@ function parsePayload(body: unknown): ContactPayload {
     businessName: readString(b.businessName, MAX_BUSINESS),
     subject: readString(b.subject, MAX_SUBJECT),
     message: readString(b.message, MAX_MESSAGE),
-    website: readString(b.website, 200)
+    extraField: readString(b.extraField, 200)
   };
 }
 
@@ -73,7 +77,7 @@ export async function POST(request: Request) {
   const payload = parsePayload(body);
 
   // Bots that fill every field trip the honeypot; answer 200 so they move on.
-  if (payload.website.length > 0) {
+  if (payload.extraField.length > 0) {
     return NextResponse.json({ ok: true });
   }
 
