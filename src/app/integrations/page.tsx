@@ -106,7 +106,7 @@ export default function IntegrationsPage() {
             Connect your coworker to <span className="text-claw-green">8,000+ apps</span>
           </>
         }
-        subtitle="Zapier, Google Workspace, Microsoft 365, a public API, and webhooks: your coworker plugs into the tools your business already runs on."
+        subtitle="Zapier, Google Workspace, Microsoft 365, and more: your coworker plugs into the tools your business already runs on. No code needed, and there's a developer API when you want it."
       />
 
       <StatBand

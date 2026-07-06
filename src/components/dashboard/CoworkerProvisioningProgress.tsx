@@ -61,7 +61,7 @@ export function CoworkerProvisioningProgress({ businessId, initialSnapshot }: Pr
         <p className="text-sm font-semibold text-spark-orange">Provisioning did not finish cleanly</p>
         <p className="text-xs text-parchment/60 mt-2">
           Last step reported an error at {percent}% (deploy script or remote setup). Your business may still be
-          starting — check the dashboard or contact support if something looks wrong.
+          starting; check the dashboard or contact support if something looks wrong.
         </p>
       </Card>
     );

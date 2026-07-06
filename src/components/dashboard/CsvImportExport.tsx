@@ -27,7 +27,7 @@ const DATASETS: { type: CsvType; title: string; blurb: string }[] = [
   {
     type: "contacts",
     title: "Contacts",
-    blurb: "Everyone in the directory — customers, companies, testers. Import updates by phone number."
+    blurb: "Everyone in the directory: customers, companies, testers. Import updates by phone number."
   },
   {
     type: "employees",
@@ -154,7 +154,7 @@ export function CsvImportExport({ businessId }: Props) {
             {result?.type === type && (
               <div className="mt-4 rounded-lg border border-parchment/10 bg-deep-ink/40 px-3 py-2">
                 <p className="text-xs text-parchment/80">
-                  {result.summary.totalRows} row{result.summary.totalRows === 1 ? "" : "s"} —{" "}
+                  {result.summary.totalRows} row{result.summary.totalRows === 1 ? "" : "s"}:{" "}
                   <span className="text-claw-green">{result.summary.created} created</span>,{" "}
                   <span className="text-signal-teal">{result.summary.updated} updated</span>,{" "}
                   {result.summary.skipped} skipped

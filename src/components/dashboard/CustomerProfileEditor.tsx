@@ -143,7 +143,7 @@ export function CustomerProfileEditor(props: Props) {
       <label className="block text-xs text-parchment/70 mb-1 mt-4">
         Email
         <span className="ml-1 text-parchment/40">
-          (optional — links their email so inbound/outbound mail rolls up here)
+          (optional; links their email so inbound/outbound mail rolls up here)
         </span>
       </label>
       <input
@@ -165,7 +165,7 @@ export function CustomerProfileEditor(props: Props) {
       <textarea
         value={pinnedMd}
         onChange={(e) => setPinnedMd(e.target.value.slice(0, PINNED_MAX))}
-        placeholder="VIP — escalate to owner on every call.&#10;Always greet by Mr. Smith.&#10;Do not upsell."
+        placeholder="VIP: escalate to owner on every call.&#10;Always greet by Mr. Smith.&#10;Do not upsell."
         rows={5}
         maxLength={PINNED_MAX}
         className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60 font-mono"

@@ -90,7 +90,7 @@ export function StaffSmsToggle({
             </h2>
             <p className="text-xs text-parchment/50 max-w-xl">
               When you or a team member texts your business number, the assistant
-              treats you as staff — not a customer — so it never runs the
+              treats you as staff, not a customer, so it never runs the
               lead-intake script. Choose how it should respond.
             </p>
           </div>

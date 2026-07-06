@@ -17,10 +17,10 @@ const SIZES = ["kvm1", "kvm2", "kvm4", "kvm8"] as const;
 type Size = (typeof SIZES)[number];
 
 const SIZE_LABEL: Record<Size, string> = {
-  kvm1: "KVM 1 — 1 vCPU / 4GB (no local model)",
-  kvm2: "KVM 2 — 2 vCPU / 8GB",
-  kvm4: "KVM 4 — 4 vCPU / 16GB",
-  kvm8: "KVM 8 — 8 vCPU / 32GB"
+  kvm1: "KVM 1: 1 vCPU / 4GB (no local model)",
+  kvm2: "KVM 2: 2 vCPU / 8GB",
+  kvm4: "KVM 4: 4 vCPU / 16GB",
+  kvm8: "KVM 8: 8 vCPU / 32GB"
 };
 
 export function HardwareSizePanel({
@@ -70,7 +70,7 @@ export function HardwareSizePanel({
     return (
       <div className="space-y-1">
         <p className="text-sm text-signal-teal">
-          Migration to {target} started. Watch the ops inbox — a
+          Migration to {target} started. Watch the ops inbox; a
           &ldquo;completed&rdquo; or &ldquo;failed&rdquo; email arrives when it finishes
           (typically 10–20 min).
         </p>
@@ -82,7 +82,7 @@ export function HardwareSizePanel({
     <div className="space-y-2">
       <p className="text-xs text-parchment/40">
         Current box: <span className="font-mono text-parchment">{currentSize}</span>
-        {pinned ? " (pinned)" : " (tier default)"} — entitlements stay on the tier; only
+        {pinned ? " (pinned)" : " (tier default)"}. Entitlements stay on the tier; only
         hardware moves.
       </p>
       <div className="flex flex-wrap items-center gap-2">

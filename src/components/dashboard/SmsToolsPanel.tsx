@@ -57,7 +57,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled =
       }
       router.refresh();
     } catch {
-      setError("Network error — please try again.");
+      setError("Network error; please try again.");
     } finally {
       setBusyId(null);
     }
@@ -85,7 +85,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled =
       setNewBody("");
       router.refresh();
     } catch {
-      setError("Network error — please try again.");
+      setError("Network error; please try again.");
     } finally {
       setCreating(false);
     }
@@ -110,7 +110,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled =
       }
       router.refresh();
     } catch {
-      setError("Network error — please try again.");
+      setError("Network error; please try again.");
     } finally {
       setBusyId(null);
     }
@@ -126,7 +126,7 @@ export function SmsToolsPanel({ businessId, templates, scheduled, toolsEnabled =
         {!toolsEnabled && upcoming.length > 0 && (
           <p className="text-xs text-amber-300/80">
             Scheduling is a Standard plan perk. These were queued on your previous
-            plan and won&apos;t send — cancel them or upgrade to keep scheduling.
+            plan and won&apos;t send; cancel them or upgrade to keep scheduling.
           </p>
         )}
         {upcoming.length === 0 ? (

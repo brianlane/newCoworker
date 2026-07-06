@@ -67,8 +67,8 @@ describe("listSendFromOptions", () => {
     ]);
 
     await expect(listSendFromOptions(BIZ)).resolves.toEqual([
-      { id: "", label: "AI coworker — amy@newcoworker.com", email: "amy@newcoworker.com" },
-      { id: "g1", label: "Gmail — amy@gmail.com", email: "amy@gmail.com" },
+      { id: "", label: "AI coworker: amy@newcoworker.com", email: "amy@newcoworker.com" },
+      { id: "g1", label: "Gmail: amy@gmail.com", email: "amy@gmail.com" },
       { id: "o1", label: "Outlook", email: null }
     ]);
   });
@@ -80,7 +80,7 @@ describe("listSendFromOptions", () => {
     await expect(listSendFromOptions(BIZ)).resolves.toEqual([
       {
         id: "",
-        label: `AI coworker — ${BIZ.toLowerCase()}@newcoworker.com`,
+        label: `AI coworker: ${BIZ.toLowerCase()}@newcoworker.com`,
         email: `${BIZ.toLowerCase()}@newcoworker.com`
       }
     ]);

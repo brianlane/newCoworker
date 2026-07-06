@@ -53,7 +53,7 @@ function daysUntil(iso: string): number {
 }
 
 function headline(reason: Props["reason"]): string {
-  if (reason === "payment_failed") return "Your last payment didn't go through — your workspace is paused";
+  if (reason === "payment_failed") return "Your last payment didn't go through, so your workspace is paused";
   if (reason === "admin_force") return "Your account has been canceled";
   return "Your subscription is canceled";
 }

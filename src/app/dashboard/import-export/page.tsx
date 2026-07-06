@@ -59,7 +59,7 @@ export default async function ImportExportPage() {
       <div>
         <h1 className="text-2xl font-bold text-parchment">Import / Export</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Move your business data in and out as CSV files — bring contacts from another tool or
+          Move your business data in and out as CSV files: bring contacts from another tool or
           take a backup
         </p>
       </div>

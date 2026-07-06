@@ -55,7 +55,24 @@ const topics = [
   }
 ];
 
-export default function ContactPage() {
+/**
+ * Known ?topic= values map to a prefilled form subject so CTAs elsewhere
+ * (e.g. the white-glove lead button on /pricing) land as labeled leads.
+ */
+const TOPIC_SUBJECTS: Record<string, string> = {
+  "white-glove": "White-glove onboarding",
+  enterprise: "Enterprise inquiry",
+  support: "Support request"
+};
+
+export default async function ContactPage({
+  searchParams
+}: {
+  searchParams: Promise<{ topic?: string }>;
+}) {
+  const { topic } = await searchParams;
+  const defaultSubject = topic ? TOPIC_SUBJECTS[topic] : undefined;
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <JsonLd data={CONTACT_PAGE_JSON_LD} />
@@ -91,7 +108,7 @@ export default function ContactPage() {
           </div>
 
           <div className="w-full flex-shrink-0 lg:max-w-md">
-            <ContactForm />
+            <ContactForm defaultSubject={defaultSubject} />
           </div>
         </div>
       </section>

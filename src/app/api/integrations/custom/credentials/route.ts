@@ -94,5 +94,5 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  return errorResponse("VALIDATION_ERROR", "GET not supported on this route — use POST", 405);
+  return errorResponse("VALIDATION_ERROR", "GET not supported on this route; use POST", 405);
 }

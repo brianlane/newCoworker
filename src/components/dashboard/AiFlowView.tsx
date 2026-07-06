@@ -15,7 +15,7 @@ import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
 const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   sms: "Inbound text (SMS)",
-  manual: "Manual — Run now button",
+  manual: "Manual: Run now button",
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
@@ -50,7 +50,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
  */
 function voiceTarget(e164: string | undefined, ref: { label?: string } | undefined): string {
   if (e164) return e164;
-  return ref?.label ? `${ref.label} (saved contact — live number)` : "(saved contact — live number)";
+  return ref?.label ? `${ref.label} (saved contact: live number)` : "(saved contact: live number)";
 }
 
 /** A small pill used for conditions / flags. */
@@ -122,7 +122,7 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
       )}
       {trigger.channel === "voice" && trigger.direction === "outbound" && (
         <>
-          <Row label="Direction" value="Outbound — you place the call" />
+          <Row label="Direction" value="Outbound: you place the call" />
           {trigger.everyMinutes !== undefined ? (
             <Row label="Auto-dial" value={`Every ${trigger.everyMinutes} minutes`} />
           ) : trigger.time !== undefined && trigger.timezone !== undefined ? (
@@ -194,7 +194,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
                 {step.fields.map((f, i) => (
                   <Chip key={i}>
                     {f.name}
-                    {f.description ? ` — ${f.description}` : ""}
+                    {f.description ? `: ${f.description}` : ""}
                   </Chip>
                 ))}
               </div>
@@ -206,7 +206,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               <div className="flex flex-wrap gap-1.5">
                 {step.extractLinks.map((l, i) => (
                   <Chip key={i}>
-                    {l.name} — “{l.matchText}”
+                    {l.name}: “{l.matchText}”
                   </Chip>
                 ))}
               </div>
@@ -228,7 +228,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             {step.fields.map((f, i) => (
               <Chip key={i}>
                 {f.name}
-                {f.description ? ` — ${f.description}` : ""}
+                {f.description ? `: ${f.description}` : ""}
               </Chip>
             ))}
           </div>
@@ -255,7 +255,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             {step.fields.map((f, i) => (
               <Chip key={i}>
                 {f.name}
-                {f.description ? ` — ${f.description}` : ""}
+                {f.description ? `: ${f.description}` : ""}
               </Chip>
             ))}
           </div>
@@ -270,7 +270,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               step.replyToGroup
                 ? "Everyone in the group text (except your number)"
                 : step.toRef
-                  ? `${step.toRef.label ?? "Saved contact"} (saved contact — live number)`
+                  ? `${step.toRef.label ?? "Saved contact"} (saved contact: live number)`
                   : step.toAgentName
                     ? `${step.toAgentName} (team member)`
                     : (step.to ?? "")
@@ -290,7 +290,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
                 <Row
                   label="After-hours email"
                   value={`Emails {{vars.${step.quietHours.emailFallbackVar}}}${
-                    step.quietHours.emailSubject ? ` — "${step.quietHours.emailSubject}"` : ""
+                    step.quietHours.emailSubject ? `: "${step.quietHours.emailSubject}"` : ""
                   }`}
                 />
               )}

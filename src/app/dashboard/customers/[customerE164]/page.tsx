@@ -165,7 +165,7 @@ export default async function CustomerDetailPage({ params }: Props) {
             <span
               key={alias}
               className="text-parchment/70 bg-parchment/10 rounded px-2 py-0.5 font-mono"
-              title="Merged-in number — texts and calls from it land on this profile"
+              title="Merged-in number; texts and calls from it land on this profile"
             >
               also {alias}
             </span>
@@ -236,7 +236,7 @@ export default async function CustomerDetailPage({ params }: Props) {
             Rolling summary
           </h2>
           <p className="text-xs text-parchment/50">
-            No summary yet — it&apos;ll appear here after a few interactions.
+            No summary yet; it&apos;ll appear here after a few interactions.
           </p>
         </Card>
       )}
@@ -369,7 +369,7 @@ export default async function CustomerDetailPage({ params }: Props) {
                     className="text-sm text-parchment/90 hover:text-parchment transition-colors"
                   >
                     <span className="text-[10px] uppercase tracking-wide text-parchment/40 mr-2">
-                      {t.started_at ? <LocalDateTime iso={t.started_at} /> : "—"}
+                      {t.started_at ? <LocalDateTime iso={t.started_at} /> : "–"}
                     </span>
                     {durationLabel && (
                       <span className="text-xs text-parchment/60 mr-2">
@@ -395,7 +395,7 @@ export default async function CustomerDetailPage({ params }: Props) {
  */
 function formatDurationShort(startedAt: string, endedAt: string): string {
   const ms = Math.max(0, Date.parse(endedAt) - Date.parse(startedAt));
-  if (!Number.isFinite(ms) || ms === 0) return "—";
+  if (!Number.isFinite(ms) || ms === 0) return "–";
   const totalSec = Math.round(ms / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);

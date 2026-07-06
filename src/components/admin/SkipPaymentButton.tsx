@@ -33,7 +33,7 @@ export function SkipPaymentButton({ businessId }: { businessId: string }) {
     }
   }
 
-  if (done) return <span className="text-xs text-claw-green">✓ Activated — provisioning started</span>;
+  if (done) return <span className="text-xs text-claw-green">✓ Activated; provisioning started</span>;
 
   return (
     <div className="space-y-1">

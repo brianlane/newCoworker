@@ -97,7 +97,10 @@ export type CrmOption = {
  * empty-string would imply the user skipped the field.
  */
 export const CRM_OPTIONS: readonly CrmOption[] = [
-  { value: "None — texts, email, or calendar only", label: "None — texts, email, or calendar only" },
+  // value is a persisted sentinel (referenced by the onboarding chat prompt
+  // and stored drafts) — only the LABEL is user-visible, so only it avoids
+  // the em dash.
+  { value: "None — texts, email, or calendar only", label: "None: texts, email, or calendar only" },
   { value: "HubSpot", label: "HubSpot" },
   { value: "Salesforce", label: "Salesforce" },
   { value: "Pipedrive", label: "Pipedrive" },

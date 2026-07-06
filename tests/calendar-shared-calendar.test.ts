@@ -476,7 +476,7 @@ describe("mirrorTimeOffEvent", () => {
       expect.objectContaining({
         endpoint: "/calendar/v3/calendars/cal-9/events",
         data: expect.objectContaining({
-          summary: "Sam — out of office",
+          summary: "Sam: out of office",
           start: { date: "2026-06-12" },
           end: { date: "2026-06-14" }
         })
@@ -510,7 +510,7 @@ describe("mirrorTimeOffEvent", () => {
       expect.objectContaining({
         endpoint: "/v1.0/me/calendars/ms-cal/events",
         data: expect.objectContaining({
-          subject: "Sam — out of office",
+          subject: "Sam: out of office",
           isAllDay: true,
           start: { dateTime: "2026-06-12T00:00:00", timeZone: "UTC" },
           end: { dateTime: "2026-06-13T00:00:00", timeZone: "UTC" }

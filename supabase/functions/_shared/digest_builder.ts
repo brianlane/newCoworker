@@ -246,14 +246,14 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
   const detail: DigestEventLink[] = [];
   for (const c of activity.calls) {
     detail.push({
-      label: `Call — ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
+      label: `Call: ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
       href: "/dashboard/calls",
       at: c.started_at
     });
   }
   for (const r of activity.aiFlowRuns) {
     detail.push({
-      label: `AiFlow — ${r.flowName} (${r.status})`,
+      label: `AiFlow: ${r.flowName} (${r.status})`,
       href: "/dashboard/aiflows",
       at: r.created_at
     });
@@ -263,14 +263,14 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
       ? `${cust.display_name} (${cust.customer_e164})`
       : cust.customer_e164;
     detail.push({
-      label: `New customer — ${who}`,
+      label: `New customer: ${who}`,
       href: `/dashboard/customers/${encodeURIComponent(cust.customer_e164)}`
     });
   }
   // One clickable event per conversation, deep-linked to that thread so the
   // owner sees the actual texts (the "log") instead of the messages index.
   const threadLinks: DigestEventLink[] = activity.smsThreads.map((t) => ({
-    label: `Texts with ${t.counterpart} — ${t.inbound} received, ${t.outbound} sent`,
+    label: `Texts with ${t.counterpart}: ${t.inbound} received, ${t.outbound} sent`,
     href: `/dashboard/messages/${encodeURIComponent(t.counterpart)}`,
     at: t.lastAt
   }));
@@ -279,7 +279,7 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
   const chat: DigestEventLink[] = [];
   if (activity.chatTurns > 0) {
     chat.push({
-      label: `Dashboard chat — ${activity.chatTurns} turn${activity.chatTurns === 1 ? "" : "s"}`,
+      label: `Dashboard chat: ${activity.chatTurns} turn${activity.chatTurns === 1 ? "" : "s"}`,
       href: "/dashboard/chat"
     });
   }
@@ -313,7 +313,7 @@ export function buildDigestEventLinks(activity: DigestActivity): DigestEventLink
   // that covers EVERY text, reserve it and chat from the cap, then fill the
   // remaining budget with non-text + per-thread detail.
   const rollup: DigestEventLink = {
-    label: `Texts — ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
+    label: `Texts: ${activity.smsInbound} received, ${activity.smsOutbound} sent`,
     href: "/dashboard/messages"
   };
   const budget = Math.max(0, DIGEST_EVENT_LINKS_MAX - chat.length - 1);

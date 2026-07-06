@@ -107,7 +107,7 @@ export function CoworkerToolsManager({ businessId, initialAgents }: Props) {
                         type="button"
                         role="switch"
                         aria-checked={tool.enabled}
-                        aria-label={`${tool.label} — ${tool.enabled ? "enabled" : "disabled"}`}
+                        aria-label={`${tool.label}: ${tool.enabled ? "enabled" : "disabled"}`}
                         disabled={busy}
                         onClick={() => handleToggle(agent.key, tool.toolKey, !tool.enabled)}
                         className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors disabled:opacity-50 ${

@@ -154,7 +154,7 @@ export default async function CallTranscriptPage({
           <p className="text-sm text-parchment/70 leading-relaxed">
             {transcript.status === "missed"
               ? "This call was forwarded to a team member but wasn't answered."
-              : "This call was forwarded to a team member and answered — no AI transcript exists for it."}
+              : "This call was forwarded to a team member and answered; no AI transcript exists for it."}
             {transcript.forwarded_to_e164 && (
               <>
                 {" "}

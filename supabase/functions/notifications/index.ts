@@ -214,11 +214,11 @@ serve(async (req: Request) => {
   const missedToday = Number(record.log_payload?.missed_calls_today ?? 0);
   const summary =
     record.task_type === "sms_cap_reached"
-      ? "Monthly SMS limit reached — outbound texting is paused. Buy an SMS pack from Billing to resume."
+      ? "Monthly SMS limit reached; outbound texting is paused. Buy an SMS pack from Billing to resume."
       : record.task_type === "chat_spend_cap_reached"
-        ? "AI chat budget reached — replies switched to the slower local model. Buy a Gemini pack from Billing to restore."
+        ? "AI chat budget reached; replies switched to the slower local model. Buy a Gemini pack from Billing to restore."
         : record.task_type === "missed_call_spike"
-          ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard — a plan upgrade or minutes top-up stops the misses.`
+          ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
           : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as

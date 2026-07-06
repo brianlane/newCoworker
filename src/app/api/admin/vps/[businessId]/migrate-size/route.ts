@@ -84,7 +84,7 @@ export async function POST(
     if (!claimed) {
       return errorResponse(
         "CONFLICT",
-        "A hardware migration for this business is already in flight — wait for its ops email"
+        "A hardware migration for this business is already in flight; wait for its ops email"
       );
     }
 

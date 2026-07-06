@@ -76,7 +76,7 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
         <Stat value={entry.download_count.toLocaleString()} label="Uses" />
         <Stat value={`${perDay}/day`} label="Runs (7-day avg)" />
         <Stat
-          value={entry.last_run_at ? new Date(entry.last_run_at).toLocaleDateString() : "—"}
+          value={entry.last_run_at ? new Date(entry.last_run_at).toLocaleDateString() : "–"}
           label="Last run"
         />
       </div>

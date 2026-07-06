@@ -4,7 +4,6 @@ import { useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { BillingPeriod } from "@/lib/plans/tier";
-import { formatPriceCents } from "@/lib/pricing";
 import { listWhiteGlovePackages } from "@/lib/plans/white-glove";
 import {
   getTierCards,
@@ -178,15 +177,16 @@ export function PlanCards() {
         ))}
       </div>
 
-      {/* White-glove onboarding add-on (Phase C5). Purchased after signup
-          from Billing; shown here so buyers factor it into plan choice. */}
+      {/* White-glove onboarding (Phase C5). Deliberately unpriced here:
+          public pages route interest to /contact as a sales lead, and the
+          specialist quotes from there. Purchase happens from Billing. */}
       <div className="rounded-2xl border border-parchment/15 bg-parchment/4 px-5 py-5">
         <h2 className="text-lg font-bold text-parchment">
           Want us to set everything up for you?
         </h2>
         <p className="mt-1 text-sm text-parchment/60">
-          Add white-glove onboarding after signup (from your Billing page) and a specialist
-          handles it live with you. Plans without it include email support.
+          With white-glove onboarding, a specialist sets everything up live with you. Tell us
+          what you need and we&apos;ll reach out. Plans without it include email support.
         </p>
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {listWhiteGlovePackages().map((pkg) => (
@@ -194,12 +194,7 @@ export function PlanCards() {
               key={pkg.id}
               className="rounded-xl border border-parchment/15 bg-deep-ink/40 p-4"
             >
-              <div className="flex items-baseline justify-between gap-2">
-                <p className="text-sm font-semibold text-parchment">{pkg.name}</p>
-                <p className="text-lg font-bold text-claw-green">
-                  {formatPriceCents(pkg.priceCents)}
-                </p>
-              </div>
+              <p className="text-sm font-semibold text-parchment">{pkg.name}</p>
               <p className="mt-1 text-xs text-parchment/55">{pkg.description}</p>
               <ul className="mt-3 space-y-1.5">
                 {pkg.features.map((f) => (
@@ -212,6 +207,12 @@ export function PlanCards() {
             </div>
           ))}
         </div>
+        <a
+          href="/contact?topic=white-glove"
+          className="mt-5 block w-full rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 md:mx-auto md:max-w-sm"
+        >
+          I&apos;m interested in white-glove onboarding
+        </a>
       </div>
     </div>
   );

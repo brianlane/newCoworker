@@ -259,7 +259,7 @@ export async function importContactsCsv(
           } else {
             // The racing row vanished again (e.g. concurrent delete/merge) —
             // report it instead of silently losing the row's data.
-            throw new Error(`A concurrent change kept ${phone} from being saved — re-import this row.`);
+            throw new Error(`A concurrent change kept ${phone} from being saved; re-import this row.`);
           }
         } else {
           summary.created += 1;

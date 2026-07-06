@@ -125,7 +125,7 @@ export function AiFlowLibraryActions({
       {showAdapt && (
         <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-4 space-y-3">
           <p className="text-[11px] text-parchment/40">
-            We&apos;ll rewrite this flow for your business — your number, email, and team are
+            We&apos;ll rewrite this flow for your business; your number, email, and team are
             filled in automatically. Add anything else to tweak (optional).
           </p>
           <textarea
@@ -143,7 +143,7 @@ export function AiFlowLibraryActions({
             {busy === "adapt" ? "Adapting…" : "Adapt with AI"}
           </button>
           {draft !== null && (
-            <p className="text-[11px] text-parchment/40">Draft ready — opening the editor…</p>
+            <p className="text-[11px] text-parchment/40">Draft ready; opening the editor…</p>
           )}
         </div>
       )}

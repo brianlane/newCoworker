@@ -91,7 +91,7 @@ function Screenshot({
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img
           src={url}
-          alt={`${label} — step ${stepIndex + 1}`}
+          alt={`${label}, step ${stepIndex + 1}`}
           className={`max-h-64 w-auto rounded-md border object-contain object-top transition hover:opacity-90 ${
             failed ? "border-red-500/40" : "border-parchment/15"
           }`}
@@ -392,7 +392,7 @@ export function AiFlowRunsManager({
                   {deadline && (
                     <span className="text-parchment/60">
                       {" "}
-                      — replies by {deadline.toLocaleString()}
+                      replies by {deadline.toLocaleString()}
                     </span>
                   )}
                 </p>
@@ -490,7 +490,7 @@ export function AiFlowRunsManager({
                   )}
                   {r.status === "queued" && r.earliest_claim_at && (
                     <p className="text-xs text-parchment/50">
-                      Quiet hours — resumes at{" "}
+                      Quiet hours; resumes at{" "}
                       {new Date(r.earliest_claim_at).toLocaleString()}
                     </p>
                   )}

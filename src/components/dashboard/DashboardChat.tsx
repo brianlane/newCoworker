@@ -794,14 +794,14 @@ export function DashboardChat({ businessId, businessName }: Props) {
         // at a thinking indicator that has stopped without
         // explanation. Bugbot Medium-severity finding on PR #79
         // round-2.
-        setError("Reply ready — refresh to see it.");
+        setError("Reply ready; refresh to see it.");
       }
     } catch (err) {
       if ((err as { name?: string } | null)?.name !== "AbortError") {
         // Network/throw failure on the GET. Same recovery as the
         // error-envelope path above: the message is on the server,
         // we just couldn't fetch it.
-        setError("Reply ready — refresh to see it.");
+        setError("Reply ready; refresh to see it.");
       }
     }
 
@@ -940,7 +940,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
         </Card>
 
         {/*
-          Conversation pane. Every thread is continuable now — sending
+          Conversation pane. Every thread is continuable now; sending
           a message while viewing an archived thread reactivates it
           server-side and continues the conversation, ChatGPT/Claude/
           Gemini-style. No archive banner, no read-only state.
@@ -954,7 +954,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
               <div className="text-sm text-parchment/40">Loading…</div>
             ) : messages.length === 0 ? (
               <div className="text-sm text-parchment/50">
-                Say hi or ask your coworker anything — they&rsquo;ll remember context for this conversation.
+                Say hi or ask your coworker anything; they&rsquo;ll remember context for this conversation.
               </div>
             ) : (
               messages.map((m) => (

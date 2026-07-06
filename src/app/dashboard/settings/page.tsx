@@ -76,7 +76,7 @@ export default async function SettingsPage() {
             <dt className="text-parchment/50">Plan</dt>
             <dd>
               <Badge variant={business?.tier === "standard" ? "online" : "neutral"}>
-                {business?.tier ?? "—"}
+                {business?.tier ?? "–"}
               </Badge>
             </dd>
           </div>
@@ -100,7 +100,7 @@ export default async function SettingsPage() {
             <dt className="text-parchment/50">Subscription status</dt>
             <dd>
               <Badge variant={subscription?.status === "active" ? "success" : "pending"}>
-                {subscription?.status ?? "—"}
+                {subscription?.status ?? "–"}
               </Badge>
             </dd>
           </div>
@@ -154,7 +154,7 @@ export default async function SettingsPage() {
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Phone number</h2>
         <p className="text-xs text-parchment/40">
-          Already have a business number your customers know? Transfer it to your AI coworker —
+          Already have a business number your customers know? Transfer it to your AI coworker;
           most ports finish within a week.
         </p>
         <a

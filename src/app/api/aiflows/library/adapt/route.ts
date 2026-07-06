@@ -49,7 +49,7 @@ export async function POST(request: Request) {
 
     const limiter = await rateLimitDurable(`aiflow-library-adapt:${body.businessId}`, ADAPT_RATE_LIMIT);
     if (!limiter.success) {
-      return errorResponse("FORBIDDEN", "Too many AI requests — wait a moment and try again.", 429);
+      return errorResponse("FORBIDDEN", "Too many AI requests; wait a moment and try again.", 429);
     }
 
     const apiKey = process.env.GOOGLE_API_KEY ?? "";

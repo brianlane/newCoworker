@@ -11,9 +11,9 @@ const LABEL_CLASSES = "mb-2 block text-sm font-medium text-parchment/70";
 
 /**
  * Client-side contact form that posts to /api/contact. Includes a hidden
- * honeypot field ("website") that the API answers 200 for but discards.
+ * honeypot field that the API answers 200 for but discards.
  */
-export function ContactForm() {
+export function ContactForm({ defaultSubject }: { defaultSubject?: string }) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -130,6 +130,7 @@ export function ContactForm() {
           type="text"
           required
           maxLength={200}
+          defaultValue={defaultSubject}
           className={INPUT_CLASSES}
         />
       </div>

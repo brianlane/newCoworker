@@ -126,7 +126,7 @@ export function EmailComposer({
       // into a duplicate — the owner closes the panel via Cancel.
       if (json.data?.logged === false) {
         setNotice(
-          "Sent — but it couldn't be saved to the Emails list yet, so it may not appear here. Close this panel; don't resend."
+          "Sent, but it couldn't be saved to the Emails list yet, so it may not appear here. Close this panel; don't resend."
         );
         setSent(true);
         return;
@@ -134,7 +134,7 @@ export function EmailComposer({
       onSent?.();
       router.refresh();
     } catch {
-      setError("Network error — please try again.");
+      setError("Network error; please try again.");
     } finally {
       setBusy(false);
     }

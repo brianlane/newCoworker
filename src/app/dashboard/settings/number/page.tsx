@@ -66,7 +66,7 @@ export default async function NumberSettingsPage() {
         <h1 className="text-2xl font-bold text-parchment">Phone Number</h1>
         <p className="text-sm text-parchment/50 mt-1">
           {wizardEnabled
-            ? "Bring the business number your customers already know — it transfers to your AI coworker in about a week"
+            ? "Bring the business number your customers already know. It transfers to your AI coworker in about a week"
             : "Bring your existing business number"}
         </p>
       </div>

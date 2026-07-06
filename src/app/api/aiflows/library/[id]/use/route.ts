@@ -38,7 +38,7 @@ export async function POST(request: Request, { params }: Ctx) {
 
     const limiter = await rateLimitDurable(`aiflow-library-use:${body.businessId}`, USE_RATE_LIMIT);
     if (!limiter.success) {
-      return errorResponse("FORBIDDEN", "Too many requests — wait a moment and try again.", 429);
+      return errorResponse("FORBIDDEN", "Too many requests; wait a moment and try again.", 429);
     }
 
     const entry = await getAiFlowLibraryEntry(id);

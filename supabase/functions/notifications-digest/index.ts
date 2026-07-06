@@ -523,7 +523,7 @@ serve(async (req: Request) => {
     const html = buildBrandedEmailHtml({
       siteUrl: appUrl,
       documentTitle: model.subject,
-      heading: `${windowLabel(window).title} — ${t.business_name ?? "your business"}`,
+      heading: `${windowLabel(window).title}: ${t.business_name ?? "your business"}`,
       bodyBlocks,
       cta: { label: "Open dashboard", href: dashboardUrl },
       unsubscribeUrl,

@@ -195,7 +195,7 @@ export function SentimentMixCard({
       </p>
       {total === 0 ? (
         <p className="text-sm text-parchment/50 mt-2">
-          No summarized calls yet — sentiment appears as AI call summaries are generated.
+          No summarized calls yet; sentiment appears as AI call summaries are generated.
         </p>
       ) : (
         <div className="space-y-2 mt-3">

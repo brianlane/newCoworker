@@ -69,7 +69,7 @@ const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
 /** How the workflow starts. Mirrors TRIGGER_CHANNELS in the schema. */
 const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   sms: "Inbound text (SMS)",
-  manual: "Manual — Run now button",
+  manual: "Manual: Run now button",
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
@@ -625,7 +625,7 @@ export function AiFlowsManager({
                 "";
               return {
                 id: c.id,
-                label: email ? `${c.providerConfigKey} — ${email}` : c.providerConfigKey
+                label: email ? `${c.providerConfigKey}: ${email}` : c.providerConfigKey
               };
             })
         );
@@ -840,7 +840,7 @@ export function AiFlowsManager({
         setRunNotice(json.error?.message ?? "Run failed to start");
         return;
       }
-      setRunNotice("Run queued — see View runs for progress.");
+      setRunNotice("Run queued; see View runs for progress.");
       setRunInput("");
       setRunFor(null);
     } finally {
@@ -979,7 +979,7 @@ export function AiFlowsManager({
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Trigger</h3>
           <p className="text-[11px] text-parchment/40">
-            The trigger is what kicks off this workflow — pick how it should start below.
+            The trigger is what kicks off this workflow; pick how it should start below.
           </p>
           <div>
             <label className={labelClass}>Starts when</label>
@@ -1120,8 +1120,8 @@ export function AiFlowsManager({
                     })
                   }
                 >
-                  <option value="inbound">Inbound — a call comes in</option>
-                  <option value="outbound">Outbound — you place a call</option>
+                  <option value="inbound">Inbound: a call comes in</option>
+                  <option value="outbound">Outbound: you place a call</option>
                 </select>
               </div>
               {editor.voiceDirection === "inbound" ? (
@@ -1137,7 +1137,7 @@ export function AiFlowsManager({
                     help="Calls from this person fire the flow."
                   />
                   <p className="text-[11px] text-parchment/40">
-                    When a call comes in from this number, the steps below route it in real time — ring
+                    When a call comes in from this number, the steps below route it in real time: ring
                     people in order, then optionally hand off to your AI, or connect straight to one
                     number. Voice flows run on the call as it happens, so Run now and the batch
                     conditions don&apos;t apply.
@@ -1147,7 +1147,7 @@ export function AiFlowsManager({
                 <>
                   <p className="text-[11px] text-parchment/40">
                     An outbound flow places a call when you press Place call on the flow. Add a single
-                    Place an outbound call step below — when the callee answers, the AI talks to them,
+                    Place an outbound call step below; when the callee answers, the AI talks to them,
                     captures the details, and texts you a summary. Voice budget is checked first, so an
                     over-budget account can&apos;t place AI calls.
                   </p>
@@ -1519,7 +1519,7 @@ export function AiFlowsManager({
       {flows.length === 0 ? (
         <Card>
           <p className="py-6 text-center text-sm text-parchment/60">
-            No AiFlows yet. Create one to automate a workflow — start it from a text, an
+            No AiFlows yet. Create one to automate a workflow: start it from a text, an
             email, a schedule, or run it on demand.
           </p>
         </Card>
@@ -1605,7 +1605,7 @@ export function AiFlowsManager({
                   className={inputClass}
                   value={runInput}
                   onChange={(ev) => setRunInput(ev.target.value)}
-                  placeholder="Optional input — paste a link or message text for {{trigger.url}} / {{trigger.windowText}}"
+                  placeholder="Optional input: paste a link or message text for {{trigger.url}} / {{trigger.windowText}}"
                 />
                 <button
                   onClick={() => runNow(row)}
@@ -1737,7 +1737,7 @@ function RecipientListField({
           <option value="">Add employee…</option>
           {available.map((m) => (
             <option key={m.email} value={m.email}>
-              {m.name ? `${m.name} — ${m.email}` : m.email}
+              {m.name ? `${m.name}: ${m.email}` : m.email}
             </option>
           ))}
         </select>
@@ -2051,7 +2051,7 @@ function StepFields({
             // Saved-contact recipient: the person's LIVE number is resolved at
             // send time (renumbers/merges propagate automatically).
             <ContactRefPicker
-              label="Recipient (saved contact — live number)"
+              label="Recipient (saved contact: live number)"
               textValue=""
               refValue={step.toRef}
               people={people}
@@ -2063,7 +2063,7 @@ function StepFields({
           ) : (
             <>
               {/* Recipient is phone OR team-member OR saved contact, never
-                  more than one. Hide the other controls once one is chosen —
+                  more than one. Hide the other controls once one is chosen;
                   but if BOTH text fields are somehow set (invalid imported/
                   legacy data) keep both visible so it can be corrected. */}
               {(!step.toAgentName || Boolean(step.to)) && (
@@ -2138,7 +2138,7 @@ function StepFields({
                 />
               </div>
               <Field
-                label="After-hours email — variable holding the lead's email (optional; emailed right away while the text waits until morning)"
+                label="After-hours email: variable holding the lead's email (optional; emailed right away while the text waits until morning)"
                 value={qh.emailFallbackVar ?? ""}
                 onChange={(v) =>
                   patchStep(index, {
@@ -2252,7 +2252,7 @@ function StepFields({
           }}
         />
         <ContactRefPicker
-          label={`Pin to one team member (optional — e.g. ${examples.pinExample})`}
+          label={`Pin to one team member (optional; e.g. ${examples.pinExample})`}
           placeholder={examples.pinExample}
           textValue={step.agentName ?? ""}
           refValue={step.agentRef}
@@ -2296,7 +2296,7 @@ function StepFields({
                 })
               }
             />
-            After-hours offers — the claim countdown starts in the morning
+            After-hours offers: the claim countdown starts in the morning
           </label>
           {ow && (
             <div className="flex flex-wrap gap-2">
@@ -2349,7 +2349,7 @@ function StepFields({
       <div className="space-y-2">
         <Field label="URL variable" value={step.urlVar} onChange={(v) => patchStep(index, { urlVar: v })} />
         <Field
-          label="Login integration label (optional — for pages behind the owner's account)"
+          label="Login integration label (optional; for pages behind the owner's account)"
           value={step.auth?.integrationLabel ?? ""}
           onChange={(v) =>
             patchStep(index, { auth: v.trim() ? { integrationLabel: v } : undefined })
@@ -2442,7 +2442,7 @@ function StepFields({
           label="Repeat the actions for each list link matching this CSS selector (optional; loops over a list)"
           value={step.forEachLink ?? ""}
           onChange={(v) => patchStep(index, { forEachLink: v.trim() ? v.trim() : undefined })}
-          help="Leave blank to act on a single page. When set, the actions run on every matching link — extraction fields, screenshot, and remember-link are hidden and dropped on save (they're kept in the editor so clearing the selector restores them)."
+          help="Leave blank to act on a single page. When set, the actions run on every matching link; extraction fields, screenshot, and remember-link are hidden and dropped on save (they're kept in the editor so clearing the selector restores them)."
         />
         {step.forEachLink ? (
           <>

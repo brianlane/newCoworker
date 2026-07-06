@@ -146,7 +146,7 @@ function requireE164(raw: string): string {
   const normalized = normalizeContactNumber(raw);
   if (!normalized.ok) throw new ByonValidationError(normalized.reason);
   if (!normalized.value.startsWith("+")) {
-    throw new ByonValidationError("Short codes can't be ported — enter a full phone number.");
+    throw new ByonValidationError("Short codes can't be ported; enter a full phone number.");
   }
   return normalized.value;
 }
@@ -507,7 +507,7 @@ export async function cancelByonPortRequest(
   if (TERMINAL_STATUSES.has(existing.status)) {
     throw new ByonValidationError(
       existing.status === "ported"
-        ? "This number already finished porting — it can't be cancelled."
+        ? "This number already finished porting; it can't be cancelled."
         : "This request is already cancelled."
     );
   }

@@ -129,7 +129,7 @@ export function AddCustomerForm({ businessId }: Props) {
       <textarea
         value={note}
         onChange={(e) => setNote(e.target.value.slice(0, 4000))}
-        placeholder="Pinned note (optional) — sticks across every future SMS or call"
+        placeholder="Pinned note (optional); sticks across every future SMS or call"
         rows={2}
         className="mt-3 w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
       />

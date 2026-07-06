@@ -223,7 +223,7 @@ export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled =
       setRequests((prev) => [...rows, ...prev]);
       if (json.data?.submitted) {
         setNotice(
-          "Port request submitted. We'll text and email you as your carrier processes it — most ports finish within a week."
+          "Port request submitted. We'll text and email you as your carrier processes it. Most ports finish within a week."
         );
         // Reset the wizard for a potential next number.
         setStep(1);
@@ -290,7 +290,7 @@ export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled =
               Bring-your-own-number is a Standard plan perk
             </p>
             <p className="text-parchment/60 text-sm max-w-md mx-auto">
-              Upgrade to Standard to port the business number your customers already know — it
+              Upgrade to Standard to port the business number your customers already know. It
               transfers to your AI coworker in about a week.
             </p>
             <a
@@ -310,7 +310,7 @@ export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled =
           <h2 className="text-sm font-semibold text-parchment">Bring your own number</h2>
         </div>
         <p className="text-xs text-parchment/50 mb-4">
-          Move your existing business number to your AI coworker. Calls and texts transfer over —
+          Move your existing business number to your AI coworker. Calls and texts transfer over,
           your current service keeps working until the switch completes.
         </p>
 
@@ -368,7 +368,7 @@ export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled =
             {check && check.portable && (
               <div className="rounded-lg border border-claw-green/30 bg-claw-green/5 px-3 py-2">
                 <p className="text-sm text-claw-green">
-                  {formatDid(check.phoneE164)} can move to your coworker — typically{" "}
+                  {formatDid(check.phoneE164)} can move to your coworker, typically{" "}
                   {check.etaDays}.
                 </p>
                 {check.carrierName && (
@@ -398,7 +398,7 @@ export function ByonNumberPorting({ businessId, initialRequests, wizardEnabled =
         {step === 2 && (
           <div className="space-y-3">
             <p className="text-xs text-parchment/50">
-              Enter these exactly as they appear on your carrier bill — mismatches are the most
+              Enter these exactly as they appear on your carrier bill; mismatches are the most
               common reason carriers reject a transfer.
             </p>
             <div className="grid gap-3 sm:grid-cols-2">

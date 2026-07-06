@@ -133,7 +133,7 @@ export default async function ProvisionPage() {
                       <StatusDot status={b.status as "online" | "offline" | "high_load"} showLabel />
                     </td>
                     <td className="py-3 px-4 text-parchment/60 font-mono text-xs">
-                      {b.hostinger_vps_id ?? "—"}
+                      {b.hostinger_vps_id ?? "–"}
                     </td>
                   </tr>
                 ))}

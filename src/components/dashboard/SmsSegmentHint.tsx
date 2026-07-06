@@ -52,7 +52,7 @@ export function SmsSegmentHint({ text, mode, channel = "sms" }: Props) {
     <p className="text-xs text-spark-orange" role="alert">
       {mode === "verbatim"
         ? `This message is ${info.length} characters and contains emoji or special characters, ` +
-          `which caps texts at ${UCS2_MAX_SENDABLE_CHARS} characters — it will fail to send. ` +
+          `which caps texts at ${UCS2_MAX_SENDABLE_CHARS} characters, so it will fail to send. ` +
           `Remove the emoji or shorten the message.`
         : `This message is ${info.length} characters and contains emoji or special characters, ` +
           `which caps texts at ${UCS2_MAX_SENDABLE_CHARS} characters. To keep it sendable, ` +

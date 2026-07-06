@@ -47,7 +47,9 @@ describe("intakeOptions: CRM_OPTIONS", () => {
     // is no ambiguity between "user skipped" and "user said no
     // CRM".
     expect(CRM_OPTIONS[0]?.value).toBe("None — texts, email, or calendar only");
-    expect(CRM_OPTIONS[0]?.label).toBe("None — texts, email, or calendar only");
+    // Label diverges from the value on purpose: the value is a persisted
+    // sentinel, while the visible label follows the no-em-dash copy rule.
+    expect(CRM_OPTIONS[0]?.label).toBe("None: texts, email, or calendar only");
   });
 
   it("ends with an Other escape hatch so the dropdown isn't an exhaustive enumeration", () => {

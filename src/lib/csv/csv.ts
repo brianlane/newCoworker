@@ -77,7 +77,7 @@ export function parseCsv(text: string): CsvParseResult {
     i += 1;
   }
   if (inQuotes) {
-    return { ok: false, error: "Unterminated quoted field — check for a missing closing quote." };
+    return { ok: false, error: "Unterminated quoted field; check for a missing closing quote." };
   }
   // Flush the final record unless the file ended with a newline and nothing after.
   if (field.length > 0 || record.length > 0) pushRecord();

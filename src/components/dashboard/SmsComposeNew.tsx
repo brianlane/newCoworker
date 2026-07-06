@@ -110,7 +110,7 @@ export function SmsComposeNew({
       // would 404 on an empty history, so stay put and tell the owner the
       // message went out without being recorded.
       if (json.data?.logged === false) {
-        setError("Sent, but it couldn't be saved to history yet — it may not appear in the thread.");
+        setError("Sent, but it couldn't be saved to history yet; it may not appear in the thread.");
         setText("");
         return;
       }
@@ -118,7 +118,7 @@ export function SmsComposeNew({
       setText("");
       router.push(`/dashboard/messages/${encodeURIComponent(toE164)}`);
     } catch {
-      setError("Network error — please try again.");
+      setError("Network error; please try again.");
     } finally {
       setBusy(false);
     }

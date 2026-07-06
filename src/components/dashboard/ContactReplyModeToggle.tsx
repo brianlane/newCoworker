@@ -37,13 +37,13 @@ const MODE_OPTIONS: Array<{ mode: SmsReplyMode; label: string; description: stri
     mode: "suppress",
     label: "Suppress replies",
     description:
-      "No automatic replies to this contact. Your AiFlows and manual sends from this thread still work — use this for lead-source or bot numbers."
+      "No automatic replies to this contact. Your AiFlows and manual sends from this thread still work; use this for lead-source or bot numbers."
   },
   {
     mode: "forward_owner",
     label: "Suppress & ask me",
     description:
-      "No automatic reply — their text is forwarded to your cell with \u201CWhat would you like me to say?\u201D and your reply is sent to them."
+      "No automatic reply; their text is forwarded to your cell with \u201CWhat would you like me to say?\u201D and your reply is sent to them."
   }
 ];
 

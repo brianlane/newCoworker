@@ -70,7 +70,7 @@ export function resolveSmsCampaignCopy(
     hint:
       "Your number is being registered with US carriers (10DLC). " +
       "Inbound SMS works now; outbound replies may not deliver until registration " +
-      "completes — typically 1-2 business days."
+      "completes, typically 1-2 business days."
   };
 }
 
@@ -104,7 +104,7 @@ export function PhoneNumberCard({
           <Badge variant="pending">Provisioning</Badge>
         </div>
         <p className="mt-2 text-sm text-parchment/70">
-          We&rsquo;re still assigning your number. Check back in a few minutes — you&rsquo;ll get
+          We&rsquo;re still assigning your number. Check back in a few minutes; you&rsquo;ll get
           an SMS when it&rsquo;s live.
         </p>
       </div>
