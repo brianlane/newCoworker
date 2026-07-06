@@ -903,6 +903,14 @@ describe("planLifecycleAction: return_vps_to_pool (fleet economics Phase B)", ()
     expect(poolOp(res)?.plan).toBe("kvm2");
   });
 
+  it("keeps a kvm4 pin as the pool label (escalated mid-size box)", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsSize: "kvm4", subscription: makeSub({ tier: "standard" }) })
+    );
+    expect(poolOp(res)?.plan).toBe("kvm4");
+  });
+
   it("labels an unpinned starter box kvm2 (historical pre-inventory hardware, NOT the new kvm1 default)", () => {
     // Every kvm1-era box gets a vps_inventory row (with its real plan) at
     // purchase/adopt time, so this fallback only ever fires for

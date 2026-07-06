@@ -461,6 +461,53 @@ describe("migrateBusinessVpsSize — old-box teardown + completion", () => {
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
   });
 
+  it("resolves the old billing id via the billing list when the sub row and VM detail have none", async () => {
+    const base = makeDeps();
+    const deps = makeDeps({
+      getSubscription: vi.fn(async () =>
+        subRow({ hostinger_billing_subscription_id: null })
+      ),
+      hostinger: {
+        ...base.hostinger,
+        getVirtualMachine: vi.fn(async (id: number) =>
+          id === 1800985
+            ? ({ id, state: "running", ipv4: [{ id: 1, address: "1.2.3.4" }] } as never)
+            : ({ id, state: "running", ipv4: [{ id: 2, address: "5.6.7.8" }], subscription_id: "hbs-new" } as never)
+        ),
+        listBillingSubscriptions: vi.fn(async () => [
+          { id: "hbs-old-listed", resource_id: "1800985" } as never
+        ])
+      }
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.oldBillingHandling).toBe("auto-renew-disabled");
+    expect(deps.hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs-old-listed");
+  });
+
+  it("survives the old-billing list fallback throwing (still-renewing outcome, migration completes)", async () => {
+    const base = makeDeps();
+    const deps = makeDeps({
+      getSubscription: vi.fn(async () =>
+        subRow({ hostinger_billing_subscription_id: null })
+      ),
+      hostinger: {
+        ...base.hostinger,
+        getVirtualMachine: vi.fn(async (id: number) =>
+          id === 1800985
+            ? ({ id, state: "running", ipv4: [{ id: 1, address: "1.2.3.4" }] } as never)
+            : ({ id, state: "running", ipv4: [{ id: 2, address: "5.6.7.8" }], subscription_id: "hbs-new" } as never)
+        ),
+        listBillingSubscriptions: vi.fn(async () => {
+          throw new Error("hostinger list down");
+        })
+      }
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    if (out.ok) expect(out.oldBillingHandling).toBe("billing-id-unknown-still-renewing");
+  });
+
   it("handles a business with no recorded VM: no backup possible → fail-closed at backup", async () => {
     const deps = makeDeps({
       getBusiness: vi.fn(async () => bizRow({ hostinger_vps_id: null }))

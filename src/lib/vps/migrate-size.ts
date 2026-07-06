@@ -151,6 +151,21 @@ export async function migrateBusinessVpsSize(
     } catch (err) {
       logger.warn("migrate-size: old VM lookup failed", { businessId, oldVmId, error: errMsg(err) });
     }
+    // Last-ditch billing lookup by resource_id (mirrors the debug script):
+    // without an id, teardown can't disable auto-renew and the old box
+    // renews forever behind a "billing-id-unknown" completion email.
+    if (!oldBillingId) {
+      try {
+        const subs = await deps.hostinger.listBillingSubscriptions();
+        oldBillingId = subs.find((s) => s.resource_id === String(oldVmId))?.id ?? null;
+      } catch (err) {
+        logger.warn("migrate-size: old billing list fallback failed", {
+          businessId,
+          oldVmId,
+          error: errMsg(err)
+        });
+      }
+    }
   }
 
   const notify = async (phase: OpsMigrationEmailInput["phase"], detail: string): Promise<void> => {

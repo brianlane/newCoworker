@@ -32,6 +32,7 @@ import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import type { CustomerProfileRow } from "@/lib/db/customer-profiles";
 import { isWithinLifetimeRefundWindow } from "@/lib/db/customer-profiles";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
+import { isVpsSize } from "@/lib/vps/size";
 
 /** 30-day grace window after any cancellation. Centralised so callers stay in sync. */
 export const GRACE_WINDOW_DAYS = 30;
@@ -691,7 +692,7 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
  * hardware.
  */
 function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string {
-  if (vpsSize === "kvm1" || vpsSize === "kvm2" || vpsSize === "kvm8") return vpsSize;
+  if (isVpsSize(vpsSize)) return vpsSize;
   return tier === "starter" ? "kvm2" : "kvm8";
 }
 
