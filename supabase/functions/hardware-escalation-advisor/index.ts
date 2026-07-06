@@ -97,17 +97,23 @@ serve(async (req: Request) => {
 
   // Fleet scan: active tenants only. `wiped` boxes have no hardware; paused
   // tenants can't generate load.
-  const { data: bizRows, error: bizErr } = await supabase
-    .from("businesses")
-    .select("id, name, tier, vps_size, status, is_paused")
-    .in("tier", ["starter", "standard"])
-    .in("status", ["online", "high_load"]);
-  if (bizErr) {
-    console.error("businesses select failed", bizErr);
+  let bizRows: Array<AdvisorBusiness & { status: string; is_paused: boolean | null }>;
+  try {
+    bizRows = await fetchAllPages<AdvisorBusiness & { status: string; is_paused: boolean | null }>(
+      (from, to) =>
+        supabase
+          .from("businesses")
+          .select("id, name, tier, vps_size, status, is_paused")
+          .in("tier", ["starter", "standard"])
+          .in("status", ["online", "high_load"])
+          .order("id", { ascending: true })
+          .range(from, to)
+    );
+  } catch (err) {
+    console.error("businesses select failed", err);
     return new Response("select failed", { status: 500 });
   }
-  const businesses = ((bizRows ?? []) as Array<AdvisorBusiness & { status: string; is_paused: boolean | null }>)
-    .filter((b) => !b.is_paused);
+  const businesses = bizRows.filter((b) => !b.is_paused);
 
   if (businesses.length === 0) {
     await telemetryRecord(supabase, "hardware_escalation_advisor", {
