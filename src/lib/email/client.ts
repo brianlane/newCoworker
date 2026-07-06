@@ -20,6 +20,13 @@ export type SendOwnerEmailOptions = {
   cc?: string[];
   /** Optional bcc recipients (already normalized to valid addresses). */
   bcc?: string[];
+  /**
+   * Reply-To override. Defaults to CONTACT_EMAIL, which is right for
+   * outbound notifications; senders relaying a third party's message
+   * (e.g. the contact form) set this to that party's address so replying
+   * in a mail client reaches them.
+   */
+  replyTo?: string;
 };
 
 const DEFAULT_FROM = "New Coworker <contact@newcoworker.com>";
@@ -67,7 +74,7 @@ export async function sendOwnerEmail(
   // the real Resend class (legacyResendCtor's parameter default).
   const ctor = opts.resendCtor ?? legacyResendCtor;
   const resend = new ctor(apiKey);
-  const replyTo = process.env.CONTACT_EMAIL;
+  const replyTo = opts.replyTo ?? process.env.CONTACT_EMAIL;
 
   const text = opts.text ?? "";
   const finalText = opts.unsubscribeUrl

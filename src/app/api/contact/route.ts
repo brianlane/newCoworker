@@ -109,9 +109,21 @@ export async function POST(request: Request) {
   ].filter((l): l is string => l !== null);
 
   try {
-    await sendOwnerEmail(apiKey, toEmail, `[Contact form] ${payload.subject}`, {
-      text: lines.join("\n")
+    // Reply-To is the submitter so replying in a mail client reaches them,
+    // not the inbox that received the notification.
+    const messageId = await sendOwnerEmail(apiKey, toEmail, `[Contact form] ${payload.subject}`, {
+      text: lines.join("\n"),
+      replyTo: payload.email
     });
+    // Resend reports failures as { data: null, error } without throwing, so
+    // a missing message id means the email was NOT sent.
+    if (!messageId) {
+      logger.warn("contact form email not accepted by Resend");
+      return NextResponse.json(
+        { error: "We couldn't send your message. Please try again." },
+        { status: 502 }
+      );
+    }
   } catch (err) {
     logger.warn("contact form email failed", {
       error: err instanceof Error ? err.message : String(err)

@@ -41,6 +41,32 @@ describe("email client", () => {
     });
   });
 
+  it("options.replyTo overrides the CONTACT_EMAIL default", async () => {
+    const sendMock = vi.fn(async () => ({ data: { id: "email_2" } }));
+    class MockResend {
+      emails = { send: sendMock };
+      constructor(_key: string) {}
+    }
+
+    process.env.CONTACT_EMAIL = "team@example.com";
+    process.env.MAILER_EMAIL = "sender@example.com";
+
+    const id = await sendOwnerEmail("re_key", "team@example.com", "[Contact form] Hi", {
+      text: "Body",
+      replyTo: "visitor@example.com",
+      resendCtor: MockResend as any
+    });
+
+    expect(id).toBe("email_2");
+    expect(sendMock).toHaveBeenCalledWith({
+      from: "sender@example.com",
+      to: "team@example.com",
+      subject: "[Contact form] Hi",
+      text: "Body",
+      replyTo: "visitor@example.com"
+    });
+  });
+
   it("returns null when id is missing", async () => {
     const sendMock = vi.fn(async () => ({ data: null }));
     class MockResend {
