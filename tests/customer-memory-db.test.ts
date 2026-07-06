@@ -41,6 +41,7 @@ import {
   linkCustomerEmail,
   listCustomerMemories,
   listSmsHistoryForCustomer,
+  touchLastSummarizedAt,
   mergeCustomerMemories,
   recordInteractionAndIncrement,
   setContactSmsReplyMode,
@@ -712,6 +713,34 @@ describe("updateCustomerSummary", () => {
   });
 });
 
+describe("touchLastSummarizedAt", () => {
+  it("UPDATEs only last_summarized_at + updated_at (no summary write, no counter reset), scoped to (biz, customer)", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await touchLastSummarizedAt(BIZ, CUSTOMER, client);
+    const fr = fromCalls[0]!;
+    expect(fr.table).toBe("contacts");
+    const updateCall = fr.calls.find((c) => c.name === "update");
+    const patch = updateCall?.args[0] as Record<string, unknown>;
+    expect(patch.last_summarized_at).toBeTruthy();
+    expect(patch.updated_at).toBeTruthy();
+    // The skip stamp must never clobber the summary or the interaction
+    // counter — it exists purely to rotate the sweep queue.
+    expect(Object.keys(patch).sort()).toEqual(["last_summarized_at", "updated_at"]);
+    const eqs = fr.calls.filter((c) => c.name === "eq");
+    expect(eqs[0]?.args).toEqual(["business_id", BIZ]);
+    expect(eqs[1]?.args).toEqual(["customer_e164", CUSTOMER]);
+  });
+
+  it("propagates PostgREST errors", async () => {
+    const { client } = makeClient({
+      fromTerminator: { data: null, error: { message: "rls" } }
+    });
+    await expect(touchLastSummarizedAt(BIZ, CUSTOMER, client)).rejects.toThrow(
+      /touchLastSummarizedAt: rls/
+    );
+  });
+});
+
 describe("updateCustomerOwnerFields", () => {
   it("only patches the fields the owner provided — never touches summary_md/counters/last_*", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
@@ -1072,6 +1101,43 @@ describe("listSmsHistoryForCustomer", () => {
     expect(result.find((r) => r.jobId === "c")?.inboundText).toBe("");
   });
 
+  it("extracts RCS inbound text nested under a body OBJECT (typed text + tapped suggestion)", async () => {
+    // RCS webhooks nest content: body.text for typed messages,
+    // body.suggestion_response.text for tapped suggested replies. Without
+    // this, an RCS-only customer read as having no customer-authored
+    // content and the summarizer's gate skipped them (Bugbot, PR #380).
+    const { client } = makeClient({
+      fromTerminator: {
+        data: [
+          jobRow({ id: "typed", payload: { data: { payload: { body: { text: "rcs typed" } } } } }),
+          jobRow({
+            id: "tapped",
+            payload: {
+              data: { payload: { body: { suggestion_response: { text: "rcs tapped" } } } }
+            }
+          }),
+          // body object with neither shape → degrade to empty, never throw.
+          jobRow({ id: "odd", payload: { data: { payload: { body: { media: ["x"] } } } } }),
+          // suggestion_response present but its text is not a string.
+          jobRow({
+            id: "oddSuggestion",
+            payload: { data: { payload: { body: { suggestion_response: { text: 42 } } } } }
+          }),
+          // body is an ARRAY (not a text-bearing object) → empty.
+          jobRow({ id: "arr", payload: { data: { payload: { body: ["not", "text"] } } } })
+        ],
+        error: null
+      },
+      tableTerminators: { sms_outbound_log: { data: [], error: null } }
+    });
+    const result = await listSmsHistoryForCustomer(BIZ, CUSTOMER, {}, client);
+    expect(result.find((r) => r.jobId === "typed")?.inboundText).toBe("rcs typed");
+    expect(result.find((r) => r.jobId === "tapped")?.inboundText).toBe("rcs tapped");
+    expect(result.find((r) => r.jobId === "odd")?.inboundText).toBe("");
+    expect(result.find((r) => r.jobId === "oddSuggestion")?.inboundText).toBe("");
+    expect(result.find((r) => r.jobId === "arr")?.inboundText).toBe("");
+  });
+
   it("prefers the durable assistant_reply_text over the transient cache, and falls back when it's blank", async () => {
     const { client } = makeClient({
       fromTerminator: {
@@ -1238,6 +1304,13 @@ describe("default service-client fallback (every public helper)", () => {
     const { client } = makeClient({ fromTerminator: { data: null, error: null } });
     defaultClientSpy.mockReturnValue(client);
     await updateCustomerSummary(BIZ, CUSTOMER, { summaryMd: "x", resetCounter: true });
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("touchLastSummarizedAt falls back to createSupabaseServiceClient", async () => {
+    const { client } = makeClient({ fromTerminator: { data: null, error: null } });
+    defaultClientSpy.mockReturnValue(client);
+    await touchLastSummarizedAt(BIZ, CUSTOMER);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 

@@ -80,7 +80,9 @@ export async function POST(request: Request): Promise<Response> {
     // info for expected skips so we don't pager on quiet rows; warn
     // for actual failures so they show up in alerting.
     const isExpectedSkip =
-      result.reason === "below_threshold" || result.reason === "debounced";
+      result.reason === "below_threshold" ||
+      result.reason === "debounced" ||
+      result.reason === "no_customer_content";
     const log = isExpectedSkip ? logger.info : logger.warn;
     log.call(logger, "summarize-customer skipped/failed", {
       businessId: body.businessId,
