@@ -80,6 +80,8 @@ const comparisonRows: ComparisonRow[] = [
 ];
 
 function buildPricingFaq(): FaqItem[] {
+  // Same env-driven address the footer uses, so the two can't diverge.
+  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);
   const standardRenewal = formatPricePerMonth(getPeriodPricing("standard", "biennial").renewalMonthlyCents);
@@ -140,8 +142,8 @@ function buildPricingFaq(): FaqItem[] {
       answer: (
         <>
           Every plan includes one dedicated number. Extra numbers are $5/mo each — contact{" "}
-          <a href="mailto:team@newcoworker.com" className="text-signal-teal hover:underline">
-            team@newcoworker.com
+          <a href={`mailto:${contactEmail}`} className="text-signal-teal hover:underline">
+            {contactEmail}
           </a>{" "}
           to add one to your account.
         </>
