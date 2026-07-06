@@ -398,8 +398,19 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           }
         };
       }
-      const to = renderTemplate(step.to ?? "", scope).trim();
-      if (!to) return { ok: false, error: "send_sms: recipient is empty after templating" };
+      const toRaw = renderTemplate(step.to ?? "", scope).trim();
+      if (!toRaw) return { ok: false, error: "send_sms: recipient is empty after templating" };
+      // Telnyx only accepts E.164. Extracted phones arrive in page formatting —
+      // "(840) 275-3158", "840.275.3158" — so coerce NANP shapes to +1XXXXXXXXXX
+      // and fail fast (no retries) on anything unparseable instead of burning
+      // MAX_ATTEMPTS on a guaranteed Telnyx 40310 "Invalid 'to' address".
+      const to = isE164(toRaw) ? toRaw : normalizeNanpToE164(toRaw);
+      if (!to) {
+        return {
+          ok: false,
+          error: `send_sms: recipient "${toRaw}" is not a valid phone number`
+        };
+      }
       return { ok: true, action: { kind: "send_sms", to, body, ...(quiet ? { quiet } : {}) } };
     }
     case "send_email": {
