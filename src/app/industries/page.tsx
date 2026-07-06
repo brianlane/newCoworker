@@ -9,7 +9,7 @@ import { INDUSTRIES } from "./data";
 export const metadata: Metadata = {
   title: "Industries",
   description:
-    "New Coworker for real estate, home services, medical & dental, law firms, and small businesses — a 24/7 AI employee tuned to how your industry works.",
+    "New Coworker for real estate, home services, medical & dental, law firms, restaurants, and small businesses: a 24/7 AI employee tuned to how your industry works.",
   alternates: { canonical: "/industries" },
   openGraph: {
     title: "Industries | New Coworker",
@@ -31,7 +31,7 @@ export default function IndustriesPage() {
             Built for how <span className="text-claw-green">your business</span> actually works
           </>
         }
-        subtitle="Your coworker learns your services, your compliance rules, and your customers — starting with the industries where a missed call costs the most."
+        subtitle="Your coworker learns your services, your compliance rules, and your customers, starting with the industries where a missed call costs the most."
       />
 
       <section className="mx-auto max-w-6xl px-6 pb-24">
@@ -58,7 +58,7 @@ export default function IndustriesPage() {
 
       <CtaBanner
         title="Don't see your industry?"
-        subtitle="Your coworker is trained on YOUR business during onboarding — any business that takes calls and texts is a fit."
+        subtitle="Your coworker is trained on YOUR business during onboarding. Any business that takes calls and texts is a fit."
         ctaLabel="Get Started"
         ctaHref="/onboard"
       />

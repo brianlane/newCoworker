@@ -23,7 +23,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Pricing | New Coworker",
     description:
-      "Simple plans for a 24/7 AI employee. Starter, Standard, and Enterprise — with a 30-day money-back guarantee.",
+      "Simple plans for a 24/7 AI employee. Starter, Standard, and Enterprise, all with a 30-day money-back guarantee.",
     url: "/pricing"
   }
 };
@@ -36,7 +36,7 @@ type ComparisonRow = {
 };
 
 const CHECK = "✓";
-const DASH = "—";
+const DASH = "–";
 
 const comparisonRows: ComparisonRow[] = [
   {
@@ -74,7 +74,12 @@ const comparisonRows: ComparisonRow[] = [
   { label: "AI call summaries & caller sentiment", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Analytics dashboard & missed-call alerts", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Warm handoff call transfers", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Browser skills", starter: "Light", standard: "Full", enterprise: "Full" },
+  {
+    label: "Browser skills",
+    starter: "Reads public web pages",
+    standard: "Operates websites like a person",
+    enterprise: "Operates websites like a person"
+  },
   { label: "Support", starter: "Email", standard: "Priority email", enterprise: "SLA + dedicated" },
   { label: "White-label & multi-tenant setup", starter: DASH, standard: DASH, enterprise: CHECK }
 ];
@@ -91,8 +96,8 @@ function buildPricingFaq(): FaqItem[] {
       question: "How does billing work for 12 and 24-month plans?",
       answer: (
         <>
-          The full term is billed once at checkout at the discounted effective monthly rate —
-          that is how we lock in your dedicated server for the whole contract. Included usage
+          The full term is billed once at checkout at the discounted effective monthly rate.
+          That is how we lock in your dedicated server for the whole contract. Included usage
           (voice minutes, SMS, AI budget) still resets every month.
         </>
       )
@@ -112,8 +117,8 @@ function buildPricingFaq(): FaqItem[] {
       answer: (
         <>
           US carriers require every business that sends text messages to register (10DLC brand
-          and campaign registration). We pass this one-time {carrierFee} fee through at cost —
-          it is charged once at signup and is non-refundable, since carriers do not refund it
+          and campaign registration). We pass this one-time {carrierFee} fee through at cost.
+          It is charged once at signup and is non-refundable, since carriers do not refund it
           to us.
         </>
       )
@@ -122,7 +127,7 @@ function buildPricingFaq(): FaqItem[] {
       question: "Is there a money-back guarantee?",
       answer: (
         <>
-          Yes — every plan has a 30-day money-back window from the initial purchase date. The
+          Yes. Every plan has a 30-day money-back window from the initial purchase date. The
           one-time carrier registration fee is excluded, because carriers do not refund it.
         </>
       )
@@ -141,7 +146,7 @@ function buildPricingFaq(): FaqItem[] {
       question: "Can I get more than one phone number?",
       answer: (
         <>
-          Every plan includes one dedicated number. Extra numbers are $5/mo each — contact{" "}
+          Every plan includes one dedicated number. Extra numbers are $5/mo each. Contact{" "}
           <a href={`mailto:${contactEmail}`} className="text-signal-teal hover:underline">
             {contactEmail}
           </a>{" "}
@@ -163,9 +168,9 @@ function buildPricingFaq(): FaqItem[] {
       question: "What does white-glove onboarding include?",
       answer: (
         <>
-          Two one-time packages: <b>White-glove setup ($750)</b> — guided setup, number porting,
-          and a live 1:1 training call; and <b>White-glove buildout ($2,000)</b> — everything in
-          setup plus a full custom AiFlow buildout. Both include 30 days of priority call and
+          Two one-time packages: <b>White-glove setup ($750)</b> covers guided setup, number
+          porting, and a live 1:1 training call; <b>White-glove buildout ($2,000)</b> adds
+          everything in setup plus a full custom AiFlow buildout. Both include 30 days of priority call and
           video support. Add either from your Billing page after signup.
         </>
       )
@@ -183,7 +188,7 @@ export default function PricingPage() {
       <PageHero
         eyebrow="Pricing"
         title="One coworker. Every channel. Simple plans."
-        subtitle="Every plan includes a dedicated private server, phone number, email, and a trained AI coworker — with a 30-day money-back guarantee."
+        subtitle="Every plan includes a dedicated private server, phone number, email, and a trained AI coworker, backed by a 30-day money-back guarantee."
       />
 
       <section className="mx-auto max-w-5xl px-6 pb-20">

@@ -155,7 +155,7 @@ export function PlanCards() {
             <div className="mt-6">
               {tier.id === "enterprise" ? (
                 <a
-                  href="mailto:contact@newcoworker.com"
+                  href="/contact"
                   className="block w-full text-center rounded-lg border border-parchment/20 text-parchment px-4 py-2.5 text-sm font-semibold hover:bg-parchment/10 transition-colors"
                 >
                   {tier.cta}
@@ -186,7 +186,7 @@ export function PlanCards() {
         </h2>
         <p className="mt-1 text-sm text-parchment/60">
           Add white-glove onboarding after signup (from your Billing page) and a specialist
-          handles it live with you — plans without it include email support.
+          handles it live with you. Plans without it include email support.
         </p>
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {listWhiteGlovePackages().map((pkg) => (

@@ -46,12 +46,12 @@ function buildSections(): FaqSection[] {
         {
           question: "What exactly is New Coworker?",
           plainAnswer:
-            "New Coworker is a 24/7 AI employee for your business. It answers your business phone with human-level conversation, replies to texts and emails, books appointments on your calendar, qualifies leads, and remembers every customer — all monitored from a dashboard you control.",
+            "New Coworker is a 24/7 AI employee for your business. It answers your business phone with human-level conversation, replies to texts and emails, books appointments on your calendar, qualifies leads, and remembers every customer, all monitored from a dashboard you control.",
           answer: (
             <>
               New Coworker is a 24/7 AI employee for your business. It answers your business phone
               with human-level conversation, replies to texts and emails, books appointments on
-              your calendar, qualifies leads, and remembers every customer — all monitored from a
+              your calendar, qualifies leads, and remembers every customer, all monitored from a
               dashboard you control.
             </>
           )
@@ -114,10 +114,10 @@ function buildSections(): FaqSection[] {
         {
           question: "Can I keep my existing business number?",
           plainAnswer:
-            "Yes — Standard and Enterprise plans support bring-your-own-number porting. We handle the port and your coworker answers on your existing number. Every plan also includes a dedicated number that works from day one.",
+            "Yes. Standard and Enterprise plans support bring-your-own-number porting. We handle the port and your coworker answers on your existing number. Every plan also includes a dedicated number that works from day one.",
           answer: (
             <>
-              Yes — Standard and Enterprise plans support bring-your-own-number porting. We handle
+              Yes. Standard and Enterprise plans support bring-your-own-number porting. We handle
               the port and your coworker answers on your existing number. Every plan also includes
               a dedicated number that works from day one.
             </>
@@ -160,11 +160,11 @@ function buildSections(): FaqSection[] {
         {
           question: "Where does my data live?",
           plainAnswer:
-            "On a private server dedicated to your business. Conversation transcripts are stored on your server — not pooled in a shared cloud with thousands of other companies. Your dashboard receives activity metadata, not your raw sensitive conversations.",
+            "On a private server dedicated to your business. Conversation transcripts are stored on your server, not pooled in a shared cloud with thousands of other companies. Your dashboard receives activity metadata, not your raw sensitive conversations.",
           answer: (
             <>
               On a private server dedicated to your business. Conversation transcripts are stored
-              on your server — not pooled in a shared cloud with thousands of other companies. Your
+              on your server, not pooled in a shared cloud with thousands of other companies. Your
               dashboard receives activity metadata, not your raw sensitive conversations.
             </>
           )
@@ -184,11 +184,11 @@ function buildSections(): FaqSection[] {
         {
           question: "What about industry compliance?",
           plainAnswer:
-            "Compliance guardrails are enforced in every conversation — including Fair Housing Act rules for real estate — and Enterprise plans support custom compliance modules for other regulated industries.",
+            "Compliance guardrails are enforced in every conversation, including Fair Housing Act rules for real estate, and Enterprise plans support custom compliance modules for other regulated industries.",
           answer: (
             <>
-              Compliance guardrails are enforced in every conversation — including Fair Housing Act
-              rules for real estate — and Enterprise plans support custom compliance modules for
+              Compliance guardrails are enforced in every conversation, including Fair Housing Act
+              rules for real estate, and Enterprise plans support custom compliance modules for
               other regulated industries.
             </>
           )
@@ -205,7 +205,7 @@ function buildSections(): FaqSection[] {
             <>
               Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher
               usage caps, {standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is
-              custom. Every plan has a 30-day money-back guarantee — see the full breakdown on the{" "}
+              custom. Every plan has a 30-day money-back guarantee. See the full breakdown on the{" "}
               <Link href="/pricing" className="text-signal-teal hover:underline">
                 pricing page
               </Link>
@@ -228,10 +228,10 @@ function buildSections(): FaqSection[] {
         {
           question: "Can I cancel?",
           plainAnswer:
-            "Yes — every plan has a 30-day money-back window from the initial purchase date (the one-time carrier registration fee is excluded). After the term, service continues month-to-month at the renewal rate unless you start a new contract.",
+            "Yes. Every plan has a 30-day money-back window from the initial purchase date (the one-time carrier registration fee is excluded). After the term, service continues month-to-month at the renewal rate unless you start a new contract.",
           answer: (
             <>
-              Yes — every plan has a 30-day money-back window from the initial purchase date (the
+              Yes. Every plan has a 30-day money-back window from the initial purchase date (the
               one-time carrier registration fee is excluded). After the term, service continues
               month-to-month at the renewal rate unless you start a new contract.
             </>

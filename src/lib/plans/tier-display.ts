@@ -50,7 +50,7 @@ export const PERIOD_SUMMARY: Record<BillingPeriod, { title: string; description:
   biennial: {
     title: "Lock in the strongest rate for 24 months",
     description:
-      "The full 24-month total is billed today at the lowest effective monthly rate — the highest long-term discount."
+      "The full 24-month total is billed today at the lowest effective monthly rate, the highest long-term discount."
   },
   annual: {
     title: "Commit for 12 months and still save materially",
@@ -84,7 +84,7 @@ export const STANDARD_FEATURES: string[] = [
   concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls),
   "Bring your own phone number (port-in)",
   "RCS branded messaging",
-  "Zapier — connect 8,000+ apps",
+  "Zapier: connect 8,000+ apps",
   "Send texts during calls",
   "Auto-text callers when a call can't be answered",
   "Scheduled texts & saved message templates",
@@ -95,7 +95,7 @@ export const STANDARD_FEATURES: string[] = [
   "$10/mo AI budget for agentic tasks, before free model fallback",
   "Configuration and training updates",
   "Priority email support & maintenance",
-  "Full browser skills — operates websites like a person (logins, forms, portals)"
+  "Full browser skills: operates websites like a person (logins, forms, portals)"
 ];
 
 export const ENTERPRISE_FEATURES: string[] = [

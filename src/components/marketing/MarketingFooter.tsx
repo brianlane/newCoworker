@@ -57,7 +57,7 @@ export function MarketingFooter() {
               <span className="font-bold tracking-tight text-parchment">New Coworker</span>
             </div>
             <p className="mt-3 max-w-xs text-sm leading-relaxed text-parchment/45">
-              Your AI employee that answers calls, texts, and emails around the clock — on infrastructure
+              Your AI employee that answers calls, texts, and emails around the clock, on infrastructure
               dedicated to your business.
             </p>
           </div>

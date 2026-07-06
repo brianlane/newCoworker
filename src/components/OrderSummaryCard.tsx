@@ -67,7 +67,7 @@ export function OrderSummaryCard({
       </div>
       <div className="flex justify-between text-parchment/70">
         <span>Business</span>
-        <span>{businessName?.trim() ? businessName : "—"}</span>
+        <span>{businessName?.trim() ? businessName : "–"}</span>
       </div>
       <div className="flex justify-between text-parchment/70">
         <span>{monthlyLabel}</span>

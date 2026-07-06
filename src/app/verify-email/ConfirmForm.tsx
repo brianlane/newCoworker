@@ -60,7 +60,7 @@ export function ConfirmForm({ token, email }: Props) {
         <p className="text-xs text-parchment/65">
           {result.alreadyVerified
             ? "This email was already confirmed on your account. You're all set."
-            : "Thanks for confirming your email — your account is fully secured."}
+            : "Thanks for confirming your email. Your account is fully secured."}
         </p>
         <Link
           href="/dashboard"
@@ -88,7 +88,7 @@ export function ConfirmForm({ token, email }: Props) {
           ? "This link doesn't look right. Sign in and request a fresh verification email from your dashboard."
           : result.reason === "not_found"
             ? "We couldn't find a NewCoworker account for the email on this verification link. Reach out to support and we'll help you sort it out."
-            : "We hit a snag confirming your email. Try again — your verification link is still valid.";
+            : "We hit a snag confirming your email. Try again; your verification link is still valid.";
     const ctaClasses =
       "inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors";
     return (

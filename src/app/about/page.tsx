@@ -22,13 +22,13 @@ const principles = [
   {
     title: "Privacy is architecture, not a policy page",
     description:
-      "Every business gets its own dedicated server. Conversations and business knowledge live on infrastructure provisioned for that customer alone — not pooled in a shared cloud. We built it this way because trust shouldn't require reading the fine print.",
+      "Every business gets its own dedicated server. Conversations and business knowledge live on infrastructure provisioned for that customer alone, not pooled in a shared cloud. We built it this way because trust shouldn't require reading the fine print.",
     Icon: Lock
   },
   {
     title: "An employee, not a chatbot",
     description:
-      "Chatbots respond; coworkers act. Ours books appointments, sends follow-ups, updates records, transfers calls with context, and runs workflows — because small business owners need the work done, not another inbox to manage.",
+      "Chatbots respond; coworkers act. Ours books appointments, sends follow-ups, updates records, transfers calls with context, and runs workflows, because small business owners need the work done, not another inbox to manage.",
     Icon: Sparkles
   },
   {
@@ -40,7 +40,7 @@ const principles = [
   {
     title: "Own the stack, own the promise",
     description:
-      "We run the infrastructure end to end — voice, messaging, memory, and automation — so when we promise your calls get answered, no third-party black box can break that promise.",
+      "We run the infrastructure end to end (voice, messaging, memory, and automation), so when we promise your calls get answered, no third-party black box can break that promise.",
     Icon: Server
   }
 ];
@@ -63,13 +63,13 @@ export default function AboutPage() {
       <section className="mx-auto max-w-3xl px-6 pb-20">
         <div className="space-y-5 leading-relaxed text-parchment/65">
           <p>
-            The hardest part of a small business isn&apos;t the craft — it&apos;s the chaos around
+            The hardest part of a small business isn&apos;t the craft. It&apos;s the chaos around
             it. The call that comes in during a job. The lead that goes cold overnight. The
             follow-up that slips because the day ran long. Owners lose real revenue to work that
             is important but impossible to be present for.
           </p>
           <p>
-            Big companies solve this with staff. We think small businesses deserve the same —
+            Big companies solve this with staff. We think small businesses deserve the same,
             without the payroll. New Coworker gives every business a digital employee that answers
             calls with human-level conversation, texts and emails customers, books appointments,
             qualifies leads, and follows up relentlessly, twenty-four hours a day.
