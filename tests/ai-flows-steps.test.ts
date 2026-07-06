@@ -266,6 +266,28 @@ describe("planStep: send_sms", () => {
       error: "send_sms: recipient is empty after templating"
     });
   });
+  it("coerces a page-formatted NANP recipient to E.164 (Telnyx only accepts E.164)", () => {
+    const scope: StepScope = { vars: { seller_phone: "(840) 275-3158" } };
+    const r = planStep(step, scope);
+    expect(r.ok && r.action.kind === "send_sms" && r.action.to).toBe("+18402753158");
+  });
+  it("coerces an 11-digit 1-prefixed recipient to E.164", () => {
+    const scope: StepScope = { vars: { seller_phone: "1-840-275-3158" } };
+    const r = planStep(step, scope);
+    expect(r.ok && r.action.kind === "send_sms" && r.action.to).toBe("+18402753158");
+  });
+  it("fails fast (no retries) when the recipient is not a parseable phone number", () => {
+    const scope: StepScope = { vars: { seller_phone: "call the office" } };
+    expect(planStep(step, scope)).toEqual({
+      ok: false,
+      error: 'send_sms: recipient "call the office" is not a valid phone number'
+    });
+  });
+  it("passes an already-E.164 international recipient through untouched", () => {
+    const scope: StepScope = { vars: { seller_phone: "+447911123456" } };
+    const r = planStep(step, scope);
+    expect(r.ok && r.action.kind === "send_sms" && r.action.to).toBe("+447911123456");
+  });
   it("fails when the body resolves empty", () => {
     const blankBody: FlowStep = { id: "x", type: "send_sms", to: "+16026866672", body: "{{vars.msg}}" };
     expect(planStep(blankBody, { vars: {} })).toEqual({
