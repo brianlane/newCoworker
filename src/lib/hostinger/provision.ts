@@ -54,6 +54,7 @@ import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
 export const VPS_SIZE_PRICE_ITEM: Record<VpsSize, string> = {
   kvm1: "hostingercom-vps-kvm1-usd-1m",
   kvm2: "hostingercom-vps-kvm2-usd-1m",
+  kvm4: "hostingercom-vps-kvm4-usd-1m",
   kvm8: "hostingercom-vps-kvm8-usd-1m"
 };
 

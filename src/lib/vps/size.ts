@@ -23,7 +23,15 @@
  * pin, so the default flip changes no already-provisioned tenant.
  */
 
-export type VpsSize = "kvm1" | "kvm2" | "kvm8";
+export type VpsSize = "kvm1" | "kvm2" | "kvm4" | "kvm8";
+
+/** All valid sizes, for validation + UI pickers. */
+export const VPS_SIZES: readonly VpsSize[] = ["kvm1", "kvm2", "kvm4", "kvm8"] as const;
+
+/** Runtime narrowing used by every raw-DB-value resolver below. */
+export function isVpsSize(value: unknown): value is VpsSize {
+  return value === "kvm1" || value === "kvm2" || value === "kvm4" || value === "kvm8";
+}
 
 /**
  * Tier → hardware mapping, used when a business has no explicit pin.
@@ -54,7 +62,7 @@ export function resolveVpsSize(
   tier: "starter" | "standard",
   override?: string | null
 ): VpsSize {
-  if (override === "kvm1" || override === "kvm2" || override === "kvm8") return override;
+  if (isVpsSize(override)) return override;
   return DEFAULT_TIER_VPS_SIZE[tier];
 }
 
@@ -74,7 +82,7 @@ export function resolveDeployedVpsSize(
   tier: "starter" | "standard",
   override?: string | null
 ): VpsSize {
-  if (override === "kvm1" || override === "kvm2" || override === "kvm8") return override;
+  if (isVpsSize(override)) return override;
   return tier === "starter" ? "kvm2" : "kvm8";
 }
 
@@ -85,7 +93,7 @@ export function resolveDeployedVpsSize(
  * released box by its ACTUAL hardware when it was never inventory-tracked.
  */
 export function vpsSizeFromHostingerPlan(plan: string | null | undefined): VpsSize | null {
-  const m = /kvm\s*([128])\b/i.exec(plan ?? "");
+  const m = /kvm\s*([1248])\b/i.exec(plan ?? "");
   return m ? (`kvm${m[1]}` as VpsSize) : null;
 }
 
@@ -94,7 +102,8 @@ export function vpsSizeFromHostingerPlan(plan: string | null | undefined): VpsSi
  * degrade to once the shared AI spend cap trips. KVM1 (1 vCPU / 4GB) does
  * not: bootstrap skips the Ollama install entirely, so over-cap turns must
  * REFUSE (clear "budget used up" behavior) instead of routing to a local
- * agent that doesn't exist.
+ * agent that doesn't exist. kvm4 (4 vCPU / 16GB) and kvm8 both carry the
+ * qwen3:4b-instruct fallback; kvm2 carries llama3.2:3b.
  */
 export function vpsSizeHasLocalModel(size: VpsSize): boolean {
   return size !== "kvm1";

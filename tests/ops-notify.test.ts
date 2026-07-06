@@ -22,7 +22,8 @@ vi.mock("@/lib/logger", () => ({
 import {
   sendOpsVpsDeletionEmail,
   sendOpsPlanChangeEmail,
-  sendOpsDidReleaseFailedEmail
+  sendOpsDidReleaseFailedEmail,
+  sendOpsHardwareMigrationEmail
 } from "@/lib/email/ops-notify";
 
 const input = {
@@ -250,6 +251,112 @@ describe("sendOpsDidReleaseFailedEmail", () => {
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops DID-release-failed email failed",
       expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+const hwMigrationInput = {
+  phase: "started" as const,
+  businessId: "biz-1",
+  businessName: "Amy's Bakery",
+  requestedBy: "brian@newcoworker.com",
+  fromSize: "kvm2",
+  toSize: "kvm4",
+  detail: "Old box: srv1800985 (1.2.3.4). Flow: snapshot → backup → provision kvm4 → restore."
+};
+
+describe("sendOpsHardwareMigrationEmail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the migration progress email to the ops inbox and logs the audit line", async () => {
+    await sendOpsHardwareMigrationEmail(hwMigrationInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("kvm2 → kvm4"),
+      expect.objectContaining({
+        text: expect.stringContaining("brian@newcoworker.com")
+      })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops hardware-migration email sent",
+      expect.objectContaining({
+        businessId: "biz-1",
+        phase: "started",
+        fromSize: "kvm2",
+        toSize: "kvm4",
+        toEmail: "team@newcoworker.com"
+      })
+    );
+  });
+
+  it("labels the failed phase loudly in the subject", async () => {
+    await sendOpsHardwareMigrationEmail({ ...hwMigrationInput, phase: "failed" });
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("Hardware migration FAILED"),
+      expect.anything()
+    );
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await sendOpsHardwareMigrationEmail(hwMigrationInput);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops hardware-migration email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ businessId: "biz-1", phase: "started" })
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsHardwareMigrationEmail(hwMigrationInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsHardwareMigrationEmail(hwMigrationInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops hardware-migration email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsHardwareMigrationEmail(hwMigrationInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops hardware-migration email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+
+  it("renders completed phase with the detail block in text and html", async () => {
+    await sendOpsHardwareMigrationEmail({
+      ...hwMigrationInput,
+      phase: "completed",
+      detail: "New box: srv1900001 (5.6.7.8). Old box srv1800985: stopped, billing=auto-renew-disabled."
+    });
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("Hardware migration completed"),
+      expect.objectContaining({
+        text: expect.stringContaining("srv1900001"),
+        html: expect.stringContaining("/admin/biz-1")
+      })
     );
   });
 });

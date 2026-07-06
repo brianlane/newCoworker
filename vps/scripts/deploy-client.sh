@@ -7,12 +7,14 @@
 #   TIER                     — starter | standard (ENTITLEMENTS: drives the
 #                               aiflow-render gate; hardware decisions key on
 #                               VPS_SIZE)
-#   VPS_SIZE                 — kvm1 | kvm2 | kvm8 (HARDWARE: drives the local
-#                               Ollama fallback model — kvm1 has NONE: AI is
-#                               Gemini-only and over-cap turns refuse). Unset
-#                               falls back to the tier default (starter→kvm1,
-#                               standard→kvm8; lockstep with
-#                               src/lib/vps/size.ts).
+#   VPS_SIZE                 — kvm1 | kvm2 | kvm4 | kvm8 (HARDWARE: drives the
+#                               local Ollama fallback model — kvm1 has NONE: AI
+#                               is Gemini-only and over-cap turns refuse; kvm4
+#                               and kvm8 share the qwen fallback). The
+#                               orchestrator ALWAYS passes this explicitly;
+#                               the unset fallback below (starter→kvm1,
+#                               standard→kvm8) only guards manual runs and may
+#                               not match the box — always set VPS_SIZE.
 #   SUPABASE_URL             — Supabase project URL
 #   SUPABASE_SERVICE_KEY     — Service role key (write config back)
 #   CLOUDFLARE_TUNNEL_TOKEN  — cloudflared tunnel token
@@ -212,7 +214,7 @@ log "Writing Rowboat .env..."
 # and outage turns).
 # KVM1 (4GB): NO local model — Ollama is never installed; over-cap turns
 # refuse instead of degrading (fleet economics Phase E decision).
-# KVM2 (8GB): **`llama3.2:3b`**. KVM8 (32GB CPU): **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
+# KVM2 (8GB): **`llama3.2:3b`**. KVM4 (16GB) / KVM8 (32GB CPU): **`qwen3:4b-instruct`**. Dual fast/balanced tags are for GPU hosts only.
 if [[ "${HAS_LOCAL_MODEL}" == "false" ]]; then
   OLLAMA_MODEL=""
 elif [[ "${VPS_SIZE}" == "kvm2" ]]; then
