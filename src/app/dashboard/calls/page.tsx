@@ -82,6 +82,8 @@ export default async function DashboardCallsPage() {
             : null,
       status: row.status,
       direction: row.direction,
+      callKind: row.call_kind,
+      forwardedTo: row.forwarded_to_e164,
       startedAt: row.started_at,
       endedAt: row.ended_at,
       // AI digest (Standard+ perk). Rendered whenever present — after a
@@ -97,7 +99,7 @@ export default async function DashboardCallsPage() {
       <div>
         <h1 className="text-2xl font-bold text-parchment">Call history</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Transcripts of calls handled by your AI coworker
+          Calls handled by your AI coworker, plus calls forwarded to you and your team
         </p>
       </div>
 

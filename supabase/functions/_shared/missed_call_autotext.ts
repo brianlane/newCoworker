@@ -41,7 +41,13 @@ export interface AutotextSupabase {
   rpc(fn: string, args: Record<string, unknown>): PromiseLike<Row>;
 }
 
-export type MissedCallReason = "concurrent_limit" | "quota_exhausted";
+export type MissedCallReason =
+  | "concurrent_limit"
+  | "quota_exhausted"
+  // A call the routing layer forwarded/transferred to a human that rang out
+  // unanswered. Same follow-up as a refused call: text the caller so the
+  // conversation can continue over SMS (telnyx-voice-call-end fires this).
+  | "forwarded_no_answer";
 
 export type MissedCallAutotextOutcome = {
   status: "sent" | "skipped" | "failed";

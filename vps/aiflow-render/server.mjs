@@ -435,13 +435,23 @@ const MAX_OVERLAY_DISMISS_ROUNDS = Number(process.env.AIFLOW_MAX_OVERLAY_DISMISS
  * advanced, only genuinely dismissable layers closed. EXTRACT mode never calls
  * this (reads don't need pointer events). Returns how many layers were
  * dismissed; 0 means "nothing here looked like a blocking modal".
+ *
+ * `protectTarget` is the CURRENT action's target (the control we just failed to
+ * click). When the topmost overlay CONTAINS that control, the overlay isn't a
+ * layer covering our target — it IS the dialog hosting it (e.g. the Clever "We
+ * Spoke" update modal whose own datepicker popup briefly intercepted the
+ * "Submit Update" click). Closing it would delete the very button we're after
+ * and turn a transient interception into a fatal "no matching control", so we
+ * refuse to dismiss it and let the original error surface. Matching is
+ * intentionally loose (CSS selector OR interactive-control substring text) so
+ * it covers both click_selector and click_text targets.
  */
-async function dismissBlockingOverlays(page) {
+async function dismissBlockingOverlays(page, protectTarget = "") {
   let dismissed = 0;
   for (let round = 0; round < MAX_OVERLAY_DISMISS_ROUNDS; round++) {
     let clicked = "";
     try {
-      clicked = await page.evaluate(async () => {
+      clicked = await page.evaluate(async (protect) => {
         const isVisible = (el) => {
           const r = el.getBoundingClientRect();
           return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
@@ -460,6 +470,23 @@ async function dismissBlockingOverlays(page) {
           if (el === at || el.contains(at)) overlay = el;
         }
         if (!overlay) return "";
+        // Never close the dialog that HOSTS the control we're trying to click —
+        // dismissing it would remove our target (see docstring).
+        if (protect) {
+          let hostsTarget = false;
+          try {
+            hostsTarget = !!overlay.querySelector(protect);
+          } catch {
+            hostsTarget = false; // `protect` was action text, not a valid selector
+          }
+          if (!hostsTarget) {
+            const want = protect.trim().toLowerCase();
+            hostsTarget = [
+              ...overlay.querySelectorAll('button, a, [role="button"], [role="link"]')
+            ].some((el) => (el.textContent || "").trim().toLowerCase().includes(want));
+          }
+          if (hostsTarget) return "__protected__";
+        }
         const name = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
         const buttons = () =>
           [...overlay.querySelectorAll('button, [role="button"]')].filter(isVisible);
@@ -486,10 +513,12 @@ async function dismissBlockingOverlays(page) {
         const desc = name(btn) || "(unlabeled close)";
         btn.click();
         return desc;
-      });
+      }, protectTarget);
     } catch {
       break; // page navigated/closed mid-probe — nothing left to dismiss
     }
+    // The topmost overlay is the dialog hosting our target — don't close it.
+    if (clicked === "__protected__") break;
     if (!clicked) break;
     dismissed++;
     console.log(`[render] dismissed blocking overlay via "${clicked}"`);
@@ -509,8 +538,10 @@ async function dismissBlockingOverlays(page) {
  *
  * A failed action gets ONE retry when dismissBlockingOverlays actually closed
  * a full-viewport modal — the failure was then very likely interception, not a
- * changed page. When nothing was dismissed the original error is reported
- * unchanged, so genuine page-drift failures stay loud and permanent.
+ * changed page. The current action's target is passed through so the dismisser
+ * never closes the dialog that HOSTS that target (which would delete the very
+ * control we're after). When nothing was dismissed the original error is
+ * reported unchanged, so genuine page-drift failures stay loud and permanent.
  */
 async function performActions(page, actions) {
   let completed = 0;
@@ -519,7 +550,7 @@ async function performActions(page, actions) {
       try {
         await runAction(page, a);
       } catch (firstErr) {
-        if ((await dismissBlockingOverlays(page)) === 0) throw firstErr;
+        if ((await dismissBlockingOverlays(page, a.target)) === 0) throw firstErr;
         await runAction(page, a);
       }
       await page.waitForLoadState("networkidle", { timeout: NAV_TIMEOUT_MS }).catch(() => {});

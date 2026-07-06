@@ -38,6 +38,8 @@ const TRANSCRIPT = {
   model: "gemini-live",
   status: "completed" as const,
   direction: "inbound" as const,
+  call_kind: "ai" as const,
+  forwarded_to_e164: null,
   started_at: "2026-04-23T00:00:00Z",
   ended_at: "2026-04-23T00:03:00Z",
   created_at: "2026-04-23T00:00:00Z",

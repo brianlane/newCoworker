@@ -18,6 +18,7 @@ import {
 } from "@/lib/db/voice-transcripts";
 import {
   CallDirectionBadge,
+  ForwardedBadge,
   SentimentBadge,
   StatusBadge,
   callerLabel,
@@ -136,10 +137,34 @@ export default async function CallTranscriptPage({
           <span>·</span>
           <LocalDateTime iso={transcript.started_at} style="detail" />
           <span>·</span>
-          <span>{formatDuration(transcript.started_at, transcript.ended_at)}</span>
+          <span>
+            {/* Missed forwarded calls never ended normally (ended_at NULL) —
+                don't read that as a live call. */}
+            {transcript.status === "missed"
+              ? "no answer"
+              : formatDuration(transcript.started_at, transcript.ended_at)}
+          </span>
+          {transcript.call_kind === "forwarded" && <ForwardedBadge />}
           <StatusBadge status={transcript.status} />
         </div>
       </div>
+
+      {transcript.call_kind === "forwarded" && (
+        <Card padding="md">
+          <p className="text-sm text-parchment/70 leading-relaxed">
+            {transcript.status === "missed"
+              ? "This call was forwarded to a team member but wasn't answered."
+              : "This call was forwarded to a team member and answered — no AI transcript exists for it."}
+            {transcript.forwarded_to_e164 && (
+              <>
+                {" "}
+                Forwarded to{" "}
+                <span className="font-mono">{transcript.forwarded_to_e164}</span>.
+              </>
+            )}
+          </p>
+        </Card>
+      )}
 
       {transcript.summary && (
         <Card padding="md">
@@ -153,7 +178,7 @@ export default async function CallTranscriptPage({
         </Card>
       )}
 
-      {turns.length === 0 ? (
+      {transcript.call_kind === "forwarded" ? null : turns.length === 0 ? (
         <Card>
           <p className="text-sm text-parchment/60 text-center py-6">
             No transcript turns recorded for this call yet.

@@ -10,9 +10,16 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type VoiceTranscriptStatus = "in_progress" | "completed" | "errored";
+export type VoiceTranscriptStatus = "in_progress" | "completed" | "errored" | "missed";
 
 export type VoiceTranscriptDirection = "inbound" | "outbound";
+
+/**
+ * ai = AI-handled call written by the voice bridge (has transcript turns).
+ * forwarded = routing-written record of a call transferred/forwarded to a
+ * human (no turns; `status` is completed or missed).
+ */
+export type VoiceCallKind = "ai" | "forwarded";
 
 export type VoiceTranscriptTurnRole = "caller" | "assistant";
 
@@ -28,6 +35,9 @@ export type VoiceCallTranscriptRow = {
   status: VoiceTranscriptStatus;
   /** Whether the business received the call (inbound) or placed it (outbound). */
   direction: VoiceTranscriptDirection;
+  call_kind: VoiceCallKind;
+  /** For forwarded calls: the human number the call was sent to. NULL for AI calls. */
+  forwarded_to_e164: string | null;
   started_at: string;
   ended_at: string | null;
   created_at: string;

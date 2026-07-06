@@ -37,6 +37,13 @@ import {
 } from "../_shared/warm_transfer_notify.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
+import {
+  recordForwardedCall,
+  type ForwardedCallOutcome
+} from "../_shared/forwarded_call_log.ts";
+import { sendMissedCallAutotext } from "../_shared/missed_call_autotext.ts";
+import { maybeSendMissedCallSpikeAlert } from "../_shared/missed_call_spike.ts";
+import { systemLog } from "../_shared/system_log.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -771,15 +778,37 @@ async function handleHandoffLifecycle(
   if (!callControlId) return { handled: false, response: jsonOk("ignored_hangup") };
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
-    .select("call_control_id, status")
+    .select("call_control_id, status, business_id, from_e164")
     .eq("call_control_id", callControlId)
     .maybeSingle();
   if (!sessRow) return { handled: false, response: jsonOk("ignored_hangup") };
-  const priorStatus = String((sessRow as { status?: string }).status ?? "");
+  const sessEnd = sessRow as {
+    status?: string;
+    business_id?: string;
+    from_e164?: string;
+  };
+  const priorStatus = String(sessEnd.status ?? "");
   await supabase
     .from("voice_handoff_sessions")
     .update({ status: "done" })
     .eq("call_control_id", callControlId);
+  // The A-leg hangup is the handoff chain's terminal event — record the
+  // call-log row for the human-only outcomes. `bridged` means a human step
+  // answered (answered forwarded call); `ringing`/`done` mean nobody did and
+  // no AI takeover happened (missed → auto-text + blocked ledger + spike).
+  // `ai_intake` is skipped: the AI bridge writes its own transcript row for
+  // this same call_control_id, and a forwarded upsert would clobber it.
+  if (priorStatus !== "ai_intake" && sessEnd.business_id) {
+    await logForwardedCallOutcome(deps, {
+      businessId: sessEnd.business_id,
+      callControlId,
+      callerE164: sessEnd.from_e164 || null,
+      forwardedToE164: null,
+      startedAtIso: String(payload["start_time"] ?? "") || null,
+      outcome: priorStatus === "bridged" ? "answered" : "missed",
+      context: "handoff_chain"
+    });
+  }
   // An AI takeover reserved voice budget for this A-leg, so its hangup MUST flow
   // into settlement (signal 1 of 2) to bill the Gemini minutes. Human-only
   // handoffs never reserved, so settlement is a no-op for them — short-circuit
@@ -997,6 +1026,93 @@ async function sendWarmTransferNotifications(
 }
 
 /**
+ * Forwarded-call bookkeeping, shared by the single-leg `wt:` transfer path and
+ * the handoff-chain A-leg terminal. Writes the call-log row (so transferred/
+ * forwarded calls show up in the dashboard's call history alongside AI calls),
+ * and for a MISSED forwarded call runs the same follow-ups as a refused
+ * inbound call: caller auto-text (Standard/Enterprise, forwarded_no_answer),
+ * the `voice_call_blocked` ledger row (answer-rate card + spike counter), and
+ * the once-per-day missed-call spike alert. Never throws — logging must not
+ * break webhook handling (settlement/handoff advancement).
+ */
+async function logForwardedCallOutcome(
+  deps: HandoffDeps,
+  args: {
+    businessId: string;
+    callControlId: string;
+    callerE164: string | null;
+    forwardedToE164: string | null;
+    startedAtIso: string | null;
+    outcome: ForwardedCallOutcome;
+    /** Ledger/telemetry tag: which forwarding path produced this outcome. */
+    context: string;
+  }
+): Promise<void> {
+  const { supabase } = deps;
+  try {
+    const rec = await recordForwardedCall(supabase, {
+      businessId: args.businessId,
+      callControlId: args.callControlId,
+      outcome: args.outcome,
+      callerE164: args.callerE164,
+      forwardedToE164: args.forwardedToE164,
+      startedAtIso: args.startedAtIso
+    });
+    if (rec.status === "failed") {
+      console.error("forwarded call log failed", args.context, rec.reason);
+    }
+    if (args.outcome !== "missed") return;
+
+    const missedAt = new Date();
+    const autotext = await sendMissedCallAutotext(supabase, {
+      businessId: args.businessId,
+      callerE164: args.callerE164,
+      reason: "forwarded_no_answer",
+      telnyxApiKey: deps.apiKey,
+      defaultMessagingProfileId: Deno.env.get("TELNYX_MESSAGING_PROFILE_ID") ?? "",
+      defaultFromE164: Deno.env.get("TELNYX_SMS_FROM_E164") ?? ""
+    });
+    await telemetryRecord(supabase, "voice_missed_call_autotext", {
+      business_id: args.businessId,
+      call_control_id: args.callControlId,
+      reason: "forwarded_no_answer",
+      outcome: autotext.status,
+      detail: autotext.reason ?? null
+    });
+    // Same ledger row every refusal path writes: it feeds the dashboard
+    // answer-rate card AND the spike counter, so a forwarded call that rang
+    // out counts as a missed call everywhere the tenant looks.
+    await systemLog(supabase, {
+      businessId: args.businessId,
+      source: "voice",
+      level: "warn",
+      event: "voice_call_blocked",
+      message: "Forwarded call missed: no answer",
+      payload: {
+        call_control_id: args.callControlId,
+        reason: "forwarded_no_answer",
+        context: args.context,
+        forwarded_to: args.forwardedToE164
+      }
+    });
+    const spike = await maybeSendMissedCallSpikeAlert(supabase, {
+      businessId: args.businessId,
+      notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
+      bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
+      now: missedAt
+    });
+    if (spike.status === "sent") {
+      await telemetryRecord(supabase, "voice_missed_call_spike_alert", {
+        business_id: args.businessId,
+        missed_calls_today: spike.count
+      });
+    }
+  } catch (err) {
+    console.error("logForwardedCallOutcome threw", args.context, err);
+  }
+}
+
+/**
  * Warm-transfer SMS notifications for the single-leg transfer paths (AI
  * receptionist `transfer_to_owner` + caller-rule blind transfer). Both tag the
  * transfer's B leg with a `wt:` client_state. `call.bridged` on that leg = the
@@ -1040,16 +1156,30 @@ async function handleWarmTransferLifecycle(
   // call.bridged already sent success. Any other cause = no-answer → FAILURE
   // (also blocked by the shared key if success already went out).
   const cause = String(payload["hangup_cause"] ?? "").toLowerCase();
+  const answered = cause === "normal_clearing";
   await sendWarmTransferNotifications(deps.supabase, deps.apiKey, {
     businessId: wt.businessId,
     callerE164: wt.callerE164,
     recipientE164: wt.recipientE164,
-    outcome: cause === "normal_clearing" ? "success" : "failed",
+    outcome: answered ? "success" : "failed",
     dedupeKey
+  });
+  // The hangup is the transfer leg's ONE terminal event, so record the call-log
+  // row here (not on call.bridged): the outcome is final and `start_time` →
+  // now spans the leg's real duration. Upsert on the leg id keeps a webhook
+  // redelivery idempotent. Missed → caller auto-text + blocked ledger + spike.
+  await logForwardedCallOutcome(deps, {
+    businessId: wt.businessId,
+    callControlId: legId,
+    callerE164: wt.callerE164 || null,
+    forwardedToE164: wt.recipientE164 || null,
+    startedAtIso: String(payload["start_time"] ?? "") || null,
+    outcome: answered ? "answered" : "missed",
+    context: "warm_transfer"
   });
   return {
     handled: true,
-    response: jsonOk(cause === "normal_clearing" ? "wt_answered_hangup" : "wt_failed")
+    response: jsonOk(answered ? "wt_answered_hangup" : "wt_failed")
   };
 }
 

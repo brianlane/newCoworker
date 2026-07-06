@@ -6,11 +6,13 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
   CallDirectionBadge,
+  ForwardedBadge,
   SentimentBadge,
   StatusBadge,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
 import type {
+  VoiceCallKind,
   VoiceCallSentiment,
   VoiceTranscriptDirection,
   VoiceTranscriptStatus
@@ -34,6 +36,10 @@ export type CallListRow = {
   badgeKind: "owner" | "employee" | null;
   status: VoiceTranscriptStatus;
   direction: VoiceTranscriptDirection;
+  /** ai = bridge transcript; forwarded = call transferred to a human. */
+  callKind: VoiceCallKind;
+  /** For forwarded calls: the human number it was sent to (display only). */
+  forwardedTo: string | null;
   startedAt: string;
   endedAt: string | null;
   /** AI digest + caller mood (Standard+ perk); null while unsummarized. */
@@ -115,11 +121,20 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
                           {row.e164}
                         </span>
                       )}
+                      {row.callKind === "forwarded" && <ForwardedBadge />}
                       <StatusBadge status={row.status} />
                     </div>
                     <p className="text-xs text-parchment/50 mt-0.5">
                       <LocalDateTime iso={row.startedAt} /> ·{" "}
-                      {formatDuration(row.startedAt, row.endedAt)}
+                      {/* A missed forwarded call never ended normally — its
+                          ended_at is NULL, which formatDuration would read as
+                          a live call. */}
+                      {row.status === "missed"
+                        ? "no answer"
+                        : formatDuration(row.startedAt, row.endedAt)}
+                      {row.callKind === "forwarded" && row.forwardedTo && (
+                        <span className="font-mono"> · to {row.forwardedTo}</span>
+                      )}
                       {row.sentiment && (
                         <>
                           {" "}

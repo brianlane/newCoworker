@@ -24,7 +24,7 @@ type QueryResult = { data?: unknown; count?: number | null; error: { message: st
  */
 function makeChain(result: QueryResult) {
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gte", "order", "limit"]) {
+  for (const m of ["select", "eq", "neq", "gte", "order", "limit"]) {
     chain[m] = vi.fn(() => chain);
   }
   (chain as { then: unknown }).then = (
@@ -152,12 +152,16 @@ describe("getInboundCallStats", () => {
     const transcripts = chains.voice_call_transcripts as {
       limit: ReturnType<typeof vi.fn>;
       gte: ReturnType<typeof vi.fn>;
+      neq: ReturnType<typeof vi.fn>;
     };
     const logs = chains.system_logs as {
       limit: ReturnType<typeof vi.fn>;
       gte: ReturnType<typeof vi.fn>;
     };
     expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
+    // Missed forwarded calls live on the voice_call_blocked side of the
+    // histogram — the transcript scan must exclude them or they'd count twice.
+    expect(transcripts.neq).toHaveBeenCalledWith("status", "missed");
     expect(logs.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
     // Same day-aligned boundary as the volume series (30 inclusive UTC days).
     expect(transcripts.gte).toHaveBeenCalledWith("started_at", expectedCutoff);
@@ -240,9 +244,15 @@ describe("getAnswerRateStats", () => {
     expect(stats).toEqual({ answered: 9, missed: 1, rate: 0.9 });
     // Both counts share the day-aligned window boundary of the volume series.
     const expectedCutoff = analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString();
-    const transcripts = chains.voice_call_transcripts as { gte: ReturnType<typeof vi.fn> };
+    const transcripts = chains.voice_call_transcripts as {
+      gte: ReturnType<typeof vi.fn>;
+      neq: ReturnType<typeof vi.fn>;
+    };
     const logs = chains.system_logs as { gte: ReturnType<typeof vi.fn> };
     expect(transcripts.gte).toHaveBeenCalledWith("started_at", expectedCutoff);
+    // Missed forwarded calls are counted via their voice_call_blocked ledger
+    // row; the answered count must exclude the status='missed' transcript row.
+    expect(transcripts.neq).toHaveBeenCalledWith("status", "missed");
     expect(logs.gte).toHaveBeenCalledWith("created_at", expectedCutoff);
   });
 
