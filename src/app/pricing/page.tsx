@@ -68,7 +68,7 @@ const comparisonRows: ComparisonRow[] = [
   { label: "Appointment booking & follow-ups", starter: CHECK, standard: CHECK, enterprise: CHECK },
   { label: "Lossless permanent memory", starter: CHECK, standard: CHECK, enterprise: CHECK },
   { label: "Bring your own number (port-in)", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "RCS branded messaging", starter: DASH, standard: CHECK, enterprise: CHECK },
+  { label: "RCS messaging (verified sender)", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Zapier (8,000+ apps) & developer API", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Texts during calls & missed-call auto-text", starter: DASH, standard: CHECK, enterprise: CHECK },
   { label: "Scheduled texts & message templates", starter: DASH, standard: CHECK, enterprise: CHECK },

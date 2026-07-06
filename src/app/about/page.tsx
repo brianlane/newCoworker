@@ -22,7 +22,7 @@ const principles = [
   {
     title: "Privacy is architecture, not a policy page",
     description:
-      "Every business gets its own dedicated server. Conversations and business knowledge live on infrastructure provisioned for that customer alone, not pooled in a shared cloud. We built it this way because trust shouldn't require reading the fine print.",
+      "Every business's AI coworker runs on its own dedicated server with its own credentials, and your data is isolated per business, never shared with other companies, and always yours to export. We built it this way because trust shouldn't require reading the fine print.",
     Icon: Lock
   },
   {

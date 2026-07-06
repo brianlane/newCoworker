@@ -45,7 +45,7 @@ const features: Feature[] = [
   {
     title: "Texting, RCS & Auto-Replies",
     description:
-      "Two-way SMS and RCS branded messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates.",
+      "Two-way SMS and RCS messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates.",
     Icon: MessageSquareText
   },
   {
@@ -266,16 +266,16 @@ export default function HomePage() {
                 Your business runs on its own private server
               </h2>
               <p className="mt-4 leading-relaxed text-parchment/60">
-                Unlike shared AI platforms, every New Coworker business gets dedicated
-                infrastructure. Your conversations, customer records, and business knowledge live
-                on hardware provisioned just for you, not pooled with thousands of other
-                companies.
+                Unlike shared AI platforms, every New Coworker business gets its own dedicated
+                server running its AI coworker, with its own credentials and configuration. Your
+                data is isolated per business, never shared with other companies, and always
+                yours.
               </p>
             </div>
             <ul className="space-y-3">
               {[
                 "Dedicated private server per business with no shared tenancy",
-                "Conversation transcripts stored on your coworker's dedicated server, not our dashboard",
+                "Conversations and business records isolated per business, exportable any time",
                 "Permanent, lossless memory that stays under your control",
                 "Deny-by-default security posture with per-business credentials"
               ].map((item) => (

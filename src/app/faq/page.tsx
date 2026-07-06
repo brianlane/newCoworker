@@ -160,12 +160,13 @@ function buildSections(): FaqSection[] {
         {
           question: "Where does my data live?",
           plainAnswer:
-            "On a private server dedicated to your business. Conversation transcripts are stored on that dedicated server, not pooled in a shared cloud with thousands of other companies. Your dashboard receives activity metadata, not your raw sensitive conversations.",
+            "Your AI coworker runs on a private server dedicated to your business, with its own credentials and a deny-by-default security posture. Conversations and business records are stored securely in our platform database, isolated per business and never shared with other businesses, and you can export your data at any time.",
           answer: (
             <>
-              On a private server dedicated to your business. Conversation transcripts are stored
-              on that dedicated server, not pooled in a shared cloud with thousands of other companies. Your
-              dashboard receives activity metadata, not your raw sensitive conversations.
+              Your AI coworker runs on a private server dedicated to your business, with its own
+              credentials and a deny-by-default security posture. Conversations and business
+              records are stored securely in our platform database, isolated per business and
+              never shared with other businesses, and you can export your data at any time.
             </>
           )
         },

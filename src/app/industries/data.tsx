@@ -197,7 +197,7 @@ export const INDUSTRIES: Industry[] = [
       {
         title: "Private By Design",
         description:
-          "A dedicated server per practice, so conversations aren't pooled with thousands of other businesses.",
+          "A dedicated server per practice, with patient conversations isolated per business and never shared.",
         Icon: ShieldCheck
       },
       {
@@ -257,7 +257,7 @@ export const INDUSTRIES: Industry[] = [
       {
         title: "Private Infrastructure",
         description:
-          "A dedicated server per firm. Client conversations stay on infrastructure provisioned for you alone.",
+          "A dedicated server per firm, with client conversations isolated per business and never shared.",
         Icon: ShieldCheck
       }
     ],

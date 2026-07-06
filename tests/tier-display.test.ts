@@ -48,7 +48,7 @@ describe("tier-display", () => {
     });
 
     it("standard advertises the RCS and Zapier perks", () => {
-      expect(STANDARD_FEATURES).toContain("RCS branded messaging");
+      expect(STANDARD_FEATURES).toContain("RCS messaging (verified sender)");
       expect(STANDARD_FEATURES.some((f) => f.includes("8,000+"))).toBe(true);
     });
 
