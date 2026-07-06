@@ -3,52 +3,54 @@ import Link from "next/link";
 import { Briefcase, LifeBuoy, Mail, Users } from "lucide-react";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import { ContactForm } from "@/components/marketing/ContactForm";
+import { JsonLd } from "@/components/marketing/JsonLd";
 import { PageHero } from "@/components/marketing/sections";
+
+const CONTACT_PAGE_JSON_LD = {
+  "@context": "https://schema.org",
+  "@type": "ContactPage",
+  name: "Contact New Coworker",
+  url: "https://newcoworker.com/contact",
+  description:
+    "Contact New Coworker for sales, support, white-glove onboarding, and partnerships. Most inquiries receive a response within 24 hours.",
+  about: { "@id": "https://newcoworker.com/#organization" }
+};
 
 export const metadata: Metadata = {
   title: "Contact",
   description:
-    "Get in touch with New Coworker: sales for Enterprise plans, support for existing customers, and white-glove onboarding.",
+    "Get in touch with New Coworker: sales for Enterprise plans, support for existing customers, and white-glove onboarding. Most inquiries receive a response within 24 hours.",
   alternates: { canonical: "/contact" },
   openGraph: {
     title: "Contact | New Coworker",
-    description: "Sales, support, and white-glove onboarding — a human replies.",
+    description: "Sales, support, and white-glove onboarding. A human replies within 24 hours.",
     url: "/contact"
   }
 };
 
-const CONTACT_EMAIL = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
-
-const channels = [
+const topics = [
   {
     title: "Support",
     description:
-      "Existing customers: email us and a human replies. Standard plans get priority handling; white-glove customers have a 30-day priority call & video line.",
-    email: CONTACT_EMAIL,
-    subject: "Support request",
+      "Existing customers get a human reply. Standard plans get priority handling; white-glove customers have a 30-day priority call & video line.",
     Icon: LifeBuoy
   },
   {
     title: "Enterprise sales",
     description:
       "Multi-location, agency, white-label, or custom compliance needs? Tell us about your business and we'll put a proposal together.",
-    email: "contact@newcoworker.com",
-    subject: "Enterprise inquiry",
     Icon: Briefcase
   },
   {
     title: "White-glove onboarding",
     description:
-      "Want a specialist to set everything up live with you — porting, training, and custom workflow buildout included?",
-    email: CONTACT_EMAIL,
-    subject: "White-glove onboarding",
+      "Want a specialist to set everything up live with you? Porting, training, and custom workflow buildout included.",
     Icon: Users
   },
   {
     title: "Everything else",
-    description: "Partnerships, press, or a question that doesn't fit a box — we read it all.",
-    email: CONTACT_EMAIL,
-    subject: "Hello",
+    description: "Partnerships, press, or a question that doesn't fit a box. We read it all.",
     Icon: Mail
   }
 ];
@@ -56,28 +58,41 @@ const channels = [
 export default function ContactPage() {
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
+      <JsonLd data={CONTACT_PAGE_JSON_LD} />
       <MarketingNav />
 
       <PageHero
         eyebrow="Contact"
         title="Talk to a human"
-        subtitle="Our coworker answers our phones too — but every email below lands with a person."
+        subtitle="Our coworker answers our phones too, but every message below lands with a person."
       />
 
-      <section className="mx-auto max-w-4xl px-6 pb-20">
-        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
-          {channels.map((c) => (
-            <a
-              key={c.title}
-              href={`mailto:${c.email}?subject=${encodeURIComponent(c.subject)}`}
-              className="group rounded-xl border border-parchment/10 bg-parchment/[0.02] p-7 transition-colors hover:border-claw-green/40"
-            >
-              <c.Icon className="mb-4 h-6 w-6 text-claw-green" />
-              <h2 className="font-semibold text-parchment">{c.title}</h2>
-              <p className="mt-2 text-sm leading-relaxed text-parchment/50">{c.description}</p>
-              <p className="mt-4 text-sm font-semibold text-signal-teal group-hover:underline">{c.email}</p>
-            </a>
-          ))}
+      <section className="mx-auto max-w-6xl px-6 pb-20">
+        <div className="flex flex-col items-start gap-10 lg:flex-row">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-3xl font-bold text-parchment">
+              Send us a <span className="text-claw-green">message</span>
+            </h2>
+            <p className="mt-4 leading-relaxed text-parchment/60">
+              Whether you&apos;re evaluating plans, need help with setup or billing, or want a
+              specialist to build everything out with you, use the form and we&apos;ll reply as
+              quickly as possible. Most inquiries receive a response within 24 hours.
+            </p>
+
+            <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2">
+              {topics.map((t) => (
+                <div key={t.title} className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-5">
+                  <t.Icon className="mb-3 h-5 w-5 text-claw-green" />
+                  <h3 className="text-sm font-semibold text-parchment">{t.title}</h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-parchment/50">{t.description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="w-full flex-shrink-0 lg:max-w-md">
+            <ContactForm />
+          </div>
         </div>
       </section>
 
@@ -87,7 +102,7 @@ export default function ContactPage() {
           <Link href="/faq" className="text-signal-teal hover:underline">
             FAQ
           </Link>{" "}
-          covers setup, billing, privacy, and porting — or see{" "}
+          covers setup, billing, privacy, and porting, or see{" "}
           <Link href="/pricing" className="text-signal-teal hover:underline">
             plans and pricing
           </Link>

@@ -39,7 +39,7 @@ export const metadata: Metadata = {
 const zapierTriggers = [
   { label: "SMS received", description: "A customer texts your business number", Icon: MessageSquareText },
   { label: "SMS sent", description: "Your coworker sends a customer a text", Icon: MessageSquareText },
-  { label: "Call completed", description: "A call ends — with its AI summary attached", Icon: PhoneCall },
+  { label: "Call completed", description: "A call ends, with its AI summary attached", Icon: PhoneCall },
   { label: "Email activity", description: "Your coworker sends or receives email", Icon: Mail }
 ];
 
@@ -47,7 +47,7 @@ const nativeIntegrations: Feature[] = [
   {
     title: "Google Workspace",
     description:
-      "Calendar slot-finding and booking plus email follow-ups through your Google account — connected in two clicks.",
+      "Calendar slot-finding and booking plus email follow-ups through your Google account, connected in two clicks.",
     Icon: CalendarCheck
   },
   {
@@ -59,7 +59,7 @@ const nativeIntegrations: Feature[] = [
   {
     title: "Zapier",
     description:
-      "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing — no code required.",
+      "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing. No code required.",
     Icon: Zap
   },
   {
@@ -77,19 +77,19 @@ const nativeIntegrations: Feature[] = [
   {
     title: "CSV Import & Export",
     description:
-      "Bring your contacts in and take your data out whenever you want — your records are never locked in.",
+      "Bring your contacts in and take your data out whenever you want. Your records are never locked in.",
     Icon: FileSpreadsheet
   },
   {
     title: "Custom Integrations",
     description:
-      "Point your coworker at your own internal tools and portals — it can browse and operate them like a person would.",
+      "Point your coworker at your own internal tools and portals. It can browse and operate them like a person would.",
     Icon: ArrowLeftRight
   },
   {
     title: "Dashboard-Managed Keys",
     description:
-      "Create, rotate, and revoke API keys from the integrations page — hashed at rest, capped per business.",
+      "Create, rotate, and revoke API keys from the integrations page. Hashed at rest, capped per business.",
     Icon: KeyRound
   }
 ];
@@ -106,7 +106,7 @@ export default function IntegrationsPage() {
             Connect your coworker to <span className="text-claw-green">8,000+ apps</span>
           </>
         }
-        subtitle="Zapier, Google Workspace, Microsoft 365, a public API, and webhooks — your coworker plugs into the tools your business already runs on."
+        subtitle="Zapier, Google Workspace, Microsoft 365, a public API, and webhooks: your coworker plugs into the tools your business already runs on."
       />
 
       <StatBand
@@ -123,11 +123,11 @@ export default function IntegrationsPage() {
         <SectionHeading
           eyebrow="Zapier"
           title="If it's in Zapier, it works with New Coworker"
-          subtitle="Wire your coworker's calls and texts into CRMs, spreadsheets, Slack, invoicing, and thousands of other apps — no code, no developer."
+          subtitle="Wire your coworker's calls and texts into CRMs, spreadsheets, Slack, invoicing, and thousands of other apps. No code, no developer."
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <h3 className="font-semibold text-parchment">Triggers — when things happen here</h3>
+            <h3 className="font-semibold text-parchment">Triggers: when things happen here</h3>
             <p className="mt-1 text-sm text-parchment/50">
               Start any Zap from your coworker&apos;s activity.
             </p>
@@ -144,7 +144,7 @@ export default function IntegrationsPage() {
             </ul>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <h3 className="font-semibold text-parchment">Actions — make things happen here</h3>
+            <h3 className="font-semibold text-parchment">Actions: make things happen here</h3>
             <p className="mt-1 text-sm text-parchment/50">
               Let any app in your stack drive your coworker.
             </p>
@@ -154,7 +154,7 @@ export default function IntegrationsPage() {
                 <div>
                   <p className="text-sm font-semibold text-parchment">Send SMS</p>
                   <p className="text-sm text-parchment/50">
-                    Trigger a text from your business number when something happens anywhere else —
+                    Trigger a text from your business number when something happens anywhere else:
                     a new form fill, a paid invoice, a shipped order.
                   </p>
                 </div>

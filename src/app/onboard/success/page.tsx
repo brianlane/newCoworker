@@ -438,7 +438,7 @@ function OnboardSuccessContent() {
                 Go to Dashboard →
               </a>
               <p className="text-xs text-parchment/45 mt-2">
-                Provisioning continues in the background — you can monitor progress from your dashboard.
+                Provisioning continues in the background. You can monitor progress from your dashboard.
               </p>
             </div>
           </div>

@@ -65,7 +65,7 @@ const groups: FeatureGroup[] = [
       {
         title: "24/7 AI Call Answering",
         description:
-          "Nights, weekends, holidays, and your busiest hours — every caller gets a real conversation, not voicemail.",
+          "Nights, weekends, holidays, and your busiest hours: every caller gets a real conversation, not voicemail.",
         Icon: Phone
       },
       {
@@ -76,7 +76,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Warm Call Transfers",
         description:
-          "When a caller needs a human, the call is transferred to you or a teammate with context — the caller never repeats themselves.",
+          "When a caller needs a human, the call is transferred to you or a teammate with context, so the caller never repeats themselves.",
         Icon: PhoneForwarded
       },
       {
@@ -94,7 +94,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Bring Your Own Number",
         description:
-          "Port your existing business number in (Standard and up) — or use the dedicated number included with every plan.",
+          "Port your existing business number in (Standard and up), or use the dedicated number included with every plan.",
         Icon: Smartphone
       }
     ]
@@ -108,7 +108,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Two-Way SMS",
         description:
-          "Customers text your business number and get useful, on-brand replies immediately — day or night.",
+          "Customers text your business number and get useful, on-brand replies immediately, day or night.",
         Icon: MessageSquareText
       },
       {
@@ -138,7 +138,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Email Handling",
         description:
-          "A dedicated email address for your coworker — it reads, triages, and answers email in your voice too.",
+          "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too.",
         Icon: Mail
       }
     ]
@@ -152,7 +152,7 @@ const groups: FeatureGroup[] = [
       {
         title: "AI Call Summaries",
         description:
-          "Every call lands on your dashboard with a concise AI summary — what the caller wanted and what happened.",
+          "Every call lands on your dashboard with a concise AI summary: what the caller wanted and what happened.",
         Icon: Sparkles
       },
       {
@@ -164,7 +164,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Analytics Dashboard",
         description:
-          "Call trends, peak hours, and answer rate — the numbers that show whether opportunities are being captured.",
+          "Call trends, peak hours, and answer rate: the numbers that show whether opportunities are being captured.",
         Icon: BarChart3
       },
       {
@@ -176,7 +176,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Permanent Memory",
         description:
-          "Lossless, hierarchical memory of your business and customers — context builds forever instead of resetting per chat.",
+          "Lossless, hierarchical memory of your business and customers. Context builds forever instead of resetting per chat.",
         Icon: Brain
       },
       {
@@ -191,7 +191,7 @@ const groups: FeatureGroup[] = [
     eyebrow: "Automation",
     title: "Workflows that run your follow-up for you",
     subtitle:
-      "AiFlows connect triggers to actions across calls, texts, and email — plus real browser skills for everything else.",
+      "AiFlows connect triggers to actions across calls, texts, and email, plus real browser skills for everything else.",
     features: [
       {
         title: "AiFlows",
@@ -202,13 +202,13 @@ const groups: FeatureGroup[] = [
       {
         title: "Outbound Calls",
         description:
-          "Your coworker can place scheduled outbound calls — reminders, confirmations, and follow-ups — on your behalf.",
+          "Your coworker can place scheduled outbound calls (reminders, confirmations, and follow-ups) on your behalf.",
         Icon: Phone
       },
       {
         title: "Browser Skills",
         description:
-          "It can operate real websites — updating CRMs, checking portals, and completing forms, even behind logins.",
+          "It can operate real websites: updating CRMs, checking portals, and completing forms, even behind logins.",
         Icon: Globe
       },
       {
@@ -220,7 +220,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Owner Notifications",
         description:
-          "Choose exactly which events reach you — by SMS, email, or dashboard — and when.",
+          "Choose exactly which events reach you (by SMS, email, or dashboard) and when.",
         Icon: Bell
       },
       {
@@ -246,13 +246,13 @@ const groups: FeatureGroup[] = [
       {
         title: "Your Dashboard",
         description:
-          "Calls, messages, emails, memory, analytics, billing, and settings — one place, any device.",
+          "Calls, messages, emails, memory, analytics, billing, and settings. One place, any device.",
         Icon: LayoutDashboard
       },
       {
         title: "Compliance Guardrails",
         description:
-          "Industry guardrails — including Fair Housing rules for real estate — are enforced in every conversation.",
+          "Industry guardrails, including Fair Housing rules for real estate, are enforced in every conversation.",
         Icon: ShieldCheck
       },
       {
@@ -264,7 +264,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Training & Memory Editing",
         description:
-          "Review and edit what your coworker knows from the dashboard — its knowledge is yours to shape.",
+          "Review and edit what your coworker knows from the dashboard. Its knowledge is yours to shape.",
         Icon: BookOpenCheck
       },
       {
@@ -289,7 +289,7 @@ export default function FeaturesPage() {
             One coworker. <span className="text-claw-green">Every job handled.</span>
           </>
         }
-        subtitle="Not a chatbot bolted onto a phone system — a single AI employee that answers, texts, emails, books, remembers, and follows up."
+        subtitle="Not a chatbot bolted onto a phone system, but a single AI employee that answers, texts, emails, books, remembers, and follows up."
       />
 
       {groups.map((group) => (
@@ -301,7 +301,7 @@ export default function FeaturesPage() {
 
       <CtaBanner
         title="See it all live on your own number"
-        subtitle="Pick a plan and your coworker is answering within minutes — 30-day money-back guarantee."
+        subtitle="Pick a plan and your coworker is answering within minutes, with a 30-day money-back guarantee."
         ctaLabel="Get Started"
         ctaHref="/onboard"
       />

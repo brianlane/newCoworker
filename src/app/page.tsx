@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import { JsonLd } from "@/components/marketing/JsonLd";
 import {
   CtaBanner,
   FeatureGrid,
@@ -32,13 +33,13 @@ const features: Feature[] = [
   {
     title: "AI Voice Coworker",
     description:
-      "Answers every call 24/7 with human-level conversation — qualifies callers, checks your calendar, and books appointments on the spot.",
+      "Answers every call 24/7 with human-level conversation. It qualifies callers, checks your calendar, and books appointments on the spot.",
     Icon: Phone
   },
   {
     title: "Warm Call Transfers",
     description:
-      "When a caller needs you, your coworker transfers the call to you or your team with full context — no cold handoffs.",
+      "When a caller needs you, your coworker transfers the call to you or your team with full context. No cold handoffs.",
     Icon: PhoneForwarded
   },
   {
@@ -56,7 +57,7 @@ const features: Feature[] = [
   {
     title: "Analytics & Alerts",
     description:
-      "Call trends, peak hours, and answer rate at a glance — with alerts when callers are turned away so you never miss a spike.",
+      "Call trends, peak hours, and answer rate at a glance, with alerts when callers are turned away so you never miss a spike.",
     Icon: BarChart3
   },
   {
@@ -68,13 +69,13 @@ const features: Feature[] = [
   {
     title: "8,000+ App Integrations",
     description:
-      "Connect your coworker to Zapier, Google Workspace, Microsoft 365, and your CRM — plus a public API and webhooks for anything custom.",
+      "Connect your coworker to Zapier, Google Workspace, Microsoft 365, and your CRM, plus a public API and webhooks for anything custom.",
     Icon: Zap
   },
   {
     title: "Permanent Memory",
     description:
-      "Lossless memory learns your business over time so every call, text, and email builds on real context — nothing gets forgotten.",
+      "Lossless memory learns your business over time so every call, text, and email builds on real context. Nothing gets forgotten.",
     Icon: Brain
   },
   {
@@ -86,13 +87,13 @@ const features: Feature[] = [
   {
     title: "Compliance Guardrails",
     description:
-      "Built-in compliance guardrails — including Fair Housing rules for real estate — protect your business from costly violations.",
+      "Built-in compliance guardrails, including Fair Housing rules for real estate, protect your business from costly violations.",
     Icon: ShieldCheck
   },
   {
     title: "Your Dashboard",
     description:
-      "Monitor calls, messages, and emails, review memory, manage notifications and billing — all in one place, on any device.",
+      "Monitor calls, messages, and emails, review memory, manage notifications and billing. All in one place, on any device.",
     Icon: LayoutDashboard
   },
   {
@@ -108,19 +109,19 @@ const steps: { step: string; title: string; description: string }[] = [
     step: "1",
     title: "Tell us about your business",
     description:
-      "Pick a plan and answer a short questionnaire. Your coworker learns your services, hours, and how you like to work — it can even read your website."
+      "Pick a plan and answer a short questionnaire. Your coworker learns your services, hours, and how you like to work. It can even read your website."
   },
   {
     step: "2",
     title: "We provision everything",
     description:
-      "A dedicated private server, a phone number (or bring your own), email, and your trained AI coworker — all set up automatically."
+      "A dedicated private server, a phone number (or bring your own), email, and your trained AI coworker, all set up automatically."
   },
   {
     step: "3",
     title: "Your coworker gets to work",
     description:
-      "Calls answered, texts returned, appointments booked, leads followed up — around the clock, while you watch it all from your dashboard."
+      "Calls answered, texts returned, appointments booked, leads followed up, around the clock. You watch it all from your dashboard."
   }
 ];
 
@@ -147,8 +148,30 @@ export const metadata: Metadata = {
 export default function HomePage() {
   const starterFrom = formatPricePerMonth(getPeriodPricing("starter", "biennial").monthlyCents);
 
+  // Real plan bounds for search/answer engines: lowest effective monthly rate
+  // (Starter biennial) to highest listed monthly rate (Standard monthly).
+  const productJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "SoftwareApplication",
+    name: "New Coworker",
+    applicationCategory: "BusinessApplication",
+    operatingSystem: "Web",
+    url: "https://newcoworker.com",
+    description:
+      "A 24/7 AI employee that answers business calls, texts, and emails, books appointments, qualifies leads, and remembers every customer.",
+    offers: {
+      "@type": "AggregateOffer",
+      priceCurrency: "USD",
+      lowPrice: (getPeriodPricing("starter", "biennial").monthlyCents / 100).toFixed(2),
+      highPrice: (getPeriodPricing("standard", "monthly").monthlyCents / 100).toFixed(2),
+      offerCount: 3,
+      url: "https://newcoworker.com/pricing"
+    }
+  };
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
+      <JsonLd data={productJsonLd} />
       <MarketingNav />
 
       {/* Hero */}
@@ -161,7 +184,7 @@ export default function HomePage() {
         }
         subtitle={
           <>
-            New Coworker answers calls, texts, and emails around the clock — booking appointments,
+            New Coworker answers calls, texts, and emails around the clock: booking appointments,
             following up with leads, and remembering every customer. Built for all <b>businesses</b>.
           </>
         }
@@ -185,13 +208,13 @@ export default function HomePage() {
       {/* Proof band */}
       <StatBand
         stats={[
-          { value: "24/7", label: "Every call and text answered — nights, weekends, holidays" },
+          { value: "24/7", label: "Every call and text answered: nights, weekends, holidays" },
           {
             value: `${TIER_LIMITS.standard.maxConcurrentCalls} calls`,
-            label: "Handled at once on Standard — no busy signals during your rush"
+            label: "Handled at once on Standard, so there are no busy signals during your rush"
           },
           { value: "8,000+", label: "Apps connected through Zapier, plus API & webhooks" },
-          { value: "1 server", label: "Dedicated to your business — your data stays yours" }
+          { value: "1 server", label: "Dedicated to your business, so your data stays yours" }
         ]}
       />
 
@@ -213,7 +236,7 @@ export default function HomePage() {
         <SectionHeading
           eyebrow="How it works"
           title="Live in minutes, not weeks"
-          subtitle="Signup to first answered call is fully automated — no IT project, no sales call required."
+          subtitle="Signup to first answered call is fully automated. No IT project, no sales call required."
         />
         <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
           {steps.map((s) => (
@@ -245,13 +268,13 @@ export default function HomePage() {
               <p className="mt-4 leading-relaxed text-parchment/60">
                 Unlike shared AI platforms, every New Coworker business gets dedicated
                 infrastructure. Your conversations, customer records, and business knowledge live
-                on hardware provisioned just for you — not pooled with thousands of other
+                on hardware provisioned just for you, not pooled with thousands of other
                 companies.
               </p>
             </div>
             <ul className="space-y-3">
               {[
-                "Dedicated private server per business — no shared tenancy",
+                "Dedicated private server per business with no shared tenancy",
                 "Conversation transcripts stored on your server, not our dashboard",
                 "Permanent, lossless memory that stays under your control",
                 "Deny-by-default security posture with per-business credentials"
@@ -273,7 +296,7 @@ export default function HomePage() {
             Plans from <span className="text-claw-green">{starterFrom}</span>
           </h2>
           <p className="mx-auto mt-3 max-w-xl text-parchment/55">
-            A fraction of the cost of a receptionist or answering service — with a 30-day
+            A fraction of the cost of a receptionist or answering service, with a 30-day
             money-back guarantee on every plan.
           </p>
           <Link

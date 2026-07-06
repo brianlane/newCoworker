@@ -165,7 +165,7 @@ function SignupForm() {
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
           <h1 className="text-2xl font-bold text-parchment">Create your account</h1>
           <p className="text-sm text-parchment/50">
-            {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected — almost there!` : "Your AI coworker starts here"}
+            {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected. Almost there!` : "Your AI coworker starts here"}
           </p>
           <a href={questionnaireBaseHref} className="text-sm text-signal-teal hover:underline">
             ← Back to onboarding

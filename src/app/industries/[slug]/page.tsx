@@ -9,7 +9,10 @@ import {
   PageHero,
   SectionHeading
 } from "@/components/marketing/sections";
+import { JsonLd } from "@/components/marketing/JsonLd";
 import { getIndustry, INDUSTRIES } from "../data";
+
+const SITE_URL = "https://newcoworker.com";
 
 type Params = { slug: string };
 
@@ -39,8 +42,36 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
   const industry = getIndustry((await params).slug);
   if (!industry) notFound();
 
+  const breadcrumbJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "BreadcrumbList",
+    itemListElement: [
+      { "@type": "ListItem", position: 1, name: "Home", item: SITE_URL },
+      { "@type": "ListItem", position: 2, name: "Industries", item: `${SITE_URL}/industries` },
+      {
+        "@type": "ListItem",
+        position: 3,
+        name: industry.name,
+        item: `${SITE_URL}/industries/${industry.slug}`
+      }
+    ]
+  };
+
+  const serviceJsonLd = {
+    "@context": "https://schema.org",
+    "@type": "Service",
+    name: `New Coworker for ${industry.name}`,
+    serviceType: "AI answering and scheduling service",
+    description: industry.teaser,
+    url: `${SITE_URL}/industries/${industry.slug}`,
+    provider: { "@id": `${SITE_URL}/#organization` },
+    audience: { "@type": "BusinessAudience", name: industry.name }
+  };
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
+      <JsonLd data={breadcrumbJsonLd} />
+      <JsonLd data={serviceJsonLd} />
       <MarketingNav />
 
       <PageHero eyebrow={industry.name} title={industry.headline} subtitle={industry.subheadline}>
