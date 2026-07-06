@@ -100,7 +100,11 @@ serve(async (req: Request) => {
   }
 
   const ids = businesses.map((b) => b.id);
-  const windowStartDate = isoDaysAgo(WINDOW_DAYS, now).slice(0, 10);
+  // WINDOW_DAYS - 1: `usage_date >= start` is inclusive of both endpoints,
+  // so subtracting the full window would span 8 calendar days and overstate
+  // the pace against the evaluator's fixed 7-day divisor. Today + 6 prior
+  // days = exactly WINDOW_DAYS calendar days.
+  const windowStartDate = isoDaysAgo(WINDOW_DAYS - 1, now).slice(0, 10);
   const monthStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
     .toISOString()
     .slice(0, 10);
@@ -182,20 +186,6 @@ serve(async (req: Request) => {
     }
     if (data !== true) continue; // already advised this week
     toEmail.push(advice);
-    // Admin-page visibility while the condition persists (once per week,
-    // matching the email cadence).
-    await systemLog(supabase, {
-      businessId: advice.businessId,
-      source: "platform",
-      level: "warn",
-      event: "hardware_escalation_advice",
-      message:
-        `Sustained load: ${advice.signals.map((s) => s.kind).join(", ")} — ` +
-        (advice.recommendedSize
-          ? `consider migrating ${advice.currentSize} → ${advice.recommendedSize}`
-          : `already on ${advice.currentSize} (largest box)`),
-      payload: { signals: advice.signals, period_key: periodKey }
-    });
   }
 
   let emailed = 0;
@@ -233,6 +223,24 @@ serve(async (req: Request) => {
           await unmarkAll();
         } else {
           emailed = toEmail.length;
+          // Admin-page visibility, written only AFTER the digest actually
+          // sent: on a failed send the weekly claim is rolled back and the
+          // next run retries, so logging earlier would stack duplicate
+          // warn rows for one advisory.
+          for (const advice of toEmail) {
+            await systemLog(supabase, {
+              businessId: advice.businessId,
+              source: "platform",
+              level: "warn",
+              event: "hardware_escalation_advice",
+              message:
+                `Sustained load: ${advice.signals.map((s) => s.kind).join(", ")} — ` +
+                (advice.recommendedSize
+                  ? `consider migrating ${advice.currentSize} → ${advice.recommendedSize}`
+                  : `already on ${advice.currentSize} (largest box)`),
+              payload: { signals: advice.signals, period_key: periodKey }
+            });
+          }
         }
       } catch (err) {
         console.error("Resend escalation digest threw", err);
