@@ -43,8 +43,30 @@ import {
 
 const WINDOW_DAYS = ADVISOR_WINDOW_DAYS;
 
+/** PostgREST's default max-rows — page in chunks of this size. */
+const PAGE_SIZE = 1000;
+
 function isoDaysAgo(days: number, now: Date): string {
   return new Date(now.getTime() - days * 86_400_000).toISOString();
+}
+
+/**
+ * Drain a PostgREST query with `.range()` pagination. PostgREST silently
+ * truncates at max-rows (1000 default), so a single select over the whole
+ * fleet's usage/log rows would skew every signal once the fleet grows —
+ * with no error to catch. Throws on the first page error.
+ */
+async function fetchAllPages<T>(
+  buildQuery: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>
+): Promise<T[]> {
+  const all: T[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await buildQuery(from, from + PAGE_SIZE - 1);
+    if (error) throw new Error(error.message);
+    const page = data ?? [];
+    all.push(...page);
+    if (page.length < PAGE_SIZE) return all;
+  }
 }
 
 serve(async (req: Request) => {
@@ -111,35 +133,48 @@ serve(async (req: Request) => {
   // One fetch covers both windows: the month start is at most ~31 days back.
   const fetchFromDate = windowStartDate < monthStartDate ? windowStartDate : monthStartDate;
 
-  const { data: usageRows, error: usageErr } = await supabase
-    .from("daily_usage")
-    .select("business_id, usage_date, voice_minutes_used, sms_sent, peak_concurrent_calls")
-    .in("business_id", ids)
-    .gte("usage_date", fetchFromDate);
-  if (usageErr) {
-    console.error("daily_usage select failed", usageErr);
+  let usageRows: DailyUsageRow[];
+  try {
+    usageRows = await fetchAllPages<DailyUsageRow>((from, to) =>
+      supabase
+        .from("daily_usage")
+        .select("business_id, usage_date, voice_minutes_used, sms_sent, peak_concurrent_calls")
+        .in("business_id", ids)
+        .gte("usage_date", fetchFromDate)
+        .order("usage_date", { ascending: true })
+        .order("business_id", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("daily_usage select failed", err);
     return new Response("select failed", { status: 500 });
   }
 
-  const { data: errRows, error: logsErr } = await supabase
-    .from("system_logs")
-    .select("business_id")
-    .in("business_id", ids)
-    .in("source", [...ON_BOX_ERROR_SOURCES])
-    .eq("level", "error")
-    .gte("created_at", isoDaysAgo(WINDOW_DAYS, now));
-  if (logsErr) {
-    console.error("system_logs select failed", logsErr);
+  let errRows: Array<{ business_id: string }>;
+  try {
+    errRows = await fetchAllPages<{ business_id: string; created_at: string }>((from, to) =>
+      supabase
+        .from("system_logs")
+        .select("business_id, created_at")
+        .in("business_id", ids)
+        .in("source", [...ON_BOX_ERROR_SOURCES])
+        .eq("level", "error")
+        .gte("created_at", isoDaysAgo(WINDOW_DAYS, now))
+        .order("created_at", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("system_logs select failed", err);
     return new Response("select failed", { status: 500 });
   }
   const errorCounts = new Map<string, number>();
-  for (const row of (errRows ?? []) as Array<{ business_id: string }>) {
+  for (const row of errRows) {
     errorCounts.set(row.business_id, (errorCounts.get(row.business_id) ?? 0) + 1);
   }
 
   const usageByBiz = new Map<string, DailyUsageRow[]>();
   const smsMonthToDate = new Map<string, number>();
-  for (const row of (usageRows ?? []) as DailyUsageRow[]) {
+  for (const row of usageRows) {
     if (row.usage_date >= windowStartDate) {
       const list = usageByBiz.get(row.business_id) ?? [];
       list.push(row);
