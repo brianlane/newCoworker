@@ -51,12 +51,17 @@ vi.mock("@/lib/vps/migrate-size", () => ({
 vi.mock("@/lib/email/ops-notify", () => ({
   sendOpsHardwareMigrationEmail: vi.fn()
 }));
+vi.mock("@/lib/db/vps-migration-locks", () => ({
+  tryClaimVpsMigration: vi.fn(),
+  releaseVpsMigrationLock: vi.fn()
+}));
 
 import { POST } from "@/app/api/admin/vps/[businessId]/migrate-size/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
 import { migrateBusinessVpsSize } from "@/lib/vps/migrate-size";
 import { sendOpsHardwareMigrationEmail } from "@/lib/email/ops-notify";
+import { tryClaimVpsMigration, releaseVpsMigrationLock } from "@/lib/db/vps-migration-locks";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 
@@ -93,6 +98,8 @@ describe("api/admin/vps/[businessId]/migrate-size route", () => {
       isAdmin: true
     } as never);
     vi.mocked(getBusiness).mockResolvedValue(standardBiz as never);
+    vi.mocked(tryClaimVpsMigration).mockResolvedValue(true);
+    vi.mocked(releaseVpsMigrationLock).mockResolvedValue(undefined);
     vi.mocked(migrateBusinessVpsSize).mockResolvedValue({
       ok: true,
       fromSize: "kvm2",
@@ -116,11 +123,48 @@ describe("api/admin/vps/[businessId]/migrate-size route", () => {
     });
 
     expect(migrateBusinessVpsSize).not.toHaveBeenCalled();
+    expect(tryClaimVpsMigration).toHaveBeenCalledWith(BIZ_ID, "admin@example.com", "kvm4");
     await flushAfterCallbacks();
     expect(migrateBusinessVpsSize).toHaveBeenCalledWith(
       { businessId: BIZ_ID, targetSize: "kvm4", requestedBy: "admin@example.com" },
       expect.objectContaining({ sendOpsEmail: sendOpsHardwareMigrationEmail })
     );
+    expect(releaseVpsMigrationLock).toHaveBeenCalledWith(BIZ_ID);
+  });
+
+  it("409s when a migration is already in flight and never dispatches", async () => {
+    vi.mocked(tryClaimVpsMigration).mockResolvedValue(false);
+    const res = await POST(makeRequest("kvm4"), makeCtx());
+    expect(res.status).toBe(409);
+    const json = await res.json();
+    expect(json.error.message).toContain("already in flight");
+    expect(afterCallbacks).toHaveLength(0);
+    expect(releaseVpsMigrationLock).not.toHaveBeenCalled();
+  });
+
+  it("releases the lease even when the background migration crashes, and survives a failed release", async () => {
+    vi.mocked(migrateBusinessVpsSize).mockRejectedValue(new Error("boom"));
+    vi.mocked(releaseVpsMigrationLock).mockRejectedValue(new Error("release down"));
+    const res = await POST(makeRequest("kvm4"), makeCtx());
+    expect(res.status).toBe(202);
+    await flushAfterCallbacks();
+    expect(releaseVpsMigrationLock).toHaveBeenCalledWith(BIZ_ID);
+    // The crash email still went out despite the release failure.
+    expect(sendOpsHardwareMigrationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "failed" })
+    );
+  });
+
+  it("releases the lease after a background failure outcome", async () => {
+    vi.mocked(migrateBusinessVpsSize).mockResolvedValue({
+      ok: false,
+      stage: "backup",
+      error: "no ssh key"
+    } as never);
+    const res = await POST(makeRequest("kvm4"), makeCtx());
+    expect(res.status).toBe(202);
+    await flushAfterCallbacks();
+    expect(releaseVpsMigrationLock).toHaveBeenCalledWith(BIZ_ID);
   });
 
   it("falls back to the admin user id when the session has no email", async () => {

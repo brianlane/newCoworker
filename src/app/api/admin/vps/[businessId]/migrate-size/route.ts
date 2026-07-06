@@ -23,6 +23,7 @@ import { requireAdmin } from "@/lib/auth";
 import { getBusiness, updateBusinessVpsSize } from "@/lib/db/businesses";
 import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
+import { tryClaimVpsMigration, releaseVpsMigrationLock } from "@/lib/db/vps-migration-locks";
 import { backupBusinessData, restoreBusinessData } from "@/lib/hostinger/data-migration";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
@@ -74,6 +75,19 @@ export async function POST(
     }
 
     const requestedBy = admin.email ?? admin.userId;
+
+    // In-flight guard: the migration runs for minutes behind the 202, and
+    // an overlapping second run would treat the first run's cutover box as
+    // the "old" VM (duplicate purchase, wrong backup/teardown). The lease
+    // self-expires so a crashed background job can't wedge the business.
+    const claimed = await tryClaimVpsMigration(businessId, requestedBy, size);
+    if (!claimed) {
+      return errorResponse(
+        "CONFLICT",
+        "A hardware migration for this business is already in flight — wait for its ops email"
+      );
+    }
+
     logger.info("admin hardware migration requested", {
       businessId,
       fromSize: currentSize,
@@ -126,6 +140,17 @@ export async function POST(
             err instanceof Error ? err.message : String(err)
           }`
         });
+      } finally {
+        // Best-effort: a failed release just means the next migration for
+        // this business waits out the 30-minute lease expiry.
+        try {
+          await releaseVpsMigrationLock(businessId);
+        } catch (releaseErr) {
+          logger.warn("admin hardware migration lock release failed", {
+            businessId,
+            error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr)
+          });
+        }
       }
     });
 
