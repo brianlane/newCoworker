@@ -10,12 +10,12 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.starter.voiceMinutesPerDay).toBe(Infinity);
     });
 
-    it("starter has 600 included voice seconds per Stripe period", () => {
-      expect(TIER_LIMITS.starter.voiceIncludedSecondsPerStripePeriod).toBe(600);
+    it("starter has 1500 included voice seconds per Stripe period (Jul 2026 rebalance)", () => {
+      expect(TIER_LIMITS.starter.voiceIncludedSecondsPerStripePeriod).toBe(1500);
     });
 
     it("starter has strict monthly SMS cap (UTC month)", () => {
-      expect(TIER_LIMITS.starter.smsPerMonth).toBe(500);
+      expect(TIER_LIMITS.starter.smsPerMonth).toBe(100);
     });
 
     it("starter has 1 concurrent call max", () => {
@@ -89,8 +89,8 @@ describe("tier limits", () => {
     });
 
     it("voice and SMS lines match tier defaults", () => {
-      expect(voiceMinutesLine("starter")).toBe("10 voice minutes");
-      expect(smsMonthlyLine("starter")).toBe("500 SMS / month");
+      expect(voiceMinutesLine("starter")).toBe("25 voice minutes");
+      expect(smsMonthlyLine("starter")).toBe("100 SMS / month");
       expect(voiceMinutesLine("standard")).toBe("250 voice minutes");
       expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
       expect(voiceMinutesLine("enterprise")).toBe("2,500 voice minutes");

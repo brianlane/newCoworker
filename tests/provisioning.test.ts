@@ -357,41 +357,41 @@ describe("provisioning/orchestrate", () => {
     });
   });
 
-  it("standard tier forwards to provisioner with tier='standard' and default kvm8 hardware", async () => {
+  it("standard tier forwards to provisioner with tier='standard' and default kvm2 hardware", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s2"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
-      { businessId: "biz-kvm8", tier: "standard" },
+      { businessId: "biz-std-default", tier: "standard" },
       { vpsProvisioner, remoteExec }
     );
     expect(vpsProvisioner).toHaveBeenCalledWith({
-      businessId: "biz-kvm8",
+      businessId: "biz-std-default",
       tier: "standard",
-      vpsSize: "kvm8"
+      vpsSize: "kvm2"
     });
   });
 
-  it("an explicit vps_size pin overrides the tier default (standard on kvm2) and lands in bootstrap + deploy env", async () => {
+  it("an explicit vps_size pin overrides the tier default (standard on kvm8) and lands in bootstrap + deploy env", async () => {
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s3"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
-      { businessId: "biz-std-kvm2", tier: "standard", vpsSize: "kvm2" },
+      { businessId: "biz-std-kvm8", tier: "standard", vpsSize: "kvm8" },
       { vpsProvisioner, remoteExec }
     );
     expect(vpsProvisioner).toHaveBeenCalledWith({
-      businessId: "biz-std-kvm2",
+      businessId: "biz-std-kvm8",
       tier: "standard",
-      vpsSize: "kvm2"
+      vpsSize: "kvm8"
     });
     // Bootstrap (call 0) carries the pinned hardware profile: the slim
     // loader is base64-embedded, so decode it before asserting.
     const bootstrapCall = remoteExec.mock.calls[0][0] as { command: string };
     const b64 = /printf '%s' '([^']+)'/.exec(bootstrapCall.command)?.[1] ?? "";
     const decoded = Buffer.from(b64, "base64").toString("utf8");
-    expect(decoded).toContain("TIER='standard' VPS_SIZE='kvm2' bash");
+    expect(decoded).toContain("TIER='standard' VPS_SIZE='kvm8' bash");
     // Deploy env carries the hardware profile for deploy-client.sh.
     const cmd = deployCallArg(remoteExec).command;
-    expectDeployHasEnv(cmd, "VPS_SIZE", "kvm2");
+    expectDeployHasEnv(cmd, "VPS_SIZE", "kvm8");
     expectDeployHasEnv(cmd, "TIER", "standard");
   });
 
@@ -1831,10 +1831,10 @@ describe("provisioning/orchestrate", () => {
       expect(vpsProvisioner).toHaveBeenCalledWith({
         businessId: "biz-pool-2",
         tier: "standard",
-        vpsSize: "kvm8"
+        vpsSize: "kvm2"
       });
       expect(pool.record).toHaveBeenCalledWith(
-        expect.objectContaining({ vmId: 123, plan: "kvm8", businessId: "biz-pool-2" })
+        expect.objectContaining({ vmId: 123, plan: "kvm2", businessId: "biz-pool-2" })
       );
     });
 

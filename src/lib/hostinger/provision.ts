@@ -64,7 +64,7 @@ export const VPS_SIZE_PRICE_ITEM: Record<VpsSize, string> = {
  */
 export const DEFAULT_TIER_PRICE_ITEM: Record<"starter" | "standard", string> = {
   starter: VPS_SIZE_PRICE_ITEM.kvm1,
-  standard: VPS_SIZE_PRICE_ITEM.kvm8
+  standard: VPS_SIZE_PRICE_ITEM.kvm2
 };
 
 /** Ubuntu 24.04 with Docker (verified via `GET /api/vps/v1/templates`). */
