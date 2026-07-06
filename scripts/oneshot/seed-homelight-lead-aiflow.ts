@@ -226,16 +226,17 @@ function buildDefinition(opts: {
         responseMinutes: opts.responseMinutes,
         offerWindow,
         attachScreenshot: true,
-        // "1" claims (live or late); "1, <eta>" claims and states a timeframe.
-        // There is no "pass" digit on this pinned, Dave-only offer.
+        // "1" claims (live or late); "1, <eta>" claims and states a timeframe;
+        // "2" passes (optionally "2, <reason>") — same digits as every flow.
         offerTemplate:
           "New HomeLight referral: {{vars.lead_first_name}} — {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\n" +
           "Tap to claim: {{vars.leadUrl}}\n" +
           "Direct claim button: {{vars.claim_link}}\n" +
-          "Reply 1 to confirm you're taking it by {{offer.deadline}}.\n" +
+          "Reply 1 to claim or 2 to pass by {{offer.deadline}}.\n" +
           'You can also reply "1, <ETA>" to claim and tell us when you\'ll reach out ' +
-          '(e.g. "1, 20 min").',
+          '(e.g. "1, 20 min").\n' +
+          'Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").',
         ownerFallbackTemplate:
           "Dave didn't claim the HomeLight referral {{vars.lead_first_name}} " +
           "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time — it's back to you.\n" +

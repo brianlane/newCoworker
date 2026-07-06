@@ -1,23 +1,24 @@
 /**
- * Pure parser for the "claim WITH a timeframe" SMS reply shape used by
- * Dave-routed AiFlow offers (and the late-claim "86" path).
+ * Pure parser for the comma'd "<digit>, <free text>" SMS reply shape used by
+ * AiFlow team offers: claim with a timeframe ("1, 20 min"), pass with a reason
+ * ("2, out of town"), and the unclaim "86, <note>" path.
  *
  * Lives in `_shared` (not the telnyx-sms-inbound entrypoint) so it can be unit
  * tested under vitest without booting the Deno HTTP server, and so the worker
  * and webhook share one definition of the cap.
  */
 
-/** Cap the stated ETA so a teammate's reply can't bloat the owner's notice. */
+/** Cap the comma'd free text so a reply can't bloat the owner's notice. */
 export const MAX_CLAIM_TIMEFRAME_LEN = 120;
 
 /**
- * Parse the "claim WITH a timeframe" reply shape, "<n>, <eta>" (e.g. "4, 20 min",
- * "86, a few days"). The comma + free-text ETA is the affordance for the
- * "accept and say when you'll reach out" option Dave-routed offers advertise; the
- * exact leading digit varies per flow (it's just the displayed option number), so
- * we accept ANY 1-2 digit lead — the comma is what distinguishes a claim+ETA from
- * a bare "2" pass. Returns null when there's no comma'd ETA. The digit "86" is
- * routed to the late-claim path by the caller.
+ * Parse the comma'd reply shape, "<n>, <text>" (e.g. "1, 20 min" claim+ETA,
+ * "2, out of town" pass+reason, "86, a few days"). The comma + free text is
+ * the affordance for "accept and say when you'll reach out" / "pass and say
+ * why"; the exact leading digit's meaning is the caller's job, so we accept
+ * ANY 1-2 digit lead — the comma is what distinguishes the annotated form from
+ * a bare digit. Returns null when there's no comma'd text. The digit "86" is
+ * routed to the unclaim path by the caller.
  */
 export function parseClaimWithTimeframe(
   body: string

@@ -203,7 +203,8 @@ function buildDefinition(opts: {
         id: "route",
         type: "route_to_team",
         agentName: opts.agentName,
-        // 1 = claim (live or late; "1, <eta>" adds a timeframe), 2 = pass.
+        // 1 = claim (live or late; "1, <eta>" adds a timeframe), 2 = pass
+        // (optionally "2, <reason>").
         offerTemplate:
           "New Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Address: {{vars.lead_address}}\n" +
@@ -211,7 +212,8 @@ function buildDefinition(opts: {
           "Details: {{trigger.windowText}}\n" +
           "Reply 1 to claim or 2 to pass by {{offer.deadline}}, or it goes to the next agent.\n" +
           'You can also reply "1, <ETA>" to claim and tell us when you\'ll reach out ' +
-          '(e.g. "1, 20 min").',
+          '(e.g. "1, 20 min").\n' +
+          'Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").',
         responseMinutes: 10,
         offerWindow: {
           timezone: "America/Phoenix",
