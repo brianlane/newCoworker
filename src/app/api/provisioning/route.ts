@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { getBusiness } from "@/lib/db/businesses";
+import { getSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 
@@ -18,10 +19,15 @@ export async function POST(request: Request) {
     const business = await getBusiness(body.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
 
+    // Term-aware purchase: if a purchase is needed, buy the box at the
+    // tenant's committed contract term rather than always monthly.
+    const subscription = await getSubscription(body.businessId);
+
     const result = await orchestrateProvisioning({
       businessId: body.businessId,
       tier: business.tier,
       vpsSize: business.vps_size ?? null,
+      billingPeriod: subscription?.billing_period ?? null,
       ownerEmail: body.ownerEmail ?? business.owner_email,
       ownerPhone: body.ownerPhone
     });

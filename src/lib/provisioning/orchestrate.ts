@@ -45,6 +45,8 @@ import {
   type CloudflareTunnelProvisioner
 } from "@/lib/cloudflare/tunnel";
 import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
+import { hostingerTermForBillingPeriod } from "@/lib/hostinger/provision";
+import type { BillingPeriod } from "@/lib/plans/tier";
 
 type ProvisioningInput = {
   businessId: string;
@@ -56,6 +58,21 @@ type ProvisioningInput = {
    * only — entitlements stay on `tier`.
    */
   vpsSize?: string | null;
+  /**
+   * Customer contract term. When a purchase is needed, the Hostinger box is
+   * bought at the matching term (biennial → 2-year SKU, annual → 1-year) —
+   * term SKUs are ~40-65% cheaper per month than monthly renewal. Omitted /
+   * null buys monthly. Pool adoption ignores this (the box is already owned).
+   */
+  billingPeriod?: BillingPeriod | null;
+  /**
+   * Skip the adopt-first pool claim and force a purchase. Used by the
+   * change-plan term-alignment migration, whose entire point is landing on
+   * a term-priced PURCHASE — adopting a pooled (typically monthly-cycle,
+   * soon-lapsing) box there would keep the tenant on expensive renewal
+   * pricing. The purchased box is still recorded in `vps_inventory`.
+   */
+  skipPoolAdopt?: boolean;
   ownerEmail?: string;
   ownerPhone?: string;
 };
@@ -287,6 +304,7 @@ export type VpsProvisioner = (input: {
   businessId: string;
   tier: "starter" | "standard";
   vpsSize: VpsSize;
+  billingPeriod?: BillingPeriod | null;
 }) => Promise<ProvisionVpsForBusinessResult>;
 
 /**
@@ -336,12 +354,13 @@ function defaultVpsAdopter(client: HostingerClient): VpsAdopter {
 
 /* c8 ignore start -- production-only default factory; tests inject vpsProvisioner */
 function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
-  return ({ businessId, tier, vpsSize }) =>
+  return ({ businessId, tier, vpsSize, billingPeriod }) =>
     provisionVpsForBusiness(
       {
         businessId,
         tier,
         vpsSize,
+        billingPeriod: billingPeriod ?? null,
         // Attempt to attach the bootstrap as Hostinger's first-boot
         // post-install script. provisionVpsForBusiness gracefully degrades
         // on the 403 chicken-and-egg ("account doesn't yet own a VPS") so
@@ -420,11 +439,16 @@ export async function orchestrateProvisioning(
     sleep?: (ms: number) => Promise<void>;
   }
 ): Promise<ProvisioningResult> {
-  const { businessId, ownerEmail, ownerPhone, tier } = input;
+  const { businessId, ownerEmail, ownerPhone, tier, billingPeriod } = input;
   const narrowTier = resolveStarterOrStandard(tier);
   const vpsSize = resolveVpsSize(narrowTier, input.vpsSize);
 
-  logger.info("Starting provisioning", { businessId, tier: narrowTier, vpsSize });
+  logger.info("Starting provisioning", {
+    businessId,
+    tier: narrowTier,
+    vpsSize,
+    billingPeriod: billingPeriod ?? null
+  });
 
   await recordProvisioningProgress({
     businessId,
@@ -436,7 +460,15 @@ export async function orchestrateProvisioning(
 
   try {
     return await runOrchestrator(
-      { businessId, ownerEmail, ownerPhone, tier: narrowTier, vpsSize },
+      {
+        businessId,
+        ownerEmail,
+        ownerPhone,
+        tier: narrowTier,
+        vpsSize,
+        billingPeriod,
+        skipPoolAdopt: input.skipPoolAdopt
+      },
       deps
     );
   } catch (err) {
@@ -596,13 +628,16 @@ async function acquireVps(args: {
   businessId: string;
   tier: "starter" | "standard";
   vpsSize: VpsSize;
+  billingPeriod: BillingPeriod | null;
+  skipPoolAdopt: boolean;
   vpsPool: VpsPool | null;
   vpsAdopter: VpsAdopter;
   vpsProvisioner: VpsProvisioner;
 }): Promise<ProvisionVpsForBusinessResult> {
-  const { businessId, tier, vpsSize, vpsPool, vpsAdopter, vpsProvisioner } = args;
+  const { businessId, tier, vpsSize, billingPeriod, skipPoolAdopt, vpsPool, vpsAdopter, vpsProvisioner } =
+    args;
 
-  if (vpsPool) {
+  if (vpsPool && !skipPoolAdopt) {
     let claimed: Awaited<ReturnType<VpsPool["claim"]>> = null;
     try {
       claimed = await vpsPool.claim(vpsSize, businessId);
@@ -667,7 +702,7 @@ async function acquireVps(args: {
     }
   }
 
-  const purchased = await vpsProvisioner({ businessId, tier, vpsSize });
+  const purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod });
   if (vpsPool) {
     try {
       await vpsPool.record({
@@ -675,7 +710,9 @@ async function acquireVps(args: {
         plan: vpsSize,
         businessId,
         hostingerBillingSubscriptionId: purchased.hostingerBillingSubscriptionId,
-        notes: `purchased for ${businessId}`
+        // Record the purchased Hostinger term so pool triage can tell a
+        // prepaid 2-year box (valuable, adopt eagerly) from a monthly one.
+        notes: `purchased for ${businessId} (${hostingerTermForBillingPeriod(billingPeriod ?? "monthly")} term)`
       });
     } catch (err) {
       logger.warn("vps pool bookkeeping failed after purchase (continuing)", {
@@ -725,6 +762,8 @@ async function runOrchestrator(
     businessId,
     tier: narrowTier,
     vpsSize,
+    billingPeriod: input.billingPeriod ?? null,
+    skipPoolAdopt: input.skipPoolAdopt ?? false,
     vpsPool,
     vpsAdopter,
     vpsProvisioner

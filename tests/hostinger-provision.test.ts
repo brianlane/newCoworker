@@ -3,6 +3,9 @@ import {
   provisionVpsForBusiness,
   buildDefaultPostInstallScript,
   resolvePriceItemId,
+  hostingerTermForBillingPeriod,
+  hostingerTermMonths,
+  vpsPriceItemId,
   DEFAULT_TEMPLATE_ID,
   DEFAULT_US_DATA_CENTER_ID,
   DEFAULT_TIER_PRICE_ITEM,
@@ -366,6 +369,53 @@ describe("provisionVpsForBusiness", () => {
     // linkage so a future edit can't silently fork the two.
     expect(DEFAULT_TIER_PRICE_ITEM.starter).toBe(VPS_SIZE_PRICE_ITEM.kvm1);
     expect(DEFAULT_TIER_PRICE_ITEM.standard).toBe(VPS_SIZE_PRICE_ITEM.kvm2);
+  });
+
+  it("buys the term SKU matching the customer's contract (biennial → -2y, annual → -1y)", async () => {
+    const runPurchase = async (billingPeriod: "annual" | "biennial") => {
+      const client = makeClientStub({
+        getVirtualMachine: vi.fn().mockResolvedValue({
+          id: 42,
+          state: "running",
+          ipv4: [{ id: 1, address: "1.2.3.4" }]
+        })
+      });
+      await provisionVpsForBusiness(
+        { businessId: "biz-term", tier: "starter", billingPeriod, pollIntervalMs: 1 },
+        {
+          client: client as unknown as HostingerClient,
+          generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+          sleep: vi.fn().mockResolvedValue(undefined),
+          db: { insertVpsSshKey: vi.fn().mockResolvedValue({ id: "row", business_id: "biz-term" }) }
+        }
+      );
+      return client.purchaseVirtualMachine.mock.calls[0][0].item_id as string;
+    };
+
+    expect(await runPurchase("biennial")).toBe("hostingercom-vps-kvm1-usd-2y");
+    expect(await runPurchase("annual")).toBe("hostingercom-vps-kvm1-usd-1y");
+  });
+
+  it("an explicit monthly contract (and a null one) buys the monthly SKU", async () => {
+    const client = makeClientStub({
+      getVirtualMachine: vi.fn().mockResolvedValue({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    await provisionVpsForBusiness(
+      { businessId: "biz-term-m", tier: "starter", billingPeriod: "monthly", pollIntervalMs: 1 },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn().mockResolvedValue(undefined),
+        db: { insertVpsSshKey: vi.fn().mockResolvedValue({ id: "row", business_id: "biz-term-m" }) }
+      }
+    );
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].item_id).toBe(
+      "hostingercom-vps-kvm1-usd-1m"
+    );
   });
 
   it("attaches a Hostinger post-install script when content is provided (happy path)", async () => {
@@ -1172,6 +1222,25 @@ describe("buildDefaultPostInstallScript", () => {
     expect(s).toContain("fuser /var/lib/apt/lists/lock /var/lib/dpkg/lock-frontend");
     expect(s.match(/wait_for_apt\napt-get -y -o DPkg::Lock::Timeout=300 update/)).not.toBeNull();
     expect(s.match(/wait_for_apt\napt-get -y -o DPkg::Lock::Timeout=300 install/)).not.toBeNull();
+  });
+});
+
+describe("term helpers", () => {
+  it("maps contract periods onto Hostinger purchase terms", () => {
+    expect(hostingerTermForBillingPeriod("biennial")).toBe("2y");
+    expect(hostingerTermForBillingPeriod("annual")).toBe("1y");
+    expect(hostingerTermForBillingPeriod("monthly")).toBe("1m");
+  });
+
+  it("maps terms onto covered months", () => {
+    expect(hostingerTermMonths("2y")).toBe(24);
+    expect(hostingerTermMonths("1y")).toBe(12);
+    expect(hostingerTermMonths("1m")).toBe(1);
+  });
+
+  it("builds catalog price-item ids from size + term", () => {
+    expect(vpsPriceItemId("kvm2", "2y")).toBe("hostingercom-vps-kvm2-usd-2y");
+    expect(vpsPriceItemId("kvm8", "1m")).toBe("hostingercom-vps-kvm8-usd-1m");
   });
 });
 

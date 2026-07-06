@@ -58,12 +58,14 @@ const {
   hostingerGetVmMock,
   hostingerCreateSnapshotMock,
   hostingerStopVirtualMachineMock,
-  hostingerDisableAutoRenewalMock
+  hostingerDisableAutoRenewalMock,
+  hostingerListBillingSubscriptionsMock
 } = vi.hoisted(() => ({
   hostingerGetVmMock: vi.fn(),
   hostingerCreateSnapshotMock: vi.fn(),
   hostingerStopVirtualMachineMock: vi.fn(),
-  hostingerDisableAutoRenewalMock: vi.fn()
+  hostingerDisableAutoRenewalMock: vi.fn(),
+  hostingerListBillingSubscriptionsMock: vi.fn()
 }));
 
 vi.mock("@/lib/hostinger/client", () => {
@@ -79,6 +81,9 @@ vi.mock("@/lib/hostinger/client", () => {
     }
     disableBillingAutoRenewal(id: string) {
       return hostingerDisableAutoRenewalMock(id);
+    }
+    listBillingSubscriptions() {
+      return hostingerListBillingSubscriptionsMock();
     }
   }
   return {
@@ -142,14 +147,20 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
-const { sendOpsVpsDeletionEmailMock, sendOpsPlanChangeEmailMock } = vi.hoisted(() => ({
+const {
+  sendOpsVpsDeletionEmailMock,
+  sendOpsPlanChangeEmailMock,
+  sendOpsTermAlignmentEmailMock
+} = vi.hoisted(() => ({
   sendOpsVpsDeletionEmailMock: vi.fn().mockResolvedValue(undefined),
-  sendOpsPlanChangeEmailMock: vi.fn().mockResolvedValue(undefined)
+  sendOpsPlanChangeEmailMock: vi.fn().mockResolvedValue(undefined),
+  sendOpsTermAlignmentEmailMock: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock("@/lib/email/ops-notify", () => ({
   sendOpsVpsDeletionEmail: sendOpsVpsDeletionEmailMock,
-  sendOpsPlanChangeEmail: sendOpsPlanChangeEmailMock
+  sendOpsPlanChangeEmail: sendOpsPlanChangeEmailMock,
+  sendOpsTermAlignmentEmail: sendOpsTermAlignmentEmailMock
 }));
 
 const { releaseVpsToPoolMock } = vi.hoisted(() => ({
@@ -229,6 +240,12 @@ beforeEach(() => {
   hostingerCreateSnapshotMock.mockResolvedValue({ id: 1, state: "success" });
   hostingerStopVirtualMachineMock.mockResolvedValue({ id: 2, state: "success" });
   hostingerDisableAutoRenewalMock.mockResolvedValue({ ok: true });
+  // Default: the live box is already on a 2-year Hostinger cycle, so
+  // same-tier period switches in the existing suite keep exercising the
+  // period-only fast path. Term-alignment tests override this to monthly.
+  hostingerListBillingSubscriptionsMock.mockResolvedValue([
+    { id: "billing_old", status: "active", billing_period: 2, billing_period_unit: "year" }
+  ]);
 
   backupBusinessDataMock.mockResolvedValue({
     storageBucket: "business-backups",
@@ -629,6 +646,25 @@ describe("runChangePlanFromCheckout", () => {
       );
     });
 
+    it("emails ops a 'not_needed' contract-switch summary when the box's cycle already covers the target", async () => {
+      // Default list mock: billing_old is on a 2-year cycle; target is annual
+      // (12mo) — nothing to change, but ops still hears the switch happened.
+      await runChangePlanFromCheckout(periodOnlySession(), "evt_period_only_summary");
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: "biz-1",
+          tier: "starter",
+          oldBillingPeriod: "monthly",
+          newBillingPeriod: "annual",
+          outcome: "not_needed",
+          currentCycleMonths: 24,
+          targetTermMonths: 12,
+          oldVirtualMachineId: 1001,
+          newVirtualMachineId: null
+        })
+      );
+    });
+
     it("a tier-change migration with a null provisioning billing id never inherits the old (about-to-be-canceled) billing id", async () => {
       // Regression (Bugbot): the fast-path inheritance must not leak into the
       // migration path — step 7 cancels billing_old, so pinning it to the new
@@ -646,6 +682,160 @@ describe("runChangePlanFromCheckout", () => {
         expect.objectContaining({ hostinger_billing_subscription_id: null })
       );
       expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
+    });
+  });
+
+  describe("Hostinger term alignment (same tier, longer commitment)", () => {
+    function sameTierSession(billingPeriod: string) {
+      return makeSession({
+        metadata: {
+          businessId: "biz-1",
+          previousSubscriptionId: "sub-row-old",
+          tier: "starter",
+          billingPeriod,
+          lifecycleAction: "changePlan"
+        }
+      });
+    }
+
+    it("migrates a monthly-cycle box onto a term-bought purchase when the customer commits to biennial", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align");
+
+      // Full migration machinery runs, purchasing at the 2-year term and
+      // FORCING a purchase (a pooled monthly lapser would defeat the point).
+      expect(backupBusinessDataMock).toHaveBeenCalled();
+      expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessId: "biz-1",
+          tier: "starter",
+          billingPeriod: "biennial",
+          skipPoolAdopt: true
+        })
+      );
+      expect(restoreBusinessDataMock).toHaveBeenCalled();
+
+      // Old monthly box is torn down + pooled exactly like a tier change.
+      expect(hostingerStopVirtualMachineMock).toHaveBeenCalledWith(1001);
+      expect(hostingerDisableAutoRenewalMock).toHaveBeenCalledWith("billing_old");
+      expect(releaseVpsToPoolMock).toHaveBeenCalledWith(
+        expect.objectContaining({ vmId: 1001 })
+      );
+      expect(sendOpsVpsDeletionEmailMock).toHaveBeenCalled();
+
+      // New sub row carries the NEW box's billing, not the disabled old one.
+      expect(createSubscriptionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostinger_billing_subscription_id: "billing_new" })
+      );
+
+      // Ops heard the migration start AND the aligned outcome.
+      expect(sendOpsPlanChangeEmailMock).toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: "aligned",
+          currentCycleMonths: 1,
+          targetTermMonths: 24,
+          oldVirtualMachineId: 1001,
+          newVirtualMachineId: "2002"
+        })
+      );
+    });
+
+    it("also migrates when the box's existing term is shorter than the target (1y box, biennial commitment)", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period: 1, billing_period_unit: "year" }
+      ]);
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_1y");
+      expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+        expect.objectContaining({ billingPeriod: "biennial", skipPoolAdopt: true })
+      );
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "aligned", currentCycleMonths: 12, targetTermMonths: 24 })
+      );
+    });
+
+    it("reads the legacy period/period_unit fields when the modern cycle fields are absent", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", period: 2, period_unit: "year" }
+      ]);
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_legacy");
+      // 24-month legacy cycle already covers the target → fast path.
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "not_needed", currentCycleMonths: 24 })
+      );
+    });
+
+    it("stays on the fast path and flags ops when the billing-cycle lookup throws", async () => {
+      hostingerListBillingSubscriptionsMock.mockRejectedValue(new Error("hostinger 500"));
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_err");
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(hostingerDisableAutoRenewalMock).not.toHaveBeenCalled();
+      // Live box's billing id still inherited — nothing was migrated.
+      expect(createSubscriptionMock).toHaveBeenCalledWith(
+        expect.objectContaining({ hostinger_billing_subscription_id: "billing_old" })
+      );
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped", currentCycleMonths: null })
+      );
+    });
+
+    it("stays on the fast path and flags ops when the billing subscription is not in the list", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_other", status: "active", billing_period: 1, billing_period_unit: "month" }
+      ]);
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_missing");
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped" })
+      );
+    });
+
+    it("stays on the fast path and flags ops when the subscription row has no usable cycle fields", async () => {
+      hostingerListBillingSubscriptionsMock.mockResolvedValue([
+        { id: "billing_old", status: "active", billing_period_unit: "fortnight" }
+      ]);
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_badcycle");
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped" })
+      );
+    });
+
+    it("stays on the fast path and flags ops when no VM / billing id is recorded for the old plan", async () => {
+      getBusinessMock.mockResolvedValue({
+        id: "biz-1",
+        owner_email: "owner@example.com",
+        hostinger_vps_id: null,
+        customer_profile_id: "prof-1",
+        status: "online"
+      });
+      await runChangePlanFromCheckout(sameTierSession("biennial"), "evt_term_align_novm");
+      expect(hostingerListBillingSubscriptionsMock).not.toHaveBeenCalled();
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "skipped", oldVirtualMachineId: null })
+      );
+    });
+
+    it("never checks the cycle for a month-to-month target — the box keeps its current billing", async () => {
+      await runChangePlanFromCheckout(sameTierSession("monthly"), "evt_term_align_monthly");
+      expect(hostingerListBillingSubscriptionsMock).not.toHaveBeenCalled();
+      expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+      expect(sendOpsTermAlignmentEmailMock).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: "not_needed", targetTermMonths: 1 })
+      );
+    });
+
+    it("tier changes never send the contract-switch summary email", async () => {
+      await runChangePlanFromCheckout(makeSession(), "evt_tier_change_no_summary");
+      expect(orchestrateProvisioningMock).toHaveBeenCalledWith(
+        expect.objectContaining({ billingPeriod: "annual", skipPoolAdopt: false })
+      );
+      expect(sendOpsTermAlignmentEmailMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1316,6 +1506,9 @@ describe("runResubscribeFromCheckout", () => {
       businessId: "biz-1",
       tier: "standard",
       vpsSize: null,
+      // Term-aware purchase: the resubscriber's annual contract funds a
+      // 1-year Hostinger box instead of the pricier monthly SKU.
+      billingPeriod: "annual",
       ownerEmail: "owner@example.com"
     });
     expect(restoreBusinessDataMock).toHaveBeenCalledWith({

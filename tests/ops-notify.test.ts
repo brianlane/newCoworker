@@ -23,7 +23,8 @@ import {
   sendOpsVpsDeletionEmail,
   sendOpsPlanChangeEmail,
   sendOpsDidReleaseFailedEmail,
-  sendOpsHardwareMigrationEmail
+  sendOpsHardwareMigrationEmail,
+  sendOpsTermAlignmentEmail
 } from "@/lib/email/ops-notify";
 
 const input = {
@@ -177,6 +178,89 @@ describe("sendOpsPlanChangeEmail", () => {
     await expect(sendOpsPlanChangeEmail(planChangeInput)).resolves.toBeUndefined();
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops plan-change email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+const termAlignmentInput = {
+  businessId: "biz-1",
+  ownerName: "Jane Doe",
+  ownerEmail: "jane@example.com",
+  tier: "starter",
+  oldBillingPeriod: "monthly",
+  newBillingPeriod: "biennial",
+  outcome: "aligned" as const,
+  currentCycleMonths: 1,
+  targetTermMonths: 24,
+  oldVirtualMachineId: 1800985,
+  newVirtualMachineId: "1900001",
+  detail: "Migrated onto a 24-month term box."
+};
+
+describe("sendOpsTermAlignmentEmail", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the contract-switch summary to the ops inbox and logs the audit line", async () => {
+    await sendOpsTermAlignmentEmail(termAlignmentInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("monthly → biennial"),
+      expect.objectContaining({
+        text: expect.stringContaining("srv1800985 → srv1900001")
+      })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops term-alignment email sent",
+      expect.objectContaining({
+        businessId: "biz-1",
+        outcome: "aligned",
+        newBillingPeriod: "biennial",
+        toEmail: "team@newcoworker.com"
+      })
+    );
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await sendOpsTermAlignmentEmail(termAlignmentInput);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops term-alignment email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ businessId: "biz-1", outcome: "aligned" })
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsTermAlignmentEmail(termAlignmentInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsTermAlignmentEmail(termAlignmentInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops term-alignment email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsTermAlignmentEmail(termAlignmentInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops term-alignment email failed",
       expect.objectContaining({ error: "smtp string failure" })
     );
   });

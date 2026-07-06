@@ -9,6 +9,7 @@ import {
   vpsHostname
 } from "@/lib/email/templates/ops-vps-deletion";
 import { buildOpsPlanChangeEmail } from "@/lib/email/templates/ops-plan-change";
+import { buildOpsTermAlignmentEmail } from "@/lib/email/templates/ops-term-alignment";
 import { buildOpsDidReleaseFailedEmail } from "@/lib/email/templates/ops-did-release-failed";
 
 const mailCtx = {
@@ -289,6 +290,82 @@ describe("ops-plan-change (hardware escalation started) email", () => {
   it("handles a missing old VM id", () => {
     const { text } = buildOpsPlanChangeEmail({ ...baseInput, oldVirtualMachineId: null });
     expect(text).toContain("Old box: no VM recorded");
+  });
+});
+
+describe("ops-term-alignment (contract switch summary) email", () => {
+  const baseInput = {
+    businessId: "biz-1",
+    ownerName: "Jane Doe",
+    ownerEmail: "jane@example.com",
+    tier: "starter",
+    oldBillingPeriod: "monthly",
+    newBillingPeriod: "biennial",
+    outcome: "aligned" as const,
+    currentCycleMonths: 1,
+    targetTermMonths: 24,
+    oldVirtualMachineId: 1800985,
+    newVirtualMachineId: "1900001",
+    detail: "Migrated onto a term-bought box.",
+    siteUrl: "https://www.newcoworker.com"
+  };
+
+  it("renders the aligned outcome with the box swap and cycle transition", () => {
+    const { subject, text, html } = buildOpsTermAlignmentEmail(baseInput);
+    expect(subject).toBe(
+      "[ops] Contract switch — Jane Doe: monthly → biennial (Hostinger term aligned)"
+    );
+    expect(text).toContain("Contract: monthly → biennial");
+    expect(text).toContain("Hostinger cycle: 1mo → target 24mo");
+    expect(text).toContain("Box: srv1800985 → srv1900001 (old box pooled, auto-renew off)");
+    expect(text).toContain("Owner email: jane@example.com");
+    expect(text).not.toContain("Action needed");
+    expect(html).toContain("Hostinger term aligned");
+    expect(html).toContain("https://www.newcoworker.com/admin/biz-1");
+  });
+
+  it("renders the not_needed outcome with an unchanged box", () => {
+    const { subject, text } = buildOpsTermAlignmentEmail({
+      ...baseInput,
+      outcome: "not_needed",
+      currentCycleMonths: 24,
+      newVirtualMachineId: null,
+      detail: "Cycle already covers the target."
+    });
+    expect(subject).toContain("(no Hostinger change needed)");
+    expect(text).toContain("Hostinger cycle: 24mo → target 24mo");
+    expect(text).toContain("Box: srv1800985 (unchanged)");
+    expect(text).not.toContain("Action needed");
+  });
+
+  it("renders the skipped outcome with the manual-check callout and unknown cycle/box", () => {
+    const { subject, text } = buildOpsTermAlignmentEmail({
+      ...baseInput,
+      outcome: "skipped",
+      currentCycleMonths: null,
+      oldVirtualMachineId: null,
+      newVirtualMachineId: null,
+      detail: "Cycle could not be verified."
+    });
+    expect(subject).toContain("(MANUAL CHECK NEEDED)");
+    expect(text).toContain("Hostinger cycle: unknown → target 24mo");
+    expect(text).toContain("Box: srv? (unchanged)");
+    expect(text).toContain("Action needed: verify the box's billing cycle in hPanel");
+  });
+
+  it("falls back to the owner email when the name is missing and to placeholders for missing ids", () => {
+    const noName = buildOpsTermAlignmentEmail({
+      ...baseInput,
+      ownerName: null,
+      oldBillingPeriod: null,
+      oldVirtualMachineId: null,
+      newVirtualMachineId: null
+    });
+    expect(noName.subject).toContain("jane@example.com");
+    expect(noName.subject).toContain("unknown → biennial");
+    expect(noName.text).toContain("Box: srv? → srv?");
+    const blankName = buildOpsTermAlignmentEmail({ ...baseInput, ownerName: "   " });
+    expect(blankName.subject).toContain("jane@example.com");
   });
 });
 

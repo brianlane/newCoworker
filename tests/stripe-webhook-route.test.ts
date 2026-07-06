@@ -262,7 +262,9 @@ describe("stripe webhook route", () => {
     expect(orchestrateProvisioning).toHaveBeenCalledWith({
       businessId: "biz_1",
       tier: "starter",
-      vpsSize: null
+      vpsSize: null,
+      // Term-aware purchase: the annual contract funds a 1-year Hostinger box.
+      billingPeriod: "annual"
     });
   });
 
@@ -2406,7 +2408,8 @@ describe("stripe webhook route", () => {
     expect(orchestrateProvisioning).toHaveBeenCalledWith({
       businessId: "biz_4",
       tier: "standard",
-      vpsSize: null
+      vpsSize: null,
+      billingPeriod: "biennial"
     });
   });
 });

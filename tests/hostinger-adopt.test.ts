@@ -55,6 +55,7 @@ function makeClient(overrides: Record<string, unknown> = {}) {
     recreateVirtualMachine: vi.fn().mockResolvedValue({}),
     installMonarx: vi.fn().mockResolvedValue({ id: 1, name: "a", state: "initiated" }),
     listBillingSubscriptions: vi.fn().mockResolvedValue([]),
+    enableBillingAutoRenewal: vi.fn().mockResolvedValue({}),
     ...overrides
   };
 }
@@ -564,6 +565,70 @@ describe("adoptVpsForBusiness", () => {
       deps
     );
     expect(res.hostingerBillingSubscriptionId).toBeNull();
+    // With no billing id there is nothing to re-enable — the adopt logs a
+    // loud follow-up instead (a pooled box left with auto-renew off lapses
+    // at period end under the new tenant).
+    expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("re-enables billing auto-renew on the adopted box (pooled boxes are parked with it off)", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-adopted" })
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.enableBillingAutoRenewal).toHaveBeenCalledWith("hsub-adopted");
+  });
+
+  it("completes the adopt (with a loud log) when the auto-renew re-enable fails", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-adopted" }),
+      enableBillingAutoRenewal: vi.fn().mockRejectedValue(new Error("billing api down"))
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    // The adopt itself still succeeds — the re-enable is an ops follow-up.
+    expect(res.hostingerBillingSubscriptionId).toBe("hsub-adopted");
+  });
+
+  it("stringifies a non-Error throwable from the auto-renew re-enable", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-adopted" }),
+      enableBillingAutoRenewal: vi.fn().mockRejectedValue("renew string failure")
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow)
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(res.hostingerBillingSubscriptionId).toBe("hsub-adopted");
   });
 
   it("resolves the billing id from the VM detail's subscription_id without touching the list", async () => {

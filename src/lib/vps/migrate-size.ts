@@ -99,6 +99,8 @@ export type MigrateVpsSizeDeps = {
     businessId: string;
     tier: "starter" | "standard";
     vpsSize: VpsSize;
+    /** Buys the replacement box at the tenant's committed Hostinger term. */
+    billingPeriod?: SubscriptionRow["billing_period"];
   }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
   sendOpsEmail: (input: OpsMigrationEmailInput) => Promise<void>;
 };
@@ -234,7 +236,12 @@ export async function migrateBusinessVpsSize(
   // profile onto the live old box.
   let newProv: { vpsId: string; hostingerBillingSubscriptionId: string | null };
   try {
-    newProv = await deps.orchestrateProvisioning({ businessId, tier, vpsSize: targetSize });
+    newProv = await deps.orchestrateProvisioning({
+      businessId,
+      tier,
+      vpsSize: targetSize,
+      billingPeriod: activeSub?.billing_period ?? null
+    });
   } catch (err) {
     const error = `provisioning failed: ${errMsg(err)} — old box untouched and still serving; re-run once fixed`;
     await notify("failed", `Provision stage: ${error}`);

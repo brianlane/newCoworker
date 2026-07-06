@@ -31,11 +31,25 @@
  * new provisioning on teardown failures because the customer has already
  * paid for the new plan.
  *
- * PERIOD-ONLY FAST PATH: when the tier is unchanged (billing-period-only
- * switch), nothing about the VPS changes — steps 1-4 and 7 are skipped
- * entirely. The existing box keeps running under its existing Hostinger
- * billing subscription (inherited onto the new sub row), and only the
- * Stripe swap + DB bookkeeping (steps 5, 6, 8) execute.
+ * SAME-TIER SWITCHES (contract-period changes): the hardware is already the
+ * right size, but the box's Hostinger BILLING TERM may not match the new
+ * commitment. Hostinger term SKUs are ~40-65% cheaper per month than
+ * monthly renewal (live catalog Jul 2026: kvm1 $19.49/mo monthly renewal vs
+ * $6.49/mo first 2-year period; kvm2 $24.49 vs $8.99), and the public API
+ * cannot change an existing subscription's billing cycle (only auto-renew
+ * on/off — cycle changes are hPanel-only). So:
+ *
+ *   - Customer commits to a LONGER term than the box's current cycle →
+ *     run the full migration (steps 1-4, 7) onto a freshly TERM-BOUGHT box
+ *     of the same size; the old monthly box is pooled with auto-renew off.
+ *   - Same/shorter commitment, cycle already covers the target, or the
+ *     cycle can't be verified → period-only fast path: steps 1-4 and 7 are
+ *     skipped, the box keeps its existing Hostinger billing subscription
+ *     (inherited onto the new sub row), and only the Stripe swap + DB
+ *     bookkeeping (steps 5, 6, 8) execute.
+ *
+ * Either way, ops gets a term-alignment summary email when the switch
+ * completes (including a MANUAL CHECK flag when verification failed).
  *
  * This function is invoked fire-and-forget by the webhook; errors are
  * logged but never bubble back up so Stripe keeps receiving 200s.
@@ -82,8 +96,16 @@ import {
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
 import { logger } from "@/lib/logger";
-import { sendOpsVpsDeletionEmail, sendOpsPlanChangeEmail } from "@/lib/email/ops-notify";
+import {
+  sendOpsVpsDeletionEmail,
+  sendOpsPlanChangeEmail,
+  sendOpsTermAlignmentEmail
+} from "@/lib/email/ops-notify";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
+import {
+  hostingerTermForBillingPeriod,
+  hostingerTermMonths
+} from "@/lib/hostinger/provision";
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -188,6 +210,35 @@ async function resolveVmIp(
   } catch (err) {
     logger.warn("changePlan: resolveVmIp failed", {
       virtualMachineId,
+      error: errorMessage(err)
+    });
+    return null;
+  }
+}
+
+/**
+ * Months per billing cycle the box's Hostinger subscription currently runs
+ * on (1 = monthly renewal, 12/24 = term-bought). Null when the subscription
+ * can't be found or the response lacks cycle fields — callers must treat
+ * null as "can't verify; leave the hardware alone and flag ops".
+ */
+async function currentHostingerCycleMonths(
+  billingSubscriptionId: string,
+  client: HostingerClient
+): Promise<number | null> {
+  try {
+    const subs = await client.listBillingSubscriptions();
+    const row = subs.find((s) => s.id === billingSubscriptionId);
+    if (!row) return null;
+    // Live API (Jul 2026) returns billing_period/billing_period_unit; the
+    // legacy period/period_unit pair is kept as a fallback for older shapes.
+    const period = row.billing_period ?? row.period;
+    const unit = row.billing_period_unit ?? row.period_unit;
+    if (typeof period !== "number" || (unit !== "month" && unit !== "year")) return null;
+    return unit === "year" ? period * 12 : period;
+  } catch (err) {
+    logger.warn("changePlan: Hostinger billing-cycle lookup failed", {
+      billingSubscriptionId,
       error: errorMessage(err)
     });
     return null;
@@ -362,24 +413,6 @@ export async function runChangePlanFromCheckout(
 
   const hostinger = hostingerClient();
 
-  // ── Period-only fast path: when the tier is UNCHANGED, the VPS is already
-  // the right size and nothing about the box depends on the Stripe billing
-  // period — the change is purely a Stripe price swap. Skip the snapshot /
-  // backup / re-provision / restore cycle (steps 1-4) AND the old-Hostinger
-  // billing cancel (step 7: the box keeps its existing Hostinger
-  // subscription — canceling it would destroy the customer's live VPS).
-  // Only the Stripe/DB steps (5, 6, 8) run.
-  const periodOnlySwitch = tier === oldSub.tier;
-  if (periodOnlySwitch) {
-    logger.info("changePlan: same-tier period switch; skipping VPS migration", {
-      businessId,
-      tier,
-      // billing_period is already nullable on the row; log as-is.
-      oldBillingPeriod: oldSub.billing_period,
-      newBillingPeriod: billingPeriod
-    });
-  }
-
   // Old VPS coordinates, captured BEFORE provisioning overwrites them.
   // (`business` was read before `orchestrateProvisioning`, so this stays the
   // OLD VM id even after the DB row is repointed to the new VM.)
@@ -387,14 +420,66 @@ export async function runChangePlanFromCheckout(
   const oldVmId =
     oldVpsIdRaw && /^\d+$/.test(oldVpsIdRaw) ? Number.parseInt(oldVpsIdRaw, 10) : null;
 
-  // Ops visibility: a tier change is about to run minutes of unattended
-  // hardware migration (snapshot → backup → new-VM purchase → restore →
-  // old-box teardown). Tell the operator it STARTED — the existing
-  // deletion-request email only marks the end, so without this a stuck
-  // migration was invisible until a customer complained. Fire-and-forget
-  // (sendOpsPlanChangeEmail never throws); period-only switches touch no
-  // hardware and stay quiet.
-  if (!periodOnlySwitch) {
+  // ── Same-tier switches: the hardware is already the right size, but the
+  // box's Hostinger BILLING TERM may not match the new commitment. Term
+  // SKUs are ~40-65% cheaper per month than monthly renewal, and the
+  // public API cannot change an existing subscription's cycle (hPanel
+  // only) — so a LONGER commitment triggers the full migration onto a
+  // freshly term-bought box of the same size. Everything else stays on
+  // the period-only fast path: skip snapshot / backup / re-provision /
+  // restore (steps 1-4) AND the old-Hostinger teardown (step 7 — the box
+  // keeps its existing Hostinger subscription; touching it would destroy
+  // the customer's live VPS). Only the Stripe/DB steps (5, 6, 8) run.
+  const sameTier = tier === oldSub.tier;
+  const targetTermMonths = hostingerTermMonths(hostingerTermForBillingPeriod(billingPeriod));
+  let currentCycleMonths: number | null = null;
+  let termAlignment = false;
+  let termAlignmentSkipReason: string | null = null;
+  if (sameTier && targetTermMonths > 1) {
+    if (oldVmId === null || !oldSub.hostinger_billing_subscription_id) {
+      termAlignmentSkipReason =
+        "no VM / Hostinger billing subscription recorded for the old plan — verify the box's billing cycle in hPanel";
+    } else {
+      currentCycleMonths = await currentHostingerCycleMonths(
+        oldSub.hostinger_billing_subscription_id,
+        hostinger
+      );
+      if (currentCycleMonths === null) {
+        termAlignmentSkipReason =
+          "the box's current Hostinger billing cycle could not be verified — check hPanel and change the renewal period manually if it is still monthly";
+      } else if (currentCycleMonths < targetTermMonths) {
+        termAlignment = true;
+      }
+    }
+  }
+  const migrateVps = !sameTier || termAlignment;
+  if (sameTier) {
+    logger.info(
+      termAlignment
+        ? "changePlan: same-tier period switch needs a longer Hostinger term; migrating onto a term-bought box"
+        : "changePlan: same-tier period switch; skipping VPS migration",
+      {
+        businessId,
+        tier,
+        // billing_period is already nullable on the row; log as-is.
+        oldBillingPeriod: oldSub.billing_period,
+        newBillingPeriod: billingPeriod,
+        currentCycleMonths,
+        targetTermMonths,
+        termAlignmentSkipReason
+      }
+    );
+  }
+
+  // Ops visibility: a tier change OR a term-alignment migration is about to
+  // run minutes of unattended hardware migration (snapshot → backup →
+  // new-VM purchase → restore → old-box teardown). Tell the operator it
+  // STARTED — the existing deletion-request email only marks the end, so
+  // without this a stuck migration was invisible until a customer
+  // complained. Fire-and-forget (sendOpsPlanChangeEmail never throws);
+  // fast-path period switches touch no hardware and stay quiet here (they
+  // get the term-alignment summary email at completion instead).
+  if (migrateVps) {
     const oldTierForSize = oldSub.tier === "starter" ? "starter" : "standard";
     await sendOpsPlanChangeEmail({
       businessId,
@@ -413,7 +498,7 @@ export async function runChangePlanFromCheckout(
   }
 
   let newProv: Awaited<ReturnType<typeof orchestrateProvisioning>> | null = null;
-  if (!periodOnlySwitch) {
+  if (migrateVps) {
     // ── Step 1: snapshot the old VPS as a safety net before migration.
     const oldVpsHost = oldVmId !== null ? await resolveVmIp(oldVmId, hostinger) : null;
 
@@ -469,6 +554,13 @@ export async function runChangePlanFromCheckout(
         // Hardware pin survives tier changes: an operator-set vps_size keeps
         // the business on that box size; null keeps the tier default.
         vpsSize: business.vps_size ?? null,
+        // Buy the new box at the customer's committed Hostinger term
+        // (biennial → 2-year SKU, annual → 1-year) — for a term-alignment
+        // migration this discount is the entire point of the move, so that
+        // path also skips the adopt-first pool claim (a pooled box is
+        // typically a monthly-cycle lapser and would defeat the purpose).
+        billingPeriod,
+        skipPoolAdopt: termAlignment,
         ownerEmail: business.owner_email
       });
     } catch (err) {
@@ -537,16 +629,17 @@ export async function runChangePlanFromCheckout(
     renewal_at: renewalAt.toISOString(),
     commitment_months: commitmentMonths,
     customer_profile_id: customerProfileId,
-    // Period-only switch keeps the existing box, so the new sub row inherits
+    // A fast-path switch keeps the existing box, so the new sub row inherits
     // the old Hostinger billing subscription (still paying for the same VM).
-    // On a tier-change migration we must NOT fall back to the old billing id
-    // — step 7 is about to cancel it, and pinning it to the active row would
-    // leave the new VPS's real billing untracked while referencing dead
-    // billing. A null from provisioning stays null (operator-triaged via the
-    // existing lookup fallback inside provisionVpsForBusiness).
-    hostinger_billing_subscription_id: periodOnlySwitch
-      ? oldSub.hostinger_billing_subscription_id
-      : (newProv?.hostingerBillingSubscriptionId ?? null),
+    // On any migration (tier change OR term alignment) we must NOT fall back
+    // to the old billing id — step 7 is about to disable it, and pinning it
+    // to the active row would leave the new VPS's real billing untracked
+    // while referencing dead billing. A null from provisioning stays null
+    // (operator-triaged via the existing lookup fallback inside
+    // provisionVpsForBusiness).
+    hostinger_billing_subscription_id: migrateVps
+      ? (newProv?.hostingerBillingSubscriptionId ?? null)
+      : oldSub.hostinger_billing_subscription_id,
     ...periodCache
   });
 
@@ -589,7 +682,7 @@ export async function runChangePlanFromCheckout(
   // Runs when we know about the billing subscription OR just the VM: a
   // missing billing id (e.g. provisioning-time lookup failed) must not
   // suppress the ops email, or the orphaned box never gets deleted.
-  if (!periodOnlySwitch && (oldSub.hostinger_billing_subscription_id || oldVmId !== null)) {
+  if (migrateVps && (oldSub.hostinger_billing_subscription_id || oldVmId !== null)) {
     if (oldVmId !== null) {
       try {
         await hostinger.stopVirtualMachine(oldVmId);
@@ -686,13 +779,44 @@ export async function runChangePlanFromCheckout(
     stripe_subscription_cached_at: now.toISOString()
   });
 
+  // ── Contract-switch summary for ops. Sent on every SAME-TIER period
+  // switch after the whole orchestration lands, so the operator always
+  // hears what happened to the Hostinger side: migrated onto a term-bought
+  // box, nothing needed, or "go check hPanel" when the cycle couldn't be
+  // verified. Tier changes stay on the existing started/deletion emails.
+  if (sameTier) {
+    const detail = termAlignment
+      ? `The box was on a ${currentCycleMonths}-month Hostinger cycle; the tenant was migrated onto a new same-size box bought at the ${targetTermMonths}-month term (cheaper per month), and the old box was pooled with auto-renew off.`
+      : termAlignmentSkipReason
+        ? `A ${targetTermMonths}-month Hostinger term was wanted but the automation could not act: ${termAlignmentSkipReason}.`
+        : targetTermMonths <= 1
+          ? "New contract is month-to-month — the box keeps its current Hostinger billing cycle."
+          : `The box's Hostinger cycle (${currentCycleMonths}mo) already covers the ${targetTermMonths}-month target — nothing to change.`;
+    await sendOpsTermAlignmentEmail({
+      businessId,
+      ownerName: business.owner_name ?? null,
+      ownerEmail: business.owner_email,
+      tier,
+      oldBillingPeriod: oldSub.billing_period,
+      newBillingPeriod: billingPeriod,
+      outcome: termAlignment ? "aligned" : termAlignmentSkipReason ? "skipped" : "not_needed",
+      currentCycleMonths,
+      targetTermMonths,
+      oldVirtualMachineId: oldVmId,
+      /* c8 ignore next -- termAlignment implies newProv (a failed provision returns early above) */
+      newVirtualMachineId: termAlignment ? (newProv?.vpsId ?? null) : null,
+      detail
+    });
+  }
+
   logger.info("changePlan: complete", {
     eventId,
     businessId,
     previousSubscriptionId,
     newTier: tier,
     newBillingPeriod: billingPeriod,
-    periodOnlySwitch
+    migrateVps,
+    termAlignment
   });
 }
 
@@ -872,6 +996,9 @@ export async function runResubscribeFromCheckout(
       businessId,
       tier,
       vpsSize: business.vps_size ?? null,
+      // Term-aware purchase: a resubscriber committing to a term contract
+      // funds a term-priced Hostinger box, same as a fresh signup.
+      billingPeriod,
       ownerEmail: business.owner_email
     });
   } catch (err) {
