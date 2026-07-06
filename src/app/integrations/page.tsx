@@ -200,7 +200,7 @@ export default function IntegrationsPage() {
             </div>
             <pre className="mobile-scroll-x overflow-x-auto rounded-xl border border-parchment/10 bg-deep-ink p-5 text-xs leading-relaxed text-parchment/70">
 {`POST /api/public/v1/messages
-Authorization: Bearer nc_live_...
+Authorization: Bearer nck_...
 
 {
   "to": "+16025551234",

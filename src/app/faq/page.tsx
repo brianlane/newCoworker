@@ -201,7 +201,7 @@ function buildSections(): FaqSection[] {
             <>
               Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher
               usage caps, 10 concurrent calls, RCS, Zapier, analytics, and more. Enterprise is
-              custom. See the full breakdown on the{" "}
+              custom. Every plan has a 30-day money-back guarantee — see the full breakdown on the{" "}
               <Link href="/pricing" className="text-signal-teal hover:underline">
                 pricing page
               </Link>
