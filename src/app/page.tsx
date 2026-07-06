@@ -1,50 +1,132 @@
-import Image from "next/image";
 import Link from "next/link";
 import type { Metadata } from "next";
-import { Phone, Brain, Zap, ShieldCheck, LayoutDashboard, Rocket, Workflow } from "lucide-react";
-import type { ComponentType, SVGProps } from "react";
+import {
+  BarChart3,
+  Brain,
+  CalendarCheck,
+  LayoutDashboard,
+  MessageSquareText,
+  Phone,
+  PhoneForwarded,
+  Rocket,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
+  Zap
+} from "lucide-react";
+import { MarketingNav } from "@/components/marketing/MarketingNav";
+import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import {
+  CtaBanner,
+  FeatureGrid,
+  PageHero,
+  SectionHeading,
+  StatBand,
+  type Feature
+} from "@/components/marketing/sections";
+import { getPeriodPricing } from "@/lib/plans/tier";
+import { TIER_LIMITS } from "@/lib/plans/limits";
+import { formatPricePerMonth } from "@/lib/pricing";
 
-type FeatureItem = {
-  title: string;
-  description: string;
-  Icon: ComponentType<SVGProps<SVGSVGElement>>;
-};
-
-const features: FeatureItem[] = [
+const features: Feature[] = [
   {
     title: "AI Voice Coworker",
-    description: "Acts on your behalf as your virtual assistant 24/7 with human-level conversation.",
-    Icon: Phone,
+    description:
+      "Answers every call 24/7 with human-level conversation — qualifies callers, checks your calendar, and books appointments on the spot.",
+    Icon: Phone
   },
   {
-    title: "Permanent Memory",
-    description: "Lossless memory learns your business over time so every interaction builds context.",
-    Icon: Brain,
+    title: "Warm Call Transfers",
+    description:
+      "When a caller needs you, your coworker transfers the call to you or your team with full context — no cold handoffs.",
+    Icon: PhoneForwarded
+  },
+  {
+    title: "Texting, RCS & Auto-Replies",
+    description:
+      "Two-way SMS and RCS branded messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates.",
+    Icon: MessageSquareText
+  },
+  {
+    title: "AI Call Summaries & Sentiment",
+    description:
+      "Every call lands on your dashboard with an AI summary and caller sentiment, so you know what happened without replaying audio.",
+    Icon: Sparkles
+  },
+  {
+    title: "Analytics & Alerts",
+    description:
+      "Call trends, peak hours, and answer rate at a glance — with alerts when callers are turned away so you never miss a spike.",
+    Icon: BarChart3
   },
   {
     title: "Automated Workflows",
-    description: "Set up AiFlows that reply to texts and emails, route to your team, and follow up in real time.",
-    Icon: Workflow,
+    description:
+      "Set up AiFlows that reply to texts and emails, follow up with leads, route to your team, and run browser tasks in real time.",
+    Icon: Workflow
+  },
+  {
+    title: "8,000+ App Integrations",
+    description:
+      "Connect your coworker to Zapier, Google Workspace, Microsoft 365, and your CRM — plus a public API and webhooks for anything custom.",
+    Icon: Zap
+  },
+  {
+    title: "Permanent Memory",
+    description:
+      "Lossless memory learns your business over time so every call, text, and email builds on real context — nothing gets forgotten.",
+    Icon: Brain
+  },
+  {
+    title: "Appointment Booking",
+    description:
+      "Your coworker finds open slots on your Google or Microsoft calendar and books them mid-call, then sends the confirmation for you.",
+    Icon: CalendarCheck
   },
   {
     title: "Compliance Guardrails",
-    description: "Built-in compliance guardrails protect your business from costly violations.",
-    Icon: ShieldCheck,
+    description:
+      "Built-in compliance guardrails — including Fair Housing rules for real estate — protect your business from costly violations.",
+    Icon: ShieldCheck
   },
   {
     title: "Your Dashboard",
-    description: "Monitor activity, review memory, manage notifications — all in one place.",
-    Icon: LayoutDashboard,
+    description:
+      "Monitor calls, messages, and emails, review memory, manage notifications and billing — all in one place, on any device.",
+    Icon: LayoutDashboard
   },
   {
     title: "Deploy in Minutes",
-    description: "One-click provisioning: tailored assistant, ai agent, phone number all handled.",
-    Icon: Rocket,
+    description:
+      "One-click provisioning: your tailored assistant, dedicated server, and phone number are live minutes after signup.",
+    Icon: Rocket
+  }
+];
+
+const steps: { step: string; title: string; description: string }[] = [
+  {
+    step: "1",
+    title: "Tell us about your business",
+    description:
+      "Pick a plan and answer a short questionnaire. Your coworker learns your services, hours, and how you like to work — it can even read your website."
   },
+  {
+    step: "2",
+    title: "We provision everything",
+    description:
+      "A dedicated private server, a phone number (or bring your own), email, and your trained AI coworker — all set up automatically."
+  },
+  {
+    step: "3",
+    title: "Your coworker gets to work",
+    description:
+      "Calls answered, texts returned, appointments booked, leads followed up — around the clock, while you watch it all from your dashboard."
+  }
 ];
 
 export const metadata: Metadata = {
-  description: "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, and keep operations moving.",
+  description:
+    "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, book appointments, and keep operations moving.",
   alternates: {
     canonical: "/"
   },
@@ -63,97 +145,155 @@ export const metadata: Metadata = {
 };
 
 export default function HomePage() {
+  const starterFrom = formatPricePerMonth(getPeriodPricing("starter", "biennial").monthlyCents);
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
-      {/* Nav */}
-      <nav className="flex flex-wrap items-center justify-between gap-3 max-w-6xl mx-auto px-6 py-5">
-        <div className="flex items-center gap-3">
-          <Image src="/logo.png" alt="New Coworker" width={36} height={36} className="rounded-full" />
-          <span className="text-lg font-bold tracking-tight">New Coworker</span>
-        </div>
-        <div className="flex items-center gap-4">
-          <Link href="/login" className="text-sm text-parchment/60 hover:text-parchment transition-colors">
-            Sign in
-          </Link>
-          <Link
-            href="/onboard"
-            className="rounded-lg bg-claw-green text-deep-ink px-4 py-2 text-sm font-semibold hover:bg-opacity-90 transition-colors"
-          >
-            Get Started
-          </Link>
-        </div>
-      </nav>
+      <MarketingNav />
 
       {/* Hero */}
-      <section className="max-w-4xl mx-auto px-6 pt-20 pb-24 text-center">
-        <h1 className="text-4xl sm:text-5xl md:text-6xl font-bold leading-tight tracking-tight">
-          Your AI employee that
-          <span className="text-claw-green"> never sleeps</span>
-        </h1>
-        <p className="mt-6 text-lg text-parchment/60 max-w-2xl mx-auto leading-relaxed">
-          New Coworker answers calls, texts, emails, and more around the clock.
-          Built for all <b>businesses</b>.
-        </p>
-        <div className="mt-10">
+      <PageHero
+        title={
+          <>
+            Your AI employee that
+            <span className="text-claw-green"> never sleeps</span>
+          </>
+        }
+        subtitle={
+          <>
+            New Coworker answers calls, texts, and emails around the clock — booking appointments,
+            following up with leads, and remembering every customer. Built for all <b>businesses</b>.
+          </>
+        }
+      >
+        <div className="flex flex-col items-center justify-center gap-3 sm:flex-row">
           <Link
             href="/onboard"
-            className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+            className="inline-block rounded-lg bg-claw-green px-8 py-3.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
           >
-            Start for $9.99/mo
+            Start for {starterFrom}
+          </Link>
+          <Link
+            href="/pricing"
+            className="inline-block rounded-lg border border-parchment/20 px-8 py-3.5 text-sm font-semibold text-parchment transition-colors hover:bg-parchment/10"
+          >
+            See pricing
           </Link>
         </div>
-      </section>
+      </PageHero>
+
+      {/* Proof band */}
+      <StatBand
+        stats={[
+          { value: "24/7", label: "Every call and text answered — nights, weekends, holidays" },
+          {
+            value: `${TIER_LIMITS.standard.maxConcurrentCalls} calls`,
+            label: "Handled at once on Standard — no busy signals during your rush"
+          },
+          { value: "8,000+", label: "Apps connected through Zapier, plus API & webhooks" },
+          { value: "1 server", label: "Dedicated to your business — your data stays yours" }
+        ]}
+      />
 
       {/* Features */}
-      <section className="max-w-6xl mx-auto px-6 pb-24">
-        <h2 className="text-center text-2xl font-bold mb-12">
-          Everything your business needs, <span className="text-signal-teal">handled</span>
-        </h2>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-          {features.map((f) => (
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        <SectionHeading
+          title={
+            <>
+              Everything your business needs, <span className="text-signal-teal">handled</span>
+            </>
+          }
+          subtitle="Not a chatbot. A trained coworker that answers, acts, books, and follows up across every channel."
+        />
+        <FeatureGrid features={features} />
+      </section>
+
+      {/* How it works */}
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        <SectionHeading
+          eyebrow="How it works"
+          title="Live in minutes, not weeks"
+          subtitle="Signup to first answered call is fully automated — no IT project, no sales call required."
+        />
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+          {steps.map((s) => (
             <div
-              key={f.title}
-              className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6 hover:border-signal-teal/30 transition-colors"
+              key={s.step}
+              className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6"
             >
-              <div className="flex items-center gap-2 mb-2">
-                <f.Icon className="w-5 h-5 text-claw-green shrink-0" />
-                <h3 className="font-semibold text-parchment">{f.title}</h3>
+              <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-full bg-claw-green/15 text-sm font-bold text-claw-green">
+                {s.step}
               </div>
-              <p className="text-sm text-parchment/50 leading-relaxed">{f.description}</p>
+              <h3 className="font-semibold text-parchment">{s.title}</h3>
+              <p className="mt-2 text-sm leading-relaxed text-parchment/50">{s.description}</p>
             </div>
           ))}
         </div>
       </section>
 
-      {/* CTA */}
-      <section className="max-w-3xl mx-auto px-6 pb-24 text-center">
-        <div className="rounded-2xl border border-claw-green/20 bg-claw-green/5 p-10">
-          <h2 className="text-2xl font-bold mb-3">Ready to hire your New Coworker?</h2>
-          <p className="text-parchment/50 mb-8">
-            New coworker starts learning from day one.
+      {/* Privacy / local-first */}
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        <div className="rounded-2xl border border-signal-teal/20 bg-signal-teal/[0.04] p-8 sm:p-10">
+          <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-2">
+            <div>
+              <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-signal-teal">
+                Privacy-first by design
+              </p>
+              <h2 className="text-2xl font-bold text-parchment sm:text-3xl">
+                Your business runs on its own private server
+              </h2>
+              <p className="mt-4 leading-relaxed text-parchment/60">
+                Unlike shared AI platforms, every New Coworker business gets dedicated
+                infrastructure. Your conversations, customer records, and business knowledge live
+                on hardware provisioned just for you — not pooled with thousands of other
+                companies.
+              </p>
+            </div>
+            <ul className="space-y-3">
+              {[
+                "Dedicated private server per business — no shared tenancy",
+                "Conversation transcripts stored on your server, not our dashboard",
+                "Permanent, lossless memory that stays under your control",
+                "Deny-by-default security posture with per-business credentials"
+              ].map((item) => (
+                <li key={item} className="flex items-start gap-3 text-sm text-parchment/70">
+                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-signal-teal" />
+                  {item}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </section>
+
+      {/* Pricing teaser */}
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-8 text-center sm:p-10">
+          <h2 className="text-2xl font-bold text-parchment">
+            Plans from <span className="text-claw-green">{starterFrom}</span>
+          </h2>
+          <p className="mx-auto mt-3 max-w-xl text-parchment/55">
+            A fraction of the cost of a receptionist or answering service — with a 30-day
+            money-back guarantee on every plan.
           </p>
           <Link
-            href="/onboard"
-            className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
+            href="/pricing"
+            className="mt-7 inline-block rounded-lg border border-claw-green/40 px-8 py-3 text-sm font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
           >
-            Choose your plan
+            Compare plans
           </Link>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-parchment/10 py-8">
-        <div className="max-w-6xl mx-auto px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-parchment/30">&copy; {new Date().getFullYear()} New Coworker. All rights reserved.</p>
-          <div className="flex gap-6 text-xs text-parchment/30">
-            <a href={`mailto:${process.env.CONTACT_EMAIL ?? "team@newcoworker.com"}`} className="hover:text-parchment/60 transition-colors">Contact</a>
-            <Link href="/onboard" className="hover:text-parchment/60 transition-colors">Pricing</Link>
-            <Link href="/privacy" className="hover:text-parchment/60 transition-colors">Privacy Policy</Link>
-            <Link href="/terms" className="hover:text-parchment/60 transition-colors">Terms of Service</Link>
-            <Link href="/login" className="hover:text-parchment/60 transition-colors">Sign in</Link>
-          </div>
-        </div>
-      </footer>
+      {/* CTA */}
+      <CtaBanner
+        title="Ready to hire your New Coworker?"
+        subtitle="New coworker starts learning from day one."
+        ctaLabel="Choose your plan"
+        ctaHref="/onboard"
+      />
+
+      <MarketingFooter />
     </div>
   );
 }
