@@ -3,8 +3,8 @@
 -- KVM4 (4 vCPU / 16GB) slots between the KVM2 default and the KVM8 heavy
 -- box as the first escalation step for tenants with sustained load. Widen
 -- the businesses.vps_size CHECK to accept it. Runtime behavior: kvm4
--- carries the qwen3:4b-instruct local fallback (deploy-client.sh's
--- non-kvm1/kvm2 branch), same as kvm8.
+-- carries the llama3.2:3b local fallback (deploy-client.sh's kvm2/kvm4
+-- branch), same as kvm2; only kvm8 carries qwen3:4b-instruct.
 --
 -- The constraint was last rewritten by 20260728000000_vps_size_kvm1.sql
 -- under its auto-generated name businesses_vps_size_check.

@@ -4,7 +4,7 @@
 # Usage: TIER=starter VPS_SIZE=kvm1 ./bootstrap.sh
 #
 # TIER (starter|standard) is the ENTITLEMENT axis — it no longer drives any
-# hardware decision here. VPS_SIZE (kvm1|kvm2|kvm8) is the HARDWARE axis:
+# hardware decision here. VPS_SIZE (kvm1|kvm2|kvm4|kvm8) is the HARDWARE axis:
 # ZRAM, Ollama tuning + model pulls, and the Rowboat compose profile all key
 # on it. When VPS_SIZE is unset we fall back to the tier default mapping
 # (starter→kvm1, standard→kvm8 — keep in lockstep with
@@ -20,8 +20,8 @@ TIER="${TIER:-standard}"
 if [[ -z "${VPS_SIZE:-}" ]]; then
   if [[ "$TIER" == "starter" ]]; then VPS_SIZE="kvm1"; else VPS_SIZE="kvm8"; fi
 fi
-if [[ "$VPS_SIZE" != "kvm1" && "$VPS_SIZE" != "kvm2" && "$VPS_SIZE" != "kvm8" ]]; then
-  echo "FATAL: VPS_SIZE must be kvm1, kvm2, or kvm8 (got '$VPS_SIZE')" >&2
+if [[ "$VPS_SIZE" != "kvm1" && "$VPS_SIZE" != "kvm2" && "$VPS_SIZE" != "kvm4" && "$VPS_SIZE" != "kvm8" ]]; then
+  echo "FATAL: VPS_SIZE must be kvm1, kvm2, kvm4, or kvm8 (got '$VPS_SIZE')" >&2
   exit 1
 fi
 CLOUDFLARED_VERSION="2025.4.0"
@@ -251,6 +251,26 @@ Environment="OLLAMA_FLASH_ATTENTION=1"
 Environment="OLLAMA_KEEP_ALIVE=-1"
 EOF
 # Copyable env list for Compose / docs: vps/fragments/starter-ollama-container.env
+elif [[ "$VPS_SIZE" == "kvm4" ]]; then
+  # KVM 4 (4 vCPU, 16GB RAM) — same llama3.2:3b model as KVM 2 (only KVM 8
+  # carries qwen), with headroom for one extra parallel slot on the bigger box.
+  cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
+[Service]
+Environment="OLLAMA_NUM_PARALLEL=2"
+Environment="OLLAMA_MAX_LOADED_MODELS=1"
+Environment="OMP_NUM_THREADS=4"
+# Bind to all interfaces so the dockerised llm-router can reach Ollama via the
+# `host.docker.internal` extra_host (resolves to the docker bridge IP). UFW's
+# default-deny on the public interface still blocks external 11434 access;
+# only the loopback + docker bridge paths are reachable.
+Environment="OLLAMA_HOST=0.0.0.0:11434"
+# TurboQuant KV cache — ACTIVE
+Environment="OLLAMA_KV_CACHE_TYPE=q4_0"
+# Flash Attention — ACTIVE
+Environment="OLLAMA_FLASH_ATTENTION=1"
+# Keep the owner's primary model resident (see starter tier comment above).
+Environment="OLLAMA_KEEP_ALIVE=-1"
+EOF
 else
   # KVM 8 (8 vCPU, 32GB RAM) — full model set, higher parallelism
   cat > /etc/systemd/system/ollama.service.d/override.conf <<'EOF'
@@ -291,12 +311,12 @@ systemctl start ollama
 
 # Hardware-aware model pulls
 log "Pre-pulling AI models for VPS_SIZE=${VPS_SIZE} (background)..."
-if [[ "$VPS_SIZE" == "kvm2" ]]; then
-  # KVM 2: single model — Llama 3.2 3B (KVM8 hardware uses qwen3:4b-instruct)
+if [[ "$VPS_SIZE" == "kvm2" || "$VPS_SIZE" == "kvm4" ]]; then
+  # KVM 2 / KVM 4: single model — Llama 3.2 3B (only KVM8 hardware uses qwen3:4b-instruct)
   (
     sleep 10
     ollama pull llama3.2:3b || true
-    log "KVM 2 model ready: llama3.2:3b"
+    log "${VPS_SIZE} model ready: llama3.2:3b"
   ) &
 else
   # KVM 8 (CPU): primary **`qwen3:4b-instruct`** for Rowboat → Ollama; optional larger tags for experiments / GPU.
