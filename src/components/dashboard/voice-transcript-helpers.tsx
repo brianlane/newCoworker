@@ -78,10 +78,24 @@ export function StatusBadge({ status }: { status: VoiceTranscriptStatus }) {
       return <Badge variant="pending">In progress</Badge>;
     case "errored":
       return <Badge variant="error">Errored</Badge>;
+    case "missed":
+      return <Badge variant="error">Missed</Badge>;
     case "completed":
     default:
       return <Badge variant="success">Completed</Badge>;
   }
+}
+
+/**
+ * Pill marking a routing-written forwarded call (transferred to a human, no
+ * AI transcript) so it reads differently from AI-handled rows in the list.
+ */
+export function ForwardedBadge() {
+  return (
+    <span className="text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5 bg-parchment/10 text-parchment/60">
+      Forwarded
+    </span>
+  );
 }
 
 /**

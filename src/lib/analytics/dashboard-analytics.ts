@@ -191,6 +191,10 @@ export async function getInboundCallStats(
       .select("started_at, sentiment")
       .eq("business_id", businessId)
       .eq("direction", "inbound")
+      // A missed forwarded call writes BOTH a status='missed' transcript row
+      // (call history) and a voice_call_blocked ledger row (counted below) —
+      // exclude it here so the attempt isn't bucketed twice.
+      .neq("status", "missed")
       .gte("started_at", cutoffIso)
       .order("started_at", { ascending: false })
       .limit(ANALYTICS_CALL_SCAN_LIMIT),
@@ -272,6 +276,11 @@ export async function getAnswerRateStats(
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
         .eq("direction", "inbound")
+        // Missed forwarded calls are counted on the `voice_call_blocked` side
+        // (telnyx-voice-call-end writes both rows) — excluding them here keeps
+        // each attempt in exactly one bucket. Answered forwarded calls count
+        // as answered: a human picking up IS an answer.
+        .neq("status", "missed")
         .gte("started_at", cutoffIso),
       db
         .from("system_logs")
