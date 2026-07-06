@@ -362,6 +362,30 @@ export async function updateCustomerSummary(
   if (error) throw new Error(`updateCustomerSummary: ${error.message}`);
 }
 
+/**
+ * Stamp last_summarized_at WITHOUT writing a summary or resetting the
+ * interaction counter. Used when the summarizer looked and decided there is
+ * nothing to summarize (e.g. no customer-authored content yet) — the stamp
+ * rotates the contact to the back of the nightly sweep's oldest-first queue
+ * so permanent skips can't starve other contacts of their sweep slot.
+ */
+export async function touchLastSummarizedAt(
+  businessId: string,
+  customerE164: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("contacts")
+    .update({
+      last_summarized_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId)
+    .eq("customer_e164", customerE164);
+  if (error) throw new Error(`touchLastSummarizedAt: ${error.message}`);
+}
+
 export type CustomerOwnerEdit = {
   displayName?: string | null;
   pinnedMd?: string | null;

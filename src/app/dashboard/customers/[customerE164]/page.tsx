@@ -244,12 +244,16 @@ export default async function CustomerDetailPage({ params }: Props) {
       <Card>
         <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-parchment">SMS history</h2>
-          <Link
-            href={`/dashboard/messages/${encodeURIComponent(customerE164)}`}
-            className="text-xs text-claw-green hover:underline"
-          >
-            Full thread →
-          </Link>
+          {/* The thread page 404s when there are no messages, so only offer
+              the link when a thread actually exists to land on. */}
+          {smsHistory.length > 0 && (
+            <Link
+              href={`/dashboard/messages/${encodeURIComponent(customerE164)}`}
+              className="text-xs text-claw-green hover:underline"
+            >
+              Full thread →
+            </Link>
+          )}
         </div>
         {smsHistory.length === 0 ? (
           <p className="text-xs text-parchment/50">No SMS history.</p>
