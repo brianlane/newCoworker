@@ -370,6 +370,35 @@ export async function adoptVpsForBusiness(
     }
   }
 
+  // Pooled boxes are parked with auto-renew OFF (they lapse at period end
+  // unless adopted). Now that a live tenant depends on this box, re-enable
+  // auto-renew — otherwise Hostinger deletes the VM out from under them at
+  // the paid period's end. Best-effort with a loud log: a failure here is
+  // an ops follow-up (flip it in hPanel), not an adopt abort.
+  if (hostingerBillingSubscriptionId) {
+    try {
+      await client.enableBillingAutoRenewal(hostingerBillingSubscriptionId);
+      logger.info("adoptVps: billing auto-renew re-enabled for adopted box", {
+        virtualMachineId: vmId,
+        hostingerBillingSubscriptionId
+      });
+    } catch (err) {
+      logger.error(
+        "adoptVps: FAILED to re-enable auto-renew on adopted box — enable it in hPanel or the VM lapses at period end",
+        {
+          virtualMachineId: vmId,
+          hostingerBillingSubscriptionId,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      );
+    }
+  } else {
+    logger.error(
+      "adoptVps: no billing subscription id resolved — verify auto-renew is ON in hPanel or the adopted VM lapses at period end",
+      { virtualMachineId: vmId }
+    );
+  }
+
   return {
     virtualMachineId: vmId,
     publicIp,

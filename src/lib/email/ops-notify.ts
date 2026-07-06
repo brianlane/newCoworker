@@ -24,6 +24,10 @@ import {
   buildOpsHardwareMigrationEmail,
   type OpsHardwareMigrationInput
 } from "@/lib/email/templates/ops-hardware-migration";
+import {
+  buildOpsTermAlignmentEmail,
+  type OpsTermAlignmentInput
+} from "@/lib/email/templates/ops-term-alignment";
 
 /** Fire-and-forget ops deletion request; never throws. */
 export async function sendOpsVpsDeletionEmail(
@@ -85,6 +89,41 @@ export async function sendOpsPlanChangeEmail(
     });
   } catch (err) {
     logger.warn("ops plan-change email failed", {
+      businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget "contract-period switch finished" ops notification; never
+ * throws. Reports whether the box was migrated onto a term-priced Hostinger
+ * purchase, needed no change, or needs a manual hPanel look.
+ */
+export async function sendOpsTermAlignmentEmail(
+  input: Omit<OpsTermAlignmentInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops term-alignment email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId,
+        outcome: input.outcome
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsTermAlignmentEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops term-alignment email sent", {
+      businessId: input.businessId,
+      outcome: input.outcome,
+      newBillingPeriod: input.newBillingPeriod,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops term-alignment email failed", {
       businessId: input.businessId,
       error: err instanceof Error ? err.message : String(err)
     });

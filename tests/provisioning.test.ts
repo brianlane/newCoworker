@@ -239,7 +239,8 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-uuid-1",
       tier: "starter",
-      vpsSize: "kvm1"
+      vpsSize: "kvm1",
+      billingPeriod: null
     });
   });
 
@@ -353,7 +354,8 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-kvm1",
       tier: "starter",
-      vpsSize: "kvm1"
+      vpsSize: "kvm1",
+      billingPeriod: null
     });
   });
 
@@ -367,7 +369,8 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-std-default",
       tier: "standard",
-      vpsSize: "kvm2"
+      vpsSize: "kvm2",
+      billingPeriod: null
     });
   });
 
@@ -381,7 +384,8 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-std-kvm8",
       tier: "standard",
-      vpsSize: "kvm8"
+      vpsSize: "kvm8",
+      billingPeriod: null
     });
     // Bootstrap (call 0) carries the pinned hardware profile: the slim
     // loader is base64-embedded, so decode it before asserting.
@@ -405,7 +409,8 @@ describe("provisioning/orchestrate", () => {
     expect(vpsProvisioner).toHaveBeenCalledWith({
       businessId: "biz-corrupt",
       tier: "starter",
-      vpsSize: "kvm1"
+      vpsSize: "kvm1",
+      billingPeriod: null
     });
   });
 
@@ -1831,10 +1836,52 @@ describe("provisioning/orchestrate", () => {
       expect(vpsProvisioner).toHaveBeenCalledWith({
         businessId: "biz-pool-2",
         tier: "standard",
-        vpsSize: "kvm2"
+        vpsSize: "kvm2",
+        billingPeriod: null
       });
       expect(pool.record).toHaveBeenCalledWith(
-        expect.objectContaining({ vmId: 123, plan: "kvm2", businessId: "biz-pool-2" })
+        expect.objectContaining({
+          vmId: 123,
+          plan: "kvm2",
+          businessId: "biz-pool-2",
+          // The purchased Hostinger term is recorded for pool triage — no
+          // billingPeriod on the input means the monthly SKU was bought.
+          notes: "purchased for biz-pool-2 (1m term)"
+        })
+      );
+    });
+
+    it("skipPoolAdopt forces a term purchase past an available pooled box (change-plan term alignment)", async () => {
+      // A pooled same-size box IS available, but the caller (the change-plan
+      // term-alignment migration) must land on a term-priced PURCHASE — a
+      // pooled monthly lapser would defeat the point of the move.
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("777"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-skip", tier: "starter", billingPeriod: "biennial", skipPoolAdopt: true },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("777");
+      expect(pool.claim).not.toHaveBeenCalled();
+      expect(vpsAdopter).not.toHaveBeenCalled();
+      expect(vpsProvisioner).toHaveBeenCalledWith({
+        businessId: "biz-pool-skip",
+        tier: "starter",
+        vpsSize: "kvm1",
+        billingPeriod: "biennial"
+      });
+      // The new box is still recorded as assigned inventory, tagged with
+      // the 2-year term it was bought at.
+      expect(pool.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          vmId: 777,
+          businessId: "biz-pool-skip",
+          notes: "purchased for biz-pool-skip (2y term)"
+        })
       );
     });
 

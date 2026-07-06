@@ -86,17 +86,35 @@ export type Snapshot = {
 
 export type BillingSubscription = {
   id: string;
-  /** Usually `ACTIVE`, `SUSPENDED`, `CANCELLED`. */
+  /** e.g. `active`, `non_renewing`, `cancelled` (live API, Jul 2026). */
   status: string;
-  /** Resource id backing the subscription — for VPS this is the VM id. */
+  /** Plan label, e.g. "KVM 2" (live API, Jul 2026). */
+  name?: string;
+  /**
+   * Billing-cycle length + unit (live API, Jul 2026): a monthly box is
+   * `billing_period: 1, billing_period_unit: "month"`; a 2-year term box is
+   * `billing_period: 2, billing_period_unit: "year"`.
+   */
+  billing_period?: number;
+  billing_period_unit?: string;
+  currency_code?: string;
+  /** Cents. `renewal_price` is what the next cycle costs. */
+  total_price?: number;
+  renewal_price?: number;
+  is_auto_renewed?: boolean;
+  expires_at?: string | null;
+  next_billing_at?: string | null;
+  created_at?: string;
+  /**
+   * Legacy fields — the live list API stopped returning these (verified Jul
+   * 2026; VM↔billing mapping now comes from the VM detail's
+   * `subscription_id`). Kept optional for older API surfaces + fallbacks.
+   */
   resource_id?: string;
   category?: string;
-  next_billing_at?: string | null;
-  /** Period unit of the billing cycle, e.g. "month" or "year". */
   period_unit?: string;
   period?: number;
   item_id?: string;
-  created_at?: string;
 };
 
 export type PostInstallScript = {

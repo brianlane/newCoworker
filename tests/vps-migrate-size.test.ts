@@ -41,6 +41,7 @@ function subRow(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
     id: "sub-1",
     status: "active",
     hostinger_billing_subscription_id: "hbs-old",
+    billing_period: "biennial",
     ...overrides
   } as SubscriptionRow;
 }
@@ -255,6 +256,8 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     expect(deps.updateBusinessVpsSize).toHaveBeenCalledWith(BIZ, "kvm4");
     expect(deps.orchestrateProvisioning).toHaveBeenCalledWith({
       businessId: BIZ,
+      // The replacement box is bought at the tenant's committed term.
+      billingPeriod: "biennial",
       tier: "standard",
       vpsSize: "kvm4"
     });

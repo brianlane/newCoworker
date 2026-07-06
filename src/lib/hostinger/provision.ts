@@ -43,19 +43,55 @@ import {
 import { generateSshKeypair, type SshKeypair } from "./keypair";
 import { insertVpsSshKey, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
+import type { BillingPeriod } from "@/lib/plans/tier";
 
 /**
- * Price-item id for each hardware size.
- *
- * We hardcode the monthly-billing (`-1m`) SKUs; annual/biennial give a bigger
- * discount but lock capital longer than we want on a first-gen deploy. Ops
- * can override via env when this changes.
+ * Hostinger billing-cycle suffix baked into every VPS price-item id
+ * (`hostingercom-vps-<size>-usd-<term>`). Longer terms are dramatically
+ * cheaper per month (live catalog, Jul 2026: kvm1 $19.49/mo on 1m renewal vs
+ * $6.49/mo first 2y period; kvm2 $24.49 vs $8.99) — so purchases match the
+ * customer's committed contract term instead of always buying monthly.
+ */
+export type HostingerBillingTerm = "1m" | "1y" | "2y";
+
+/**
+ * Customer contract → Hostinger purchase term. A customer committed for 24
+ * months funds a 24-month box; month-to-month customers stay on monthly
+ * Hostinger billing so a quick cancel doesn't strand prepaid term time
+ * (churned term boxes return to the `vps_inventory` pool for reuse).
+ */
+export function hostingerTermForBillingPeriod(period: BillingPeriod): HostingerBillingTerm {
+  if (period === "biennial") return "2y";
+  if (period === "annual") return "1y";
+  return "1m";
+}
+
+/** Months covered by one Hostinger billing cycle of the given term. */
+export function hostingerTermMonths(term: HostingerBillingTerm): number {
+  if (term === "2y") return 24;
+  if (term === "1y") return 12;
+  return 1;
+}
+
+/**
+ * Price-item id for a hardware size at a billing term. Ids verified against
+ * the live catalog (`GET /api/billing/v1/catalog?category=VPS`, Jul 2026);
+ * re-verify with `debug/hostinger-term-prices.ts` if Hostinger renames SKUs.
+ */
+export function vpsPriceItemId(size: VpsSize, term: HostingerBillingTerm): string {
+  return `hostingercom-vps-${size}-usd-${term}`;
+}
+
+/**
+ * Historical monthly-term price-item map. Kept for callers that reason in
+ * "size only" terms (preflight script, debug tooling); purchase paths now
+ * derive the id from the customer's contract via {@link vpsPriceItemId}.
  */
 export const VPS_SIZE_PRICE_ITEM: Record<VpsSize, string> = {
-  kvm1: "hostingercom-vps-kvm1-usd-1m",
-  kvm2: "hostingercom-vps-kvm2-usd-1m",
-  kvm4: "hostingercom-vps-kvm4-usd-1m",
-  kvm8: "hostingercom-vps-kvm8-usd-1m"
+  kvm1: vpsPriceItemId("kvm1", "1m"),
+  kvm2: vpsPriceItemId("kvm2", "1m"),
+  kvm4: vpsPriceItemId("kvm4", "1m"),
+  kvm8: vpsPriceItemId("kvm8", "1m")
 };
 
 /**
@@ -92,7 +128,13 @@ export type ProvisionVpsForBusinessInput = {
    * only — entitlements stay on `tier`.
    */
   vpsSize?: VpsSize | null;
-  /** Override the price-item id (e.g. annual billing). */
+  /**
+   * Customer contract term. Drives the Hostinger purchase term (biennial →
+   * 2-year SKU, annual → 1-year, monthly/omitted → monthly) so the box's
+   * per-month cost matches what the customer committed to.
+   */
+  billingPeriod?: BillingPeriod | null;
+  /** Override the price-item id (bypasses the size/term derivation). */
   itemId?: string;
   /** Override the template (default: Ubuntu 24.04 with Docker). */
   templateId?: number;
@@ -203,7 +245,9 @@ export async function provisionVpsForBusiness(
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
 
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
-  const itemId = input.itemId ?? VPS_SIZE_PRICE_ITEM[vpsSize];
+  const itemId =
+    input.itemId ??
+    vpsPriceItemId(vpsSize, hostingerTermForBillingPeriod(input.billingPeriod ?? "monthly"));
   const templateId = input.templateId ?? DEFAULT_TEMPLATE_ID;
   const dataCenterId = input.dataCenterId ?? DEFAULT_US_DATA_CENTER_ID;
   // FQDN required: Hostinger's purchase-embedded setup historically accepted
