@@ -10,6 +10,7 @@ import {
   type FaqItem
 } from "@/components/marketing/sections";
 import { TIER_LIMITS } from "@/lib/plans/limits";
+import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
@@ -34,6 +35,9 @@ type FaqSection = {
 function buildSections(): FaqSection[] {
   const starterPrice = formatPricePerMonth(getPeriodPricing("starter", "biennial").monthlyCents);
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
+  // e.g. "250 voice minutes" / "up to 10 concurrent calls" — same helpers as /pricing.
+  const standardVoice = voiceMinutesLine("standard");
+  const standardConcurrent = concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls).toLowerCase();
 
   return [
     {
@@ -196,11 +200,11 @@ function buildSections(): FaqSection[] {
       items: [
         {
           question: "How much does it cost?",
-          plainAnswer: `Plans start at ${starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, 10 concurrent calls, RCS, Zapier, analytics, and more. Enterprise is custom. Every plan has a 30-day money-back guarantee.`,
+          plainAnswer: `Plans start at ${starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, ${standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is custom. Every plan has a 30-day money-back guarantee.`,
           answer: (
             <>
               Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher
-              usage caps, 10 concurrent calls, RCS, Zapier, analytics, and more. Enterprise is
+              usage caps, {standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is
               custom. Every plan has a 30-day money-back guarantee — see the full breakdown on the{" "}
               <Link href="/pricing" className="text-signal-teal hover:underline">
                 pricing page
@@ -235,10 +239,10 @@ function buildSections(): FaqSection[] {
         },
         {
           question: "What happens if I hit my monthly usage caps?",
-          plainAnswer: `Included usage resets monthly: for example, Standard includes 250 voice minutes and ${TIER_LIMITS.standard.smsPerMonth} SMS per month. You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next cycle or an upgrade. Compliance messages are never blocked.`,
+          plainAnswer: `Included usage resets monthly: for example, Standard includes ${standardVoice} and ${TIER_LIMITS.standard.smsPerMonth} SMS per month. You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next cycle or an upgrade. Compliance messages are never blocked.`,
           answer: (
             <>
-              Included usage resets monthly: for example, Standard includes 250 voice minutes and{" "}
+              Included usage resets monthly: for example, Standard includes {standardVoice} and{" "}
               {TIER_LIMITS.standard.smsPerMonth} SMS per month. You&apos;re alerted before you run
               out; at the cap, metered voice calls and customer texts pause until the next cycle or
               an upgrade. Compliance messages are never blocked.

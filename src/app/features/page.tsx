@@ -70,8 +70,7 @@ const groups: FeatureGroup[] = [
       },
       {
         title: `Up to ${TIER_LIMITS.standard.maxConcurrentCalls} Concurrent Calls`,
-        description:
-          "On Standard, your coworker holds up to ten conversations at once, so a busy morning never produces a busy signal.",
+        description: `On Standard, your coworker holds up to ${TIER_LIMITS.standard.maxConcurrentCalls} conversations at once, so a busy morning never produces a busy signal.`,
         Icon: PhoneIncoming
       },
       {
