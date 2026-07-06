@@ -1061,6 +1061,11 @@ async function logForwardedCallOutcome(
       startedAtIso: args.startedAtIso
     });
     if (rec.status === "failed") {
+      // Deliberately NOT a gate for the follow-ups below: the call really was
+      // missed regardless of whether its history row landed, and suppressing
+      // the caller's auto-text (their only recovery path) over a transient
+      // write failure to a different table would trade a customer-facing
+      // feature for log consistency. The error is loud here for ops.
       console.error("forwarded call log failed", args.context, rec.reason);
     }
     if (args.outcome !== "missed") return;
