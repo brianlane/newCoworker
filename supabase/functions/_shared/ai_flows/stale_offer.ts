@@ -2,12 +2,16 @@
  * Pure classifier + copy for a teammate's STALE offer digit reply.
  *
  * A bare "1"/"2" (or a flow's stamped claim digit) only resumes a run while the
- * sender is the CURRENTLY offered agent. When the claim window lapses the offer
- * escalates, and a late reply used to fall through to the customer-chat AI —
- * which knows nothing about AiFlow offers and improvises a baffling answer
- * ("I can only handle one message at a time"). Instead, the webhook uses this
- * module to recognize "this teammate is replying to an offer that moved on" and
- * answer deterministically with what actually happened to the lead.
+ * sender is the CURRENTLY offered agent. When the claim window lapses, a late
+ * "1" now claims the lead retroactively via the webhook's late-claim path
+ * (which runs BEFORE this classifier), so this module only answers the replies
+ * that can no longer claim anything: someone else took the lead, the run isn't
+ * re-openable, or the digit was a pass. Without it those replies would fall
+ * through to the customer-chat AI — which knows nothing about AiFlow offers and
+ * improvises a baffling answer ("I can only handle one message at a time").
+ * The webhook uses this module to recognize "this teammate is replying to an
+ * offer that moved on" and answer deterministically with what actually
+ * happened to the lead.
  *
  * Lives in `_shared` (not the telnyx-sms-inbound entrypoint) so it can be unit
  * tested under vitest without booting the Deno HTTP server.

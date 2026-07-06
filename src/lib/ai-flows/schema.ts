@@ -532,19 +532,20 @@ const stepSchema = z.discriminatedUnion("type", [
     agentRef: contactRefSchema.optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
-    // The reply digit that means "accept WITH a timeframe" (e.g. 2 or 3). A
-    // teammate replies "<digit>, <eta>" to claim and state when they'll reach
-    // out. The inbound webhook only treats the comma form as a claim when the
-    // digit is "1" (plain accept) or this option, so a flow whose "2" means PASS
-    // (round-robin) never mis-records a "2, can't take it" reply as a claim.
+    // LEGACY. The reply digit that means "accept WITH a timeframe" (e.g. 2 or
+    // 3). Superseded by the universal "1" claim digit: "1, <eta>" claims with a
+    // timeframe on EVERY offer, so new flows don't need a separate option. Kept
+    // for already-authored flows — the inbound webhook still honors a stamped
+    // option digit, and a flow whose "2" means PASS (round-robin) never
+    // mis-records a "2, can't take it" reply as a claim.
     claimTimeframeOption: z.number().int().min(1).max(9).optional(),
-    // The reply digit that means "claim a lead AFTER its offer window lapsed"
-    // (retroactive/late claim) WITH a timeframe; a teammate replies
-    // "<digit>, <eta>" to re-open a lapsed offer and state when they'll reach
-    // out. Distinct from claimTimeframeOption (the live option) so a lapsed
-    // lead has its own numbered affordance instead of the old magic "86" (which
-    // is now reserved for retroactive UNCLAIM). Must differ from
-    // claimTimeframeOption (enforced in validateDefinitionSemantics).
+    // LEGACY. The reply digit that means "claim a lead AFTER its offer window
+    // lapsed" (retroactive/late claim). Superseded by the universal "1" claim
+    // digit: a bare "1" or "1, <eta>" after the window late-claims seamlessly,
+    // so new flows don't need a separate option. Kept for already-authored
+    // flows (the webhook still honors a stamped digit). Must differ from
+    // claimTimeframeOption (enforced in validateDefinitionSemantics). "86"
+    // remains reserved for retroactive UNCLAIM.
     lateClaimOption: z.number().int().min(1).max(9).optional(),
     when: whenSchema.optional()
   }),

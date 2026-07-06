@@ -1,26 +1,17 @@
 #!/usr/bin/env tsx
 /**
- * One-shot: patch a tenant's LIVE AiFlows for two changes, in place (idempotent).
+ * One-shot: patch a tenant's LIVE AiFlows, in place (idempotent).
  *
- * 1. "Accept WITH a timeframe" option on every route step pinned to ONE agent
- *    (default "Dave Lane"): append a new numbered option to the offer SMS —
- *    `Reply <n> with a timeframe to claim and tell us when you'll reach out
- *    (e.g. "<n>, 20 min")` where <n> is one greater than the highest single-digit
- *    option already shown (86 is ignored). The engine (telnyx-sms-inbound +
- *    ai-flow-worker, this PR) parses the comma'd reply as a claim and surfaces the
- *    ETA to the owner. Skips a step whose offer already advertises it.
+ * NOTE (Jul 2026): the numbered "accept with a timeframe" (claimTimeframeOption)
+ * and "retro/late claim" (lateClaimOption) options this script used to APPEND
+ * were superseded by the universal "1" claim digit — "1" / "1, <ETA>" now
+ * claims live AND late on every offer, so those patches were removed here and
+ * scripts/oneshot/simplify-claim-options.ts strips the options from already-
+ * patched flows. What remains:
  *
  * 1a. Drop the LEGACY "Reply 86 ... retroactively" offer line: "86" is now
  *    reserved for retroactive UNCLAIM, so that stale instruction is removed from
- *    every Dave-pinned route step before the retro option below is appended.
- *
- * 1b. RETRO (late) claim option: append a SEPARATE numbered option at the next
- *    sequential digit for claiming a lead AFTER its window lapsed, stamping
- *    `lateClaimOption`. Replaces the old magic "86" (now reserved for retroactive
- *    UNCLAIM). Advertises ONLY the comma/ETA form (`"<n>, <ETA>"`) with the
- *    clarity copy "ETA of when you can please triple tap this lead?" — a retro
- *    claim always requires the ETA. Idempotent via its own marker; runs after
- *    option 1.
+ *    every Dave-pinned route step.
  *
  * 2. HomeLight email FALLBACK: insert the `email_extract` step ("email_card")
  *    after the portal contact-card browse so a delayed/empty portal card is
@@ -77,9 +68,6 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 const DEFAULT_EMAIL_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
-
-/** Idempotency marker: this exact phrase appears only in the appended option. */
-const TIMEFRAME_OPTION_MARKER = "with a timeframe to claim";
 
 /**
  * The lead-match terms for the HomeLight email fallback: first name + price.
@@ -144,44 +132,6 @@ export function migrateEmailMatchToPrice(def: Definition): boolean {
   return true;
 }
 
-/** Highest single-digit option already shown in the offer (86 excluded), or 1. */
-export function highestOptionDigit(offerTemplate: string): number {
-  const digits = [...offerTemplate.matchAll(/\b([1-9])\b/g)].map((m) => Number(m[1]));
-  return digits.length > 0 ? Math.max(...digits) : 1;
-}
-
-/** The appended option line for option number `n`. */
-export function timeframeOptionLine(n: number): string {
-  return (
-    `\nReply ${n} with a timeframe to claim and tell us when you'll reach out ` +
-    `(e.g. "${n}, 20 min").`
-  );
-}
-
-/**
- * Append the timeframe option to every route_to_team step pinned to `agentName`
- * that doesn't already have it. Returns whether anything changed.
- */
-export function addTimeframeOption(def: Definition, agentName: string): boolean {
-  let changed = false;
-  for (const step of def.steps ?? []) {
-    if (step.type !== "route_to_team") continue;
-    if (typeof step.agentName !== "string" || step.agentName.trim() !== agentName) continue;
-    const offer = typeof step.offerTemplate === "string" ? step.offerTemplate : "";
-    if (!offer || offer.includes(TIMEFRAME_OPTION_MARKER)) continue;
-    const n = highestOptionDigit(offer) + 1;
-    step.offerTemplate = offer + timeframeOptionLine(n);
-    // Stamp the digit so the engine treats "<n>, <eta>" (and a bare <n>) as the
-    // accept-with-timeframe option — never as a pass.
-    step.claimTimeframeOption = n;
-    changed = true;
-  }
-  return changed;
-}
-
-/** Idempotency marker: this phrase appears only in the appended RETRO option. */
-const RETRO_OPTION_MARKER = "triple tap this lead";
-
 /**
  * Remove the LEGACY "Reply 86 ... retroactively" line from every route_to_team
  * step pinned to `agentName`. "86" is now reserved for retroactive UNCLAIM, so
@@ -202,42 +152,6 @@ export function stripLegacy86Line(def: Definition, agentName: string): boolean {
       step.offerTemplate = kept.join("\n");
       changed = true;
     }
-  }
-  return changed;
-}
-
-/**
- * The appended retroactive (late) claim option line for option number `n`.
- * Advertises ONLY the comma/ETA form ("n, <ETA>") — a retro claim always
- * requires the ETA (the worker keys it on the comma reply), so the copy never
- * suggests a bare "n" that wouldn't re-open a lapsed lead.
- */
-export function retroClaimOptionLine(n: number): string {
-  return (
-    `\nLapsed lead? Reply "${n}, <ETA>" to claim it after its window — ` +
-    `ETA of when you can please triple tap this lead? (e.g. "${n}, tomorrow am").`
-  );
-}
-
-/**
- * Append the retroactive (late) claim option to every route_to_team step pinned
- * to `agentName` that doesn't already have it, stamping `lateClaimOption` so the
- * engine treats "<n>, <eta>" as a claim of a LAPSED offer. Numbered at the next
- * sequential digit (after the live timeframe option), kept distinct from
- * claimTimeframeOption. Run AFTER addTimeframeOption so the digits don't collide.
- * Returns whether anything changed.
- */
-export function addRetroClaimOption(def: Definition, agentName: string): boolean {
-  let changed = false;
-  for (const step of def.steps ?? []) {
-    if (step.type !== "route_to_team") continue;
-    if (typeof step.agentName !== "string" || step.agentName.trim() !== agentName) continue;
-    const offer = typeof step.offerTemplate === "string" ? step.offerTemplate : "";
-    if (!offer || offer.includes(RETRO_OPTION_MARKER)) continue;
-    const n = highestOptionDigit(offer) + 1;
-    step.offerTemplate = offer + retroClaimOptionLine(n);
-    step.lateClaimOption = n;
-    changed = true;
   }
   return changed;
 }
@@ -325,18 +239,14 @@ async function main(): Promise<void> {
     const def = JSON.parse(JSON.stringify(row.definition)) as Definition;
     const before = JSON.stringify(row.definition);
 
-    const tf = addTimeframeOption(def, agentName);
     // Drop the legacy "Reply 86 ... retroactively" line: 86 is now UNCLAIM.
     const legacy86 = stripLegacy86Line(def, agentName);
-    // Retro/late claim option (must run AFTER addTimeframeOption so it numbers
-    // at the next sequential digit and never collides with the live option).
-    const retro = addRetroClaimOption(def, agentName);
     // The email fallback only applies to the HomeLight flow (the one with the
     // portal contact-card step); addHomeLightEmailFallback no-ops otherwise.
     const email = addHomeLightEmailFallback(def, emailCfg);
     // Migrate an already-inserted email_card from city to price matching.
     const price = migrateEmailMatchToPrice(def);
-    if (!tf && !legacy86 && !retro && !email && !price) continue;
+    if (!legacy86 && !email && !price) continue;
 
     // Re-validate the patched definition exactly like the dashboard/CRUD path.
     try {
@@ -350,9 +260,7 @@ async function main(): Promise<void> {
 
     changedCount += 1;
     console.log(`\n=== ${row.name} (${row.id}) ===`);
-    console.log(`  timeframe option: ${tf ? "added" : "unchanged"}`);
     console.log(`  legacy 86 line: ${legacy86 ? "removed" : "unchanged"}`);
-    console.log(`  retro-claim option: ${retro ? "added" : "unchanged"}`);
     console.log(`  homelight email fallback: ${email ? "added" : "n/a"}`);
     console.log(`  email lead-match -> price: ${price ? "migrated" : "n/a"}`);
     console.log(`  BEFORE: ${before}`);

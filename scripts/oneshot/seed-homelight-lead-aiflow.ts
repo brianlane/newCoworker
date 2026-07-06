@@ -226,17 +226,16 @@ function buildDefinition(opts: {
         responseMinutes: opts.responseMinutes,
         offerWindow,
         attachScreenshot: true,
-        // "2, <eta>" (or a bare "2") is the accept-with-timeframe option; there is
-        // no "pass" digit on this pinned, Dave-only offer.
-        claimTimeframeOption: 2,
+        // "1" claims (live or late); "1, <eta>" claims and states a timeframe.
+        // There is no "pass" digit on this pinned, Dave-only offer.
         offerTemplate:
           "New HomeLight referral: {{vars.lead_first_name}} — {{vars.lead_type}} in " +
           "{{vars.city}} (~{{vars.price}}).\n" +
           "Tap to claim: {{vars.leadUrl}}\n" +
           "Direct claim button: {{vars.claim_link}}\n" +
           "Reply 1 to confirm you're taking it by {{offer.deadline}}.\n" +
-          'Reply 2 with a timeframe to claim and tell us when you\'ll reach out ' +
-          '(e.g. "2, 20 min").',
+          'You can also reply "1, <ETA>" to claim and tell us when you\'ll reach out ' +
+          '(e.g. "1, 20 min").',
         ownerFallbackTemplate:
           "Dave didn't claim the HomeLight referral {{vars.lead_first_name}} " +
           "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}) in time — it's back to you.\n" +

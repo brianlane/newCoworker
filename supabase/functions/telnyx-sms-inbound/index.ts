@@ -423,28 +423,30 @@ type LateClaimArgs = {
   messagingProfileId: string;
   smsFromE164: string;
   /**
-   * The leading reply digit ("4" in "4, 20 min"). A run is only late-claimable
-   * when this equals its stamped late-claim option (routing.late_digit), so a
+   * The leading reply digit — "1" in "1" / "1, 20 min", or a flow's stamped
+   * legacy late-claim option ("4" in "4, 20 min"). "1" is the UNIVERSAL claim
+   * digit and late-claims any eligible lapsed offer; any other digit only
+   * matches a run whose stamped option (routing.late_digit) equals it, so a
    * comma'd reply meant for a different run/flow never re-opens this one.
    */
   digit: string;
-  /** Optional ETA the teammate stated ("4, 2 hours" → "2 hours"); "" when none. */
+  /** Optional ETA the teammate stated ("1, 2 hours" → "2 hours"); "" when none. */
   timeframe?: string;
 };
 
 /**
- * Handle a teammate's retroactive (late) claim — a "<lateOpt>, <eta>" reply
- * where <lateOpt> is the flow's stamped late-claim option digit. Returns a
- * Response when the message was consumed (claimed or already-yours), or null
- * when no eligible offer exists so the caller can fall through to the normal
- * inbound path.
+ * Handle a teammate's retroactive (late) claim — a "1" / "1, <eta>" reply after
+ * the offer window lapsed (or a legacy "<lateOpt>, <eta>" where <lateOpt> is the
+ * flow's stamped late-claim option digit). Returns a Response when the message
+ * was consumed (claimed or already-yours), or null when no eligible offer
+ * exists so the caller can fall through to the normal inbound path.
  *
  * Re-opens the most recent route_to_team run this teammate was offered (live or
- * already handed back to the owner) within LATE_CLAIM_WINDOW_MS WHOSE stamped
- * late-claim digit (routing.late_digit) matches the reply, rewinds it to the
- * route step (routing.step_index, stamped by the worker on park), and marks
- * routing.late_claim so the worker's claim path notifies the owner and then
- * finalizes WITHOUT replaying later steps.
+ * already handed back to the owner) within LATE_CLAIM_WINDOW_MS that recognizes
+ * the reply digit ("1" always; else the stamped routing.late_digit), rewinds it
+ * to the route step (routing.step_index, stamped by the worker on park), and
+ * marks routing.late_claim so the worker's claim path notifies the owner and
+ * then finalizes WITHOUT replaying later steps.
  */
 async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const {
@@ -573,11 +575,13 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
         : null;
     if (!routing) continue;
     if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) continue;
-    // Only runs whose stamped late-claim digit matches this reply are eligible:
-    // the late option is per-flow, so a "4, eta" reply must not re-open a run
-    // whose late option was a different digit (or had none).
+    // "1" is the universal claim digit: it late-claims any eligible run this
+    // teammate was offered, so the offer copy needs no separate retro option.
+    // Any other digit only matches a run whose stamped legacy late-claim
+    // option (routing.late_digit) equals it — a "4, eta" reply must not
+    // re-open a run whose late option was a different digit (or had none).
     const lateDigit = typeof routing.late_digit === "string" ? routing.late_digit : "";
-    if (!lateDigit || lateDigit !== digit) continue;
+    if (digit !== "1" && (!lateDigit || lateDigit !== digit)) continue;
     const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
     // Claimed by someone else → not available to this teammate.
     if (claimedBy && claimedBy !== from) continue;
@@ -642,7 +646,13 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   if (!match) return null;
 
   if (alreadyMine) {
-    await logReply();
+    // Re-ack a duplicate claim so the sender gets positive feedback (this path
+    // now also consumes a repeat bare "1", which the stale-offer ack used to
+    // answer). Idempotent — nothing is re-opened.
+    await ack(
+      "You've already got this lead — it's yours. Reply 86 if you need to release it.",
+      "late-claim-mine"
+    );
     await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
       business_id: businessId,
       run_id: match.id,
@@ -1374,8 +1384,9 @@ serve(async (req: Request) => {
       // Comma'd claim ("<n>, <eta>", n != 86): try a LIVE offer first (only the
       // ACCEPT digits "1" or the offer's timeframe option claim; a same-digit
       // PASS like a round-robin "2, can't take it" falls through). If no live
-      // offer resolves it, try a retroactive/LATE claim keyed on the flow's
-      // stamped late-claim digit (re-opens a lapsed offer within 24h).
+      // offer resolves it, try a retroactive/LATE claim — "1, <eta>" always
+      // qualifies (universal claim digit), a legacy flow's stamped late-claim
+      // digit still works (re-opens a lapsed offer within 24h).
       if (claimTf && claimTf.digit !== "86") {
         const liveHandled = await tryAgentClaimWithTimeframe({
           supabase,
@@ -1638,13 +1649,36 @@ serve(async (req: Request) => {
           }
         }
 
-        // Stale offer reply: the digit matched no LIVE offer (and no owner
-        // approval), but this teammate WAS offered a lead recently — e.g. a
-        // "1" sent after the claim window lapsed and the offer escalated.
-        // Consume it with a deterministic "here's what happened to that lead"
-        // ack instead of letting it fall through to the chat AI, which has no
-        // offer context and improvises a baffling reply. This never claims —
-        // the explicit late-claim digit and "86" keep that role.
+        // Retroactive (late) claim on a bare digit: a "1" (or a flow's stamped
+        // legacy late-claim digit) sent AFTER the claim window lapsed simply
+        // claims the lead if it's still unclaimed — seamless, same digit as a
+        // live claim, no ETA required. Runs after the live-offer and owner-
+        // approval checks so it can never shadow either.
+        {
+          const lateHandled = await tryLateClaim({
+            supabase,
+            businessId,
+            from,
+            ackTo: to,
+            eventId,
+            envelope,
+            telnyxApiKey,
+            messagingProfileId,
+            smsFromE164,
+            digit: replyBody,
+            timeframe: ""
+          });
+          if (lateHandled) return lateHandled;
+        }
+
+        // Stale offer reply: the digit matched no LIVE offer, no owner
+        // approval, and no late-claimable run (someone else took the lead, or
+        // it's past the late-claim window / not re-openable), but this
+        // teammate WAS offered a lead recently. Consume it with a
+        // deterministic "here's what happened to that lead" ack instead of
+        // letting it fall through to the chat AI, which has no offer context
+        // and improvises a baffling reply. This never claims — the late-claim
+        // path above and "86" keep that role.
         const { data: staleRows } = await supabase
           .from("ai_flow_runs")
           .select("id, status, context, awaiting_agent_e164, updated_at")
