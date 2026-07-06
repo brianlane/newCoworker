@@ -83,7 +83,7 @@ export const STANDARD_FEATURES: string[] = [
   `${TIER_LIMITS.standard.smsPerMonth} SMS`,
   concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls),
   "Bring your own phone number (port-in)",
-  "RCS branded messaging",
+  "RCS messaging (verified sender)",
   "Zapier: connect 8,000+ apps",
   "Send texts during calls",
   "Auto-text callers when a call can't be answered",

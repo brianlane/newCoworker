@@ -1,12 +1,12 @@
 # New Coworker
 
-> New Coworker gives growing businesses a 24/7 AI employee that answers phone calls with human-level conversation, replies to texts and emails, books appointments, qualifies leads, and remembers every customer. Each business runs on a dedicated private server, so conversations are never pooled in a shared cloud.
+> New Coworker gives growing businesses a 24/7 AI employee that answers phone calls with human-level conversation, replies to texts and emails, books appointments, qualifies leads, and remembers every customer. Each business's AI coworker runs on its own dedicated private server, and business data is isolated per business.
 
 Key facts:
 
 - Plans: Starter, Standard, and Enterprise, each with a 30-day money-back guarantee. Current pricing and included usage are listed on the pricing page.
 - Every plan includes a dedicated phone number, a dedicated email address, appointment booking, and lossless permanent memory of the business and its customers.
-- Standard adds bring-your-own-number porting, RCS branded messaging, Zapier (8,000+ apps), AI call summaries, analytics, scheduled texts, missed-call auto-text, warm handoff transfers, and full browser skills that operate websites like a person.
+- Standard adds bring-your-own-number porting, RCS messaging (verified sender, delivered through New Coworker's Google-verified agent with automatic SMS fallback), Zapier (8,000+ apps), AI call summaries, analytics, scheduled texts, missed-call auto-text, warm handoff transfers, and full browser skills that operate websites like a person.
 - Enterprise adds multi-tenant agency setups, white-label dashboards, SLAs, and custom compliance modules.
 - Integrations: Zapier, Google Workspace, Microsoft 365, a public REST API, and webhooks.
 - Compliance guardrails (including Fair Housing rules for real estate) are enforced in every conversation.

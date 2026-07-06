@@ -103,7 +103,7 @@ const groups: FeatureGroup[] = [
     eyebrow: "Messaging",
     title: "Texts that never sit unread",
     subtitle:
-      "Two-way SMS and RCS branded messaging, handled by the same coworker that knows every caller.",
+      "Two-way SMS and RCS messaging, handled by the same coworker that knows every caller.",
     features: [
       {
         title: "Two-Way SMS",
@@ -112,9 +112,9 @@ const groups: FeatureGroup[] = [
         Icon: MessageSquareText
       },
       {
-        title: "RCS Branded Messaging",
+        title: "RCS Messaging",
         description:
-          "Verified-sender branding with your logo and read receipts, so your messages stand out from anonymous SMS.",
+          "Texts delivered through a Google-verified sender with read receipts and rich formatting, with automatic SMS fallback from your business number.",
         Icon: MessagesSquare
       },
       {
@@ -240,7 +240,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Dedicated Private Server",
         description:
-          "Every business runs on a private server dedicated to it alone, so conversations and business knowledge are never pooled with other companies.",
+          "Your AI coworker runs on its own dedicated server: isolated compute, per-business credentials, and consistent performance no shared bot can match.",
         Icon: Server
       },
       {
