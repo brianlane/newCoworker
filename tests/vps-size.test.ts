@@ -8,11 +8,11 @@ import {
 } from "@/lib/vps/size";
 
 describe("vps/size", () => {
-  it("maps the tier defaults (starter→kvm1, standard→kvm8)", () => {
+  it("maps the tier defaults (starter→kvm1, standard→kvm2)", () => {
     expect(DEFAULT_TIER_VPS_SIZE.starter).toBe("kvm1");
-    expect(DEFAULT_TIER_VPS_SIZE.standard).toBe("kvm8");
+    expect(DEFAULT_TIER_VPS_SIZE.standard).toBe("kvm2");
     expect(resolveVpsSize("starter")).toBe("kvm1");
-    expect(resolveVpsSize("standard")).toBe("kvm8");
+    expect(resolveVpsSize("standard")).toBe("kvm2");
   });
 
   it("honors an explicit pin over the tier default", () => {
@@ -22,8 +22,8 @@ describe("vps/size", () => {
   });
 
   it("falls back to the tier default on null, undefined, and corrupt values", () => {
-    expect(resolveVpsSize("standard", null)).toBe("kvm8");
-    expect(resolveVpsSize("standard", undefined)).toBe("kvm8");
+    expect(resolveVpsSize("standard", null)).toBe("kvm2");
+    expect(resolveVpsSize("standard", undefined)).toBe("kvm2");
     expect(resolveVpsSize("starter", "kvm999")).toBe("kvm1");
     expect(resolveVpsSize("starter", "")).toBe("kvm1");
   });

@@ -365,7 +365,7 @@ describe("provisionVpsForBusiness", () => {
     // The tier-keyed map is now derived from the size-keyed one; pin the
     // linkage so a future edit can't silently fork the two.
     expect(DEFAULT_TIER_PRICE_ITEM.starter).toBe(VPS_SIZE_PRICE_ITEM.kvm1);
-    expect(DEFAULT_TIER_PRICE_ITEM.standard).toBe(VPS_SIZE_PRICE_ITEM.kvm8);
+    expect(DEFAULT_TIER_PRICE_ITEM.standard).toBe(VPS_SIZE_PRICE_ITEM.kvm2);
   });
 
   it("attaches a Hostinger post-install script when content is provided (happy path)", async () => {
@@ -981,11 +981,12 @@ describe("buildDefaultPostInstallScript", () => {
     const s = buildDefaultPostInstallScript();
     expect(s).toContain("https://github.com/brianlane/newCoworker.git");
     expect(s).toContain("REPO_REF='main'");
-    // Default tier is "standard" (KVM 8 safe pick) — the bootstrap loader
-    // emits `TIER='standard' VPS_SIZE='kvm8' bash …`. Must be single-quoted
-    // so the values are delivered to bootstrap.sh exactly as-is even if the
-    // loader is later sourced from a context that mangles env propagation.
-    expect(s).toContain("TIER='standard' VPS_SIZE='kvm8'");
+    // Default tier is "standard" (now KVM 2, the Jul 2026 default flip) —
+    // the bootstrap loader emits `TIER='standard' VPS_SIZE='kvm2' bash …`.
+    // Must be single-quoted so the values are delivered to bootstrap.sh
+    // exactly as-is even if the loader is later sourced from a context that
+    // mangles env propagation.
+    expect(s).toContain("TIER='standard' VPS_SIZE='kvm2'");
   });
 
   it("accepts custom repo URL, ref, and tier (vpsSize follows the tier default)", () => {

@@ -68,7 +68,7 @@ export const STARTER_FEATURES: string[] = [
   "Phone number and email address dedicated to your coworker",
   "Chat access to your coworker",
   "$5/mo AI budget for agentic tasks",
-  "Light browser tasks",
+  "Browser can read public web pages",
   "3rd party integrations",
   "Lossless memory and expansive knowledge base",
   "Emails and appointment booking",
@@ -95,7 +95,7 @@ export const STANDARD_FEATURES: string[] = [
   "$10/mo AI budget for agentic tasks, before free model fallback",
   "Configuration and training updates",
   "Priority email support & maintenance",
-  "Full browser skills"
+  "Full browser skills — operates websites like a person (logins, forms, portals)"
 ];
 
 export const ENTERPRISE_FEATURES: string[] = [

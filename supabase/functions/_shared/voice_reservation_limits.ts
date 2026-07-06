@@ -8,7 +8,10 @@
 
 export const VOICE_RES_LIMITS = {
   starter: {
-    voiceIncludedSecondsPerStripePeriod: 600,
+    // 10 → 25 min in the Jul 2026 starter rebalance: voice is the cheapest
+    // included unit (~$0.028/min all-in ≈ $0.70/mo at full cap), so it grew
+    // while the expensive SMS cap shrank (500 → 100).
+    voiceIncludedSecondsPerStripePeriod: 1_500,
     maxConcurrentCalls: 1
   },
   standard: {

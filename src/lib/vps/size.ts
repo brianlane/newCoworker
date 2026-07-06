@@ -25,10 +25,21 @@
 
 export type VpsSize = "kvm1" | "kvm2" | "kvm8";
 
-/** Tier → hardware mapping, used when a business has no explicit pin. */
+/**
+ * Tier → hardware mapping, used when a business has no explicit pin.
+ *
+ * standard → kvm2 (Jul 2026 flip): the June 2026 KVM2 experiment + Amy's
+ * live cutover proved the full standard feature set — render sidecar,
+ * 20-concurrent-call load test, llama3.2:3b local fallback — runs on KVM2
+ * (~$24.49/mo vs $73.99 for KVM8, a ~$49.50/mo margin gain per tenant).
+ * KVM8 remains available as a per-business `vps_size` escalation pin for
+ * tenants with sustained load. Existing standard tenants are unaffected:
+ * already-provisioned boxes resolve through `resolveDeployedVpsSize`,
+ * whose null-pin fallback stays kvm8 for standard.
+ */
 export const DEFAULT_TIER_VPS_SIZE: Record<"starter" | "standard", VpsSize> = {
   starter: "kvm1",
-  standard: "kvm8"
+  standard: "kvm2"
 };
 
 /**
