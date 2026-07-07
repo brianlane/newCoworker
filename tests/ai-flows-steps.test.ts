@@ -671,25 +671,14 @@ describe("planStep: route_to_team", () => {
       false
     );
   });
-  it("carries claimTimeframeOption when set, omits it otherwise", () => {
-    const r = planStep({ ...base, claimTimeframeOption: 3 }, {});
-    expect(r.ok && r.action.kind === "route_to_team" && r.action.claimTimeframeOption).toBe(3);
-    const without = planStep(base, {});
-    expect(
-      without.ok &&
-        without.action.kind === "route_to_team" &&
-        "claimTimeframeOption" in without.action
-    ).toBe(false);
-  });
-  it("carries lateClaimOption when set, omits it otherwise", () => {
-    const r = planStep({ ...base, lateClaimOption: 4 }, {});
-    expect(r.ok && r.action.kind === "route_to_team" && r.action.lateClaimOption).toBe(4);
-    const without = planStep(base, {});
-    expect(
-      without.ok &&
-        without.action.kind === "route_to_team" &&
-        "lateClaimOption" in without.action
-    ).toBe(false);
+  it("never carries the removed claimTimeframeOption/lateClaimOption digits", () => {
+    // Reply digits are universal ("1" claim, "2" pass); legacy fields on an
+    // old stored step type are ignored by planStep, not forwarded.
+    const r = planStep({ ...base, claimTimeframeOption: 3, lateClaimOption: 4 } as FlowStep, {});
+    expect(r.ok && r.action.kind === "route_to_team" && "claimTimeframeOption" in r.action).toBe(
+      false
+    );
+    expect(r.ok && r.action.kind === "route_to_team" && "lateClaimOption" in r.action).toBe(false);
   });
 });
 

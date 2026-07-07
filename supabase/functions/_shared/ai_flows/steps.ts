@@ -151,10 +151,6 @@ export type StepAction =
       offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
       attachScreenshot: boolean;
-      /** Reply digit meaning "accept with a timeframe"; stored on the offer. */
-      claimTimeframeOption?: number;
-      /** Reply digit meaning "retroactive (late) claim with a timeframe". */
-      lateClaimOption?: number;
     }
   | {
       kind: "browse_action";
@@ -482,11 +478,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(agentName ? { agentName } : {}),
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
-          attachScreenshot: step.attachScreenshot === true,
-          ...(step.claimTimeframeOption
-            ? { claimTimeframeOption: step.claimTimeframeOption }
-            : {}),
-          ...(step.lateClaimOption ? { lateClaimOption: step.lateClaimOption } : {})
+          attachScreenshot: step.attachScreenshot === true
         }
       };
     }

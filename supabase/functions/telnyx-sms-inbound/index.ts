@@ -328,17 +328,14 @@ type LiveClaimArgs = {
 };
 
 /**
- * Handle a teammate's "claim WITH a timeframe" reply to a LIVE offer — the
- * "<n>, <eta>" option (e.g. "3, 20 min"). Resolves the teammate's currently
- * offered run and finalizes it as a claim with the ETA stamped on
- * routing.claim_timeframe (the worker appends it to the owner's claim notice +
- * the outcome). Returns a Response when consumed, or null when it should fall
- * through to the normal path — either this sender has no live offer, OR the
- * leading digit isn't an ACCEPT digit for that offer. The accept digits are
- * "1" (plain claim) and the offer's stamped `tf_digit` (the "accept with a
- * timeframe" option). This is what stops a round-robin "2, can't take it" (where
- * 2 means PASS) from being mis-recorded as a claim: digit 2 ≠ accept, so it
- * falls through and a real pass stays a bare "2".
+ * Handle a teammate's "claim WITH a timeframe" reply to a LIVE offer —
+ * "1, <eta>" (e.g. "1, 20 min"). Resolves the teammate's currently offered run
+ * and finalizes it as a claim with the ETA stamped on routing.claim_timeframe
+ * (the worker appends it to the owner's claim notice + the outcome). Returns a
+ * Response when consumed, or null when it should fall through to the normal
+ * path — either this sender has no live offer, OR the leading digit isn't "1"
+ * (the only claim digit). A "2, can't take it" (2 = PASS) therefore never gets
+ * mis-recorded as a claim; tryAgentPassWithReason consumes it instead.
  */
 async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response | null> {
   const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
@@ -359,11 +356,9 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     offer.context?.routing && typeof offer.context.routing === "object"
       ? { ...(offer.context.routing as Record<string, unknown>) }
       : {};
-  // Only "1" (plain accept) or this offer's stamped timeframe option count as a
-  // claim. Any other comma'd digit (e.g. a round-robin "2" = pass) falls through
-  // so it's never mis-recorded as a claim; a real pass is a bare digit.
-  const tfDigit = typeof prevRouting.tf_digit === "string" ? prevRouting.tf_digit : "";
-  if (digit !== "1" && !(tfDigit && digit === tfDigit)) return null;
+  // Only "1" claims. Any other comma'd digit (e.g. "2, can't take it" = pass)
+  // falls through so it's never mis-recorded as a claim.
+  if (digit !== "1") return null;
   prevRouting.last_event = "claim";
   prevRouting.reply_from = from;
   prevRouting.claim_timeframe = timeframe;
@@ -417,14 +412,12 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
 
 /**
  * Handle a teammate's "pass WITH a reason" reply to a LIVE offer — "2, <reason>"
- * (e.g. "2, out of town"). Only digit "2" is a pass, and only when the offer's
- * stamped timeframe option isn't itself "2" (on those legacy pinned offers
- * "2, <eta>" means CLAIM and tryAgentClaimWithTimeframe consumes it first).
- * Resolves the teammate's currently offered run and resumes it as a reject with
- * routing.pass_reason stamped — the worker records the reason in actions_taken
- * and appends it to the owner-fallback notice, so the owner learns WHY the lead
- * bounced. Returns a Response when consumed, or null when this sender has no
- * live offer (or the digit isn't a pass) so the caller falls through.
+ * (e.g. "2, out of town"). Only digit "2" is a pass. Resolves the teammate's
+ * currently offered run and resumes it as a reject with routing.pass_reason
+ * stamped — the worker records the reason in actions_taken and appends it to
+ * the owner-fallback notice, so the owner learns WHY the lead bounced. Returns
+ * a Response when consumed, or null when this sender has no live offer (or the
+ * digit isn't a pass) so the caller falls through.
  */
 async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | null> {
   const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
@@ -446,11 +439,6 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
     offer.context?.routing && typeof offer.context.routing === "object"
       ? { ...(offer.context.routing as Record<string, unknown>) }
       : {};
-  // A legacy offer whose stamped timeframe option IS "2" treats "2, <text>" as
-  // a CLAIM; the claim handler runs first, so refusing here is just belt and
-  // braces against mis-recording a claim as a pass.
-  const tfDigit = typeof prevRouting.tf_digit === "string" ? prevRouting.tf_digit : "";
-  if (tfDigit === "2") return null;
   prevRouting.last_event = "reject";
   prevRouting.reply_from = from;
   prevRouting.pass_reason = timeframe;
@@ -510,11 +498,9 @@ type LateClaimArgs = {
   messagingProfileId: string;
   smsFromE164: string;
   /**
-   * The leading reply digit — "1" in "1" / "1, 20 min", or a flow's stamped
-   * legacy late-claim option ("4" in "4, 20 min"). "1" is the UNIVERSAL claim
-   * digit and late-claims any eligible lapsed offer; any other digit only
-   * matches a run whose stamped option (routing.late_digit) equals it, so a
-   * comma'd reply meant for a different run/flow never re-opens this one.
+   * The leading reply digit — "1" in "1" / "1, 20 min". "1" is the universal
+   * claim digit and the only one that late-claims; any other digit never
+   * matches, so a comma'd reply meant for something else never re-opens a run.
    */
   digit: string;
   /** Optional ETA the teammate stated ("1, 2 hours" → "2 hours"); "" when none. */
@@ -523,15 +509,13 @@ type LateClaimArgs = {
 
 /**
  * Handle a teammate's retroactive (late) claim — a "1" / "1, <eta>" reply after
- * the offer window lapsed (or a legacy "<lateOpt>, <eta>" where <lateOpt> is the
- * flow's stamped late-claim option digit). Returns a Response when the message
- * was consumed (claimed or already-yours), or null when no eligible offer
- * exists so the caller can fall through to the normal inbound path.
+ * the offer window lapsed. Returns a Response when the message was consumed
+ * (claimed or already-yours), or null when no eligible offer exists so the
+ * caller can fall through to the normal inbound path.
  *
  * Re-opens the most recent route_to_team run this teammate was offered (live or
- * already handed back to the owner) within LATE_CLAIM_WINDOW_MS that recognizes
- * the reply digit ("1" always; else the stamped routing.late_digit), rewinds it
- * to the route step (routing.step_index, stamped by the worker on park), and
+ * already handed back to the owner) within LATE_CLAIM_WINDOW_MS, rewinds it to
+ * the route step (routing.step_index, stamped by the worker on park), and
  * marks routing.late_claim so the worker's claim path notifies the owner and
  * then finalizes WITHOUT replaying later steps.
  */
@@ -664,11 +648,8 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) continue;
     // "1" is the universal claim digit: it late-claims any eligible run this
     // teammate was offered, so the offer copy needs no separate retro option.
-    // Any other digit only matches a run whose stamped legacy late-claim
-    // option (routing.late_digit) equals it — a "4, eta" reply must not
-    // re-open a run whose late option was a different digit (or had none).
-    const lateDigit = typeof routing.late_digit === "string" ? routing.late_digit : "";
-    if (digit !== "1" && (!lateDigit || lateDigit !== digit)) continue;
+    // No other digit ever late-claims.
+    if (digit !== "1") continue;
     const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
     // Claimed by someone else → not available to this teammate.
     if (claimedBy && claimedBy !== from) continue;
@@ -1554,15 +1535,13 @@ serve(async (req: Request) => {
     // collide with STOP/HELP/START keywords (handled above).
     if (from) {
       const replyBody = inboundSmsBody(payload).trim();
-      // "claim WITH a timeframe": "<n>, <eta>" (e.g. "4, 20 min"). The comma'd
-      // ETA is the "accept and say when you'll reach out" option Dave-routed
-      // offers advertise. The leading digit is just the displayed option number
-      // (live claim vs. retroactive/late claim) — the comma is the real signal.
+      // Comma'd offer reply: "<n>, <text>" — "1, <eta>" (claim + when they'll
+      // reach out), "2, <reason>" (pass + why), "86, <note>". The comma is the
+      // signal that free text annotates the digit.
       const claimTf = parseClaimWithTimeframe(replyBody);
 
       // route_to_team retroactive UNCLAIM ("86"): a teammate RELEASES a lead
-      // they had claimed; the worker hands it back to the owner. "86" no longer
-      // means late-claim (that moved to the flow's lateClaimOption digit).
+      // they had claimed; the worker hands it back to the owner.
       // Matched BEFORE the 1-9 owner/agent block so a multi-digit "86" is never
       // misread as an approval digit; we accept a bare "86" or "86, <note>".
       if (replyBody === "86" || (claimTf && claimTf.digit === "86")) {
@@ -1582,14 +1561,12 @@ serve(async (req: Request) => {
         // so a stray "86" is still handled like any other inbound text.
       }
 
-      // Comma'd reply ("<n>, <text>", n != 86): try a LIVE claim first (only
-      // the ACCEPT digits "1" or the offer's timeframe option claim), then a
-      // LIVE pass-with-reason ("2, out of town" — the reason is surfaced to
-      // the owner). If neither resolves it, try a retroactive/LATE claim —
-      // "1, <eta>" always qualifies (universal claim digit), a legacy flow's
-      // stamped late-claim digit still works (re-opens a lapsed offer within
-      // 24h). Finally, a reply to an offer that can no longer be claimed gets
-      // the deterministic stale-offer ack instead of the chat AI.
+      // Comma'd reply ("<n>, <text>", n != 86): try a LIVE claim first ("1" is
+      // the only claim digit), then a LIVE pass-with-reason ("2, out of town" —
+      // the reason is surfaced to the owner). If neither resolves it, try a
+      // retroactive/LATE claim ("1, <eta>" re-opens a lapsed offer within 24h).
+      // Finally, a reply to an offer that can no longer be claimed gets the
+      // deterministic stale-offer ack instead of the chat AI.
       if (claimTf && claimTf.digit !== "86") {
         const liveHandled = await tryAgentClaimWithTimeframe({
           supabase,
@@ -1696,20 +1673,15 @@ serve(async (req: Request) => {
         const offer = offerRow as
           | { id: string; context: Record<string, unknown> | null }
           | null;
-        // Agent offers: "1" always claims. "2" is the PASS digit for round-robin
-        // flows — UNLESS this offer's timeframe option IS "2" (a pinned, no-pass
-        // flow like HomeLight: "Reply 1 to confirm, or 2 with a timeframe"), in
-        // which case a bare "2" CLAIMS (no ETA) instead of being mis-read as a
-        // pass that escalates to the owner. The offer's stamped tf_digit also lets
-        // a bare timeframe digit (e.g. "3") claim. Any other digit falls through
-        // to the owner-approval check and then the normal customer path.
+        // Agent offers: "1" claims, "2" passes — universal on every flow. Any
+        // other digit falls through to the owner-approval check and then the
+        // normal customer path.
         const offRouting =
           offer?.context?.routing && typeof offer.context.routing === "object"
             ? (offer.context.routing as Record<string, unknown>)
             : {};
-        const offerTfDigit = typeof offRouting.tf_digit === "string" ? offRouting.tf_digit : "";
-        const bareClaim = replyBody === "1" || (offerTfDigit !== "" && replyBody === offerTfDigit);
-        const barePass = replyBody === "2" && offerTfDigit !== "2";
+        const bareClaim = replyBody === "1";
+        const barePass = replyBody === "2";
         if (offer && (bareClaim || barePass)) {
           const claimed = bareClaim;
           const prevRouting = { ...offRouting };

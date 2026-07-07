@@ -1,7 +1,7 @@
 /**
  * Pure classifier + copy for a teammate's STALE offer digit reply.
  *
- * A bare "1"/"2" (or a flow's stamped claim digit) only resumes a run while the
+ * A bare "1"/"2" only resumes a run while the
  * sender is the CURRENTLY offered agent. When the claim window lapses, a late
  * "1" now claims the lead retroactively via the webhook's late-claim path
  * (which runs BEFORE this classifier), so this module only answers the replies
@@ -52,10 +52,9 @@ function str(v: unknown): string {
  * Find the most recent routed run (newest-first candidates, same set the
  * late-claim path scans) that this SENDER was ever offered, and classify what
  * their stale digit reply refers to. A run only matches when the digit is an
- * offer digit for THAT run ("1"/"2" always are; a flow's stamped
- * tf_digit/late_digit also count) — otherwise the scan continues to older
- * candidates. Returns null when the reply should fall through to the normal
- * inbound path instead of being consumed:
+ * offer digit ("1" claim / "2" pass — universal on every flow) — otherwise the
+ * scan continues to older candidates. Returns null when the reply should fall
+ * through to the normal inbound path instead of being consumed:
  *   - the sender never appeared in a recent offer (a stray digit from staff),
  *   - no candidate run recognizes the digit as one of its offer digits, or
  *   - the first matching run is still LIVE and offered to the sender (the
@@ -83,14 +82,10 @@ export function classifyStaleOfferReply(args: {
       offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
     if (!everOffered) continue;
 
-    // Only digits that plausibly reference an offer are consumed: the
-    // advertised claim/pass digits plus this flow's stamped extras. A
-    // non-matching digit may still reference an OLDER run whose flow stamped
-    // that digit (e.g. a late-claim "4" after a newer 1/2-only offer), so keep
-    // scanning rather than bailing; a digit no candidate recognizes (e.g. a
-    // bare "7") falls through to the normal path.
-    const offerDigits = new Set(["1", "2", str(routing.tf_digit), str(routing.late_digit)]);
-    if (!offerDigits.has(digit)) continue;
+    // Only digits that plausibly reference an offer are consumed: "1" (claim)
+    // and "2" (pass), universal on every flow. Any other digit (e.g. a bare
+    // "7") falls through to the normal path.
+    if (digit !== "1" && digit !== "2") continue;
 
     // A LIVE offer to this sender is the upstream live-claim path's job; when
     // that path didn't consume the digit, don't tell the sender the window
