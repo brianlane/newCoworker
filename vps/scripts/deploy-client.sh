@@ -1623,6 +1623,8 @@ elif [[ -d "${DATA_API_SRC}" && -f "${DATA_API_SRC}/docker-compose.yml" ]]; then
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
       --exclude ".env" \
+      --exclude "backup.env" \
+      --exclude "backups/" \
       --exclude "node_modules" \
       "${DATA_API_SRC}/" "${DATA_API_DEST}/"
   else
