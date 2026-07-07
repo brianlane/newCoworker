@@ -345,6 +345,12 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             />
           )}
           <Row label="Owner fallback SMS" value={step.ownerFallbackTemplate} />
+          {step.firstToClaim === false && (
+            <Row
+              label="First to claim"
+              value="Off — only the currently offered teammate can claim a live offer"
+            />
+          )}
           {step.claimedNotifyTemplate && (
             <Row label="Owner notice when claimed" value={step.claimedNotifyTemplate} />
           )}

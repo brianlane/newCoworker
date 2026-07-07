@@ -151,6 +151,8 @@ export type StepAction =
       offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
       attachScreenshot: boolean;
+      /** First to claim (ON when undefined; false disables the bare-"1" yank). */
+      firstToClaim?: boolean;
     }
   | {
       kind: "browse_action";
@@ -478,7 +480,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(agentName ? { agentName } : {}),
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
-          attachScreenshot: step.attachScreenshot === true
+          attachScreenshot: step.attachScreenshot === true,
+          // Only an explicit opt-out is carried; undefined means ON.
+          ...(step.firstToClaim === false ? { firstToClaim: false } : {})
         }
       };
     }

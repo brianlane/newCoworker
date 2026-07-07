@@ -31,10 +31,14 @@ export type StaleOfferOutcome = {
   /**
    * claimed_by_sender — the sender already holds this lead (duplicate claim);
    * claimed_by_other  — someone else picked it up after the window lapsed;
+   * live_with_other   — unclaimed but actively offered to another teammate,
+   *                     and the flow allows first-to-claim: a bare "1" would
+   *                     take it over, so tell the sender that instead of
+   *                     pretending the lead is gone;
    * moved_on          — nobody has claimed it but the offer left the sender
    *                     (escalated to the next agent, or back with the owner).
    */
-  kind: "claimed_by_sender" | "claimed_by_other" | "moved_on";
+  kind: "claimed_by_sender" | "claimed_by_other" | "live_with_other" | "moved_on";
   /** Roster name of the claimer for claimed_by_other ("" when unknown). */
   claimedName: string;
 };
@@ -105,6 +109,18 @@ export function classifyStaleOfferReply(args: {
         claimedName: str(routing.claimed_name).trim()
       };
     }
+    // Unclaimed but actively offered to another teammate. When the flow allows
+    // first-to-claim (the default), a bare "1" would have yanked it upstream in
+    // tryLateClaim — reaching this classifier with a "1" means the sender added
+    // an ETA ("1, a few hours"), which must not preempt the active countdown.
+    // Tell them the bare-"1" affordance instead of pretending the lead is gone.
+    const liveWithOther =
+      offered !== "" &&
+      offered !== from &&
+      (row.status === "awaiting_agent" || row.status === "queued");
+    if (liveWithOther && digit === "1" && routing.first_to_claim !== false) {
+      return { runId: row.id, kind: "live_with_other", claimedName: "" };
+    }
     return { runId: row.id, kind: "moved_on", claimedName: "" };
   }
   return null;
@@ -119,6 +135,11 @@ export function staleOfferAckText(outcome: StaleOfferOutcome): string {
   switch (outcome.kind) {
     case "claimed_by_sender":
       return "You've already got this lead — it's yours. Reply 86 if you need to release it.";
+    case "live_with_other":
+      return (
+        "That lead is with another teammate right now. If you can take it " +
+        'immediately, reply 1 (just "1", no ETA) to claim it.'
+      );
     case "claimed_by_other":
       return (
         `Thanks — that lead's claim window has passed and ` +

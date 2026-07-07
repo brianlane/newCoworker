@@ -3031,6 +3031,10 @@ async function routeToTeamStep(
     // may have left so re-offered runs shed them.
     delete routing.tf_digit;
     delete routing.late_digit;
+    // First to claim is ON by default; only an explicit opt-out is stamped so
+    // the inbound webhook can refuse the bare-"1" yank for this flow.
+    if (action.firstToClaim === false) routing.first_to_claim = false;
+    else delete routing.first_to_claim;
     // After-hours offer window: the offer SMS still goes out now, but inside
     // the quiet window the claim deadline extends to quietEnd + grace so the
     // countdown effectively starts in the morning. The resolved deadline is

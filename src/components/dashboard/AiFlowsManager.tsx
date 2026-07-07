@@ -2344,6 +2344,19 @@ function StepFields({
           />
           Attach the screenshot from an earlier browse step to each agent offer (MMS)
         </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.firstToClaim !== false}
+            onChange={(ev) =>
+              // ON is the default, so checked round-trips as undefined and
+              // only an explicit opt-out stores firstToClaim: false.
+              patchStep(index, { firstToClaim: ev.target.checked ? undefined : false })
+            }
+          />
+          First to claim: teammates offered earlier can still grab a live offer with a
+          bare &quot;1&quot; (an ETA reply never preempts the active window)
+        </label>
       </div>
     );
   }

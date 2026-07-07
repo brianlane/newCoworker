@@ -537,6 +537,13 @@ const stepSchema = z.discriminatedUnion("type", [
     // why), "86" retroactively unclaims. The old claimTimeframeOption /
     // lateClaimOption fields were removed after every stored flow was migrated
     // off them (scripts/oneshot/simplify-claim-options.ts).
+    //
+    // First to claim (ON by default; set false to opt out): while the offer is
+    // live with one teammate, any teammate it was offered EARLIER can still
+    // take it with a bare "1" — the lead needs a call right away, so whoever
+    // can do it first wins. Only a bare "1" yanks; "1, <eta>" from outside the
+    // sender's own window never preempts the active countdown.
+    firstToClaim: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({

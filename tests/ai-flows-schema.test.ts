@@ -617,6 +617,19 @@ describe("route_to_team step", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
+  it("preserves an explicit firstToClaim opt-out (undefined means ON)", () => {
+    const optOut = JSON.parse(JSON.stringify(routedInput));
+    optOut.steps[2].firstToClaim = false;
+    const def = parseAiFlowDefinition(optOut);
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.firstToClaim).toBe(false);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+
+    const defaulted = parseAiFlowDefinition(routedInput);
+    const dStep = defaulted.steps[2];
+    expect(dStep.type === "route_to_team" && dStep.firstToClaim).toBeUndefined();
+  });
+
   it("strips the removed claimTimeframeOption/lateClaimOption fields from old definitions", () => {
     // Reply digits are universal now ("1" claim, "2" pass); a definition
     // authored before the migration still parses, but the legacy per-flow

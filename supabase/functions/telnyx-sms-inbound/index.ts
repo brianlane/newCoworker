@@ -509,15 +509,21 @@ type LateClaimArgs = {
 
 /**
  * Handle a teammate's retroactive (late) claim — a "1" / "1, <eta>" reply after
- * the offer window lapsed. Returns a Response when the message was consumed
- * (claimed or already-yours), or null when no eligible offer exists so the
- * caller can fall through to the normal inbound path.
+ * the offer window lapsed — and the FIRST-TO-CLAIM yank: a bare "1" from a
+ * teammate the lead was offered earlier takes over an offer currently live
+ * with someone else (on by default; a flow opts out with firstToClaim:false).
+ * The yank is bare-"1" only — "1, <eta>" from outside the sender's own window
+ * never preempts the active countdown, because stating an ETA means "not right
+ * now". Returns a Response when the message was consumed (claimed or
+ * already-yours), or null when no eligible offer exists so the caller can fall
+ * through to the normal inbound path.
  *
  * Re-opens the most recent route_to_team run this teammate was offered (live or
  * already handed back to the owner) within LATE_CLAIM_WINDOW_MS, rewinds it to
  * the route step (routing.step_index, stamped by the worker on park), and
  * marks routing.late_claim so the worker's claim path notifies the owner and
- * then finalizes WITHOUT replaying later steps.
+ * then finalizes WITHOUT replaying later steps. (A yank leaves late_claim
+ * unset — post-route steps haven't run, so the flow continues normally.)
  */
 async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const {
@@ -625,21 +631,26 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const nowMs = Date.now();
   type Cand = (typeof candidates)[number];
   // A teammate can plausibly have more than one eligible run at once. Classify
-  // each into three buckets and pick by PRECEDENCE rather than raw recency:
+  // each into four buckets and pick by PRECEDENCE rather than raw recency:
   //   1. live  — an active offer to this teammate (what reply "1" targets);
   //              wins even if an older eligible run was touched more recently.
   //   2. late  — a lapsed offer whose post-route steps already ran (re-open,
   //              the actual intent of "86"); beats a stale re-ack.
-  //   3. mine  — a lead already claimed by this teammate (idempotent re-ack),
+  //   3. yank  — first-to-claim: an offer live with ANOTHER teammate that this
+  //              sender was offered earlier; a bare "1" takes it over so the
+  //              lead gets called right away instead of waiting out windows.
+  //   4. mine  — a lead already claimed by this teammate (idempotent re-ack),
   //              only used when there's nothing fresh to claim.
   // Within each bucket the newest wins (candidates are newest-first).
   let liveMatch: Cand | null = null;
   let liveStep = -1;
   let lateMatch: Cand | null = null;
   let lateStep = -1;
+  let yankMatch: Cand | null = null;
+  let yankStep = -1;
   let mineMatch: Cand | null = null;
   for (const row of candidates) {
-    if (liveMatch && lateMatch && mineMatch) break;
+    if (liveMatch && lateMatch && yankMatch && mineMatch) break;
     const routing =
       row.context?.routing && typeof row.context.routing === "object"
         ? (row.context.routing as Record<string, unknown>)
@@ -686,17 +697,35 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       continue;
     }
     // Still a LIVE offer parked at the route step (later steps not run yet).
-    // Mirror reply "1": only the CURRENTLY offered teammate may claim, so a
-    // teammate who already passed (in `tried`) can't preempt the active offer.
     if (offered === from && !liveMatch) {
       liveMatch = row;
       liveStep = stepIndex;
+      continue;
+    }
+    // First-to-claim yank (on by default; a flow opts out with
+    // firstToClaim:false → routing.first_to_claim === false): the offer is
+    // live with ANOTHER teammate, but this sender was offered it earlier
+    // (everOffered above). A BARE "1" takes it over — the lead needs a call
+    // right away, and whoever can do that first wins. A "1, <eta>" must NOT
+    // preempt the active window: stating an ETA means "not right now", so the
+    // current teammate's countdown stands (the stale-offer ack tells the
+    // sender to reply just "1" if they can take it immediately).
+    if (
+      offered !== from &&
+      !yankMatch &&
+      claimTimeframe === "" &&
+      routing.first_to_claim !== false
+    ) {
+      yankMatch = row;
+      yankStep = stepIndex;
     }
   }
 
-  // Precedence: live offer → fresh late claim → idempotent re-ack.
+  // Precedence: live offer → fresh late claim → first-to-claim yank →
+  // idempotent re-ack.
   let alreadyMine = false;
   let isLate = false;
+  let isYank = false;
   let matchStepIndex = -1;
   let match: Cand | null = null;
   if (liveMatch) {
@@ -706,6 +735,10 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     match = lateMatch;
     isLate = true;
     matchStepIndex = lateStep;
+  } else if (yankMatch) {
+    match = yankMatch;
+    isYank = true;
+    matchStepIndex = yankStep;
   } else if (mineMatch) {
     match = mineMatch;
     alreadyMine = true;
@@ -744,6 +777,17 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const memberName = (memberRow as { name?: string } | null)?.name ?? "";
 
   const routing = { ...(match.context!.routing as Record<string, unknown>) };
+  // First-to-claim yank: retire the teammate whose live window we're taking
+  // over into `tried` — they stay recognized by the stale-offer classifier
+  // ("<name> picked it up") and are never re-offered this lead.
+  if (isYank) {
+    const prevOffered = typeof routing.offered === "string" ? routing.offered : "";
+    const tried = Array.isArray(routing.tried)
+      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    if (prevOffered && !tried.includes(prevOffered)) tried.push(prevOffered);
+    routing.tried = tried;
+  }
   routing.last_event = "claim";
   routing.reply_from = from;
   routing.offered = from;
@@ -816,7 +860,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     business_id: businessId,
     run_id: match.id,
     event_id: eventId,
-    decision: isLate ? "late_claim" : "late_option_live"
+    decision: isLate ? "late_claim" : isYank ? "first_to_claim" : "late_option_live"
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "late_claimed" }), {
     status: 200,

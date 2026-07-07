@@ -671,6 +671,21 @@ describe("planStep: route_to_team", () => {
       false
     );
   });
+  it("carries firstToClaim only as an explicit opt-out (undefined/true mean ON)", () => {
+    const off = planStep({ ...base, firstToClaim: false }, {});
+    expect(off.ok && off.action.kind === "route_to_team" && off.action.firstToClaim).toBe(false);
+    const defaulted = planStep(base, {});
+    expect(
+      defaulted.ok && defaulted.action.kind === "route_to_team" && "firstToClaim" in defaulted.action
+    ).toBe(false);
+    const explicitOn = planStep({ ...base, firstToClaim: true }, {});
+    expect(
+      explicitOn.ok &&
+        explicitOn.action.kind === "route_to_team" &&
+        "firstToClaim" in explicitOn.action
+    ).toBe(false);
+  });
+
   it("never carries the removed claimTimeframeOption/lateClaimOption digits", () => {
     // Reply digits are universal ("1" claim, "2" pass); legacy fields on an
     // old stored step type are ignored by planStep, not forwarded.
