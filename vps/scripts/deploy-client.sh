@@ -1683,9 +1683,16 @@ DAENV_EOF
         fi
         sleep 2
       done
-      if [[ "${dataapi_ok}" == "1" ]]; then
-        report_progress 99 "data_api_ready" "residency data-api healthy on :8091"
+      if [[ "${dataapi_ok}" == "1" && "${schema_applied}" == "1" ]]; then
+        report_progress 99 "data_api_ready" "residency data-api healthy on :8091 (schema applied)"
         log "data-api ready"
+      elif [[ "${dataapi_ok}" == "1" ]]; then
+        # HTTP answers but this deploy's schema apply never succeeded: the
+        # box may be serving an OLD layout, which is stale-data risk, not
+        # health. Keep the terminal event non-ready so provisioning surfaces
+        # it instead of declaring the data plane good.
+        log "WARN: data-api answers ok:true but this deploy's schema apply failed — layout may be stale"
+        report_progress 98 "data_api_schema_stale" "data-api healthy but schema apply failed (layout may be stale)"
       else
         log "WARN: data-api container started but /v1/health never reported ok:true within 40s (transport up with ok:false = datastore unreachable)"
         report_progress 98 "data_api_unhealthy" "data-api started but /v1/health never reported ok:true"
