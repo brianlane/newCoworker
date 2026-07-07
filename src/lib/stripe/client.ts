@@ -273,10 +273,17 @@ export async function createChatCreditCheckoutSession(
 }
 
 export type WhiteGloveCheckoutParams = {
+  /** Fixed catalog id ("setup"/"buildout"), or "custom" for admin offers. */
   packageId: string;
   packageName: string;
   amountCents: number;
   businessId: string;
+  /**
+   * Custom admin-authored offer id (white_glove_offers.id). When set, the
+   * webhook marks THAT row paid instead of stamping a fixed package on the
+   * business.
+   */
+  offerId?: string;
   successUrl: string;
   cancelUrl: string;
   customerEmail?: string;
@@ -303,6 +310,7 @@ export async function createWhiteGloveCheckoutSession(
     checkoutKind: "white_glove_package",
     businessId: params.businessId,
     whiteGlovePackage: params.packageId,
+    ...(params.offerId ? { whiteGloveOfferId: params.offerId } : {}),
     userId: params.userId
   };
   const session = await stripe.checkout.sessions.create({

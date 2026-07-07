@@ -766,6 +766,26 @@ describe("stripe/client", () => {
       expect(call.customer_creation).toBeUndefined();
     });
 
+    it("stamps whiteGloveOfferId metadata for custom offers (and omits it otherwise)", async () => {
+      await createWhiteGloveCheckoutSession({
+        ...baseParams,
+        packageId: "custom",
+        packageName: "White-glove migration",
+        amountCents: 125_000,
+        offerId: "offer-1"
+      });
+      const custom = mockSessionCreate.mock.calls[0]?.[0];
+      expect(custom.metadata).toMatchObject({
+        checkoutKind: "white_glove_package",
+        whiteGlovePackage: "custom",
+        whiteGloveOfferId: "offer-1"
+      });
+
+      await createWhiteGloveCheckoutSession(baseParams);
+      const fixed = mockSessionCreate.mock.calls[1]?.[0];
+      expect("whiteGloveOfferId" in fixed.metadata).toBe(false);
+    });
+
     it("rejects non-positive or non-integer amountCents", async () => {
       for (const amountCents of [0, -100, 10.5]) {
         await expect(

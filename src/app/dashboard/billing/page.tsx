@@ -44,6 +44,7 @@ import {
 import { Card } from "@/components/ui/Card";
 import { VoiceBonusPacks } from "@/components/dashboard/VoiceBonusPacks";
 import { UsagePacks } from "@/components/dashboard/UsagePacks";
+import { listWhiteGloveOffers } from "@/lib/db/white-glove-offers";
 import { PlanCard } from "@/components/billing/PlanCard";
 import {
   getWhiteGloveBookingUrl,
@@ -207,6 +208,11 @@ export default async function BillingPage(props: {
   const whiteGloveOffers = listWhiteGlovePackages().filter(
     (p) => ownedWhiteGlove === null || (ownedWhiteGlove.id === "setup" && p.id === "buildout")
   );
+  // Custom admin-authored offers (bespoke price, single business). Only OPEN
+  // ones are payable; paid/revoked rows never render here.
+  const customWhiteGloveOffers = business
+    ? (await listWhiteGloveOffers(business.id, db)).filter((o) => o.status === "open")
+    : [];
 
   // ---- Derive PlanCard props from subscription + profile ---------------
   const now = new Date();
@@ -519,6 +525,22 @@ export default async function BillingPage(props: {
             label: p.name,
             priceUsd: p.priceUsd,
             subline: p.description
+          }))}
+          canPurchase={canPurchase}
+          disabledReason={disabledReason}
+        />
+      )}
+
+      {customWhiteGloveOffers.length > 0 && (
+        <UsagePacks
+          title="Your custom offer"
+          description="Prepared for your business by our team. One-time payment; includes a 30-day priority call & video support line."
+          checkoutPath="/api/billing/white-glove/checkout"
+          packs={customWhiteGloveOffers.map((o) => ({
+            id: o.id,
+            label: o.name,
+            priceUsd: o.amount_cents / 100,
+            subline: o.description || undefined
           }))}
           canPurchase={canPurchase}
           disabledReason={disabledReason}

@@ -1,16 +1,19 @@
 /**
  * POST /api/billing/white-glove/checkout
  *
- * Authenticated tenant buys a white-glove onboarding package (Phase C5).
- * Mirrors the usage-pack checkouts: pick a `packId` from
- * `src/lib/plans/white-glove.ts`, confirm the caller's business has an
- * active Stripe subscription, then create a `mode=payment` Checkout Session
- * with inline `price_data`. The Stripe webhook records the purchase and
- * opens the priority-support window on success.
+ * Authenticated tenant buys white-glove onboarding (Phase C5) — either a
+ * fixed catalog package (`packId` from `src/lib/plans/white-glove.ts`) or a
+ * CUSTOM admin-authored offer (`packId` = the offer's UUID; the stored
+ * `white_glove_offers` row is the pricing source of truth). Both paths
+ * confirm the caller's business has an active Stripe subscription, then
+ * create a `mode=payment` Checkout Session with inline `price_data`. The
+ * Stripe webhook records the purchase and opens the priority-support window
+ * on success.
  *
- * Guards: a business that already owns the requested package (or owns
+ * Guards: a business that already owns the requested fixed package (or owns
  * `buildout`, which supersedes `setup`) gets a CONFLICT instead of a
- * double-charge. Upgrading setup → buildout is allowed.
+ * double-charge (upgrading setup → buildout is allowed). A custom offer must
+ * be OPEN and must belong to the caller's business.
  *
  * Returns `{ checkoutUrl }` so the client can `window.location = checkoutUrl`.
  */
@@ -21,6 +24,7 @@ import { getSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createWhiteGloveCheckoutSession } from "@/lib/stripe/client";
 import { WHITE_GLOVE_PACKAGE_IDS, getWhiteGlovePackage } from "@/lib/plans/white-glove";
+import { getWhiteGloveOffer } from "@/lib/db/white-glove-offers";
 import {
   successResponse,
   errorResponse,
@@ -28,7 +32,8 @@ import {
 } from "@/lib/api-response";
 
 const schema = z.object({
-  packId: z.enum(WHITE_GLOVE_PACKAGE_IDS)
+  // A fixed catalog id ("setup"/"buildout") or a custom offer UUID.
+  packId: z.string().trim().min(1).max(64)
 });
 
 export async function POST(request: Request) {
@@ -46,7 +51,8 @@ export async function POST(request: Request) {
 
     const body = schema.parse(await request.json());
     const pkg = getWhiteGlovePackage(body.packId);
-    if (!pkg) {
+    const isCustomOffer = !pkg;
+    if (isCustomOffer && !z.string().uuid().safeParse(body.packId).success) {
       return errorResponse("NOT_FOUND", "White-glove package is not available");
     }
 
@@ -65,12 +71,30 @@ export async function POST(request: Request) {
       return errorResponse("NOT_FOUND", "Business not found");
     }
 
-    const owned = business.white_glove_package as "setup" | "buildout" | null;
-    if (owned === pkg.id || owned === "buildout") {
-      return errorResponse(
-        "CONFLICT",
-        "Your business already has this white-glove package (or a larger one)"
-      );
+    // Fixed packages only: never re-sell an owned package. Custom offers are
+    // independent of package ownership (a bespoke deal can always be sold).
+    if (pkg) {
+      const owned = business.white_glove_package as "setup" | "buildout" | null;
+      if (owned === pkg.id || owned === "buildout") {
+        return errorResponse(
+          "CONFLICT",
+          "Your business already has this white-glove package (or a larger one)"
+        );
+      }
+    }
+
+    // Custom offer: the stored row is the pricing source of truth, and it
+    // must be OPEN and belong to the CALLER'S business (an offer id leaked
+    // across tenants must never be payable).
+    let offer = null;
+    if (isCustomOffer) {
+      offer = await getWhiteGloveOffer(body.packId, db);
+      if (!offer || offer.business_id !== business.id) {
+        return errorResponse("NOT_FOUND", "White-glove package is not available");
+      }
+      if (offer.status !== "open") {
+        return errorResponse("CONFLICT", "This offer is no longer available");
+      }
     }
 
     const subscription = await getSubscription(business.id);
@@ -83,10 +107,11 @@ export async function POST(request: Request) {
 
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const session = await createWhiteGloveCheckoutSession({
-      packageId: pkg.id,
-      packageName: pkg.name,
-      amountCents: pkg.priceCents,
+      packageId: pkg ? pkg.id : "custom",
+      packageName: pkg ? pkg.name : offer!.name,
+      amountCents: pkg ? pkg.priceCents : offer!.amount_cents,
       businessId: business.id,
+      offerId: offer?.id,
       successUrl: `${appUrl}/dashboard/billing?whiteGlove=success&session_id={CHECKOUT_SESSION_ID}`,
       cancelUrl: `${appUrl}/dashboard/billing?whiteGlove=cancelled`,
       customerEmail: user.email,

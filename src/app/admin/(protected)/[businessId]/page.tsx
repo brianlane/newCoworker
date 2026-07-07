@@ -29,6 +29,8 @@ import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEdito
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
+import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
+import { listWhiteGloveOffers } from "@/lib/db/white-glove-offers";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 
 export const dynamic = "force-dynamic";
@@ -48,7 +50,8 @@ export default async function BusinessDetailPage({
     config,
     subscription,
     telnyxRoute,
-    telnyxSettings
+    telnyxSettings,
+    whiteGloveOffers
   ] = await Promise.all([
     getBusiness(businessId),
     getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
@@ -60,7 +63,8 @@ export default async function BusinessDetailPage({
     getBusinessConfig(businessId),
     getSubscription(businessId),
     getTelnyxVoiceRouteForBusiness(businessId),
-    getBusinessTelnyxSettings(businessId)
+    getBusinessTelnyxSettings(businessId),
+    listWhiteGloveOffers(businessId)
   ]);
 
   if (!business) notFound();
@@ -109,6 +113,24 @@ export default async function BusinessDetailPage({
         initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
         compact
       />
+
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Custom white-glove offers
+        </h2>
+        <WhiteGloveOffersPanel
+          businessId={businessId}
+          initialOffers={whiteGloveOffers.map((o) => ({
+            id: o.id,
+            name: o.name,
+            description: o.description,
+            amount_cents: o.amount_cents,
+            status: o.status,
+            created_at: o.created_at,
+            paid_at: o.paid_at
+          }))}
+        />
+      </Card>
 
       {business.tier === "enterprise" && (
         <Card>
