@@ -1744,8 +1744,14 @@ RBTMR_EOF
         log "WARN: schema apply failed — residency backups NOT (re)installed this deploy (no dump of an unverified layout)"
         report_progress 98 "residency_backup_skipped_schema" "backups skipped: datastore schema apply failed"
       else
-        log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset — residency backups NOT installed (DR gap)"
-        report_progress 98 "residency_backup_unconfigured" "no backup passphrase provided; encrypted backups skipped"
+        # No escrow key this deploy: also STOP a previously-installed timer
+        # (its preserved backup.env would keep dumping with a key the
+        # platform may have rotated away) — "skipped" must mean stopped.
+        systemctl disable --now residency-backup.timer 2>/dev/null || true
+        rm -f /etc/systemd/system/residency-backup.service /etc/systemd/system/residency-backup.timer /opt/data-api/backup.env
+        systemctl daemon-reload 2>/dev/null || true
+        log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset — residency backups NOT installed (DR gap); any prior timer stopped"
+        report_progress 98 "residency_backup_unconfigured" "no backup passphrase provided; encrypted backups skipped (prior timer stopped)"
       fi
 
       dataapi_ok=0
