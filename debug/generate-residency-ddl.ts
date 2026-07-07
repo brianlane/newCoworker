@@ -29,7 +29,6 @@ import { loadEnv } from "./_shared.ts";
 loadEnv();
 
 const { RESIDENCY_MOVED_TABLES } = await import("../src/lib/residency/tables.ts");
-const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
 
 const OUT_ARG = process.argv.indexOf("--out");
 const OUT_PATH = path.resolve(
@@ -61,16 +60,11 @@ type IndexRow = {
   indexdef: string;
 };
 
-const db = await createSupabaseServiceClient();
-
 /**
- * The service client can't query information_schema through PostgREST, so
- * everything goes through a single SQL RPC. `exec_sql`-style helpers don't
- * exist in this project; use the supabase-js `.rpc` against the built-in
- * `pg_meta`-less path via a plain `select` won't work either — so we shell
- * the queries through PostgREST's `/rpc/` only if a helper exists. Fallback:
- * run the three catalog queries through the `pg` protocol using the
- * connection string in SUPABASE_DB_URL (the same var supabase CLI uses).
+ * PostgREST (the supabase-js service client) cannot query
+ * information_schema/pg_catalog, so the three catalog reads go over the raw
+ * `pg` protocol using the connection string in SUPABASE_DB_URL — the same
+ * var the supabase CLI uses. It is the ONLY credential this script needs.
  */
 const dbUrl = process.env.SUPABASE_DB_URL ?? "";
 if (!dbUrl) {
