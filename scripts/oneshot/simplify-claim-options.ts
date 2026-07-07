@@ -41,6 +41,7 @@
  */
 import { pathToFileURL } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+import { recordOneshotApplied } from "./_ledger";
 import {
   parseAiFlowDefinition,
   AiFlowValidationError
@@ -157,6 +158,7 @@ async function main(): Promise<void> {
   }
 
   let changedCount = 0;
+  const patched: Array<{ id: string; name: string }> = [];
   for (const row of (rows ?? []) as Array<{ id: string; name: string; definition: Definition }>) {
     const def = JSON.parse(JSON.stringify(row.definition)) as Definition;
     const before = JSON.stringify(row.definition);
@@ -187,6 +189,7 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       console.log("  -> updated.");
+      patched.push({ id: row.id, name: row.name });
     }
   }
 
@@ -196,6 +199,13 @@ async function main(): Promise<void> {
     console.log(`\n[dry-run] ${changedCount} flow(s) would change. Re-run with --apply to write.`);
   } else {
     console.log(`\nSimplified ${changedCount} flow(s).`);
+  }
+  if (args.apply) {
+    await recordOneshotApplied(db, {
+      scriptPath: process.argv[1] ?? "simplify-claim-options.ts",
+      businessId,
+      details: { patched }
+    });
   }
 }
 

@@ -29,6 +29,16 @@ import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts
 import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
+import { parseRouting } from "../_shared/ai_flows/routing.ts";
+import {
+  matchLateClaimReply,
+  type LateClaimCandidate
+} from "../_shared/ai_flows/late_claim.ts";
+import {
+  OFFER_REPLY_DECISION,
+  staleOfferDecision,
+  type OfferReplyDecision
+} from "../_shared/ai_flows/telemetry_decisions.ts";
 import {
   classifyStaleOfferReply,
   staleOfferAckText,
@@ -342,7 +352,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
 
   const { data: offerRow } = await supabase
     .from("ai_flow_runs")
-    .select("id, context, updated_at")
+    .select("id, context, revision")
     .eq("business_id", businessId)
     .in("status", ["awaiting_agent", "queued"])
     .eq("context->routing->>offered", from)
@@ -350,14 +360,11 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     .limit(1)
     .maybeSingle();
   const offer = offerRow as
-    | { id: string; context: Record<string, unknown> | null; updated_at: string }
+    | { id: string; context: Record<string, unknown> | null; revision: number }
     | null;
   if (!offer) return null;
 
-  const prevRouting =
-    offer.context?.routing && typeof offer.context.routing === "object"
-      ? { ...(offer.context.routing as Record<string, unknown>) }
-      : {};
+  const prevRouting = parseRouting(offer.context?.routing);
   // Only "1" claims. Any other comma'd digit (e.g. "2, can't take it" = pass)
   // falls through so it's never mis-recorded as a claim.
   if (digit !== "1") return null;
@@ -368,9 +375,9 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   // worker) belongs to THAT reply — never let it ride along with this claim.
   delete prevRouting.pass_reason;
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
-  // Optimistic concurrency: gate on the exact updated_at we read so a
-  // concurrent first-to-claim yank (or worker mutation) can never be
-  // overwritten by this stale routing snapshot — the first write wins.
+  // Optimistic concurrency: gate on the revision we read (trigger-bumped on
+  // every update) so a concurrent first-to-claim yank (or worker mutation)
+  // can never be overwritten by this stale routing snapshot.
   const { data: resumed, error: resumeErr } = await supabase
     .from("ai_flow_runs")
     .update({
@@ -381,7 +388,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
       updated_at: new Date().toISOString()
     })
     .eq("id", offer.id)
-    .eq("updated_at", offer.updated_at)
+    .eq("revision", offer.revision)
     .in("status", ["awaiting_agent", "queued"])
     .select("id");
   if (resumeErr) {
@@ -392,7 +399,10 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     });
   }
   if (!resumed || (resumed as unknown[]).length === 0) {
-    return await consumeRacedOfferReply({ ...args, telemetryDecision: "claim_timeframe_raced" });
+    return await consumeRacedOfferReply({
+      ...args,
+      telemetryDecision: OFFER_REPLY_DECISION.claim_timeframe_raced
+    });
   }
   // No claim acknowledgement is texted back: the offer SMS already carried the
   // lead details, so "you've claimed this lead, we'll tell the team..." only
@@ -412,7 +422,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     business_id: businessId,
     run_id: offer.id,
     event_id: eventId,
-    decision: "claim_timeframe"
+    decision: OFFER_REPLY_DECISION.claim_timeframe
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "claimed" }), {
     status: 200,
@@ -435,7 +445,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
 
   const { data: offerRow } = await supabase
     .from("ai_flow_runs")
-    .select("id, context, updated_at")
+    .select("id, context, revision")
     .eq("business_id", businessId)
     .in("status", ["awaiting_agent", "queued"])
     .eq("context->routing->>offered", from)
@@ -443,20 +453,18 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
     .limit(1)
     .maybeSingle();
   const offer = offerRow as
-    | { id: string; context: Record<string, unknown> | null; updated_at: string }
+    | { id: string; context: Record<string, unknown> | null; revision: number }
     | null;
   if (!offer) return null;
 
-  const prevRouting =
-    offer.context?.routing && typeof offer.context.routing === "object"
-      ? { ...(offer.context.routing as Record<string, unknown>) }
-      : {};
+  const prevRouting = parseRouting(offer.context?.routing);
   prevRouting.last_event = "reject";
   prevRouting.reply_from = from;
   prevRouting.pass_reason = timeframe;
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
-  // Same optimistic gate as the claim paths: if a first-to-claim yank (or the
-  // worker) touched the run first, this stale snapshot must not overwrite it.
+  // Same optimistic revision gate as the claim paths: if a first-to-claim
+  // yank (or the worker) touched the run first, this stale snapshot must not
+  // overwrite it.
   const { data: resumed, error: resumeErr } = await supabase
     .from("ai_flow_runs")
     .update({
@@ -467,7 +475,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
       updated_at: new Date().toISOString()
     })
     .eq("id", offer.id)
-    .eq("updated_at", offer.updated_at)
+    .eq("revision", offer.revision)
     .in("status", ["awaiting_agent", "queued"])
     .select("id");
   if (resumeErr) {
@@ -482,7 +490,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
     // and someone/something else already moved it. Log it and stop.
     return await consumeRacedOfferReply({
       ...args,
-      telemetryDecision: "reject_raced",
+      telemetryDecision: OFFER_REPLY_DECISION.reject_raced,
       textBack: false
     });
   }
@@ -501,7 +509,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
     business_id: businessId,
     run_id: offer.id,
     event_id: eventId,
-    decision: "reject_reason"
+    decision: OFFER_REPLY_DECISION.reject_reason
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "rejected" }), {
     status: 200,
@@ -518,7 +526,7 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
  * 200 Response — the message was a staff reply either way, never customer chat.
  */
 async function consumeRacedOfferReply(
-  args: LiveClaimArgs & { telemetryDecision: string; textBack?: boolean }
+  args: LiveClaimArgs & { telemetryDecision: OfferReplyDecision; textBack?: boolean }
 ): Promise<Response> {
   const {
     supabase,
@@ -708,150 +716,32 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // otherwise an older eligible run within 24h would be claimed instead.
   const { data: rows } = await supabase
     .from("ai_flow_runs")
-    .select("id, status, context, awaiting_agent_e164, current_step, updated_at")
+    .select("id, status, context, awaiting_agent_e164, current_step, updated_at, revision")
     .eq("business_id", businessId)
     .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
     .not("context->routing", "is", null)
     .order("updated_at", { ascending: false })
     .limit(25);
-  const candidates =
-    (rows as
-      | Array<{
-          id: string;
-          status: string;
-          context: Record<string, unknown> | null;
-          awaiting_agent_e164: string | null;
-          current_step: number | null;
-          updated_at: string;
-        }>
-      | null) ?? [];
+  const candidates = (rows as LateClaimCandidate[] | null) ?? [];
 
-  const nowMs = Date.now();
-  type Cand = (typeof candidates)[number];
-  // A teammate can plausibly have more than one eligible run at once. Classify
-  // each into four buckets and pick by PRECEDENCE rather than raw recency:
-  //   1. live  — an active offer to this teammate (what reply "1" targets);
-  //              wins even if an older eligible run was touched more recently.
-  //   2. late  — a lapsed offer whose post-route steps already ran (re-open,
-  //              the actual intent of "86"); beats a stale re-ack.
-  //   3. yank  — first-to-claim: an offer live with ANOTHER teammate that this
-  //              sender was offered earlier; a bare "1" takes it over so the
-  //              lead gets called right away instead of waiting out windows.
-  //   4. mine  — a lead already claimed by this teammate (idempotent re-ack),
-  //              only used when there's nothing fresh to claim.
-  // Within each bucket the newest wins (candidates are newest-first).
-  let liveMatch: Cand | null = null;
-  let liveStep = -1;
-  let lateMatch: Cand | null = null;
-  let lateStep = -1;
-  let yankMatch: Cand | null = null;
-  let yankStep = -1;
-  let mineMatch: Cand | null = null;
-  for (const row of candidates) {
-    if (liveMatch && lateMatch && yankMatch && mineMatch) break;
-    const routing =
-      row.context?.routing && typeof row.context.routing === "object"
-        ? (row.context.routing as Record<string, unknown>)
-        : null;
-    if (!routing) continue;
-    if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) continue;
-    // "1" is the universal claim digit: it late-claims any eligible run this
-    // teammate was offered, so the offer copy needs no separate retro option.
-    // No other digit ever late-claims.
-    if (digit !== "1") continue;
-    const claimedBy = typeof routing.claimed_by === "string" ? routing.claimed_by : "";
-    // Claimed by someone else → not available to this teammate.
-    if (claimedBy && claimedBy !== from) continue;
-    // Already this teammate's lead (claimed via 1, or a prior 86): re-ack
-    // without re-opening. The worker clears routing.step_index when it
-    // finalizes a claim, so this idempotent path must NOT require step_index —
-    // gating on it here was why a repeat "86" fell through to the customer path.
-    if (claimedBy === from) {
-      if (!mineMatch) mineMatch = row;
-      continue;
-    }
-    // A fresh claim needs the rewind target the worker stamped on park.
-    const stepIndex = typeof routing.step_index === "number" ? routing.step_index : -1;
-    if (stepIndex < 0) continue;
-    const offered = typeof routing.offered === "string" ? routing.offered : "";
-    const tried = Array.isArray(routing.tried)
-      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
-    const everOffered = offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
-    if (!everOffered) continue;
-    // Did the steps AFTER route_to_team already run? They did if the run
-    // completed (status "done") OR the worker advanced current_step past the
-    // route step (owner fallback ran later steps, then parked on e.g. a
-    // quiet-hours defer or approval gate). Those are TRUE late claims.
-    const currentStep = typeof row.current_step === "number" ? row.current_step : stepIndex;
-    const postRouteRan = row.status === "done" || currentStep > stepIndex;
-    if (postRouteRan) {
-      // Any teammate who was ever offered this lead can take it now; the worker
-      // re-runs only the route claim/notify and then ends (no step replay).
-      if (!lateMatch) {
-        lateMatch = row;
-        lateStep = stepIndex;
-      }
-      continue;
-    }
-    // Still a LIVE offer parked at the route step (later steps not run yet).
-    if (offered === from && !liveMatch) {
-      liveMatch = row;
-      liveStep = stepIndex;
-      continue;
-    }
-    // First-to-claim yank (on by default; a flow opts out with
-    // firstToClaim:false → routing.first_to_claim === false): the offer is
-    // live with ANOTHER teammate, but this sender was TEXTED the offer earlier.
-    // A BARE "1" takes it over — the lead needs a call right away, and whoever
-    // can do that first wins. A "1, <eta>" must NOT preempt the active window:
-    // stating an ETA means "not right now", so the current teammate's
-    // countdown stands (the stale-offer ack tells the sender to reply just "1"
-    // if they can take it immediately). Eligibility comes from
-    // routing.offered_log — the worker's record of who actually RECEIVED an
-    // offer SMS — not `tried`, which also collects opt-out/lead-phone skips
-    // that never saw one.
-    const offeredLog = Array.isArray(routing.offered_log)
-      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
-    if (
-      offered !== from &&
-      !yankMatch &&
-      claimTimeframe === "" &&
-      offeredLog.includes(from) &&
-      routing.first_to_claim !== false
-    ) {
-      yankMatch = row;
-      yankStep = stepIndex;
-    }
-  }
+  // Bucket precedence (live → late → yank → mine) and all eligibility rules
+  // live in the pure, unit-tested matcher; this function just EXECUTES the
+  // decision it returns.
+  const matched = matchLateClaimReply({
+    candidates,
+    from,
+    digit,
+    timeframe: claimTimeframe,
+    nowMs: Date.now(),
+    windowMs: LATE_CLAIM_WINDOW_MS
+  });
+  if (!matched) return null;
+  const match = matched.row;
+  const isLate = matched.kind === "late";
+  const isYank = matched.kind === "yank";
+  const matchStepIndex = matched.stepIndex;
 
-  // Precedence: live offer → fresh late claim → first-to-claim yank →
-  // idempotent re-ack.
-  let alreadyMine = false;
-  let isLate = false;
-  let isYank = false;
-  let matchStepIndex = -1;
-  let match: Cand | null = null;
-  if (liveMatch) {
-    match = liveMatch;
-    matchStepIndex = liveStep;
-  } else if (lateMatch) {
-    match = lateMatch;
-    isLate = true;
-    matchStepIndex = lateStep;
-  } else if (yankMatch) {
-    match = yankMatch;
-    isYank = true;
-    matchStepIndex = yankStep;
-  } else if (mineMatch) {
-    match = mineMatch;
-    alreadyMine = true;
-  }
-
-  if (!match) return null;
-
-  if (alreadyMine) {
+  if (matched.kind === "mine") {
     // Re-ack a duplicate claim so the sender gets positive feedback (this path
     // now also consumes a repeat bare "1", which the stale-offer ack used to
     // answer). Idempotent — nothing is re-opened.
@@ -863,7 +753,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       business_id: businessId,
       run_id: match.id,
       event_id: eventId,
-      decision: "late_claim_repeat"
+      decision: OFFER_REPLY_DECISION.late_claim_repeat
     });
     return new Response(JSON.stringify({ ok: true, agent_offer: "already_claimed" }), {
       status: 200,
@@ -881,15 +771,13 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     .maybeSingle();
   const memberName = (memberRow as { name?: string } | null)?.name ?? "";
 
-  const routing = { ...(match.context!.routing as Record<string, unknown>) };
+  const routing = parseRouting(match.context!.routing);
   // First-to-claim yank: retire the teammate whose live window we're taking
   // over into `tried` — they stay recognized by the stale-offer classifier
   // ("<name> picked it up") and are never re-offered this lead.
   if (isYank) {
-    const prevOffered = typeof routing.offered === "string" ? routing.offered : "";
-    const tried = Array.isArray(routing.tried)
-      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
+    const prevOffered = routing.offered ?? "";
+    const tried = routing.tried ?? [];
     if (prevOffered && !tried.includes(prevOffered)) tried.push(prevOffered);
     routing.tried = tried;
   }
@@ -912,9 +800,9 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const stepIndex = matchStepIndex;
   const nextContext = { ...(match.context ?? {}), routing };
 
-  // Optimistic concurrency: gate the reopen on the exact updated_at we read.
-  // Two teammates in `tried` can both text "86" before claimed_by is set;
-  // this makes the FIRST write win (it changes updated_at, so the second
+  // Optimistic concurrency: gate the reopen on the revision we read (a DB
+  // trigger bumps it on EVERY update). Two teammates can both reply before
+  // claimed_by is set; the FIRST write wins (it bumps revision, so the second
   // matches no row) instead of both overwriting routing and both being told
   // they got the lead. .select() lets us see whether we won.
   const { data: reopened, error: reopenErr } = await supabase
@@ -933,7 +821,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       updated_at: new Date().toISOString()
     })
     .eq("id", match.id)
-    .eq("updated_at", match.updated_at)
+    .eq("revision", match.revision)
     .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
     .select("id");
   if (reopenErr) {
@@ -952,7 +840,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
       business_id: businessId,
       run_id: match.id,
       event_id: eventId,
-      decision: "late_claim_raced"
+      decision: OFFER_REPLY_DECISION.late_claim_raced
     });
     return new Response(JSON.stringify({ ok: true, agent_offer: "late_claim_raced" }), {
       status: 200,
@@ -965,7 +853,11 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     business_id: businessId,
     run_id: match.id,
     event_id: eventId,
-    decision: isLate ? "late_claim" : isYank ? "first_to_claim" : "late_option_live"
+    decision: isLate
+      ? OFFER_REPLY_DECISION.late_claim
+      : isYank
+        ? OFFER_REPLY_DECISION.first_to_claim
+        : OFFER_REPLY_DECISION.late_option_live
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "late_claimed" }), {
     status: 200,
@@ -1076,7 +968,7 @@ async function tryStaleOfferAck(args: StaleOfferAckArgs): Promise<Response | nul
     business_id: businessId,
     run_id: stale.runId,
     event_id: eventId,
-    decision: `stale_${stale.kind}`
+    decision: staleOfferDecision(stale.kind)
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "stale_reply" }), {
     status: 200,
@@ -1166,7 +1058,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   // as late-claim so a re-opened/parked run is still findable.
   const { data: rows } = await supabase
     .from("ai_flow_runs")
-    .select("id, status, context, updated_at")
+    .select("id, status, context, updated_at, revision")
     .eq("business_id", businessId)
     .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
     .not("context->routing", "is", null)
@@ -1179,6 +1071,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
           status: string;
           context: Record<string, unknown> | null;
           updated_at: string;
+          revision: number;
         }>
       | null) ?? [];
 
@@ -1188,7 +1081,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   for (const row of candidates) {
     const routing =
       row.context?.routing && typeof row.context.routing === "object"
-        ? (row.context.routing as Record<string, unknown>)
+        ? parseRouting(row.context.routing)
         : null;
     if (!routing) continue;
     if (nowMs - Date.parse(row.updated_at) > LATE_CLAIM_WINDOW_MS) continue;
@@ -1196,8 +1089,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
     if (routing.claimed_by !== from) continue;
     // Need the durable route step to rewind to (stamped on park, survives the
     // claim). Without it we can't re-run the route handback cleanly.
-    const idx =
-      typeof routing.route_step_index === "number" ? routing.route_step_index : -1;
+    const idx = routing.route_step_index ?? -1;
     if (idx < 0) continue;
     match = row;
     routeStepIndex = idx;
@@ -1206,13 +1098,14 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
 
   if (!match) return null;
 
-  const routing = { ...(match.context!.routing as Record<string, unknown>) };
+  const routing = parseRouting(match.context!.routing);
   routing.last_event = "unclaim";
   routing.reply_from = from;
   const nextContext = { ...(match.context ?? {}), routing };
 
-  // Optimistic concurrency: gate on the exact updated_at we read so a racing
-  // duplicate "86" (or the worker mutating the row) can't double-process.
+  // Optimistic concurrency: gate on the revision we read (trigger-bumped on
+  // every update) so a racing duplicate "86" (or the worker mutating the row)
+  // can't double-process.
   const { data: reopened, error: reopenErr } = await supabase
     .from("ai_flow_runs")
     .update({
@@ -1226,7 +1119,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
       updated_at: new Date().toISOString()
     })
     .eq("id", match.id)
-    .eq("updated_at", match.updated_at)
+    .eq("revision", match.revision)
     .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
     .select("id");
   if (reopenErr) {
@@ -1242,7 +1135,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
       business_id: businessId,
       run_id: match.id,
       event_id: eventId,
-      decision: "unclaim_raced"
+      decision: OFFER_REPLY_DECISION.unclaim_raced
     });
     return new Response(JSON.stringify({ ok: true, agent_offer: "unclaim_raced" }), {
       status: 200,
@@ -1255,7 +1148,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
     business_id: businessId,
     run_id: match.id,
     event_id: eventId,
-    decision: "unclaim"
+    decision: OFFER_REPLY_DECISION.unclaim
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "unclaimed" }), {
     status: 200,
@@ -1812,7 +1705,7 @@ serve(async (req: Request) => {
 
         const { data: offerRow } = await supabase
           .from("ai_flow_runs")
-          .select("id, context, updated_at")
+          .select("id, context, revision")
           .eq("business_id", businessId)
           .in("status", ["awaiting_agent", "queued"])
           .eq("context->routing->>offered", from)
@@ -1820,20 +1713,16 @@ serve(async (req: Request) => {
           .limit(1)
           .maybeSingle();
         const offer = offerRow as
-          | { id: string; context: Record<string, unknown> | null; updated_at: string }
+          | { id: string; context: Record<string, unknown> | null; revision: number }
           | null;
         // Agent offers: "1" claims, "2" passes — universal on every flow. Any
         // other digit falls through to the owner-approval check and then the
         // normal customer path.
-        const offRouting =
-          offer?.context?.routing && typeof offer.context.routing === "object"
-            ? (offer.context.routing as Record<string, unknown>)
-            : {};
         const bareClaim = replyBody === "1";
         const barePass = replyBody === "2";
         if (offer && (bareClaim || barePass)) {
           const claimed = bareClaim;
-          const prevRouting = { ...offRouting };
+          const prevRouting = parseRouting(offer.context?.routing);
           prevRouting.last_event = claimed ? "claim" : "reject";
           prevRouting.reply_from = from;
           // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed
@@ -1843,9 +1732,9 @@ serve(async (req: Request) => {
           const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
           // Only block terminal rows; 'awaiting_agent' and 'queued' are both
           // valid to resume (the latter covers the sweep-raced window above).
-          // Optimistic concurrency: gate on the exact updated_at we read so a
-          // concurrent first-to-claim yank is never overwritten by this stale
-          // routing snapshot — the first write wins.
+          // Optimistic concurrency: gate on the revision we read (trigger-
+          // bumped on every update) so a concurrent first-to-claim yank is
+          // never overwritten by this stale routing snapshot.
           const { data: resumed, error: resumeErr } = await supabase
             .from("ai_flow_runs")
             .update({
@@ -1856,7 +1745,7 @@ serve(async (req: Request) => {
               updated_at: new Date().toISOString()
             })
             .eq("id", offer.id)
-            .eq("updated_at", offer.updated_at)
+            .eq("revision", offer.revision)
             .in("status", ["awaiting_agent", "queued"])
             .select("id");
           if (resumeErr) {
@@ -1881,7 +1770,9 @@ serve(async (req: Request) => {
               smsFromE164,
               digit: replyBody,
               timeframe: "",
-              telemetryDecision: claimed ? "claim_raced" : "reject_raced",
+              telemetryDecision: claimed
+                ? OFFER_REPLY_DECISION.claim_raced
+                : OFFER_REPLY_DECISION.reject_raced,
               textBack: claimed
             });
           }
@@ -1906,7 +1797,7 @@ serve(async (req: Request) => {
             business_id: businessId,
             run_id: offer.id,
             event_id: eventId,
-            decision: claimed ? "claim" : "reject"
+            decision: claimed ? OFFER_REPLY_DECISION.claim : OFFER_REPLY_DECISION.reject
           });
           return new Response(
             JSON.stringify({ ok: true, agent_offer: claimed ? "claimed" : "rejected" }),

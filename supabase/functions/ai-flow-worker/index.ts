@@ -81,6 +81,7 @@ import {
   type SpendSupabase
 } from "../_shared/chat_spend_cap.ts";
 import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
+import type { OfferRouting } from "../_shared/ai_flows/routing.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -746,7 +747,10 @@ async function runStep(
     case "await_approval":
       return approvalStep(approval, scope, index, action);
     case "route_to_team":
-      return routeToTeamStep(supabase, run, scope, action, routing);
+      // The routing grab-bag is owned by this worker; the typed contract
+      // (OfferRouting) makes every field read/write key-checked while the
+      // in-place mutation semantics (persisted via context) are preserved.
+      return routeToTeamStep(supabase, run, scope, action, routing as OfferRouting);
     case "browse_action":
       return browseActionStep(supabase, run, index, scope, action);
     case "recall_url":
@@ -2850,7 +2854,9 @@ async function routeToTeamStep(
   run: RunRow,
   scope: Scope,
   action: Extract<StepAction, { kind: "route_to_team" }>,
-  routing: Record<string, unknown>
+  // Typed contract shared with the inbound webhook — see
+  // _shared/ai_flows/routing.ts for each field's full lifecycle.
+  routing: OfferRouting
 ): Promise<StepOutcome> {
   const tried: string[] = Array.isArray(routing.tried)
     ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
