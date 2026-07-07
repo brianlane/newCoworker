@@ -180,14 +180,12 @@ for (const table of tables) {
     return parts.join(" ");
   });
 
+  // FKs between moved tables are deferred to ALTER TABLE statements AFTER
+  // every CREATE TABLE, so the (alphabetical-ish) table order in
+  // RESIDENCY_MOVED_TABLES can never break a fresh apply on dependency
+  // order. FKs to central tables are dropped entirely.
   const tableConstraints = constraints
-    .filter((k) => k.table_name === table)
-    .filter((k) => {
-      if (k.constraint_type !== "FOREIGN KEY") return true;
-      // Keep FKs only when the referenced table also moves to the box.
-      const ref = /references (?:public\.)?([a-z0-9_]+)/i.exec(k.definition)?.[1];
-      return ref != null && movedSet.has(ref);
-    })
+    .filter((k) => k.table_name === table && k.constraint_type !== "FOREIGN KEY")
     .map((k) => `  constraint ${k.constraint_name} ${k.definition}`);
 
   lines.push(`-- ── ${table} ${"─".repeat(Math.max(0, 60 - table.length))}`);
@@ -202,6 +200,23 @@ for (const table of tables) {
       continue;
     }
     lines.push(`${idx.indexdef.replace("CREATE INDEX", "create index if not exists").replace("CREATE UNIQUE INDEX", "create unique index if not exists")};`);
+  }
+  lines.push("");
+}
+
+// Moved-to-moved FKs, applied once every table exists (order-independent).
+const keptFks = constraints.filter((k) => {
+  if (k.constraint_type !== "FOREIGN KEY") return false;
+  const ref = /references (?:public\.)?([a-z0-9_]+)/i.exec(k.definition)?.[1];
+  return ref != null && movedSet.has(ref);
+});
+if (keptFks.length > 0) {
+  lines.push("-- ── foreign keys between moved tables ─────────────────────────");
+  for (const fk of keptFks) {
+    lines.push(`alter table ${fk.table_name}`);
+    lines.push(`  drop constraint if exists ${fk.constraint_name};`);
+    lines.push(`alter table ${fk.table_name}`);
+    lines.push(`  add constraint ${fk.constraint_name} ${fk.definition};`);
   }
   lines.push("");
 }
