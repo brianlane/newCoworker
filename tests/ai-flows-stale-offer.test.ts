@@ -29,14 +29,78 @@ function classify(candidates: StaleOfferCandidate[], digit = "1", from = GABBY) 
 }
 
 describe("classifyStaleOfferReply", () => {
-  it("returns moved_on when the offer escalated past the sender and nobody claimed yet", () => {
-    // Gabby's exact Jul 2 case: window lapsed, offer moved to the next agent,
-    // her late "1" used to fall into the customer-chat AI.
+  it("returns live_with_other for a '1' on an offer live with another teammate (first-to-claim on)", () => {
+    // Reaching the classifier with a "1" in this state means the sender added
+    // an ETA ("1, a few hours") — the ack teaches the bare-"1" yank instead of
+    // pretending the lead moved on for good.
     const r = classify([
       row({
         status: "awaiting_agent",
-        routing: { offered: NEXT_AGENT, tried: [GABBY], step_index: 11 }
+        routing: {
+          offered: NEXT_AGENT,
+          tried: [GABBY],
+          offered_log: [GABBY, NEXT_AGENT],
+          step_index: 11
+        }
       })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "live_with_other", claimedName: "" });
+  });
+
+  it("returns moved_on instead when the flow opted out of first-to-claim", () => {
+    const r = classify([
+      row({
+        status: "awaiting_agent",
+        routing: {
+          offered: NEXT_AGENT,
+          tried: [GABBY],
+          offered_log: [GABBY, NEXT_AGENT],
+          step_index: 11,
+          first_to_claim: false
+        }
+      })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
+  });
+
+  it("returns moved_on when the sender was only skipped, never texted the offer", () => {
+    // In `tried` (e.g. opted out at offer time) but not in offered_log: the
+    // yank would refuse them, so the ack must not teach it.
+    const r = classify([
+      row({
+        status: "awaiting_agent",
+        routing: {
+          offered: NEXT_AGENT,
+          tried: [GABBY],
+          offered_log: [NEXT_AGENT],
+          step_index: 11
+        }
+      })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
+  });
+
+  it("returns moved_on for a '2' on a live-with-other offer (passing needs no yank hint)", () => {
+    const r = classify(
+      [
+        row({
+          status: "awaiting_agent",
+          routing: {
+            offered: NEXT_AGENT,
+            tried: [GABBY],
+            offered_log: [GABBY, NEXT_AGENT],
+            step_index: 11
+          }
+        })
+      ],
+      "2"
+    );
+    expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
+  });
+
+  it("returns moved_on when the run finished unclaimed (nothing live to yank)", () => {
+    const r = classify([
+      row({ status: "done", routing: { offered: NEXT_AGENT, tried: [GABBY] } })
     ]);
     expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
   });
@@ -153,5 +217,11 @@ describe("staleOfferAckText", () => {
     const t = staleOfferAckText({ runId: "r", kind: "moved_on", claimedName: "" });
     expect(t).toContain("claim window has passed");
     expect(t).toContain("next one");
+  });
+
+  it("teaches the bare-1 yank for a lead live with another teammate", () => {
+    const t = staleOfferAckText({ runId: "r", kind: "live_with_other", claimedName: "" });
+    expect(t).toContain("with another teammate right now");
+    expect(t).toContain('reply 1 (just "1", no ETA)');
   });
 });

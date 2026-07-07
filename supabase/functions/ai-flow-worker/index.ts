@@ -2999,6 +2999,17 @@ async function routeToTeamStep(
   // ask Rowboat for the next one.
   const prevOffered = typeof routing.offered === "string" ? routing.offered : "";
   if (prevOffered && !tried.includes(prevOffered)) tried.push(prevOffered);
+  // routing.offered is only ever set when an offer SMS actually went out, so
+  // the retiring agent belongs in offered_log too. This is what backfills
+  // yank rights for runs already in flight when offered_log first shipped
+  // (their earlier offers predate the field).
+  if (prevOffered) {
+    const offeredLog = Array.isArray(routing.offered_log)
+      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    if (!offeredLog.includes(prevOffered)) offeredLog.push(prevOffered);
+    routing.offered_log = offeredLog;
+  }
   delete routing.offered;
   delete routing.offered_name;
   delete routing.last_event;
@@ -3026,11 +3037,23 @@ async function routeToTeamStep(
     }
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
+    // Log of teammates ACTUALLY texted an offer (unlike `tried`, which also
+    // collects opt-out/lead-phone skips that never saw one). The webhook's
+    // first-to-claim yank grants takeover rights from this log only.
+    const offeredLog = Array.isArray(routing.offered_log)
+      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    if (!offeredLog.includes(agent.phone)) offeredLog.push(agent.phone);
+    routing.offered_log = offeredLog;
     // Reply digits are universal ("1" claim, "2" pass, "86" unclaim), so no
     // per-flow digit is stamped anymore. Clear stamps a pre-migration deploy
     // may have left so re-offered runs shed them.
     delete routing.tf_digit;
     delete routing.late_digit;
+    // First to claim is ON by default; only an explicit opt-out is stamped so
+    // the inbound webhook can refuse the bare-"1" yank for this flow.
+    if (action.firstToClaim === false) routing.first_to_claim = false;
+    else delete routing.first_to_claim;
     // After-hours offer window: the offer SMS still goes out now, but inside
     // the quiet window the claim deadline extends to quietEnd + grace so the
     // countdown effectively starts in the morning. The resolved deadline is

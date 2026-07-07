@@ -457,6 +457,12 @@ export type FlowStep =
        * without media when no screenshot was captured.
        */
       attachScreenshot?: boolean;
+      /**
+       * First to claim (ON when undefined; false opts out): while the offer is
+       * live with one teammate, any teammate offered EARLIER can take it with
+       * a bare "1". "1, <eta>" never preempts an active countdown.
+       */
+      firstToClaim?: boolean;
       when?: StepCondition;
     }
   | {
