@@ -367,6 +367,9 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   prevRouting.last_event = "claim";
   prevRouting.reply_from = from;
   prevRouting.claim_timeframe = timeframe;
+  // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed by the
+  // worker) belongs to THAT reply — never let it ride along with this claim.
+  delete prevRouting.pass_reason;
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
   const { error: resumeErr } = await supabase
     .from("ai_flow_runs")
@@ -768,6 +771,9 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // claim notice. Cleared when none so a re-claim never carries a stale ETA.
   if (claimTimeframe) routing.claim_timeframe = claimTimeframe;
   else delete routing.claim_timeframe;
+  // Same for a pass_reason from an earlier "2, <reason>": it belongs to that
+  // reply, never to this late claim.
+  delete routing.pass_reason;
   // late_claim flags a run whose post-route steps ALREADY ran (see matcher):
   // the worker re-runs just the route claim/notify and then ends, so
   // email/browse/notify aren't replayed. A still-live offer is left unflagged
@@ -1709,6 +1715,10 @@ serve(async (req: Request) => {
           const prevRouting = { ...offRouting };
           prevRouting.last_event = claimed ? "claim" : "reject";
           prevRouting.reply_from = from;
+          // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed
+          // by the worker) belongs to THAT reply — a bare digit carries none, so
+          // clear it or the worker would attribute the old text to this reply.
+          delete prevRouting.pass_reason;
           const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
           // Only block terminal rows; 'awaiting_agent' and 'queued' are both
           // valid to resume (the latter covers the sweep-raced window above).
