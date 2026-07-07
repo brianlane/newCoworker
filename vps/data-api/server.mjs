@@ -251,13 +251,15 @@ app.post("/v1/select", async (req, res) => {
       if (!Number.isInteger(limit) || limit < 0) {
         throw { code: "invalid_request", message: "limit must be a non-negative integer" };
       }
-      sql += ` LIMIT ${limit}`;
+      values.push(limit);
+      sql += ` LIMIT $${values.length}`;
     }
     if (offset !== undefined) {
       if (!Number.isInteger(offset) || offset < 0) {
         throw { code: "invalid_request", message: "offset must be a non-negative integer" };
       }
-      sql += ` OFFSET ${offset}`;
+      values.push(offset);
+      sql += ` OFFSET $${values.length}`;
     }
     const result = await pool.query(sql, values);
     const payload = { ok: true, rows: result.rows };
