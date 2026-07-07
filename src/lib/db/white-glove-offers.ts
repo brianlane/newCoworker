@@ -107,18 +107,21 @@ export async function revokeWhiteGloveOffer(
 }
 
 /**
- * Mark an offer paid (Stripe webhook, checkout.session.completed). Applies
- * regardless of current status: an admin revoke that raced the payment loses
- * (the customer DID pay — support can refund out-of-band, and 'paid' reflects
- * the money), and a webhook RETRY of an already-paid offer is an idempotent
- * re-write of the same values. Returns whether a row matched (false = offer
- * unknown, never an error).
+ * Mark an offer paid (Stripe webhook, checkout.session.completed) — an ATOMIC
+ * CLAIM, not a blind write. The update only matches when the offer is not yet
+ * paid OR is already paid by THIS same Stripe session (webhook retry →
+ * idempotent re-write of identical values). A completion from a DIFFERENT
+ * session on an already-paid offer matches nothing and returns
+ * "duplicate_session": the customer was charged twice (e.g. two Buy tabs both
+ * reached Stripe before the first completion) and the caller must alert for a
+ * refund instead of re-crediting. An admin revoke that raced the payment
+ * still flips to 'paid' — the money is real; support refunds out-of-band.
  */
 export async function markWhiteGloveOfferPaid(
   offerId: string,
   data: { paidAt: Date; stripeSessionId: string },
   client?: SupabaseClient
-): Promise<boolean> {
+): Promise<"paid" | "duplicate_session"> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data: rows, error } = await db
     .from("white_glove_offers")
@@ -128,9 +131,10 @@ export async function markWhiteGloveOfferPaid(
       stripe_session_id: data.stripeSessionId
     })
     .eq("id", offerId)
+    .or(`status.neq.paid,stripe_session_id.eq.${data.stripeSessionId}`)
     .select("id");
   if (error) throw new Error(`markWhiteGloveOfferPaid: ${error.message}`);
-  return ((rows as unknown[] | null) ?? []).length > 0;
+  return ((rows as unknown[] | null) ?? []).length > 0 ? "paid" : "duplicate_session";
 }
 
 /**
@@ -138,7 +142,10 @@ export async function markWhiteGloveOfferPaid(
  * payment. Unlike recordWhiteGlovePurchase (fixed packages), this must NOT
  * touch white_glove_package — that column is the fixed-package enum — and it
  * never SHORTENS an already-open window (a custom offer bought during an
- * existing window extends, not truncates).
+ * existing window extends, not truncates). Monotonic-under-concurrency: the
+ * guard lives in the UPDATE's WHERE clause (single statement), so two webhook
+ * handlers finishing together can never overwrite a longer window with a
+ * shorter one the way a read-compare-write would.
  */
 export async function extendPrioritySupport(
   businessId: string,
@@ -146,18 +153,11 @@ export async function extendPrioritySupport(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data: row, error: readErr } = await db
-    .from("businesses")
-    .select("priority_support_until")
-    .eq("id", businessId)
-    .maybeSingle();
-  if (readErr) throw new Error(`extendPrioritySupport read: ${readErr.message}`);
-  const current = (row as { priority_support_until?: string | null } | null)
-    ?.priority_support_until;
-  if (current && new Date(current).getTime() >= until.getTime()) return;
+  const untilIso = until.toISOString();
   const { error } = await db
     .from("businesses")
-    .update({ priority_support_until: until.toISOString() })
-    .eq("id", businessId);
+    .update({ priority_support_until: untilIso })
+    .eq("id", businessId)
+    .or(`priority_support_until.is.null,priority_support_until.lt.${untilIso}`);
   if (error) throw new Error(`extendPrioritySupport: ${error.message}`);
 }

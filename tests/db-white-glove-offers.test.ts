@@ -22,6 +22,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
+    or: vi.fn().mockReturnThis(),
     order: vi.fn().mockResolvedValue({ data: [], error: null }),
     single: vi.fn().mockResolvedValue({ data: null, error: null }),
     maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
@@ -147,25 +148,28 @@ describe("db/white-glove-offers", () => {
     await expect(revokeWhiteGloveOffer(OFFER.id)).rejects.toThrow("revokeWhiteGloveOffer: boom");
   });
 
-  it("markWhiteGloveOfferPaid stamps status/paid_at/session and reports a match", async () => {
+  it("markWhiteGloveOfferPaid atomically claims the row (retry-safe, duplicate-session aware)", async () => {
     const db = mockDb({ select: vi.fn().mockResolvedValue({ data: [{ id: OFFER.id }], error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    const matched = await markWhiteGloveOfferPaid(OFFER.id, {
+    const claim = await markWhiteGloveOfferPaid(OFFER.id, {
       paidAt: new Date("2026-07-04T12:00:00Z"),
       stripeSessionId: "cs_123"
     });
-    expect(matched).toBe(true);
+    expect(claim).toBe("paid");
     expect(db.update).toHaveBeenCalledWith({
       status: "paid",
       paid_at: "2026-07-04T12:00:00.000Z",
       stripe_session_id: "cs_123"
     });
+    // The claim guard: not-yet-paid OR same session (idempotent retry).
+    expect(db.or).toHaveBeenCalledWith("status.neq.paid,stripe_session_id.eq.cs_123");
 
+    // No row matched → the offer was already paid by a DIFFERENT session.
     const none = mockDb({ select: vi.fn().mockResolvedValue({ data: null, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(none as never);
     expect(
       await markWhiteGloveOfferPaid(OFFER.id, { paidAt: new Date(), stripeSessionId: "cs_1" })
-    ).toBe(false);
+    ).toBe("duplicate_session");
   });
 
   it("markWhiteGloveOfferPaid throws on error", async () => {
@@ -181,76 +185,37 @@ describe("db/white-glove-offers", () => {
   describe("extendPrioritySupport", () => {
     const UNTIL = new Date("2026-08-05T00:00:00Z");
 
-    function dbWithCurrentWindow(current: string | null) {
-      // First call chain reads businesses.priority_support_until; the second
-      // performs the update. eq() resolves the update terminal.
-      const updateEq = vi.fn().mockResolvedValue({ error: null });
+    it("extends monotonically in a single guarded UPDATE (null-or-shorter windows only)", async () => {
+      const or = vi.fn().mockResolvedValue({ error: null });
       const db = {
         from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        maybeSingle: vi
-          .fn()
-          .mockResolvedValue({ data: { priority_support_until: current }, error: null }),
-        update: vi.fn().mockReturnValue({ eq: updateEq }),
-        eq: vi.fn().mockReturnThis()
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        or
       };
-      return { db, updateEq };
-    }
-
-    it("opens the window when none is set", async () => {
-      const { db } = dbWithCurrentWindow(null);
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       await extendPrioritySupport("biz-1", UNTIL);
       expect(db.update).toHaveBeenCalledWith({
         priority_support_until: UNTIL.toISOString()
       });
-    });
-
-    it("extends a shorter window but never shortens a longer one", async () => {
-      const shorter = dbWithCurrentWindow("2026-07-10T00:00:00Z");
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(shorter.db as never);
-      await extendPrioritySupport("biz-1", UNTIL);
-      expect(shorter.db.update).toHaveBeenCalled();
-
-      const longer = dbWithCurrentWindow("2026-09-01T00:00:00Z");
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(longer.db as never);
-      await extendPrioritySupport("biz-1", UNTIL);
-      expect(longer.db.update).not.toHaveBeenCalled();
-    });
-
-    it("throws on read and write errors", async () => {
-      const readErr = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "read-boom" } })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(readErr as never);
-      await expect(extendPrioritySupport("biz-1", UNTIL)).rejects.toThrow(
-        "extendPrioritySupport read: read-boom"
+      // The monotonic guard lives in the WHERE clause, so concurrent webhook
+      // handlers can never overwrite a longer window with a shorter one.
+      expect(or).toHaveBeenCalledWith(
+        `priority_support_until.is.null,priority_support_until.lt.${UNTIL.toISOString()}`
       );
+    });
 
-      const { db } = dbWithCurrentWindow(null);
-      db.update = vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ error: { message: "write-boom" } })
-      });
+    it("throws on write errors", async () => {
+      const db = {
+        from: vi.fn().mockReturnThis(),
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        or: vi.fn().mockResolvedValue({ error: { message: "write-boom" } })
+      };
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       await expect(extendPrioritySupport("biz-1", UNTIL)).rejects.toThrow(
         "extendPrioritySupport: write-boom"
       );
-    });
-
-    it("treats a missing business row as no current window", async () => {
-      const noRow = {
-        from: vi.fn().mockReturnThis(),
-        select: vi.fn().mockReturnThis(),
-        eq: vi.fn().mockReturnThis(),
-        maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
-        update: vi.fn().mockReturnValue({ eq: vi.fn().mockResolvedValue({ error: null }) })
-      };
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(noRow as never);
-      await extendPrioritySupport("biz-1", UNTIL);
-      expect(noRow.update).toHaveBeenCalled();
     });
   });
 });

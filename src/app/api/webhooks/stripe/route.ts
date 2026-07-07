@@ -1612,10 +1612,25 @@ async function applyCustomWhiteGloveOfferFromCheckout(
   const purchasedAt = new Date(createdSec * 1000);
   const supportUntil = prioritySupportUntil(purchasedAt);
 
-  await markWhiteGloveOfferPaid(offerId, {
+  const claim = await markWhiteGloveOfferPaid(offerId, {
     paidAt: purchasedAt,
     stripeSessionId: session.id
   });
+  if (claim === "duplicate_session") {
+    // The offer was already paid by a DIFFERENT Checkout Session: the
+    // customer was charged twice (two Buy tabs both reached Stripe before
+    // the first completion landed). Don't re-credit anything — surface it
+    // loudly so support refunds this session's charge.
+    logger.error("white_glove_offer paid by a second session — refund needed", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      offerId,
+      firstSessionId: offer.stripe_session_id,
+      amountCents: offer.amount_cents
+    });
+    return;
+  }
   await extendPrioritySupport(businessId, supportUntil);
   logger.info("Custom white-glove offer paid", {
     eventId,

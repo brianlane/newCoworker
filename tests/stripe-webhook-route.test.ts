@@ -109,7 +109,7 @@ vi.mock("@/lib/db/businesses", () => ({
 
 vi.mock("@/lib/db/white-glove-offers", () => ({
   getWhiteGloveOffer: vi.fn(),
-  markWhiteGloveOfferPaid: vi.fn().mockResolvedValue(true),
+  markWhiteGloveOfferPaid: vi.fn().mockResolvedValue("paid"),
   extendPrioritySupport: vi.fn().mockResolvedValue(undefined)
 }));
 
@@ -1352,6 +1352,55 @@ describe("stripe webhook route", () => {
     expect(markWhiteGloveOfferPaid).toHaveBeenCalled();
     expect(extendPrioritySupport).toHaveBeenCalled();
     expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not re-credit a duplicate-session completion of an already-paid offer", async () => {
+    const bid = "00000000-0000-4000-8000-000000000045";
+    const offerId = "00000000-0000-4000-8000-00000000008f";
+    process.env.RESEND_API_KEY = "resend_test";
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      id: offerId,
+      business_id: bid,
+      name: "Deal",
+      status: "paid",
+      stripe_session_id: "cs_first",
+      amount_cents: 125_000
+    } as never);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: bid,
+      owner_email: "owner@example.com"
+    } as never);
+    vi.mocked(markWhiteGloveOfferPaid).mockResolvedValueOnce("duplicate_session");
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_offer_dup",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_second",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "white_glove_package",
+            businessId: bid,
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    // No support extension and no confirmation email for the second charge —
+    // it gets flagged for a refund instead.
+    expect(extendPrioritySupport).not.toHaveBeenCalled();
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+    delete process.env.RESEND_API_KEY;
   });
 
   it("still returns 200 when the custom-offer confirmation email fails", async () => {
