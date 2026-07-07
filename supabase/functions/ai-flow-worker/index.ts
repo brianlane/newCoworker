@@ -25,6 +25,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
+import { isSelfPhone, scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
@@ -981,6 +982,64 @@ function appendActionTaken(scope: Scope, description: string): void {
   scope.vars.actions_taken = prev ? `${prev}; ${description}` : description;
 }
 
+/**
+ * The business's OWN phone numbers (tenant DID, owner forward cell, owner
+ * profile phone) — the numbers an extracted "lead phone" can never
+ * legitimately be. Used to scrub extraction output (see
+ * _shared/ai_flows/extracted_contact.ts). Best-effort: a lookup error returns
+ * what was found so extraction never fails on this.
+ */
+async function businessSelfNumbers(supabase: Supabase, businessId: string): Promise<string[]> {
+  const out: string[] = [];
+  const { data: settings } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_sms_from_e164, forward_to_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const s = settings as
+    | { telnyx_sms_from_e164?: string | null; forward_to_e164?: string | null }
+    | null;
+  if (s?.telnyx_sms_from_e164) out.push(s.telnyx_sms_from_e164);
+  if (s?.forward_to_e164) out.push(s.forward_to_e164);
+  const { data: biz } = await supabase
+    .from("businesses")
+    .select("phone")
+    .eq("id", businessId)
+    .maybeSingle();
+  const phone = (biz as { phone?: string | null } | null)?.phone;
+  if (phone) out.push(phone);
+  return out;
+}
+
+/**
+ * Run extraction output through the self-number scrub and record what was
+ * discarded. A cleared field goes back to "" so email_extract's
+ * fillOnlyEmpty backfill gets its chance, and the owner's outcome line says
+ * why a lead step may have been skipped.
+ */
+async function scrubExtractedSelfPhones(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  out: Record<string, string>,
+  stepLabel: string
+): Promise<Record<string, string>> {
+  const scrub = scrubSelfPhones(out, await businessSelfNumbers(supabase, run.business_id));
+  if (scrub.cleared.length > 0) {
+    appendActionTaken(
+      scope,
+      `discarded extracted ${scrub.cleared.join(", ")} from ${stepLabel} — it matched the business's own number, not the lead's`
+    );
+    await telemetryRecord(supabase, "ai_flow_extraction_scrubbed", {
+      business_id: run.business_id,
+      run_id: run.id,
+      step: stepLabel,
+      cleared: scrub.cleared
+    });
+  }
+  return scrub.values;
+}
+
 async function browseStep(
   supabase: Supabase,
   run: RunRow,
@@ -1108,14 +1167,17 @@ async function browseStep(
     }
   }
 
-  const out: Record<string, string> = {};
+  const raw: Record<string, string> = {};
   for (const f of action.fields ?? []) {
     let val = extracted[f.name] ?? "";
     if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
       val = extractPhones(pageText)[0] ?? "";
     }
-    out[f.name] = val;
+    raw[f.name] = val;
   }
+  // Scrub BEFORE the link/screenshot passthroughs join the map, so the
+  // actions_taken note only ever names real extraction fields.
+  const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_extract");
   // Capture link hrefs by their visible button text from the page HTML (parsed
   // here in the worker; the render service already returns html). Empty string
   // when no anchor's visible text contains the matchText.
@@ -1169,14 +1231,15 @@ async function extractTextStep(
     throw e;
   }
 
-  const out: Record<string, string> = {};
+  const raw: Record<string, string> = {};
   for (const f of action.fields) {
     let val = extracted[f.name] ?? "";
     if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
       val = extractPhones(action.text)[0] ?? "";
     }
-    out[f.name] = val;
+    raw[f.name] = val;
   }
+  const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "extract_text");
 
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { vars: out } };
@@ -1259,20 +1322,21 @@ async function emailExtractStep(
     throw e;
   }
 
-  const out: Record<string, string> = {};
+  const raw: Record<string, string> = {};
   for (const f of action.fields) {
     // Backfill: keep a meaningful existing value (an earlier browse already
     // filled it); only fall through to the email value when it's empty/"none".
     if (action.fillOnlyEmpty && !isEmptyVarValue(scope.vars[f.name])) {
-      out[f.name] = scope.vars[f.name] as string;
+      raw[f.name] = scope.vars[f.name] as string;
       continue;
     }
     let val = extracted[f.name] ?? "";
     if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
       val = extractPhones(data.bodyText)[0] ?? "";
     }
-    out[f.name] = val;
+    raw[f.name] = val;
   }
+  const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "email_extract");
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { found: true, vars: out } };
 }
@@ -1563,14 +1627,15 @@ async function browseActionStep(
       }
       throw e;
     }
-    const out: Record<string, string> = {};
+    const raw: Record<string, string> = {};
     for (const f of action.fields) {
       let val = extracted[f.name] ?? "";
       if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
         val = extractPhones(pageText)[0] ?? "";
       }
-      out[f.name] = val;
+      raw[f.name] = val;
     }
+    const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_action");
     Object.assign(scope.vars, out);
     extractedVars = out;
   }
@@ -2133,6 +2198,16 @@ async function sendSmsStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "send_sms" }>
 ): Promise<StepOutcome> {
+  // A templated recipient that resolved to nothing usable (lead had no phone,
+  // or the self-number scrub cleared a bogus extraction): skip the outreach
+  // with a note in the owner's outcome line instead of failing the run.
+  if (action.skipReason) {
+    appendActionTaken(
+      scope,
+      "skipped texting the lead — no valid phone number was extracted"
+    );
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
   // Named-agent send: resolve the roster member's current phone and render the
   // body with {{agent.*}} in scope (the planner left both pending — only the
   // worker can read the roster). Everything below then treats it as a 1:1 send.
@@ -2232,6 +2307,26 @@ async function sendSmsStep(
   }
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) return { kind: "fail", error: "send_sms: Telnyx messaging is not configured" };
+
+  // Never text ourselves: a destination equal to our own sending DID (or any
+  // of the business's own numbers) means an upstream extraction grabbed the
+  // business's contact info instead of the lead's. Telnyx would reject it
+  // anyway (40310, source == destination) — fail the step IMMEDIATELY with a
+  // clear message instead of burning MAX_ATTEMPTS on a permanent 400.
+  // isSelfPhone normalizes BOTH sides (businesses.phone is free-form), so the
+  // guard and the extraction scrub can never disagree.
+  if (
+    toE164 === cfg.from ||
+    isSelfPhone(toE164, await businessSelfNumbers(supabase, run.business_id))
+  ) {
+    return {
+      kind: "fail",
+      error:
+        `send_sms: destination ${toE164} is this business's own number — refusing to ` +
+        "text ourselves. The extracted lead phone is wrong (the extraction likely " +
+        "picked up the business's contact info instead of the lead's)."
+    };
+  }
 
   // No auto-appended opt-out footer on AiFlow sends. The "Reply STOP to opt out."
   // suffix corrupts control replies (e.g. the literal "Y" a partner system expects)
