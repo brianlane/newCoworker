@@ -14,7 +14,8 @@ import {
   whiteGloveOfferPayUrl,
   revokeWhiteGloveOffer,
   markWhiteGloveOfferPaid,
-  extendPrioritySupport
+  extendPrioritySupport,
+  attachProspectWhiteGloveOffersToBusiness
 } from "@/lib/db/white-glove-offers";
 
 function mockDb(overrides: Record<string, unknown> = {}) {
@@ -256,6 +257,61 @@ describe("db/white-glove-offers", () => {
     await expect(
       markWhiteGloveOfferPaid(OFFER.id, { paidAt: new Date(), stripeSessionId: "cs_1" })
     ).rejects.toThrow("markWhiteGloveOfferPaid: boom");
+  });
+
+  describe("attachProspectWhiteGloveOffersToBusiness", () => {
+    function attachDb(rows: Array<{ id: string; status: string }>) {
+      // One builder handles both statements: the attach UPDATE terminates in
+      // .select(rows); the (conditional) priority-window UPDATE terminates in
+      // .or({error:null}).
+      return {
+        from: vi.fn().mockReturnThis(),
+        update: vi.fn().mockReturnThis(),
+        is: vi.fn().mockReturnThis(),
+        ilike: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue({ data: rows, error: null }),
+        or: vi.fn().mockResolvedValue({ error: null })
+      };
+    }
+
+    it("attaches by email (case-insensitive) and opens the window when a PAID offer attaches", async () => {
+      const db = attachDb([
+        { id: "o1", status: "paid" },
+        { id: "o2", status: "open" }
+      ]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const count = await attachProspectWhiteGloveOffersToBusiness("biz-1", "Owner@Example.com ");
+      expect(count).toBe(2);
+      expect(db.is).toHaveBeenCalledWith("business_id", null);
+      expect(db.ilike).toHaveBeenCalledWith("recipient_email", "Owner@Example.com");
+      // Paid offer present → priority window opened (monotonic .or guard).
+      expect(db.or).toHaveBeenCalled();
+    });
+
+    it("attaches OPEN offers without touching the priority window", async () => {
+      const db = attachDb([{ id: "o1", status: "open" }]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const count = await attachProspectWhiteGloveOffersToBusiness("biz-1", "p@x.com");
+      expect(count).toBe(1);
+      expect(db.or).not.toHaveBeenCalled();
+    });
+
+    it("returns 0 for a blank email or no matches, and throws on errors", async () => {
+      expect(await attachProspectWhiteGloveOffersToBusiness("biz-1", "  ")).toBe(0);
+
+      const none = attachDb([]);
+      none.select = vi.fn().mockResolvedValue({ data: null, error: null });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(none as never);
+      expect(await attachProspectWhiteGloveOffersToBusiness("biz-1", "p@x.com")).toBe(0);
+
+      const err = attachDb([]);
+      err.select = vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(err as never);
+      await expect(
+        attachProspectWhiteGloveOffersToBusiness("biz-1", "p@x.com")
+      ).rejects.toThrow("attachProspectWhiteGloveOffersToBusiness: boom");
+    });
   });
 
   describe("extendPrioritySupport", () => {

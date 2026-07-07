@@ -93,6 +93,45 @@ export async function listProspectWhiteGloveOffers(
   return (data ?? []) as WhiteGloveOfferRow[];
 }
 
+/**
+ * Attach the owner's PROSPECT offers to their freshly created business —
+ * called from createBusiness so a deal paid before signup follows the account
+ * automatically. Matching is by recipient_email (case-insensitive). For every
+ * PAID offer attached, the standard 30-day priority call/video support window
+ * opens FROM NOW (attach time) — more generous than "from payment", and
+ * monotonic via extendPrioritySupport. Billing then sees the paid offer via
+ * listWhiteGloveOffers and hides the package upsell.
+ *
+ * Returns the number of offers attached. Callers treat failures as
+ * best-effort (a ledger hiccup must never fail account creation).
+ */
+export async function attachProspectWhiteGloveOffersToBusiness(
+  businessId: string,
+  ownerEmail: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const email = ownerEmail.trim();
+  if (!email) return 0;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("white_glove_offers")
+    .update({ business_id: businessId })
+    .is("business_id", null)
+    .ilike("recipient_email", email)
+    .select("id, status");
+  if (error) throw new Error(`attachProspectWhiteGloveOffersToBusiness: ${error.message}`);
+  const rows = (data ?? []) as Array<{ id: string; status: string }>;
+  if (rows.some((r) => r.status === "paid")) {
+    await extendPrioritySupport(businessId, prioritySupportWindowFromNow(), db);
+  }
+  return rows.length;
+}
+
+/** Attach-time priority window end: now + the standard 30 days. */
+function prioritySupportWindowFromNow(): Date {
+  return new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+}
+
 /** The emailable public payment link for an offer (durable; never expires). */
 export function whiteGloveOfferPayUrl(offer: Pick<WhiteGloveOfferRow, "pay_token">): string {
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");

@@ -6,6 +6,7 @@ import {
   type DataResidencyMode
 } from "@/lib/residency/tier-gate";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
+import { attachProspectWhiteGloveOffersToBusiness } from "@/lib/db/white-glove-offers";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -142,7 +143,22 @@ export async function createBusiness(
     .single();
 
   if (error) throw new Error(`createBusiness: ${error.message}`);
-  return row as BusinessRow;
+  const business = row as BusinessRow;
+
+  // A prospect who paid a custom white-glove offer BEFORE signing up gets it
+  // attached to the new business automatically (and their priority-support
+  // window opened). Best-effort: a hiccup here must never fail account
+  // creation — the offer stays attachable by re-running the attach.
+  try {
+    await attachProspectWhiteGloveOffersToBusiness(business.id, data.ownerEmail, db);
+  } catch (err) {
+    console.error(
+      `createBusiness: attaching prospect white-glove offers failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  return business;
 }
 
 export async function updateBusinessWebsiteUrl(
