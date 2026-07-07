@@ -232,6 +232,20 @@ describe("api/admin/vps/[businessId]/migrate-size route", () => {
     expect(res.status).toBe(404);
   });
 
+  it("rejects residency tenants before the 202 with the manual runbook", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      ...standardBiz,
+      tier: "enterprise",
+      data_residency_mode: "vps"
+    } as never);
+    const res = await POST(makeRequest("kvm4"), makeCtx());
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error.message).toContain("residency-restore");
+    expect(afterCallbacks).toHaveLength(0);
+    expect(migrateBusinessVpsSize).not.toHaveBeenCalled();
+  });
+
   it("accepts enterprise businesses (provisionable since Jul 2026)", async () => {
     vi.mocked(getBusiness).mockResolvedValue({ ...standardBiz, tier: "enterprise" } as never);
     const res = await POST(makeRequest("kvm4"), makeCtx());
