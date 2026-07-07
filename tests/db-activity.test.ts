@@ -934,15 +934,27 @@ describe("paginateFullActivityFeed", () => {
     expect(page.nextBefore).toBe("2026-02-04T00:00:00Z");
   });
 
-  it("ignores a capped source whose boundary row has a malformed timestamp", () => {
-    // Defensive: a capped source with a non-string timestamp on its oldest row
-    // contributes no boundary instead of poisoning the cursor math.
+  it("falls back to the newest parseable timestamp when a boundary row is malformed", () => {
+    // Defensive: a capped source with a non-string timestamp on its oldest
+    // row still counts as CAPPED — its boundary walks up to the first
+    // parseable row so paging can't end early and reopen the merge gap.
     const page = paginateFullActivityFeed(
       input({
         limit: 2,
         chat: [chat("2026-02-05T00:00:00Z"), { created_at: 42 } as never]
       })
     );
-    expect(page.nextBefore).toBeNull();
+    expect(page.items.map((i) => i.at)).toEqual(["2026-02-05T00:00:00Z"]);
+    expect(page.nextBefore).toBe("2026-02-05T00:00:00Z");
+
+    // A capped source with NO parseable timestamps at all contributes no
+    // boundary (nothing sane to cut on).
+    const none = paginateFullActivityFeed(
+      input({
+        limit: 2,
+        chat: [{ created_at: 41 } as never, { created_at: 42 } as never]
+      })
+    );
+    expect(none.nextBefore).toBeNull();
   });
 });

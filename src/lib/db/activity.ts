@@ -318,8 +318,15 @@ export type ActivityFeedPage = {
 function cappedSourceBoundaries(input: ActivityFeedInput): string[] {
   const oldestOfCapped = (rows: Array<Record<string, unknown>>, key: string): string | null => {
     if (rows.length < input.limit || rows.length === 0) return null;
-    const last = rows[rows.length - 1]?.[key];
-    return typeof last === "string" ? last : null;
+    // Walk up from the oldest fetched row to the first parseable timestamp:
+    // a malformed row (shouldn't happen for timestamptz columns, but fail
+    // safe) must not make a CAPPED source look uncapped — that would end
+    // paging early and reintroduce the merge gap.
+    for (let i = rows.length - 1; i >= 0; i--) {
+      const at = rows[i]?.[key];
+      if (typeof at === "string") return at;
+    }
+    return null;
   };
   return [
     oldestOfCapped(input.calls, "started_at"),
