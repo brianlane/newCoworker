@@ -25,7 +25,14 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+// createBusiness auto-attaches prospect white-glove offers; keep it inert
+// here (its own behavior is covered in db-white-glove-offers.test.ts).
+vi.mock("@/lib/db/white-glove-offers", () => ({
+  attachProspectWhiteGloveOffersToBusiness: vi.fn().mockResolvedValue(0)
+}));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { attachProspectWhiteGloveOffersToBusiness } from "@/lib/db/white-glove-offers";
 
 function mockDb(overrides: Record<string, unknown> = {}) {
   const base = {
@@ -72,6 +79,47 @@ describe("db/businesses", () => {
     expect(result.name).toBe("Sunrise Realty");
     expect(db.from).toHaveBeenCalledWith("businesses");
     expect(db.insert).toHaveBeenCalled();
+    // A prospect who paid a white-glove offer pre-signup gets it attached to
+    // the new business automatically.
+    expect(attachProspectWhiteGloveOffersToBusiness).toHaveBeenCalledWith(
+      MOCK_BUSINESS.id,
+      "owner@test.com",
+      db
+    );
+  });
+
+  it("createBusiness survives a failing prospect white-glove attach (best-effort)", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(attachProspectWhiteGloveOffersToBusiness).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await createBusiness({
+        id: "uuid-biz-1",
+        name: "Sunrise Realty",
+        ownerEmail: "owner@test.com",
+        tier: "starter"
+      });
+      expect(result.name).toBe("Sunrise Realty");
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it("createBusiness tolerates a non-Error attach failure", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(attachProspectWhiteGloveOffersToBusiness).mockRejectedValueOnce("string failure");
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await createBusiness({ id: "x", name: "X", ownerEmail: "x@x.com", tier: "starter" });
+      expect(errSpy).toHaveBeenCalled();
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("createBusiness passes the detected timezone through to the insert", async () => {
@@ -349,6 +397,41 @@ describe("db/businesses", () => {
     expect(updateQuery.update).toHaveBeenCalledWith({ owner_email: "paid@test.com" });
     expect(updateQuery.eq).toHaveBeenNthCalledWith(1, "id", "uuid-biz-1");
     expect(updateQuery.eq).toHaveBeenNthCalledWith(2, "owner_email", createPendingOwnerEmail("uuid-biz-1"));
+    // The REAL email just landed (row was created with the pending sentinel):
+    // prospect white-glove offers keyed to it are attached now.
+    expect(attachProspectWhiteGloveOffersToBusiness).toHaveBeenCalledWith(
+      "uuid-biz-1",
+      "paid@test.com",
+      db
+    );
+  });
+
+  it("updateBusinessOwnerEmailIfPending survives a failing prospect attach (best-effort)", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: "uuid-biz-1" }], error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(updateQuery) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(attachProspectWhiteGloveOffersToBusiness).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")
+      ).resolves.toBe(true);
+      expect(errSpy).toHaveBeenCalled();
+
+      // Non-Error rejections are stringified, not rethrown.
+      vi.mocked(attachProspectWhiteGloveOffersToBusiness).mockRejectedValueOnce("string fail");
+      await expect(
+        updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")
+      ).resolves.toBe(true);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("updateBusinessOwnerEmailIfPending does not update when the business already has a real owner", async () => {

@@ -6,6 +6,7 @@ import {
   type DataResidencyMode
 } from "@/lib/residency/tier-gate";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
+import { attachProspectWhiteGloveOffersToBusiness } from "@/lib/db/white-glove-offers";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -142,7 +143,22 @@ export async function createBusiness(
     .single();
 
   if (error) throw new Error(`createBusiness: ${error.message}`);
-  return row as BusinessRow;
+  const business = row as BusinessRow;
+
+  // A prospect who paid a custom white-glove offer BEFORE signing up gets it
+  // attached to the new business automatically (and their priority-support
+  // window opened). Best-effort: a hiccup here must never fail account
+  // creation — the offer stays attachable by re-running the attach.
+  try {
+    await attachProspectWhiteGloveOffersToBusiness(business.id, data.ownerEmail, db);
+  } catch (err) {
+    console.error(
+      `createBusiness: attaching prospect white-glove offers failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
+  }
+  return business;
 }
 
 export async function updateBusinessWebsiteUrl(
@@ -395,15 +411,23 @@ export async function updateBusinessOwnerEmailIfPending(
     throw new Error(`updateBusinessOwnerEmailIfPending: ${error.message}`);
   }
 
-  if ((data ?? []).length > 0) {
-    return true;
+  const swapped = (data ?? []).length > 0;
+  if (!swapped) {
+    const business = await getBusiness(id, db);
+    if (!business || business.owner_email !== ownerEmail) return false;
   }
 
-  const business = await getBusiness(id, db);
-
-  if (!business) {
-    return false;
+  // Stripe-first onboarding creates the row with a pending sentinel email, so
+  // createBusiness's prospect white-glove attach found nothing; the REAL email
+  // just landed — re-run the attach now. Best-effort, mirroring createBusiness.
+  try {
+    await attachProspectWhiteGloveOffersToBusiness(id, ownerEmail, db);
+  } catch (err) {
+    console.error(
+      `updateBusinessOwnerEmailIfPending: prospect white-glove attach failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
   }
-
-  return business.owner_email === ownerEmail;
+  return true;
 }

@@ -6,12 +6,18 @@ import { StatusDot } from "@/components/ui/StatusDot";
 import { DeployButton } from "@/components/dashboard/DeployButton";
 import { CreateClientModal } from "@/components/admin/CreateClientModal";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
+import {
+  listProspectWhiteGloveOffers,
+  whiteGloveOfferPayUrl
+} from "@/lib/db/white-glove-offers";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminClientsPage() {
   const businesses = await listBusinesses();
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
+  const prospectOffers = await listProspectWhiteGloveOffers();
 
   return (
     <div className="space-y-6">
@@ -107,6 +113,25 @@ export default async function AdminClientsPage() {
           </div>
         </Card>
       )}
+
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Prospect white-glove offers (pre-account)
+        </h2>
+        <WhiteGloveOffersPanel
+          initialOffers={prospectOffers.map((o) => ({
+            id: o.id,
+            name: o.name,
+            description: o.description,
+            amount_cents: o.amount_cents,
+            status: o.status,
+            created_at: o.created_at,
+            paid_at: o.paid_at,
+            recipient_email: o.recipient_email,
+            payUrl: whiteGloveOfferPayUrl(o)
+          }))}
+        />
+      </Card>
     </div>
   );
 }

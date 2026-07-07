@@ -766,6 +766,22 @@ describe("stripe/client", () => {
       expect(call.customer_creation).toBeUndefined();
     });
 
+    it("omits businessId/userId metadata for prospect (pre-account) payments", async () => {
+      await createWhiteGloveCheckoutSession({
+        packageId: "custom",
+        packageName: "Founding deal",
+        amountCents: 50_000,
+        offerId: "offer-p",
+        successUrl: "https://example.com/ok",
+        cancelUrl: "https://example.com/cancel",
+        customerEmail: "prospect@example.com"
+      });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect("businessId" in call.metadata).toBe(false);
+      expect("userId" in call.metadata).toBe(false);
+      expect(call.metadata.whiteGloveOfferId).toBe("offer-p");
+    });
+
     it("stamps whiteGloveOfferId metadata for custom offers (and omits it otherwise)", async () => {
       await createWhiteGloveCheckoutSession({
         ...baseParams,
