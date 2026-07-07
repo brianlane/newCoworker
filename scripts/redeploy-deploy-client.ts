@@ -57,9 +57,11 @@ import {
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
+  listActiveGatewayTokensForBusiness,
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { cloudflareTunnelProvisionerFromEnv } from "@/lib/cloudflare/tunnel";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { sshExec } from "@/lib/hostinger/ssh";
@@ -90,7 +92,8 @@ function buildDeployEnvPrefix(
   bridgeMediaWssOrigin: string,
   gatewayToken: string,
   repoRef: string,
-  dataResidencyEnabled: boolean
+  dataResidencyEnabled: boolean,
+  dataApiTokens: string
 ): string {
   const bashQuote = quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -135,6 +138,8 @@ function buildDeployEnvPrefix(
     // redeploy that omitted it would stop an opted-in enterprise tenant's
     // datastore.
     ["DATA_RESIDENCY_ENABLED", dataResidencyEnabled ? "true" : ""],
+    // Every non-revoked per-tenant token (rotation overlap window).
+    ["DATA_API_TOKENS", dataApiTokens],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken],
@@ -236,6 +241,37 @@ async function redeployOne(
   const dataResidencyEnabled =
     target.tier === "enterprise" &&
     (target.dataResidencyMode ?? "supabase") !== "supabase";
+  // Bearer list mirrors the orchestrator: every non-revoked token, with the
+  // token this deploy stamps guaranteed present.
+  let dataApiTokens = "";
+  if (dataResidencyEnabled) {
+    const activeTokens = await listActiveGatewayTokensForBusiness(target.businessId);
+    dataApiTokens = (
+      activeTokens.includes(gatewayToken) ? activeTokens : [gatewayToken, ...activeTokens]
+    ).join(",");
+  }
+  // Reconcile the tunnel ingress with the residency gate. The redeploy path
+  // is how an admin residency flip reaches an EXISTING box, and cloudflared
+  // (config_src=cloudflare) picks ingress changes up remotely — without this
+  // an enable leaves no data-* route and a disable leaves a public route
+  // pointing at a stopped service. PUT /configurations replaces the whole
+  // ingress array, so dataEnabled:false naturally drops the data rule; the
+  // provisioner is idempotent for the app/voice/render hostnames. Best-effort:
+  // a CF hiccup must not block the fleet roll (same posture as orchestrate).
+  const tunnelProvisioner = cloudflareTunnelProvisionerFromEnv();
+  if (tunnelProvisioner) {
+    try {
+      await tunnelProvisioner({
+        businessId: target.businessId,
+        renderEnabled: tier !== "starter",
+        dataEnabled: dataResidencyEnabled
+      });
+    } catch (err) {
+      process.stderr.write(
+        `[redeploy-deploy-client] tunnel ingress reconcile failed for ${target.businessId} (continuing): ${err instanceof Error ? err.message : String(err)}\n`
+      );
+    }
+  }
   const envPrefix = buildDeployEnvPrefix(
     target.businessId,
     tier,
@@ -243,7 +279,8 @@ async function redeployOne(
     bridgeOrigin,
     gatewayToken,
     ref,
-    dataResidencyEnabled
+    dataResidencyEnabled,
+    dataApiTokens
   );
   const command = buildRedeployCommand(ref, envPrefix);
   try {

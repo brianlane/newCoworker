@@ -1640,9 +1640,11 @@ elif [[ -d "${DATA_API_SRC}" && -f "${DATA_API_SRC}/docker-compose.yml" ]]; then
 
     cat > .env <<DAENV_EOF
 DATA_API_PORT=8091
-# Bearer(s) the platform presents; the per-tenant gateway token. Comma-
-# separated so a token rotation's pending/confirmed overlap keeps working.
-DATA_API_TOKENS=${ROWBOAT_GATEWAY_TOKEN}
+# Bearer(s) the platform presents. The orchestrator/redeploy passes EVERY
+# non-revoked per-tenant gateway token (comma-separated) so a rotation's
+# pending/confirmed overlap keeps working; fall back to the single deploy
+# token only if the caller predates DATA_API_TOKENS.
+DATA_API_TOKENS=${DATA_API_TOKENS:-${ROWBOAT_GATEWAY_TOKEN}}
 POSTGRES_PASSWORD=${pg_password}
 DATABASE_URL=postgresql://dataapi:${pg_password}@residency-postgres:5432/residency
 DAENV_EOF

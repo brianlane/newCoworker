@@ -39,7 +39,10 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
   getActiveGatewayTokenForBusiness: vi.fn(async () => process.env.ROWBOAT_GATEWAY_TOKEN ?? null),
   issueGatewayToken: vi.fn(async () => "minted-per-tenant-tok"),
-  markGatewayTokenDeployed: vi.fn(async () => undefined)
+  markGatewayTokenDeployed: vi.fn(async () => undefined),
+  // Residency-only bearer list (DATA_API_TOKENS). Empty by default: only the
+  // residency tests exercise it, overriding per-test.
+  listActiveGatewayTokensForBusiness: vi.fn(async () => [])
 }));
 
 vi.mock("@/lib/db/configs", () => ({
@@ -93,6 +96,7 @@ import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
+  listActiveGatewayTokensForBusiness,
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
@@ -886,6 +890,10 @@ describe("provisioning/orchestrate", () => {
       tier: "enterprise",
       data_residency_mode: "dual"
     } as never);
+    vi.mocked(listActiveGatewayTokensForBusiness).mockResolvedValueOnce([
+      "mock_gateway_token",
+      "old-rotated-token"
+    ]);
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e4"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     const cfStub = vi.fn().mockResolvedValue({
@@ -906,7 +914,33 @@ describe("provisioning/orchestrate", () => {
       dataEnabled: true
     });
     // deploy-client.sh gets the stack gate so the box stands the containers up.
-    expectDeployHasEnv(deployCallArg(remoteExec).command, "DATA_RESIDENCY_ENABLED", "true");
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "DATA_RESIDENCY_ENABLED", "true");
+    // Bearer list = every non-revoked token, with the deploy token guaranteed
+    // present. The mocked list already contains it, so no prepend happens.
+    expectDeployHasEnv(cmd, "DATA_API_TOKENS", "mock_gateway_token,old-rotated-token");
+  });
+
+  it("prepends the deploy token to DATA_API_TOKENS when the DB list lacks it", async () => {
+    // Covers the rotation race where this deploy just minted a token the
+    // list read predates — the data-api must still accept it.
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      data_residency_mode: "vps"
+    } as never);
+    vi.mocked(listActiveGatewayTokensForBusiness).mockResolvedValueOnce(["stale-token"]);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e7"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-res-rot", tier: "enterprise" },
+      { vpsProvisioner, remoteExec }
+    );
+    expectDeployHasEnv(
+      deployCallArg(remoteExec).command,
+      "DATA_API_TOKENS",
+      "mock_gateway_token,stale-token"
+    );
   });
 
   it("enterprise still in 'supabase' mode gets no data hostname and an empty deploy flag", async () => {
