@@ -1,6 +1,10 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { Business } from "@/lib/db/schema";
 import type { EnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
+import {
+  assertResidencyModeAllowed,
+  type DataResidencyMode
+} from "@/lib/residency/tier-gate";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -56,6 +60,13 @@ export type BusinessRow = {
    * `resolveDeployedVpsSize` (existing boxes) in src/lib/vps/size.ts.
    */
   vps_size?: "kvm1" | "kvm2" | "kvm4" | "kvm8" | null;
+  /**
+   * Enterprise-only data-residency rollout gate (default 'supabase').
+   * 'dual' = both stores written during migration; 'vps' = the tenant's box
+   * is the content source of truth. Written only via updateDataResidencyMode,
+   * which enforces the enterprise tier gate.
+   */
+  data_residency_mode?: DataResidencyMode;
   /**
    * Highest white-glove onboarding package purchased (Phase C5). Recorded by
    * the Stripe webhook; catalog in src/lib/plans/white-glove.ts.
@@ -282,6 +293,25 @@ export async function updateEnterpriseLimits(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ enterprise_limits: limits }).eq("id", id);
   if (error) throw new Error(`updateEnterpriseLimits: ${error.message}`);
+}
+
+/**
+ * Flip a tenant's data-residency rollout mode. Enterprise-only for any
+ * forward mode; flipping BACK to 'supabase' is always allowed (see
+ * assertResidencyModeAllowed) so a downgraded tenant can never be wedged.
+ */
+export async function updateDataResidencyMode(
+  id: string,
+  mode: DataResidencyMode,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  await assertResidencyModeAllowed(id, mode, db);
+  const { error } = await db
+    .from("businesses")
+    .update({ data_residency_mode: mode })
+    .eq("id", id);
+  if (error) throw new Error(`updateDataResidencyMode: ${error.message}`);
 }
 
 export async function updateBusinessOwnerEmail(
