@@ -214,7 +214,7 @@ describe("voice-transcripts vps reads", () => {
     expect(await listTurns("t1", { businessId: BIZ }, centralChain())).toEqual([]);
   });
 
-  it("listTranscriptsForCaller folds aliases into one IN filter", async () => {
+  it("listTranscriptsForCaller folds aliases into one IN filter with central null ordering", async () => {
     await listTranscriptsForCaller(BIZ, "+1555", { aliases: ["+1556", "+1555"] }, centralDb({}));
     expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
       table: "voice_call_transcripts",
@@ -222,7 +222,8 @@ describe("voice-transcripts vps reads", () => {
         { column: "business_id", op: "eq", value: BIZ },
         { column: "caller_e164", op: "in", value: ["+1555", "+1556"] }
       ],
-      order: [{ column: "started_at", ascending: false }],
+      // nullsFirst:false mirrors the central supabase-js ordering exactly.
+      order: [{ column: "started_at", ascending: false, nullsFirst: false }],
       limit: 25
     });
   });

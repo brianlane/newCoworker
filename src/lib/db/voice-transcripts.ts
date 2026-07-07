@@ -224,7 +224,10 @@ export async function listTranscriptsForCaller(
         { column: "business_id", op: "eq", value: businessId },
         { column: "caller_e164", op: "in", value: callers }
       ],
-      order: [{ column: "started_at", ascending: false }],
+      // Match the central path's `nullsFirst: false` exactly — Postgres
+      // defaults DESC to NULLS FIRST, which would float null-started calls
+      // to the top for vps tenants only.
+      order: [{ column: "started_at", ascending: false, nullsFirst: false }],
       limit
     });
   }

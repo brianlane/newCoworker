@@ -243,8 +243,21 @@ app.post("/v1/select", async (req, res) => {
         throw { code: "invalid_request", message: "order must be a non-empty array" };
       }
       assertColumns(order.map((o) => o?.column), "order column");
+      for (const o of order) {
+        if (o.nullsFirst !== undefined && typeof o.nullsFirst !== "boolean") {
+          throw { code: "invalid_request", message: "order nullsFirst must be a boolean" };
+        }
+      }
       sql += ` ORDER BY ${order
-        .map((o) => `${quoteIdent(o.column)} ${o.ascending ? "ASC" : "DESC"}`)
+        .map((o) => {
+          const nulls =
+            o.nullsFirst === true
+              ? " NULLS FIRST"
+              : o.nullsFirst === false
+                ? " NULLS LAST"
+                : "";
+          return `${quoteIdent(o.column)} ${o.ascending ? "ASC" : "DESC"}${nulls}`;
+        })
         .join(", ")}`;
     }
     if (limit !== undefined) {
