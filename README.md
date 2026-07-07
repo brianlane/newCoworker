@@ -308,9 +308,6 @@ Intentional operational exemptions (NOT metered against the customer's monthly S
 - Teammate offer-reply acks and the Safe-Mode inbound forward to the owner ([telnyx-sms-inbound](supabase/functions/telnyx-sms-inbound/index.ts) / [sms-inbound-worker](supabase/functions/sms-inbound-worker/index.ts)).
 - STOP / HELP / START compliance auto-replies (legally required; must never be capped).
 
-## Subagents
-Never use a subagent.
-
 ## All work and code modifications must follow this flow
 
 For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge apply migrations, deploy functions, vps needed redeploy, seed etc then return back to main.
