@@ -66,6 +66,17 @@ export async function POST(
 
     const business = await getBusiness(businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
+    // Residency tenants fail closed BEFORE the 202: the background engine
+    // would refuse anyway (its own guard is defense-in-depth), but the
+    // operator must see the runbook in the panel, not a silent no-op.
+    if ((business.data_residency_mode ?? "supabase") !== "supabase") {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "Data-residency tenant: hardware migration would strand the box datastore (only copy " +
+          "of purged history). Manual runbook: fresh encrypted backup -> migrate -> " +
+          "debug/residency-restore.ts --apply onto the new box."
+      );
+    }
     const currentSize = resolveDeployedVpsSize(business.tier, business.vps_size);
     if (currentSize === size) {
       return errorResponse("VALIDATION_ERROR", `Business is already on ${size}`);
