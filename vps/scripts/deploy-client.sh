@@ -1777,8 +1777,11 @@ RBTMR_EOF
         report_progress 98 "data_api_unhealthy" "data-api started but /v1/health never reported ok:true"
       fi
     else
-      log "WARN: data-api compose failed (residency reads/writes will be degraded)"
-      report_progress 98 "data_api_compose_failed" "docker compose up failed"
+      # Stack is in an unknown state — a previously-installed backup timer
+      # must not keep dumping it (same posture as the schema-apply gate).
+      systemctl disable --now residency-backup.timer 2>/dev/null || true
+      log "WARN: data-api compose failed (residency reads/writes will be degraded); backup timer stopped"
+      report_progress 98 "data_api_compose_failed" "docker compose up failed (backup timer stopped)"
     fi
   )
 else
