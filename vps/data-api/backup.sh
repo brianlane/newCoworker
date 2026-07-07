@@ -5,14 +5,15 @@
 # pg_dump the box datastore, gzip, AES-256 encrypt LOCALLY (the passphrase
 # is escrowed centrally in residency_backup_keys; only ciphertext ever
 # leaves the box), upload to Supabase Storage under
-# <DATA_BACKUP_BUCKET>/residency/<BUSINESS_ID>/, and prune local copies.
+# business-backups/residency/<BUSINESS_ID>/ (DATA_BACKUP_BUCKET — keep in
+# lockstep with src/lib/db/data-backups.ts), and prune local copies.
 #
 # Env (from /opt/data-api/backup.env, root-only):
 #   BUSINESS_ID                  tenant uuid
 #   SUPABASE_URL                 https://<ref>.supabase.co
 #   SUPABASE_SERVICE_KEY         upload credential
 #   RESIDENCY_BACKUP_PASSPHRASE  AES passphrase (escrowed centrally)
-#   RESIDENCY_BACKUP_BUCKET      default "data-backups"
+#   RESIDENCY_BACKUP_BUCKET      default "business-backups" (DATA_BACKUP_BUCKET)
 #   RESIDENCY_BACKUP_KEEP        local copies to keep, default 7
 set -euo pipefail
 
@@ -20,7 +21,7 @@ set -euo pipefail
 : "${SUPABASE_URL:?SUPABASE_URL required}"
 : "${SUPABASE_SERVICE_KEY:?SUPABASE_SERVICE_KEY required}"
 : "${RESIDENCY_BACKUP_PASSPHRASE:?RESIDENCY_BACKUP_PASSPHRASE required}"
-BUCKET="${RESIDENCY_BACKUP_BUCKET:-data-backups}"
+BUCKET="${RESIDENCY_BACKUP_BUCKET:-business-backups}"
 KEEP="${RESIDENCY_BACKUP_KEEP:-7}"
 
 BACKUP_DIR="/opt/data-api/backups"
