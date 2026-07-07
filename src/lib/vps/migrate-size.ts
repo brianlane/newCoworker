@@ -125,6 +125,26 @@ export async function migrateBusinessVpsSize(
   // and the size resolvers know the enterprise kvm8 default.
   const tier = biz.tier;
 
+  // Residency tenants FAIL CLOSED: this flow backs up and restores
+  // /opt/rowboat/{vault,memory} only — the box-local residency datastore
+  // (the ONLY copy of purged content history) would be left behind on the
+  // old box and silently lost at teardown. Until the automated datastore
+  // move lands, the runbook is manual: verify a fresh encrypted dump
+  // (residency-backup.timer), migrate, then debug/residency-restore.ts
+  // --apply onto the new box before flipping traffic.
+  const residencyMode =
+    (biz as { data_residency_mode?: string }).data_residency_mode ?? "supabase";
+  if (residencyMode !== "supabase") {
+    return {
+      ok: false,
+      stage: "guard",
+      error:
+        `data_residency_mode=${residencyMode}: hardware migration would strand the box datastore ` +
+        "(only copy of purged history). Follow the manual runbook: fresh encrypted backup -> " +
+        "migrate -> debug/residency-restore.ts --apply onto the new box."
+    };
+  }
+
   const currentSize = resolveDeployedVpsSize(tier, biz.vps_size);
   if (currentSize === targetSize) {
     return { ok: false, stage: "guard", error: `business is already on ${targetSize}` };

@@ -112,6 +112,22 @@ describe("migrateBusinessVpsSize — guards", () => {
     expect(deps.sendOpsEmail).not.toHaveBeenCalled();
   });
 
+  it("fails closed for residency tenants (box datastore would be stranded)", async () => {
+    const deps = makeDeps({
+      getBusiness: vi.fn(async () =>
+        bizRow({ tier: "enterprise", data_residency_mode: "vps" } as never)
+      )
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.stage).toBe("guard");
+      expect(out.error).toContain("residency");
+      expect(out.error).toContain("residency-restore");
+    }
+    expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
+  });
+
   it("migrates enterprise tenants, passing the real tier to provisioning", async () => {
     // Enterprise became provisionable (Jul 2026): the old "enterprise is
     // custom" guard is gone, and the tenant's REAL tier flows through so

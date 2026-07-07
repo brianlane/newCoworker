@@ -26,6 +26,7 @@ import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
 import { getTierLimits } from "@/lib/plans/limits";
 import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
+import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
@@ -143,6 +144,18 @@ export default async function BusinessDetailPage({
             businessId={businessId}
             effectiveLimits={getTierLimits("enterprise", business.enterprise_limits)}
             initialOverride={parseEnterpriseLimitsOverride(business.enterprise_limits)}
+          />
+        </Card>
+      )}
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Data residency
+          </h2>
+          <ResidencyPanel
+            businessId={businessId}
+            initialMode={business.data_residency_mode ?? "supabase"}
           />
         </Card>
       )}

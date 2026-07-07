@@ -74,6 +74,50 @@ npm run test:integration:correctness:kvm2-llama32-compare
 
 The integration path uses real Rowboat + Ollama stacks and writes assistant outputs to `test-results/integration-correctness-responses.json`.
 
+## Data residency (enterprise, opt-in)
+
+Enterprise tenants can opt in to **physical data residency**: their customer
+content (contacts, conversations, transcripts, emails — the
+`RESIDENCY_MOVED_TABLES` in [src/lib/residency/tables.ts](src/lib/residency/tables.ts))
+lives in a Postgres on THEIR OWN VPS, fronted by a bearer-authenticated data
+API published on the tenant tunnel at `data-<businessId>.<zone>` →
+`127.0.0.1:8091` ([vps/data-api/](vps/data-api/)). Off by default for
+everyone; the enterprise-only gate is enforced server-side
+([src/lib/residency/tier-gate.ts](src/lib/residency/tier-gate.ts)).
+
+`businesses.data_residency_mode` drives the rollout, flipped from the admin
+business page (Data residency card) or `POST /api/admin/data-residency`:
+
+- **`supabase`** (default) — everything central; code path byte-identical to
+  pre-residency.
+- **`dual`** — DB triggers journal every content write to
+  `residency_write_journal`; a per-minute cron (`residency-replay` Edge fn →
+  `/api/internal/residency-replay`) drains it to the box in strict order.
+  A down box only lags (journal grows, drain resumes); it never loses or
+  reorders. Confirmed rows are deleted — central holds content in transit,
+  not at rest.
+- **`vps`** — dashboard content reads come FROM THE BOX
+  ([src/lib/residency/read.ts](src/lib/residency/read.ts)), with **no silent
+  fallback**: a down box is a visible error, never stale central data.
+
+Per-tenant enablement runbook (one deal at a time, no fleet rollout):
+1. flip `dual` → `npx tsx debug/residency-backfill.ts --business <id> --drain`
+2. gate: `npx tsx debug/residency-parity.ts --business <id>` must PASS
+3. flip `vps` (reads now from the box; redeploy publishes the tunnel hostname
+   + stack via the same orchestrator/redeploy env gates)
+4. purge central history: `npx tsx debug/residency-purge.ts --business <id> --apply`
+   (parity-gated, journal-must-be-empty, trigger-muted so the purge never
+   replicates as deletes; live engine state — contacts, threads, chat, flows —
+   deliberately stays central until the engine's own reads are residency-routed)
+
+DR: a 6h systemd timer on the box streams `pg_dump → gzip → AES-256` and
+uploads **ciphertext only** to `business-backups/residency/<id>/`; the
+passphrase is escrowed in `residency_backup_keys` (service-role-only,
+rotatable per deal). Restore with `npx tsx debug/residency-restore.ts
+--business <id> [--apply]`. Hardware migrations for residency tenants FAIL
+CLOSED in `migrate-vps-size` — the box datastore is the only copy of purged
+history, so the move is manual: fresh backup → migrate → restore → flip.
+
 ## Operating the VPS fleet (`debug/`)
 
 One-shot operational + diagnostic scripts for the live per-tenant VPS fleet
