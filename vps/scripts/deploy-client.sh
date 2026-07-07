@@ -1686,7 +1686,11 @@ DAENV_EOF
       # centrally (residency_backup_keys) and reaches the box via the
       # deploy env; without it the timer is skipped LOUDLY — an opted-in
       # box without backups is a DR gap, not a default.
-      if [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" ]]; then
+      #
+      # Gated on THIS deploy's schema apply: dumping an empty/incomplete
+      # datastore would upload a "backup" that a later restore could
+      # clobber a good box with. No schema, no dump.
+      if [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" && "${schema_applied}" == "1" ]]; then
         install -m 0755 "${DATA_API_SRC}/backup.sh" /opt/data-api/backup.sh
         cat > /opt/data-api/backup.env <<RBENV_EOF
 BUSINESS_ID=${BUSINESS_ID}
@@ -1735,6 +1739,12 @@ RBTMR_EOF
           log "WARN: initial residency backup failed — timer will retry; check journalctl -u residency-backup"
           report_progress 98 "residency_backup_failed" "initial encrypted backup failed (timer will retry)"
         fi
+      elif [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" ]]; then
+        # Schema apply failed above: also stop any EXISTING timer so a
+        # stale unit can't keep dumping a datastore in an unknown layout.
+        systemctl disable --now residency-backup.timer 2>/dev/null || true
+        log "WARN: schema apply failed — residency backups NOT (re)installed this deploy (no dump of an unverified layout)"
+        report_progress 98 "residency_backup_skipped_schema" "backups skipped: datastore schema apply failed"
       else
         log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset — residency backups NOT installed (DR gap)"
         report_progress 98 "residency_backup_unconfigured" "no backup passphrase provided; encrypted backups skipped"
