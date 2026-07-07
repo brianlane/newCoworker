@@ -386,10 +386,11 @@ function buildDefinition(opts: {
         ...(opts.leadEmailConnectionId ? { fromConnectionId: opts.leadEmailConnectionId } : {}),
         when: gateOnClaim
       },
-      // 11. Always tell the owner the outcome — claimed (with everything that was
-      //     sent) or not (owner fallback). Ungated. Carries the FULL lead
-      //     details (audit Jul 2026) so Amy never has to dig through the QT
-      //     email for the contact info.
+      // 11. Always tell the owner the outcome, in two complementary branches
+      //     (audit Jul 2026). The contact fields only exist after a CLAIM (the
+      //     portal/email extraction steps are claim-gated), so the claimed
+      //     notify carries the full details while the unclaimed one shows the
+      //     alert-level fields + portal link instead of empty lines.
       {
         id: "notify",
         type: "notify_owner",
@@ -398,7 +399,18 @@ function buildDefinition(opts: {
           "~{{vars.price}}).\n" +
           "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Address: {{vars.lead_address}}\n" +
-          "Outcome: {{vars.actions_taken}}."
+          "Outcome: {{vars.actions_taken}}.",
+        when: gateOnClaim
+      },
+      {
+        id: "notify_unclaimed",
+        type: "notify_owner",
+        message:
+          "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, " +
+          "~{{vars.price}}).\n" +
+          "Not claimed — full details in the portal: {{vars.leadUrl}}\n" +
+          "Outcome: {{vars.actions_taken}}.",
+        when: { var: "claimed_agent", equals: "none" }
       }
     ],
     options: { suppressDefaultReply: true }

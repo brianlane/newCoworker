@@ -2,14 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   enrichOwnerNotify,
   NOTIFY_MESSAGES,
-  CLEVER_NOTIFY_STEP
+  CLEVER_NOTIFY_STEP,
+  HOMELIGHT_NOTIFY_CLAIMED,
+  HOMELIGHT_NOTIFY_UNCLAIMED_STEP
 } from "../scripts/oneshot/enrich-owner-notify";
 
 type Step = Record<string, unknown> & { id?: string; type?: string };
 type Def = { steps: Step[] };
 
 describe("enrichOwnerNotify", () => {
-  it("rewrites the HomeLight notify to include personal info + address", () => {
+  it("splits the HomeLight notify into a full-details claimed branch and an unclaimed branch", () => {
     const def: Def = {
       steps: [
         {
@@ -21,11 +23,23 @@ describe("enrichOwnerNotify", () => {
       ]
     };
     expect(enrichOwnerNotify(def, "HomeLight Referral")).toBe(true);
-    const msg = def.steps[0].message as string;
-    expect(msg).toContain("Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}");
-    expect(msg).toContain("Address: {{vars.lead_address}}");
-    expect(msg).toContain("~{{vars.price}}");
-    expect(msg).toContain("Outcome: {{vars.actions_taken}}");
+    // Claimed branch: full contact details, gated on a claim (the contact
+    // extraction steps only run post-claim).
+    const claimed = def.steps.find((s) => s.id === "notify")!;
+    expect(claimed.message).toBe(HOMELIGHT_NOTIFY_CLAIMED);
+    expect(claimed.message).toContain(
+      "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}"
+    );
+    expect(claimed.message).toContain("Address: {{vars.lead_address}}");
+    expect(claimed.when).toEqual({ var: "claimed_agent", notEquals: "none" });
+    // Unclaimed branch: alert-level fields + portal link, no empty lines.
+    const unclaimed = def.steps.find((s) => s.id === "notify_unclaimed")!;
+    expect(unclaimed.message).toBe(HOMELIGHT_NOTIFY_UNCLAIMED_STEP.message);
+    expect(unclaimed.when).toEqual({ var: "claimed_agent", equals: "none" });
+    expect(def.steps.indexOf(unclaimed)).toBe(def.steps.indexOf(claimed) + 1);
+    // Idempotent.
+    expect(enrichOwnerNotify(def, "HomeLight Referral")).toBe(false);
+    expect(def.steps.filter((s) => s.type === "notify_owner")).toHaveLength(2);
   });
 
   it("rewrites the Realtor.com notify (previously outcome-only) with full lead details", () => {
@@ -82,7 +96,13 @@ describe("enrichOwnerNotify", () => {
   it("is idempotent and leaves unknown flows without address fields unchanged", () => {
     const def: Def = {
       steps: [
-        { id: "notify", type: "notify_owner", message: NOTIFY_MESSAGES["HomeLight Referral"].notify },
+        {
+          id: "notify",
+          type: "notify_owner",
+          message: HOMELIGHT_NOTIFY_CLAIMED,
+          when: { var: "claimed_agent", notEquals: "none" }
+        },
+        JSON.parse(JSON.stringify(HOMELIGHT_NOTIFY_UNCLAIMED_STEP)),
         {
           id: "card",
           type: "browse_extract",
@@ -94,6 +114,11 @@ describe("enrichOwnerNotify", () => {
 
     const untouched: Def = { steps: [{ id: "x", type: "send_sms" }] };
     expect(enrichOwnerNotify(untouched, "Some Other Flow")).toBe(false);
+
+    const realtorDone: Def = {
+      steps: [{ id: "s5", type: "notify_owner", message: NOTIFY_MESSAGES["Realtor.com Lead"].s5 }]
+    };
+    expect(enrichOwnerNotify(realtorDone, "Realtor.com Lead")).toBe(false);
   });
 
   it("ignores notify steps whose id has no configured rewrite (and steps without ids)", () => {

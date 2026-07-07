@@ -70,15 +70,14 @@ type Definition = { steps?: Step[] } & Record<string, unknown>;
 /**
  * Per-flow notify_owner rewrites, keyed by flow name and step id. The message
  * doubles as the idempotency marker (exact-match compare before writing).
+ *
+ * Realtor.com extracts every lead field from the trigger text BEFORE routing,
+ * so its (ungated) notify can always show the full details. HomeLight is
+ * handled separately (see enrichOwnerNotify): its contact fields only exist
+ * after a claim, so the notify SPLITS into a claimed/unclaimed pair instead
+ * of one message that would render empty lines on the owner-fallback path.
  */
 export const NOTIFY_MESSAGES: Record<string, Record<string, string>> = {
-  "HomeLight Referral": {
-    notify:
-      "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}).\n" +
-      "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
-      "Address: {{vars.lead_address}}\n" +
-      "Outcome: {{vars.actions_taken}}."
-  },
   "Realtor.com Lead": {
     s5:
       "Realtor.com Lead Routing Update:\n" +
@@ -87,6 +86,31 @@ export const NOTIFY_MESSAGES: Record<string, Record<string, string>> = {
       "Price: {{vars.lead_price_details}}\n" +
       "Outcome: {{vars.actions_taken}}"
   }
+};
+
+/**
+ * HomeLight's claimed-path notify: the post-claim portal/email extractions
+ * have run, so the full contact details are available.
+ */
+export const HOMELIGHT_NOTIFY_CLAIMED =
+  "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}).\n" +
+  "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+  "Address: {{vars.lead_address}}\n" +
+  "Outcome: {{vars.actions_taken}}.";
+
+/**
+ * HomeLight's unclaimed-path notify: only the alert-level fields exist (the
+ * contact-card steps are claim-gated), so show those plus the portal link
+ * instead of empty Lead/Address lines.
+ */
+export const HOMELIGHT_NOTIFY_UNCLAIMED_STEP: Step = {
+  id: "notify_unclaimed",
+  type: "notify_owner",
+  message:
+    "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}).\n" +
+    "Not claimed — full details in the portal: {{vars.leadUrl}}\n" +
+    "Outcome: {{vars.actions_taken}}.",
+  when: { var: "claimed_agent", equals: "none" }
 };
 
 /** The notify_owner step appended to Clever Lead - Accept (which had none). */
@@ -121,6 +145,28 @@ export function enrichOwnerNotify(def: Definition, flowName: string): boolean {
         step.message = next;
         changed = true;
       }
+    }
+  }
+
+  // 1b. HomeLight: split the single ungated notify into a claimed/unclaimed
+  // pair. The contact fields are extracted by CLAIM-GATED steps, so an
+  // ungated full-details notify would render empty Lead/Address lines on the
+  // owner-fallback path.
+  if (flowName === "HomeLight Referral") {
+    const notify = steps.find((s) => s.type === "notify_owner" && s.id === "notify");
+    if (notify && notify.message !== HOMELIGHT_NOTIFY_CLAIMED) {
+      notify.message = HOMELIGHT_NOTIFY_CLAIMED;
+      notify.when = { var: "claimed_agent", notEquals: "none" };
+      changed = true;
+    }
+    if (notify && !steps.some((s) => s.id === "notify_unclaimed")) {
+      steps.splice(
+        steps.indexOf(notify) + 1,
+        0,
+        JSON.parse(JSON.stringify(HOMELIGHT_NOTIFY_UNCLAIMED_STEP)) as Step
+      );
+      def.steps = steps;
+      changed = true;
     }
   }
 
