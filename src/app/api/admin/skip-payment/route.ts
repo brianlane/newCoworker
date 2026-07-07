@@ -36,6 +36,11 @@ export async function POST(request: Request) {
       businessId: body.businessId,
       tier: business.tier,
       vpsSize: business.vps_size ?? null,
+      // Buy the Hostinger box at the tenant's committed term: an
+      // annual/biennial subscription that lost its box (failed provision)
+      // must not be re-provisioned onto expensive monthly hardware. Null
+      // (admin-created Stripe-less rows) keeps the monthly purchase.
+      billingPeriod: existing?.billing_period ?? null,
       ownerEmail: business.owner_email
     });
 

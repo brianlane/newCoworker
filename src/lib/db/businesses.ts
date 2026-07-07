@@ -99,6 +99,11 @@ export async function createBusiness(
     crmUsed?: string;
     /** IANA timezone auto-detected from the owner's browser at onboarding. */
     timezone?: string;
+    /**
+     * Optional hardware pin recorded at creation (admin enterprise flow).
+     * Null = tier default at provision time (see DEFAULT_TIER_VPS_SIZE).
+     */
+    vpsSize?: "kvm1" | "kvm2" | "kvm4" | "kvm8" | null;
   },
   client?: SupabaseClient
 ): Promise<BusinessRow> {
@@ -119,7 +124,8 @@ export async function createBusiness(
       typical_inquiry: data.typicalInquiry ?? null,
       team_size: data.teamSize ?? null,
       crm_used: data.crmUsed ?? null,
-      timezone: data.timezone ?? null
+      timezone: data.timezone ?? null,
+      vps_size: data.vpsSize ?? null
     })
     .select()
     .single();

@@ -10,7 +10,13 @@ const schema = z.object({
   tier: z.enum(["starter", "standard", "enterprise"]),
   businessType: z.string().optional(),
   ownerName: z.string().optional(),
-  phone: z.string().optional()
+  phone: z.string().optional(),
+  /**
+   * Optional hardware pin, offered in the admin modal for enterprise deals
+   * (custom pricing means the operator sizes the box per contract). Omitted
+   * = tier default at provision time (enterprise → kvm8).
+   */
+  vpsSize: z.enum(["kvm1", "kvm2", "kvm4", "kvm8"]).optional()
 });
 
 export async function POST(request: Request) {
@@ -27,7 +33,8 @@ export async function POST(request: Request) {
       tier: body.tier,
       businessType: body.businessType,
       ownerName: body.ownerName,
-      phone: body.phone
+      phone: body.phone,
+      vpsSize: body.vpsSize ?? null
     });
 
     await createSubscription({
