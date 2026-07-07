@@ -25,6 +25,12 @@
  *
  * - Billing/metering/provisioning tables STAY CENTRAL by definition
  *   (cross-tenant control plane).
+ *
+ * - `customer_profiles` STAYS CENTRAL despite the name: it is the
+ *   PLATFORM's abuse/billing identity of the paying business owner
+ *   (lifetime refund-once, subscription caps, Stripe ids) — cross-tenant
+ *   control plane, not the tenant's customer data. The tenant's customer
+ *   memory lives in `contacts`.
  */
 
 /**
@@ -34,12 +40,12 @@
  * external webhook writes directly into any of them).
  */
 export const RESIDENCY_MOVED_TABLES = [
-  // Contacts + identity side tables
+  // Unified contact directory + the AI's cross-channel memory. Absorbed the
+  // former `customer_memories` (renamed) and `contact_overrides` (folded in,
+  // dropped) in 20260704000000_contacts_unify.sql; `customer_memories`
+  // survives only as a backward-compat VIEW over this table, and views are
+  // not replicated (the data-api serves the base table).
   "contacts",
-  "contact_overrides",
-  // Customer AI profile/memory
-  "customer_profiles",
-  "customer_memories",
   // Owner dashboard chat
   "dashboard_chat_threads",
   "dashboard_chat_messages",

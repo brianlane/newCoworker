@@ -101,9 +101,13 @@ describe("residency tier gate", () => {
 });
 
 describe("residency moved-table inventory", () => {
-  it("keeps the compliance and engine tables central", () => {
+  it("keeps the compliance, engine, and control-plane tables central", () => {
     // sms_opt_outs gates STOP handling on the webhook path; engine/job
-    // tables are drained by Edge workers — none of them may ever move.
+    // tables are drained by Edge workers; customer_profiles is the
+    // platform's abuse/billing identity of the OWNER (not tenant content);
+    // customer_memories and contact_overrides no longer exist as tables
+    // (contacts_unify merged them into contacts — the former survives only
+    // as a compat view, which is not replicated).
     for (const central of [
       "sms_opt_outs",
       "ai_flow_runs",
@@ -112,7 +116,10 @@ describe("residency moved-table inventory", () => {
       "telnyx_webhook_events",
       "businesses",
       "subscriptions",
-      "vps_gateway_tokens"
+      "vps_gateway_tokens",
+      "customer_profiles",
+      "customer_memories",
+      "contact_overrides"
     ]) {
       expect(isResidencyMovedTable(central)).toBe(false);
     }
@@ -121,8 +128,6 @@ describe("residency moved-table inventory", () => {
   it("moves the tenant-content tables", () => {
     for (const moved of [
       "contacts",
-      "customer_profiles",
-      "customer_memories",
       "dashboard_chat_messages",
       "email_log",
       "voice_call_transcript_turns",
