@@ -259,18 +259,38 @@ function buildDefinition(opts: {
         auth: { integrationLabel: opts.integrationLabel },
         screenshot: true,
         when: gateOnClaim,
+        // Each description names the known failure mode (the Jul 7 incident:
+        // the claim landing page has no lead card and the extractor answered
+        // with Amy's own info) and gives the extractor a safe out ('none').
         fields: [
-          { name: "lead_name", description: "The lead's full name from the portal contact card" },
+          {
+            name: "lead_name",
+            description:
+              "The lead's (client's) full name from the portal contact card. NEVER the " +
+              "agent's own name shown in the page header, account menu, or a 'New " +
+              "Referral for <agent>' banner. If the page shows no lead contact card " +
+              "(e.g. it's a claim landing page or a referral list), answer 'none'."
+          },
           {
             name: "lead_phone",
-            description: "The lead's mobile phone from the contact card, in E.164 if possible"
+            description:
+              "The lead's mobile phone from the portal contact card, in E.164 if " +
+              "possible. NEVER the agent's own phone number and NEVER a HomeLight " +
+              "claim/support number. If the page shows no lead contact card with a " +
+              "phone, answer 'none'."
           },
-          { name: "lead_email", description: "The lead's email from the contact card, or 'none'" },
+          {
+            name: "lead_email",
+            description:
+              "The lead's email from the portal contact card. NEVER the agent's own " +
+              "email. If the page shows no lead contact card with an email, answer 'none'."
+          },
           {
             name: "lead_address",
             description:
-              "The property street address from the contact card — the FULL address " +
-              "including street, city, state, and ZIP code"
+              "The property address from the portal contact card — the FULL address " +
+              "including street, city, state, and ZIP code. If the page shows no lead " +
+              "contact card, answer 'none'."
           }
         ]
       },
@@ -279,14 +299,13 @@ function buildDefinition(opts: {
       //     in plain labels) from Amy's connected mailbox and BACKFILL the missing
       //     fields, so Dave always has the phone + property address to call back
       //     on. fillOnlyEmpty means the portal values (step 5) win; the email only
-      //     fills gaps. Matched to THIS lead by first name AND price within the
-      //     window (both must appear), so two leads who share a first name in the
-      //     same window don't collide. Price beats city as the second term because a
-      //     realtor works one city (so city repeats across leads) while the exact
-      //     price is near-unique. We match price_digits (e.g. "429"), not "$429K",
-      //     because the portal email writes the price in full ("$429,000") — the
-      //     bare leading digits are the token present in BOTH. Gated on claim and
-      //     only when a mailbox is configured.
+      //     fills gaps. Matched to THIS lead by FIRST NAME within the lookback
+      //     window. (A price second-term looked stronger but broke in practice:
+      //     the alert rounds — $784,663 → "$785K" → digits "785" — while the
+      //     email spells the price in full, so the "785" token never appears and
+      //     the backfill could never find the email exactly when it was needed.
+      //     The 60-minute lookback keeps first-name collisions unlikely.)
+      //     Gated on claim and only when a mailbox is configured.
       ...(opts.emailConnectionId
         ? [
             {
@@ -294,7 +313,7 @@ function buildDefinition(opts: {
               type: "email_extract",
               connectionId: opts.emailConnectionId,
               fromContains: opts.emailFromContains,
-              matchTemplates: ["{{vars.lead_first_name}}", "{{vars.price_digits}}"],
+              matchTemplates: ["{{vars.lead_first_name}}"],
               lookbackMinutes: opts.emailLookbackMinutes,
               fillOnlyEmpty: true,
               when: gateOnClaim,

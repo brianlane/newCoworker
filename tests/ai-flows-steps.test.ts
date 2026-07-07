@@ -253,11 +253,24 @@ describe("planStep: send_sms", () => {
       }
     });
   });
-  it("fails when the recipient resolves empty", () => {
+  it("plans a SKIP when a templated recipient resolves empty (lead-data gap, not config bug)", () => {
     expect(planStep(step, { vars: {}, trigger: { from: "+1" } })).toEqual({
-      ok: false,
-      error: "send_sms: recipient is empty after templating"
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        body: "Hi, are you still interested? - +1",
+        skipReason: "no_recipient_phone"
+      }
     });
+  });
+  it("plans a SKIP for 'none'-class templated recipients (extraction answered 'none')", () => {
+    for (const none of ["none", "N/A", "unknown", "null", "na"]) {
+      const r = planStep(step, { vars: { seller_phone: none }, trigger: { from: "+1" } });
+      expect(r.ok && r.action.kind === "send_sms" && r.action.skipReason).toBe(
+        "no_recipient_phone"
+      );
+    }
   });
   it("fails when `to` is absent and replyToGroup is off", () => {
     const noTo: FlowStep = { id: "x", type: "send_sms", body: "hi" };
@@ -276,9 +289,23 @@ describe("planStep: send_sms", () => {
     const r = planStep(step, scope);
     expect(r.ok && r.action.kind === "send_sms" && r.action.to).toBe("+18402753158");
   });
-  it("fails fast (no retries) when the recipient is not a parseable phone number", () => {
+  it("plans a SKIP when a templated recipient is not a parseable phone", () => {
     const scope: StepScope = { vars: { seller_phone: "call the office" } };
     expect(planStep(step, scope)).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        // {{trigger.from}} resolves empty (no trigger in scope) and the body
+        // is trimmed by the planner.
+        body: "Hi, are you still interested? -",
+        skipReason: "unparseable_recipient_phone"
+      }
+    });
+  });
+  it("still HARD-FAILS a literal (non-templated) bad recipient — that's a config bug", () => {
+    const literal: FlowStep = { id: "x", type: "send_sms", to: "call the office", body: "hi" };
+    expect(planStep(literal, {})).toEqual({
       ok: false,
       error: 'send_sms: recipient "call the office" is not a valid phone number'
     });

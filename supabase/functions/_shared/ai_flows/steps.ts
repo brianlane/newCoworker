@@ -109,6 +109,13 @@ export type StepAction =
       toRef?: ContactRef;
       body: string;
       quiet?: SendSmsQuietPlan;
+      /**
+       * Set when a TEMPLATED recipient resolved to nothing usable (the lead
+       * had no phone, or the self-number scrub cleared a bogus extraction).
+       * The worker skips the send with an actions_taken note instead of
+       * failing the run — a lead-data gap is not a flow-config bug.
+       */
+      skipReason?: string;
     }
   | {
       kind: "send_email";
@@ -397,13 +404,35 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         };
       }
       const toRaw = renderTemplate(step.to ?? "", scope).trim();
-      if (!toRaw) return { ok: false, error: "send_sms: recipient is empty after templating" };
+      // A recipient that came from a TEMPLATE VAR (extraction output) can
+      // legitimately be missing — the lead had no phone, or the scrub cleared
+      // a bogus one. That's a lead-data gap, not a flow-config bug: plan a
+      // SKIP (the worker notes it in actions_taken) instead of failing the
+      // whole run. A LITERAL bad recipient stays a hard plan failure.
+      const fromTemplateVar = (step.to ?? "").includes("{{");
+      const emptyish =
+        !toRaw || ["none", "n/a", "na", "null", "unknown"].includes(toRaw.toLowerCase());
+      if (emptyish) {
+        if (fromTemplateVar) {
+          return {
+            ok: true,
+            action: { kind: "send_sms", to: "", body, skipReason: "no_recipient_phone" }
+          };
+        }
+        return { ok: false, error: "send_sms: recipient is empty after templating" };
+      }
       // Telnyx only accepts E.164. Extracted phones arrive in page formatting —
       // "(840) 275-3158", "840.275.3158" — so coerce NANP shapes to +1XXXXXXXXXX
       // and fail fast (no retries) on anything unparseable instead of burning
       // MAX_ATTEMPTS on a guaranteed Telnyx 40310 "Invalid 'to' address".
       const to = isE164(toRaw) ? toRaw : normalizeNanpToE164(toRaw);
       if (!to) {
+        if (fromTemplateVar) {
+          return {
+            ok: true,
+            action: { kind: "send_sms", to: "", body, skipReason: "unparseable_recipient_phone" }
+          };
+        }
         return {
           ok: false,
           error: `send_sms: recipient "${toRaw}" is not a valid phone number`
