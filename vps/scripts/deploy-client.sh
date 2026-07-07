@@ -1687,8 +1687,8 @@ DAENV_EOF
         report_progress 99 "data_api_ready" "residency data-api healthy on :8091"
         log "data-api ready"
       else
-        log "WARN: data-api container started but GET /v1/health never returned 200 within 40s"
-        report_progress 98 "data_api_unhealthy" "data-api started but never reached HTTP 200"
+        log "WARN: data-api container started but /v1/health never reported ok:true within 40s (transport up with ok:false = datastore unreachable)"
+        report_progress 98 "data_api_unhealthy" "data-api started but /v1/health never reported ok:true"
       fi
     else
       log "WARN: data-api compose failed (residency reads/writes will be degraded)"
