@@ -1,0 +1,74 @@
+# Per-tenant residency datastore + data API.
+#
+# Deployed by vps/scripts/deploy-client.sh ONLY when the orchestrator passes
+# DATA_RESIDENCY_ENABLED=true (enterprise tier, data_residency_mode past
+# 'supabase'). The tenant's Cloudflare tunnel publishes the API at
+# `data-<businessId>.<zone>` → 127.0.0.1:8091; Postgres never leaves the
+# private compose network and binds no host port at all.
+#
+# Memory posture: the whole stack must fit alongside Rowboat/Ollama on an
+# 8 GB KVM2 (the standard-profile box enterprise runs on). Tenant content is
+# a few MB, so a tiny Postgres is ample — mem_limit + conservative
+# shared_buffers/work_mem keep RSS bounded under ZRAM.
+#
+# The .env written by deploy-client.sh provides DATA_API_TOKENS,
+# POSTGRES_PASSWORD, DATABASE_URL.
+
+services:
+  data-api:
+    build: .
+    image: data-api:local
+    container_name: data-api
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:8091:8091"
+    mem_limit: 128m
+    depends_on:
+      residency-postgres:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+  residency-postgres:
+    image: postgres:17-alpine
+    container_name: residency-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: residency
+      POSTGRES_USER: dataapi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - max_connections=20
+      - -c
+      - maintenance_work_mem=32MB
+    volumes:
+      - residency_pgdata:/var/lib/postgresql/data
+      # Applied ONCE on first boot of an empty data dir (postgres image
+      # convention). Schema upgrades on an existing volume are pushed by the
+      # deploy script via psql -f (the DDL is idempotent: IF NOT EXISTS).
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dataapi -d residency"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    logging:
+      driver: json-file
+      options:
+        max-size: "20m"
+        max-file: "5"
+
+volumes:
+  residency_pgdata:

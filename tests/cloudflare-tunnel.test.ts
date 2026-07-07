@@ -319,6 +319,134 @@ describe("cloudflareTunnelProvisioner", () => {
     ).toBe(false);
   });
 
+  it("publishes a per-tenant data hostname only when dataEnabled (residency enterprise tenants)", async () => {
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u, i) =>
+          (i?.method ?? "GET") === "GET" &&
+          u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-d`),
+        body: ok([])
+      },
+      {
+        match: (u, i) =>
+          i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-d", name: "nc-biz-d" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-d/token"), body: ok("T") },
+      {
+        match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"),
+        body: ok({})
+      },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-1", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
+        body: ok({ id: "rec-d" }),
+        reuse: true
+      },
+      totalTlsHandler()
+    ]);
+
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const result = await provisioner({
+      businessId: "biz-d",
+      renderEnabled: true,
+      dataEnabled: true
+    });
+    expect(result.dataHostname).toBe(`data-biz-d.${ZONE}`);
+
+    // Ingress carries app + voice + render + data + the required catch-all.
+    const ingress = calls.find(
+      (c) => c.method === "PUT" && c.url.endsWith("/configurations")
+    );
+    expect(ingress?.body).toMatchObject({
+      config: {
+        ingress: [
+          { hostname: `biz-d.${ZONE}`, service: "http://localhost:3000" },
+          { hostname: `voice-biz-d.${ZONE}`, service: "http://127.0.0.1:8090" },
+          { hostname: `render-biz-d.${ZONE}`, service: "http://127.0.0.1:8080" },
+          { hostname: `data-biz-d.${ZONE}`, service: "http://127.0.0.1:8091" },
+          { service: "http_status:404" }
+        ]
+      }
+    });
+
+    // The data hostname gets its own CNAME pointing at the same tunnel.
+    const dataDnsCreate = calls.find(
+      (c) =>
+        c.method === "POST" &&
+        c.url === `${BASE}/zones/zone-1/dns_records` &&
+        (c.body as { name?: string }).name === `data-biz-d.${ZONE}`
+    );
+    expect(dataDnsCreate?.body).toMatchObject({
+      type: "CNAME",
+      name: `data-biz-d.${ZONE}`,
+      content: "tun-d.cfargotunnel.com",
+      proxied: true
+    });
+  });
+
+  it("omits the data hostname/ingress/CNAME when dataEnabled is absent (default off)", async () => {
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u, i) =>
+          (i?.method ?? "GET") === "GET" &&
+          u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-nd`),
+        body: ok([])
+      },
+      {
+        match: (u, i) =>
+          i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-nd", name: "nc-biz-nd" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-nd/token"), body: ok("T") },
+      {
+        match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"),
+        body: ok({})
+      },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-1", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-1/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-1/dns_records`,
+        body: ok({ id: "rec-nd" }),
+        reuse: true
+      },
+      totalTlsHandler()
+    ]);
+
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const result = await provisioner({ businessId: "biz-nd", renderEnabled: true });
+    expect(result.dataHostname).toBeUndefined();
+    const ingress = calls.find(
+      (c) => c.method === "PUT" && c.url.endsWith("/configurations")
+    ) as { body: { config: { ingress: Array<{ hostname?: string }> } } };
+    expect(
+      ingress.body.config.ingress.some((r) => r.hostname?.startsWith("data-"))
+    ).toBe(false);
+    expect(
+      calls.some(
+        (c) =>
+          c.method === "POST" &&
+          c.url === `${BASE}/zones/zone-1/dns_records` &&
+          (c.body as { name?: string }).name?.startsWith("data-")
+      )
+    ).toBe(false);
+  });
+
   it("hostnameSuffix decouples public hostname from CF zone (apex zone, deeper hostname)", async () => {
     // Real-world case: zone is "newcoworker.com" (apex on CF) but we want
     // hostnames at "<businessId>.tunnel.newcoworker.com".
@@ -1011,11 +1139,19 @@ describe("cloudflareTunnelProvisioner", () => {
       // counterpart to the whitespace-coercion test below.
       renderServiceUrl: "http://127.0.0.1:9091",
       renderHostnamePrefix: "rb-",
+      // ... and the data-api override branch (residency data plane).
+      dataServiceUrl: "http://127.0.0.1:9092",
+      dataHostnamePrefix: "db-",
       fetchImpl
     });
-    const result = await provisioner({ businessId: "biz-v", renderEnabled: true });
+    const result = await provisioner({
+      businessId: "biz-v",
+      renderEnabled: true,
+      dataEnabled: true
+    });
     expect(result.voiceHostname).toBe("vb-biz-v.tunnel.newcoworker.com");
     expect(result.renderHostname).toBe("rb-biz-v.tunnel.newcoworker.com");
+    expect(result.dataHostname).toBe("db-biz-v.tunnel.newcoworker.com");
     const ingress = calls.find(
       (c) => c.method === "PUT" && c.url.endsWith("/configurations")
     );
@@ -1030,6 +1166,10 @@ describe("cloudflareTunnelProvisioner", () => {
           {
             hostname: "rb-biz-v.tunnel.newcoworker.com",
             service: "http://127.0.0.1:9091"
+          },
+          {
+            hostname: "db-biz-v.tunnel.newcoworker.com",
+            service: "http://127.0.0.1:9092"
           },
           { service: "http_status:404" }
         ]
@@ -1227,20 +1367,27 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
       zoneName: "tunnel.newcoworker.com",
       zoneId: "zone-w",
       hostnameSuffix: "   ",
-      // Also exercise the whitespace-coercion path for the new voice-bridge
-      // and render knobs: a padded prefix should trim to the documented default.
+      // Also exercise the whitespace-coercion path for the new voice-bridge,
+      // render, and data knobs: a padded prefix trims to the documented default.
       voiceServiceUrl: "   ",
       voiceHostnamePrefix: "   ",
       renderServiceUrl: "   ",
       renderHostnamePrefix: "   ",
+      dataServiceUrl: "   ",
+      dataHostnamePrefix: "   ",
       serviceUrl: "http://localhost:3000",
       fetchImpl
     });
-    const result = await provisioner({ businessId: "biz-ws", renderEnabled: true });
+    const result = await provisioner({
+      businessId: "biz-ws",
+      renderEnabled: true,
+      dataEnabled: true
+    });
     expect(result.hostname).toBe("biz-ws.tunnel.newcoworker.com");
     expect(result.voiceHostname).toBe("voice-biz-ws.tunnel.newcoworker.com");
-    // Whitespace render knobs collapse to the documented defaults.
+    // Whitespace render/data knobs collapse to the documented defaults.
     expect(result.renderHostname).toBe("render-biz-ws.tunnel.newcoworker.com");
+    expect(result.dataHostname).toBe("data-biz-ws.tunnel.newcoworker.com");
     const appCreate = calls.find(
       (c) =>
         c.method === "POST" &&

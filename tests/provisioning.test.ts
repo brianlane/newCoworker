@@ -39,7 +39,10 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
   getActiveGatewayTokenForBusiness: vi.fn(async () => process.env.ROWBOAT_GATEWAY_TOKEN ?? null),
   issueGatewayToken: vi.fn(async () => "minted-per-tenant-tok"),
-  markGatewayTokenDeployed: vi.fn(async () => undefined)
+  markGatewayTokenDeployed: vi.fn(async () => undefined),
+  // Residency-only bearer list (DATA_API_TOKENS). Empty by default: only the
+  // residency tests exercise it, overriding per-test.
+  listActiveGatewayTokensForBusiness: vi.fn(async () => [])
 }));
 
 vi.mock("@/lib/db/configs", () => ({
@@ -93,6 +96,7 @@ import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
+  listActiveGatewayTokensForBusiness,
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
@@ -871,7 +875,153 @@ describe("provisioning/orchestrate", () => {
       { businessId: "biz-ent", tier: "enterprise" },
       { vpsProvisioner, remoteExec, cloudflareTunnel: cfStub }
     );
-    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-ent", renderEnabled: true });
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-ent",
+      renderEnabled: true,
+      dataEnabled: false
+    });
+  });
+
+  it("enterprise with residency past 'supabase' publishes the data hostname + deploy flag", async () => {
+    // The gate keys on the REAL tier from the business row (the box tier is
+    // narrowed to standard) plus the enterprise-only data_residency_mode.
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      data_residency_mode: "dual"
+    } as never);
+    vi.mocked(listActiveGatewayTokensForBusiness).mockResolvedValueOnce([
+      "mock_gateway_token",
+      "old-rotated-token"
+    ]);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e4"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "t-res",
+      token: "PER_TENANT_TOKEN",
+      hostname: "biz-res.newcoworker.com",
+      voiceHostname: "voice-biz-res.newcoworker.com",
+      renderHostname: "render-biz-res.newcoworker.com",
+      dataHostname: "data-biz-res.newcoworker.com"
+    });
+    await orchestrateProvisioning(
+      { businessId: "biz-res", tier: "enterprise" },
+      { vpsProvisioner, remoteExec, cloudflareTunnel: cfStub }
+    );
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-res",
+      renderEnabled: true,
+      dataEnabled: true
+    });
+    // deploy-client.sh gets the stack gate so the box stands the containers up.
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "DATA_RESIDENCY_ENABLED", "true");
+    // Bearer list = every non-revoked token, with the deploy token guaranteed
+    // present. The mocked list already contains it, so no prepend happens.
+    expectDeployHasEnv(cmd, "DATA_API_TOKENS", "mock_gateway_token,old-rotated-token");
+  });
+
+  it("prepends the deploy token to DATA_API_TOKENS when the DB list lacks it", async () => {
+    // Covers the rotation race where this deploy just minted a token the
+    // list read predates — the data-api must still accept it.
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      data_residency_mode: "vps"
+    } as never);
+    vi.mocked(listActiveGatewayTokensForBusiness).mockResolvedValueOnce(["stale-token"]);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e7"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-res-rot", tier: "enterprise" },
+      { vpsProvisioner, remoteExec }
+    );
+    expectDeployHasEnv(
+      deployCallArg(remoteExec).command,
+      "DATA_API_TOKENS",
+      "mock_gateway_token,stale-token"
+    );
+  });
+
+  it("enterprise still in 'supabase' mode gets no data hostname and an empty deploy flag", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      data_residency_mode: "supabase"
+    } as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e5"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "t-res2",
+      token: "PER_TENANT_TOKEN",
+      hostname: "biz-res2.newcoworker.com",
+      voiceHostname: "voice-biz-res2.newcoworker.com",
+      renderHostname: "render-biz-res2.newcoworker.com"
+    });
+    await orchestrateProvisioning(
+      { businessId: "biz-res2", tier: "enterprise" },
+      { vpsProvisioner, remoteExec, cloudflareTunnel: cfStub }
+    );
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-res2",
+      renderEnabled: true,
+      dataEnabled: false
+    });
+    expectDeployHasEnv(deployCallArg(remoteExec).command, "DATA_RESIDENCY_ENABLED", "");
+  });
+
+  it("enterprise with NO residency column (pre-migration row) defaults to supabase mode", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise"
+    } as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e6"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "t-res3",
+      token: "PER_TENANT_TOKEN",
+      hostname: "biz-res3.newcoworker.com",
+      voiceHostname: "voice-biz-res3.newcoworker.com",
+      renderHostname: "render-biz-res3.newcoworker.com"
+    });
+    await orchestrateProvisioning(
+      { businessId: "biz-res3", tier: "enterprise" },
+      { vpsProvisioner, remoteExec, cloudflareTunnel: cfStub }
+    );
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-res3",
+      renderEnabled: true,
+      dataEnabled: false
+    });
+  });
+
+  it("a non-enterprise tenant never gets the data plane even with a stray residency mode", async () => {
+    // Defense-in-depth: the DB gate blocks non-enterprise forward flips, but
+    // the orchestrator re-checks the tier so a corrupt row can't leak a
+    // data hostname onto a standard box.
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "standard",
+      data_residency_mode: "vps"
+    } as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("s9"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "t-std9",
+      token: "PER_TENANT_TOKEN",
+      hostname: "biz-std9.newcoworker.com",
+      voiceHostname: "voice-biz-std9.newcoworker.com",
+      renderHostname: "render-biz-std9.newcoworker.com"
+    });
+    await orchestrateProvisioning(
+      { businessId: "biz-std9", tier: "standard" },
+      { vpsProvisioner, remoteExec, cloudflareTunnel: cfStub }
+    );
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-std9",
+      renderEnabled: true,
+      dataEnabled: false
+    });
   });
 
   it("falls back RESEND_API_KEY to '' when unset but ownerEmail provided", async () => {
@@ -930,7 +1080,11 @@ describe("provisioning/orchestrate", () => {
     );
     // Starter tier: render sidecar is NOT deployed, so the tunnel must not
     // publish a render hostname for it.
-    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-cf", renderEnabled: false });
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-cf",
+      renderEnabled: false,
+      dataEnabled: false
+    });
     expect(result.tunnelUrl).toBe("https://biz-cf.newcoworker.com");
     const cmd = deployCallArg(remoteExec).command;
     expectDeployHasEnv(cmd, "CLOUDFLARE_TUNNEL_TOKEN", "PER_TENANT_TOKEN");
@@ -955,7 +1109,11 @@ describe("provisioning/orchestrate", () => {
         cloudflareTunnel: cfStub
       }
     );
-    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-std", renderEnabled: true });
+    expect(cfStub).toHaveBeenCalledWith({
+      businessId: "biz-std",
+      renderEnabled: true,
+      dataEnabled: false
+    });
     // The shared render bearer must reach the VPS deploy command.
     expectDeployHasEnv(deployCallArg(remoteExec).command, "AIFLOW_RENDER_TOKEN", "RENDER_BEARER");
   });

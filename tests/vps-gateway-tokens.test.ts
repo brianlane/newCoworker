@@ -15,6 +15,7 @@ import {
   resolveGatewayTokenBinding,
   getActiveGatewayTokenForBusiness,
   getDeployedGatewayTokenForBusiness,
+  listActiveGatewayTokensForBusiness,
   resolveBusinessIdForRowboatProject,
   getActiveGatewayTokensForProject,
   issueGatewayToken,
@@ -136,6 +137,41 @@ describe("getActiveGatewayTokenForBusiness", () => {
     const { client } = makeClient({ maybeSingle: { data: { token: "svc-tok" }, error: null } });
     serviceClientHolder.current = client;
     expect(await getActiveGatewayTokenForBusiness("biz")).toBe("svc-tok");
+  });
+});
+
+describe("listActiveGatewayTokensForBusiness", () => {
+  it("returns every non-revoked token (pending + confirmed)", async () => {
+    const { client } = makeClient({
+      list: { data: [{ token: "new-pending" }, { token: "old-confirmed" }], error: null }
+    });
+    expect(await listActiveGatewayTokensForBusiness("biz", client as never)).toEqual([
+      "new-pending",
+      "old-confirmed"
+    ]);
+  });
+
+  it("returns [] when the business has no tokens", async () => {
+    const { client } = makeClient({ list: { data: [], error: null } });
+    expect(await listActiveGatewayTokensForBusiness("biz", client as never)).toEqual([]);
+  });
+
+  it("tolerates a null data payload", async () => {
+    const { client } = makeClient({ list: { data: null, error: null } });
+    expect(await listActiveGatewayTokensForBusiness("biz", client as never)).toEqual([]);
+  });
+
+  it("throws on a DB error", async () => {
+    const { client } = makeClient({ list: { data: null, error: { message: "list-boom" } } });
+    await expect(listActiveGatewayTokensForBusiness("biz", client as never)).rejects.toThrow(
+      /list-boom/
+    );
+  });
+
+  it("falls back to the service client when none is passed", async () => {
+    const { client } = makeClient({ list: { data: [{ token: "svc-list" }], error: null } });
+    serviceClientHolder.current = client;
+    expect(await listActiveGatewayTokensForBusiness("biz")).toEqual(["svc-list"]);
   });
 });
 

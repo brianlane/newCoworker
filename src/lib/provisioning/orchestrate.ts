@@ -32,6 +32,7 @@ import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
+  listActiveGatewayTokensForBusiness,
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
@@ -958,9 +959,20 @@ async function runOrchestrator(
   // so a standard tenant pinned to kvm2 still gets the sidecar). Gate the
   // public render hostname to match where the container actually runs.
   const renderEnabled = narrowTier !== "starter";
+  // Residency data-api gate. Keys on the REAL tier from the business row
+  // (narrowTier collapses enterprise onto the standard box profile) plus the
+  // enterprise-only data_residency_mode flag: only an opted-in enterprise
+  // tenant gets the data-* hostname and the on-box datastore stack.
+  const dataResidencyEnabled =
+    businessRow?.tier === "enterprise" &&
+    (businessRow?.data_residency_mode ?? "supabase") !== "supabase";
   if (tunnelProvisioner) {
     try {
-      const p = await tunnelProvisioner({ businessId, renderEnabled });
+      const p = await tunnelProvisioner({
+        businessId,
+        renderEnabled,
+        dataEnabled: dataResidencyEnabled
+      });
       tunnelHostname = p.hostname;
       cloudflareTunnelToken = p.token;
       bridgeMediaWssOrigin = `wss://${p.voiceHostname}`;
@@ -1192,6 +1204,19 @@ async function runOrchestrator(
   const existingGatewayToken = await getActiveGatewayTokenForBusiness(businessId);
   const gatewayToken =
     existingGatewayToken ?? (await issueGatewayToken(businessId, { label: "provisioning" }));
+  // Residency data-api bearer list: EVERY non-revoked token (pending +
+  // confirmed), not just the one this deploy stamps — during a rotation the
+  // platform can still present the old confirmed token until
+  // markGatewayTokenDeployed flips it, and the data-api must keep answering
+  // through that overlap. Only resolved for residency-enabled tenants.
+  let dataApiTokens = "";
+  if (dataResidencyEnabled) {
+    const activeTokens = await listActiveGatewayTokensForBusiness(businessId);
+    const all = activeTokens.includes(gatewayToken)
+      ? activeTokens
+      : [gatewayToken, ...activeTokens];
+    dataApiTokens = all.join(",");
+  }
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
@@ -1245,6 +1270,13 @@ async function runOrchestrator(
     // tiers; the render→platform credential lookup reuses APP_BASE_URL +
     // ROWBOAT_GATEWAY_TOKEN, so only this one extra secret needs to flow here.
     ["AIFLOW_RENDER_TOKEN", process.env.AIFLOW_RENDER_TOKEN ?? ""],
+    // Residency data-api stack gate for deploy-client.sh: "true" stands the
+    // per-tenant Postgres + data-api containers up (enterprise, opted in);
+    // anything else tears a stale stack down.
+    ["DATA_RESIDENCY_ENABLED", dataResidencyEnabled ? "true" : ""],
+    // Comma-separated bearer list for the data-api (all non-revoked tokens,
+    // so a rotation's overlap window never drops authenticated requests).
+    ["DATA_API_TOKENS", dataApiTokens],
     ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]

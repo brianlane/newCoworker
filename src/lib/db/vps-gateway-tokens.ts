@@ -83,6 +83,29 @@ export async function getActiveGatewayTokenForBusiness(
 }
 
 /**
+ * EVERY non-revoked token (plaintext) for a business — pending AND
+ * confirmed, newest first. Used to build the residency data-api's
+ * DATA_API_TOKENS list: during a rotation the platform may still present
+ * the old confirmed token while the box already carries the new pending
+ * one, so the API must accept both for the overlap window (same rationale
+ * as getActiveGatewayTokensForProject for Rowboat JWT verification).
+ */
+export async function listActiveGatewayTokensForBusiness(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_gateway_tokens")
+    .select("token")
+    .eq("business_id", businessId)
+    .is("revoked_at", null)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listActiveGatewayTokensForBusiness: ${error.message}`);
+  return (data ?? []).map((row) => row.token as string);
+}
+
+/**
  * Latest non-revoked token (plaintext) that has been CONFIRMED on the VPS
  * (`deployed_at` set). Used for the outbound Rowboat bearer, so the app never
  * gets "ahead" of the box: until a freshly minted token is confirmed deployed,
