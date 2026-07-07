@@ -294,15 +294,15 @@ app.post("/v1/insert", async (req, res) => {
       }
     }
     const values = [];
-    const tuples = rows.map(
-      (row) =>
-        `(${columns
-          .map((c) => {
-            values.push(normalizeValue(row[c]));
-            return `$${values.length}`;
-          })
-          .join(", ")})`
-    );
+    const tuples = [];
+    for (const row of rows) {
+      const placeholders = [];
+      for (const c of columns) {
+        values.push(await normalizeValue(table, c, row[c]));
+        placeholders.push(`$${values.length}`);
+      }
+      tuples.push(`(${placeholders.join(", ")})`);
+    }
     let sql = `INSERT INTO ${table} (${columns.map(quoteIdent).join(", ")}) VALUES ${tuples.join(", ")}`;
     if (onConflict !== undefined) {
       if (!Array.isArray(onConflict) || onConflict.length === 0) {
@@ -342,10 +342,11 @@ app.post("/v1/update", async (req, res) => {
       throw { code: "invalid_request", message: "update requires at least one filter" };
     }
     const values = [];
-    const assignments = columns.map((c) => {
-      values.push(normalizeValue(set[c]));
-      return `${quoteIdent(c)} = $${values.length}`;
-    });
+    const assignments = [];
+    for (const c of columns) {
+      values.push(await normalizeValue(table, c, set[c]));
+      assignments.push(`${quoteIdent(c)} = $${values.length}`);
+    }
     let sql = `UPDATE ${table} SET ${assignments.join(", ")}${compileFilters(filters, values)}`;
     if (returning === true) sql += " RETURNING *";
     const result = await pool.query(sql, values);
@@ -373,10 +374,49 @@ app.post("/v1/delete", async (req, res) => {
   }
 });
 
-/** JSON/array values must reach pg as JSON text for json/jsonb columns. */
-function normalizeValue(v) {
-  if (v !== null && typeof v === "object") return JSON.stringify(v);
-  return v;
+/**
+ * Column-type registry, loaded lazily from the datastore's own catalog and
+ * refreshed when an unknown column shows up (a schema upgrade that landed
+ * after boot). Needed because the correct wire form of a JS array depends on
+ * the COLUMN, not the value: text[]/uuid[] want a JS array (node-pg emits a
+ * Postgres array literal), while json/jsonb want JSON text — the old
+ * value-only heuristic stringified everything and broke array columns for
+ * journal replays that carry full row images.
+ */
+let columnTypeMap = null;
+async function loadColumnTypes() {
+  const { rows } = await pool.query(
+    `select table_name, column_name, data_type, udt_name
+       from information_schema.columns
+      where table_schema = 'public'`
+  );
+  const map = new Map();
+  for (const r of rows) {
+    if (!map.has(r.table_name)) map.set(r.table_name, new Map());
+    map.get(r.table_name).set(r.column_name, {
+      isArray: r.data_type === "ARRAY",
+      isJson: r.udt_name === "json" || r.udt_name === "jsonb"
+    });
+  }
+  columnTypeMap = map;
+}
+
+async function columnKind(table, column) {
+  if (!columnTypeMap || !columnTypeMap.get(table)?.has(column)) {
+    await loadColumnTypes();
+  }
+  return columnTypeMap.get(table)?.get(column) ?? { isArray: false, isJson: false };
+}
+
+/** Shape a payload value for its destination column. */
+async function normalizeValue(table, column, v) {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== "object") return v;
+  const kind = await columnKind(table, column);
+  if (kind.isJson) return JSON.stringify(v);
+  if (kind.isArray && Array.isArray(v)) return v;
+  // Unknown/mismatched shape: JSON text is the least destructive fallback.
+  return JSON.stringify(v);
 }
 
 function handleError(res, err) {
