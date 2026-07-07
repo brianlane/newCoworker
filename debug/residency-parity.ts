@@ -41,6 +41,11 @@ const CHILD_PARENT: Record<string, { parent: string; fk: string }> = {
   voice_call_transcript_turns: { parent: "voice_call_transcripts", fk: "transcript_id" }
 };
 
+// Parent-slice ceiling for child-table scoping. Hitting it means the gate
+// CANNOT prove parity for that child table (central and box could slice
+// different parent sets) — treated as a hard failure, never a silent pass.
+const PARENT_SLICE_LIMIT = 5000;
+
 async function centralCount(table: string): Promise<number> {
   const child = CHILD_PARENT[table];
   if (!child) {
@@ -55,9 +60,15 @@ async function centralCount(table: string): Promise<number> {
     .from(child.parent)
     .select("id")
     .eq("business_id", businessId)
-    .limit(5000);
+    .order("id", { ascending: true })
+    .limit(PARENT_SLICE_LIMIT);
   if (pErr) throw new Error(`central parents for ${table}: ${pErr.message}`);
   const ids = ((parents ?? []) as Array<{ id: string }>).map((p) => p.id);
+  if (ids.length >= PARENT_SLICE_LIMIT) {
+    throw new Error(
+      `central parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap — cannot prove parity; raise PARENT_SLICE_LIMIT`
+    );
+  }
   if (ids.length === 0) return 0;
   const { count, error } = await db
     .from(table)
@@ -77,10 +88,16 @@ async function boxCount(table: string): Promise<number> {
       table: child.parent as never,
       columns: ["id"],
       filters: [{ column: "business_id", op: "eq", value: businessId }],
-      limit: 5000
+      order: [{ column: "id", ascending: true }],
+      limit: PARENT_SLICE_LIMIT
     });
     if (!parents.ok) throw new Error(`box parents for ${table}: ${parents.message}`);
     const ids = parents.rows.map((p) => p.id);
+    if (ids.length >= PARENT_SLICE_LIMIT) {
+      throw new Error(
+        `box parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap — cannot prove parity; raise PARENT_SLICE_LIMIT`
+      );
+    }
     if (ids.length === 0) return 0;
     filters = [{ column: child.fk, op: "in" as const, value: ids }];
   }
