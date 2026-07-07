@@ -293,7 +293,10 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         type,
         offerTemplate:
           "New lead {{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}. " +
-          "Reply 1 to claim or 2 to pass by {{offer.deadline}}.",
+          "Reply 1 to claim or 2 to pass by {{offer.deadline}}.\n" +
+          'You can also reply "1, <ETA>" to claim and tell us when you\'ll reach out ' +
+          '(e.g. "1, 20 min").\n' +
+          'Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").',
         responseMinutes: 10,
         ownerFallbackTemplate:
           "No agent claimed {{vars.lead_name}} ({{vars.lead_phone}}). It's back to you."

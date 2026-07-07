@@ -617,27 +617,18 @@ describe("route_to_team step", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
-  it("preserves distinct claimTimeframeOption and lateClaimOption", () => {
+  it("strips the removed claimTimeframeOption/lateClaimOption fields from old definitions", () => {
+    // Reply digits are universal now ("1" claim, "2" pass); a definition
+    // authored before the migration still parses, but the legacy per-flow
+    // option digits are dropped rather than honored.
     const withOpts = JSON.parse(JSON.stringify(routedInput));
     withOpts.steps[2].claimTimeframeOption = 3;
     withOpts.steps[2].lateClaimOption = 4;
     const def = parseAiFlowDefinition(withOpts);
-    const step = def.steps[2];
-    expect(step.type === "route_to_team" && step.claimTimeframeOption).toBe(3);
-    expect(step.type === "route_to_team" && step.lateClaimOption).toBe(4);
+    const step = def.steps[2] as Record<string, unknown>;
+    expect("claimTimeframeOption" in step).toBe(false);
+    expect("lateClaimOption" in step).toBe(false);
     expect(validateDefinitionSemantics(def)).toEqual([]);
-  });
-
-  it("rejects claimTimeframeOption equal to lateClaimOption", () => {
-    const clash = JSON.parse(JSON.stringify(routedInput));
-    clash.steps[2].claimTimeframeOption = 3;
-    clash.steps[2].lateClaimOption = 3;
-    const def = aiFlowDefinitionSchema.parse(clash);
-    expect(
-      validateDefinitionSemantics(def).some((i) =>
-        i.includes("same digit for claimTimeframeOption and lateClaimOption")
-      )
-    ).toBe(true);
   });
 });
 

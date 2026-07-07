@@ -457,21 +457,6 @@ export type FlowStep =
        * without media when no screenshot was captured.
        */
       attachScreenshot?: boolean;
-      /**
-       * Reply digit (1-9) that means "accept WITH a timeframe" (e.g. 2 or 3).
-       * Stored on the offer's routing so the inbound webhook treats only "1" or
-       * this digit + comma as a claim — a round-robin flow's "2" (pass) is never
-       * mis-read as a claim.
-       */
-      claimTimeframeOption?: number;
-      /**
-       * Reply digit (1-9) that means "claim a lead AFTER its offer window
-       * lapsed" (retroactive/late claim) WITH a timeframe — a teammate replies
-       * "<digit>, <eta>" to re-open a lapsed offer. Stamped on the offer's
-       * routing as `late_digit`; replaces the old magic "86" (now reserved for
-       * retroactive UNCLAIM). Must differ from claimTimeframeOption.
-       */
-      lateClaimOption?: number;
       when?: StepCondition;
     }
   | {

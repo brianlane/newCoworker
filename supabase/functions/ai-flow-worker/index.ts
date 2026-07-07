@@ -2943,11 +2943,11 @@ async function routeToTeamStep(
     delete routing.late_claim;
     delete routing.step_index;
     delete routing.claim_timeframe;
+    // Legacy per-flow reply digits (tf_digit / late_digit) are gone: "1"
+    // claims and "2" passes universally. Scrub any stamp left by an old
+    // deploy so no stored run keeps a digit the webhook no longer honors.
     delete routing.tf_digit;
-    // Keep routing.late_digit AND route_step_index past the claim: a duplicate
-    // late-option reply ("<lateOpt>, eta") must still match this run in
-    // tryLateClaim (gated on late_digit) to get the idempotent "already yours"
-    // re-ack instead of falling through to the customer SMS path.
+    delete routing.late_digit;
     if (lateClaim) routing.late_claimed = true;
     if (action.claimedNotifyTemplate) {
       let body = renderTemplate(
@@ -3026,17 +3026,11 @@ async function routeToTeamStep(
     }
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
-    // Stamp the "accept with a timeframe" reply digit on the offer so the inbound
-    // webhook can tell a timeframe-claim ("3, 20 min") from a same-digit PASS
-    // ("2") without re-parsing the offer copy. Cleared when the step doesn't
-    // define the option (legacy / no-timeframe flows).
-    if (action.claimTimeframeOption) routing.tf_digit = String(action.claimTimeframeOption);
-    else delete routing.tf_digit;
-    // Stamp the retroactive (late) claim digit too, so the inbound webhook can
-    // tell a lapsed-offer claim ("<lateOpt>, eta") for THIS run from any other
-    // comma'd reply. Cleared when the step doesn't define the option.
-    if (action.lateClaimOption) routing.late_digit = String(action.lateClaimOption);
-    else delete routing.late_digit;
+    // Reply digits are universal ("1" claim, "2" pass, "86" unclaim), so no
+    // per-flow digit is stamped anymore. Clear stamps a pre-migration deploy
+    // may have left so re-offered runs shed them.
+    delete routing.tf_digit;
+    delete routing.late_digit;
     // After-hours offer window: the offer SMS still goes out now, but inside
     // the quiet window the claim deadline extends to quietEnd + grace so the
     // countdown effectively starts in the morning. The resolved deadline is

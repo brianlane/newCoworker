@@ -532,21 +532,11 @@ const stepSchema = z.discriminatedUnion("type", [
     agentRef: contactRefSchema.optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
-    // LEGACY. The reply digit that means "accept WITH a timeframe" (e.g. 2 or
-    // 3). Superseded by the universal "1" claim digit: "1, <eta>" claims with a
-    // timeframe on EVERY offer, so new flows don't need a separate option. Kept
-    // for already-authored flows — the inbound webhook still honors a stamped
-    // option digit, and a flow whose "2" means PASS (round-robin) never
-    // mis-records a "2, can't take it" reply as a claim.
-    claimTimeframeOption: z.number().int().min(1).max(9).optional(),
-    // LEGACY. The reply digit that means "claim a lead AFTER its offer window
-    // lapsed" (retroactive/late claim). Superseded by the universal "1" claim
-    // digit: a bare "1" or "1, <eta>" after the window late-claims seamlessly,
-    // so new flows don't need a separate option. Kept for already-authored
-    // flows (the webhook still honors a stamped digit). Must differ from
-    // claimTimeframeOption (enforced in validateDefinitionSemantics). "86"
-    // remains reserved for retroactive UNCLAIM.
-    lateClaimOption: z.number().int().min(1).max(9).optional(),
+    // Offer reply digits are universal, not per-flow options: "1" claims (live
+    // or late; "1, <eta>" adds a timeframe), "2" passes ("2, <reason>" adds
+    // why), "86" retroactively unclaims. The old claimTimeframeOption /
+    // lateClaimOption fields were removed after every stored flow was migrated
+    // off them (scripts/oneshot/simplify-claim-options.ts).
     when: whenSchema.optional()
   }),
   z.object({
@@ -1150,20 +1140,6 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     ) {
       issues.push(
         `Step "${step.id}" attaches a screenshot but no earlier browse step captures one.`
-      );
-    }
-
-    // The live "accept with a timeframe" digit and the retroactive late-claim
-    // digit must be distinct, or a single reply digit would be ambiguous
-    // between claiming a live offer and re-opening a lapsed one.
-    if (
-      step.type === "route_to_team" &&
-      step.claimTimeframeOption !== undefined &&
-      step.lateClaimOption !== undefined &&
-      step.claimTimeframeOption === step.lateClaimOption
-    ) {
-      issues.push(
-        `Step "${step.id}" uses the same digit for claimTimeframeOption and lateClaimOption; they must differ.`
       );
     }
 
