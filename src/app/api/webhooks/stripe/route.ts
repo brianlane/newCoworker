@@ -1643,16 +1643,17 @@ async function applyCustomWhiteGloveOfferFromCheckout(
   }
   let effectiveBusinessId = businessId;
   if (!effectiveBusinessId) {
-    // The payer may ALREADY have an account (signed up between receiving the
-    // link and paying). Attach the paid offer to their newest business so
+    // The RECIPIENT may already have an account (signed up between receiving
+    // the link and paying). Attach the paid offer to their newest business so
     // billing hides the upsell and priority support opens now; when no
     // account exists yet, createBusiness / the pending-email swap attach it
-    // at signup instead.
+    // at signup instead. Strictly the recipient's email — never the Stripe
+    // payer's, which anyone holding the link could set.
     try {
-      effectiveBusinessId = await attachPaidProspectOfferToBusinessByEmail(offerId, [
-        offer.recipient_email,
-        session.customer_details?.email
-      ]);
+      effectiveBusinessId = await attachPaidProspectOfferToBusinessByEmail(
+        offerId,
+        offer.recipient_email
+      );
     } catch (err) {
       logger.error("white_glove_offer prospect attach failed (non-fatal)", {
         eventId,

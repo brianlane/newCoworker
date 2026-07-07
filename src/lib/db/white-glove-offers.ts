@@ -134,45 +134,43 @@ function prioritySupportWindowFromNow(): Date {
 
 /**
  * Inverse attach for the Stripe webhook: a PROSPECT offer was just PAID, and
- * the payer may already have an account (signed up between receiving the link
- * and paying it). Finds the newest business owned by any of the candidate
- * emails (offer recipient first, then the Stripe payer), stamps it onto the
- * offer (only while business_id is still null — never re-homes an attached
- * offer), and returns the business id so the caller can open the priority
- * window. Null when no account exists yet — createBusiness's attach picks the
- * offer up at signup instead.
+ * the recipient may already have an account (signed up between receiving the
+ * link and paying it). Attaches STRICTLY by the offer's recipient_email — the
+ * Stripe payer email is never used, because whoever holds the link could pay
+ * with any email and must not bind the offer (and its priority-support grant)
+ * to a different tenant than the admin addressed. Finds the recipient's
+ * newest business, stamps it onto the offer (only while business_id is still
+ * null — never re-homes an attached offer), and returns the business id so
+ * the caller can open the priority window. Null when no account exists yet —
+ * createBusiness's attach picks the offer up at signup instead.
  */
 export async function attachPaidProspectOfferToBusinessByEmail(
   offerId: string,
-  candidateEmails: Array<string | null | undefined>,
+  recipientEmail: string | null | undefined,
   client?: SupabaseClient
 ): Promise<string | null> {
+  const email = recipientEmail?.trim() ?? "";
+  if (!email) return null;
   const db = client ?? (await createSupabaseServiceClient());
-  const emails = candidateEmails
-    .map((e) => e?.trim() ?? "")
-    .filter((e) => e.length > 0);
-  for (const email of emails) {
-    const { data, error } = await db
-      .from("businesses")
-      .select("id")
-      .ilike("owner_email", email)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) throw new Error(`attachPaidProspectOfferToBusinessByEmail: ${error.message}`);
-    const businessId = (data as { id?: string } | null)?.id;
-    if (!businessId) continue;
-    const { error: upErr } = await db
-      .from("white_glove_offers")
-      .update({ business_id: businessId })
-      .eq("id", offerId)
-      .is("business_id", null);
-    if (upErr) {
-      throw new Error(`attachPaidProspectOfferToBusinessByEmail: ${upErr.message}`);
-    }
-    return businessId;
+  const { data, error } = await db
+    .from("businesses")
+    .select("id")
+    .ilike("owner_email", email)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`attachPaidProspectOfferToBusinessByEmail: ${error.message}`);
+  const businessId = (data as { id?: string } | null)?.id;
+  if (!businessId) return null;
+  const { error: upErr } = await db
+    .from("white_glove_offers")
+    .update({ business_id: businessId })
+    .eq("id", offerId)
+    .is("business_id", null);
+  if (upErr) {
+    throw new Error(`attachPaidProspectOfferToBusinessByEmail: ${upErr.message}`);
   }
-  return null;
+  return businessId;
 }
 
 /** The emailable public payment link for an offer (durable; never expires). */

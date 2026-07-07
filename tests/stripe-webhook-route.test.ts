@@ -1403,12 +1403,12 @@ describe("stripe webhook route", () => {
       paidAt: new Date(1700000000 * 1000),
       stripeSessionId: "cs_wg_prospect"
     });
-    // The webhook TRIES to attach to an existing account (payer may have
-    // signed up since receiving the link); none exists here, so no window.
-    expect(attachPaidProspectOfferToBusinessByEmail).toHaveBeenCalledWith(offerId, [
-      "prospect@example.com",
-      undefined
-    ]);
+    // The webhook TRIES to attach to an existing account for the RECIPIENT
+    // (never the Stripe payer); none exists here, so no window.
+    expect(attachPaidProspectOfferToBusinessByEmail).toHaveBeenCalledWith(
+      offerId,
+      "prospect@example.com"
+    );
     expect(extendPrioritySupport).not.toHaveBeenCalled();
     expect(recordWhiteGlovePurchase).not.toHaveBeenCalled();
     expect(mockSendOwnerEmail).toHaveBeenCalledWith(
