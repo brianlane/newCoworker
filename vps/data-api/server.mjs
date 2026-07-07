@@ -29,6 +29,7 @@
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import express from "express";
+import rateLimit from "express-rate-limit";
 import pg from "pg";
 
 const PORT = Number(process.env.DATA_API_PORT ?? 8091);
@@ -84,6 +85,17 @@ const FILTER_OPS = {
 
 const IDENT_RE = /^[a-z_][a-z0-9_]*$/;
 
+/**
+ * Quote an identifier for SQL interpolation. Every identifier is ALSO
+ * validated against IDENT_RE first (assertColumns / compileFilters), so this
+ * is defense-in-depth: pg's escapeIdentifier double-quotes the name and
+ * escapes embedded quotes, making the interpolation inert even if a
+ * validator regression let a hostile name through.
+ */
+function quoteIdent(name) {
+  return pg.escapeIdentifier(name);
+}
+
 const pool = new pg.Pool({
   connectionString: DATABASE_URL,
   // The box serves exactly one tenant; a handful of connections is ample and
@@ -132,7 +144,7 @@ function compileFilters(filters, values) {
       if (value !== null) {
         throw { code: "invalid_request", message: "filter op 'is' only supports null" };
       }
-      parts.push(`${column} IS NULL`);
+      parts.push(`${quoteIdent(column)} IS NULL`);
     } else if (op === "in") {
       if (!Array.isArray(value) || value.length === 0) {
         throw { code: "invalid_request", message: "filter op 'in' needs a non-empty array" };
@@ -141,13 +153,13 @@ function compileFilters(filters, values) {
         values.push(v);
         return `$${values.length}`;
       });
-      parts.push(`${column} IN (${placeholders.join(", ")})`);
+      parts.push(`${quoteIdent(column)} IN (${placeholders.join(", ")})`);
     } else if (op in FILTER_OPS) {
       if (value === null || value === undefined || Array.isArray(value)) {
         throw { code: "invalid_request", message: `filter op '${op}' needs a scalar value` };
       }
       values.push(value);
-      parts.push(`${column} ${FILTER_OPS[op]} $${values.length}`);
+      parts.push(`${quoteIdent(column)} ${FILTER_OPS[op]} $${values.length}`);
     } else {
       throw { code: "invalid_request", message: `unknown filter op: ${String(op)}` };
     }
@@ -156,9 +168,13 @@ function compileFilters(filters, values) {
 }
 
 function requireTable(body) {
-  const table = body?.table;
-  if (typeof table !== "string" || !MOVED_TABLES.has(table)) {
-    throw { code: "unknown_table", message: `unknown table: ${String(table)}` };
+  const requested = body?.table;
+  // Resolve to the SET's own member (not the request string) so the value
+  // interpolated into SQL is a trusted constant — taint from the request
+  // body never reaches a query string, whitelist aside.
+  const table = [...MOVED_TABLES].find((t) => t === requested);
+  if (table === undefined) {
+    throw { code: "unknown_table", message: `unknown table: ${String(requested)}` };
   }
   return table;
 }
@@ -174,6 +190,19 @@ function assertColumns(cols, label) {
 const app = express();
 app.disable("x-powered-by");
 app.use(express.json({ limit: "2mb" }));
+
+// The platform (dashboard + Edge workers) is the only legitimate caller, so
+// the ceiling is generous — this exists to bound a runaway loop or a stolen
+// token's blast radius, not to throttle normal traffic. Same middleware the
+// aiflow-render sidecar uses.
+app.use(
+  rateLimit({
+    windowMs: 60_000,
+    limit: 600,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+);
 
 app.get("/v1/health", async (_req, res) => {
   try {
@@ -206,7 +235,7 @@ app.post("/v1/select", async (req, res) => {
         throw { code: "invalid_request", message: "columns must be a non-empty array" };
       }
       assertColumns(columns, "column");
-      projection = columns.join(", ");
+      projection = columns.map(quoteIdent).join(", ");
     }
     let sql = `SELECT ${projection} FROM ${table}${compileFilters(filters, values)}`;
     if (order !== undefined) {
@@ -215,7 +244,7 @@ app.post("/v1/select", async (req, res) => {
       }
       assertColumns(order.map((o) => o?.column), "order column");
       sql += ` ORDER BY ${order
-        .map((o) => `${o.column} ${o.ascending ? "ASC" : "DESC"}`)
+        .map((o) => `${quoteIdent(o.column)} ${o.ascending ? "ASC" : "DESC"}`)
         .join(", ")}`;
     }
     if (limit !== undefined) {
@@ -272,7 +301,7 @@ app.post("/v1/insert", async (req, res) => {
           })
           .join(", ")})`
     );
-    let sql = `INSERT INTO ${table} (${columns.join(", ")}) VALUES ${tuples.join(", ")}`;
+    let sql = `INSERT INTO ${table} (${columns.map(quoteIdent).join(", ")}) VALUES ${tuples.join(", ")}`;
     if (onConflict !== undefined) {
       if (!Array.isArray(onConflict) || onConflict.length === 0) {
         throw { code: "invalid_request", message: "onConflict must be a non-empty array" };
@@ -280,11 +309,11 @@ app.post("/v1/insert", async (req, res) => {
       assertColumns(onConflict, "onConflict column");
       const updates = columns
         .filter((c) => !onConflict.includes(c))
-        .map((c) => `${c} = excluded.${c}`);
+        .map((c) => `${quoteIdent(c)} = excluded.${quoteIdent(c)}`);
       sql +=
         updates.length > 0
-          ? ` ON CONFLICT (${onConflict.join(", ")}) DO UPDATE SET ${updates.join(", ")}`
-          : ` ON CONFLICT (${onConflict.join(", ")}) DO NOTHING`;
+          ? ` ON CONFLICT (${onConflict.map(quoteIdent).join(", ")}) DO UPDATE SET ${updates.join(", ")}`
+          : ` ON CONFLICT (${onConflict.map(quoteIdent).join(", ")}) DO NOTHING`;
     }
     if (returning === true) sql += " RETURNING *";
     const result = await pool.query(sql, values);
@@ -313,7 +342,7 @@ app.post("/v1/update", async (req, res) => {
     const values = [];
     const assignments = columns.map((c) => {
       values.push(normalizeValue(set[c]));
-      return `${c} = $${values.length}`;
+      return `${quoteIdent(c)} = $${values.length}`;
     });
     let sql = `UPDATE ${table} SET ${assignments.join(", ")}${compileFilters(filters, values)}`;
     if (returning === true) sql += " RETURNING *";

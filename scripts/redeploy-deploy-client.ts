@@ -89,7 +89,8 @@ function buildDeployEnvPrefix(
   deployVpsSize: "kvm1" | "kvm2" | "kvm4" | "kvm8",
   bridgeMediaWssOrigin: string,
   gatewayToken: string,
-  repoRef: string
+  repoRef: string,
+  dataResidencyEnabled: boolean
 ): string {
   const bashQuote = quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -129,6 +130,11 @@ function buildDeployEnvPrefix(
     ["APP_BASE_URL", process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["AIFLOW_RENDER_TOKEN", process.env.AIFLOW_RENDER_TOKEN ?? ""],
+    // Mirror the orchestrator's residency gate: deploy-client.sh tears the
+    // data-api stack down when this is not exactly "true", so a fleet
+    // redeploy that omitted it would stop an opted-in enterprise tenant's
+    // datastore.
+    ["DATA_RESIDENCY_ENABLED", dataResidencyEnabled ? "true" : ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken],
@@ -224,13 +230,20 @@ async function redeployOne(
   // new kvm1 default — the redeploy profile must match the actual hardware.
   const vpsSize = resolveDeployedVpsSize(tier, target.vpsSize);
   const bridgeOrigin = await resolveBridgeMediaWssOrigin(target.businessId);
+  // Same gate as orchestrate.ts: REAL tier + data_residency_mode past
+  // 'supabase'. Forwarded so a routine fleet roll preserves (or correctly
+  // tears down) the tenant's data-api stack.
+  const dataResidencyEnabled =
+    target.tier === "enterprise" &&
+    (target.dataResidencyMode ?? "supabase") !== "supabase";
   const envPrefix = buildDeployEnvPrefix(
     target.businessId,
     tier,
     vpsSize,
     bridgeOrigin,
     gatewayToken,
-    ref
+    ref,
+    dataResidencyEnabled
   );
   const command = buildRedeployCommand(ref, envPrefix);
   try {

@@ -1651,13 +1651,15 @@ DAENV_EOF
     if docker compose up -d --build --force-recreate; then
       # Schema upgrades on an EXISTING volume: the image's initdb hook only
       # runs on first boot, so re-apply the idempotent DDL (IF NOT EXISTS /
-      # drop-and-add FKs) directly. Wait for the healthcheck first.
+      # drop-and-add FKs) directly. The psql apply is RETRIED inside the same
+      # loop as the readiness probe — pg_isready can succeed while the server
+      # is still mid-crash-recovery, and a transient apply failure must not
+      # skip the schema for the whole deploy.
       schema_applied=0
       for _ in $(seq 1 24); do
-        if docker compose exec -T residency-postgres pg_isready -U dataapi -d residency >/dev/null 2>&1; then
-          if docker compose exec -T residency-postgres psql -U dataapi -d residency -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/schema.sql >/dev/null 2>&1; then
-            schema_applied=1
-          fi
+        if docker compose exec -T residency-postgres pg_isready -U dataapi -d residency >/dev/null 2>&1 \
+          && docker compose exec -T residency-postgres psql -U dataapi -d residency -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/schema.sql >/dev/null 2>&1; then
+          schema_applied=1
           break
         fi
         sleep 5
@@ -1668,9 +1670,12 @@ DAENV_EOF
         log "WARN: data-api schema apply failed or postgres never became ready"
       fi
 
+      # /v1/health deliberately answers HTTP 200 even when Postgres is down
+      # (the tunnel replaces origin 5xx bodies), so readiness must check the
+      # JSON body's ok flag — a 200 with ok:false is NOT healthy.
       dataapi_ok=0
       for _ in $(seq 1 20); do
-        if curl -sf --max-time 3 http://127.0.0.1:8091/v1/health >/dev/null 2>&1; then
+        if curl -sf --max-time 3 http://127.0.0.1:8091/v1/health 2>/dev/null | grep -q '"ok":true'; then
           dataapi_ok=1
           break
         fi
