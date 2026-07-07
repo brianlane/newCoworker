@@ -363,12 +363,15 @@ export function paginateFullActivityFeed(input: ActivityFeedInput): ActivityFeed
     };
   }
 
-  // Newest incomplete-source boundary; the boundary row itself WAS fetched,
-  // so keeping >= boundary always keeps at least that row (never an empty
-  // page → the cursor always advances).
+  // Newest incomplete-source boundary. The boundary row was fetched, but the
+  // collector may have DROPPED it (e.g. an SMS job without a parsable phone),
+  // so the filtered chunk can legitimately come back empty — advance the
+  // cursor to the boundary itself in that case so paging always makes
+  // progress (the next fetch is strictly below it) instead of throwing.
   const boundary = boundaries.reduce((a, b) => (a > b ? a : b));
   const items = merged.filter((i) => i.at >= boundary).slice(0, input.limit);
-  return { items, nextBefore: items[items.length - 1]!.at };
+  const nextBefore = items.length > 0 ? items[items.length - 1]!.at : boundary;
+  return { items, nextBefore };
 }
 
 /** Treat a failed query as "no rows" so one broken source never blanks the feed. */
@@ -622,13 +625,25 @@ export async function getActivityFeedPage(
   client?: SupabaseClient
 ): Promise<ActivityFeedPage> {
   const db = client ?? (await createSupabaseServiceClient());
-  return paginateFullActivityFeed(
-    await fetchActivityFeedInput(
-      businessId,
-      opts.limit ?? ACTIVITY_FEED_MAX,
-      db,
-      activityWindowDays(opts.tier),
-      opts.before
-    )
-  );
+  // A chunk can come back EMPTY while history remains (every row in the
+  // boundary window was dropped by the collector, e.g. unparsable SMS
+  // payloads). Hop over up to a few such chunks so the owner never lands on a
+  // blank page with an "Older activity" link; give up after the bound and
+  // return the (empty) page with its cursor intact.
+  let before = opts.before;
+  let page: ActivityFeedPage = { items: [], nextBefore: null };
+  for (let hop = 0; hop < 3; hop++) {
+    page = paginateFullActivityFeed(
+      await fetchActivityFeedInput(
+        businessId,
+        opts.limit ?? ACTIVITY_FEED_MAX,
+        db,
+        activityWindowDays(opts.tier),
+        before
+      )
+    );
+    if (page.items.length > 0 || !page.nextBefore) return page;
+    before = page.nextBefore;
+  }
+  return page;
 }

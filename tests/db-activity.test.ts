@@ -703,6 +703,69 @@ describe("getActivityFeedPage", () => {
     expect(chain.lt).not.toHaveBeenCalled();
   });
 
+  it("hops over empty chunks (dropped rows) instead of returning a blank page", async () => {
+    // First fetch: a capped smsInbound chunk whose rows all lack a parsable
+    // phone (collector drops them → empty page, cursor advances). Second
+    // fetch: a real chat item. The getter follows the cursor internally.
+    let call = 0;
+    const first = {
+      ...ALL_EMPTY,
+      sms_inbound_jobs: {
+        data: [
+          { payload: null, created_at: "2026-02-05T00:00:00Z" },
+          { payload: null, created_at: "2026-02-04T00:00:00Z" }
+        ],
+        error: null
+      }
+    };
+    const second = {
+      ...ALL_EMPTY,
+      dashboard_chat_jobs: { data: [{ created_at: "2026-02-03T00:00:00Z" }], error: null }
+    };
+    const db = {
+      from: vi.fn((table: string) => {
+        // 9 source queries per fetch round.
+        const round = Math.floor(call / 9);
+        call += 1;
+        const byTable = round === 0 ? first : second;
+        return chainResult(byTable[table as keyof typeof first]);
+      })
+    };
+
+    const page = await getActivityFeedPage("biz-1", { limit: 2 }, db as never);
+    expect(page.items.map((i) => i.kind)).toEqual(["chat"]);
+    expect(page.nextBefore).toBeNull();
+  });
+
+  it("gives up after bounded hops and returns the empty page with its cursor", async () => {
+    // Every chunk is a capped run of dropped rows: after 3 hops the getter
+    // stops and hands back the empty page + cursor instead of looping.
+    let fetchRound = -1;
+    const db = {
+      from: vi.fn((table: string) => {
+        if (table === "voice_call_transcripts") fetchRound += 1;
+        if (table !== "sms_inbound_jobs" || fetchRound > 90) {
+          return chainResult({ data: [], error: null });
+        }
+        const day = 20 - fetchRound * 2;
+        return chainResult({
+          data: [
+            { payload: null, created_at: `2026-02-${String(day).padStart(2, "0")}T00:00:00Z` },
+            { payload: null, created_at: `2026-02-${String(day - 1).padStart(2, "0")}T00:00:00Z` }
+          ],
+          error: null
+        });
+      })
+    };
+
+    const page = await getActivityFeedPage("biz-1", { limit: 2 }, db as never);
+    expect(page.items).toEqual([]);
+    expect(page.nextBefore).toBe("2026-02-15T00:00:00Z");
+    // 3 hops × 9 source queries... but sms_inbound_jobs is queried twice per
+    // round (inbound + replies), so just assert the loop was bounded.
+    expect(db.from.mock.calls.length).toBe(27);
+  });
+
   it("applies the `before` cursor to every source on its own timestamp column", async () => {
     const db = mockDbByTable(ALL_EMPTY);
     const before = "2026-02-01T00:00:00Z";
@@ -851,6 +914,24 @@ describe("paginateFullActivityFeed", () => {
       })
     );
     expect(emailNewer.nextBefore).toBe("2026-02-04T00:00:00Z");
+  });
+
+  it("advances the cursor past a boundary row the collector dropped (empty chunk, no crash)", () => {
+    // A capped smsInbound source whose rows have no parsable phone: the
+    // collector drops them all, so the boundary-filtered chunk is empty. The
+    // cursor must still advance (to the boundary) so older history stays
+    // reachable instead of the page throwing/blanking.
+    const page = paginateFullActivityFeed(
+      input({
+        limit: 2,
+        smsInbound: [
+          { payload: null, created_at: "2026-02-05T00:00:00Z" },
+          { payload: null, created_at: "2026-02-04T00:00:00Z" }
+        ]
+      })
+    );
+    expect(page.items).toEqual([]);
+    expect(page.nextBefore).toBe("2026-02-04T00:00:00Z");
   });
 
   it("ignores a capped source whose boundary row has a malformed timestamp", () => {
