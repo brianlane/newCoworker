@@ -167,6 +167,41 @@ describe("chunkJournalRows", () => {
     const rows = [row(1), row(2), row(3)];
     expect(chunkJournalRows(rows, 2).map((c) => c.length)).toEqual([2, 1]);
   });
+
+  it("never batches two upserts for the same primary key together", () => {
+    // Postgres rejects one INSERT ... ON CONFLICT DO UPDATE touching the
+    // same row twice — a rapid update-update pair must split into two
+    // sequential chunks (order preserved).
+    const rows = [
+      row(1, { payload: { id: "same", business_id: BIZ } }),
+      row(2, { payload: { id: "same", business_id: BIZ } }),
+      row(3, { payload: { id: "other", business_id: BIZ } })
+    ];
+    expect(chunkJournalRows(rows, 100).map((c) => c.map((r) => r.seq))).toEqual([
+      [1],
+      [2, 3]
+    ]);
+  });
+
+  it("composite-PK duplicates split too, and unresolvable PKs are isolated", () => {
+    const t = (seq: number, e164: string) =>
+      row(seq, {
+        table_name: "sms_rowboat_threads",
+        payload: { business_id: BIZ, customer_e164: e164 }
+      });
+    expect(
+      chunkJournalRows([t(1, "+1"), t(2, "+2"), t(3, "+1")], 100).map((c) =>
+        c.map((r) => r.seq)
+      )
+    ).toEqual([[1, 2], [3]]);
+    // A row whose PK cannot be fingerprinted (unknown table / missing PK
+    // value) is never merged into a batch — it stands alone so the drain's
+    // unknown-table/missing-PK handling sees it individually.
+    const broken = row(2, { table_name: "businesses" });
+    expect(chunkJournalRows([row(1), broken, row(3)], 100).map((c) => c.length)).toEqual([
+      1, 1, 1
+    ]);
+  });
 });
 
 describe("deleteFiltersFor", () => {
@@ -333,6 +368,24 @@ describe("runResidencyReplay", () => {
     await expect(
       runResidencyReplay({ client, makeDataApi: () => makeApi({}) })
     ).rejects.toThrow(/journal delete down/);
+  });
+
+  it("onlyBusinessIds pins a targeted drain to those tenants", async () => {
+    const OTHER = "22222222-2222-4222-8222-222222222222";
+    const { client } = makeDb({
+      pendingBusinesses: [OTHER, BIZ],
+      mode: "dual",
+      pending: []
+    });
+    const summary = await runResidencyReplay({
+      client,
+      makeDataApi: () => makeApi({}),
+      onlyBusinessIds: [BIZ],
+      businessLimit: 1
+    });
+    // Without the filter, businessLimit:1 would have scheduled OTHER first
+    // and starved the target out of the run entirely.
+    expect(summary.businesses.map((b) => b.businessId)).toEqual([BIZ]);
   });
 
   it("caps the businesses processed per run", async () => {

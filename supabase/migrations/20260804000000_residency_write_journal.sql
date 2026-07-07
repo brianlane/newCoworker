@@ -159,6 +159,7 @@ as $$
 $$;
 
 revoke all on function public.residency_pending_businesses() from public;
+grant execute on function public.residency_pending_businesses() to service_role;
 
 -- Attempt counter bump for a failed batch, one statement (PostgREST cannot
 -- express `set attempts = attempts + 1`).
@@ -174,6 +175,7 @@ as $$
 $$;
 
 revoke all on function public.residency_bump_attempts(bigint[]) from public;
+grant execute on function public.residency_bump_attempts(bigint[]) to service_role;
 
 -- One-time backfill: snapshot every existing content row for a business
 -- into the journal as 'upsert' rows, in FK-dependency order (parents before
@@ -239,6 +241,7 @@ end;
 $$;
 
 revoke all on function public.residency_backfill_business(uuid) from public;
+grant execute on function public.residency_backfill_business(uuid) to service_role;
 
 -- ── replay cron ─────────────────────────────────────────────────────────
 -- Every minute (worst-case replication lag ≈60s + function runtime), same

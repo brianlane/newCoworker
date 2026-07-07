@@ -68,23 +68,54 @@ export type ReplayDeps = {
   businessLimit?: number;
   /** Max rows per data-api upsert batch. */
   batchSize?: number;
+  /**
+   * Drain ONLY these businesses (operator tooling: a targeted backfill
+   * drain must not be starved out of the businessLimit window by a large
+   * shared backlog, and must not spend its run draining other tenants).
+   */
+  onlyBusinessIds?: string[];
 };
 
-/** Consecutive same-table upserts collapse into one batched insert call. */
+/** Stable PK fingerprint for duplicate detection inside a batch. */
+function pkKeyOf(row: JournalRow): string | null {
+  if (!isResidencyMovedTable(row.table_name)) return null;
+  const parts: string[] = [];
+  for (const column of RESIDENCY_TABLE_PRIMARY_KEYS[row.table_name]) {
+    const value = row.payload[column];
+    if (value === null || value === undefined) return null;
+    parts.push(String(value));
+  }
+  return parts.join("\u0000");
+}
+
+/**
+ * Consecutive same-table upserts collapse into one batched insert call —
+ * EXCEPT when a batch would touch the same primary key twice: Postgres
+ * rejects a single `INSERT … ON CONFLICT DO UPDATE` that affects one row
+ * twice ("cannot affect row a second time"), so a rapid update-update pair
+ * on the same contact would wedge the drain forever. A repeated PK starts a
+ * new chunk, preserving exact seq-order apply semantics.
+ */
 export function chunkJournalRows(rows: JournalRow[], batchSize: number): JournalRow[][] {
   const chunks: JournalRow[][] = [];
+  let currentKeys = new Set<string>();
   for (const row of rows) {
     const current = chunks[chunks.length - 1];
+    const key = pkKeyOf(row);
     if (
       current &&
       current.length < batchSize &&
       row.op === "upsert" &&
       current[0].op === "upsert" &&
-      current[0].table_name === row.table_name
+      current[0].table_name === row.table_name &&
+      key !== null &&
+      !currentKeys.has(key)
     ) {
       current.push(row);
+      currentKeys.add(key);
     } else {
       chunks.push([row]);
+      currentKeys = new Set(key === null ? [] : [key]);
     }
   }
   return chunks;
@@ -285,7 +316,12 @@ export async function runResidencyReplay(deps: ReplayDeps = {}): Promise<ReplayS
     totalErrors: 0
   };
 
-  const ids = ((pendingBusinesses ?? []) as string[]).slice(0, businessLimit);
+  const pendingIds = (pendingBusinesses ?? []) as string[];
+  const ids = (
+    deps.onlyBusinessIds
+      ? pendingIds.filter((id) => deps.onlyBusinessIds!.includes(id))
+      : pendingIds
+  ).slice(0, businessLimit);
   for (const businessId of ids) {
     const result = await drainBusiness(
       db,

@@ -79,10 +79,14 @@ if (drain) {
   console.log(`[drain] replaying${baseUrl ? ` via ${baseUrl}` : " via tunnel"}...`);
   const started = Date.now();
   for (;;) {
+    // onlyBusinessIds pins the drain to OUR tenant: without it a large
+    // shared backlog could fill the businessLimit window with other
+    // tenants and this loop would misread "not scheduled" as "done".
     const summary = await runResidencyReplay({
       makeDataApi: (id) =>
         new DataApiClient(id, baseUrl && id === businessId ? { baseUrl } : {}),
-      perBusinessLimit: 500
+      perBusinessLimit: 500,
+      onlyBusinessIds: [businessId]
     });
     const mine = summary.businesses.find((b) => b.businessId === businessId);
     console.log(
