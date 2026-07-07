@@ -3026,6 +3026,14 @@ async function routeToTeamStep(
     }
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
+    // Log of teammates ACTUALLY texted an offer (unlike `tried`, which also
+    // collects opt-out/lead-phone skips that never saw one). The webhook's
+    // first-to-claim yank grants takeover rights from this log only.
+    const offeredLog = Array.isArray(routing.offered_log)
+      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    if (!offeredLog.includes(agent.phone)) offeredLog.push(agent.phone);
+    routing.offered_log = offeredLog;
     // Reply digits are universal ("1" claim, "2" pass, "86" unclaim), so no
     // per-flow digit is stamped anymore. Clear stamps a pre-migration deploy
     // may have left so re-offered runs shed them.

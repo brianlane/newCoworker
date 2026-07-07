@@ -36,7 +36,12 @@ describe("classifyStaleOfferReply", () => {
     const r = classify([
       row({
         status: "awaiting_agent",
-        routing: { offered: NEXT_AGENT, tried: [GABBY], step_index: 11 }
+        routing: {
+          offered: NEXT_AGENT,
+          tried: [GABBY],
+          offered_log: [GABBY, NEXT_AGENT],
+          step_index: 11
+        }
       })
     ]);
     expect(r).toEqual({ runId: "run-1", kind: "live_with_other", claimedName: "" });
@@ -46,7 +51,30 @@ describe("classifyStaleOfferReply", () => {
     const r = classify([
       row({
         status: "awaiting_agent",
-        routing: { offered: NEXT_AGENT, tried: [GABBY], step_index: 11, first_to_claim: false }
+        routing: {
+          offered: NEXT_AGENT,
+          tried: [GABBY],
+          offered_log: [GABBY, NEXT_AGENT],
+          step_index: 11,
+          first_to_claim: false
+        }
+      })
+    ]);
+    expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
+  });
+
+  it("returns moved_on when the sender was only skipped, never texted the offer", () => {
+    // In `tried` (e.g. opted out at offer time) but not in offered_log: the
+    // yank would refuse them, so the ack must not teach it.
+    const r = classify([
+      row({
+        status: "awaiting_agent",
+        routing: {
+          offered: NEXT_AGENT,
+          tried: [GABBY],
+          offered_log: [NEXT_AGENT],
+          step_index: 11
+        }
       })
     ]);
     expect(r).toEqual({ runId: "run-1", kind: "moved_on", claimedName: "" });
@@ -57,7 +85,12 @@ describe("classifyStaleOfferReply", () => {
       [
         row({
           status: "awaiting_agent",
-          routing: { offered: NEXT_AGENT, tried: [GABBY], step_index: 11 }
+          routing: {
+            offered: NEXT_AGENT,
+            tried: [GABBY],
+            offered_log: [GABBY, NEXT_AGENT],
+            step_index: 11
+          }
         })
       ],
       "2"

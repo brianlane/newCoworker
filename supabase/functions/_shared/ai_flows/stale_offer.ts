@@ -114,11 +114,22 @@ export function classifyStaleOfferReply(args: {
     // tryLateClaim — reaching this classifier with a "1" means the sender added
     // an ETA ("1, a few hours"), which must not preempt the active countdown.
     // Tell them the bare-"1" affordance instead of pretending the lead is gone.
+    // Gated on routing.offered_log (who actually RECEIVED an offer SMS) so a
+    // teammate the worker merely skipped is never taught a yank that
+    // tryLateClaim would then refuse.
+    const offeredLog = Array.isArray(routing.offered_log)
+      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
     const liveWithOther =
       offered !== "" &&
       offered !== from &&
       (row.status === "awaiting_agent" || row.status === "queued");
-    if (liveWithOther && digit === "1" && routing.first_to_claim !== false) {
+    if (
+      liveWithOther &&
+      digit === "1" &&
+      offeredLog.includes(from) &&
+      routing.first_to_claim !== false
+    ) {
       return { runId: row.id, kind: "live_with_other", claimedName: "" };
     }
     return { runId: row.id, kind: "moved_on", claimedName: "" };
