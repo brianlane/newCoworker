@@ -958,9 +958,20 @@ async function runOrchestrator(
   // so a standard tenant pinned to kvm2 still gets the sidecar). Gate the
   // public render hostname to match where the container actually runs.
   const renderEnabled = narrowTier !== "starter";
+  // Residency data-api gate. Keys on the REAL tier from the business row
+  // (narrowTier collapses enterprise onto the standard box profile) plus the
+  // enterprise-only data_residency_mode flag: only an opted-in enterprise
+  // tenant gets the data-* hostname and the on-box datastore stack.
+  const dataResidencyEnabled =
+    businessRow?.tier === "enterprise" &&
+    (businessRow?.data_residency_mode ?? "supabase") !== "supabase";
   if (tunnelProvisioner) {
     try {
-      const p = await tunnelProvisioner({ businessId, renderEnabled });
+      const p = await tunnelProvisioner({
+        businessId,
+        renderEnabled,
+        dataEnabled: dataResidencyEnabled
+      });
       tunnelHostname = p.hostname;
       cloudflareTunnelToken = p.token;
       bridgeMediaWssOrigin = `wss://${p.voiceHostname}`;
@@ -1245,6 +1256,11 @@ async function runOrchestrator(
     // tiers; the render→platform credential lookup reuses APP_BASE_URL +
     // ROWBOAT_GATEWAY_TOKEN, so only this one extra secret needs to flow here.
     ["AIFLOW_RENDER_TOKEN", process.env.AIFLOW_RENDER_TOKEN ?? ""],
+    // Residency data-api stack gate for deploy-client.sh: "true" stands the
+    // per-tenant Postgres + data-api containers up (enterprise, opted in);
+    // anything else tears a stale stack down. The data-api's bearer is the
+    // per-tenant ROWBOAT_GATEWAY_TOKEN already exported above.
+    ["DATA_RESIDENCY_ENABLED", dataResidencyEnabled ? "true" : ""],
     ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]

@@ -1,0 +1,18 @@
+{
+  "name": "newcoworker-data-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Single-tenant residency data API fronting the box-local Postgres",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "express": "^4.21.2",
+    "pg": "^8.16.3"
+  }
+}

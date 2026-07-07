@@ -39,6 +39,13 @@ export type ProvisionedTunnel = {
    * ingress rule + CNAME are created only where the container actually runs.
    */
   renderHostname?: string;
+  /**
+   * Public hostname forwarding to `dataServiceUrl` (the residency data API on
+   * :8091). Only present when `dataEnabled` was passed — the data-api stack is
+   * deployed exclusively for enterprise tenants with data residency switched
+   * on, so the hostname exists only where the container actually runs.
+   */
+  dataHostname?: string;
 };
 
 export type CloudflareTunnelProvisioner = (input: {
@@ -50,6 +57,12 @@ export type CloudflareTunnelProvisioner = (input: {
    * public hostname that would resolve to a non-existent backend.
    */
   renderEnabled?: boolean;
+  /**
+   * Whether to publish the residency data-API hostname for this tenant.
+   * Deployed exclusively for enterprise tenants whose `data_residency_mode`
+   * is past 'supabase' — everyone else gets no hostname and no backend.
+   */
+  dataEnabled?: boolean;
 }) => Promise<ProvisionedTunnel>;
 
 export type CloudflareTunnelConfig = {
@@ -112,6 +125,19 @@ export type CloudflareTunnelConfig = {
    */
   renderHostnamePrefix?: string;
   /**
+   * Local residency data-API URL (default "http://127.0.0.1:8091"). When an
+   * enterprise tenant has residency enabled, the tunnel publishes it behind a
+   * dedicated public hostname so the dashboard + Supabase Edge can reach the
+   * box datastore with a CF-issued cert — same pattern as voice/render.
+   */
+  dataServiceUrl?: string;
+  /**
+   * Hostname prefix for the data-API public URL. The resulting public
+   * hostname is `${dataHostnamePrefix}${businessId}.${hostnameSuffix}`
+   * (default "data-") — one wildcard level, covered by free Universal SSL.
+   */
+  dataHostnamePrefix?: string;
+  /**
    * Pre-known zone id. When supplied we skip the `GET /zones?name=…` lookup,
    * which removes one round-trip and avoids relying on the API token having
    * the zone-list scope (Zone:DNS:Edit is enough on a specific zone).
@@ -156,6 +182,8 @@ export function createCloudflareTunnelProvisioner(
     voiceHostnamePrefix: rawVoiceHostnamePrefix,
     renderServiceUrl: rawRenderServiceUrl,
     renderHostnamePrefix: rawRenderHostnamePrefix,
+    dataServiceUrl: rawDataServiceUrl,
+    dataHostnamePrefix: rawDataHostnamePrefix,
     tunnelNamePrefix = "nc",
     fetchImpl = fetch
   } = config;
@@ -190,6 +218,15 @@ export function createCloudflareTunnelProvisioner(
     typeof rawRenderHostnamePrefix === "string" && rawRenderHostnamePrefix.trim().length > 0
       ? rawRenderHostnamePrefix.trim()
       : "render-";
+  // Same empty-string coercion as the voice/render equivalents above.
+  const dataServiceUrl =
+    typeof rawDataServiceUrl === "string" && rawDataServiceUrl.trim().length > 0
+      ? rawDataServiceUrl.trim()
+      : "http://127.0.0.1:8091";
+  const dataHostnamePrefix =
+    typeof rawDataHostnamePrefix === "string" && rawDataHostnamePrefix.trim().length > 0
+      ? rawDataHostnamePrefix.trim()
+      : "data-";
 
   /**
    * Cloudflare API caller. The `tokenOverride` parameter lets specific
@@ -327,7 +364,8 @@ export function createCloudflareTunnelProvisioner(
 
   return async function provisionBusinessTunnel({
     businessId,
-    renderEnabled = false
+    renderEnabled = false,
+    dataEnabled = false
   }): Promise<ProvisionedTunnel> {
     if (!businessId) throw new Error("businessId required");
     const tunnelName = `${tunnelNamePrefix}-${businessId}`;
@@ -337,6 +375,10 @@ export function createCloudflareTunnelProvisioner(
     // so no public hostname points at a backend that isn't running there.
     const renderHostname = renderEnabled
       ? `${renderHostnamePrefix}${businessId}.${hostnameSuffix}`
+      : undefined;
+    // Only materialized for residency-enabled enterprise tenants.
+    const dataHostname = dataEnabled
+      ? `${dataHostnamePrefix}${businessId}.${hostnameSuffix}`
       : undefined;
 
     // 1. Reuse an existing tunnel by name, otherwise create one. CF accepts the
@@ -378,6 +420,9 @@ export function createCloudflareTunnelProvisioner(
     ];
     if (renderHostname) {
       ingress.push({ hostname: renderHostname, service: renderServiceUrl });
+    }
+    if (dataHostname) {
+      ingress.push({ hostname: dataHostname, service: dataServiceUrl });
     }
     // CF requires the ingress array to terminate with a hostname-less catch-all.
     ingress.push({ service: "http_status:404" });
@@ -422,6 +467,15 @@ export function createCloudflareTunnelProvisioner(
         role: "render"
       });
     }
+    if (dataHostname) {
+      await ensureCnameRecord({
+        businessId,
+        zoneId,
+        hostname: dataHostname,
+        cnameTarget,
+        role: "data"
+      });
+    }
 
     // 5. Best-effort Total TLS opt-in. With our default one-wildcard-level
     //    hostname pattern (`<biz>.<zone>`), free Universal SSL already
@@ -432,7 +486,7 @@ export function createCloudflareTunnelProvisioner(
     //    `ensureZoneTotalTls` for why we swallow API errors here.
     await ensureZoneTotalTls(zoneId, businessId);
 
-    return { tunnelId, token, hostname, voiceHostname, renderHostname };
+    return { tunnelId, token, hostname, voiceHostname, renderHostname, dataHostname };
   };
 }
 
@@ -470,6 +524,8 @@ export function cloudflareTunnelProvisionerFromEnv(
     voiceServiceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_SERVICE_URL),
     voiceHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_VOICE_HOSTNAME_PREFIX),
     renderServiceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_RENDER_SERVICE_URL),
-    renderHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_RENDER_HOSTNAME_PREFIX)
+    renderHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_RENDER_HOSTNAME_PREFIX),
+    dataServiceUrl: blankToUndefined(env.CLOUDFLARE_TUNNEL_DATA_SERVICE_URL),
+    dataHostnamePrefix: blankToUndefined(env.CLOUDFLARE_TUNNEL_DATA_HOSTNAME_PREFIX)
   });
 }

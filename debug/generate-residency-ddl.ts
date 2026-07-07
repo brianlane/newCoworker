@@ -19,7 +19,14 @@
  *   - Indexes are copied as-is (they encode the read patterns the dashboard
  *     depends on).
  *
- * Usage: npx tsx debug/generate-residency-ddl.ts [--out vps/data-api/schema.sql]
+ * Usage:
+ *   npx tsx debug/generate-residency-ddl.ts [--out vps/data-api/schema.sql]
+ *   npx tsx debug/generate-residency-ddl.ts --catalog-json <file>
+ *
+ * `--catalog-json` skips the live connection and reads a pre-fetched
+ * `{ columns, constraints, indexes }` JSON (the three catalog queries below,
+ * json_agg'd) — for operators whose only DB access is the Supabase MCP /
+ * SQL editor rather than a raw postgres:// URL.
  * Read-only against the central DB; writes only the local schema file.
  */
 import fs from "node:fs";
@@ -62,58 +69,90 @@ type IndexRow = {
   indexdef: string;
 };
 
-/**
- * PostgREST (the supabase-js service client) cannot query
- * information_schema/pg_catalog, so the three catalog reads go over the raw
- * `pg` protocol using the connection string in SUPABASE_DB_URL — the same
- * var the supabase CLI uses. It is the ONLY credential this script needs.
- */
-const dbUrl = process.env.SUPABASE_DB_URL ?? "";
-if (!dbUrl) {
-  console.error(
-    "SUPABASE_DB_URL is required (postgres:// connection string; the catalog " +
-      "queries need raw SQL access that PostgREST does not expose)."
-  );
-  process.exit(1);
-}
-
-const { default: pg } = await import("pg");
-const client = new pg.Client({ connectionString: dbUrl });
-await client.connect();
-
 const tables = [...RESIDENCY_MOVED_TABLES];
-const inList = tables.map((t) => `'${t}'`).join(", ");
 
-const { rows: columns } = await client.query<ColumnRow>(
-  `select table_name, column_name, ordinal_position, data_type, udt_name,
-          is_nullable, column_default, character_maximum_length,
-          is_identity, identity_generation
-     from information_schema.columns
-    where table_schema = 'public' and table_name in (${inList})
-    order by table_name, ordinal_position`
-);
+let columns: ColumnRow[];
+let constraints: ConstraintRow[];
+let indexes: IndexRow[];
 
-const { rows: constraints } = await client.query<ConstraintRow>(
-  `select rel.relname as table_name,
-          con.conname as constraint_name,
-          case con.contype when 'p' then 'PRIMARY KEY' when 'u' then 'UNIQUE'
-                           when 'f' then 'FOREIGN KEY' when 'c' then 'CHECK' end as constraint_type,
-          pg_get_constraintdef(con.oid) as definition
-     from pg_constraint con
-     join pg_class rel on rel.oid = con.conrelid
-     join pg_namespace nsp on nsp.oid = rel.relnamespace
-    where nsp.nspname = 'public' and rel.relname in (${inList})
-    order by rel.relname, con.contype desc, con.conname`
-);
+const CATALOG_ARG = process.argv.indexOf("--catalog-json");
+if (CATALOG_ARG !== -1) {
+  // Offline mode: catalog rows pre-fetched by the operator (Supabase MCP /
+  // SQL editor) as { columns, constraints, indexes }.
+  const catalogPath = path.resolve(process.cwd(), process.argv[CATALOG_ARG + 1]);
+  const catalog = JSON.parse(fs.readFileSync(catalogPath, "utf8")) as {
+    columns: ColumnRow[];
+    constraints: ConstraintRow[];
+    indexes: IndexRow[];
+  };
+  columns = catalog.columns;
+  constraints = catalog.constraints;
+  indexes = catalog.indexes;
+} else {
+  /**
+   * PostgREST (the supabase-js service client) cannot query
+   * information_schema/pg_catalog, so the three catalog reads go over the raw
+   * `pg` protocol using the connection string in SUPABASE_DB_URL — the same
+   * var the supabase CLI uses. It is the ONLY credential this script needs.
+   */
+  const dbUrl = process.env.SUPABASE_DB_URL ?? "";
+  if (!dbUrl) {
+    console.error(
+      "SUPABASE_DB_URL is required (postgres:// connection string; the catalog " +
+        "queries need raw SQL access that PostgREST does not expose). " +
+        "No URL? Pre-fetch the catalog and use --catalog-json instead."
+    );
+    process.exit(1);
+  }
 
-const { rows: indexes } = await client.query<IndexRow>(
-  `select tablename, indexname, indexdef
-     from pg_indexes
-    where schemaname = 'public' and tablename in (${inList})
-    order by tablename, indexname`
-);
+  const { default: pg } = await import("pg");
+  // Supabase's Postgres presents a chain the local trust store can't verify
+  // (SELF_SIGNED_CERT_IN_CHAIN). A `sslmode=` query param inside the URL takes
+  // precedence over both PGSSLMODE and the `ssl` client option, so strip it
+  // from the URL and configure TLS explicitly: encrypted, but without chain
+  // verification. Acceptable here — the script is read-only catalog
+  // introspection run by an operator, not a production data path.
+  const parsedUrl = new URL(dbUrl);
+  parsedUrl.searchParams.delete("sslmode");
+  const client = new pg.Client({
+    connectionString: parsedUrl.toString(),
+    ssl: { rejectUnauthorized: false }
+  });
+  await client.connect();
 
-await client.end();
+  const inList = tables.map((t) => `'${t}'`).join(", ");
+
+  ({ rows: columns } = await client.query<ColumnRow>(
+    `select table_name, column_name, ordinal_position, data_type, udt_name,
+            is_nullable, column_default, character_maximum_length,
+            is_identity, identity_generation
+       from information_schema.columns
+      where table_schema = 'public' and table_name in (${inList})
+      order by table_name, ordinal_position`
+  ));
+
+  ({ rows: constraints } = await client.query<ConstraintRow>(
+    `select rel.relname as table_name,
+            con.conname as constraint_name,
+            case con.contype when 'p' then 'PRIMARY KEY' when 'u' then 'UNIQUE'
+                             when 'f' then 'FOREIGN KEY' when 'c' then 'CHECK' end as constraint_type,
+            pg_get_constraintdef(con.oid) as definition
+       from pg_constraint con
+       join pg_class rel on rel.oid = con.conrelid
+       join pg_namespace nsp on nsp.oid = rel.relnamespace
+      where nsp.nspname = 'public' and rel.relname in (${inList})
+      order by rel.relname, con.contype desc, con.conname`
+  ));
+
+  ({ rows: indexes } = await client.query<IndexRow>(
+    `select tablename, indexname, indexdef
+       from pg_indexes
+      where schemaname = 'public' and tablename in (${inList})
+      order by tablename, indexname`
+  ));
+
+  await client.end();
+}
 
 const missing = tables.filter((t) => !columns.some((c) => c.table_name === t));
 if (missing.length > 0) {

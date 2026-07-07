@@ -64,6 +64,13 @@
 #                               a rsync from the orchestrator).
 #   PROVISIONING_PROGRESS_URL — optional; POST JSON progress to app (see report_progress)
 #   PROVISIONING_PROGRESS_TOKEN — Bearer token for progress API
+#   DATA_RESIDENCY_ENABLED   — "true" stands up the residency data-api +
+#                               box-local Postgres (enterprise tenants with
+#                               data_residency_mode past 'supabase'); any
+#                               other value tears a stale stack down. The
+#                               API's bearer is ROWBOAT_GATEWAY_TOKEN and the
+#                               tunnel publishes data-<businessId>.<zone> →
+#                               127.0.0.1:8091.
 
 set -euo pipefail
 
@@ -1580,6 +1587,109 @@ AIRENV_EOF
   )
 else
   log "No aiflow-render source at ${AIFLOW_RENDER_SRC} — skipping render sidecar"
+fi
+
+# ------------------------------------------------------------------
+# Residency data API + box-local Postgres (enterprise opt-in).
+#
+# Gate: the orchestrator passes DATA_RESIDENCY_ENABLED=true ONLY for
+# enterprise tenants whose businesses.data_residency_mode is past
+# 'supabase'. Everyone else gets a teardown of any stale stack (a tenant
+# rolled back to central must not keep serving stale content from the box —
+# the named volume, i.e. the data itself, is deliberately preserved for the
+# pre-purge rollback window).
+#
+# Same sync model as the other sidecars: rsync from the staged repo,
+# rewrite .env every deploy (bearer-token rotations land), --force-recreate.
+# The Postgres password is generated ON THE BOX on first deploy and
+# preserved across redeploys — it never leaves the VPS (the platform talks
+# to the data-api over the tunnel, never to Postgres directly).
+# ------------------------------------------------------------------
+DATA_API_SRC="${DATA_API_SRC:-/opt/newcoworker-repo/vps/data-api}"
+DATA_API_DEST="/opt/data-api"
+
+if [[ "${DATA_RESIDENCY_ENABLED:-}" != "true" ]]; then
+  if [[ -f "${DATA_API_DEST}/docker-compose.yml" ]]; then
+    log "DATA_RESIDENCY_ENABLED!=true: tearing down data-api stack (volume preserved)..."
+    ( cd "${DATA_API_DEST}" && docker compose down --remove-orphans ) || true
+  fi
+elif [[ -d "${DATA_API_SRC}" && -f "${DATA_API_SRC}/docker-compose.yml" ]]; then
+  log "Syncing data-api source ${DATA_API_SRC} → ${DATA_API_DEST}..."
+  mkdir -p "${DATA_API_DEST}"
+  if command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete \
+      --exclude ".env" \
+      --exclude "node_modules" \
+      "${DATA_API_SRC}/" "${DATA_API_DEST}/"
+  else
+    log "rsync not installed; falling back to cp -R (no --delete)"
+    cp -R "${DATA_API_SRC}/." "${DATA_API_DEST}/"
+  fi
+
+  (
+    cd "${DATA_API_DEST}"
+
+    # Preserve the box-local Postgres password across redeploys; changing it
+    # would strand the existing data volume (postgres only reads
+    # POSTGRES_PASSWORD on first init). Generated here, never leaves the box.
+    prev_pg_password=""
+    if [[ -f .env ]]; then
+      prev_pg_password=$(grep -E '^POSTGRES_PASSWORD=' .env 2>/dev/null | tail -n 1 | cut -d= -f2-) || true
+    fi
+    pg_password="${prev_pg_password:-$(openssl rand -hex 24)}"
+
+    cat > .env <<DAENV_EOF
+DATA_API_PORT=8091
+# Bearer(s) the platform presents; the per-tenant gateway token. Comma-
+# separated so a token rotation's pending/confirmed overlap keeps working.
+DATA_API_TOKENS=${ROWBOAT_GATEWAY_TOKEN}
+POSTGRES_PASSWORD=${pg_password}
+DATABASE_URL=postgresql://dataapi:${pg_password}@residency-postgres:5432/residency
+DAENV_EOF
+    chmod 600 .env
+
+    if docker compose up -d --build --force-recreate; then
+      # Schema upgrades on an EXISTING volume: the image's initdb hook only
+      # runs on first boot, so re-apply the idempotent DDL (IF NOT EXISTS /
+      # drop-and-add FKs) directly. Wait for the healthcheck first.
+      schema_applied=0
+      for _ in $(seq 1 24); do
+        if docker compose exec -T residency-postgres pg_isready -U dataapi -d residency >/dev/null 2>&1; then
+          if docker compose exec -T residency-postgres psql -U dataapi -d residency -v ON_ERROR_STOP=1 -f /docker-entrypoint-initdb.d/schema.sql >/dev/null 2>&1; then
+            schema_applied=1
+          fi
+          break
+        fi
+        sleep 5
+      done
+      if [[ "${schema_applied}" == "1" ]]; then
+        log "data-api datastore schema applied/refreshed"
+      else
+        log "WARN: data-api schema apply failed or postgres never became ready"
+      fi
+
+      dataapi_ok=0
+      for _ in $(seq 1 20); do
+        if curl -sf --max-time 3 http://127.0.0.1:8091/v1/health >/dev/null 2>&1; then
+          dataapi_ok=1
+          break
+        fi
+        sleep 2
+      done
+      if [[ "${dataapi_ok}" == "1" ]]; then
+        report_progress 99 "data_api_ready" "residency data-api healthy on :8091"
+        log "data-api ready"
+      else
+        log "WARN: data-api container started but GET /v1/health never returned 200 within 40s"
+        report_progress 98 "data_api_unhealthy" "data-api started but never reached HTTP 200"
+      fi
+    else
+      log "WARN: data-api compose failed (residency reads/writes will be degraded)"
+      report_progress 98 "data_api_compose_failed" "docker compose up failed"
+    fi
+  )
+else
+  log "WARN: DATA_RESIDENCY_ENABLED=true but no data-api source at ${DATA_API_SRC} — skipping"
 fi
 
 log "=== Client deployment complete: ${BUSINESS_ID} ==="
