@@ -51,6 +51,7 @@ export function WhiteGloveOffersPanel({
   const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const prospectMode = !businessId;
 
@@ -73,6 +74,7 @@ export function WhiteGloveOffersPanel({
     }
     setLoading(true);
     setError(null);
+    setNotice(null);
     try {
       const res = await fetch("/api/admin/white-glove-offers", {
         method: "POST",
@@ -89,6 +91,12 @@ export function WhiteGloveOffersPanel({
       if (!res.ok) {
         setError(json.error?.message ?? "Creating the offer failed");
       } else {
+        const emailedTo: string | null = json.data?.emailedTo ?? null;
+        setNotice(
+          emailedTo
+            ? `Offer created and emailed to ${emailedTo} with the payment link.`
+            : "Offer created — the email couldn't be sent automatically, so copy the pay link below and send it yourself."
+        );
         setName("");
         setDescription("");
         setAmount("");
@@ -135,8 +143,8 @@ export function WhiteGloveOffersPanel({
     <div className="space-y-3">
       <p className="text-xs text-parchment/40">
         {prospectMode
-          ? "Create a bespoke, one-time offer for a PROSPECT (no account needed). Email them the payment link; they pay through Stripe before signup."
-          : "Create a bespoke, one-time offer for this business. It appears on their billing page — or email them the payment link directly. Paying opens the standard 30-day priority support window."}
+          ? "Create a bespoke, one-time offer for a PROSPECT (no account needed). The payment link is emailed to them automatically; they pay through Stripe before signup."
+          : "Create a bespoke, one-time offer for this business. The payment link is emailed to the recipient (or the owner) automatically, and it appears on their billing page. Paying opens the standard 30-day priority support window."}
       </p>
 
       <div className="flex flex-wrap items-end gap-2">
@@ -187,6 +195,7 @@ export function WhiteGloveOffersPanel({
       </label>
 
       {error && <p className="text-xs text-clay-red">{error}</p>}
+      {notice && <p className="text-xs text-claw-green">{notice}</p>}
 
       {offers.length > 0 && (
         <ul className="space-y-1.5">

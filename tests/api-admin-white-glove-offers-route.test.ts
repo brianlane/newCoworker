@@ -19,6 +19,10 @@ vi.mock("@/lib/db/white-glove-offers", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/email/client", () => ({
+  sendOwnerEmail: vi.fn().mockResolvedValue("email_1")
+}));
+
 import { POST, GET, DELETE } from "@/app/api/admin/white-glove-offers/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
@@ -28,6 +32,7 @@ import {
   listProspectWhiteGloveOffers,
   revokeWhiteGloveOffer
 } from "@/lib/db/white-glove-offers";
+import { sendOwnerEmail } from "@/lib/email/client";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 const OFFER_ID = "33333333-3333-4333-8333-333333333333";
@@ -84,6 +89,93 @@ describe("api/admin/white-glove-offers route", () => {
     });
     // The emailable payment link comes back with the created offer.
     expect(body.data.payUrl).toContain("/offer/tok-1");
+  });
+
+  it("POST emails the offer to an explicit recipient and reports emailedTo", async () => {
+    process.env.RESEND_API_KEY = "resend_test";
+    try {
+      vi.mocked(createWhiteGloveOffer).mockResolvedValue({
+        id: OFFER_ID,
+        pay_token: "tok-9",
+        name: "Founding deal",
+        description: "Desc",
+        amount_cents: 50_000
+      } as never);
+      const res = await POST(
+        jsonRequest("POST", {
+          recipientEmail: "prospect@example.com",
+          name: "Founding deal",
+          amountUsd: 500
+        })
+      );
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.data.emailedTo).toBe("prospect@example.com");
+      expect(sendOwnerEmail).toHaveBeenCalledWith(
+        "resend_test",
+        "prospect@example.com",
+        expect.stringContaining("Founding deal"),
+        expect.objectContaining({ text: expect.stringContaining("/offer/tok-9") })
+      );
+    } finally {
+      delete process.env.RESEND_API_KEY;
+    }
+  });
+
+  it("POST falls back to the business owner's email for business-tied offers", async () => {
+    process.env.RESEND_API_KEY = "resend_test";
+    try {
+      vi.mocked(createWhiteGloveOffer).mockResolvedValue({
+        id: OFFER_ID,
+        pay_token: "tok-10",
+        name: "Deal",
+        description: "",
+        amount_cents: 10_000
+      } as never);
+      const res = await POST(
+        jsonRequest("POST", { businessId: BIZ_ID, name: "Deal", amountUsd: 100 })
+      );
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      expect(body.data.emailedTo).toBe("o@o.com");
+    } finally {
+      delete process.env.RESEND_API_KEY;
+    }
+  });
+
+  it("POST still succeeds (emailedTo null) when the key is unset or the send fails", async () => {
+    delete process.env.RESEND_API_KEY;
+    vi.mocked(createWhiteGloveOffer).mockResolvedValue({
+      id: OFFER_ID,
+      pay_token: "tok-11",
+      name: "Deal",
+      description: "",
+      amount_cents: 10_000
+    } as never);
+    const noKey = await POST(
+      jsonRequest("POST", { recipientEmail: "p@x.com", name: "Deal", amountUsd: 100 })
+    );
+    expect((await noKey.json()).data.emailedTo).toBeNull();
+
+    process.env.RESEND_API_KEY = "resend_test";
+    try {
+      vi.mocked(sendOwnerEmail).mockRejectedValueOnce(new Error("resend down"));
+      const failed = await POST(
+        jsonRequest("POST", { recipientEmail: "p@x.com", name: "Deal", amountUsd: 100 })
+      );
+      const body = await failed.json();
+      expect(failed.status).toBe(200);
+      expect(body.data.emailedTo).toBeNull();
+
+      // Resend can also reject WITHOUT throwing (no message id): still null.
+      vi.mocked(sendOwnerEmail).mockResolvedValueOnce(null);
+      const rejected = await POST(
+        jsonRequest("POST", { recipientEmail: "p@x.com", name: "Deal", amountUsd: 100 })
+      );
+      expect((await rejected.json()).data.emailedTo).toBeNull();
+    } finally {
+      delete process.env.RESEND_API_KEY;
+    }
   });
 
   it("POST creates a PROSPECT offer from a recipient email (no business)", async () => {
