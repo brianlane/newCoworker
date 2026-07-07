@@ -68,25 +68,28 @@ export default async function CallTranscriptPage({
   const transcript = await getTranscriptById(business.id, transcriptId);
   if (!transcript) notFound();
 
-  const turns = await listTurns(transcript.id, { businessId: business.id });
-
-  // Name the caller (owner / roster member / manual override) and let the owner
-  // set or edit that name inline, mirroring the SMS thread header. Only a real
-  // caller number is editable — a missing/anonymous caller has nothing to key on.
+  // Everything below depends only on the transcript — one parallel group
+  // instead of three serial awaits (for residency tenants each is a tunnel
+  // round-trip to their box).
   const callerE164 = transcript.caller_e164?.trim() || null;
-  const contact = callerE164
-    ? (
-        await resolveContactNames(business.id, [callerE164], db).catch(
+  const [turns, contactMap, memory] = await Promise.all([
+    listTurns(transcript.id, { businessId: business.id }),
+    // Name the caller (owner / roster member / manual override) and let the
+    // owner set or edit that name inline, mirroring the SMS thread header.
+    // Only a real caller number is editable.
+    callerE164
+      ? resolveContactNames(business.id, [callerE164], db).catch(
           () => new Map<string, ContactName>()
         )
-      ).get(callerE164)
-    : undefined;
-  // Link the caller through to their contact profile when one exists
-  // (alias-aware; the profile page 404s on numbers without a contacts row,
-  // so only link when there is somewhere to land).
-  const memory = callerE164
-    ? await getCustomerMemory(business.id, callerE164, db).catch(() => null)
-    : null;
+      : Promise.resolve(new Map<string, ContactName>()),
+    // Link the caller through to their contact profile when one exists
+    // (alias-aware; the profile page 404s on numbers without a contacts row,
+    // so only link when there is somewhere to land).
+    callerE164
+      ? getCustomerMemory(business.id, callerE164, db).catch(() => null)
+      : Promise.resolve(null)
+  ]);
+  const contact = callerE164 ? contactMap.get(callerE164) : undefined;
 
   return (
     <div className="space-y-6 max-w-3xl">

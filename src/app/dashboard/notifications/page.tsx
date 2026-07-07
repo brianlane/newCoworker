@@ -50,12 +50,15 @@ export default async function NotificationsPage() {
   // owner's first visit would insert, so the admin still previews the real
   // page instead of a bogus "provision your coworker" empty state. Real
   // owners keep the create-on-first-visit behavior.
-  const prefs =
+  // Prefs and the recent list are independent — one parallel group (for
+  // residency tenants the notifications read is a tunnel round-trip).
+  const [prefs, recent] = await Promise.all([
     businessId && businessRow
       ? viewAsCtx.viewAs
-        ? ((await getNotificationPreferences(businessId)) ??
-          defaultNotificationPreferencesRow(businessId))
-        : await getOrCreateNotificationPreferences(businessId, {
+        ? getNotificationPreferences(businessId).then(
+            (row) => row ?? defaultNotificationPreferencesRow(businessId)
+          )
+        : getOrCreateNotificationPreferences(businessId, {
             contactSeeds: {
               userEmail: seedUserEmail,
               authPhone: seedAuthPhone,
@@ -63,7 +66,9 @@ export default async function NotificationsPage() {
               businessPhone: businessRow.phone ?? null
             }
           })
-      : null;
+      : Promise.resolve(null),
+    businessId ? getNotifications(businessId, { limit: 25 }) : Promise.resolve([])
+  ]);
   // Display-only autofill: prefill the alert phone/email inputs from the
   // owner's account + business contact info when the stored prefs are still
   // empty. The DB row is untouched until the owner clicks Save.
@@ -79,8 +84,6 @@ export default async function NotificationsPage() {
           })
         }
       : prefs;
-
-  const recent = businessId ? await getNotifications(businessId, { limit: 25 }) : [];
 
   // Swap raw phone numbers in the stored digest event labels for known contact
   // names, using the same resolver the dashboard's Recent Activity uses. The
