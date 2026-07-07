@@ -63,7 +63,16 @@ async function emailOfferToRecipient(
       recipientEmail,
       siteUrl
     });
-    await sendOwnerEmail(apiKey, recipientEmail, subject, { text, html });
+    // Resend can reject WITHOUT throwing (returns no message id) — treat that
+    // as a failed send so the admin is told to copy the link manually instead
+    // of the notice claiming an email that never went out.
+    const messageId = await sendOwnerEmail(apiKey, recipientEmail, subject, { text, html });
+    if (!messageId) {
+      logger.error("white_glove_offer create: Resend rejected the offer email (non-fatal)", {
+        offerId: offer.id
+      });
+      return null;
+    }
     return recipientEmail;
   } catch (err) {
     logger.error("white_glove_offer create: offer email failed (non-fatal)", {

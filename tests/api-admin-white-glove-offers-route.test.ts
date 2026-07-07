@@ -166,6 +166,13 @@ describe("api/admin/white-glove-offers route", () => {
       const body = await failed.json();
       expect(failed.status).toBe(200);
       expect(body.data.emailedTo).toBeNull();
+
+      // Resend can also reject WITHOUT throwing (no message id): still null.
+      vi.mocked(sendOwnerEmail).mockResolvedValueOnce(null);
+      const rejected = await POST(
+        jsonRequest("POST", { recipientEmail: "p@x.com", name: "Deal", amountUsd: 100 })
+      );
+      expect((await rejected.json()).data.emailedTo).toBeNull();
     } finally {
       delete process.env.RESEND_API_KEY;
     }
