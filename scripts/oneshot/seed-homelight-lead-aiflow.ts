@@ -266,7 +266,12 @@ function buildDefinition(opts: {
             description: "The lead's mobile phone from the contact card, in E.164 if possible"
           },
           { name: "lead_email", description: "The lead's email from the contact card, or 'none'" },
-          { name: "lead_address", description: "The property street address from the contact card" }
+          {
+            name: "lead_address",
+            description:
+              "The property street address from the contact card — the FULL address " +
+              "including street, city, state, and ZIP code"
+          }
         ]
       },
       // 5b. Fallback: if the portal contact card was delayed/empty, read the
@@ -304,7 +309,9 @@ function buildDefinition(opts: {
                 },
                 {
                   name: "lead_address",
-                  description: "The property street address, labeled 'Address' in the HomeLight email"
+                  description:
+                    "The property street address, labeled 'Address' in the HomeLight " +
+                    "email — the FULL address including street, city, state, and ZIP code"
                 }
               ]
             }
@@ -379,14 +386,31 @@ function buildDefinition(opts: {
         ...(opts.leadEmailConnectionId ? { fromConnectionId: opts.leadEmailConnectionId } : {}),
         when: gateOnClaim
       },
-      // 11. Always tell the owner the outcome — claimed (with everything that was
-      //     sent) or not (owner fallback). Ungated.
+      // 11. Always tell the owner the outcome, in two complementary branches
+      //     (audit Jul 2026). The contact fields only exist after a CLAIM (the
+      //     portal/email extraction steps are claim-gated), so the claimed
+      //     notify carries the full details while the unclaimed one shows the
+      //     alert-level fields + portal link instead of empty lines.
       {
         id: "notify",
         type: "notify_owner",
         message:
           "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, " +
-          "~{{vars.price}}).\nOutcome: {{vars.actions_taken}}."
+          "~{{vars.price}}).\n" +
+          "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
+          "Outcome: {{vars.actions_taken}}.",
+        when: gateOnClaim
+      },
+      {
+        id: "notify_unclaimed",
+        type: "notify_owner",
+        message:
+          "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, " +
+          "~{{vars.price}}).\n" +
+          "Not claimed — full details in the portal: {{vars.leadUrl}}\n" +
+          "Outcome: {{vars.actions_taken}}.",
+        when: { var: "claimed_agent", equals: "none" }
       }
     ],
     options: { suppressDefaultReply: true }
