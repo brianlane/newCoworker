@@ -7,6 +7,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -71,6 +72,15 @@ export async function listTranscriptsForBusiness(
   const db = client ?? (await createSupabaseServiceClient());
   const requested = options.limit ?? DEFAULT_LIST_LIMIT;
   const limit = Math.min(Math.max(1, requested), MAX_LIST_LIMIT);
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    return await readMovedRows<VoiceCallTranscriptRow>(businessId, {
+      table: "voice_call_transcripts",
+      filters: [{ column: "business_id", op: "eq", value: businessId }],
+      order: [{ column: "created_at", ascending: false }],
+      limit
+    });
+  }
   const { data, error } = await db
     .from("voice_call_transcripts")
     .select("*")
@@ -87,6 +97,18 @@ export async function getTranscriptByCallControlId(
   client?: SupabaseClient
 ): Promise<VoiceCallTranscriptRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    const rows = await readMovedRows<VoiceCallTranscriptRow>(businessId, {
+      table: "voice_call_transcripts",
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "call_control_id", op: "eq", value: callControlId }
+      ],
+      limit: 1
+    });
+    return rows[0] ?? null;
+  }
   const { data, error } = await db
     .from("voice_call_transcripts")
     .select("*")
@@ -112,6 +134,18 @@ export async function getTranscriptById(
   client?: SupabaseClient
 ): Promise<VoiceCallTranscriptRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    const rows = await readMovedRows<VoiceCallTranscriptRow>(businessId, {
+      table: "voice_call_transcripts",
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "id", op: "eq", value: id }
+      ],
+      limit: 1
+    });
+    return rows[0] ?? null;
+  }
   const { data, error } = await db
     .from("voice_call_transcripts")
     .select("*")
@@ -124,9 +158,29 @@ export async function getTranscriptById(
 
 export async function listTurns(
   transcriptId: string,
+  options: {
+    /**
+     * Owning business, when the caller has it (both dashboard call pages
+     * do). Required for residency routing — turns have no business_id
+     * column of their own, so without it the read stays central (correct
+     * until the Phase 4 purge; the purge runbook greps for bare calls).
+     */
+    businessId?: string;
+  } = {},
   client?: SupabaseClient
 ): Promise<VoiceCallTranscriptTurnRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
+  const bizId = options.businessId;
+  // The ternary keeps the await OUT of any `if` condition/body pairing that
+  // v8-to-istanbul mis-counts (negative implicit-else artifact).
+  const vpsReadMode = await (bizId ? isVpsReadMode(bizId, db) : Promise.resolve(false));
+  if (bizId && vpsReadMode) {
+    return await readMovedRows<VoiceCallTranscriptTurnRow>(bizId, {
+      table: "voice_call_transcript_turns",
+      filters: [{ column: "transcript_id", op: "eq", value: transcriptId }],
+      order: [{ column: "turn_index", ascending: true }]
+    });
+  }
   const { data, error } = await db
     .from("voice_call_transcript_turns")
     .select("*")
@@ -162,6 +216,21 @@ export async function listTranscriptsForCaller(
   const requested = options.limit ?? DEFAULT_LIST_LIMIT;
   const limit = Math.min(Math.max(1, requested), MAX_LIST_LIMIT);
   const callers = [...new Set([callerE164, ...(options.aliases ?? [])])];
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    return await readMovedRows<VoiceCallTranscriptRow>(businessId, {
+      table: "voice_call_transcripts",
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "caller_e164", op: "in", value: callers }
+      ],
+      // Match the central path's `nullsFirst: false` exactly — Postgres
+      // defaults DESC to NULLS FIRST, which would float null-started calls
+      // to the top for vps tenants only.
+      order: [{ column: "started_at", ascending: false, nullsFirst: false }],
+      limit
+    });
+  }
   const { data, error } = await db
     .from("voice_call_transcripts")
     .select("*")
@@ -209,13 +278,6 @@ export async function listVoiceTurnsForCustomer(
   // One bulk SELECT for all transcript ids — much cheaper than N
   // round trips on the summarizer hot path.
   const ids = transcripts.map((t) => t.id);
-  const { data, error } = await db
-    .from("voice_call_transcript_turns")
-    .select("transcript_id, role, content, started_at, turn_index")
-    .in("transcript_id", ids)
-    .order("turn_index", { ascending: true })
-    .limit(maxTurnsTotal);
-  if (error) throw new Error(`listVoiceTurnsForCustomer: ${error.message}`);
   type Row = {
     transcript_id: string;
     role: VoiceTranscriptTurnRole;
@@ -223,8 +285,28 @@ export async function listVoiceTurnsForCustomer(
     started_at: string | null;
     turn_index: number;
   };
+  let turnRows: Row[];
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    turnRows = await readMovedRows<Row>(businessId, {
+      table: "voice_call_transcript_turns",
+      columns: ["transcript_id", "role", "content", "started_at", "turn_index"],
+      filters: [{ column: "transcript_id", op: "in", value: ids }],
+      order: [{ column: "turn_index", ascending: true }],
+      limit: maxTurnsTotal
+    });
+  } else {
+    const { data, error } = await db
+      .from("voice_call_transcript_turns")
+      .select("transcript_id, role, content, started_at, turn_index")
+      .in("transcript_id", ids)
+      .order("turn_index", { ascending: true })
+      .limit(maxTurnsTotal);
+    if (error) throw new Error(`listVoiceTurnsForCustomer: ${error.message}`);
+    turnRows = (data as Row[] | null) ?? [];
+  }
   const startedAtById = new Map(transcripts.map((t) => [t.id, t.started_at]));
-  return ((data as Row[] | null) ?? [])
+  return turnRows
     .map((r) => ({
       callStartedAt: r.started_at ?? startedAtById.get(r.transcript_id) ?? null,
       role: r.role,

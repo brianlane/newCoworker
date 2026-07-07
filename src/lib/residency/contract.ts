@@ -53,6 +53,12 @@ export type DataApiFilter = {
 export type DataApiOrder = {
   column: string;
   ascending: boolean;
+  /**
+   * Explicit NULLS placement. Omitted = PostgreSQL defaults (NULLS FIRST on
+   * DESC, NULLS LAST on ASC). Central call sites that use supabase-js
+   * `nullsFirst:` must pass this so box ordering matches central exactly.
+   */
+  nullsFirst?: boolean;
 };
 
 /** POST /v1/select */

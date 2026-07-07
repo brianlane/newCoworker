@@ -26,8 +26,27 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+// Residency (box) projection — mirrors OUTBOUND_LOG_SELECT below. Only
+// `sms_outbound_log` moves; `sms_inbound_jobs` is an ENGINE table and stays
+// central (see src/lib/residency/tables.ts), so vps-mode threads merge a
+// central inbound read with a box outbound read.
+const OUTBOUND_LOG_COLUMNS = [
+  "id",
+  "business_id",
+  "to_e164",
+  "from_e164",
+  "body",
+  "source",
+  "run_id",
+  "flow_id",
+  "telnyx_message_id",
+  "channel",
+  "created_at"
+];
 
 export type SmsJobRow = {
   id: string;
@@ -229,17 +248,29 @@ export async function listConversationsForBusiness(
   if (error) {
     throw new Error(`listConversationsForBusiness: ${error.message}`);
   }
-  const { data: outboundData, error: outboundError } = await db
-    .from("sms_outbound_log")
-    .select(OUTBOUND_LOG_SELECT)
-    .eq("business_id", businessId)
-    .order("created_at", { ascending: false })
-    .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
-  if (outboundError) {
-    throw new Error(`listConversationsForBusiness: ${outboundError.message}`);
+  let outboundRows: OutboundLogRow[];
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    outboundRows = await readMovedRows<OutboundLogRow>(businessId, {
+      table: "sms_outbound_log",
+      columns: OUTBOUND_LOG_COLUMNS,
+      filters: [{ column: "business_id", op: "eq", value: businessId }],
+      order: [{ column: "created_at", ascending: false }],
+      limit: Math.min(limit * 4, MAX_LIST_LIMIT * 4)
+    });
+  } else {
+    const { data: outboundData, error: outboundError } = await db
+      .from("sms_outbound_log")
+      .select(OUTBOUND_LOG_SELECT)
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: false })
+      .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
+    if (outboundError) {
+      throw new Error(`listConversationsForBusiness: ${outboundError.message}`);
+    }
+    outboundRows = (outboundData as OutboundLogRow[] | null) ?? [];
   }
   const rows = (data as SmsJobRow[] | null) ?? [];
-  const outboundRows = (outboundData as OutboundLogRow[] | null) ?? [];
   const byCustomer = new Map<string, SmsConversation>();
   for (const row of rows) {
     const cust = customerE164FromPayload(row.payload);
@@ -343,18 +374,33 @@ export async function listMessagesForCustomer(
     throw new Error(`listMessagesForCustomer: ${error.message}`);
   }
   // Worker-initiated sends CAN be filtered in SQL (to_e164 is a real column).
-  const { data: outboundData, error: outboundError } = await db
-    .from("sms_outbound_log")
-    .select(OUTBOUND_LOG_SELECT)
-    .eq("business_id", businessId)
-    .eq("to_e164", customerE164)
-    .order("created_at", { ascending: false })
-    .limit(Math.min(limit, MAX_LIST_LIMIT));
-  if (outboundError) {
-    throw new Error(`listMessagesForCustomer: ${outboundError.message}`);
+  let outboundRows: OutboundLogRow[];
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    outboundRows = await readMovedRows<OutboundLogRow>(businessId, {
+      table: "sms_outbound_log",
+      columns: OUTBOUND_LOG_COLUMNS,
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "to_e164", op: "eq", value: customerE164 }
+      ],
+      order: [{ column: "created_at", ascending: false }],
+      limit: Math.min(limit, MAX_LIST_LIMIT)
+    });
+  } else {
+    const { data: outboundData, error: outboundError } = await db
+      .from("sms_outbound_log")
+      .select(OUTBOUND_LOG_SELECT)
+      .eq("business_id", businessId)
+      .eq("to_e164", customerE164)
+      .order("created_at", { ascending: false })
+      .limit(Math.min(limit, MAX_LIST_LIMIT));
+    if (outboundError) {
+      throw new Error(`listMessagesForCustomer: ${outboundError.message}`);
+    }
+    outboundRows = (outboundData as OutboundLogRow[] | null) ?? [];
   }
   const rows = (data as SmsJobRow[] | null) ?? [];
-  const outboundRows = (outboundData as OutboundLogRow[] | null) ?? [];
   // Reverse to chronological order BEFORE expansion so the inbound/
   // outbound pairs land in the messages array in the correct order
   // (inbound at index N, outbound at N+1).

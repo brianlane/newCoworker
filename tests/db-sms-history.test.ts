@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// The residency read-routing layer is unit-tested in tests/residency-read.test.ts
+// and the VPS branches of this module in tests/residency-read-flip.test.ts.
+// Pin CENTRAL mode here so these tests exercise the Supabase path unchanged.
+vi.mock("@/lib/residency/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/residency/read")>();
+  return { ...actual, isVpsReadMode: vi.fn(async () => false) };
+});
+
 const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: (...a: unknown[]) => defaultClientSpy(...a)

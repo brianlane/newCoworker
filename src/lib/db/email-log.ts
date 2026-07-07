@@ -17,8 +17,27 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { escapeLikeLiteral, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+// Column projection for residency (box) reads — mirrors EMAIL_LOG_SELECT.
+const EMAIL_LOG_COLUMNS = [
+  "id",
+  "business_id",
+  "direction",
+  "to_email",
+  "from_email",
+  "subject",
+  "body_preview",
+  "cc_email",
+  "bcc_email",
+  "source",
+  "run_id",
+  "flow_id",
+  "provider_message_id",
+  "created_at"
+];
 
 export type EmailLogSource =
   | "ai_flow"
@@ -102,6 +121,16 @@ export async function listEmailLog(
       EMAIL_LOG_MAX_LIMIT
     )
   );
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    return await readMovedRows<EmailLogRow>(businessId, {
+      table: "email_log",
+      columns: EMAIL_LOG_COLUMNS,
+      filters: [{ column: "business_id", op: "eq", value: businessId }],
+      order: [{ column: "created_at", ascending: false }],
+      limit
+    });
+  }
   const { data, error } = await db
     .from("email_log")
     .select(EMAIL_LOG_SELECT)
@@ -142,6 +171,51 @@ export async function listEmailLogForAddress(
       EMAIL_LOG_MAX_LIMIT
     )
   );
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    // The generic data-api contract has no OR filter groups, so the
+    // from/to disjunction becomes two selects merged + deduped by id.
+    // Two tunnel round-trips for a profile rollup is acceptable; adding
+    // OR to the wire contract for one call site is not.
+    const likeValue = escapeLikeLiteral(normalized);
+    const base = {
+      table: "email_log" as const,
+      columns: EMAIL_LOG_COLUMNS,
+      order: [{ column: "created_at", ascending: false }],
+      limit
+    };
+    const [fromRows, toRows] = await Promise.all([
+      readMovedRows<EmailLogRow>(businessId, {
+        ...base,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "from_email", op: "ilike", value: likeValue }
+        ]
+      }),
+      readMovedRows<EmailLogRow>(businessId, {
+        ...base,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          { column: "to_email", op: "ilike", value: likeValue }
+        ]
+      })
+    ]);
+    const byId = new Map<string, EmailLogRow>();
+    for (const row of [...fromRows, ...toRows]) byId.set(row.id, row);
+    // Belt-and-braces exact match (case-insensitive): the escaped ILIKE is
+    // already literal under PostgreSQL's default backslash escape, but the
+    // rollup must never show someone else's mail if a server setting ever
+    // changes LIKE escape semantics — mirror findCustomerByEmail's JS
+    // re-check.
+    const wanted = normalized.toLowerCase();
+    return [...byId.values()]
+      .filter(
+        (row) =>
+          row.from_email?.toLowerCase() === wanted || row.to_email?.toLowerCase() === wanted
+      )
+      .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
+      .slice(0, limit);
+  }
   // See listCustomerMemories for the full rationale on this two-step escape.
   const escapedForLike = normalized.replace(/[%_]/g, (m) => `\\${m}`);
   const escapedForPostgrest = escapedForLike.replace(/["\\]/g, "\\$&");
@@ -177,6 +251,30 @@ export async function getEmailBody(
   client?: SupabaseClient
 ): Promise<EmailLogBody | null> {
   const db = client ?? (await createSupabaseServiceClient());
+  type BodyRow = {
+    body_preview: string | null;
+    body_full: string | null;
+    attachments: StoredAttachment[] | null;
+  };
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    const rows = await readMovedRows<BodyRow>(businessId, {
+      table: "email_log",
+      columns: ["body_preview", "body_full", "attachments"],
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "id", op: "eq", value: id }
+      ],
+      limit: 1
+    });
+    const boxRow = rows[0];
+    if (!boxRow) return null;
+    return {
+      body_preview: boxRow.body_preview,
+      body_full: boxRow.body_full,
+      attachments: boxRow.attachments ?? []
+    };
+  }
   const { data, error } = await db
     .from("email_log")
     .select("body_preview, body_full, attachments")
@@ -185,7 +283,7 @@ export async function getEmailBody(
     .maybeSingle();
   if (error) throw new Error(`getEmailBody: ${error.message}`);
   if (!data) return null;
-  const row = data as { body_preview: string | null; body_full: string | null; attachments: StoredAttachment[] | null };
+  const row = data as BodyRow;
   return {
     body_preview: row.body_preview,
     body_full: row.body_full,
