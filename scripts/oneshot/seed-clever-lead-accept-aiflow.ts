@@ -168,7 +168,12 @@ function buildDefinition(opts: {
               "The seller's mobile phone from the contact card in E.164 if possible — NOT Clever support (614-363-2845)"
           },
           { name: "lead_email", description: "The seller's email address from the contact card, or 'none'" },
-          { name: "lead_address", description: "The property street address from the contact card" }
+          {
+            name: "lead_address",
+            description:
+              "The property street address from the contact card — the FULL address " +
+              "including street, city, state, and ZIP code"
+          }
         ],
         screenshot: true
       },
@@ -230,6 +235,17 @@ function buildDefinition(opts: {
           "{{agent.name}} claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Lead source: Clever (listwithclever.com)",
         attachScreenshot: true
+      },
+      // Always tell the owner the outcome with the FULL lead details (audit
+      // Jul 2026): personal info, address, source, and everything that ran.
+      {
+        id: "notify",
+        type: "notify_owner",
+        message:
+          "Clever lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
+          "Lead source: Clever (listwithclever.com)\n" +
+          "Outcome: {{vars.actions_taken}}."
       }
     ],
     options: { suppressDefaultReply: true }

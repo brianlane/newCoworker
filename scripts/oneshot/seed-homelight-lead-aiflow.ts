@@ -266,7 +266,12 @@ function buildDefinition(opts: {
             description: "The lead's mobile phone from the contact card, in E.164 if possible"
           },
           { name: "lead_email", description: "The lead's email from the contact card, or 'none'" },
-          { name: "lead_address", description: "The property street address from the contact card" }
+          {
+            name: "lead_address",
+            description:
+              "The property street address from the contact card — the FULL address " +
+              "including street, city, state, and ZIP code"
+          }
         ]
       },
       // 5b. Fallback: if the portal contact card was delayed/empty, read the
@@ -304,7 +309,9 @@ function buildDefinition(opts: {
                 },
                 {
                   name: "lead_address",
-                  description: "The property street address, labeled 'Address' in the HomeLight email"
+                  description:
+                    "The property street address, labeled 'Address' in the HomeLight " +
+                    "email — the FULL address including street, city, state, and ZIP code"
                 }
               ]
             }
@@ -380,13 +387,18 @@ function buildDefinition(opts: {
         when: gateOnClaim
       },
       // 11. Always tell the owner the outcome — claimed (with everything that was
-      //     sent) or not (owner fallback). Ungated.
+      //     sent) or not (owner fallback). Ungated. Carries the FULL lead
+      //     details (audit Jul 2026) so Amy never has to dig through the QT
+      //     email for the contact info.
       {
         id: "notify",
         type: "notify_owner",
         message:
           "HomeLight referral: {{vars.lead_first_name}} ({{vars.lead_type}} in {{vars.city}}, " +
-          "~{{vars.price}}).\nOutcome: {{vars.actions_taken}}."
+          "~{{vars.price}}).\n" +
+          "Lead: {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
+          "Outcome: {{vars.actions_taken}}."
       }
     ],
     options: { suppressDefaultReply: true }
