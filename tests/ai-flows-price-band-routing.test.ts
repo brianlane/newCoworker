@@ -83,6 +83,24 @@ describe("addPriceBandRouting", () => {
     }
   });
 
+  it("stamps a seed-shaped ReferralExchange flow (single 'route' step, name case differs)", () => {
+    // The seed creates "ReferralExchange lead" (lowercase l) with ONE route
+    // step id "route" — the $1M rule must land there too, not only on Amy's
+    // live route_buyer/route_seller/route_both branches.
+    const def: Def = {
+      steps: [
+        { id: "browse", type: "browse_extract", fields: [{ name: "price" }] },
+        { id: "route", type: "route_to_team" }
+      ]
+    };
+    expect(addPriceBandRouting(def, "ReferralExchange lead")).toBe(true);
+    const route = def.steps.find((s) => s.id === "route")!;
+    expect(route.ownerDirectWhen).toEqual(OWNER_DIRECT_WHEN);
+    expect(route.ownerDirectTemplate).toBe(
+      PRICE_BAND_FLOWS["ReferralExchange Lead"].ownerDirectTemplates.route
+    );
+  });
+
   it("leaves unknown flows untouched", () => {
     const def: Def = {
       steps: [{ id: "route", type: "route_to_team" }]

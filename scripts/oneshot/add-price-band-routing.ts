@@ -109,15 +109,25 @@ export const PRICE_BAND_FLOWS: Record<
   "ReferralExchange Lead": {
     extractStepId: "browse",
     priceBandSource: "Based on the asking/target price shown on the lead page.",
-    ownerDirectTemplates: Object.fromEntries(
-      ["route_buyer", "route_seller", "route_both"].map((id) => [
-        id,
+    // Amy's live flow branches into route_buyer/route_seller/route_both; a
+    // freshly seeded flow has a single "route" step. The branch templates can
+    // reference the richer live-flow vars (contact_note/web_source/lead_email);
+    // the seed-shape "route" template sticks to the vars the seed extracts.
+    ownerDirectTemplates: {
+      ...Object.fromEntries(
+        ["route_buyer", "route_seller", "route_both"].map((id) => [
+          id,
+          "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you — not offered to the team.\n" +
+            "{{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}) in " +
+            "{{vars.location}}, around {{vars.price}}. Contact: {{vars.contact_note}}.\n" +
+            "Lead source: {{vars.web_source}}"
+        ])
+      ),
+      route:
         "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you — not offered to the team.\n" +
-          "{{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}) in " +
-          "{{vars.location}}, around {{vars.price}}. Contact: {{vars.contact_note}}.\n" +
-          "Lead source: {{vars.web_source}}"
-      ])
-    )
+        "{{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}, around {{vars.price}}.\n" +
+        "Lead source: ReferralExchange (referralexchange.com)"
+    }
   },
   "Clever Lead - Accept": {
     extractStepId: "read_details",
@@ -138,7 +148,12 @@ export const PRICE_BAND_FLOWS: Record<
  * Pure and idempotent (second run returns false).
  */
 export function addPriceBandRouting(def: Definition, flowName: string): boolean {
-  const wiring = PRICE_BAND_FLOWS[flowName];
+  // Case-insensitive flow-name match: the seed's default name is
+  // "ReferralExchange lead" while Amy's live flow is "ReferralExchange Lead".
+  const want = flowName.trim().toLowerCase();
+  const wiring = Object.entries(PRICE_BAND_FLOWS).find(
+    ([name]) => name.toLowerCase() === want
+  )?.[1];
   if (!wiring) return false;
   let changed = false;
   const steps = def.steps ?? [];
