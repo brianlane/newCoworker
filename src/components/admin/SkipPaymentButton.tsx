@@ -4,7 +4,19 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 
-export function SkipPaymentButton({ businessId }: { businessId: string }) {
+export function SkipPaymentButton({
+  businessId,
+  label = "Skip Payment & Provision"
+}: {
+  businessId: string;
+  /**
+   * Button copy. The endpoint both activates a Stripe-less subscription and
+   * kicks off provisioning, so callers whose subscription is ALREADY active
+   * (admin-created enterprise accounts awaiting a box) relabel it to plain
+   * "Provision VPS".
+   */
+  label?: string;
+}) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [done, setDone] = useState(false);
@@ -38,7 +50,7 @@ export function SkipPaymentButton({ businessId }: { businessId: string }) {
   return (
     <div className="space-y-1">
       <Button size="sm" variant="secondary" onClick={handleSkip} loading={loading}>
-        Skip Payment &amp; Provision
+        {label}
       </Button>
       {error && <p className="text-xs text-spark-orange">{error}</p>}
     </div>

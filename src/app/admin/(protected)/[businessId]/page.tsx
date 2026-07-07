@@ -193,20 +193,27 @@ export default async function BusinessDetailPage({
           <div>
             <dt className="text-parchment/40 text-xs">Hardware size</dt>
             <dd className="text-parchment font-mono">
-              {business.tier === "enterprise"
-                ? (business.vps_size ?? "custom")
-                : resolveDeployedVpsSize(business.tier, business.vps_size)}
+              {resolveDeployedVpsSize(business.tier, business.vps_size)}
             </dd>
           </div>
         </dl>
-        {(business.tier === "starter" || business.tier === "standard") &&
-          business.hostinger_vps_id && (
-            <HardwareSizePanel
-              businessId={businessId}
-              currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
-              pinned={business.vps_size != null}
-            />
+        {!business.hostinger_vps_id &&
+          subscription?.status === "active" &&
+          business.status !== "wiped" && (
+            <div className="mb-4">
+              {/* Active subscription but no box yet — the admin-created
+                  enterprise path lands here (create-client writes an active
+                  Stripe-less subscription without provisioning). */}
+              <SkipPaymentButton businessId={businessId} label="Provision VPS" />
+            </div>
           )}
+        {business.hostinger_vps_id && (
+          <HardwareSizePanel
+            businessId={businessId}
+            currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
+            pinned={business.vps_size != null}
+          />
+        )}
       </Card>
 
       {/* Voice / SMS DID */}

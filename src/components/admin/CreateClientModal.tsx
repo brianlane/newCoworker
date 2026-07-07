@@ -6,6 +6,14 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 
 type Tier = "starter" | "standard" | "enterprise";
+type VpsSize = "kvm1" | "kvm2" | "kvm4" | "kvm8";
+
+const VPS_SIZE_OPTIONS: Array<{ value: VpsSize | ""; label: string }> = [
+  { value: "", label: "Default (KVM 8)" },
+  { value: "kvm2", label: "KVM 2: 2 vCPU / 8GB" },
+  { value: "kvm4", label: "KVM 4: 4 vCPU / 16GB" },
+  { value: "kvm8", label: "KVM 8: 8 vCPU / 32GB" }
+];
 
 export function CreateClientModal() {
   const router = useRouter();
@@ -19,6 +27,7 @@ export function CreateClientModal() {
   const [ownerName, setOwnerName] = useState("");
   const [phone, setPhone] = useState("");
   const [businessType, setBusinessType] = useState("");
+  const [vpsSize, setVpsSize] = useState<VpsSize | "">("");
 
   function reset() {
     setName("");
@@ -27,6 +36,7 @@ export function CreateClientModal() {
     setOwnerName("");
     setPhone("");
     setBusinessType("");
+    setVpsSize("");
     setError(null);
   }
 
@@ -44,7 +54,17 @@ export function CreateClientModal() {
       const res = await fetch("/api/admin/create-client", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name, ownerEmail, tier, ownerName, phone, businessType })
+        body: JSON.stringify({
+          name,
+          ownerEmail,
+          tier,
+          ownerName,
+          phone,
+          businessType,
+          // Hardware pin is an enterprise-deal knob; other tiers always
+          // provision on the tier default.
+          ...(tier === "enterprise" && vpsSize ? { vpsSize } : {})
+        })
       });
       const json = await res.json();
       if (!res.ok) {
@@ -120,6 +140,32 @@ export function CreateClientModal() {
                   ))}
                 </div>
               </div>
+
+              {tier === "enterprise" && (
+                <div className="flex flex-col gap-1">
+                  <label
+                    htmlFor="create-client-vps-size"
+                    className="text-sm font-medium text-parchment/80"
+                  >
+                    VPS Size
+                  </label>
+                  <select
+                    id="create-client-vps-size"
+                    value={vpsSize}
+                    onChange={(e) => setVpsSize(e.target.value as VpsSize | "")}
+                    className="rounded-lg border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment focus:border-signal-teal focus:outline-none"
+                  >
+                    {VPS_SIZE_OPTIONS.map((opt) => (
+                      <option key={opt.value || "default"} value={opt.value}>
+                        {opt.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-parchment/40">
+                    Hardware pin for the enterprise box; leave on Default for KVM 8.
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Input
