@@ -200,6 +200,14 @@ function buildDefinition(opts: {
             name: "lead_type",
             description:
               "Is the lead a buyer or a seller? Answer exactly one lowercase word: buyer or seller."
+          },
+          {
+            name: "price_band",
+            description:
+              "Answer exactly one lowercase token: over_1m or under_1m. Is the " +
+              "price/home value ONE MILLION DOLLARS or more? $1M, $1,000,000, $1.2M " +
+              "and above are over_1m; $999,999 and below are under_1m. If no price " +
+              "is shown, answer under_1m. Based on the listing/asking price in the alert."
           }
         ]
       },
@@ -243,7 +251,14 @@ function buildDefinition(opts: {
           "Tap to claim: {{vars.leadUrl}}",
         claimedNotifyTemplate:
           "{{agent.name}} claimed the HomeLight referral {{vars.lead_first_name}} " +
-          "({{vars.lead_type}} in {{vars.city}})."
+          "({{vars.lead_type}} in {{vars.city}}).",
+        // $1M+ leads are never offered to the team: the owner gets this SMS
+        // instead and claim-gated steps skip (claimed_agent="none").
+        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+        ownerDirectTemplate:
+          "HIGH-VALUE HomeLight referral ($1M+) kept for you — not offered to the team.\n" +
+          "{{vars.lead_first_name}} — {{vars.lead_type}} in {{vars.city}} (~{{vars.price}}).\n" +
+          "Tap to claim: {{vars.leadUrl}}"
       },
       // 5. Re-open the (now claimed) lead link and read the real contact card off
       //    the portal. GATED — only runs after Dave accepted. screenshot:true here

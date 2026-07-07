@@ -630,6 +630,52 @@ describe("route_to_team step", () => {
     expect(dStep.type === "route_to_team" && dStep.firstToClaim).toBeUndefined();
   });
 
+  it("accepts a complete keep-for-owner rule and preserves both fields", () => {
+    const withRule = JSON.parse(JSON.stringify(routedInput));
+    withRule.steps[1].fields.push({ name: "price_band" });
+    withRule.steps[2].ownerDirectWhen = { var: "price_band", equals: "over_1m" };
+    withRule.steps[2].ownerDirectTemplate = "Kept for you: {{vars.lead_name}}";
+    const def = parseAiFlowDefinition(withRule);
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.ownerDirectWhen).toEqual({
+      var: "price_band",
+      equals: "over_1m"
+    });
+    expect(step.type === "route_to_team" && step.ownerDirectTemplate).toBe(
+      "Kept for you: {{vars.lead_name}}"
+    );
+  });
+
+  it("rejects half a keep-for-owner rule (condition and template are a pair)", () => {
+    const onlyWhen = JSON.parse(JSON.stringify(routedInput));
+    onlyWhen.steps[1].fields.push({ name: "price_band" });
+    onlyWhen.steps[2].ownerDirectWhen = { var: "price_band", equals: "over_1m" };
+    expect(
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(onlyWhen)).some((i) =>
+        i.includes("ownerDirectWhen and ownerDirectTemplate together")
+      )
+    ).toBe(true);
+
+    const onlyTemplate = JSON.parse(JSON.stringify(routedInput));
+    onlyTemplate.steps[2].ownerDirectTemplate = "Kept for you";
+    expect(
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(onlyTemplate)).some((i) =>
+        i.includes("ownerDirectWhen and ownerDirectTemplate together")
+      )
+    ).toBe(true);
+  });
+
+  it("rejects an ownerDirectWhen on a var no earlier step produces", () => {
+    const ghost = JSON.parse(JSON.stringify(routedInput));
+    ghost.steps[2].ownerDirectWhen = { var: "price_band", equals: "over_1m" };
+    ghost.steps[2].ownerDirectTemplate = "Kept for you";
+    expect(
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(ghost)).some((i) =>
+        i.includes("ownerDirectWhen condition on {{vars.price_band}}")
+      )
+    ).toBe(true);
+  });
+
   it("strips the removed claimTimeframeOption/lateClaimOption fields from old definitions", () => {
     // Reply digits are universal now ("1" claim, "2" pass); a definition
     // authored before the migration still parses, but the legacy per-flow

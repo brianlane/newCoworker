@@ -2285,6 +2285,105 @@ function StepFields({
           <label className="flex items-center gap-2 text-xs text-parchment/70">
             <input
               type="checkbox"
+              checked={Boolean(step.ownerDirectWhen)}
+              onChange={(ev) =>
+                // Both-or-neither (enforced on save): enabling seeds the $1M
+                // example; disabling clears the pair.
+                patchStep(
+                  index,
+                  ev.target.checked
+                    ? {
+                        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+                        ownerDirectTemplate:
+                          step.ownerDirectTemplate ??
+                          "HIGH-VALUE lead kept for you — not offered to the team."
+                      }
+                    : { ownerDirectWhen: undefined, ownerDirectTemplate: undefined }
+                )
+              }
+            />
+            Keep the lead for the owner (no team offer) when…
+          </label>
+          {step.ownerDirectWhen && (
+            <>
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  className={`${inputClass} w-auto`}
+                  value={step.ownerDirectWhen.var}
+                  placeholder="price_band"
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      ownerDirectWhen: { ...step.ownerDirectWhen, var: ev.target.value }
+                    })
+                  }
+                />
+                <select
+                  className={`${inputClass} w-auto`}
+                  value={
+                    step.ownerDirectWhen.notEquals !== undefined
+                      ? "notEquals"
+                      : step.ownerDirectWhen.contains !== undefined
+                        ? "contains"
+                        : "equals"
+                  }
+                  onChange={(ev) => {
+                    const value =
+                      step.ownerDirectWhen?.equals ??
+                      step.ownerDirectWhen?.notEquals ??
+                      step.ownerDirectWhen?.contains ??
+                      "";
+                    const v = step.ownerDirectWhen?.var ?? "";
+                    const next =
+                      ev.target.value === "notEquals"
+                        ? { var: v, notEquals: value }
+                        : ev.target.value === "contains"
+                          ? { var: v, contains: value }
+                          : { var: v, equals: value };
+                    patchStep(index, { ownerDirectWhen: next });
+                  }}
+                >
+                  <option value="equals">equals</option>
+                  <option value="notEquals">does not equal</option>
+                  <option value="contains">contains</option>
+                </select>
+                <input
+                  className={`${inputClass} flex-1`}
+                  value={
+                    step.ownerDirectWhen.equals ??
+                    step.ownerDirectWhen.notEquals ??
+                    step.ownerDirectWhen.contains ??
+                    ""
+                  }
+                  placeholder="over_1m"
+                  onChange={(ev) => {
+                    const w = step.ownerDirectWhen!;
+                    const next =
+                      w.notEquals !== undefined
+                        ? { var: w.var, notEquals: ev.target.value }
+                        : w.contains !== undefined
+                          ? { var: w.var, contains: ev.target.value }
+                          : { var: w.var, equals: ev.target.value };
+                    patchStep(index, { ownerDirectWhen: next });
+                  }}
+                />
+              </div>
+              <Field
+                label="Owner SMS when kept (sent instead of any team offer)"
+                value={step.ownerDirectTemplate ?? ""}
+                onChange={(v) => patchStep(index, { ownerDirectTemplate: v })}
+                textarea
+              />
+              <p className="text-[11px] text-parchment/50">
+                Checked once, before anyone is offered. Steps gated on a claim are
+                skipped, and the outcome notification says the lead was kept.
+              </p>
+            </>
+          )}
+        </div>
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
               checked={Boolean(ow)}
               onChange={(ev) =>
                 patchStep(index, {

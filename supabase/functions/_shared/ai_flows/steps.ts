@@ -15,7 +15,8 @@ import type {
   ExtractField,
   ExtractLink,
   FlowStep,
-  RouteOfferWindow
+  RouteOfferWindow,
+  StepCondition
 } from "./types.ts";
 
 export type StepScope = {
@@ -160,6 +161,11 @@ export type StepAction =
       attachScreenshot: boolean;
       /** First to claim (ON when undefined; false disables the bare-"1" yank). */
       firstToClaim?: boolean;
+      /** Keep-for-owner rule (see FlowStep): matched on first entry → no team
+       * offer; the owner gets ownerDirectTemplate instead. */
+      ownerDirectWhen?: StepCondition;
+      /** Passed UNRENDERED like the other route templates (worker renders it). */
+      ownerDirectTemplate?: string;
     }
   | {
       kind: "browse_action";
@@ -498,6 +504,10 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const responseMinutes = Math.max(1, Math.round(step.responseMinutes ?? 10));
       const claimed = step.claimedNotifyTemplate?.trim();
       const agentName = step.agentName?.trim();
+      // Keep-for-owner rule: carried only as a complete pair (the schema
+      // enforces both-or-neither; a half-configured rule is dropped, not
+      // half-applied). Template stays unrendered like the other route copy.
+      const ownerDirect = step.ownerDirectWhen && step.ownerDirectTemplate?.trim();
       return {
         ok: true,
         action: {
@@ -511,7 +521,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true,
           // Only an explicit opt-out is carried; undefined means ON.
-          ...(step.firstToClaim === false ? { firstToClaim: false } : {})
+          ...(step.firstToClaim === false ? { firstToClaim: false } : {}),
+          ...(ownerDirect
+            ? {
+                ownerDirectWhen: step.ownerDirectWhen,
+                ownerDirectTemplate: step.ownerDirectTemplate!.trim()
+              }
+            : {})
         }
       };
     }

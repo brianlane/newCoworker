@@ -164,7 +164,16 @@ function buildDefinition(opts: {
           { name: "lead_name", description: "The lead's first name, if shown" },
           { name: "lead_phone", description: "The lead's phone number in E.164 if possible" },
           { name: "location", description: "City/area of the lead" },
-          { name: "price", description: "Asking/target price, if shown" }
+          { name: "price", description: "Asking/target price, if shown" },
+          {
+            name: "price_band",
+            description:
+              "Answer exactly one lowercase token: over_1m or under_1m. Is the " +
+              "price/home value ONE MILLION DOLLARS or more? $1M, $1,000,000, $1.2M " +
+              "and above are over_1m; $999,999 and below are under_1m. If no price " +
+              "is shown, answer under_1m. Based on the asking/target price shown on " +
+              "the lead page."
+          }
         ],
         // ReferralExchange lead pages are behind the agent's login, so browse via
         // the per-tenant render service using the stored "Referral Exchange"
@@ -208,7 +217,14 @@ function buildDefinition(opts: {
         offerTemplate: opts.offerTemplate,
         responseMinutes: 10,
         ownerFallbackTemplate: opts.ownerFallbackTemplate,
-        claimedNotifyTemplate: opts.claimedNotifyTemplate
+        claimedNotifyTemplate: opts.claimedNotifyTemplate,
+        // $1M+ leads are never offered to the team: the owner gets this SMS
+        // instead and claim-gated steps skip (claimed_agent="none").
+        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+        ownerDirectTemplate:
+          "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you — not offered to the team.\n" +
+          "{{vars.lead_name}} ({{vars.lead_phone}}) in {{vars.location}}, around {{vars.price}}.\n" +
+          "Lead source: ReferralExchange (referralexchange.com)"
       },
       // Ungated so the owner is always told a lead came in; worded as "handled"
       // (not "sent") because if lead_type matched neither branch no intro went

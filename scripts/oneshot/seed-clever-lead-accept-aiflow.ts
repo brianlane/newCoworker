@@ -173,6 +173,15 @@ function buildDefinition(opts: {
             description:
               "The property street address from the contact card — the FULL address " +
               "including street, city, state, and ZIP code"
+          },
+          {
+            name: "price_band",
+            description:
+              "Answer exactly one lowercase token: over_1m or under_1m. Is the " +
+              "price/home value ONE MILLION DOLLARS or more? $1M, $1,000,000, $1.2M " +
+              "and above are over_1m; $999,999 and below are under_1m. If no price " +
+              "is shown, answer under_1m. Based on the estimated home value / price " +
+              "shown on the lead page."
           }
         ],
         screenshot: true
@@ -234,7 +243,15 @@ function buildDefinition(opts: {
         claimedNotifyTemplate:
           "{{agent.name}} claimed the Clever lead {{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
           "Lead source: Clever (listwithclever.com)",
-        attachScreenshot: true
+        attachScreenshot: true,
+        // $1M+ leads are never offered to the team: the owner gets this SMS
+        // instead and claim-gated steps skip (claimed_agent="none").
+        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+        ownerDirectTemplate:
+          "HIGH-VALUE Clever lead ($1M+) kept for you — not offered to the team.\n" +
+          "{{vars.lead_name}} ({{vars.lead_phone}}) {{vars.lead_email}}\n" +
+          "Address: {{vars.lead_address}}\n" +
+          "Lead source: Clever (listwithclever.com)"
       },
       // Always tell the owner the outcome with the FULL lead details (audit
       // Jul 2026): personal info, address, source, and everything that ran.

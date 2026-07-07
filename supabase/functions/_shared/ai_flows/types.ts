@@ -463,6 +463,17 @@ export type FlowStep =
        * a bare "1". "1, <eta>" never preempts an active countdown.
        */
       firstToClaim?: boolean;
+      /**
+       * Keep-for-owner rule: when this condition matches on FIRST entry (e.g.
+       * `{ var: "price_band", equals: "over_1m" }` for $1M+ leads), the step
+       * offers NOBODY — it texts the owner `ownerDirectTemplate` instead and
+       * sets claimed_agent="none" so claim-gated later steps skip. Evaluated
+       * only before any offer goes out; a resumed run (claim/pass/timeout)
+       * never re-branches.
+       */
+      ownerDirectWhen?: StepCondition;
+      /** Owner SMS for the keep-for-owner branch. Required with ownerDirectWhen. */
+      ownerDirectTemplate?: string;
       when?: StepCondition;
     }
   | {
