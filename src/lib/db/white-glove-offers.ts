@@ -35,6 +35,15 @@ export type WhiteGloveOfferRow = {
 export const WHITE_GLOVE_OFFER_MIN_CENTS = 100;
 export const WHITE_GLOVE_OFFER_MAX_CENTS = 5_000_000;
 
+/**
+ * Escape LIKE/ILIKE pattern metacharacters. `_` (single-char wildcard) is
+ * common in real emails — without this, john_doe@x.com would also match
+ * johnXdoe@x.com and could attach an offer to the wrong tenant.
+ */
+function escapeLikePattern(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+}
+
 export async function createWhiteGloveOffer(
   data: {
     /** Null authors a PROSPECT offer (recipientEmail then required by the DB). */
@@ -117,7 +126,7 @@ export async function attachProspectWhiteGloveOffersToBusiness(
     .from("white_glove_offers")
     .update({ business_id: businessId })
     .is("business_id", null)
-    .ilike("recipient_email", email)
+    .ilike("recipient_email", escapeLikePattern(email))
     .select("id, status");
   if (error) throw new Error(`attachProspectWhiteGloveOffersToBusiness: ${error.message}`);
   const rows = (data ?? []) as Array<{ id: string; status: string }>;
@@ -155,7 +164,7 @@ export async function attachPaidProspectOfferToBusinessByEmail(
   const { data, error } = await db
     .from("businesses")
     .select("id")
-    .ilike("owner_email", email)
+    .ilike("owner_email", escapeLikePattern(email))
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

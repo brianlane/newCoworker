@@ -286,6 +286,16 @@ describe("db/white-glove-offers", () => {
       expect(count).toBe(2);
       expect(db.is).toHaveBeenCalledWith("business_id", null);
       expect(db.ilike).toHaveBeenCalledWith("recipient_email", "Owner@Example.com");
+
+      // LIKE metacharacters in real emails are escaped so john_doe@x.com can
+      // never wildcard-match another tenant's address.
+      const wildcardDb = attachDb([]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(wildcardDb as never);
+      await attachProspectWhiteGloveOffersToBusiness("biz-1", "john_doe%\\@x.com");
+      expect(wildcardDb.ilike).toHaveBeenCalledWith(
+        "recipient_email",
+        "john\\_doe\\%\\\\@x.com"
+      );
       // Paid offer present → priority window opened (monotonic .or guard).
       expect(db.or).toHaveBeenCalled();
     });
@@ -345,6 +355,12 @@ describe("db/white-glove-offers", () => {
       );
       expect(id).toBe("biz-9");
       expect(db.ilike).toHaveBeenCalledWith("owner_email", "Prospect@Example.com");
+
+      // Wildcard characters are escaped here too.
+      const wildcardDb = lookupDb([null]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(wildcardDb as never);
+      await attachPaidProspectOfferToBusinessByEmail("offer-1", "john_doe@x.com");
+      expect(wildcardDb.ilike).toHaveBeenCalledWith("owner_email", "john\\_doe@x.com");
       expect(db.update).toHaveBeenCalledWith({ business_id: "biz-9" });
       // Only ever attaches while unattached — never re-homes an offer.
       expect(db.is).toHaveBeenCalledWith("business_id", null);
