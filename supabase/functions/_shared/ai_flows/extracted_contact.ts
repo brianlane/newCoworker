@@ -33,6 +33,20 @@ export type ScrubResult = {
 };
 
 /**
+ * Does `value` parse to a phone that matches one of the business's own
+ * numbers? BOTH sides are normalized to E.164 first — self numbers can be
+ * stored in free-form shapes (businesses.phone is captured verbatim at
+ * onboarding), and the compared value may arrive in page formatting. Shared
+ * by the extraction scrub AND the worker's send_sms self-send guard so the
+ * two can never disagree on what counts as "ourselves".
+ */
+export function isSelfPhone(value: string, selfNumbers: readonly string[]): boolean {
+  const normalized = toE164(value);
+  if (!normalized) return false;
+  return selfNumbers.some((n) => toE164(n) === normalized);
+}
+
+/**
  * Clear every extracted field whose value is one of the business's own phone
  * numbers. Non-phone values (names, addresses, emails, "none") are never
  * touched — only a value that PARSES to a phone and MATCHES a self number is
@@ -42,16 +56,10 @@ export function scrubSelfPhones(
   values: Record<string, string>,
   selfNumbers: readonly string[]
 ): ScrubResult {
-  const self = new Set(
-    selfNumbers
-      .map((n) => toE164(n))
-      .filter((n): n is string => Boolean(n))
-  );
   const out: Record<string, string> = {};
   const cleared: string[] = [];
   for (const [name, value] of Object.entries(values)) {
-    const normalized = toE164(value);
-    if (normalized && self.has(normalized)) {
+    if (isSelfPhone(value, selfNumbers)) {
       out[name] = "";
       cleared.push(name);
     } else {

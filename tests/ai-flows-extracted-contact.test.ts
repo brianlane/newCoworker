@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { scrubSelfPhones } from "../supabase/functions/_shared/ai_flows/extracted_contact";
+import {
+  isSelfPhone,
+  scrubSelfPhones
+} from "../supabase/functions/_shared/ai_flows/extracted_contact";
 
 const BUSINESS_DID = "+16028053377";
 const OWNER_CELL = "+16026951142";
@@ -40,5 +43,20 @@ describe("scrubSelfPhones", () => {
       values: { lead_phone: BUSINESS_DID },
       cleared: []
     });
+  });
+});
+
+describe("isSelfPhone", () => {
+  it("normalizes BOTH sides (free-form stored self numbers still match)", () => {
+    // businesses.phone is captured verbatim at onboarding — "(602) 805-3377".
+    expect(isSelfPhone("+16028053377", ["(602) 805-3377"])).toBe(true);
+    expect(isSelfPhone("602.805.3377", ["+16028053377"])).toBe(true);
+    expect(isSelfPhone("+14806008501", ["(602) 805-3377"])).toBe(false);
+  });
+
+  it("never matches non-phone values or empty inputs", () => {
+    expect(isSelfPhone("Amy", [BUSINESS_DID])).toBe(false);
+    expect(isSelfPhone("", [BUSINESS_DID])).toBe(false);
+    expect(isSelfPhone(BUSINESS_DID, [])).toBe(false);
   });
 });

@@ -25,7 +25,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-import { scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
+import { isSelfPhone, scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
@@ -2310,7 +2310,12 @@ async function sendSmsStep(
   // business's contact info instead of the lead's. Telnyx would reject it
   // anyway (40310, source == destination) — fail the step IMMEDIATELY with a
   // clear message instead of burning MAX_ATTEMPTS on a permanent 400.
-  if (toE164 === cfg.from || (await businessSelfNumbers(supabase, run.business_id)).includes(toE164)) {
+  // isSelfPhone normalizes BOTH sides (businesses.phone is free-form), so the
+  // guard and the extraction scrub can never disagree.
+  if (
+    toE164 === cfg.from ||
+    isSelfPhone(toE164, await businessSelfNumbers(supabase, run.business_id))
+  ) {
     return {
       kind: "fail",
       error:
