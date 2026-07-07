@@ -73,3 +73,29 @@ export type ResidencyMovedTable = (typeof RESIDENCY_MOVED_TABLES)[number];
 export function isResidencyMovedTable(name: string): name is ResidencyMovedTable {
   return (RESIDENCY_MOVED_TABLES as readonly string[]).includes(name);
 }
+
+/**
+ * Primary-key columns per moved table. The replication layer keys on these:
+ * journal 'upsert' rows become PK-conflict upserts on the box (last writer
+ * wins per row, applied in seq order) and 'delete' rows become PK-filtered
+ * deletes. Two tables have composite natural keys; everything else is `id`.
+ * Keep in lockstep with vps/data-api/schema.sql (generated from the live
+ * central schema).
+ */
+export const RESIDENCY_TABLE_PRIMARY_KEYS: Record<ResidencyMovedTable, readonly string[]> = {
+  contacts: ["id"],
+  dashboard_chat_threads: ["id"],
+  dashboard_chat_messages: ["id"],
+  dashboard_chat_activity: ["business_id"],
+  email_log: ["id"],
+  voice_call_transcripts: ["id"],
+  voice_call_transcript_turns: ["id"],
+  voice_outbound_dial_log: ["id"],
+  sms_outbound_log: ["id"],
+  sms_rowboat_threads: ["business_id", "customer_e164"],
+  sms_owner_reply_prompts: ["id"],
+  scheduled_sms: ["id"],
+  notifications: ["id"],
+  ai_flows: ["id"],
+  aiflow_url_memory: ["business_id", "memory_key"]
+};
