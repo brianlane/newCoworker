@@ -26,7 +26,8 @@ import { getBusiness, recordWhiteGlovePurchase, setBusinessCustomerProfile } fro
 import {
   getWhiteGloveOffer,
   markWhiteGloveOfferPaid,
-  extendPrioritySupport
+  extendPrioritySupport,
+  attachPaidProspectOfferToBusinessByEmail
 } from "@/lib/db/white-glove-offers";
 import {
   getWhiteGloveBookingUrl,
@@ -1640,11 +1641,31 @@ async function applyCustomWhiteGloveOfferFromCheckout(
     });
     return;
   }
-  if (businessId) await extendPrioritySupport(businessId, supportUntil);
+  let effectiveBusinessId = businessId;
+  if (!effectiveBusinessId) {
+    // The payer may ALREADY have an account (signed up between receiving the
+    // link and paying). Attach the paid offer to their newest business so
+    // billing hides the upsell and priority support opens now; when no
+    // account exists yet, createBusiness / the pending-email swap attach it
+    // at signup instead.
+    try {
+      effectiveBusinessId = await attachPaidProspectOfferToBusinessByEmail(offerId, [
+        offer.recipient_email,
+        session.customer_details?.email
+      ]);
+    } catch (err) {
+      logger.error("white_glove_offer prospect attach failed (non-fatal)", {
+        eventId,
+        offerId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  if (effectiveBusinessId) await extendPrioritySupport(effectiveBusinessId, supportUntil);
   logger.info("Custom white-glove offer paid", {
     eventId,
     sessionId: session.id,
-    businessId,
+    businessId: effectiveBusinessId,
     offerId,
     prospect: !businessId,
     amountCents: offer.amount_cents,

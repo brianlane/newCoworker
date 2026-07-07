@@ -15,7 +15,8 @@ import {
   revokeWhiteGloveOffer,
   markWhiteGloveOfferPaid,
   extendPrioritySupport,
-  attachProspectWhiteGloveOffersToBusiness
+  attachProspectWhiteGloveOffersToBusiness,
+  attachPaidProspectOfferToBusinessByEmail
 } from "@/lib/db/white-glove-offers";
 
 function mockDb(overrides: Record<string, unknown> = {}) {
@@ -311,6 +312,75 @@ describe("db/white-glove-offers", () => {
       await expect(
         attachProspectWhiteGloveOffersToBusiness("biz-1", "p@x.com")
       ).rejects.toThrow("attachProspectWhiteGloveOffersToBusiness: boom");
+    });
+  });
+
+  describe("attachPaidProspectOfferToBusinessByEmail", () => {
+    function lookupDb(businessRows: Array<{ id: string } | null>) {
+      // Each maybeSingle() call resolves the next candidate-email lookup; the
+      // offer UPDATE terminates in .is() resolving {data,error}.
+      const maybeSingle = vi.fn();
+      for (const row of businessRows) {
+        maybeSingle.mockResolvedValueOnce({ data: row, error: null });
+      }
+      return {
+        from: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        update: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        ilike: vi.fn().mockReturnThis(),
+        order: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        maybeSingle,
+        is: vi.fn().mockResolvedValue({ data: null, error: null })
+      };
+    }
+
+    it("attaches to the newest business of the first matching email and returns its id", async () => {
+      const db = lookupDb([{ id: "biz-9" }]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const id = await attachPaidProspectOfferToBusinessByEmail("offer-1", [
+        "prospect@example.com",
+        "payer@example.com"
+      ]);
+      expect(id).toBe("biz-9");
+      expect(db.ilike).toHaveBeenCalledWith("owner_email", "prospect@example.com");
+      expect(db.update).toHaveBeenCalledWith({ business_id: "biz-9" });
+      // Only ever attaches while unattached — never re-homes an offer.
+      expect(db.is).toHaveBeenCalledWith("business_id", null);
+    });
+
+    it("falls through blank/missing emails to the next candidate and returns null when none match", async () => {
+      const db = lookupDb([null, null]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const id = await attachPaidProspectOfferToBusinessByEmail("offer-1", [
+        "",
+        null,
+        undefined,
+        "a@x.com",
+        "b@x.com"
+      ]);
+      expect(id).toBeNull();
+      expect(db.maybeSingle).toHaveBeenCalledTimes(2);
+    });
+
+    it("throws on lookup and update errors", async () => {
+      const lookupErr = lookupDb([]);
+      lookupErr.maybeSingle.mockResolvedValueOnce({
+        data: null,
+        error: { message: "look-boom" }
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(lookupErr as never);
+      await expect(
+        attachPaidProspectOfferToBusinessByEmail("offer-1", ["a@x.com"])
+      ).rejects.toThrow("attachPaidProspectOfferToBusinessByEmail: look-boom");
+
+      const updateErr = lookupDb([{ id: "biz-9" }]);
+      updateErr.is = vi.fn().mockResolvedValue({ data: null, error: { message: "up-boom" } });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(updateErr as never);
+      await expect(
+        attachPaidProspectOfferToBusinessByEmail("offer-1", ["a@x.com"])
+      ).rejects.toThrow("attachPaidProspectOfferToBusinessByEmail: up-boom");
     });
   });
 

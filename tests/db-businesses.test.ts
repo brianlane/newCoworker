@@ -397,6 +397,41 @@ describe("db/businesses", () => {
     expect(updateQuery.update).toHaveBeenCalledWith({ owner_email: "paid@test.com" });
     expect(updateQuery.eq).toHaveBeenNthCalledWith(1, "id", "uuid-biz-1");
     expect(updateQuery.eq).toHaveBeenNthCalledWith(2, "owner_email", createPendingOwnerEmail("uuid-biz-1"));
+    // The REAL email just landed (row was created with the pending sentinel):
+    // prospect white-glove offers keyed to it are attached now.
+    expect(attachProspectWhiteGloveOffersToBusiness).toHaveBeenCalledWith(
+      "uuid-biz-1",
+      "paid@test.com",
+      db
+    );
+  });
+
+  it("updateBusinessOwnerEmailIfPending survives a failing prospect attach (best-effort)", async () => {
+    const updateQuery = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockResolvedValue({ data: [{ id: "uuid-biz-1" }], error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(updateQuery) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    vi.mocked(attachProspectWhiteGloveOffersToBusiness).mockRejectedValueOnce(
+      new Error("ledger down")
+    );
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await expect(
+        updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")
+      ).resolves.toBe(true);
+      expect(errSpy).toHaveBeenCalled();
+
+      // Non-Error rejections are stringified, not rethrown.
+      vi.mocked(attachProspectWhiteGloveOffersToBusiness).mockRejectedValueOnce("string fail");
+      await expect(
+        updateBusinessOwnerEmailIfPending("uuid-biz-1", "paid@test.com")
+      ).resolves.toBe(true);
+    } finally {
+      errSpy.mockRestore();
+    }
   });
 
   it("updateBusinessOwnerEmailIfPending does not update when the business already has a real owner", async () => {

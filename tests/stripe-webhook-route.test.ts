@@ -110,7 +110,8 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/db/white-glove-offers", () => ({
   getWhiteGloveOffer: vi.fn(),
   markWhiteGloveOfferPaid: vi.fn().mockResolvedValue("paid"),
-  extendPrioritySupport: vi.fn().mockResolvedValue(undefined)
+  extendPrioritySupport: vi.fn().mockResolvedValue(undefined),
+  attachPaidProspectOfferToBusinessByEmail: vi.fn().mockResolvedValue(null)
 }));
 
 const { mockSendOwnerEmail } = vi.hoisted(() => ({
@@ -179,7 +180,8 @@ import { getBusiness, recordWhiteGlovePurchase } from "@/lib/db/businesses";
 import {
   getWhiteGloveOffer,
   markWhiteGloveOfferPaid,
-  extendPrioritySupport
+  extendPrioritySupport,
+  attachPaidProspectOfferToBusinessByEmail
 } from "@/lib/db/white-glove-offers";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
@@ -1401,7 +1403,12 @@ describe("stripe webhook route", () => {
       paidAt: new Date(1700000000 * 1000),
       stripeSessionId: "cs_wg_prospect"
     });
-    // No business exists yet: nothing to stamp, and no business lookup needed.
+    // The webhook TRIES to attach to an existing account (payer may have
+    // signed up since receiving the link); none exists here, so no window.
+    expect(attachPaidProspectOfferToBusinessByEmail).toHaveBeenCalledWith(offerId, [
+      "prospect@example.com",
+      undefined
+    ]);
     expect(extendPrioritySupport).not.toHaveBeenCalled();
     expect(recordWhiteGlovePurchase).not.toHaveBeenCalled();
     expect(mockSendOwnerEmail).toHaveBeenCalledWith(
@@ -1411,6 +1418,86 @@ describe("stripe webhook route", () => {
       expect.objectContaining({ text: expect.any(String), html: expect.any(String) })
     );
     delete process.env.RESEND_API_KEY;
+  });
+
+  it("opens the priority window when a paid prospect offer attaches to an EXISTING account", async () => {
+    const offerId = "00000000-0000-4000-8000-0000000000bf";
+    const existingBiz = "00000000-0000-4000-8000-0000000000be";
+    delete process.env.RESEND_API_KEY;
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      id: offerId,
+      business_id: null,
+      name: "Deal",
+      status: "open",
+      recipient_email: "prospect@example.com"
+    } as never);
+    vi.mocked(attachPaidProspectOfferToBusinessByEmail).mockResolvedValueOnce(existingBiz);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_prospect_existing",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_wg_prospect_existing",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "white_glove_package",
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(extendPrioritySupport).toHaveBeenCalledWith(existingBiz, expect.any(Date));
+  });
+
+  it("still records a prospect payment when the attach lookup fails", async () => {
+    const offerId = "00000000-0000-4000-8000-0000000000cf";
+    delete process.env.RESEND_API_KEY;
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      id: offerId,
+      business_id: null,
+      name: "Deal",
+      status: "open",
+      recipient_email: "prospect@example.com"
+    } as never);
+    vi.mocked(attachPaidProspectOfferToBusinessByEmail).mockRejectedValueOnce(
+      new Error("lookup down")
+    );
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_prospect_attach_fail",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_wg_prospect_attach_fail",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "white_glove_package",
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(markWhiteGloveOfferPaid).toHaveBeenCalled();
+    expect(extendPrioritySupport).not.toHaveBeenCalled();
   });
 
   it("falls back to the Stripe payer email for a prospect offer without recipient_email", async () => {

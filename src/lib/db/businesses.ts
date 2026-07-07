@@ -411,15 +411,23 @@ export async function updateBusinessOwnerEmailIfPending(
     throw new Error(`updateBusinessOwnerEmailIfPending: ${error.message}`);
   }
 
-  if ((data ?? []).length > 0) {
-    return true;
+  const swapped = (data ?? []).length > 0;
+  if (!swapped) {
+    const business = await getBusiness(id, db);
+    if (!business || business.owner_email !== ownerEmail) return false;
   }
 
-  const business = await getBusiness(id, db);
-
-  if (!business) {
-    return false;
+  // Stripe-first onboarding creates the row with a pending sentinel email, so
+  // createBusiness's prospect white-glove attach found nothing; the REAL email
+  // just landed — re-run the attach now. Best-effort, mirroring createBusiness.
+  try {
+    await attachProspectWhiteGloveOffersToBusiness(id, ownerEmail, db);
+  } catch (err) {
+    console.error(
+      `updateBusinessOwnerEmailIfPending: prospect white-glove attach failed (non-fatal): ${
+        err instanceof Error ? err.message : String(err)
+      }`
+    );
   }
-
-  return business.owner_email === ownerEmail;
+  return true;
 }
