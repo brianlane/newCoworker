@@ -35,6 +35,7 @@ import {
   listActiveGatewayTokensForBusiness,
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
+import { getOrCreateResidencyBackupKey } from "@/lib/residency/backup-keys";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -1210,12 +1211,17 @@ async function runOrchestrator(
   // markGatewayTokenDeployed flips it, and the data-api must keep answering
   // through that overlap. Only resolved for residency-enabled tenants.
   let dataApiTokens = "";
+  let residencyBackupPassphrase = "";
   if (dataResidencyEnabled) {
     const activeTokens = await listActiveGatewayTokensForBusiness(businessId);
     const all = activeTokens.includes(gatewayToken)
       ? activeTokens
       : [gatewayToken, ...activeTokens];
     dataApiTokens = all.join(",");
+    // Escrowed AES passphrase for the box's encrypted datastore dumps
+    // (residency_backup_keys). Minted once per tenant; only ciphertext
+    // ever leaves the box.
+    residencyBackupPassphrase = await getOrCreateResidencyBackupKey(businessId);
   }
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -1277,6 +1283,9 @@ async function runOrchestrator(
     // Comma-separated bearer list for the data-api (all non-revoked tokens,
     // so a rotation's overlap window never drops authenticated requests).
     ["DATA_API_TOKENS", dataApiTokens],
+    // Escrowed backup-encryption passphrase (empty when residency is off —
+    // deploy-client then skips the backup timer install).
+    ["RESIDENCY_BACKUP_PASSPHRASE", residencyBackupPassphrase],
     ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]

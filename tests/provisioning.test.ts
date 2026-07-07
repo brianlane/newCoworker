@@ -36,6 +36,11 @@ vi.mock("@/lib/db/businesses", () => ({
 // the deploy-command assertion (ROWBOAT_GATEWAY_TOKEN=mock_gateway_token) stays
 // deterministic; when the env is unset the reader returns null so the mint path
 // runs with a fixed persisted value.
+vi.mock("@/lib/residency/backup-keys", () => ({
+  // Escrow mint hits the DB only on the residency path; deterministic here.
+  getOrCreateResidencyBackupKey: vi.fn(async () => "escrowed-backup-pass")
+}));
+
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
   getActiveGatewayTokenForBusiness: vi.fn(async () => process.env.ROWBOAT_GATEWAY_TOKEN ?? null),
   issueGatewayToken: vi.fn(async () => "minted-per-tenant-tok"),
@@ -919,6 +924,8 @@ describe("provisioning/orchestrate", () => {
     // Bearer list = every non-revoked token, with the deploy token guaranteed
     // present. The mocked list already contains it, so no prepend happens.
     expectDeployHasEnv(cmd, "DATA_API_TOKENS", "mock_gateway_token,old-rotated-token");
+    // Escrowed backup passphrase reaches the box for the encrypted-dump timer.
+    expectDeployHasEnv(cmd, "RESIDENCY_BACKUP_PASSPHRASE", "escrowed-backup-pass");
   });
 
   it("prepends the deploy token to DATA_API_TOKENS when the DB list lacks it", async () => {
@@ -967,7 +974,10 @@ describe("provisioning/orchestrate", () => {
       renderEnabled: true,
       dataEnabled: false
     });
-    expectDeployHasEnv(deployCallArg(remoteExec).command, "DATA_RESIDENCY_ENABLED", "");
+    const offCmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(offCmd, "DATA_RESIDENCY_ENABLED", "");
+    // No escrow mint for non-residency deploys — the passphrase stays empty.
+    expectDeployHasEnv(offCmd, "RESIDENCY_BACKUP_PASSPHRASE", "");
   });
 
   it("enterprise with NO residency column (pre-migration row) defaults to supabase mode", async () => {

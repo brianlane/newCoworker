@@ -61,6 +61,7 @@ import {
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getOrCreateResidencyBackupKey } from "@/lib/residency/backup-keys";
 import { cloudflareTunnelProvisionerFromEnv } from "@/lib/cloudflare/tunnel";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
@@ -93,7 +94,8 @@ function buildDeployEnvPrefix(
   gatewayToken: string,
   repoRef: string,
   dataResidencyEnabled: boolean,
-  dataApiTokens: string
+  dataApiTokens: string,
+  residencyBackupPassphrase: string
 ): string {
   const bashQuote = quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -140,6 +142,7 @@ function buildDeployEnvPrefix(
     ["DATA_RESIDENCY_ENABLED", dataResidencyEnabled ? "true" : ""],
     // Every non-revoked per-tenant token (rotation overlap window).
     ["DATA_API_TOKENS", dataApiTokens],
+    ["RESIDENCY_BACKUP_PASSPHRASE", residencyBackupPassphrase],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken],
@@ -244,11 +247,13 @@ async function redeployOne(
   // Bearer list mirrors the orchestrator: every non-revoked token, with the
   // token this deploy stamps guaranteed present.
   let dataApiTokens = "";
+  let residencyBackupPassphrase = "";
   if (dataResidencyEnabled) {
     const activeTokens = await listActiveGatewayTokensForBusiness(target.businessId);
     dataApiTokens = (
       activeTokens.includes(gatewayToken) ? activeTokens : [gatewayToken, ...activeTokens]
     ).join(",");
+    residencyBackupPassphrase = await getOrCreateResidencyBackupKey(target.businessId);
   }
   // Reconcile the tunnel ingress with the residency gate. The redeploy path
   // is how an admin residency flip reaches an EXISTING box, and cloudflared
@@ -280,7 +285,8 @@ async function redeployOne(
     gatewayToken,
     ref,
     dataResidencyEnabled,
-    dataApiTokens
+    dataApiTokens,
+    residencyBackupPassphrase
   );
   const command = buildRedeployCommand(ref, envPrefix);
   try {

@@ -1613,6 +1613,10 @@ if [[ "${DATA_RESIDENCY_ENABLED:-}" != "true" ]]; then
     log "DATA_RESIDENCY_ENABLED!=true: tearing down data-api stack (volume preserved)..."
     ( cd "${DATA_API_DEST}" && docker compose down --remove-orphans ) || true
   fi
+  # Backup timer follows the stack down (a stopped Postgres can't be dumped).
+  systemctl disable --now residency-backup.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/residency-backup.service /etc/systemd/system/residency-backup.timer
+  systemctl daemon-reload 2>/dev/null || true
 elif [[ -d "${DATA_API_SRC}" && -f "${DATA_API_SRC}/docker-compose.yml" ]]; then
   log "Syncing data-api source ${DATA_API_SRC} → ${DATA_API_DEST}..."
   mkdir -p "${DATA_API_DEST}"
@@ -1675,6 +1679,65 @@ DAENV_EOF
       # /v1/health deliberately answers HTTP 200 even when Postgres is down
       # (the tunnel replaces origin 5xx bodies), so readiness must check the
       # JSON body's ok flag — a 200 with ok:false is NOT healthy.
+      # Encrypted backup timer (Phase B4): every 6h, pg_dump → gzip →
+      # AES-256 → ciphertext-only upload. The passphrase is escrowed
+      # centrally (residency_backup_keys) and reaches the box via the
+      # deploy env; without it the timer is skipped LOUDLY — an opted-in
+      # box without backups is a DR gap, not a default.
+      if [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" ]]; then
+        install -m 0755 "${DATA_API_SRC}/backup.sh" /opt/data-api/backup.sh
+        cat > /opt/data-api/backup.env <<RBENV_EOF
+BUSINESS_ID=${BUSINESS_ID}
+SUPABASE_URL=${SUPABASE_URL}
+SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+RESIDENCY_BACKUP_PASSPHRASE=${RESIDENCY_BACKUP_PASSPHRASE}
+RESIDENCY_BACKUP_BUCKET=${RESIDENCY_BACKUP_BUCKET:-data-backups}
+RBENV_EOF
+        chmod 600 /opt/data-api/backup.env
+
+        cat > /etc/systemd/system/residency-backup.service <<'RBSVC_EOF'
+[Unit]
+Description=Encrypted residency datastore backup
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/data-api/backup.env
+ExecStart=/opt/data-api/backup.sh
+RBSVC_EOF
+
+        cat > /etc/systemd/system/residency-backup.timer <<'RBTMR_EOF'
+[Unit]
+Description=Run residency-backup every 6 hours
+Requires=residency-backup.service
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+AccuracySec=5min
+Unit=residency-backup.service
+
+[Install]
+WantedBy=timers.target
+RBTMR_EOF
+
+        systemctl daemon-reload
+        systemctl enable --now residency-backup.timer
+        log "residency-backup.timer enabled (6h cadence, ciphertext-only uploads)"
+        # First backup immediately so a box is never opted-in-yet-unbacked;
+        # failure is non-fatal (timer retries) but loudly reported.
+        if systemctl start residency-backup.service; then
+          report_progress 99 "residency_backup_seeded" "first encrypted datastore backup completed"
+        else
+          log "WARN: initial residency backup failed — timer will retry; check journalctl -u residency-backup"
+          report_progress 98 "residency_backup_failed" "initial encrypted backup failed (timer will retry)"
+        fi
+      else
+        log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset — residency backups NOT installed (DR gap)"
+        report_progress 98 "residency_backup_unconfigured" "no backup passphrase provided; encrypted backups skipped"
+      fi
+
       dataapi_ok=0
       for _ in $(seq 1 20); do
         if curl -sf --max-time 3 http://127.0.0.1:8091/v1/health 2>/dev/null | grep -q '"ok":true'; then
