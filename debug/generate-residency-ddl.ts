@@ -1,0 +1,195 @@
+/**
+ * Generate the VPS datastore DDL for the residency moved tables.
+ *
+ * Reads the LIVE central database's information_schema for every table in
+ * RESIDENCY_MOVED_TABLES (src/lib/residency/tables.ts) and emits a single
+ * versioned schema file the per-tenant data-api datastore will host
+ * (vps/data-api/schema.sql). Generating from the live schema — instead of
+ * hand-copying 130+ migrations — means the artifact can never drift from
+ * what production actually runs; re-run after any migration that touches a
+ * moved table.
+ *
+ * Deliberate translation choices:
+ *   - RLS policies are NOT copied. The box holds exactly ONE tenant and the
+ *     data-api authenticates every call with the per-tenant gateway token;
+ *     the multi-tenant row filter would be dead weight.
+ *   - Foreign keys to NON-moved tables (e.g. business_id → businesses) are
+ *     dropped: the referenced control-plane rows live only in central
+ *     Supabase. FKs between two moved tables are kept.
+ *   - Indexes are copied as-is (they encode the read patterns the dashboard
+ *     depends on).
+ *
+ * Usage: npx tsx debug/generate-residency-ddl.ts [--out vps/data-api/schema.sql]
+ * Read-only against the central DB; writes only the local schema file.
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { loadEnv } from "./_shared.ts";
+
+loadEnv();
+
+const { RESIDENCY_MOVED_TABLES } = await import("../src/lib/residency/tables.ts");
+const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
+
+const OUT_ARG = process.argv.indexOf("--out");
+const OUT_PATH = path.resolve(
+  process.cwd(),
+  OUT_ARG !== -1 ? process.argv[OUT_ARG + 1] : "vps/data-api/schema.sql"
+);
+
+type ColumnRow = {
+  table_name: string;
+  column_name: string;
+  ordinal_position: number;
+  data_type: string;
+  udt_name: string;
+  is_nullable: "YES" | "NO";
+  column_default: string | null;
+  character_maximum_length: number | null;
+};
+
+type ConstraintRow = {
+  table_name: string;
+  constraint_name: string;
+  constraint_type: string;
+  definition: string;
+};
+
+type IndexRow = {
+  tablename: string;
+  indexname: string;
+  indexdef: string;
+};
+
+const db = await createSupabaseServiceClient();
+
+/**
+ * The service client can't query information_schema through PostgREST, so
+ * everything goes through a single SQL RPC. `exec_sql`-style helpers don't
+ * exist in this project; use the supabase-js `.rpc` against the built-in
+ * `pg_meta`-less path via a plain `select` won't work either — so we shell
+ * the queries through PostgREST's `/rpc/` only if a helper exists. Fallback:
+ * run the three catalog queries through the `pg` protocol using the
+ * connection string in SUPABASE_DB_URL (the same var supabase CLI uses).
+ */
+const dbUrl = process.env.SUPABASE_DB_URL ?? "";
+if (!dbUrl) {
+  console.error(
+    "SUPABASE_DB_URL is required (postgres:// connection string; the catalog " +
+      "queries need raw SQL access that PostgREST does not expose)."
+  );
+  process.exit(1);
+}
+
+const { default: pg } = await import("pg");
+const client = new pg.Client({ connectionString: dbUrl });
+await client.connect();
+
+const tables = [...RESIDENCY_MOVED_TABLES];
+const inList = tables.map((t) => `'${t}'`).join(", ");
+
+const { rows: columns } = await client.query<ColumnRow>(
+  `select table_name, column_name, ordinal_position, data_type, udt_name,
+          is_nullable, column_default, character_maximum_length
+     from information_schema.columns
+    where table_schema = 'public' and table_name in (${inList})
+    order by table_name, ordinal_position`
+);
+
+const { rows: constraints } = await client.query<ConstraintRow>(
+  `select rel.relname as table_name,
+          con.conname as constraint_name,
+          case con.contype when 'p' then 'PRIMARY KEY' when 'u' then 'UNIQUE'
+                           when 'f' then 'FOREIGN KEY' when 'c' then 'CHECK' end as constraint_type,
+          pg_get_constraintdef(con.oid) as definition
+     from pg_constraint con
+     join pg_class rel on rel.oid = con.conrelid
+     join pg_namespace nsp on nsp.oid = rel.relnamespace
+    where nsp.nspname = 'public' and rel.relname in (${inList})
+    order by rel.relname, con.contype desc, con.conname`
+);
+
+const { rows: indexes } = await client.query<IndexRow>(
+  `select tablename, indexname, indexdef
+     from pg_indexes
+    where schemaname = 'public' and tablename in (${inList})
+    order by tablename, indexname`
+);
+
+await client.end();
+
+const missing = tables.filter((t) => !columns.some((c) => c.table_name === t));
+if (missing.length > 0) {
+  console.error(`tables missing from live schema: ${missing.join(", ")}`);
+  process.exit(1);
+}
+
+function columnType(c: ColumnRow): string {
+  if (c.data_type === "ARRAY") return `${c.udt_name.replace(/^_/, "")}[]`;
+  if (c.data_type === "USER-DEFINED") return c.udt_name;
+  if (c.character_maximum_length != null && c.data_type === "character varying") {
+    return `varchar(${c.character_maximum_length})`;
+  }
+  return c.data_type;
+}
+
+const movedSet = new Set<string>(tables);
+const lines: string[] = [];
+lines.push("-- GENERATED by debug/generate-residency-ddl.ts — do not edit by hand.");
+lines.push(`-- Source: central Supabase live schema, ${new Date().toISOString()}`);
+lines.push(`-- Tables: ${tables.length} (RESIDENCY_MOVED_TABLES)`);
+lines.push("--");
+lines.push("-- Single-tenant datastore for the per-VPS data API. RLS is intentionally");
+lines.push("-- absent (one tenant per box; the data-api bearer token is the boundary).");
+lines.push("-- FKs to central control-plane tables (businesses, …) are dropped.");
+lines.push("");
+lines.push("create extension if not exists pgcrypto;");
+lines.push("");
+lines.push("create table if not exists residency_schema_meta (");
+lines.push("  key text primary key,");
+lines.push("  value text not null");
+lines.push(");");
+lines.push(
+  `insert into residency_schema_meta (key, value) values ('generated_at', '${new Date().toISOString()}')`
+);
+lines.push("  on conflict (key) do update set value = excluded.value;");
+lines.push("");
+
+for (const table of tables) {
+  const cols = columns.filter((c) => c.table_name === table);
+  const defs = cols.map((c) => {
+    const parts = [`  ${c.column_name} ${columnType(c)}`];
+    if (c.is_nullable === "NO") parts.push("not null");
+    if (c.column_default != null) parts.push(`default ${c.column_default}`);
+    return parts.join(" ");
+  });
+
+  const tableConstraints = constraints
+    .filter((k) => k.table_name === table)
+    .filter((k) => {
+      if (k.constraint_type !== "FOREIGN KEY") return true;
+      // Keep FKs only when the referenced table also moves to the box.
+      const ref = /references (?:public\.)?([a-z0-9_]+)/i.exec(k.definition)?.[1];
+      return ref != null && movedSet.has(ref);
+    })
+    .map((k) => `  constraint ${k.constraint_name} ${k.definition}`);
+
+  lines.push(`-- ── ${table} ${"─".repeat(Math.max(0, 60 - table.length))}`);
+  lines.push(`create table if not exists ${table} (`);
+  lines.push([...defs, ...tableConstraints].join(",\n"));
+  lines.push(");");
+  lines.push("");
+
+  for (const idx of indexes.filter((i) => i.tablename === table)) {
+    // Primary-key/unique-constraint indexes are created by the constraint.
+    if (constraints.some((k) => k.table_name === table && k.constraint_name === idx.indexname)) {
+      continue;
+    }
+    lines.push(`${idx.indexdef.replace("CREATE INDEX", "create index if not exists").replace("CREATE UNIQUE INDEX", "create unique index if not exists")};`);
+  }
+  lines.push("");
+}
+
+fs.mkdirSync(path.dirname(OUT_PATH), { recursive: true });
+fs.writeFileSync(OUT_PATH, lines.join("\n"));
+console.log(`wrote ${OUT_PATH} (${tables.length} tables, ${columns.length} columns)`);
