@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   buildActivityFeed,
-  buildFullActivityFeed,
+  paginateFullActivityFeed,
   collectActivityItems,
   getRecentActivity,
-  getAllRecentActivity,
+  getActivityFeedPage,
   activityWindowDays,
   DEFAULT_ACTIVITY_LIMIT,
   ACTIVITY_FEED_MAX,
@@ -423,9 +423,9 @@ describe("collectActivityItems", () => {
   });
 });
 
-describe("buildFullActivityFeed", () => {
+describe("paginateFullActivityFeed — ranking", () => {
   it("ranks strictly by recency with no alert reservation", () => {
-    const items = buildFullActivityFeed(
+    const { items } = paginateFullActivityFeed(
       emptyInput({
         // Three newer routine calls plus one old alert; the card would reserve a
         // slot for the alert, but the full feed is pure recency.
@@ -440,20 +440,6 @@ describe("buildFullActivityFeed", () => {
     );
     expect(items.map((i) => i.kind)).toEqual(["call", "call", "call"]);
   });
-
-  it("caps the merged feed to limit", () => {
-    const items = buildFullActivityFeed(
-      emptyInput({
-        chat: [
-          { created_at: "2026-01-03T00:00:00Z" },
-          { created_at: "2026-01-02T00:00:00Z" },
-          { created_at: "2026-01-01T00:00:00Z" }
-        ],
-        limit: 2
-      })
-    );
-    expect(items.map((i) => i.at)).toEqual(["2026-01-03T00:00:00Z", "2026-01-02T00:00:00Z"]);
-  });
 });
 
 function chainResult(result: { data: unknown; error: unknown }) {
@@ -462,6 +448,7 @@ function chainResult(result: { data: unknown; error: unknown }) {
     eq: vi.fn().mockReturnThis(),
     not: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
+    lt: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue(result)
   };
@@ -659,7 +646,7 @@ describe("getRecentActivity", () => {
   });
 });
 
-describe("getAllRecentActivity", () => {
+describe("getActivityFeedPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
@@ -696,19 +683,185 @@ describe("getAllRecentActivity", () => {
       }
     });
 
-    const items = await getAllRecentActivity("biz-1", 50, db as never);
-    expect(items.map((i) => i.kind)).toEqual(["alert", "aiflow"]);
-    expect(items[1].label).toBe("AiFlow: ReferralExchange lead (completed)");
+    const page = await getActivityFeedPage("biz-1", { limit: 50 }, db as never);
+    expect(page.items.map((i) => i.kind)).toEqual(["alert", "aiflow"]);
+    expect(page.items[1].label).toBe("AiFlow: ReferralExchange lead (completed)");
+    // No source hit its cap and everything fit in one chunk: window exhausted.
+    expect(page.nextBefore).toBeNull();
   });
 
   it("creates a service client and uses ACTIVITY_FEED_MAX when no limit is given", async () => {
     const db = mockDbByTable(ALL_EMPTY);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
-    const items = await getAllRecentActivity("biz-1");
-    expect(items).toEqual([]);
+    const page = await getActivityFeedPage("biz-1");
+    expect(page).toEqual({ items: [], nextBefore: null });
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
     const chain = db.from.mock.results[0].value;
     expect(chain.limit).toHaveBeenCalledWith(ACTIVITY_FEED_MAX);
+    // No cursor → no lt() filter is applied to any source.
+    expect(chain.lt).not.toHaveBeenCalled();
+  });
+
+  it("applies the `before` cursor to every source on its own timestamp column", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    const before = "2026-02-01T00:00:00Z";
+    await getActivityFeedPage("biz-1", { before }, db as never);
+
+    const chains = db.from.mock.results.map((r) => r.value);
+    // 9 source queries, each cursor-bounded.
+    expect(chains).toHaveLength(9);
+    for (const chain of chains) {
+      expect(chain.lt).toHaveBeenCalledWith(expect.any(String), before);
+    }
+    // Spot-check the per-source columns: calls page on started_at, the reply
+    // source on updated_at (its send-time window), everything else created_at.
+    expect(chains[0].lt).toHaveBeenCalledWith("started_at", before);
+    expect(chains[2].lt).toHaveBeenCalledWith("updated_at", before);
+    expect(chains[3].lt).toHaveBeenCalledWith("created_at", before);
+  });
+});
+
+describe("paginateFullActivityFeed", () => {
+  const chat = (at: string) => ({ created_at: at });
+
+  function input(over: Partial<ActivityFeedInput>): ActivityFeedInput {
+    return {
+      calls: [],
+      smsInbound: [],
+      smsReplies: [],
+      smsOutbound: [],
+      emails: [],
+      chat: [],
+      flows: [],
+      customers: [],
+      alerts: [],
+      limit: 3,
+      ...over
+    };
+  }
+
+  it("pages a complete (uncapped) merge and stops once the window is exhausted", () => {
+    // 4 chat rows, limit 3, chat did NOT hit its per-source cap (4 > 3 would
+    // be a cap hit, so use limit 5 with 4 rows): everything fetched.
+    const full = input({
+      limit: 5,
+      chat: ["2026-02-05", "2026-02-04", "2026-02-03", "2026-02-02"].map((d) =>
+        chat(`${d}T00:00:00Z`)
+      )
+    });
+    const page = paginateFullActivityFeed(full);
+    expect(page.items).toHaveLength(4);
+    expect(page.nextBefore).toBeNull();
+
+    // Two sources, EACH under its per-source cap, but their merge holds more
+    // than one chunk: the cursor points at the last kept item even though no
+    // source was capped.
+    const chunked = paginateFullActivityFeed(
+      input({
+        limit: 3,
+        chat: [chat("2026-02-05T00:00:00Z"), chat("2026-02-03T00:00:00Z")],
+        emails: [
+          {
+            direction: "outbound" as const,
+            to_email: "a@x.com",
+            from_email: null,
+            subject: null,
+            created_at: "2026-02-04T00:00:00Z"
+          },
+          {
+            direction: "outbound" as const,
+            to_email: "b@x.com",
+            from_email: null,
+            subject: null,
+            created_at: "2026-02-02T00:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(chunked.items).toHaveLength(3);
+    expect(chunked.nextBefore).toBe("2026-02-03T00:00:00Z");
+  });
+
+  it("cuts the chunk at the newest capped source's fetch depth so no source is skipped", () => {
+    // Chat is CHATTY: it hit its 3-row cap at 2026-02-03 — there may be more
+    // chat rows between 02-03 and the email from 02-01. The merged chunk must
+    // therefore stop at the chat boundary and NOT show the older email yet.
+    const page = paginateFullActivityFeed(
+      input({
+        chat: ["2026-02-05", "2026-02-04", "2026-02-03"].map((d) => chat(`${d}T00:00:00Z`)),
+        emails: [
+          {
+            direction: "outbound",
+            to_email: "a@x.com",
+            from_email: null,
+            subject: null,
+            created_at: "2026-02-01T00:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(page.items.map((i) => i.kind)).toEqual(["chat", "chat", "chat"]);
+    // Cursor = last kept item; the next chunk re-queries every source below
+    // it, so the 02-01 email surfaces there instead of being skipped.
+    expect(page.nextBefore).toBe("2026-02-03T00:00:00Z");
+  });
+
+  it("returns an empty exhausted page when there is no activity at all", () => {
+    expect(paginateFullActivityFeed(input({}))).toEqual({ items: [], nextBefore: null });
+  });
+
+  it("keeps the boundary row itself so the cursor always advances", () => {
+    // A single capped source: the chunk ends exactly at its oldest fetched row.
+    const page = paginateFullActivityFeed(
+      input({
+        limit: 2,
+        chat: [chat("2026-02-05T00:00:00Z"), chat("2026-02-04T00:00:00Z")]
+      })
+    );
+    expect(page.items).toHaveLength(2);
+    expect(page.nextBefore).toBe("2026-02-04T00:00:00Z");
+  });
+
+  it("uses the NEWEST boundary when several sources are capped (either order)", () => {
+    const emails = (ats: string[]) =>
+      ats.map((at) => ({
+        direction: "outbound" as const,
+        to_email: "a@x.com",
+        from_email: null,
+        subject: null,
+        created_at: at
+      }));
+    // Chat capped down to 02-04, emails capped down to 02-02 → boundary 02-04.
+    const chatNewer = paginateFullActivityFeed(
+      input({
+        limit: 2,
+        chat: [chat("2026-02-05T00:00:00Z"), chat("2026-02-04T00:00:00Z")],
+        emails: emails(["2026-02-03T00:00:00Z", "2026-02-02T00:00:00Z"])
+      })
+    );
+    expect(chatNewer.nextBefore).toBe("2026-02-04T00:00:00Z");
+
+    // Swapped depths: emails capped down to 02-04 → same boundary either way.
+    const emailNewer = paginateFullActivityFeed(
+      input({
+        limit: 2,
+        chat: [chat("2026-02-03T00:00:00Z"), chat("2026-02-02T00:00:00Z")],
+        emails: emails(["2026-02-05T00:00:00Z", "2026-02-04T00:00:00Z"])
+      })
+    );
+    expect(emailNewer.nextBefore).toBe("2026-02-04T00:00:00Z");
+  });
+
+  it("ignores a capped source whose boundary row has a malformed timestamp", () => {
+    // Defensive: a capped source with a non-string timestamp on its oldest row
+    // contributes no boundary instead of poisoning the cursor math.
+    const page = paginateFullActivityFeed(
+      input({
+        limit: 2,
+        chat: [chat("2026-02-05T00:00:00Z"), { created_at: 42 } as never]
+      })
+    );
+    expect(page.nextBefore).toBeNull();
   });
 });

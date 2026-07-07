@@ -150,9 +150,10 @@ function alertLabel(row: ActivityAlertRow): string {
  * Build the unsorted list of activity items from every source. Pure and shared
  * by both the dashboard card ({@link buildActivityFeed}, which then reserves
  * slots for alerts) and the full "See all activity" page
- * ({@link buildFullActivityFeed}, which sorts strictly by recency). Splitting
- * the collection from the ordering keeps the two surfaces in lockstep on what
- * counts as activity while letting each pick its own ranking.
+ * ({@link paginateFullActivityFeed}, which sorts strictly by recency and
+ * chunks with a cursor). Splitting the collection from the ordering keeps the
+ * two surfaces in lockstep on what counts as activity while letting each pick
+ * its own ranking.
  */
 export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
   const items: ActivityItem[] = [];
@@ -284,7 +285,7 @@ function byRecency(a: ActivityItem, b: ActivityItem): number {
  * (a backlog of urgent items can't hide the latest calls/texts), fill the rest
  * by recency, then backfill any unused slots with extra alerts when there isn't
  * enough other activity. The full "See all activity" page uses
- * {@link buildFullActivityFeed} instead, which ranks purely by recency.
+ * {@link paginateFullActivityFeed} instead, which ranks purely by recency.
  */
 export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
   const items = collectActivityItems(input);
@@ -297,15 +298,77 @@ export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
   return [...reservedAlerts, ...extraAlerts, ...keptRest].sort(byRecency);
 }
 
+export type ActivityFeedPage = {
+  items: ActivityItem[];
+  /**
+   * Cursor for the next-older chunk (pass back as `before`), or null when the
+   * window is exhausted. Timestamps are ms-precision; distinct events sharing
+   * the exact cursor millisecond could be skipped across a chunk boundary — an
+   * accepted trade-off for cursor paging without a global sequence.
+   */
+  nextBefore: string | null;
+};
+
 /**
- * Like {@link buildActivityFeed} but ranks strictly by recency (no alert
- * reservation), for the full-page "See all activity" view that paginates the
- * complete feed. The card's alert-reservation logic exists only to protect a
- * 10-item summary; on a paginated page every item is reachable, so a plain
- * newest-first ordering is what the owner expects.
+ * Timestamps each source was fetched down to, for sources that HIT their
+ * per-source row cap (ordered newest-first, so the last row is the oldest
+ * fetched). A capped source may have older rows we never saw; anything below
+ * the NEWEST such boundary is potentially incomplete.
  */
-export function buildFullActivityFeed(input: ActivityFeedInput): ActivityItem[] {
-  return collectActivityItems(input).sort(byRecency).slice(0, input.limit);
+function cappedSourceBoundaries(input: ActivityFeedInput): string[] {
+  const oldestOfCapped = (rows: Array<Record<string, unknown>>, key: string): string | null => {
+    if (rows.length < input.limit || rows.length === 0) return null;
+    const last = rows[rows.length - 1]?.[key];
+    return typeof last === "string" ? last : null;
+  };
+  return [
+    oldestOfCapped(input.calls, "started_at"),
+    oldestOfCapped(input.smsInbound, "created_at"),
+    oldestOfCapped(input.smsReplies, "updated_at"),
+    oldestOfCapped(input.smsOutbound, "created_at"),
+    oldestOfCapped(input.emails, "created_at"),
+    oldestOfCapped(input.chat, "created_at"),
+    oldestOfCapped(input.flows, "created_at"),
+    oldestOfCapped(input.customers, "created_at"),
+    oldestOfCapped(input.alerts, "created_at")
+  ].filter((x): x is string => Boolean(x));
+}
+
+/**
+ * Merge one CHUNK of the full-page feed and compute the cursor for the next
+ * one. The subtlety: each source is fetched with its own row cap, so a chatty
+ * source (say 200 texts in two days) stops early while quieter sources run the
+ * whole window — naively merging would show quiet-source items from BELOW the
+ * chatty source's fetch depth while silently missing the texts between. To
+ * keep every chunk gap-free:
+ *
+ *   1. Find the NEWEST "oldest fetched row" among sources that hit their cap —
+ *      the merged feed is only complete above that boundary.
+ *   2. Keep merged items at/above the boundary (capped at `limit`).
+ *   3. Point `nextBefore` at the last KEPT item, so the next chunk re-queries
+ *      every source strictly below it.
+ *
+ * When no source hit its cap the merged set is the complete remainder of the
+ * window: page it out and stop (nextBefore null) once it's all been shown.
+ */
+export function paginateFullActivityFeed(input: ActivityFeedInput): ActivityFeedPage {
+  const merged = collectActivityItems(input).sort(byRecency);
+  const boundaries = cappedSourceBoundaries(input);
+
+  if (boundaries.length === 0) {
+    const items = merged.slice(0, input.limit);
+    return {
+      items,
+      nextBefore: merged.length > input.limit ? items[items.length - 1]!.at : null
+    };
+  }
+
+  // Newest incomplete-source boundary; the boundary row itself WAS fetched,
+  // so keeping >= boundary always keeps at least that row (never an empty
+  // page → the cursor always advances).
+  const boundary = boundaries.reduce((a, b) => (a > b ? a : b));
+  const items = merged.filter((i) => i.at >= boundary).slice(0, input.limit);
+  return { items, nextBefore: items[items.length - 1]!.at };
 }
 
 /** Treat a failed query as "no rows" so one broken source never blanks the feed. */
@@ -353,81 +416,119 @@ export function activityWindowDays(tier: string | null | undefined): number {
  * {@link ACTIVITY_WINDOW_DAYS} days and over-fetched to `limit` per source so
  * the downstream merge can't starve any one source. Resolves contact names for
  * every phone-bearing row. Shared by {@link getRecentActivity} (card) and
- * {@link getAllRecentActivity} (full page) so the two surfaces read identical
+ * {@link getActivityFeedPage} (full page) so the two surfaces read identical
  * data and differ only in how they rank/cap it.
+ *
+ * `before` is the cursor for the full page's older chunks: every source is
+ * additionally bounded to rows STRICTLY OLDER than it (on the same timestamp
+ * column it orders by), so "Older activity" walks the whole window instead of
+ * stopping at the first `limit` rows.
  */
 async function fetchActivityFeedInput(
   businessId: string,
   limit: number,
   db: SupabaseClient,
-  windowDays: number = ACTIVITY_WINDOW_DAYS
+  windowDays: number = ACTIVITY_WINDOW_DAYS,
+  before?: string
 ): Promise<ActivityFeedInput> {
   const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  // Cursor filter, applied per-source on its ordering column. `q` is the
+  // PostgREST builder mid-chain; `lt`'s return is typed `any` because a
+  // recursive structural constraint (lt(): T) sends tsc into TS2589 against
+  // the real builder generics — only the chain shape matters here.
+  const beforeLt = <T extends { lt(column: string, value: string): any }>(
+    q: T,
+    column: string
+  ) => (before ? q.lt(column, before) : q);
 
   const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, chatRes, flowsRes, custRes, alertRes] =
     await Promise.all([
-      db
-        .from("voice_call_transcripts")
-        .select("caller_e164, status, started_at")
-        .eq("business_id", businessId)
-        .gte("started_at", since)
+      beforeLt(
+        db
+          .from("voice_call_transcripts")
+          .select("caller_e164, status, started_at")
+          .eq("business_id", businessId)
+          .gte("started_at", since),
+        "started_at"
+      )
         .order("started_at", { ascending: false })
         .limit(limit),
-      db
-        .from("sms_inbound_jobs")
-        .select("payload, created_at")
-        .eq("business_id", businessId)
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("sms_inbound_jobs")
+          .select("payload, created_at")
+          .eq("business_id", businessId)
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit),
       // Replies windowed on updated_at (send time) so a recent reply to an
       // older inbound text still appears as outbound activity.
-      db
-        .from("sms_inbound_jobs")
-        .select("payload, updated_at")
-        .eq("business_id", businessId)
-        .not("assistant_reply_text", "is", null)
-        .gte("updated_at", since)
+      beforeLt(
+        db
+          .from("sms_inbound_jobs")
+          .select("payload, updated_at")
+          .eq("business_id", businessId)
+          .not("assistant_reply_text", "is", null)
+          .gte("updated_at", since),
+        "updated_at"
+      )
         .order("updated_at", { ascending: false })
         .limit(limit),
-      db
-        .from("sms_outbound_log")
-        .select("to_e164, created_at")
-        .eq("business_id", businessId)
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("sms_outbound_log")
+          .select("to_e164, created_at")
+          .eq("business_id", businessId)
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit),
       // Coworker email activity (AiFlow/assistant sends, trigger emails,
       // tenant-mailbox traffic) — the email counterpart of the SMS sources.
-      db
-        .from("email_log")
-        .select("direction, to_email, from_email, subject, created_at")
-        .eq("business_id", businessId)
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("email_log")
+          .select("direction, to_email, from_email, subject, created_at")
+          .eq("business_id", businessId)
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit),
-      db
-        .from("dashboard_chat_jobs")
-        .select("created_at")
-        .eq("business_id", businessId)
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("dashboard_chat_jobs")
+          .select("created_at")
+          .eq("business_id", businessId)
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit),
-      db
-        .from("ai_flow_runs")
-        .select("id, flow_id, status, created_at, ai_flows(name)")
-        .eq("business_id", businessId)
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("ai_flow_runs")
+          .select("id, flow_id, status, created_at, ai_flows(name)")
+          .eq("business_id", businessId)
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit),
-      db
-        .from("contacts")
-        // Only real customer profiles count as "new customer" activity — folded
-        // manual contacts (vendors, services, testers) are not interactions.
-        .select("display_name, customer_e164, created_at")
-        .eq("business_id", businessId)
-        .eq("type", "customer")
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("contacts")
+          // Only real customer profiles count as "new customer" activity — folded
+          // manual contacts (vendors, services, testers) are not interactions.
+          .select("display_name, customer_e164, created_at")
+          .eq("business_id", businessId)
+          .eq("type", "customer")
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit),
       // High-signal coworker_logs entries: urgent alerts only. These are the
@@ -435,12 +536,15 @@ async function fetchActivityFeedInput(
       // "/dashboard/notifications" deep link always resolves to the event.
       // `error` rows are intentionally excluded — they aren't dispatched
       // anywhere owner-facing, so there's no page to link them to.
-      db
-        .from("coworker_logs")
-        .select("task_type, log_payload, created_at")
-        .eq("business_id", businessId)
-        .eq("status", "urgent_alert")
-        .gte("created_at", since)
+      beforeLt(
+        db
+          .from("coworker_logs")
+          .select("task_type, log_payload, created_at")
+          .eq("business_id", businessId)
+          .eq("status", "urgent_alert")
+          .gte("created_at", since),
+        "created_at"
+      )
         .order("created_at", { ascending: false })
         .limit(limit)
     ]);
@@ -502,17 +606,29 @@ export async function getRecentActivity(
 
 /**
  * Like {@link getRecentActivity} but for the full "See all activity" page:
- * loads up to {@link ACTIVITY_FEED_MAX} rows and ranks strictly by recency (no
- * alert reservation), so the page can paginate the complete recent feed.
+ * loads ONE gap-free chunk of up to `limit` items ranked strictly by recency
+ * (no alert reservation), plus the `nextBefore` cursor for the next-older
+ * chunk — so the whole tier window (e.g. 90 days) is reachable, not just the
+ * newest {@link ACTIVITY_FEED_MAX} events. Pass `before` (a previous chunk's
+ * `nextBefore`) to walk older history.
  */
-export async function getAllRecentActivity(
+export async function getActivityFeedPage(
   businessId: string,
-  limit: number = ACTIVITY_FEED_MAX,
-  client?: SupabaseClient,
-  tier?: string | null
-): Promise<ActivityItem[]> {
+  opts: {
+    limit?: number;
+    before?: string;
+    tier?: string | null;
+  } = {},
+  client?: SupabaseClient
+): Promise<ActivityFeedPage> {
   const db = client ?? (await createSupabaseServiceClient());
-  return buildFullActivityFeed(
-    await fetchActivityFeedInput(businessId, limit, db, activityWindowDays(tier))
+  return paginateFullActivityFeed(
+    await fetchActivityFeedInput(
+      businessId,
+      opts.limit ?? ACTIVITY_FEED_MAX,
+      db,
+      activityWindowDays(opts.tier),
+      opts.before
+    )
   );
 }

@@ -13,14 +13,25 @@ import type { ActivityItem } from "@/lib/db/activity";
 const PAGE_SIZE = 25;
 
 /**
- * Full "See all activity" list. The parent server page loads a bounded set of
- * activity items (newest-first, already ranked by recency); this component
- * filters them with the shared free-text search and paginates the result so
- * lower-frequency events (e.g. AiFlow runs) that the 10-item dashboard card
- * hides are reachable. Stateless on the server side — pagination/search live
- * entirely in the browser, matching the calls/texts/emails list views.
+ * Full "See all activity" list. The parent server page loads ONE gap-free
+ * chunk of activity items (newest-first, already ranked by recency); this
+ * component filters them with the shared free-text search and paginates the
+ * chunk in the browser, matching the calls/texts/emails list views. When the
+ * tier window holds more history than one chunk, the server page passes
+ * `olderHref`/`newestHref` cursor links so the ENTIRE window is reachable —
+ * the search box only covers the currently loaded chunk.
  */
-export function ActivityList({ items }: { items: ActivityItem[] }) {
+export function ActivityList({
+  items,
+  olderHref = null,
+  newestHref = null
+}: {
+  items: ActivityItem[];
+  /** Server link to the next-older chunk; null when the window is exhausted. */
+  olderHref?: string | null;
+  /** Server link back to the newest chunk; null when already on it. */
+  newestHref?: string | null;
+}) {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(0);
 
@@ -108,6 +119,21 @@ export function ActivityList({ items }: { items: ActivityItem[] }) {
           >
             Next →
           </button>
+        </div>
+      )}
+
+      {(olderHref || newestHref) && (
+        <div className="flex items-center justify-center gap-4 border-t border-parchment/10 pt-3">
+          {newestHref && (
+            <a href={newestHref} className="text-xs text-signal-teal hover:underline">
+              ← Back to newest
+            </a>
+          )}
+          {olderHref && (
+            <a href={olderHref} className="text-xs text-signal-teal hover:underline">
+              Older activity →
+            </a>
+          )}
         </div>
       )}
     </div>
