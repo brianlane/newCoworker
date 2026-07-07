@@ -1,4 +1,5 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { countMovedRows, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -58,6 +59,18 @@ export async function getNotifications(
     typeof limitOrOptions === "number" ? { limit: limitOrOptions } : limitOrOptions;
   const limit = opts.limit ?? 20;
   const db = client ?? (await createSupabaseServiceClient());
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    return await readMovedRows<NotificationRow>(businessId, {
+      table: "notifications",
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        ...(opts.unreadOnly ? [{ column: "read_at", op: "is" as const, value: null }] : [])
+      ],
+      order: [{ column: "created_at", ascending: false }],
+      limit
+    });
+  }
   let q = db
     .from("notifications")
     .select()
@@ -92,6 +105,17 @@ export async function getUnreadNotificationCount(
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    return await countMovedRows(businessId, {
+      table: "notifications",
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "status", op: "eq", value: "sent" },
+        { column: "read_at", op: "is", value: null }
+      ]
+    });
+  }
   const { count, error } = await db
     .from("notifications")
     .select("id", { count: "exact", head: true })

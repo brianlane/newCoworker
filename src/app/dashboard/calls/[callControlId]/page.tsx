@@ -68,7 +68,7 @@ export default async function CallTranscriptPage({
   const transcript = await getTranscriptById(business.id, transcriptId);
   if (!transcript) notFound();
 
-  const turns = await listTurns(transcript.id);
+  const turns = await listTurns(transcript.id, { businessId: business.id });
 
   // Name the caller (owner / roster member / manual override) and let the owner
   // set or edit that name inline, mirroring the SMS thread header. Only a real

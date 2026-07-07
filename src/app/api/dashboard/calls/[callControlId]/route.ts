@@ -62,7 +62,7 @@ export async function GET(
     if (!transcript) {
       return errorResponse("NOT_FOUND", "Transcript not found");
     }
-    const turns = await listTurns(transcript.id);
+    const turns = await listTurns(transcript.id, { businessId });
 
     return successResponse({
       transcript: {

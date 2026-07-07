@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+// The residency read-routing layer is unit-tested in tests/residency-read.test.ts
+// and the VPS branches of this module in tests/residency-read-flip.test.ts.
+// Pin CENTRAL mode here so these tests exercise the Supabase path unchanged.
+vi.mock("@/lib/residency/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/residency/read")>();
+  return { ...actual, isVpsReadMode: vi.fn(async () => false) };
+});
+
 const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
@@ -198,7 +206,7 @@ describe("db/voice-transcripts — listTurns", () => {
     const c = chain();
     c.order.mockResolvedValue({ data: [{ id: 1, turn_index: 0 }], error: null });
     const db = makeDb(c);
-    const turns = await listTurns("t-1", db as never);
+    const turns = await listTurns("t-1", {}, db as never);
     expect(turns).toHaveLength(1);
     expect(c.eq).toHaveBeenCalledWith("transcript_id", "t-1");
     expect(c.order).toHaveBeenCalledWith("turn_index", { ascending: true });
@@ -207,13 +215,13 @@ describe("db/voice-transcripts — listTurns", () => {
   it("returns [] when no rows", async () => {
     const c = chain();
     c.order.mockResolvedValue({ data: null, error: null });
-    await expect(listTurns("t-1", makeDb(c) as never)).resolves.toEqual([]);
+    await expect(listTurns("t-1", {}, makeDb(c) as never)).resolves.toEqual([]);
   });
 
   it("throws on query error", async () => {
     const c = chain();
     c.order.mockResolvedValue({ data: null, error: { message: "oops" } });
-    await expect(listTurns("t-1", makeDb(c) as never)).rejects.toThrow(
+    await expect(listTurns("t-1", {}, makeDb(c) as never)).rejects.toThrow(
       /listTurns: oops/
     );
   });
