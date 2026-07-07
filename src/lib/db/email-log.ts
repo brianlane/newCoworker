@@ -202,7 +202,17 @@ export async function listEmailLogForAddress(
     ]);
     const byId = new Map<string, EmailLogRow>();
     for (const row of [...fromRows, ...toRows]) byId.set(row.id, row);
+    // Belt-and-braces exact match (case-insensitive): the escaped ILIKE is
+    // already literal under PostgreSQL's default backslash escape, but the
+    // rollup must never show someone else's mail if a server setting ever
+    // changes LIKE escape semantics — mirror findCustomerByEmail's JS
+    // re-check.
+    const wanted = normalized.toLowerCase();
     return [...byId.values()]
+      .filter(
+        (row) =>
+          row.from_email?.toLowerCase() === wanted || row.to_email?.toLowerCase() === wanted
+      )
       .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
       .slice(0, limit);
   }

@@ -74,14 +74,23 @@ describe("email-log vps reads", () => {
   });
 
   it("listEmailLogForAddress merges from/to selects, dedupes, sorts, limits", async () => {
-    const a = { id: "e1", created_at: "2026-07-01T00:00:00Z" };
-    const b = { id: "e2", created_at: "2026-07-03T00:00:00Z" };
-    const c = { id: "e3", created_at: "2026-07-02T00:00:00Z" };
-    const dupe = { id: "e1", created_at: "2026-07-01T00:00:00Z" };
+    const addr = "joe_smith@x.com";
+    const a = { id: "e1", created_at: "2026-07-01T00:00:00Z", from_email: addr, to_email: null };
+    const b = { id: "e2", created_at: "2026-07-03T00:00:00Z", from_email: null, to_email: "JOE_SMITH@X.COM" };
+    const c = { id: "e3", created_at: "2026-07-02T00:00:00Z", from_email: addr, to_email: null };
+    const dupe = { id: "e1", created_at: "2026-07-01T00:00:00Z", from_email: addr, to_email: null };
+    // A wildcard near-miss (joeXsmith) that a broken ILIKE-escape would let
+    // through — the JS exact-match post-filter must drop it.
+    const nearMiss = {
+      id: "e9",
+      created_at: "2026-07-04T00:00:00Z",
+      from_email: "joeXsmith@x.com",
+      to_email: null
+    };
     // Merge order e2, e1, e3 makes the desc sort exercise BOTH comparator
     // directions (e1 sorts after e2, e3 sorts before e1).
     vi.mocked(readMovedRows)
-      .mockResolvedValueOnce([b] as never)
+      .mockResolvedValueOnce([b, nearMiss] as never)
       .mockResolvedValueOnce([a, c, dupe] as never);
     const rows = await listEmailLogForAddress(BIZ, "joe_smith@x.com", { limit: 2 }, centralDb({}));
     expect(rows.map((r) => r.id)).toEqual(["e2", "e3"]);

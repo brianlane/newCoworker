@@ -147,10 +147,13 @@ export async function countMovedRows(
 }
 
 /**
- * Escape `%`/`_` so a literal address can be used as an anchored ILIKE
- * value (the data-api parameterizes the value; only LIKE metachars need
- * escaping, not PostgREST reserved chars).
+ * Escape `\`, `%`, and `_` so a literal value can be used as an anchored
+ * ILIKE pattern (the data-api parameterizes the value; PostgreSQL's default
+ * LIKE escape character is backslash, so backslash-escaping the metachars —
+ * and any literal backslash first — yields an exact, case-insensitive
+ * match). Callers matching identities should still post-filter on exact
+ * equality; ILIKE here only buys case-insensitivity.
  */
 export function escapeLikeLiteral(value: string): string {
-  return value.replace(/[%_]/g, (m) => `\\${m}`);
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
 }
