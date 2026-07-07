@@ -1731,14 +1731,12 @@ RBTMR_EOF
         systemctl daemon-reload
         systemctl enable --now residency-backup.timer
         log "residency-backup.timer enabled (6h cadence, ciphertext-only uploads)"
-        # First backup immediately so a box is never opted-in-yet-unbacked;
-        # failure is non-fatal (timer retries) but loudly reported.
-        if systemctl start residency-backup.service; then
-          report_progress 99 "residency_backup_seeded" "first encrypted datastore backup completed"
-        else
-          log "WARN: initial residency backup failed — timer will retry; check journalctl -u residency-backup"
-          report_progress 98 "residency_backup_failed" "initial encrypted backup failed (timer will retry)"
-        fi
+        # Kick the first backup ASYNCHRONOUSLY (--no-block): a box is never
+        # opted-in-yet-unbacked, but a large datastore's dump+upload must not
+        # eat the deploy SSH session's fixed timeout. Outcome lands in
+        # journalctl -u residency-backup; the timer retries on failure.
+        systemctl start --no-block residency-backup.service || true
+        report_progress 99 "residency_backup_kicked" "first encrypted backup started in the background (timer maintains 6h cadence)"
       elif [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" ]]; then
         # Schema apply failed above: also stop any EXISTING timer so a
         # stale unit can't keep dumping a datastore in an unknown layout.
