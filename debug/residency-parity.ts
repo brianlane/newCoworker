@@ -61,10 +61,12 @@ async function centralCount(table: string): Promise<number> {
     .select("id")
     .eq("business_id", businessId)
     .order("id", { ascending: true })
-    .limit(PARENT_SLICE_LIMIT);
+    // +1 disambiguates "exactly at the cap" (complete set, fine) from
+    // "more rows exist beyond the slice" (parity unprovable).
+    .limit(PARENT_SLICE_LIMIT + 1);
   if (pErr) throw new Error(`central parents for ${table}: ${pErr.message}`);
   const ids = ((parents ?? []) as Array<{ id: string }>).map((p) => p.id);
-  if (ids.length >= PARENT_SLICE_LIMIT) {
+  if (ids.length > PARENT_SLICE_LIMIT) {
     throw new Error(
       `central parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap — cannot prove parity; raise PARENT_SLICE_LIMIT`
     );
@@ -89,11 +91,11 @@ async function boxCount(table: string): Promise<number> {
       columns: ["id"],
       filters: [{ column: "business_id", op: "eq", value: businessId }],
       order: [{ column: "id", ascending: true }],
-      limit: PARENT_SLICE_LIMIT
+      limit: PARENT_SLICE_LIMIT + 1
     });
     if (!parents.ok) throw new Error(`box parents for ${table}: ${parents.message}`);
     const ids = parents.rows.map((p) => p.id);
-    if (ids.length >= PARENT_SLICE_LIMIT) {
+    if (ids.length > PARENT_SLICE_LIMIT) {
       throw new Error(
         `box parents for ${table} hit the ${PARENT_SLICE_LIMIT} slice cap — cannot prove parity; raise PARENT_SLICE_LIMIT`
       );
