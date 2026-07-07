@@ -24,6 +24,11 @@ import {
 } from "@/lib/db/customer-profiles";
 import { getBusiness, recordWhiteGlovePurchase, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import {
+  getWhiteGloveOffer,
+  markWhiteGloveOfferPaid,
+  extendPrioritySupport
+} from "@/lib/db/white-glove-offers";
+import {
   getWhiteGloveBookingUrl,
   getWhiteGlovePackage,
   prioritySupportUntil
@@ -1478,6 +1483,13 @@ async function applyWhiteGlovePurchaseFromCheckout(
     });
     return;
   }
+  // Custom admin-authored offer: mark the offer row paid and open the
+  // priority window; the fixed-package column is untouched.
+  const offerId = session.metadata?.whiteGloveOfferId?.trim();
+  if (offerId) {
+    await applyCustomWhiteGloveOfferFromCheckout(session, eventId, businessId, offerId);
+    return;
+  }
   const pkg = getWhiteGlovePackage(session.metadata?.whiteGlovePackage ?? "");
   if (!pkg) {
     logger.warn("white_glove_package checkout has unknown package id", {
@@ -1552,6 +1564,103 @@ async function applyWhiteGlovePurchaseFromCheckout(
     await sendOwnerEmail(apiKey, business.owner_email, subject, { text, html });
   } catch (err) {
     logger.error("white_glove_package confirmation email failed", {
+      eventId,
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Records a CUSTOM white-glove offer payment: flips the white_glove_offers
+ * row to 'paid', extends (never shortens) the business's priority
+ * call/video support window by the standard 30 days, and sends the same
+ * booking confirmation email as the fixed packages. Idempotent under
+ * webhook retries — the row re-writes the same values (session `created`
+ * is fixed) and extendPrioritySupport is monotonic.
+ */
+async function applyCustomWhiteGloveOfferFromCheckout(
+  session: Stripe.Checkout.Session,
+  eventId: string,
+  businessId: string,
+  offerId: string
+) {
+  const offer = await getWhiteGloveOffer(offerId);
+  if (!offer || offer.business_id !== businessId) {
+    logger.warn("white_glove_offer checkout for unknown/mismatched offer", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      offerId
+    });
+    return;
+  }
+  const business = await getBusiness(businessId);
+  if (!business) {
+    logger.warn("white_glove_offer checkout for unknown business", {
+      eventId,
+      sessionId: session.id,
+      businessId
+    });
+    return;
+  }
+
+  const createdSec =
+    typeof session.created === "number" && Number.isFinite(session.created)
+      ? session.created
+      : Math.floor(Date.now() / 1000);
+  const purchasedAt = new Date(createdSec * 1000);
+  const supportUntil = prioritySupportUntil(purchasedAt);
+
+  const claim = await markWhiteGloveOfferPaid(offerId, {
+    paidAt: purchasedAt,
+    stripeSessionId: session.id
+  });
+  if (claim === "duplicate_session") {
+    // The offer was already paid by a DIFFERENT Checkout Session: the
+    // customer was charged twice (two Buy tabs both reached Stripe before
+    // the first completion landed). Don't re-credit anything — surface it
+    // loudly so support refunds this session's charge.
+    logger.error("white_glove_offer paid by a second session — refund needed", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      offerId,
+      firstSessionId: offer.stripe_session_id,
+      amountCents: offer.amount_cents
+    });
+    return;
+  }
+  await extendPrioritySupport(businessId, supportUntil);
+  logger.info("Custom white-glove offer paid", {
+    eventId,
+    sessionId: session.id,
+    businessId,
+    offerId,
+    amountCents: offer.amount_cents,
+    prioritySupportUntil: supportUntil.toISOString()
+  });
+
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    logger.warn("white_glove_offer: RESEND_API_KEY unset; skipping confirmation email", {
+      eventId,
+      businessId
+    });
+    return;
+  }
+  try {
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const { subject, text, html } = buildWhiteGloveConfirmationEmail({
+      packageName: offer.name,
+      recipientEmail: business.owner_email,
+      prioritySupportUntil: supportUntil,
+      bookingUrl: getWhiteGloveBookingUrl(),
+      siteUrl
+    });
+    await sendOwnerEmail(apiKey, business.owner_email, subject, { text, html });
+  } catch (err) {
+    logger.error("white_glove_offer confirmation email failed", {
       eventId,
       businessId,
       error: err instanceof Error ? err.message : String(err)

@@ -16,15 +16,34 @@ vi.mock("@/lib/db/subscriptions", () => ({
   getSubscription: vi.fn()
 }));
 
+vi.mock("@/lib/db/white-glove-offers", () => ({
+  getWhiteGloveOffer: vi.fn()
+}));
+
 import { POST } from "@/app/api/billing/white-glove/checkout/route";
 import { getAuthUser } from "@/lib/auth";
 import { createWhiteGloveCheckoutSession } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
+import { getWhiteGloveOffer } from "@/lib/db/white-glove-offers";
 
 const OLD_ENV = process.env;
 const BID = "11111111-1111-4111-8111-111111111111";
 const UID = "22222222-2222-4222-8222-222222222222";
+const OFFER_ID = "33333333-3333-4333-8333-333333333333";
+
+const OPEN_OFFER = {
+  id: OFFER_ID,
+  business_id: BID,
+  name: "White-glove migration",
+  description: "Full migration",
+  amount_cents: 125_000,
+  status: "open",
+  created_by: "admin@example.com",
+  created_at: "2026-07-01T00:00:00Z",
+  paid_at: null,
+  stripe_session_id: null
+};
 
 function mockBusinessesQuery(rows: Array<{ id: string; white_glove_package: string | null }>) {
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({
@@ -130,9 +149,59 @@ describe("api/billing/white-glove/checkout route", () => {
     expect(createWhiteGloveCheckoutSession).not.toHaveBeenCalled();
   });
 
-  it("returns 400 on malformed packId", async () => {
+  it("returns 404 for a packId that is neither a package nor an offer UUID", async () => {
     const res = await POST(buildRequest({ packId: "platinum" }));
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(404);
+    expect(createWhiteGloveCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("creates a Checkout Session for an OPEN custom offer using the stored amount", async () => {
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue(OPEN_OFFER as never);
+
+    const res = await POST(buildRequest({ packId: OFFER_ID }));
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.data.checkoutUrl).toBe("https://checkout.stripe.test/white-glove");
+    expect(createWhiteGloveCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        packageId: "custom",
+        packageName: "White-glove migration",
+        amountCents: 125_000,
+        offerId: OFFER_ID,
+        businessId: BID
+      })
+    );
+  });
+
+  it("allows a custom offer even when the business already owns buildout", async () => {
+    mockBusinessesQuery([{ id: BID, white_glove_package: "buildout" }]);
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue(OPEN_OFFER as never);
+
+    const res = await POST(buildRequest({ packId: OFFER_ID }));
+    expect(res.status).toBe(200);
+  });
+
+  it("returns 404 for an unknown offer or one belonging to another business", async () => {
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue(null);
+    expect((await POST(buildRequest({ packId: OFFER_ID }))).status).toBe(404);
+
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      ...OPEN_OFFER,
+      business_id: "44444444-4444-4444-8444-444444444444"
+    } as never);
+    expect((await POST(buildRequest({ packId: OFFER_ID }))).status).toBe(404);
+    expect(createWhiteGloveCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it("returns 409 for an offer that is no longer open", async () => {
+    for (const status of ["paid", "revoked"]) {
+      vi.mocked(getWhiteGloveOffer).mockResolvedValue({ ...OPEN_OFFER, status } as never);
+      const res = await POST(buildRequest({ packId: OFFER_ID }));
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error.message).toContain("no longer available");
+    }
     expect(createWhiteGloveCheckoutSession).not.toHaveBeenCalled();
   });
 

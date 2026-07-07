@@ -107,6 +107,12 @@ vi.mock("@/lib/db/businesses", () => ({
   recordWhiteGlovePurchase: vi.fn()
 }));
 
+vi.mock("@/lib/db/white-glove-offers", () => ({
+  getWhiteGloveOffer: vi.fn(),
+  markWhiteGloveOfferPaid: vi.fn().mockResolvedValue("paid"),
+  extendPrioritySupport: vi.fn().mockResolvedValue(undefined)
+}));
+
 const { mockSendOwnerEmail } = vi.hoisted(() => ({
   mockSendOwnerEmail: vi.fn().mockResolvedValue("email_1")
 }));
@@ -170,6 +176,11 @@ import {
   updateSubscription
 } from "@/lib/db/subscriptions";
 import { getBusiness, recordWhiteGlovePurchase } from "@/lib/db/businesses";
+import {
+  getWhiteGloveOffer,
+  markWhiteGloveOfferPaid,
+  extendPrioritySupport
+} from "@/lib/db/white-glove-offers";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { logger } from "@/lib/logger";
@@ -1142,6 +1153,298 @@ describe("stripe webhook route", () => {
     }
     expect(recordWhiteGlovePurchase).not.toHaveBeenCalled();
     expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+  });
+
+  it("records a CUSTOM white-glove offer payment: marks paid, extends support, emails", async () => {
+    const bid = "00000000-0000-4000-8000-000000000041";
+    const offerId = "00000000-0000-4000-8000-00000000004f";
+    const createdSec = 1700000000;
+    process.env.RESEND_API_KEY = "resend_test";
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: bid,
+      owner_email: "owner@example.com",
+      white_glove_package: null
+    } as never);
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      id: offerId,
+      business_id: bid,
+      name: "White-glove migration",
+      description: "",
+      amount_cents: 125_000,
+      status: "open",
+      created_by: "admin@example.com",
+      created_at: "2026-07-01T00:00:00Z",
+      paid_at: null,
+      stripe_session_id: null
+    } as never);
+
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_offer_ok",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_wg_offer_ok",
+          mode: "payment",
+          created: createdSec,
+          metadata: {
+            checkoutKind: "white_glove_package",
+            businessId: bid,
+            whiteGlovePackage: "custom",
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const purchasedAt = new Date(createdSec * 1000);
+    const supportUntil = new Date(purchasedAt.getTime() + 30 * 24 * 60 * 60 * 1000);
+    expect(markWhiteGloveOfferPaid).toHaveBeenCalledWith(offerId, {
+      paidAt: purchasedAt,
+      stripeSessionId: "cs_wg_offer_ok"
+    });
+    expect(extendPrioritySupport).toHaveBeenCalledWith(bid, supportUntil);
+    // The fixed-package column must never be touched by a custom offer.
+    expect(recordWhiteGlovePurchase).not.toHaveBeenCalled();
+    expect(mockSendOwnerEmail).toHaveBeenCalledWith(
+      "resend_test",
+      "owner@example.com",
+      expect.stringContaining("White-glove migration"),
+      expect.objectContaining({ text: expect.any(String), html: expect.any(String) })
+    );
+    delete process.env.RESEND_API_KEY;
+  });
+
+  it("ignores a custom-offer completion for an unknown or mismatched offer", async () => {
+    const bid = "00000000-0000-4000-8000-000000000042";
+    const offerId = "00000000-0000-4000-8000-00000000005f";
+    process.env.RESEND_API_KEY = "resend_test";
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: bid,
+      owner_email: "owner@example.com"
+    } as never);
+
+    const offers = [
+      null,
+      // Belongs to a different business: never cross-credit.
+      {
+        id: offerId,
+        business_id: "00000000-0000-4000-8000-0000000000ff",
+        name: "X",
+        status: "open"
+      }
+    ];
+    for (const offer of offers) {
+      vi.mocked(getWhiteGloveOffer).mockResolvedValue(offer as never);
+      vi.mocked(verifyWebhook).mockReturnValue({
+        id: `evt_wg_offer_bad_${offer ? "mismatch" : "missing"}`,
+        type: "checkout.session.completed",
+        data: {
+          object: {
+            id: "cs_wg_offer_bad",
+            mode: "payment",
+            created: 1700000000,
+            metadata: {
+              checkoutKind: "white_glove_package",
+              businessId: bid,
+              whiteGloveOfferId: offerId
+            }
+          }
+        }
+      } as never);
+
+      const response = await POST(
+        new Request("http://localhost:3000/api/webhooks/stripe", {
+          method: "POST",
+          headers: { "stripe-signature": "sig" },
+          body: "{}"
+        })
+      );
+      expect(response.status).toBe(200);
+    }
+    expect(markWhiteGloveOfferPaid).not.toHaveBeenCalled();
+    expect(extendPrioritySupport).not.toHaveBeenCalled();
+    delete process.env.RESEND_API_KEY;
+  });
+
+  it("records a custom-offer payment but skips the email for an unknown business or unset key", async () => {
+    const bid = "00000000-0000-4000-8000-000000000043";
+    const offerId = "00000000-0000-4000-8000-00000000006f";
+    const offer = {
+      id: offerId,
+      business_id: bid,
+      name: "Deal",
+      status: "open"
+    };
+
+    // Unknown business: nothing is written at all.
+    process.env.RESEND_API_KEY = "resend_test";
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue(offer as never);
+    vi.mocked(getBusiness).mockResolvedValue(null);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_offer_ghost_biz",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_wg_offer_ghost",
+          mode: "payment",
+          metadata: {
+            checkoutKind: "white_glove_package",
+            businessId: bid,
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+    expect(
+      (
+        await POST(
+          new Request("http://localhost:3000/api/webhooks/stripe", {
+            method: "POST",
+            headers: { "stripe-signature": "sig" },
+            body: "{}"
+          })
+        )
+      ).status
+    ).toBe(200);
+    expect(markWhiteGloveOfferPaid).not.toHaveBeenCalled();
+
+    // No RESEND key (and no `created` → Date.now() fallback): paid + extended, no email.
+    delete process.env.RESEND_API_KEY;
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: bid,
+      owner_email: "owner@example.com"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_offer_no_key",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_wg_offer_no_key",
+          mode: "payment",
+          metadata: {
+            checkoutKind: "white_glove_package",
+            businessId: bid,
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+    expect(
+      (
+        await POST(
+          new Request("http://localhost:3000/api/webhooks/stripe", {
+            method: "POST",
+            headers: { "stripe-signature": "sig" },
+            body: "{}"
+          })
+        )
+      ).status
+    ).toBe(200);
+    expect(markWhiteGloveOfferPaid).toHaveBeenCalled();
+    expect(extendPrioritySupport).toHaveBeenCalled();
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not re-credit a duplicate-session completion of an already-paid offer", async () => {
+    const bid = "00000000-0000-4000-8000-000000000045";
+    const offerId = "00000000-0000-4000-8000-00000000008f";
+    process.env.RESEND_API_KEY = "resend_test";
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      id: offerId,
+      business_id: bid,
+      name: "Deal",
+      status: "paid",
+      stripe_session_id: "cs_first",
+      amount_cents: 125_000
+    } as never);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: bid,
+      owner_email: "owner@example.com"
+    } as never);
+    vi.mocked(markWhiteGloveOfferPaid).mockResolvedValueOnce("duplicate_session");
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_offer_dup",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_second",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "white_glove_package",
+            businessId: bid,
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    // No support extension and no confirmation email for the second charge —
+    // it gets flagged for a refund instead.
+    expect(extendPrioritySupport).not.toHaveBeenCalled();
+    expect(mockSendOwnerEmail).not.toHaveBeenCalled();
+    delete process.env.RESEND_API_KEY;
+  });
+
+  it("still returns 200 when the custom-offer confirmation email fails", async () => {
+    const bid = "00000000-0000-4000-8000-000000000044";
+    const offerId = "00000000-0000-4000-8000-00000000007f";
+    process.env.RESEND_API_KEY = "resend_test";
+    vi.mocked(getWhiteGloveOffer).mockResolvedValue({
+      id: offerId,
+      business_id: bid,
+      name: "Deal",
+      status: "open"
+    } as never);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: bid,
+      owner_email: "owner@example.com"
+    } as never);
+    mockSendOwnerEmail.mockRejectedValueOnce(new Error("resend down"));
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_wg_offer_email_fail",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_wg_offer_email_fail",
+          mode: "payment",
+          created: 1700000000,
+          metadata: {
+            checkoutKind: "white_glove_package",
+            businessId: bid,
+            whiteGloveOfferId: offerId
+          }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(markWhiteGloveOfferPaid).toHaveBeenCalled();
+    delete process.env.RESEND_API_KEY;
   });
 
   it("does not record SMS bonus grant when smsTexts metadata is invalid", async () => {
