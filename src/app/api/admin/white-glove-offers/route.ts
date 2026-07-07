@@ -5,8 +5,12 @@
  *          OR for a PROSPECT (recipientEmail instead of businessId — payable
  *          via the public /offer/<pay_token> link before any account exists).
  *          The stored row is the pricing source of truth for Stripe Checkout;
- *          the client never supplies an amount at pay time. The response
- *          includes the emailable payUrl.
+ *          the client never supplies an amount at pay time. The offer is
+ *          EMAILED to its recipient (explicit recipientEmail, else the
+ *          business owner) with the payment link — best-effort: an email
+ *          hiccup never fails the creation, and the response reports
+ *          `emailedTo` (or null) so the admin knows whether to send the link
+ *          manually. The payUrl is always returned.
  * GET    — list offers: ?businessId=<uuid> for a business's panel, or
  *          ?prospect=1 for pre-account offers.
  * DELETE — revoke an OPEN offer (a paid offer can't be revoked; refunds are
@@ -22,9 +26,53 @@ import {
   revokeWhiteGloveOffer,
   whiteGloveOfferPayUrl,
   WHITE_GLOVE_OFFER_MIN_CENTS,
-  WHITE_GLOVE_OFFER_MAX_CENTS
+  WHITE_GLOVE_OFFER_MAX_CENTS,
+  type WhiteGloveOfferRow
 } from "@/lib/db/white-glove-offers";
+import { buildWhiteGloveOfferEmail } from "@/lib/email/templates/white-glove-offer";
+import { sendOwnerEmail } from "@/lib/email/client";
+import { logger } from "@/lib/logger";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+
+/**
+ * Email the freshly created offer to its recipient with the payment link.
+ * Best-effort: returns the address it emailed, or null (no recipient / no
+ * RESEND key / send failure) so the caller can tell the admin to copy the
+ * link manually instead.
+ */
+async function emailOfferToRecipient(
+  offer: WhiteGloveOfferRow,
+  recipientEmail: string | null,
+  payUrl: string
+): Promise<string | null> {
+  if (!recipientEmail) return null;
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) {
+    logger.warn("white_glove_offer create: RESEND_API_KEY unset; offer not emailed", {
+      offerId: offer.id
+    });
+    return null;
+  }
+  try {
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const { subject, text, html } = buildWhiteGloveOfferEmail({
+      offerName: offer.name,
+      description: offer.description,
+      amountCents: offer.amount_cents,
+      payUrl,
+      recipientEmail,
+      siteUrl
+    });
+    await sendOwnerEmail(apiKey, recipientEmail, subject, { text, html });
+    return recipientEmail;
+  } catch (err) {
+    logger.error("white_glove_offer create: offer email failed (non-fatal)", {
+      offerId: offer.id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
 
 const createSchema = z
   .object({
@@ -47,9 +95,11 @@ export async function POST(request: Request) {
     const admin = await requireAdmin();
     const body = createSchema.parse(await request.json());
 
+    let ownerEmail: string | null = null;
     if (body.businessId) {
       const business = await getBusiness(body.businessId);
       if (!business) return errorResponse("NOT_FOUND", "Business not found");
+      ownerEmail = business.owner_email ?? null;
     }
 
     const offer = await createWhiteGloveOffer({
@@ -60,7 +110,15 @@ export async function POST(request: Request) {
       createdBy: admin.email ?? admin.userId,
       recipientEmail: body.recipientEmail ?? null
     });
-    return successResponse({ offer, payUrl: whiteGloveOfferPayUrl(offer) });
+    const payUrl = whiteGloveOfferPayUrl(offer);
+    // Explicit recipient first (the admin typed it); a business-tied offer
+    // without one goes to the owner so "Create offer" always notifies someone.
+    const emailedTo = await emailOfferToRecipient(
+      offer,
+      body.recipientEmail ?? ownerEmail,
+      payUrl
+    );
+    return successResponse({ offer, payUrl, emailedTo });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");
