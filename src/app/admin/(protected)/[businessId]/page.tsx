@@ -154,6 +154,10 @@ export default async function BusinessDetailPage({
             Data residency
           </h2>
           <ResidencyPanel
+            // Remount on tenant OR mode change so useState re-seeds — a
+            // navigation between businesses (or a server refresh after a
+            // flip) must never show the previous tenant's mode.
+            key={`${businessId}:${business.data_residency_mode ?? "supabase"}`}
             businessId={businessId}
             initialMode={business.data_residency_mode ?? "supabase"}
           />
