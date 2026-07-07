@@ -53,9 +53,10 @@ type ProvisioningInput = {
   tier: "starter" | "standard" | "enterprise";
   /**
    * Hardware pin (`businesses.vps_size`). Callers pass the raw column value;
-   * null/undefined resolves to the tier default (starter→kvm2,
-   * standard→kvm8). Drives the Hostinger SKU + bootstrap hardware profile
-   * only — entitlements stay on `tier`.
+   * null/undefined resolves to the tier default (starter→kvm1,
+   * standard→kvm2, enterprise→kvm8 — see DEFAULT_TIER_VPS_SIZE). Drives the
+   * Hostinger SKU + bootstrap hardware profile only — entitlements stay on
+   * `tier`.
    */
   vpsSize?: string | null;
   /**
@@ -89,14 +90,18 @@ export type ProvisioningResult = {
   hostingerBillingSubscriptionId: string | null;
 };
 
-function resolveStarterOrStandard(tier: ProvisioningInput["tier"]): "starter" | "standard" {
-  if (tier === "enterprise") {
-    const contact = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
-    throw new Error(
-      `Enterprise provisioning requires a custom engagement. Please contact ${contact} to discuss your needs.`
-    );
-  }
-  return tier;
+/**
+ * Map the ENTITLEMENT tier onto the on-box deploy profile. Enterprise runs
+ * the STANDARD box profile (full compose stack, render sidecar, standard
+ * Ollama model selection) — there is no separate enterprise bootstrap TIER,
+ * and every downstream gate already treats enterprise as standard-plus
+ * (render, analytics, call summaries, BYON). Entitlements (limits, caps,
+ * `enterprise_limits` overrides) keep reading the REAL tier from the
+ * `businesses` row; only the hardware/deploy axis narrows here. Hardware
+ * defaults come from `resolveVpsSize` (enterprise → kvm8, admin-pinnable).
+ */
+function resolveBoxTier(tier: ProvisioningInput["tier"]): "starter" | "standard" {
+  return tier === "starter" ? "starter" : "standard";
 }
 
 /**
@@ -440,8 +445,10 @@ export async function orchestrateProvisioning(
   }
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier, billingPeriod } = input;
-  const narrowTier = resolveStarterOrStandard(tier);
-  const vpsSize = resolveVpsSize(narrowTier, input.vpsSize);
+  const narrowTier = resolveBoxTier(tier);
+  // Size resolution keys on the REAL tier so enterprise gets its kvm8
+  // default rather than standard's kvm2; an explicit vps_size pin wins.
+  const vpsSize = resolveVpsSize(tier, input.vpsSize);
 
   logger.info("Starting provisioning", {
     businessId,

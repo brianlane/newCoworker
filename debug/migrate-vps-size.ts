@@ -98,8 +98,8 @@ if (bizErr || !biz) {
   console.error(`business ${BUSINESS_ID} not found: ${bizErr?.message}`);
   process.exit(1);
 }
-if (biz.tier !== "starter" && biz.tier !== "standard") {
-  console.error(`tier=${biz.tier} is not migratable by this script (enterprise is custom)`);
+if (biz.tier !== "starter" && biz.tier !== "standard" && biz.tier !== "enterprise") {
+  console.error(`tier=${biz.tier} is not a recognized tier`);
   process.exit(1);
 }
 

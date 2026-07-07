@@ -480,7 +480,6 @@ export async function runChangePlanFromCheckout(
   // fast-path period switches touch no hardware and stay quiet here (they
   // get the term-alignment summary email at completion instead).
   if (migrateVps) {
-    const oldTierForSize = oldSub.tier === "starter" ? "starter" : "standard";
     await sendOpsPlanChangeEmail({
       businessId,
       ownerName: business.owner_name ?? null,
@@ -492,7 +491,7 @@ export async function runChangePlanFromCheckout(
       // Old box: deployed-size resolution (null pin on a legacy box = the
       // historical default it was actually provisioned on). New box: the
       // forward-looking default for the target tier under the same pin.
-      fromHardware: resolveDeployedVpsSize(oldTierForSize, business.vps_size ?? null),
+      fromHardware: resolveDeployedVpsSize(oldSub.tier, business.vps_size ?? null),
       toHardware: resolveVpsSize(tier, business.vps_size ?? null)
     });
   }

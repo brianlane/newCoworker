@@ -112,14 +112,16 @@ describe("migrateBusinessVpsSize — guards", () => {
     expect(deps.sendOpsEmail).not.toHaveBeenCalled();
   });
 
-  it("refuses enterprise tenants", async () => {
+  it("migrates enterprise tenants, passing the real tier to provisioning", async () => {
+    // Enterprise became provisionable (Jul 2026): the old "enterprise is
+    // custom" guard is gone, and the tenant's REAL tier flows through so
+    // the orchestrator resolves the enterprise box profile itself.
     const deps = makeDeps({ getBusiness: vi.fn(async () => bizRow({ tier: "enterprise" })) });
     const out = await migrateBusinessVpsSize(input, deps);
-    expect(out.ok).toBe(false);
-    if (!out.ok) {
-      expect(out.stage).toBe("guard");
-      expect(out.error).toContain("enterprise");
-    }
+    expect(out.ok).toBe(true);
+    expect(deps.orchestrateProvisioning).toHaveBeenCalledWith(
+      expect.objectContaining({ tier: "enterprise", vpsSize: "kvm4" })
+    );
   });
 
   it("refuses a no-op migration to the current effective size", async () => {
