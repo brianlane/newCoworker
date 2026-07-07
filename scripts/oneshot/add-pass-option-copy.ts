@@ -37,6 +37,7 @@ import {
   parseAiFlowDefinition,
   AiFlowValidationError
 } from "@/lib/ai-flows/schema";
+import { recordOneshotApplied } from "./_ledger";
 
 type Args = { apply: boolean; businessId: string | null };
 
@@ -137,6 +138,7 @@ async function main(): Promise<void> {
   }
 
   let changedCount = 0;
+  const patched: Array<{ id: string; name: string }> = [];
   for (const row of (rows ?? []) as Array<{ id: string; name: string; definition: Definition }>) {
     const def = JSON.parse(JSON.stringify(row.definition)) as Definition;
     const before = JSON.stringify(row.definition);
@@ -167,6 +169,7 @@ async function main(): Promise<void> {
         process.exit(1);
       }
       console.log("  -> updated.");
+      patched.push({ id: row.id, name: row.name });
     }
   }
 
@@ -176,6 +179,13 @@ async function main(): Promise<void> {
     console.log(`\n[dry-run] ${changedCount} flow(s) would change. Re-run with --apply to write.`);
   } else {
     console.log(`\nPatched ${changedCount} flow(s).`);
+  }
+  if (args.apply) {
+    await recordOneshotApplied(db, {
+      scriptPath: process.argv[1] ?? "add-pass-option-copy.ts",
+      businessId,
+      details: { patched }
+    });
   }
 }
 

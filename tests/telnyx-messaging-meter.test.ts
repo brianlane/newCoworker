@@ -224,6 +224,44 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
     }
   });
 
+  it("still posts the cap alert with empty base URL/bearer when the env is unset", async () => {
+    // Explicitly exercises the env-UNSET side of the `?? ""` fallbacks so
+    // branch coverage doesn't depend on whether the developer's shell has the
+    // Supabase env exported (it isn't in CI, it often is locally).
+    const savedUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const savedKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    try {
+      rpc.mockImplementation((name: string) => {
+        if (name === "try_reserve_sms_outbound_slot") {
+          return Promise.resolve({ data: { ok: false, reason: "monthly_sms_limit" }, error: null });
+        }
+        if (name === "mark_usage_cap_alert") {
+          return Promise.resolve({ data: true, error: null });
+        }
+        return Promise.resolve({ data: null, error: null });
+      });
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      await expect(
+        sendTelnyxSms(
+          { apiKey: "k", messagingProfileId: "p" },
+          "+15550001111",
+          "Hi",
+          { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+        )
+      ).rejects.toThrow("Monthly SMS limit reached");
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url] = fetchMock.mock.calls[0] as [string, RequestInit];
+      expect(url).toBe("/functions/v1/notifications");
+    } finally {
+      if (savedUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+      else process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl;
+      if (savedKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+      else process.env.SUPABASE_SERVICE_ROLE_KEY = savedKey;
+    }
+  });
+
   it("skips the alert POST when another sender already alerted this period", async () => {
     rpc.mockImplementation((name: string) => {
       if (name === "try_reserve_sms_outbound_slot") {

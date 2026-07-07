@@ -16,6 +16,7 @@
  * Lives in `_shared` (not the telnyx-sms-inbound entrypoint) so it can be unit
  * tested under vitest without booting the Deno HTTP server.
  */
+import { routingOfContext } from "./routing.ts";
 
 /** The run-row shape the webhook already reads for late-claim candidate scans. */
 export type StaleOfferCandidate = {
@@ -43,15 +44,6 @@ export type StaleOfferOutcome = {
   claimedName: string;
 };
 
-function routingOf(row: StaleOfferCandidate): Record<string, unknown> | null {
-  const r = row.context?.routing;
-  return r && typeof r === "object" ? (r as Record<string, unknown>) : null;
-}
-
-function str(v: unknown): string {
-  return typeof v === "string" ? v : "";
-}
-
 /**
  * Find the most recent routed run (newest-first candidates, same set the
  * late-claim path scans) that this SENDER was ever offered, and classify what
@@ -74,14 +66,12 @@ export function classifyStaleOfferReply(args: {
 }): StaleOfferOutcome | null {
   const { candidates, from, digit, nowMs, windowMs } = args;
   for (const row of candidates) {
-    const routing = routingOf(row);
+    const routing = routingOfContext(row.context);
     if (!routing) continue;
     if (nowMs - Date.parse(row.updated_at) > windowMs) continue;
 
-    const offered = str(routing.offered);
-    const tried = Array.isArray(routing.tried)
-      ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
+    const offered = routing.offered ?? "";
+    const tried = routing.tried ?? [];
     const everOffered =
       offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
     if (!everOffered) continue;
@@ -98,7 +88,7 @@ export function classifyStaleOfferReply(args: {
       offered === from && (row.status === "awaiting_agent" || row.status === "queued");
     if (liveToSender) return null;
 
-    const claimedBy = str(routing.claimed_by);
+    const claimedBy = routing.claimed_by ?? "";
     if (claimedBy === from) {
       return { runId: row.id, kind: "claimed_by_sender", claimedName: "" };
     }
@@ -106,7 +96,7 @@ export function classifyStaleOfferReply(args: {
       return {
         runId: row.id,
         kind: "claimed_by_other",
-        claimedName: str(routing.claimed_name).trim()
+        claimedName: (routing.claimed_name ?? "").trim()
       };
     }
     // Unclaimed but actively offered to another teammate. When the flow allows
@@ -117,9 +107,7 @@ export function classifyStaleOfferReply(args: {
     // Gated on routing.offered_log (who actually RECEIVED an offer SMS) so a
     // teammate the worker merely skipped is never taught a yank that
     // tryLateClaim would then refuse.
-    const offeredLog = Array.isArray(routing.offered_log)
-      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
-      : [];
+    const offeredLog = routing.offered_log ?? [];
     const liveWithOther =
       offered !== "" &&
       offered !== from &&

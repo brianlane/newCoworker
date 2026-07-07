@@ -212,6 +212,23 @@ describe("issueGatewayToken", () => {
     else process.env.ROWBOAT_GATEWAY_TOKEN = prev;
   });
 
+  it("stores any token when no shared token env is configured", async () => {
+    // Explicitly exercises the env-UNSET side of the shared-token guard so
+    // branch coverage doesn't depend on whether the developer's shell has
+    // ROWBOAT_GATEWAY_TOKEN exported (it isn't in CI, it often is locally).
+    const prev = process.env.ROWBOAT_GATEWAY_TOKEN;
+    delete process.env.ROWBOAT_GATEWAY_TOKEN;
+    try {
+      const { client, insertSpy } = makeClient({});
+      const token = await issueGatewayToken("biz", { token: "anything-goes" }, client as never);
+      expect(token).toBe("anything-goes");
+      expect(insertSpy).toHaveBeenCalled();
+    } finally {
+      if (prev === undefined) delete process.env.ROWBOAT_GATEWAY_TOKEN;
+      else process.env.ROWBOAT_GATEWAY_TOKEN = prev;
+    }
+  });
+
   it("throws when insert fails", async () => {
     const { client } = makeClient({ insert: { error: { message: "insert-fail" } } });
     await expect(issueGatewayToken("biz", {}, client as never)).rejects.toThrow(/insert-fail/);

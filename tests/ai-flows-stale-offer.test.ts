@@ -114,6 +114,11 @@ describe("classifyStaleOfferReply", () => {
     expect(r).toEqual({ runId: "run-1", kind: "claimed_by_other", claimedName: "Dave Lane" });
   });
 
+  it("returns claimed_by_other with an empty name when the claimer's name is unknown", () => {
+    const r = classify([row({ routing: { tried: [GABBY], claimed_by: DAVE } })]);
+    expect(r).toEqual({ runId: "run-1", kind: "claimed_by_other", claimedName: "" });
+  });
+
   it("returns claimed_by_sender for a duplicate claim digit", () => {
     const r = classify([
       row({ routing: { tried: [GABBY], claimed_by: GABBY, claimed_name: "Gabrielle Mota" } })
