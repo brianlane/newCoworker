@@ -212,8 +212,10 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  let changedCount = 0;
-  const patched: Array<{ id: string; name: string }> = [];
+  // Pass 1: patch + validate EVERY flow in memory before writing ANY, so an
+  // invalid later flow can never leave the tenant half-patched (some flows
+  // with the $1M rule, others without).
+  const pending: Array<{ id: string; name: string; def: Definition }> = [];
   for (const row of (rows ?? []) as Array<{ id: string; name: string; definition: Definition }>) {
     const def = JSON.parse(JSON.stringify(row.definition)) as Definition;
     if (!addPriceBandRouting(def, row.name)) continue;
@@ -222,27 +224,37 @@ async function main(): Promise<void> {
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
-      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — skipping:`);
+      console.error(`\nFlow "${row.name}" (${row.id}) would become INVALID — aborting before any write:`);
       if (err instanceof AiFlowValidationError) for (const i of err.issues) console.error(`  - ${i}`);
       else console.error(err);
       process.exit(2);
     }
 
-    changedCount += 1;
     console.log(`\n=== ${row.name} (${row.id}) ===`);
     console.log(`  AFTER: ${JSON.stringify(def)}`);
+    pending.push({ id: row.id, name: row.name, def });
+  }
 
-    if (args.apply) {
+  // Pass 2: write.
+  const changedCount = pending.length;
+  const patched: Array<{ id: string; name: string }> = [];
+  if (args.apply) {
+    for (const p of pending) {
       const { error: upErr } = await db
         .from("ai_flows")
-        .update({ definition: def })
-        .eq("id", row.id);
+        .update({ definition: p.def })
+        .eq("id", p.id);
       if (upErr) {
-        console.error(`Update failed for ${row.id}: ${upErr.message}`);
+        console.error(`Update failed for ${p.id}: ${upErr.message}`);
+        console.error(
+          patched.length > 0
+            ? `Already written before the failure: ${patched.map((x) => x.name).join(", ")} — re-run after fixing; the patcher is idempotent.`
+            : "Nothing had been written yet."
+        );
         process.exit(1);
       }
-      console.log("  -> updated.");
-      patched.push({ id: row.id, name: row.name });
+      console.log(`  -> updated ${p.name}.`);
+      patched.push({ id: p.id, name: p.name });
     }
   }
 
