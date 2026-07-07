@@ -2974,6 +2974,27 @@ async function routeToTeamStep(
     };
   }
 
+  // A pass with a stated reason ("2, out of town"): the inbound webhook stamps
+  // routing.pass_reason on the reject. Record it — accumulated on
+  // routing.pass_reasons (one entry per passing teammate) and in actions_taken —
+  // so the owner-fallback notice and the run summary say WHY the lead bounced.
+  // Cleared afterwards so a later offer never inherits a stale reason.
+  const passReason =
+    typeof routing.pass_reason === "string" ? routing.pass_reason.trim() : "";
+  if (routing.last_event === "reject" && passReason) {
+    const passerName =
+      (typeof routing.offered_name === "string" && routing.offered_name) ||
+      (typeof routing.reply_from === "string" && routing.reply_from) ||
+      "a teammate";
+    const reasons = Array.isArray(routing.pass_reasons)
+      ? (routing.pass_reasons as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    reasons.push(`${passerName}: ${passReason}`);
+    routing.pass_reasons = reasons;
+    appendActionTaken(scope, `${passerName} passed (${passReason})`);
+  }
+  delete routing.pass_reason;
+
   // First entry, reject ('2'), or timeout: retire the agent we last offered, then
   // ask Rowboat for the next one.
   const prevOffered = typeof routing.offered === "string" ? routing.offered : "";
@@ -3044,7 +3065,13 @@ async function routeToTeamStep(
   // claimed_agent="none" so claim-gated LATER steps (e.g. the lead marketing
   // text/email) are skipped — only ungated steps like notify_owner still run.
   scope.vars.claimed_agent = "none";
-  const body = renderTemplate(action.ownerFallbackTemplate, scope);
+  let body = renderTemplate(action.ownerFallbackTemplate, scope);
+  // Appended (not templated) so EVERY flow's fallback notice carries the pass
+  // reasons teammates stated ("2, <reason>") without editing each template.
+  const passReasons = Array.isArray(routing.pass_reasons)
+    ? (routing.pass_reasons as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  if (passReasons.length > 0) body += `\nPassed: ${passReasons.join("; ")}`;
   await sendOwnerSms(supabase, run, body, `aiflow-owner-fallback:${run.id}`);
   appendActionTaken(scope, "no agent claimed the lead; handed back to the owner");
   return { kind: "ok", result: { routed: "owner_fallback", tried: tried.length } };

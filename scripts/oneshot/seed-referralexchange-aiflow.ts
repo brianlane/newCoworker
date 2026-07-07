@@ -112,7 +112,8 @@ const DEFAULT_OFFER =
   "New {{vars.lead_type}} lead: {{vars.lead_name}} ({{vars.lead_phone}}) in " +
   "{{vars.location}}, around {{vars.price}}.\n" +
   "Lead source: ReferralExchange (referralexchange.com)\n" +
-  "Reply 1 to claim or 2 to pass within 10 minutes, or it goes to the next agent.";
+  "Reply 1 to claim or 2 to pass within 10 minutes, or it goes to the next agent.\n" +
+  'Passing? You can reply "2, <reason>" to tell us why (e.g. "2, out of town").';
 
 const DEFAULT_OWNER_FALLBACK =
   "No agent claimed the {{vars.lead_type}} lead {{vars.lead_name}} " +

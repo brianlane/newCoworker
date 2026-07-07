@@ -318,9 +318,12 @@ type LiveClaimArgs = {
   telnyxApiKey: string;
   messagingProfileId: string;
   smsFromE164: string;
-  /** The leading reply digit ("3" in "3, 20 min"). */
+  /** The leading reply digit ("1" in "1, 20 min", "2" in "2, out of town"). */
   digit: string;
-  /** The stated ETA (already parsed/trimmed). */
+  /**
+   * The comma'd free text (already parsed/trimmed): the stated ETA for a
+   * claim, or the pass reason for tryAgentPassWithReason.
+   */
   timeframe: string;
 };
 
@@ -364,6 +367,9 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   prevRouting.last_event = "claim";
   prevRouting.reply_from = from;
   prevRouting.claim_timeframe = timeframe;
+  // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed by the
+  // worker) belongs to THAT reply — never let it ride along with this claim.
+  delete prevRouting.pass_reason;
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
   const { error: resumeErr } = await supabase
     .from("ai_flow_runs")
@@ -404,6 +410,87 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     decision: "claim_timeframe"
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "claimed" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+/**
+ * Handle a teammate's "pass WITH a reason" reply to a LIVE offer — "2, <reason>"
+ * (e.g. "2, out of town"). Only digit "2" is a pass, and only when the offer's
+ * stamped timeframe option isn't itself "2" (on those legacy pinned offers
+ * "2, <eta>" means CLAIM and tryAgentClaimWithTimeframe consumes it first).
+ * Resolves the teammate's currently offered run and resumes it as a reject with
+ * routing.pass_reason stamped — the worker records the reason in actions_taken
+ * and appends it to the owner-fallback notice, so the owner learns WHY the lead
+ * bounced. Returns a Response when consumed, or null when this sender has no
+ * live offer (or the digit isn't a pass) so the caller falls through.
+ */
+async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | null> {
+  const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
+  if (digit !== "2") return null;
+
+  const { data: offerRow } = await supabase
+    .from("ai_flow_runs")
+    .select("id, context")
+    .eq("business_id", businessId)
+    .in("status", ["awaiting_agent", "queued"])
+    .eq("context->routing->>offered", from)
+    .order("updated_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  const offer = offerRow as { id: string; context: Record<string, unknown> | null } | null;
+  if (!offer) return null;
+
+  const prevRouting =
+    offer.context?.routing && typeof offer.context.routing === "object"
+      ? { ...(offer.context.routing as Record<string, unknown>) }
+      : {};
+  // A legacy offer whose stamped timeframe option IS "2" treats "2, <text>" as
+  // a CLAIM; the claim handler runs first, so refusing here is just belt and
+  // braces against mis-recording a claim as a pass.
+  const tfDigit = typeof prevRouting.tf_digit === "string" ? prevRouting.tf_digit : "";
+  if (tfDigit === "2") return null;
+  prevRouting.last_event = "reject";
+  prevRouting.reply_from = from;
+  prevRouting.pass_reason = timeframe;
+  const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
+  const { error: resumeErr } = await supabase
+    .from("ai_flow_runs")
+    .update({
+      status: "queued",
+      awaiting_agent_e164: null,
+      respond_by_at: null,
+      context: nextContext,
+      updated_at: new Date().toISOString()
+    })
+    .eq("id", offer.id)
+    .in("status", ["awaiting_agent", "queued"]);
+  if (resumeErr) {
+    console.error("ai_flow_runs pass+reason resume", resumeErr);
+    return new Response(JSON.stringify({ ok: false, error: "agent_resume_failed" }), {
+      status: 503,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  // No pass acknowledgement is texted back (mirrors the bare "2" path); the
+  // reply is still logged so it shows in the dashboard Texts thread.
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent: null
+  });
+  await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+    business_id: businessId,
+    run_id: offer.id,
+    event_id: eventId,
+    decision: "reject_reason"
+  });
+  return new Response(JSON.stringify({ ok: true, agent_offer: "rejected" }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
@@ -684,6 +771,9 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // claim notice. Cleared when none so a re-claim never carries a stale ETA.
   if (claimTimeframe) routing.claim_timeframe = claimTimeframe;
   else delete routing.claim_timeframe;
+  // Same for a pass_reason from an earlier "2, <reason>": it belongs to that
+  // reply, never to this late claim.
+  delete routing.pass_reason;
   // late_claim flags a run whose post-route steps ALREADY ran (see matcher):
   // the worker re-runs just the route claim/notify and then ends, so
   // email/browse/notify aren't replayed. A still-live offer is left unflagged
@@ -748,6 +838,117 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     decision: isLate ? "late_claim" : "late_option_live"
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "late_claimed" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+type StaleOfferAckArgs = {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  /** DID the inbound arrived on — safest ack sender fallback. */
+  ackTo: string;
+  eventId: string;
+  /** Full Telnyx webhook envelope — persisted so the reply shows in Texts. */
+  envelope: unknown;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+  /** The reply's leading digit (bare "1"/"2", or the comma'd "2, <reason>"). */
+  digit: string;
+};
+
+/**
+ * Stale offer reply: the digit matched no LIVE offer, no owner approval, and
+ * no late-claimable run (someone else took the lead, or it's past the
+ * late-claim window / not re-openable), but this teammate WAS offered a lead
+ * recently. Consume it with a deterministic "here's what happened to that
+ * lead" ack instead of letting it fall through to the chat AI, which has no
+ * offer context and improvises a baffling reply. This never claims — the
+ * late-claim path and "86" keep that role. Returns a Response when consumed,
+ * or null when the reply should fall through to the normal inbound path.
+ */
+async function tryStaleOfferAck(args: StaleOfferAckArgs): Promise<Response | null> {
+  const {
+    supabase,
+    businessId,
+    from,
+    ackTo,
+    eventId,
+    envelope,
+    telnyxApiKey,
+    messagingProfileId,
+    smsFromE164,
+    digit
+  } = args;
+
+  const { data: staleRows } = await supabase
+    .from("ai_flow_runs")
+    .select("id, status, context, awaiting_agent_e164, updated_at")
+    .eq("business_id", businessId)
+    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
+    .not("context->routing", "is", null)
+    .order("updated_at", { ascending: false })
+    .limit(25);
+  const stale = classifyStaleOfferReply({
+    candidates: (staleRows as StaleOfferCandidate[] | null) ?? [],
+    from,
+    digit,
+    nowMs: Date.now(),
+    windowMs: LATE_CLAIM_WINDOW_MS
+  });
+  if (!stale) return null;
+
+  // Ack sender resolution mirrors the late-claim path: per-tenant settings
+  // win, then the DID the message arrived on, then the global from.
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) || messagingProfileId;
+  const ackFrom = (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  const canAck = Boolean(telnyxApiKey && ackProfile && from);
+
+  const ackText = staleOfferAckText(stale);
+  let ackSent: string | null = null;
+  if (canAck) {
+    const send = await telnyxSendSms({
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text: ackText,
+      idempotencyKey: `${eventId}:stale-offer-ack`
+    });
+    if (!send.ok) {
+      console.error("stale offer ack reply", send.status, send.body.slice(0, 300));
+    } else {
+      ackSent = ackText;
+    }
+  }
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent
+  });
+  await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+    business_id: businessId,
+    run_id: stale.runId,
+    event_id: eventId,
+    decision: `stale_${stale.kind}`
+  });
+  return new Response(JSON.stringify({ ok: true, agent_offer: "stale_reply" }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
@@ -1381,12 +1582,14 @@ serve(async (req: Request) => {
         // so a stray "86" is still handled like any other inbound text.
       }
 
-      // Comma'd claim ("<n>, <eta>", n != 86): try a LIVE offer first (only the
-      // ACCEPT digits "1" or the offer's timeframe option claim; a same-digit
-      // PASS like a round-robin "2, can't take it" falls through). If no live
-      // offer resolves it, try a retroactive/LATE claim — "1, <eta>" always
-      // qualifies (universal claim digit), a legacy flow's stamped late-claim
-      // digit still works (re-opens a lapsed offer within 24h).
+      // Comma'd reply ("<n>, <text>", n != 86): try a LIVE claim first (only
+      // the ACCEPT digits "1" or the offer's timeframe option claim), then a
+      // LIVE pass-with-reason ("2, out of town" — the reason is surfaced to
+      // the owner). If neither resolves it, try a retroactive/LATE claim —
+      // "1, <eta>" always qualifies (universal claim digit), a legacy flow's
+      // stamped late-claim digit still works (re-opens a lapsed offer within
+      // 24h). Finally, a reply to an offer that can no longer be claimed gets
+      // the deterministic stale-offer ack instead of the chat AI.
       if (claimTf && claimTf.digit !== "86") {
         const liveHandled = await tryAgentClaimWithTimeframe({
           supabase,
@@ -1403,6 +1606,21 @@ serve(async (req: Request) => {
         });
         if (liveHandled) return liveHandled;
 
+        const passHandled = await tryAgentPassWithReason({
+          supabase,
+          businessId,
+          from,
+          ackTo: to,
+          eventId,
+          envelope,
+          telnyxApiKey,
+          messagingProfileId,
+          smsFromE164,
+          digit: claimTf.digit,
+          timeframe: claimTf.timeframe
+        });
+        if (passHandled) return passHandled;
+
         const lateHandled = await tryLateClaim({
           supabase,
           businessId,
@@ -1417,6 +1635,20 @@ serve(async (req: Request) => {
           timeframe: claimTf.timeframe
         });
         if (lateHandled) return lateHandled;
+
+        const staleHandled = await tryStaleOfferAck({
+          supabase,
+          businessId,
+          from,
+          ackTo: to,
+          eventId,
+          envelope,
+          telnyxApiKey,
+          messagingProfileId,
+          smsFromE164,
+          digit: claimTf.digit
+        });
+        if (staleHandled) return staleHandled;
       }
 
       // Single digits 1-9: agent offers understand 1/2; owner approvals map
@@ -1483,6 +1715,10 @@ serve(async (req: Request) => {
           const prevRouting = { ...offRouting };
           prevRouting.last_event = claimed ? "claim" : "reject";
           prevRouting.reply_from = from;
+          // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed
+          // by the worker) belongs to THAT reply — a bare digit carries none, so
+          // clear it or the worker would attribute the old text to this reply.
+          delete prevRouting.pass_reason;
           const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
           // Only block terminal rows; 'awaiting_agent' and 'queued' are both
           // valid to resume (the latter covers the sweep-raced window above).
@@ -1671,67 +1907,22 @@ serve(async (req: Request) => {
           if (lateHandled) return lateHandled;
         }
 
-        // Stale offer reply: the digit matched no LIVE offer, no owner
-        // approval, and no late-claimable run (someone else took the lead, or
-        // it's past the late-claim window / not re-openable), but this
-        // teammate WAS offered a lead recently. Consume it with a
-        // deterministic "here's what happened to that lead" ack instead of
-        // letting it fall through to the chat AI, which has no offer context
-        // and improvises a baffling reply. This never claims — the late-claim
-        // path above and "86" keep that role.
-        const { data: staleRows } = await supabase
-          .from("ai_flow_runs")
-          .select("id, status, context, awaiting_agent_e164, updated_at")
-          .eq("business_id", businessId)
-          .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
-          .not("context->routing", "is", null)
-          .order("updated_at", { ascending: false })
-          .limit(25);
-        const stale = classifyStaleOfferReply({
-          candidates: (staleRows as StaleOfferCandidate[] | null) ?? [],
+        // Stale offer reply (see tryStaleOfferAck): a digit that matched no
+        // live offer, no approval, and no late-claimable run still gets a
+        // deterministic "here's what happened to that lead" ack.
+        const staleHandled = await tryStaleOfferAck({
+          supabase,
+          businessId,
           from,
-          digit: replyBody,
-          nowMs: Date.now(),
-          windowMs: LATE_CLAIM_WINDOW_MS
+          ackTo: to,
+          eventId,
+          envelope,
+          telnyxApiKey,
+          messagingProfileId,
+          smsFromE164,
+          digit: replyBody
         });
-        if (stale) {
-          const ackText = staleOfferAckText(stale);
-          let ackSent: string | null = null;
-          if (canAck) {
-            const send = await telnyxSendSms({
-              apiKey: telnyxApiKey,
-              messagingProfileId: ackProfile,
-              fromE164: ackFrom,
-              toE164: from,
-              text: ackText,
-              idempotencyKey: `${eventId}:stale-offer-ack`
-            });
-            if (!send.ok) {
-              console.error("stale offer ack reply", send.status, send.body.slice(0, 300));
-            } else {
-              ackSent = ackText;
-            }
-          }
-          await persistOfferReplyJob({
-            supabase,
-            businessId,
-            eventId,
-            envelope,
-            from,
-            staffKind: "team",
-            ackSent
-          });
-          await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
-            business_id: businessId,
-            run_id: stale.runId,
-            event_id: eventId,
-            decision: `stale_${stale.kind}`
-          });
-          return new Response(JSON.stringify({ ok: true, agent_offer: "stale_reply" }), {
-            status: 200,
-            headers: { "Content-Type": "application/json" }
-          });
-        }
+        if (staleHandled) return staleHandled;
       }
     }
 
