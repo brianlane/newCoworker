@@ -818,24 +818,60 @@ describe("provisioning/orchestrate", () => {
     );
   });
 
-  it("throws for enterprise tier — requires custom engagement", async () => {
-    await expect(
-      orchestrateProvisioning({ businessId: "biz-enterprise", tier: "enterprise" })
-    ).rejects.toThrow("Enterprise provisioning requires a custom engagement");
+  it("enterprise tier provisions on the standard box profile with default kvm8 hardware", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e1"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-enterprise", tier: "enterprise" },
+      { vpsProvisioner, remoteExec }
+    );
+    // The box tier narrows to STANDARD (compose stack, Ollama model
+    // selection) while the hardware default is the enterprise kvm8.
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-enterprise",
+      tier: "standard",
+      vpsSize: "kvm8",
+      billingPeriod: null
+    });
+    const bootstrapCall = remoteExec.mock.calls[0][0] as { command: string };
+    const b64 = /printf '%s' '([^']+)'/.exec(bootstrapCall.command)?.[1] ?? "";
+    const decoded = Buffer.from(b64, "base64").toString("utf8");
+    expect(decoded).toContain("TIER='standard' VPS_SIZE='kvm8' bash");
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "TIER", "standard");
+    expectDeployHasEnv(cmd, "VPS_SIZE", "kvm8");
   });
 
-  it("enterprise error mentions CONTACT_EMAIL from env", async () => {
-    process.env.CONTACT_EMAIL = "custom@example.com";
-    await expect(
-      orchestrateProvisioning({ businessId: "biz-enterprise-2", tier: "enterprise" })
-    ).rejects.toThrow("custom@example.com");
+  it("enterprise honors an explicit vps_size pin over the kvm8 default", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e2"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-enterprise-2", tier: "enterprise", vpsSize: "kvm2" },
+      { vpsProvisioner, remoteExec }
+    );
+    expect(vpsProvisioner).toHaveBeenCalledWith({
+      businessId: "biz-enterprise-2",
+      tier: "standard",
+      vpsSize: "kvm2",
+      billingPeriod: null
+    });
   });
 
-  it("enterprise error uses fallback email when CONTACT_EMAIL unset", async () => {
-    delete process.env.CONTACT_EMAIL;
-    await expect(
-      orchestrateProvisioning({ businessId: "biz-enterprise-3", tier: "enterprise" })
-    ).rejects.toThrow("team@newcoworker.com");
+  it("enterprise publishes the render tunnel hostname (standard-plus entitlement)", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e3"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const cfStub = vi.fn().mockResolvedValue({
+      tunnelId: "t-ent",
+      token: "PER_TENANT_TOKEN",
+      hostname: "biz-ent.newcoworker.com",
+      voiceHostname: "voice-biz-ent.newcoworker.com",
+      renderHostname: "render-biz-ent.newcoworker.com"
+    });
+    await orchestrateProvisioning(
+      { businessId: "biz-ent", tier: "enterprise" },
+      { vpsProvisioner, remoteExec, cloudflareTunnel: cfStub }
+    );
+    expect(cfStub).toHaveBeenCalledWith({ businessId: "biz-ent", renderEnabled: true });
   });
 
   it("falls back RESEND_API_KEY to '' when unset but ownerEmail provided", async () => {

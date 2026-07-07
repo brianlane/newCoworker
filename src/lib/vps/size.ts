@@ -44,10 +44,21 @@ export function isVpsSize(value: unknown): value is VpsSize {
  * tenants with sustained load. Existing standard tenants are unaffected:
  * already-provisioned boxes resolve through `resolveDeployedVpsSize`,
  * whose null-pin fallback stays kvm8 for standard.
+ *
+ * enterprise → kvm8: enterprise deals are custom-priced, so margin never
+ * forces the smaller box; default to the largest SKU and let the admin pin
+ * `businesses.vps_size` down (KVM2 is validated for the full standard
+ * feature set) when a deal calls for it. On the box, enterprise runs the
+ * STANDARD deploy profile (see `resolveBoxTier` in
+ * src/lib/provisioning/orchestrate.ts) — entitlements stay on the tier.
  */
-export const DEFAULT_TIER_VPS_SIZE: Record<"starter" | "standard", VpsSize> = {
+export const DEFAULT_TIER_VPS_SIZE: Record<
+  "starter" | "standard" | "enterprise",
+  VpsSize
+> = {
   starter: "kvm1",
-  standard: "kvm2"
+  standard: "kvm2",
+  enterprise: "kvm8"
 };
 
 /**
@@ -59,7 +70,7 @@ export const DEFAULT_TIER_VPS_SIZE: Record<"starter" | "standard", VpsSize> = {
  * provisioning.
  */
 export function resolveVpsSize(
-  tier: "starter" | "standard",
+  tier: "starter" | "standard" | "enterprise",
   override?: string | null
 ): VpsSize {
   if (isVpsSize(override)) return override;
@@ -77,9 +88,13 @@ export function resolveVpsSize(
  * local Ollama model. Resolving it to the new kvm1 default would stamp a
  * no-Ollama deploy profile onto Ollama hardware and contradict
  * `tenantHasLocalModel` (which also treats null as legacy kvm2/kvm8).
+ *
+ * Enterprise deploys post-date pin persistence (the tier was un-provisionable
+ * before Jul 2026), so every enterprise box carries an explicit pin and the
+ * kvm8 fallback here is theoretical.
  */
 export function resolveDeployedVpsSize(
-  tier: "starter" | "standard",
+  tier: "starter" | "standard" | "enterprise",
   override?: string | null
 ): VpsSize {
   if (isVpsSize(override)) return override;

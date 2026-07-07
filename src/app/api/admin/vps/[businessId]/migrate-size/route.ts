@@ -66,9 +66,6 @@ export async function POST(
 
     const business = await getBusiness(businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
-    if (business.tier !== "starter" && business.tier !== "standard") {
-      return errorResponse("VALIDATION_ERROR", "Enterprise hardware is managed manually");
-    }
     const currentSize = resolveDeployedVpsSize(business.tier, business.vps_size);
     if (currentSize === size) {
       return errorResponse("VALIDATION_ERROR", `Business is already on ${size}`);

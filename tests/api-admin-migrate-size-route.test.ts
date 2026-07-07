@@ -232,12 +232,15 @@ describe("api/admin/vps/[businessId]/migrate-size route", () => {
     expect(res.status).toBe(404);
   });
 
-  it("rejects enterprise businesses", async () => {
+  it("accepts enterprise businesses (provisionable since Jul 2026)", async () => {
     vi.mocked(getBusiness).mockResolvedValue({ ...standardBiz, tier: "enterprise" } as never);
     const res = await POST(makeRequest("kvm4"), makeCtx());
-    expect(res.status).toBe(400);
-    const json = await res.json();
-    expect(json.error.message).toContain("Enterprise");
+    expect(res.status).toBe(202);
+    await flushAfterCallbacks();
+    expect(migrateBusinessVpsSize).toHaveBeenCalledWith(
+      expect.objectContaining({ targetSize: "kvm4" }),
+      expect.anything()
+    );
   });
 
   it("rejects a no-op migration to the current effective size", async () => {

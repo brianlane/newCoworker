@@ -97,7 +97,7 @@ export type MigrateVpsSizeDeps = {
   restoreBusinessData: (input: { businessId: string; vpsHost: string }) => Promise<unknown>;
   orchestrateProvisioning: (input: {
     businessId: string;
-    tier: "starter" | "standard";
+    tier: "starter" | "standard" | "enterprise";
     vpsSize: VpsSize;
     /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
@@ -120,13 +120,9 @@ export async function migrateBusinessVpsSize(
   if (!biz) {
     return { ok: false, stage: "load", error: "business not found" };
   }
-  if (biz.tier !== "starter" && biz.tier !== "standard") {
-    return {
-      ok: false,
-      stage: "guard",
-      error: `tier=${biz.tier} is not migratable (enterprise is custom)`
-    };
-  }
+  // All tiers are migratable since enterprise became provisionable (Jul
+  // 2026): the orchestrator maps enterprise onto the standard box profile
+  // and the size resolvers know the enterprise kvm8 default.
   const tier = biz.tier;
 
   const currentSize = resolveDeployedVpsSize(tier, biz.vps_size);
