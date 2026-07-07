@@ -14,6 +14,7 @@ vi.mock("@/lib/db/white-glove-offers", async (importOriginal) => {
     ...actual,
     createWhiteGloveOffer: vi.fn(),
     listWhiteGloveOffers: vi.fn(),
+    listProspectWhiteGloveOffers: vi.fn(),
     revokeWhiteGloveOffer: vi.fn()
   };
 });
@@ -24,6 +25,7 @@ import { getBusiness } from "@/lib/db/businesses";
 import {
   createWhiteGloveOffer,
   listWhiteGloveOffers,
+  listProspectWhiteGloveOffers,
   revokeWhiteGloveOffer
 } from "@/lib/db/white-glove-offers";
 
@@ -58,7 +60,10 @@ describe("api/admin/white-glove-offers route", () => {
   });
 
   it("POST creates an offer with the amount converted to cents and the admin as author", async () => {
-    vi.mocked(createWhiteGloveOffer).mockResolvedValue({ id: OFFER_ID } as never);
+    vi.mocked(createWhiteGloveOffer).mockResolvedValue({
+      id: OFFER_ID,
+      pay_token: "tok-1"
+    } as never);
     const res = await POST(
       jsonRequest("POST", {
         businessId: BIZ_ID,
@@ -67,14 +72,46 @@ describe("api/admin/white-glove-offers route", () => {
         amountUsd: 1250
       })
     );
+    const body = await res.json();
     expect(res.status).toBe(200);
     expect(createWhiteGloveOffer).toHaveBeenCalledWith({
       businessId: BIZ_ID,
       name: "White-glove migration",
       description: "Full migration",
       amountCents: 125_000,
-      createdBy: "admin@example.com"
+      createdBy: "admin@example.com",
+      recipientEmail: null
     });
+    // The emailable payment link comes back with the created offer.
+    expect(body.data.payUrl).toContain("/offer/tok-1");
+  });
+
+  it("POST creates a PROSPECT offer from a recipient email (no business)", async () => {
+    vi.mocked(createWhiteGloveOffer).mockResolvedValue({
+      id: OFFER_ID,
+      pay_token: "tok-2"
+    } as never);
+    const res = await POST(
+      jsonRequest("POST", {
+        recipientEmail: "prospect@example.com",
+        name: "Founding deal",
+        amountUsd: 500
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(getBusiness).not.toHaveBeenCalled();
+    expect(createWhiteGloveOffer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: null,
+        recipientEmail: "prospect@example.com"
+      })
+    );
+  });
+
+  it("POST 400s when neither businessId nor recipientEmail is provided", async () => {
+    const res = await POST(jsonRequest("POST", { name: "Deal", amountUsd: 100 }));
+    expect(res.status).toBe(400);
+    expect(createWhiteGloveOffer).not.toHaveBeenCalled();
   });
 
   it("POST defaults description to empty and rejects out-of-bounds amounts", async () => {
@@ -114,19 +151,35 @@ describe("api/admin/white-glove-offers route", () => {
     );
   });
 
-  it("GET lists a business's offers and validates the businessId", async () => {
-    vi.mocked(listWhiteGloveOffers).mockResolvedValue([{ id: OFFER_ID } as never]);
+  it("GET lists a business's offers (with pay links) and validates the businessId", async () => {
+    vi.mocked(listWhiteGloveOffers).mockResolvedValue([
+      { id: OFFER_ID, pay_token: "tok-1" } as never
+    ]);
     const ok = await GET(
       new Request(`http://localhost/api/admin/white-glove-offers?businessId=${BIZ_ID}`)
     );
     const body = await ok.json();
     expect(ok.status).toBe(200);
     expect(body.data.offers).toHaveLength(1);
+    expect(body.data.offers[0].payUrl).toContain("/offer/tok-1");
 
     const bad = await GET(
       new Request("http://localhost/api/admin/white-glove-offers?businessId=nope")
     );
     expect(bad.status).toBe(400);
+  });
+
+  it("GET ?prospect=1 lists pre-account offers", async () => {
+    vi.mocked(listProspectWhiteGloveOffers).mockResolvedValue([
+      { id: OFFER_ID, pay_token: "tok-3" } as never
+    ]);
+    const res = await GET(
+      new Request("http://localhost/api/admin/white-glove-offers?prospect=1")
+    );
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.data.offers[0].payUrl).toContain("/offer/tok-3");
+    expect(listWhiteGloveOffers).not.toHaveBeenCalled();
   });
 
   it("DELETE revokes an open offer and 409s when it isn't open", async () => {

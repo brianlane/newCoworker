@@ -277,7 +277,8 @@ export type WhiteGloveCheckoutParams = {
   packageId: string;
   packageName: string;
   amountCents: number;
-  businessId: string;
+  /** Absent for PROSPECT offers paid via the public /offer link (no account yet). */
+  businessId?: string;
   /**
    * Custom admin-authored offer id (white_glove_offers.id). When set, the
    * webhook marks THAT row paid instead of stamping a fixed package on the
@@ -288,7 +289,8 @@ export type WhiteGloveCheckoutParams = {
   cancelUrl: string;
   customerEmail?: string;
   customerId?: string;
-  userId: string;
+  /** Absent for unauthenticated prospect payments. */
+  userId?: string;
 };
 
 /**
@@ -308,10 +310,10 @@ export async function createWhiteGloveCheckoutSession(
   const stripe = getStripe();
   const metadata: Record<string, string> = {
     checkoutKind: "white_glove_package",
-    businessId: params.businessId,
+    ...(params.businessId ? { businessId: params.businessId } : {}),
     whiteGlovePackage: params.packageId,
     ...(params.offerId ? { whiteGloveOfferId: params.offerId } : {}),
-    userId: params.userId
+    ...(params.userId ? { userId: params.userId } : {})
   };
   const session = await stripe.checkout.sessions.create({
     mode: "payment",

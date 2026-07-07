@@ -15,7 +15,8 @@ export type WhiteGloveOfferStatus = "open" | "paid" | "revoked";
 
 export type WhiteGloveOfferRow = {
   id: string;
-  business_id: string;
+  /** Null for PROSPECT offers authored before the account exists. */
+  business_id: string | null;
   name: string;
   description: string;
   amount_cents: number;
@@ -24,6 +25,10 @@ export type WhiteGloveOfferRow = {
   created_at: string;
   paid_at: string | null;
   stripe_session_id: string | null;
+  /** Who the deal is for (required when business_id is null); pre-fills Checkout. */
+  recipient_email: string | null;
+  /** Unguessable capability behind the public /offer/<pay_token> payment link. */
+  pay_token: string;
 };
 
 /** Bounds mirrored from the table CHECK so the API fails fast with a clear message. */
@@ -32,11 +37,13 @@ export const WHITE_GLOVE_OFFER_MAX_CENTS = 5_000_000;
 
 export async function createWhiteGloveOffer(
   data: {
-    businessId: string;
+    /** Null authors a PROSPECT offer (recipientEmail then required by the DB). */
+    businessId: string | null;
     name: string;
     description: string;
     amountCents: number;
     createdBy: string;
+    recipientEmail?: string | null;
   },
   client?: SupabaseClient
 ): Promise<WhiteGloveOfferRow> {
@@ -48,7 +55,8 @@ export async function createWhiteGloveOffer(
       name: data.name,
       description: data.description,
       amount_cents: data.amountCents,
-      created_by: data.createdBy
+      created_by: data.createdBy,
+      recipient_email: data.recipientEmail ?? null
     })
     .select("*")
     .single();
@@ -69,6 +77,41 @@ export async function listWhiteGloveOffers(
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listWhiteGloveOffers: ${error.message}`);
   return (data ?? []) as WhiteGloveOfferRow[];
+}
+
+/** Prospect (pre-account) offers — business_id is null. Newest first. */
+export async function listProspectWhiteGloveOffers(
+  client?: SupabaseClient
+): Promise<WhiteGloveOfferRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("white_glove_offers")
+    .select("*")
+    .is("business_id", null)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listProspectWhiteGloveOffers: ${error.message}`);
+  return (data ?? []) as WhiteGloveOfferRow[];
+}
+
+/** The emailable public payment link for an offer (durable; never expires). */
+export function whiteGloveOfferPayUrl(offer: Pick<WhiteGloveOfferRow, "pay_token">): string {
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${appUrl}/offer/${offer.pay_token}`;
+}
+
+/** Resolve the offer behind a public payment link, or null. */
+export async function getWhiteGloveOfferByPayToken(
+  payToken: string,
+  client?: SupabaseClient
+): Promise<WhiteGloveOfferRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("white_glove_offers")
+    .select("*")
+    .eq("pay_token", payToken)
+    .maybeSingle();
+  if (error) throw new Error(`getWhiteGloveOfferByPayToken: ${error.message}`);
+  return (data as WhiteGloveOfferRow | null) ?? null;
 }
 
 /** Single offer by id, or null when it doesn't exist. */

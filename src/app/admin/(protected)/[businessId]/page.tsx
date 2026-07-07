@@ -30,7 +30,7 @@ import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
-import { listWhiteGloveOffers } from "@/lib/db/white-glove-offers";
+import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 
 export const dynamic = "force-dynamic";
@@ -127,7 +127,9 @@ export default async function BusinessDetailPage({
             amount_cents: o.amount_cents,
             status: o.status,
             created_at: o.created_at,
-            paid_at: o.paid_at
+            paid_at: o.paid_at,
+            recipient_email: o.recipient_email,
+            payUrl: whiteGloveOfferPayUrl(o)
           }))}
         />
       </Card>

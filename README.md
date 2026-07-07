@@ -84,6 +84,11 @@ the test coverage gate (coverage is scoped to `src/lib/**`); the reusable,
 tested primitives they build on live in `src/lib/db/vps-ssh-keys.ts` and
 `src/lib/hostinger/*`.
 
+One-shot ledger — a new `applied_oneshots` table (service-role only) plus
+`scripts/oneshot/_ledger.ts`; the active flow-patching scripts now record
+every `--apply` with the business and the patched flow IDs. "Has this run
+everywhere?" is a one-line query going forward.
+
 ```bash
 # Roll the latest main's chat-worker out to EVERY active VPS
 tsx debug/update-all-vps.ts --dry-run   # preview targets

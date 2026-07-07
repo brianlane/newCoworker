@@ -8,7 +8,10 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   createWhiteGloveOffer,
   listWhiteGloveOffers,
+  listProspectWhiteGloveOffers,
   getWhiteGloveOffer,
+  getWhiteGloveOfferByPayToken,
+  whiteGloveOfferPayUrl,
   revokeWhiteGloveOffer,
   markWhiteGloveOfferPaid,
   extendPrioritySupport
@@ -22,6 +25,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
     in: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
     or: vi.fn().mockReturnThis(),
     order: vi.fn().mockResolvedValue({ data: [], error: null }),
     single: vi.fn().mockResolvedValue({ data: null, error: null }),
@@ -64,8 +68,25 @@ describe("db/white-glove-offers", () => {
       name: OFFER.name,
       description: OFFER.description,
       amount_cents: OFFER.amount_cents,
-      created_by: OFFER.created_by
+      created_by: OFFER.created_by,
+      recipient_email: null
     });
+  });
+
+  it("createWhiteGloveOffer supports PROSPECT offers (null business + recipient email)", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: OFFER, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await createWhiteGloveOffer({
+      businessId: null,
+      name: OFFER.name,
+      description: "",
+      amountCents: 100,
+      createdBy: "admin@test.com",
+      recipientEmail: "prospect@example.com"
+    });
+    expect(db.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ business_id: null, recipient_email: "prospect@example.com" })
+    );
   });
 
   it("createWhiteGloveOffer throws on error", async () => {
@@ -122,6 +143,61 @@ describe("db/white-glove-offers", () => {
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(getWhiteGloveOffer(OFFER.id)).rejects.toThrow("getWhiteGloveOffer: boom");
+  });
+
+  it("listProspectWhiteGloveOffers filters to business_id IS NULL (and [] for null data)", async () => {
+    const db = mockDb({ order: vi.fn().mockResolvedValue({ data: [OFFER], error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await listProspectWhiteGloveOffers()).toEqual([OFFER]);
+    expect(db.is).toHaveBeenCalledWith("business_id", null);
+
+    const empty = mockDb({ order: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(empty as never);
+    expect(await listProspectWhiteGloveOffers()).toEqual([]);
+
+    const err = mockDb({
+      order: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(err as never);
+    await expect(listProspectWhiteGloveOffers()).rejects.toThrow(
+      "listProspectWhiteGloveOffers: boom"
+    );
+  });
+
+  it("getWhiteGloveOfferByPayToken resolves the pay link's offer (row, null, error)", async () => {
+    const db = mockDb({ maybeSingle: vi.fn().mockResolvedValue({ data: OFFER, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await getWhiteGloveOfferByPayToken("tok-1")).toEqual(OFFER);
+    expect(db.eq).toHaveBeenCalledWith("pay_token", "tok-1");
+
+    const missing = mockDb({ maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(missing as never);
+    expect(await getWhiteGloveOfferByPayToken("tok-1")).toBeNull();
+
+    const err = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(err as never);
+    await expect(getWhiteGloveOfferByPayToken("tok-1")).rejects.toThrow(
+      "getWhiteGloveOfferByPayToken: boom"
+    );
+  });
+
+  it("whiteGloveOfferPayUrl builds the durable link from the app URL (set and unset)", () => {
+    const saved = process.env.NEXT_PUBLIC_APP_URL;
+    try {
+      process.env.NEXT_PUBLIC_APP_URL = "https://www.newcoworker.com/";
+      expect(whiteGloveOfferPayUrl({ pay_token: "tok-abc" })).toBe(
+        "https://www.newcoworker.com/offer/tok-abc"
+      );
+      delete process.env.NEXT_PUBLIC_APP_URL;
+      expect(whiteGloveOfferPayUrl({ pay_token: "tok-abc" })).toBe(
+        "http://localhost:3000/offer/tok-abc"
+      );
+    } finally {
+      if (saved === undefined) delete process.env.NEXT_PUBLIC_APP_URL;
+      else process.env.NEXT_PUBLIC_APP_URL = saved;
+    }
   });
 
   it("revokeWhiteGloveOffer flips only OPEN rows and reports whether one flipped", async () => {

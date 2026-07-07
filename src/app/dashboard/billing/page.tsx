@@ -202,17 +202,16 @@ export default async function BillingPage(props: {
     (business as { priority_support_until?: string | null } | null)?.priority_support_until ?? null;
   const priorityOpen = hasPrioritySupport(prioritySupportUntilIso);
   const bookingUrl = getWhiteGloveBookingUrl();
-  // Offer only packages the business doesn't already own (buildout supersedes
-  // setup, so owning buildout hides both offers; owning setup leaves the
-  // buildout upgrade visible).
-  const whiteGloveOffers = listWhiteGlovePackages().filter(
-    (p) => ownedWhiteGlove === null || (ownedWhiteGlove.id === "setup" && p.id === "buildout")
-  );
   // Custom admin-authored offers (bespoke price, single business). Only OPEN
   // ones are payable; paid/revoked rows never render here.
-  const customWhiteGloveOffers = business
-    ? (await listWhiteGloveOffers(business.id, db)).filter((o) => o.status === "open")
-    : [];
+  const allCustomOffers = business ? await listWhiteGloveOffers(business.id, db) : [];
+  const customWhiteGloveOffers = allCustomOffers.filter((o) => o.status === "open");
+  // A business that has ALREADY received white-glove service — any fixed
+  // package, or a paid custom offer — never sees the package upsell again
+  // (not even the setup → buildout upgrade).
+  const hasReceivedWhiteGlove =
+    ownedWhiteGlove !== null || allCustomOffers.some((o) => o.status === "paid");
+  const whiteGloveOffers = hasReceivedWhiteGlove ? [] : listWhiteGlovePackages();
 
   // ---- Derive PlanCard props from subscription + profile ---------------
   const now = new Date();
@@ -485,10 +484,13 @@ export default async function BillingPage(props: {
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">Support</h2>
-        {ownedWhiteGlove ? (
+        {hasReceivedWhiteGlove ? (
           <div className="mt-2 space-y-1">
             <p className="text-xs text-parchment/70">
-              {ownedWhiteGlove.name} purchased.{" "}
+              {(ownedWhiteGlove?.name ??
+                allCustomOffers.find((o) => o.status === "paid")?.name ??
+                "White-glove service")}{" "}
+              purchased.{" "}
               {priorityOpen && prioritySupportUntilIso
                 ? `Priority call & video support is open until ${new Date(prioritySupportUntilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
                 : "Your priority call & video window has ended; support continues by email."}
