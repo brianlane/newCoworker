@@ -74,24 +74,36 @@ export default async function CustomerDetailPage({ params }: Props) {
   // not the URL value, which after a merge may itself be an alias (the
   // alias-aware getCustomerMemory above already resolved it). Keying off
   // the raw URL number dropped everything stored under the primary.
-  const [smsHistory, voiceTranscripts, allCustomers] = await Promise.all([
-    listSmsHistoryForCustomer(business.id, memory.customer_e164, {
-      limit: 50,
-      aliases: memory.alias_e164s ?? []
-    }),
-    // Tolerate transcript table errors here so a voice-table outage
-    // doesn't block the SMS-only customer detail page from rendering.
-    listTranscriptsForCaller(business.id, memory.customer_e164, {
-      limit: 10,
-      aliases: memory.alias_e164s ?? []
-    }).catch(() => []),
-    listCustomerMemories(business.id, { limit: 200 }).catch(() => [])
-  ]);
-  // Email rollup: only when the profile has a linked address. Tolerate a
-  // log-table error so it never blocks the rest of the page.
-  const emailHistory = memory.email
-    ? await listEmailLogForAddress(business.id, memory.email, { limit: 20 }).catch(() => [])
-    : [];
+  // All five reads depend only on `memory` (already resolved), so they run
+  // as ONE parallel group. This matters doubly for residency (vps-mode)
+  // tenants, where each read is a tunnel round-trip to their box —
+  // serially these were ~5 RTTs, now the page pays one.
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames] =
+    await Promise.all([
+      listSmsHistoryForCustomer(business.id, memory.customer_e164, {
+        limit: 50,
+        aliases: memory.alias_e164s ?? []
+      }),
+      // Tolerate transcript table errors here so a voice-table outage
+      // doesn't block the SMS-only customer detail page from rendering.
+      listTranscriptsForCaller(business.id, memory.customer_e164, {
+        limit: 10,
+        aliases: memory.alias_e164s ?? []
+      }).catch(() => []),
+      listCustomerMemories(business.id, { limit: 200 }).catch(() => []),
+      // Email rollup: only when the profile has a linked address. Tolerate a
+      // log-table error so it never blocks the rest of the page.
+      memory.email
+        ? listEmailLogForAddress(business.id, memory.email, { limit: 20 }).catch(() => [])
+        : Promise.resolve([]),
+      // Owner/employee/manual-override names win over the stored
+      // display_name for the header.
+      resolveContactNames(
+        business.id,
+        [memory.customer_e164, ...(memory.alias_e164s ?? [])],
+        db
+      ).catch(() => new Map<string, ContactName>())
+    ]);
   // Merge is "same person, two numbers" — only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
   // codes, vendors, testers, owner/employee) so an irreversible merge can never
@@ -100,13 +112,6 @@ export default async function CustomerDetailPage({ params }: Props) {
     .filter((c) => c.customer_e164 !== memory.customer_e164 && c.type === "customer")
     .map((c) => ({ customerE164: c.customer_e164, displayName: c.display_name }));
 
-  // Owner/employee/manual-override names win over the stored display_name for
-  // the header, so the owner's own number reads "Brian Lane (owner)".
-  const contactNames = await resolveContactNames(
-    business.id,
-    [memory.customer_e164, ...(memory.alias_e164s ?? [])],
-    db
-  ).catch(() => new Map<string, ContactName>());
   // The URL number can be a merged-in alias, and the owner/override identity
   // may live on the alias rather than the profile's primary. Prefer the
   // primary, then the URL number, then any alias that resolved.

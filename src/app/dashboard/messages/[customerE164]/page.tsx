@@ -69,22 +69,23 @@ export default async function SmsThreadPage({
   const business = businesses?.[0] ?? null;
   if (!business) notFound();
 
-  const messages = await listMessagesForCustomer(business.id, customerE164, {
-    limit: 100
-  });
-  if (messages.length === 0) notFound();
-  // RCS-first tenants (approved agent + concrete from-number, the same
-  // precondition sendTelnyxSms checks) get the softened emoji hint in the
-  // reply composer.
-  const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
-  // Reply-mode toggle state: tolerate a missing profile (numbers with thread
-  // history but no contact row default to 'auto'; the PATCH creates the row).
-  const memory = await getCustomerMemory(business.id, customerE164).catch(() => null);
-  const contact = (
-    await resolveContactNames(business.id, [customerE164]).catch(
+  // The four reads are independent — one parallel group instead of four
+  // serial awaits (for residency tenants each is a tunnel round-trip).
+  const [messages, rcsEnabled, memory, contactMap] = await Promise.all([
+    listMessagesForCustomer(business.id, customerE164, { limit: 100 }),
+    // RCS-first tenants (approved agent + concrete from-number, the same
+    // precondition sendTelnyxSms checks) get the softened emoji hint in the
+    // reply composer.
+    rcsChannelActiveForBusiness(db, business.id),
+    // Reply-mode toggle state: tolerate a missing profile (numbers with thread
+    // history but no contact row default to 'auto'; the PATCH creates the row).
+    getCustomerMemory(business.id, customerE164).catch(() => null),
+    resolveContactNames(business.id, [customerE164]).catch(
       () => new Map<string, ContactName>()
     )
-  ).get(customerE164);
+  ]);
+  if (messages.length === 0) notFound();
+  const contact = contactMap.get(customerE164);
   const inboundLabel = contact
     ? contact.kind === "employee"
       ? `${contact.name} (employee)`
