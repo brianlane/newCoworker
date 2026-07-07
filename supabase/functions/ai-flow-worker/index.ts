@@ -1167,14 +1167,17 @@ async function browseStep(
     }
   }
 
-  const out: Record<string, string> = {};
+  const raw: Record<string, string> = {};
   for (const f of action.fields ?? []) {
     let val = extracted[f.name] ?? "";
     if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
       val = extractPhones(pageText)[0] ?? "";
     }
-    out[f.name] = val;
+    raw[f.name] = val;
   }
+  // Scrub BEFORE the link/screenshot passthroughs join the map, so the
+  // actions_taken note only ever names real extraction fields.
+  const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_extract");
   // Capture link hrefs by their visible button text from the page HTML (parsed
   // here in the worker; the render service already returns html). Empty string
   // when no anchor's visible text contains the matchText.
@@ -1632,7 +1635,7 @@ async function browseActionStep(
       }
       raw[f.name] = val;
     }
-    const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_extract");
+    const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_action");
     Object.assign(scope.vars, out);
     extractedVars = out;
   }
