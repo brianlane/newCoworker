@@ -2999,6 +2999,17 @@ async function routeToTeamStep(
   // ask Rowboat for the next one.
   const prevOffered = typeof routing.offered === "string" ? routing.offered : "";
   if (prevOffered && !tried.includes(prevOffered)) tried.push(prevOffered);
+  // routing.offered is only ever set when an offer SMS actually went out, so
+  // the retiring agent belongs in offered_log too. This is what backfills
+  // yank rights for runs already in flight when offered_log first shipped
+  // (their earlier offers predate the field).
+  if (prevOffered) {
+    const offeredLog = Array.isArray(routing.offered_log)
+      ? (routing.offered_log as unknown[]).filter((x): x is string => typeof x === "string")
+      : [];
+    if (!offeredLog.includes(prevOffered)) offeredLog.push(prevOffered);
+    routing.offered_log = offeredLog;
+  }
   delete routing.offered;
   delete routing.offered_name;
   delete routing.last_event;
