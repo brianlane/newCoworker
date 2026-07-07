@@ -1613,12 +1613,18 @@ if [[ "${DATA_RESIDENCY_ENABLED:-}" != "true" ]]; then
     log "DATA_RESIDENCY_ENABLED!=true: tearing down data-api stack (volume preserved)..."
     ( cd "${DATA_API_DEST}" && docker compose down --remove-orphans ) || true
   fi
+  # Backup timer follows the stack down (a stopped Postgres can't be dumped).
+  systemctl disable --now residency-backup.timer 2>/dev/null || true
+  rm -f /etc/systemd/system/residency-backup.service /etc/systemd/system/residency-backup.timer
+  systemctl daemon-reload 2>/dev/null || true
 elif [[ -d "${DATA_API_SRC}" && -f "${DATA_API_SRC}/docker-compose.yml" ]]; then
   log "Syncing data-api source ${DATA_API_SRC} → ${DATA_API_DEST}..."
   mkdir -p "${DATA_API_DEST}"
   if command -v rsync >/dev/null 2>&1; then
     rsync -a --delete \
       --exclude ".env" \
+      --exclude "backup.env" \
+      --exclude "backups/" \
       --exclude "node_modules" \
       "${DATA_API_SRC}/" "${DATA_API_DEST}/"
   else
@@ -1675,6 +1681,79 @@ DAENV_EOF
       # /v1/health deliberately answers HTTP 200 even when Postgres is down
       # (the tunnel replaces origin 5xx bodies), so readiness must check the
       # JSON body's ok flag — a 200 with ok:false is NOT healthy.
+      # Encrypted backup timer (Phase B4): every 6h, pg_dump → gzip →
+      # AES-256 → ciphertext-only upload. The passphrase is escrowed
+      # centrally (residency_backup_keys) and reaches the box via the
+      # deploy env; without it the timer is skipped LOUDLY — an opted-in
+      # box without backups is a DR gap, not a default.
+      #
+      # Gated on THIS deploy's schema apply: dumping an empty/incomplete
+      # datastore would upload a "backup" that a later restore could
+      # clobber a good box with. No schema, no dump.
+      if [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" && "${schema_applied}" == "1" ]]; then
+        install -m 0755 "${DATA_API_SRC}/backup.sh" /opt/data-api/backup.sh
+        cat > /opt/data-api/backup.env <<RBENV_EOF
+BUSINESS_ID=${BUSINESS_ID}
+SUPABASE_URL=${SUPABASE_URL}
+SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+RESIDENCY_BACKUP_PASSPHRASE=${RESIDENCY_BACKUP_PASSPHRASE}
+RESIDENCY_BACKUP_BUCKET=${RESIDENCY_BACKUP_BUCKET:-business-backups}
+RBENV_EOF
+        chmod 600 /opt/data-api/backup.env
+
+        cat > /etc/systemd/system/residency-backup.service <<'RBSVC_EOF'
+[Unit]
+Description=Encrypted residency datastore backup
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/opt/data-api/backup.env
+ExecStart=/opt/data-api/backup.sh
+RBSVC_EOF
+
+        cat > /etc/systemd/system/residency-backup.timer <<'RBTMR_EOF'
+[Unit]
+Description=Run residency-backup every 6 hours
+Requires=residency-backup.service
+
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=6h
+AccuracySec=5min
+Unit=residency-backup.service
+
+[Install]
+WantedBy=timers.target
+RBTMR_EOF
+
+        systemctl daemon-reload
+        systemctl enable --now residency-backup.timer
+        log "residency-backup.timer enabled (6h cadence, ciphertext-only uploads)"
+        # Kick the first backup ASYNCHRONOUSLY (--no-block): a box is never
+        # opted-in-yet-unbacked, but a large datastore's dump+upload must not
+        # eat the deploy SSH session's fixed timeout. Outcome lands in
+        # journalctl -u residency-backup; the timer retries on failure.
+        systemctl start --no-block residency-backup.service || true
+        report_progress 99 "residency_backup_kicked" "first encrypted backup started in the background (timer maintains 6h cadence)"
+      elif [[ -n "${RESIDENCY_BACKUP_PASSPHRASE:-}" ]]; then
+        # Schema apply failed above: also stop any EXISTING timer so a
+        # stale unit can't keep dumping a datastore in an unknown layout.
+        systemctl disable --now residency-backup.timer 2>/dev/null || true
+        log "WARN: schema apply failed — residency backups NOT (re)installed this deploy (no dump of an unverified layout)"
+        report_progress 98 "residency_backup_skipped_schema" "backups skipped: datastore schema apply failed"
+      else
+        # No escrow key this deploy: also STOP a previously-installed timer
+        # (its preserved backup.env would keep dumping with a key the
+        # platform may have rotated away) — "skipped" must mean stopped.
+        systemctl disable --now residency-backup.timer 2>/dev/null || true
+        rm -f /etc/systemd/system/residency-backup.service /etc/systemd/system/residency-backup.timer /opt/data-api/backup.env
+        systemctl daemon-reload 2>/dev/null || true
+        log "WARN: RESIDENCY_BACKUP_PASSPHRASE unset — residency backups NOT installed (DR gap); any prior timer stopped"
+        report_progress 98 "residency_backup_unconfigured" "no backup passphrase provided; encrypted backups skipped (prior timer stopped)"
+      fi
+
       dataapi_ok=0
       for _ in $(seq 1 20); do
         if curl -sf --max-time 3 http://127.0.0.1:8091/v1/health 2>/dev/null | grep -q '"ok":true'; then
@@ -1698,8 +1777,11 @@ DAENV_EOF
         report_progress 98 "data_api_unhealthy" "data-api started but /v1/health never reported ok:true"
       fi
     else
-      log "WARN: data-api compose failed (residency reads/writes will be degraded)"
-      report_progress 98 "data_api_compose_failed" "docker compose up failed"
+      # Stack is in an unknown state — a previously-installed backup timer
+      # must not keep dumping it (same posture as the schema-apply gate).
+      systemctl disable --now residency-backup.timer 2>/dev/null || true
+      log "WARN: data-api compose failed (residency reads/writes will be degraded); backup timer stopped"
+      report_progress 98 "data_api_compose_failed" "docker compose up failed (backup timer stopped)"
     fi
   )
 else
