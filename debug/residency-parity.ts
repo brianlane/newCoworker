@@ -115,15 +115,23 @@ for (const table of RESIDENCY_MOVED_TABLES) {
   }
 }
 
-const { count: pending } = await db
+const { count: pending, error: pendingError } = await db
   .from("residency_write_journal")
   .select("seq", { count: "exact", head: true })
   .eq("business_id", businessId)
   .is("replayed_at", null);
-console.log(`\n[parity] pending journal rows: ${pending ?? "?"}`);
+if (pendingError || pending === null || pending === undefined) {
+  // An unreadable journal is a FAIL, not zero — the gate must never pass on
+  // missing evidence.
+  console.log(
+    `\n[parity] FAIL — journal depth unreadable: ${pendingError?.message ?? "no count returned"}`
+  );
+  process.exit(1);
+}
+console.log(`\n[parity] pending journal rows: ${pending}`);
 console.log(
-  mismatches === 0 && (pending ?? 0) === 0
+  mismatches === 0 && pending === 0
     ? "[parity] PASS — counts equal, journal drained"
-    : `[parity] FAIL — ${mismatches} table mismatch(es), ${pending ?? "?"} pending journal rows`
+    : `[parity] FAIL — ${mismatches} table mismatch(es), ${pending} pending journal rows`
 );
-process.exit(mismatches === 0 && (pending ?? 0) === 0 ? 0 : 1);
+process.exit(mismatches === 0 && pending === 0 ? 0 : 1);
