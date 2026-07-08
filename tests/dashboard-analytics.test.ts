@@ -12,6 +12,7 @@ import {
   ANALYTICS_CALL_SCAN_LIMIT,
   ANALYTICS_DAY_CALL_LIMIT,
   ANALYTICS_DAY_TEXT_LIMIT,
+  ANALYTICS_DAY_TEXT_SCAN_LIMIT,
   ANALYTICS_SEGMENT_CALL_LIMIT,
   ANALYTICS_WINDOW_DAYS,
   analyticsWindowStart,
@@ -288,7 +289,8 @@ describe("getAnalyticsDayDetail", () => {
     expect(transcripts.lt).toHaveBeenCalledWith("started_at", "2026-07-04T00:00:00.000Z");
     // Missed forwarded calls live in the turned-away count, not the call list.
     expect(transcripts.neq).toHaveBeenCalledWith("status", "missed");
-    expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_DAY_CALL_LIMIT);
+    // Scanned at the series' row cap so the header totals match the chart bar.
+    expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
     const logs = chains.system_logs as {
       gte: ReturnType<typeof vi.fn>;
       lt: ReturnType<typeof vi.fn>;
@@ -447,7 +449,7 @@ describe("getAnalyticsDayDetail", () => {
   });
 
   it("caps the text list and flags it clipped", async () => {
-    // 101 jobs × 2 messages each = 202 expanded texts > the 200 cap.
+    // 101 jobs × 2 messages each = 202 expanded texts > the 200 display cap.
     const jobs = Array.from({ length: 101 }, (_, i) => ({
       id: `j-${i}`,
       payload: jobPayload("+15550001111", `msg ${i}`),
@@ -462,6 +464,47 @@ describe("getAnalyticsDayDetail", () => {
     const { client } = makeClient({
       ...emptyTables,
       sms_inbound_jobs: { data: jobs, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.texts).toHaveLength(ANALYTICS_DAY_TEXT_LIMIT);
+    expect(detail.textsClipped).toBe(true);
+  });
+
+  it("flags texts clipped when the inbound-jobs scan fills its row cap", async () => {
+    // 1000 rows hit the scan cap even though none expand into messages —
+    // same-day messages may exist beyond the scan, so the flag must be set.
+    const jobs = Array.from({ length: ANALYTICS_DAY_TEXT_SCAN_LIMIT }, (_, i) => ({
+      id: `j-${i}`,
+      payload: {},
+      status: "pending",
+      assistant_reply_text: null,
+      rowboat_reply_cached: null,
+      channel: null,
+      reply_channel: null,
+      created_at: "2026-07-03T09:00:00Z",
+      updated_at: null
+    }));
+    const { client } = makeClient({
+      ...emptyTables,
+      sms_inbound_jobs: { data: jobs, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.texts).toEqual([]);
+    expect(detail.textsClipped).toBe(true);
+  });
+
+  it("flags texts clipped when the outbound-log scan fills its row cap", async () => {
+    const outbound = Array.from({ length: ANALYTICS_DAY_TEXT_SCAN_LIMIT }, (_, i) => ({
+      id: `o-${i}`,
+      to_e164: "+15550001111",
+      body: `send ${i}`,
+      source: "ai_flow",
+      channel: null,
+      created_at: "2026-07-03T09:00:00Z"
+    }));
+    const { client } = makeClient({
+      ...emptyTables,
+      sms_outbound_log: { data: outbound, error: null }
     });
     const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
     expect(detail.texts).toHaveLength(ANALYTICS_DAY_TEXT_LIMIT);
@@ -531,8 +574,8 @@ describe("getAnalyticsDayDetail", () => {
     expect(detail.usage.sms).toBe(0);
   });
 
-  it("flags the call list as clipped at the row cap", async () => {
-    const full = Array.from({ length: ANALYTICS_DAY_CALL_LIMIT }, (_, i) => ({
+  it("caps the call LIST at the display limit while totals count the full scan", async () => {
+    const full = Array.from({ length: ANALYTICS_DAY_CALL_LIMIT + 1 }, (_, i) => ({
       ...CALL,
       id: `t-${i}`
     }));
@@ -543,6 +586,8 @@ describe("getAnalyticsDayDetail", () => {
     const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
     expect(detail.clipped).toBe(true);
     expect(detail.calls).toHaveLength(ANALYTICS_DAY_CALL_LIMIT);
+    // Header totals reflect every scanned call, matching the chart bar.
+    expect(detail.usage.calls).toBe(ANALYTICS_DAY_CALL_LIMIT + 1);
   });
 
   it("throws when the usage lookup errors", async () => {

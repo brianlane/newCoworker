@@ -339,11 +339,19 @@ export type AnalyticsDayDetail = {
   textsClipped: boolean;
 };
 
-/** Row cap for the day drill-down call list — far above any single tenant's daily volume. */
+/** Display cap for the day drill-down call list — far above any single tenant's daily volume. */
 export const ANALYTICS_DAY_CALL_LIMIT = 200;
 
-/** Row cap for the day drill-down text list. */
+/** Display cap for the day drill-down text list. */
 export const ANALYTICS_DAY_TEXT_LIMIT = 200;
+
+/**
+ * Row cap for the day drill-down's TEXT source scans (inbound jobs and the
+ * outbound log, each). Higher than the display cap so `textsClipped` can be
+ * detected honestly: a source scan that fills its cap means messages may be
+ * missing even when the merged display list sits under its own cap.
+ */
+export const ANALYTICS_DAY_TEXT_SCAN_LIMIT = 1000;
 
 /**
  * Everything the analytics page shows when the owner clicks into one day of
@@ -383,7 +391,7 @@ export async function getAnalyticsDayDetail(
           { column: "created_at", op: "lt", value: endIso }
         ],
         order: [{ column: "created_at", ascending: false }],
-        limit: ANALYTICS_DAY_TEXT_LIMIT
+        limit: ANALYTICS_DAY_TEXT_SCAN_LIMIT
       });
     }
     const { data, error } = await db
@@ -393,7 +401,7 @@ export async function getAnalyticsDayDetail(
       .gte("created_at", startIso)
       .lt("created_at", endIso)
       .order("created_at", { ascending: false })
-      .limit(ANALYTICS_DAY_TEXT_LIMIT);
+      .limit(ANALYTICS_DAY_TEXT_SCAN_LIMIT);
     if (error) throw new Error(`getAnalyticsDayDetail outbound texts: ${error.message}`);
     return (data as DayTextLogRow[] | null) ?? [];
   };
@@ -405,10 +413,13 @@ export async function getAnalyticsDayDetail(
       .eq("business_id", businessId)
       .eq("usage_date", date)
       .maybeSingle(),
+    // Scanned at the same row cap as the 30-day series so the header totals
+    // agree with the chart bar the owner clicked; only the first
+    // ANALYTICS_DAY_CALL_LIMIT rows are rendered in the list.
     fetchTranscriptRows<DetailCallRow>(businessId, db, {
       columns: DETAIL_CALL_COLUMNS,
       filter: { startIso, endIso },
-      limit: ANALYTICS_DAY_CALL_LIMIT,
+      limit: ANALYTICS_CALL_SCAN_LIMIT,
       label: "getAnalyticsDayDetail calls"
     }),
     db
@@ -430,7 +441,7 @@ export async function getAnalyticsDayDetail(
       .gte("created_at", new Date(dayStart.getTime() - 86_400_000).toISOString())
       .lt("created_at", endIso)
       .order("created_at", { ascending: false })
-      .limit(ANALYTICS_DAY_TEXT_LIMIT * 2),
+      .limit(ANALYTICS_DAY_TEXT_SCAN_LIMIT),
     fetchOutboundLog()
   ]);
   if (usageRes.error) throw new Error(`getAnalyticsDayDetail usage: ${usageRes.error.message}`);
@@ -457,8 +468,9 @@ export async function getAnalyticsDayDetail(
     const t = Date.parse(ts);
     return Number.isFinite(t) && t >= dayStartMs && t < dayEndMs;
   };
+  const jobRows = (jobsRes.data as unknown as DayTextJobRow[] | null) ?? [];
   const texts: DayDetailText[] = [];
-  for (const row of (jobsRes.data as unknown as DayTextJobRow[] | null) ?? []) {
+  for (const row of jobRows) {
     const otherE164 = customerE164FromPayload(row.payload);
     const inboundText = inboundTextFromPayload(row.payload);
     if (inboundText && inDay(row.created_at)) {
@@ -496,7 +508,13 @@ export async function getAnalyticsDayDetail(
     });
   }
   texts.sort((a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp));
-  const textsClipped = texts.length > ANALYTICS_DAY_TEXT_LIMIT;
+  // Clipped when either source scan filled its own row cap (messages may be
+  // missing even if the merged list is short) OR the merged list exceeds
+  // the display cap.
+  const textsClipped =
+    jobRows.length >= ANALYTICS_DAY_TEXT_SCAN_LIMIT ||
+    outboundLogRows.length >= ANALYTICS_DAY_TEXT_SCAN_LIMIT ||
+    texts.length > ANALYTICS_DAY_TEXT_LIMIT;
 
   return {
     date,
@@ -505,10 +523,12 @@ export async function getAnalyticsDayDetail(
       sms: Number(usageRow?.sms_sent ?? 0),
       voiceMinutes: Math.round(daySeconds / 60)
     },
-    calls: callRows.map(toDayDetailCall),
+    calls: callRows.slice(0, ANALYTICS_DAY_CALL_LIMIT).map(toDayDetailCall),
     texts: texts.slice(0, ANALYTICS_DAY_TEXT_LIMIT),
     turnedAway: blockedRes.count ?? 0,
-    clipped: callRows.length >= ANALYTICS_DAY_CALL_LIMIT,
+    // A scan-cap hit (2000) always exceeds the display cap (200), so one
+    // comparison covers both "list truncated" and "totals undercount".
+    clipped: callRows.length > ANALYTICS_DAY_CALL_LIMIT,
     textsClipped
   };
 }

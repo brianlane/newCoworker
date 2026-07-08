@@ -159,12 +159,20 @@ export default async function DashboardAnalyticsPage(props: {
     params.day <= todayYmd
       ? params.day
       : null;
+  // Mutually exclusive: a hand-built URL carrying several params gets the
+  // highest-priority drill-down only, so the extra fetchers never run.
   const selectedSentiment =
-    params.sentiment && (CALL_SENTIMENT_KEYS as string[]).includes(params.sentiment)
+    !selectedDay &&
+    params.sentiment &&
+    (CALL_SENTIMENT_KEYS as string[]).includes(params.sentiment)
       ? (params.sentiment as VoiceCallSentiment)
       : null;
   const selectedHour =
-    params.hour && /^\d{1,2}$/.test(params.hour) && Number(params.hour) <= 23
+    !selectedDay &&
+    !selectedSentiment &&
+    params.hour &&
+    /^\d{1,2}$/.test(params.hour) &&
+    Number(params.hour) <= 23
       ? Number(params.hour)
       : null;
 

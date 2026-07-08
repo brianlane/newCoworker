@@ -362,7 +362,8 @@ describe("analytics vps reads", () => {
         { column: "started_at", op: "lt", value: "2026-07-04T00:00:00.000Z" }
       ],
       order: [{ column: "started_at", ascending: false }],
-      limit: 200
+      // Same scan cap as the 30-day series so header totals match the chart.
+      limit: 2000
     });
     expect(calls[1][1]).toMatchObject({
       table: "sms_outbound_log",
