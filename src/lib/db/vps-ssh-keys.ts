@@ -175,6 +175,21 @@ export async function reassignVpsSshKeyBusiness(
 }
 
 /**
+ * Update the persisted host (public IP / hostname) of a key row. Only
+ * meaningful for byos/ovh rows, whose host has no live provider lookup —
+ * used by the BYOS re-prepare path when the operator corrects the address.
+ */
+export async function updateVpsSshKeyHost(
+  id: string,
+  host: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("vps_ssh_keys").update({ host }).eq("id", id);
+  if (error) throw new Error(`updateVpsSshKeyHost: ${error.message}`);
+}
+
+/**
  * Retire a key row by stamping `rotated_at`. Required before inserting a
  * replacement row for the same VPS: the `vps_ssh_keys_one_active_per_vps`
  * partial unique index allows only one active (rotated_at IS NULL) row per

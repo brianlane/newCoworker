@@ -172,15 +172,21 @@ export type ProvisionVpsForBusinessInput = {
 };
 
 export type ProvisionVpsForBusinessResult = {
-  virtualMachineId: number;
-  /** Primary IPv4 address for SSH. */
+  /**
+   * Generic box id. Hostinger provisions return the numeric VM id; BYOS
+   * returns the `byos-<businessId>` sentinel (and OVH will return its
+   * service name). The orchestrator stringifies it into
+   * `businesses.hostinger_vps_id` either way.
+   */
+  virtualMachineId: number | string;
+  /** Primary IPv4 address (or BYOS/OVH host) for SSH. */
   publicIp: string;
   /** SSH username. Always `root` on a fresh Hostinger VPS. */
   sshUsername: string;
   /** The row we wrote to `vps_ssh_keys`, including the private key PEM. */
   sshKey: VpsSshKeyRow;
-  /** Id of the public key resource we registered. */
-  publicKeyId: number;
+  /** Id of the public key resource we registered. Null for providers with no key-resource registry (BYOS). */
+  publicKeyId: number | null;
   /**
    * Id of the post-install-script resource we registered, if attaching
    * succeeded. `null` means either the caller didn't provide a script OR

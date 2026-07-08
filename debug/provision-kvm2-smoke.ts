@@ -215,9 +215,12 @@ if (insCfgErr) {
 
 // ------------------------------------------------------- purchase OR adopt
 type ProvisionResultLike = {
-  virtualMachineId: number;
+  // number | string / number | null match ProvisionVpsForBusinessResult
+  // (widened for the BYOS/OVH provider axis); this Hostinger-only script
+  // always produces numbers in practice.
+  virtualMachineId: number | string;
   publicIp: string;
-  publicKeyId: number;
+  publicKeyId: number | null;
   postInstallScriptId: number | null;
   hostingerBillingSubscriptionId: string | null;
 };

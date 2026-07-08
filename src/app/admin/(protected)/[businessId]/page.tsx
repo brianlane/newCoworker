@@ -31,8 +31,11 @@ import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
+import { ByosEnrollmentPanel } from "@/components/admin/ByosEnrollmentPanel";
 import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
+import { byosBoxId } from "@/lib/provisioning/byos";
+import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 
 export const dynamic = "force-dynamic";
 
@@ -69,6 +72,21 @@ export default async function BusinessDetailPage({
   ]);
 
   if (!business) notFound();
+
+  // BYOS enrollment state (enterprise only): the active key row for the
+  // byos-<businessId> sentinel box. Only SAFE fields cross into the client
+  // component — never private_key_pem.
+  const byosKeyRow =
+    business.tier === "enterprise" ? await getActiveVpsSshKey(byosBoxId(businessId)) : null;
+  const byosEnrollment =
+    byosKeyRow && byosKeyRow.host
+      ? {
+          host: byosKeyRow.host,
+          publicKey: byosKeyRow.public_key,
+          fingerprintSha256: byosKeyRow.fingerprint_sha256,
+          region: byosKeyRow.region
+        }
+      : null;
 
   const systemLogById = new Map(
     [...recentSystemLogs, ...problemSystemLogs].map((row) => [row.id, row])
@@ -144,6 +162,22 @@ export default async function BusinessDetailPage({
             businessId={businessId}
             effectiveLimits={getTierLimits("enterprise", business.enterprise_limits)}
             initialOverride={parseEnterpriseLimitsOverride(business.enterprise_limits)}
+          />
+        </Card>
+      )}
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Bring your own server (SSH handover)
+          </h2>
+          <ByosEnrollmentPanel
+            // Remount on tenant or enrollment change so useState re-seeds.
+            key={`${businessId}:${business.vps_provider ?? "hostinger"}:${byosEnrollment?.host ?? ""}`}
+            businessId={businessId}
+            initialProvider={business.vps_provider ?? "hostinger"}
+            initialRegion={business.vps_region ?? "us"}
+            initialEnrollment={byosEnrollment}
           />
         </Card>
       )}
@@ -235,6 +269,12 @@ export default async function BusinessDetailPage({
             <dt className="text-parchment/40 text-xs">Hardware size</dt>
             <dd className="text-parchment font-mono">
               {resolveDeployedVpsSize(business.tier, business.vps_size)}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-parchment/40 text-xs">Provider / region</dt>
+            <dd className="text-parchment font-mono">
+              {business.vps_provider ?? "hostinger"} · {business.vps_region ?? "us"}
             </dd>
           </div>
         </dl>

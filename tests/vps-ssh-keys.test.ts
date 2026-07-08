@@ -11,7 +11,8 @@ import {
   getActiveVpsSshKeyForBusiness,
   listActiveVpsSshKeys,
   reassignVpsSshKeyBusiness,
-  rotateVpsSshKey
+  rotateVpsSshKey,
+  updateVpsSshKeyHost
 } from "@/lib/db/vps-ssh-keys";
 import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
 import { promisify } from "node:util";
@@ -260,6 +261,58 @@ describe("vps_ssh_keys DB layer", () => {
       chain.single.mockResolvedValue({ data: sample, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(reassignVpsSshKeyBusiness("row-uuid", "biz-new")).resolves.toEqual(sample);
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  it("insertVpsSshKey persists explicit provider/region/host (BYOS enrollment path)", async () => {
+    const chain = makeChain();
+    chain.single.mockResolvedValue({ data: sample, error: null });
+    const db = makeDb(chain);
+    await insertVpsSshKey(
+      {
+        business_id: "biz-1",
+        hostinger_vps_id: "byos-biz-1",
+        public_key: "ssh-ed25519 AAA",
+        private_key_pem: "PEM",
+        fingerprint_sha256: "fp",
+        provider: "byos",
+        region: "ca",
+        host: "203.0.113.7"
+      },
+      db as never
+    );
+    const insertArg = chain.insert.mock.calls[0][0];
+    expect(insertArg.provider).toBe("byos");
+    expect(insertArg.region).toBe("ca");
+    expect(insertArg.host).toBe("203.0.113.7");
+  });
+
+  describe("updateVpsSshKeyHost", () => {
+    it("updates the host on the row", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      const db = makeDb(chain);
+      await updateVpsSshKeyHost("row-uuid", "198.51.100.9", db as never);
+      expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
+      expect(chain.update).toHaveBeenCalledWith({ host: "198.51.100.9" });
+      expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: { message: "host boom" } });
+      const db = makeDb(chain);
+      await expect(
+        updateVpsSshKeyHost("row-uuid", "198.51.100.9", db as never)
+      ).rejects.toThrow(/updateVpsSshKeyHost: host boom/);
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await updateVpsSshKeyHost("row-uuid", "198.51.100.9");
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

@@ -749,7 +749,10 @@ async function acquireVps(args: {
   if (vpsPool && hostingerManaged) {
     try {
       await vpsPool.record({
-        vmId: purchased.virtualMachineId,
+        // Hostinger provisioners always return the numeric VM id; the
+        // string ids (byos-*/OVH service names) never reach this branch
+        // because bookkeeping is gated on hostingerManaged above.
+        vmId: Number(purchased.virtualMachineId),
         plan: vpsSize,
         businessId,
         hostingerBillingSubscriptionId: purchased.hostingerBillingSubscriptionId,
