@@ -31,7 +31,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(rateLimit).mockReturnValue({ success: true, limit: 120, remaining: 119, reset: 0 });
   vi.mocked(authenticatePublicApiRequest).mockResolvedValue(AUTH);
-  vi.mocked(processWebhookFlowEvent).mockResolvedValue({ enqueued: 1, flowsEvaluated: 2 });
+  vi.mocked(processWebhookFlowEvent).mockResolvedValue({
+    enqueued: 1,
+    flowsEvaluated: 2,
+    flowsMatched: 1
+  });
 });
 
 describe("POST /api/public/v1/flow-events", () => {
@@ -76,7 +80,7 @@ describe("POST /api/public/v1/flow-events", () => {
     );
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.data).toEqual({ enqueued: 1, flows_evaluated: 2 });
+    expect(body.data).toEqual({ enqueued: 1, flows_evaluated: 2, flows_matched: 1 });
     expect(processWebhookFlowEvent).toHaveBeenCalledWith("biz-1", {
       source: "facebook_lead_ads",
       eventId: "lead-1",

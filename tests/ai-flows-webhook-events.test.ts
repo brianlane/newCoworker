@@ -79,7 +79,7 @@ describe("processWebhookFlowEvent", () => {
 
     const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
 
-    expect(res).toEqual({ enqueued: 2, flowsEvaluated: 3 });
+    expect(res).toEqual({ enqueued: 2, flowsEvaluated: 3, flowsMatched: 2 });
     expect(enqueueAiFlowRun).toHaveBeenCalledTimes(2);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -102,6 +102,7 @@ describe("processWebhookFlowEvent", () => {
         payload: expect.objectContaining({
           source_label: "facebook_lead_ads",
           flows_evaluated: 3,
+          flows_matched: 2,
           runs_enqueued: 2,
           flow_ids: ["flow-match", "flow-anymatch"]
         })
@@ -138,7 +139,7 @@ describe("processWebhookFlowEvent", () => {
     );
   });
 
-  it("treats a duplicate (null enqueue) as already-handled — delivery log only", async () => {
+  it("treats a duplicate (null enqueue) as already-handled: matched but not enqueued", async () => {
     const db = flowsDb({
       data: [{ id: "flow-dupe", definition: { trigger: { channel: "webhook", conditions: [] } } }],
       error: null
@@ -146,10 +147,15 @@ describe("processWebhookFlowEvent", () => {
     enqueueAiFlowRun.mockResolvedValue(null); // already enqueued by an earlier delivery
 
     const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
-    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 1 });
+    // flowsMatched stays 1 so the guide readout can say "already handled"
+    // instead of the false "no flow matched" on a bridge retry.
+    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 1, flowsMatched: 1 });
     expect(recordSystemLog).toHaveBeenCalledTimes(1);
     expect(recordSystemLog).toHaveBeenCalledWith(
-      expect.objectContaining({ event: "webhook_event_received" }),
+      expect.objectContaining({
+        event: "webhook_event_received",
+        payload: expect.objectContaining({ flows_matched: 1, runs_enqueued: 0 })
+      }),
       db
     );
   });
@@ -178,14 +184,14 @@ describe("processWebhookFlowEvent", () => {
       error: null
     });
     const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
-    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 1 });
+    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 1, flowsMatched: 0 });
     expect(enqueueAiFlowRun).not.toHaveBeenCalled();
   });
 
   it("handles null flow data and logs a zero-flow delivery for the guide readout", async () => {
     const db = flowsDb({ data: null, error: null });
     const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
-    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 0 });
+    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 0, flowsMatched: 0 });
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "webhook_event_received",
@@ -206,7 +212,8 @@ describe("processWebhookFlowEvent", () => {
     defaultClientSpy.mockResolvedValueOnce(flowsDb({ data: [], error: null }));
     await expect(processWebhookFlowEvent("biz-1", EVENT)).resolves.toEqual({
       enqueued: 0,
-      flowsEvaluated: 0
+      flowsEvaluated: 0,
+      flowsMatched: 0
     });
   });
 });

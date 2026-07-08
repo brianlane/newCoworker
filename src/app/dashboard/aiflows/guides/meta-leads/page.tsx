@@ -95,6 +95,9 @@ export default async function MetaLeadsGuidePage() {
             createdAt: l.created_at,
             source: String(l.payload?.source_label ?? "webhook"),
             runsEnqueued: Number(l.payload?.runs_enqueued ?? 0),
+            // Older rows predate flows_matched; fall back to runs_enqueued so
+            // a past successful delivery never renders as "no flow matched".
+            flowsMatched: Number(l.payload?.flows_matched ?? l.payload?.runs_enqueued ?? 0),
             preview: String(l.payload?.preview ?? "").slice(0, 200)
           }))}
         />

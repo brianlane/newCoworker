@@ -34,6 +34,13 @@ export type WebhookFlowEventResult = {
   enqueued: number;
   /** Enabled webhook flows evaluated (helps a Zap author see "0 flows"). */
   flowsEvaluated: number;
+  /**
+   * Flows whose conditions matched this event, whether or not a run was
+   * enqueued. matched > 0 with enqueued === 0 means a duplicate redelivery
+   * (the first delivery already ran) — NOT a broken setup, so the guide's
+   * readout must not report "no flow matched".
+   */
+  flowsMatched: number;
 };
 
 type WebhookFlow = { id: string; conditions: TriggerCondition[] };
@@ -83,6 +90,7 @@ export async function processWebhookFlowEvent(
   const flows = await loadWebhookFlows(db, businessId);
 
   let enqueued = 0;
+  let matched = 0;
   const enqueuedFlowIds: string[] = [];
   for (const flow of flows) {
     // Pre-resolve any from_matches saved-contact refs (fail CLOSED per flow,
@@ -102,6 +110,7 @@ export async function processWebhookFlowEvent(
     }
     if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from, refValues))
       continue;
+    matched += 1;
     const run = await enqueueAiFlowRun(
       { businessId, flowId: flow.id, trigger: scope, dedupeKey },
       db
@@ -135,6 +144,7 @@ export async function processWebhookFlowEvent(
         source_label: scope.from,
         event_key: dedupeKey,
         flows_evaluated: flows.length,
+        flows_matched: matched,
         runs_enqueued: enqueued,
         flow_ids: enqueuedFlowIds,
         // First lines only: enough for the owner to recognize the test lead,
@@ -145,5 +155,5 @@ export async function processWebhookFlowEvent(
     db
   );
 
-  return { enqueued, flowsEvaluated: flows.length };
+  return { enqueued, flowsEvaluated: flows.length, flowsMatched: matched };
 }

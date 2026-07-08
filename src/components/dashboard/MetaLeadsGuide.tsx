@@ -26,6 +26,8 @@ type RecentEventItem = {
   createdAt: string;
   source: string;
   runsEnqueued: number;
+  /** Flows whose conditions matched (a retry can match yet enqueue 0 new runs). */
+  flowsMatched: number;
   preview: string;
 };
 
@@ -354,10 +356,14 @@ export function MetaLeadsGuide({
                   <span className="text-parchment/45">
                     {new Date(e.createdAt).toLocaleString()}
                   </span>
-                  <span className={e.runsEnqueued > 0 ? "text-signal-teal" : "text-parchment/45"}>
+                  <span
+                    className={e.flowsMatched > 0 ? "text-signal-teal" : "text-parchment/45"}
+                  >
                     {e.runsEnqueued > 0
                       ? `started ${e.runsEnqueued} flow run${e.runsEnqueued > 1 ? "s" : ""}`
-                      : "no flow matched (is your flow enabled?)"}
+                      : e.flowsMatched > 0
+                        ? "already handled (repeat delivery of the same lead)"
+                        : "no flow matched (is your flow enabled?)"}
                   </span>
                 </div>
                 {e.preview ? (

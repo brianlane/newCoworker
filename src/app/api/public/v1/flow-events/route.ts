@@ -63,7 +63,9 @@ export async function POST(request: Request) {
 
     return successResponse({
       enqueued: result.enqueued,
-      flows_evaluated: result.flowsEvaluated
+      flows_evaluated: result.flowsEvaluated,
+      // matched > 0 with enqueued 0 = duplicate redelivery (already handled).
+      flows_matched: result.flowsMatched
     });
   } catch (err) {
     logger.warn("public-api flow-events failed", {
