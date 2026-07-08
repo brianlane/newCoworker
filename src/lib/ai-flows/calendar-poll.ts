@@ -212,6 +212,11 @@ export function normalizeGraphEvent(
 const GRAPH_EVENT_SELECT =
   "id,subject,bodyPreview,location,organizer,attendees,start,end,createdDateTime,isCancelled";
 
+// calendarView does not support $select on createdDateTime (Graph rejects the
+// request); the upcoming query never reads it, so select everything else.
+const GRAPH_VIEW_SELECT =
+  "id,subject,bodyPreview,location,organizer,attendees,start,end,isCancelled";
+
 type CalendarFetch = { events: CalendarEventInput[]; overflowed: boolean };
 
 type FetchTarget = {
@@ -242,9 +247,11 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
       .filter((e): e is CalendarEventInput => e !== null);
     return { events: items, overflowed: items.length >= CALENDAR_POLL_MAX_EVENTS };
   }
+  // /me/calendar/events is the DEFAULT calendar; /me/events would span the
+  // whole mailbox (every calendar), mis-tagging secondary-calendar events.
   const base = t.calendarId
     ? `/v1.0/me/calendars/${encodeURIComponent(t.calendarId)}/events`
-    : "/v1.0/me/events";
+    : "/v1.0/me/calendar/events";
   const res = await nangoProxyForBusiness(t.businessId, t.link, {
     endpoint:
       `${base}?$filter=${encodeURIComponent(`createdDateTime ge ${sinceIso}`)}` +
@@ -290,7 +297,7 @@ async function fetchUpcoming(
     endpoint:
       `${base}?startDateTime=${encodeURIComponent(timeMin)}` +
       `&endDateTime=${encodeURIComponent(timeMax)}` +
-      `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_EVENT_SELECT}`,
+      `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_VIEW_SELECT}`,
     method: "GET"
   });
   if (!res) throw new Error("calendar_not_connected");

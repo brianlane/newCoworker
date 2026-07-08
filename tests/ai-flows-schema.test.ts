@@ -1149,6 +1149,14 @@ describe("trigger channels", () => {
         steps
       })
     ).toThrow(AiFlowValidationError);
+    // Zero would make the [start - lead, start) due window empty — dead flow.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_start", leadMinutes: 0, conditions: [] },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
   });
 
   it("calendar-triggered steps may reference the calendar trigger scope keys", () => {

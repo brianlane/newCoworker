@@ -575,7 +575,7 @@ describe("pollCalendarTriggers", () => {
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(1);
     const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
-    expect(endpoint).toContain("/v1.0/me/events?$filter=");
+    expect(endpoint).toContain("/v1.0/me/calendar/events?$filter=");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         dedupeKey: "cal:m1",
@@ -601,6 +601,8 @@ describe("pollCalendarTriggers", () => {
     expect(res.enqueued).toBe(1);
     const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
     expect(endpoint).toContain("/v1.0/me/calendars/ms-shared-1/calendarView?");
+    // calendarView rejects $select on createdDateTime; the view select must omit it.
+    expect(endpoint).not.toContain("createdDateTime");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({ dedupeKey: `cal:m2:${startIso}` }),
       expect.anything()

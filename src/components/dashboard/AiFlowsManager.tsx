@@ -1189,13 +1189,19 @@ export function AiFlowsManager({
               </div>
               {editor.calendarOn === "event_start" && (
                 <div>
-                  <label className={labelClass}>How long before the event (minutes)</label>
+                  <label className={labelClass}>How long before the event (minutes, min 1)</label>
                   <input
                     type="number"
+                    min={1}
                     className={inputClass}
                     value={editor.calendarLeadMinutes}
                     onChange={(ev) =>
-                      setEditor({ ...editor, calendarLeadMinutes: Number(ev.target.value) || 0 })
+                      setEditor({
+                        ...editor,
+                        // The due window is [start - lead, start), so zero can
+                        // never fire; clamp instead of saving a dead flow.
+                        calendarLeadMinutes: Math.max(1, Number(ev.target.value) || 1)
+                      })
                     }
                   />
                 </div>

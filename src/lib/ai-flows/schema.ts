@@ -280,7 +280,9 @@ const calendarTriggerSchema = z
     channel: z.literal("calendar"),
     calendar: z.enum(["primary", "shared", "both"]).optional(),
     on: z.enum(["event_created", "event_start"]),
-    leadMinutes: z.number().int().min(0).max(1440).optional(),
+    // min 1: the due window is [start - leadMinutes, start), so a zero lead
+    // would be an empty window that can never fire.
+    leadMinutes: z.number().int().min(1).max(1440).optional(),
     conditions: z.array(conditionSchema).max(20)
   })
   .superRefine((t, ctx) => {
