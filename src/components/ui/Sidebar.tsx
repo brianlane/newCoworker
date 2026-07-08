@@ -36,6 +36,17 @@ interface SidebarProps {
   brand?: SidebarBrand | null;
 }
 
+/**
+ * Expand #rgb shorthand to #rrggbb, then append a hex alpha. Appending alpha
+ * to shorthand directly (e.g. "#0f0" + "26" = "#0f026") is not a valid CSS
+ * color; the schema allows both hex shapes so normalize first.
+ */
+function hexWithAlpha(hex: string, alphaHex: string): string {
+  const full =
+    hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
+  return `${full}${alphaHex}`;
+}
+
 export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProps) {
   const pathname = usePathname();
   // Mobile-only off-canvas state. At lg+ the drawer is always static/visible
@@ -125,7 +136,10 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
             // schema-validated #hex) since Tailwind tokens can't be tenant-set.
             const accentStyle =
               active && brand?.accentColor
-                ? { color: brand.accentColor, backgroundColor: `${brand.accentColor}26` }
+                ? {
+                    color: brand.accentColor,
+                    backgroundColor: hexWithAlpha(brand.accentColor, "26")
+                  }
                 : undefined;
             return (
               <Link
