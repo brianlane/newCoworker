@@ -27,13 +27,17 @@ permissions:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    # For status events we can't filter on branch here: the payload's
+    # `branches` array is often empty (e.g. commits pushed to an existing
+    # branch), so the job runs for every successful status and the script's
+    # PR-lookup / dependabot-author / label guards exit quietly when the
+    # status is unrelated to an eligible Dependabot PR.
     if: >-
       (github.event_name == 'workflow_run' &&
        github.event.workflow_run.event == 'pull_request' &&
        startsWith(github.event.workflow_run.head_branch, 'dependabot/')) ||
       (github.event_name == 'status' &&
-       github.event.state == 'success' &&
-       contains(toJSON(github.event.branches.*.name), 'dependabot/'))
+       github.event.state == 'success')
     steps:
       - name: Evaluate checks and merge if all green
         env:
