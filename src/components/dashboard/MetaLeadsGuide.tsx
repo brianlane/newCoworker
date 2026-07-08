@@ -94,7 +94,10 @@ export function MetaLeadsGuide({
   const [refreshing, setRefreshing] = useState(false);
 
   const template = metaLeadFollowUpTemplate();
-  const existingFlow = webhookFlows[0] ?? null;
+  // Only a flow that IS this starter counts as installed — a tenant with some
+  // other webhook flow still gets the one-click install (Bugbot fe7aebd1).
+  const existingFlow = webhookFlows.find((f) => f.name === template.name) ?? null;
+  const otherWebhookFlow = existingFlow ? null : (webhookFlows[0] ?? null);
 
   async function installFlow() {
     setInstallError(null);
@@ -182,9 +185,17 @@ export function MetaLeadsGuide({
               </Link>
             </>
           ) : (
-            <Button type="button" variant="primary" size="sm" onClick={installFlow} loading={installing}>
-              Install “{template.name}”
-            </Button>
+            <>
+              <Button type="button" variant="primary" size="sm" onClick={installFlow} loading={installing}>
+                Install “{template.name}”
+              </Button>
+              {otherWebhookFlow ? (
+                <span className="text-xs text-parchment/50">
+                  Your existing webhook flow “{otherWebhookFlow.name}” keeps working — this adds
+                  a separate starter for Meta leads.
+                </span>
+              ) : null}
+            </>
           )}
         </div>
         {installError ? (
