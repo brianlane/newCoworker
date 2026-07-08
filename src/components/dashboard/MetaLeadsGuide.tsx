@@ -318,7 +318,7 @@ export function MetaLeadsGuide({
               <li>
                 <strong>Headers:</strong> add one named <code className="font-mono text-xs">Authorization</code>{" "}
                 with the value <code className="font-mono text-xs">Bearer YOUR-API-KEY</code> (the key
-                from step 2, after the word “Bearer” and a space)
+                from step 3, after the word “Bearer” and a space)
               </li>
               <li>
                 <strong>Body type:</strong> Raw, <strong>Content type:</strong> JSON. In the request
