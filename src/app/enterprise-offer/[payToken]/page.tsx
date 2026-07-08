@@ -38,8 +38,17 @@ export default async function EnterpriseOfferPayPage({
   const business = await getBusiness(deal.business_id);
 
   const justPaid = query.paid === "1";
+  // Terminal states always win: a stale ?paid=1 success redirect (or a
+  // revoke that raced the checkout) must not tell the visitor "subscription
+  // active" when the webhook refused activation and canceled the Stripe
+  // subscription. justPaid only bridges the open→active window while the
+  // webhook is still in flight.
   const state: "open" | "active" | "revoked" | "canceled" =
-    deal.status === "open" && !justPaid ? "open" : justPaid ? "active" : deal.status;
+    deal.status === "revoked" || deal.status === "canceled"
+      ? deal.status
+      : deal.status === "active" || justPaid
+        ? "active"
+        : "open";
 
   return (
     <main className="min-h-screen bg-deep-ink flex items-center justify-center px-4">
