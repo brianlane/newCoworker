@@ -39,7 +39,10 @@ import {
   type VpsProvisioner
 } from "@/lib/provisioning/orchestrate";
 import { assertVpsProviderAllowed, type VpsRegion } from "@/lib/vps/provider";
+import type { VpsSize } from "@/lib/vps/size";
 import { logger } from "@/lib/logger";
+import { readFileSync } from "fs";
+import { join } from "path";
 
 /** Marker echoed by the SSH probe so a mangled shell can't fake success. */
 export const BYOS_PROBE_MARKER = "newcoworker-byos-ok";
@@ -224,6 +227,139 @@ export async function probeByosSsh(
     );
   }
   return { host: row.host };
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Preflight gate (PII hard requirements — see vps/scripts/byos-preflight.sh)
+// ─────────────────────────────────────────────────────────────────────────
+
+export type ByosPreflightStatus = "PASS" | "FAIL" | "WARN";
+
+export type ByosPreflightCheck = {
+  name: string;
+  status: ByosPreflightStatus;
+  detail: string;
+};
+
+export type ByosPreflightReport = {
+  /** True when no check FAILed (WARNs allowed — enforced separately). */
+  ok: boolean;
+  checks: ByosPreflightCheck[];
+  /**
+   * Disk-encryption posture: 'detected' (dm-crypt/LUKS on the box) or
+   * 'attestation_required' (provider-level encryption cannot be verified
+   * remotely — the operator must attest to it explicitly).
+   */
+  diskEncryption: "detected" | "attestation_required";
+};
+
+/**
+ * Parse the machine-readable `PREFLIGHT <check> <status> <detail>` lines the
+ * script emits. Exported for tests; tolerant of interleaved noise lines but
+ * NOT of a missing verdict — a script that died mid-run must read as failed.
+ */
+export function parseByosPreflightOutput(stdout: string): ByosPreflightReport {
+  const checks: ByosPreflightCheck[] = [];
+  let verdict: string | null = null;
+  for (const line of stdout.split("\n")) {
+    const m = /^PREFLIGHT (\S+) (PASS|FAIL|WARN)(?: (.*))?$/.exec(line.trim());
+    if (!m) continue;
+    if (m[1] === "RESULT") {
+      verdict = m[2];
+      continue;
+    }
+    checks.push({ name: m[1], status: m[2] as ByosPreflightStatus, detail: m[3] ?? "" });
+  }
+  const encryptionCheck = checks.find((c) => c.name === "disk_encryption");
+  return {
+    // Fail closed: no verdict line (script crashed / connection dropped
+    // mid-run) is a failure even if every parsed check passed.
+    ok: verdict === "PASS" && checks.every((c) => c.status !== "FAIL"),
+    checks,
+    diskEncryption: encryptionCheck?.status === "PASS" ? "detected" : "attestation_required"
+  };
+}
+
+/* c8 ignore start -- filesystem read of a repo-tracked script; the missing-file
+   throw is a deploy-packaging error surfaced loudly in prod, not a unit-testable
+   branch (tests inject loadScript). */
+function loadByosPreflightScript(): string {
+  // Fail closed — unlike soul.md's template fallback, a missing SECURITY
+  // GATE script must abort enrollment, never degrade to "no checks".
+  return readFileSync(join(process.cwd(), "vps/scripts/byos-preflight.sh"), "utf-8");
+}
+/* c8 ignore stop */
+
+export type ByosPreflightDeps = ByosSshDeps & {
+  /** Injectable script source (tests). Default reads vps/scripts/byos-preflight.sh. */
+  loadScript?: () => string;
+};
+
+/**
+ * Run the preflight gate on the customer's box over SSH and enforce it:
+ * throws {@link ByosEnrollmentError} when any check FAILs, and when disk
+ * encryption is undetectable without the operator's provider-level
+ * encryption attestation (`attestProviderDiskEncryption`). Returns the full
+ * report so the caller can persist it to the provisioning log.
+ */
+export async function runByosPreflight(
+  businessId: string,
+  opts: { vpsSize: VpsSize; attestProviderDiskEncryption: boolean },
+  deps: ByosPreflightDeps = {}
+): Promise<ByosPreflightReport> {
+  /* c8 ignore next -- production default; tests inject exec */
+  const exec = deps.exec ?? sshExec;
+  /* c8 ignore next -- production default; tests inject loadScript */
+  const loadScript = deps.loadScript ?? loadByosPreflightScript;
+
+  const row = await requireByosKeyRow(businessId);
+  const b64 = Buffer.from(loadScript(), "utf8").toString("base64");
+  // VPS_SIZE is app-resolved (kvm1|kvm2|kvm4|kvm8 union type) — safe to
+  // interpolate; the script itself is staged base64 so no quoting hazards.
+  const command =
+    `printf '%s' '${b64}' | base64 -d > /tmp/newcoworker-byos-preflight.sh` +
+    ` && chmod +x /tmp/newcoworker-byos-preflight.sh` +
+    ` && VPS_SIZE='${opts.vpsSize}' bash /tmp/newcoworker-byos-preflight.sh`;
+
+  let result;
+  try {
+    result = await exec({
+      host: row.host,
+      username: row.ssh_username,
+      privateKeyPem: row.private_key_pem,
+      command,
+      timeoutMs: 120_000,
+      connectTimeoutMs: 30_000
+    });
+  } catch (err) {
+    throw new ByosEnrollmentError(
+      `Preflight SSH run on ${row.host} failed: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+
+  const report = parseByosPreflightOutput(result.stdout);
+  if (!report.ok) {
+    const failed = report.checks.filter((c) => c.status === "FAIL");
+    const summary =
+      failed.length > 0
+        ? failed.map((c) => `${c.name}: ${c.detail}`).join("; ")
+        : `no verdict from the preflight script (exit ${result.exitCode})`;
+    throw new ByosEnrollmentError(`BYOS preflight failed — ${summary}`);
+  }
+  if (report.diskEncryption === "attestation_required" && !opts.attestProviderDiskEncryption) {
+    throw new ByosEnrollmentError(
+      "No disk encryption detected on the box (dm-crypt/LUKS). Confirm provider-level " +
+        "encryption at rest and re-run with the attestation checkbox checked — PII must " +
+        "not land on an unencrypted disk."
+    );
+  }
+  logger.info("BYOS preflight passed", {
+    businessId,
+    host: row.host,
+    diskEncryption: report.diskEncryption,
+    attested: opts.attestProviderDiskEncryption
+  });
+  return report;
 }
 
 /**

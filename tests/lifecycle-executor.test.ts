@@ -71,6 +71,11 @@ vi.mock("@/lib/hostinger/data-migration", () => ({
   deleteBusinessBackup: deleteBusinessBackupMock
 }));
 
+const { wipeByosBoxMock } = vi.hoisted(() => ({ wipeByosBoxMock: vi.fn() }));
+vi.mock("@/lib/provisioning/byos-wipe", () => ({
+  wipeByosBox: wipeByosBoxMock
+}));
+
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: createSupabaseServiceClientMock
 }));
@@ -547,6 +552,28 @@ describe("executeLifecyclePlan refund handling", () => {
         html: expect.stringContaining("Your cancellation is scheduled")
       })
     );
+  });
+
+  it("dispatches wipe_byos_box to the BYOS wipe helper", async () => {
+    wipeByosBoxMock.mockResolvedValueOnce(undefined);
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        telnyxOps: [],
+        hostingerOps: [],
+        sshOps: [
+          { type: "wipe_byos_box", businessId: "biz_byos", vpsHost: "203.0.113.7" }
+        ],
+        dbUpdates: [],
+        emailsToSend: []
+      },
+      { businessId: "biz_byos", vpsHost: "203.0.113.7" },
+      { stripe: {} as never }
+    );
+    expect(wipeByosBoxMock).toHaveBeenCalledWith({
+      businessId: "biz_byos",
+      vpsHost: "203.0.113.7"
+    });
   });
 
   it("dispatches the ops VPS deletion request to the ops inbox", async () => {

@@ -88,6 +88,18 @@ export type SshOp =
       vpsHost: string;
       /** When restoring into a freshly-provisioned VM during change-plan. */
       newSshKeyId?: string;
+    }
+  | {
+      /**
+       * Terminal wipe of a CUSTOMER-owned (BYOS) box: remove every platform
+       * container, directory, and `.env` secret over SSH and hand the box
+       * back to its owner. Emitted only by the grace-expired wipe for
+       * `vps_provider='byos'` tenants — the BYOS replacement for stop_vm +
+       * pool return + hPanel deletion.
+       */
+      type: "wipe_byos_box";
+      businessId: string;
+      vpsHost: string;
     };
 
 export type DbUpdateOp =
@@ -583,9 +595,20 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
 
   // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op —
   // see the LifecycleContext.vpsProvider docstring.
-  const hostingerManaged = providerUsesHostingerLifecycle(
-    resolveVpsProvider(ctx.vpsProvider)
-  );
+  const vpsProvider = resolveVpsProvider(ctx.vpsProvider);
+  const hostingerManaged = providerUsesHostingerLifecycle(vpsProvider);
+
+  // BYOS terminal action: the box belongs to the customer, so instead of
+  // stop_vm/pool-return/hPanel-deletion we wipe the platform stack + secrets
+  // off it over SSH and hand it back. Skipped when the box host is unknown
+  // (unreachable box → the grace-sweep retries on its next tick).
+  if (vpsProvider === "byos" && ctx.vpsHost !== null) {
+    plan.sshOps.push({
+      type: "wipe_byos_box",
+      businessId: sub.business_id,
+      vpsHost: ctx.vpsHost
+    });
+  }
 
   // Backstop teardown: if the cancel path that produced this grace row
   // skipped the VPS teardown (e.g. manual operator cancel in the Stripe

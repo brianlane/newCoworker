@@ -38,6 +38,7 @@ import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-d
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
+import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +75,7 @@ export default async function BusinessDetailPage({
     listWhiteGloveOffers(businessId),
     listEnterpriseDeals(businessId)
   ]);
+  const postureReport = await getLatestVpsPostureReport(businessId);
 
   if (!business) notFound();
 
@@ -302,7 +304,34 @@ export default async function BusinessDetailPage({
               {business.vps_provider ?? "hostinger"} · {business.vps_region ?? "us"}
             </dd>
           </div>
+          <div>
+            <dt className="text-parchment/40 text-xs">Security posture</dt>
+            <dd className="flex items-center gap-2">
+              {postureReport ? (
+                <>
+                  <Badge variant={postureReport.ok ? "success" : "error"}>
+                    {postureReport.ok ? "OK" : "DRIFT"}
+                  </Badge>
+                  <LocalTime
+                    iso={postureReport.created_at}
+                    className="text-xs text-parchment/40 font-mono"
+                  />
+                </>
+              ) : (
+                <span className="text-parchment/40 text-xs">no reports yet</span>
+              )}
+            </dd>
+          </div>
         </dl>
+        {postureReport && !postureReport.ok && (
+          <p className="mb-4 text-xs text-spark-orange">
+            Failing checks:{" "}
+            {postureReport.checks
+              .filter((c) => !c.ok)
+              .map((c) => c.name)
+              .join(", ")}
+          </p>
+        )}
         {!business.hostinger_vps_id &&
           subscription?.status === "active" &&
           business.status !== "wiped" &&

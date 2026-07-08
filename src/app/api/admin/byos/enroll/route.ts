@@ -5,10 +5,15 @@ import {
   ByosEnrollmentError,
   makeByosProvisioner,
   prepareByosEnrollment,
-  probeByosSsh
+  probeByosSsh,
+  runByosPreflight
 } from "@/lib/provisioning/byos";
 import { VpsProviderValidationError, VPS_REGIONS } from "@/lib/vps/provider";
-import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { resolveVpsSize } from "@/lib/vps/size";
+import {
+  getLatestProvisioningStatus,
+  recordProvisioningProgress
+} from "@/lib/provisioning/progress";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { z } from "zod";
@@ -22,7 +27,13 @@ const bodySchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("provision"),
-    businessId: z.string().uuid()
+    businessId: z.string().uuid(),
+    /**
+     * Operator attestation that the box has PROVIDER-level encryption at
+     * rest, required when the preflight cannot detect dm-crypt/LUKS on the
+     * box itself. Recorded in the provisioning log for the audit trail.
+     */
+    attestProviderDiskEncryption: z.boolean().optional().default(false)
   })
 ]);
 
@@ -92,6 +103,28 @@ export async function POST(request: Request) {
     }
 
     const { host } = await probeByosSsh(body.businessId);
+
+    // Hard security gate BEFORE any bootstrap: OS/hardware/co-tenancy/
+    // egress checks run on the box; disk encryption must be detected or
+    // operator-attested. Throws ByosEnrollmentError (→ 400) on any FAIL.
+    const preflight = await runByosPreflight(body.businessId, {
+      vpsSize: resolveVpsSize(business.tier, business.vps_size),
+      attestProviderDiskEncryption: body.attestProviderDiskEncryption
+    });
+    // Audit trail: the preflight verdict + the encryption attestation land
+    // in the same provisioning log the admin page renders.
+    await recordProvisioningProgress({
+      businessId: body.businessId,
+      phase: "byos_preflight",
+      percent: 3,
+      message:
+        `BYOS preflight passed on ${host} — ` +
+        `disk encryption: ${preflight.diskEncryption}` +
+        (body.attestProviderDiskEncryption
+          ? " (operator attested provider-level encryption at rest)"
+          : ""),
+      source: "orchestrator"
+    });
 
     // Fire-and-forget, mirroring the Stripe-webhook provisioning kick: the
     // run takes many minutes (bootstrap + deploy) and the admin page follows

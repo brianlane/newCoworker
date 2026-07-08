@@ -381,6 +381,14 @@ async function runSshOp(op: SshOp): Promise<void> {
     case "backup_durable_data":
       await backupBusinessData({ businessId: op.businessId, vpsHost: op.vpsHost });
       return;
+    case "wipe_byos_box": {
+      // Terminal BYOS wipe: dynamic import keeps the executor's module
+      // graph free of the provisioning stack for the 99% of plans that
+      // never touch a BYOS box.
+      const { wipeByosBox } = await import("@/lib/provisioning/byos-wipe");
+      await wipeByosBox({ businessId: op.businessId, vpsHost: op.vpsHost });
+      return;
+    }
     case "restore_durable_data":
       // Restore is only dispatched by change-plan & reactivate flows, which
       // run their own provisioning setup and then invoke the helper
