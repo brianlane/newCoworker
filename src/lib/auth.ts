@@ -79,6 +79,44 @@ export async function requireAdmin(): Promise<AuthUser> {
   return user;
 }
 
+/**
+ * Business-scoped authorization through the central permission matrix
+ * (src/lib/authz/policy.ts): resolves the caller's role on `businessId`
+ * (owner via `businesses.owner_email`, else their business_members row) and
+ * requires it to satisfy `action`. The platform admin always passes, same
+ * as `requireOwner`. Refusals are security-logged (bizblasts'
+ * log_authorization_failure pattern) so probing is visible in ops logs.
+ */
+export async function requireBusinessRole(
+  businessId: string,
+  action: import("@/lib/authz/policy").BusinessAction
+): Promise<AuthUser> {
+  const user = await requireAuth();
+  if (user.isAdmin) return user;
+
+  const refuse = async (reason: string): Promise<never> => {
+    const { logger } = await import("@/lib/logger");
+    logger.warn("authorization refused", {
+      businessId,
+      action,
+      userId: user.userId,
+      reason
+    });
+    throw Object.assign(new Error("Forbidden"), { status: 403 });
+  };
+
+  if (!user.email) return refuse("no_email");
+
+  const { getBusinessRoleForEmail } = await import("@/lib/db/business-members");
+  const role = await getBusinessRoleForEmail(businessId, user.email);
+  if (!role) return refuse("no_role");
+
+  const { can } = await import("@/lib/authz/policy");
+  if (!can(role, action)) return refuse(`role_${role}_insufficient`);
+
+  return user;
+}
+
 export async function requireOwner(businessId: string): Promise<AuthUser> {
   const user = await requireAuth();
   if (user.isAdmin) return user;
