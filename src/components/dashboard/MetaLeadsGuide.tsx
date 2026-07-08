@@ -18,6 +18,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { metaLeadFollowUpTemplate } from "@/lib/ai-flows/templates";
+import { ZAPIER_INVITE_URL } from "@/lib/integrations/zapier-invite";
 
 type WebhookFlowItem = { id: string; name: string; enabled: boolean };
 
@@ -337,11 +338,21 @@ export function MetaLeadsGuide({
         </ol>
         <div className="mt-4 rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
           <p className="text-xs text-parchment/60">
-            <strong>Already pay for Zapier?</strong> Use it instead: trigger{" "}
-            <em>Facebook Lead Ads → New Lead</em>, action{" "}
-            <em>NewCoworker → Send Lead to Coworker</em> (connect with the same API key, map the
-            lead fields — no URL or headers needed). Note Facebook Lead Ads is a premium Zapier
-            app and needs a paid Zapier plan; Make.com&apos;s free tier is why we recommend it.
+            <strong>Already pay for Zapier?</strong> Use it instead: first{" "}
+            <a
+              href={ZAPIER_INVITE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-signal-teal hover:underline"
+            >
+              accept the New Coworker invite
+            </a>{" "}
+            (one time — the app is invite-only until publicly listed), then build the Zap:
+            trigger <em>Facebook Lead Ads → New Lead</em>, action{" "}
+            <em>New Coworker → Send Lead to Coworker</em> (connect with the same API key, map
+            the lead fields — no URL or headers needed). Note Facebook Lead Ads is a premium
+            Zapier app and needs a paid Zapier plan; Make.com&apos;s free tier is why we
+            recommend it.
           </p>
         </div>
       </Card>

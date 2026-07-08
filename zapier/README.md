@@ -65,6 +65,10 @@ share the **invite link** — invited users can build Zaps against the pushed
 version without promotion. Manage everything visually at
 https://developer.zapier.com (NOT the regular zapier.com/app dashboard).
 
+Invite links are per pushed version. The dashboard surfaces the current one
+from `src/lib/integrations/zapier-invite.ts` — after pushing a NEW version,
+re-run `users:links` and update that constant in the same PR.
+
 `BASE_URL` defaults to `https://www.newcoworker.com`; point a version at a
 preview deployment with `zapier env:set <version> BASE_URL=https://…`.
 

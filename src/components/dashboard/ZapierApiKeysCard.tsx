@@ -21,6 +21,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { ZAPIER_INVITE_URL } from "@/lib/integrations/zapier-invite";
 
 type ApiKeyItem = {
   id: string;
@@ -134,8 +135,21 @@ export function ZapierApiKeysCard({ businessId, initialKeys, activeHooks }: Prop
           <h3 className="text-sm font-semibold text-parchment">Zapier &amp; API access</h3>
           <p className="text-xs text-parchment/50 mt-1">
             Create an API key and paste it into Zapier to connect your coworker
-            to 7,000+ apps: trigger Zaps on new texts, calls, and emails, or
-            send texts from other tools.
+            to 7,000+ apps: trigger Zaps on new texts, calls, and emails, send
+            texts from other tools, or forward in leads.
+          </p>
+          <p className="text-xs text-parchment/50 mt-1.5">
+            First,{" "}
+            <a
+              href={ZAPIER_INVITE_URL}
+              target="_blank"
+              rel="noreferrer"
+              className="text-signal-teal hover:underline"
+            >
+              accept the New Coworker invite on Zapier
+            </a>{" "}
+            (one time per Zapier account) — the app is invite-only until it&apos;s listed in
+            Zapier&apos;s public directory, so it won&apos;t appear in their app search without it.
           </p>
         </div>
       </div>
