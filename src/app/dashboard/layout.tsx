@@ -13,6 +13,7 @@ import {
   type AccessibleBusiness
 } from "@/lib/dashboard/active-business";
 import { can } from "@/lib/authz/policy";
+import { effectiveBranding, type Branding } from "@/lib/plans/branding";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
@@ -51,6 +52,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     | null = null;
   let businessId: string | null = null;
   let accessible: AccessibleBusiness[] = [];
+  let brand: Branding | null = null;
   if (ownerEmail) {
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
@@ -89,6 +91,17 @@ export default async function DashboardLayout({ children }: { children: React.Re
     const ctx = await resolveActiveBusinessContext(user, db);
     businessId = ctx.businessId;
     accessible = ctx.accessible;
+    // White-label branding (enterprise): read tier + branding for the active
+    // business; effectiveBranding gates on tier so a downgraded tenant's
+    // stored branding goes dormant automatically.
+    if (businessId) {
+      const { data: brandRow } = await db
+        .from("businesses")
+        .select("tier, branding")
+        .eq("id", businessId)
+        .maybeSingle();
+      brand = effectiveBranding(brandRow?.tier as string | undefined, brandRow?.branding);
+    }
     // The grace banner's CTA is /api/billing/reactivate (manage_billing,
     // owner-only) — don't dangle it in front of managers/staff whose click
     // would just 403. Billing state is the owner's concern.
@@ -111,7 +124,11 @@ export default async function DashboardLayout({ children }: { children: React.Re
 
   return (
     <div className="flex h-dvh bg-deep-ink">
-      <DashboardSidebar userEmail={viewAs ? ownerEmail : user.email} businessId={businessId} />
+      <DashboardSidebar
+        userEmail={viewAs ? ownerEmail : user.email}
+        businessId={businessId}
+        brand={brand}
+      />
       <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
         <BusinessSwitcher
           businesses={accessible.map((b) => ({

@@ -13,6 +13,7 @@ import {
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessStatus,
+  updateBusinessBranding,
   updateBusinessTimezone,
   updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
@@ -316,6 +317,22 @@ describe("db/businesses", () => {
 
     await expect(updateEnterpriseLimits("uuid-biz-1", { maxConcurrentCalls: 5 })).rejects.toThrow(
       "updateEnterpriseLimits"
+    );
+  });
+
+  it("updateBusinessBranding writes branding json, clears with null, throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateBusinessBranding("uuid-biz-1", { productName: "Acme" });
+    expect(db.update).toHaveBeenCalledWith({ branding: { productName: "Acme" } });
+
+    await updateBusinessBranding("uuid-biz-1", null);
+    expect(db.update).toHaveBeenCalledWith({ branding: null });
+
+    const bad = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(bad as never);
+    await expect(updateBusinessBranding("uuid-biz-1", null)).rejects.toThrow(
+      "updateBusinessBranding"
     );
   });
 

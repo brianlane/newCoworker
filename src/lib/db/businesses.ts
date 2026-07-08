@@ -1,6 +1,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { Business } from "@/lib/db/schema";
 import type { EnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
+import type { Branding } from "@/lib/plans/branding";
 import {
   assertResidencyModeAllowed,
   residencyAllowedForTier,
@@ -360,6 +361,17 @@ export async function updateEnterpriseLimits(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ enterprise_limits: limits }).eq("id", id);
   if (error) throw new Error(`updateEnterpriseLimits: ${error.message}`);
+}
+
+/** White-label branding (enterprise); null clears back to platform branding. */
+export async function updateBusinessBranding(
+  id: string,
+  branding: Branding | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ branding }).eq("id", id);
+  if (error) throw new Error(`updateBusinessBranding: ${error.message}`);
 }
 
 /**
