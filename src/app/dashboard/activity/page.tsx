@@ -70,10 +70,12 @@ export default async function ActivityPage(props: {
     }));
   }
 
-  // Next-older chunk: push the current cursor onto the trail. Next-newer
+  // Next-older chunk: push the current cursor onto the trail. On the newest
+  // chunk (no cursor) the trail is always restarted empty — a stray `trail`
+  // param there would otherwise send "Previous" to the wrong chunk. Next-newer
   // chunk: pop the trail and open that chunk on its last client page.
   const olderHref = page.nextBefore
-    ? chunkHref(page.nextBefore, before ? [...trail, before] : trail, false)
+    ? chunkHref(page.nextBefore, before ? [...trail, before] : [], false)
     : null;
   const newerHref = before
     ? chunkHref(trail[trail.length - 1], trail.slice(0, -1), true)
