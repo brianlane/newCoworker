@@ -134,6 +134,9 @@ function makeVpsStub(
       private_key_pem: privateKeyPem,
       fingerprint_sha256: "SHA256:abc",
       ssh_username: "root",
+      provider: "hostinger",
+      region: "us",
+      host: null,
       created_at: "2026-01-01T00:00:00Z",
       rotated_at: null
     },
@@ -2376,6 +2379,82 @@ describe("provisioning/orchestrate", () => {
           { vpsProvisioner, remoteExec: vi.fn() }
         )
       ).rejects.toThrow("real failure 2");
+    });
+  });
+
+  describe("provider axis (BYOS / OVH)", () => {
+    it("byos enterprise: provisions via the injected provisioner and never touches the Hostinger pool", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "byos"
+      } as never);
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("777"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const vpsPool = {
+        claim: vi.fn(),
+        record: vi.fn(),
+        release: vi.fn(),
+        retire: vi.fn()
+      };
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-byos-1", tier: "enterprise", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec, vpsPool }
+      );
+
+      expect(result.vpsId).toBe("777");
+      // The vps_inventory pool is Hostinger stock: a BYOS provision must
+      // neither adopt from it nor record into it.
+      expect(vpsPool.claim).not.toHaveBeenCalled();
+      expect(vpsPool.record).not.toHaveBeenCalled();
+    });
+
+    it("rejects a non-hostinger provider on a non-enterprise tenant (tier gate)", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "standard",
+        vps_provider: "byos"
+      } as never);
+      const vpsProvisioner = vi.fn();
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-byos-2", tier: "standard" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/Enterprise plan features/);
+      expect(vpsProvisioner).not.toHaveBeenCalled();
+    });
+
+    it("byos without an injected provisioner fails loudly instead of buying a Hostinger box", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "byos"
+      } as never);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-byos-3", tier: "enterprise" },
+          { remoteExec: vi.fn(), vpsPool: null }
+        )
+      ).rejects.toThrow(/No default VPS provisioner for provider 'byos'.*SSH-handover/);
+    });
+
+    it("ovh without an injected provisioner fails loudly with the OVH-specific message", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "ovh"
+      } as never);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-ovh-1", tier: "enterprise" },
+          { remoteExec: vi.fn(), vpsPool: null }
+        )
+      ).rejects.toThrow(/No default VPS provisioner for provider 'ovh'.*not wired yet/);
     });
   });
 });

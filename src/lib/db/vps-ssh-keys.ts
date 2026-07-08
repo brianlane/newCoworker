@@ -38,12 +38,25 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export type VpsSshKeyRow = {
   id: string;
   business_id: string;
+  /**
+   * Generic provider box id (column name is historical): Hostinger numeric
+   * VM id as text, OVH service name, or a `byos-<businessId>` sentinel.
+   */
   hostinger_vps_id: string;
   hostinger_public_key_id: number | null;
   public_key: string;
   private_key_pem: string;
   fingerprint_sha256: string;
   ssh_username: string;
+  /** Which provider runs the box: 'hostinger' (default) | 'ovh' | 'byos'. */
+  provider: string;
+  /** Physical region of the box: 'us' (default) | 'ca'. */
+  region: string;
+  /**
+   * Public IP/hostname for byos/ovh boxes (no live provider IP lookup).
+   * Null for hostinger rows — their IP is resolved live from the API.
+   */
+  host: string | null;
   created_at: string;
   rotated_at: string | null;
 };
@@ -100,6 +113,12 @@ export type InsertVpsSshKeyInput = {
   private_key_pem: string;
   fingerprint_sha256: string;
   ssh_username?: string;
+  /** Defaults to 'hostinger' (the historical fleet). */
+  provider?: string;
+  /** Defaults to 'us'. */
+  region?: string;
+  /** Public IP/hostname; only meaningful for byos/ovh rows. */
+  host?: string | null;
 };
 
 export async function insertVpsSshKey(
@@ -116,7 +135,10 @@ export async function insertVpsSshKey(
       public_key: input.public_key,
       private_key_pem: input.private_key_pem,
       fingerprint_sha256: input.fingerprint_sha256,
-      ssh_username: input.ssh_username ?? "root"
+      ssh_username: input.ssh_username ?? "root",
+      provider: input.provider ?? "hostinger",
+      region: input.region ?? "us",
+      host: input.host ?? null
     })
     .select()
     .single();

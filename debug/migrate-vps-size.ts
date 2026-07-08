@@ -91,7 +91,7 @@ const db = await createSupabaseServiceClient();
 // ---------------------------------------------------------------- load state
 const { data: biz, error: bizErr } = await db
   .from("businesses")
-  .select("id, name, tier, status, hostinger_vps_id, owner_email, vps_size, is_paused")
+  .select("id, name, tier, status, hostinger_vps_id, owner_email, vps_size, vps_provider, is_paused")
   .eq("id", BUSINESS_ID)
   .single();
 if (bizErr || !biz) {
@@ -100,6 +100,17 @@ if (bizErr || !biz) {
 }
 if (biz.tier !== "starter" && biz.tier !== "standard" && biz.tier !== "enterprise") {
   console.error(`tier=${biz.tier} is not a recognized tier`);
+  process.exit(1);
+}
+// Non-hostinger tenants FAIL CLOSED (same policy as src/lib/vps/migrate-size.ts):
+// this script purchases/adopts a Hostinger replacement and tears the old box
+// down via the Hostinger API — neither applies to a customer-owned BYOS box
+// or an OVH Canada box. Resize provider-side, then re-provision.
+if ((biz.vps_provider ?? "hostinger") !== "hostinger") {
+  console.error(
+    `vps_provider=${biz.vps_provider}: hardware migration is Hostinger-only. ` +
+      "Resize the box provider-side (customer/OVH plan change), then re-run provisioning."
+  );
   process.exit(1);
 }
 

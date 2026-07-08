@@ -975,6 +975,83 @@ describe("planLifecycleAction: return_vps_to_pool (fleet economics Phase B)", ()
   });
 });
 
+describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycle)", () => {
+  it("byos cancel keeps the SSH backup but emits no Hostinger ops, pool return, or hPanel email", () => {
+    const ctx = makeCtx({
+      vpsProvider: "byos",
+      // A BYOS row can still carry a numeric-looking box id and a billing
+      // id from a past life — the provider gate must win over presence.
+      virtualMachineId: 42
+    });
+    const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    const { plan } = res;
+
+    // Customer-owned box: nothing Hostinger-side to snapshot/stop/bill.
+    expect(plan.hostingerOps).toEqual([]);
+    // The box is still reachable, so the durable-data backup still runs.
+    expect(plan.sshOps).toEqual([
+      { type: "backup_durable_data", businessId: "biz-1", vpsHost: "1.2.3.4" }
+    ]);
+    // A customer-owned box must never enter the Hostinger reuse pool.
+    expect(plan.dbUpdates.some((op) => op.type === "return_vps_to_pool")).toBe(false);
+    // No hPanel entry exists — no ops deletion request.
+    expect(plan.emailsToSend.map((e) => e.type)).toEqual([
+      "send_cancel_confirmation",
+      "send_refund_issued"
+    ]);
+    // No VM was stopped, so the plan must not claim one was.
+    const subUpdate = plan.dbUpdates.find(
+      (op) => op.type === "update_subscription"
+    ) as { type: "update_subscription"; patch: Record<string, unknown> };
+    expect(subUpdate.patch.vps_stopped_at).toBeNull();
+  });
+
+  it("ovh grace-expired wipe still wipes centrally but skips every Hostinger op", () => {
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({
+        vpsProvider: "ovh",
+        subscription: makeSub({
+          status: "canceled",
+          grace_ends_at: "2026-04-01T00:00:00.000Z",
+          wiped_at: null,
+          cancel_reason: "payment_failed"
+        })
+      })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+    expect(res.plan.dbUpdates.some((op) => op.type === "return_vps_to_pool")).toBe(false);
+    expect(
+      res.plan.emailsToSend.some((e) => e.type === "send_ops_vps_deletion_request")
+    ).toBe(false);
+    // The central wipe itself is provider-independent.
+    const subUpdate = res.plan.dbUpdates.find(
+      (op) => op.type === "update_subscription"
+    ) as { type: "update_subscription"; patch: Record<string, unknown> };
+    expect(subUpdate.patch.wiped_at).toBeTruthy();
+    expect(res.plan.dbUpdates.some((op) => op.type === "mark_business_wiped")).toBe(true);
+    expect(res.plan.dbUpdates).toContainEqual({
+      type: "delete_backup_artifact",
+      businessId: "biz-1"
+    });
+  });
+
+  it("a corrupt provider value resolves to hostinger (full lifecycle preserved)", () => {
+    const res = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsProvider: "garbage" })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    expect(res.plan.hostingerOps.map((op) => op.type)).toEqual([
+      "create_snapshot",
+      "stop_vm",
+      "disable_billing_auto_renewal"
+    ]);
+  });
+});
+
 describe("planLifecycleAction: undo/reactivate edge cases", () => {
   it("rejects undo when subscription is not active", () => {
     const res = planLifecycleAction(

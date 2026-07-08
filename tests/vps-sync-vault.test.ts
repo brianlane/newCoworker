@@ -64,6 +64,9 @@ const FULL_KEY = {
   private_key_pem: "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----\n",
   fingerprint_sha256: "SHA256:fp",
   ssh_username: "root",
+  provider: "hostinger",
+  region: "us",
+  host: null,
   created_at: "2026-04-30T00:00:00Z",
   rotated_at: null
 };

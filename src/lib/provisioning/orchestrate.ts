@@ -47,6 +47,12 @@ import {
   type CloudflareTunnelProvisioner
 } from "@/lib/cloudflare/tunnel";
 import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
+import {
+  assertVpsProviderAllowed,
+  providerUsesHostingerLifecycle,
+  resolveVpsProvider,
+  type VpsProvider
+} from "@/lib/vps/provider";
 import { hostingerTermForBillingPeriod } from "@/lib/hostinger/provision";
 import type { BillingPeriod } from "@/lib/plans/tier";
 
@@ -381,6 +387,26 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
 }
 /* c8 ignore stop */
 
+/**
+ * Placeholder provisioner for providers whose purchase/enrollment path is
+ * not wired into the orchestrator yet. BYOS boxes are enrolled through the
+ * admin SSH-handover flow (which injects its own provisioner); OVH purchase
+ * support lands with the OVH client. Reaching this thrower means a
+ * non-hostinger business hit the generic purchase path — fail loudly with
+ * the next step instead of silently buying a Hostinger box for a tenant
+ * whose deal requires their own / Canadian hardware.
+ */
+function unavailableProviderProvisioner(provider: VpsProvider): VpsProvisioner {
+  return async () => {
+    throw new Error(
+      `No default VPS provisioner for provider '${provider}': ` +
+        (provider === "byos"
+          ? "BYOS boxes are enrolled via the admin SSH-handover flow, not the purchase path."
+          : "OVH purchase support is not wired yet — inject a vpsProvisioner.")
+    );
+  };
+}
+
 /* c8 ignore start -- production-only default factory; tests inject didProvisioner */
 function defaultDidProvisioner(): DidProvisioner {
   return async ({ businessId, platformDefaults, search }) => {
@@ -637,16 +663,24 @@ async function acquireVps(args: {
   businessId: string;
   tier: "starter" | "standard";
   vpsSize: VpsSize;
+  /**
+   * Provider axis. The `vps_inventory` pool is Hostinger-owned stock, so
+   * both the adopt-first claim AND the post-acquire bookkeeping only run
+   * for hostinger tenants — a BYOS/OVH provision must never land on (or
+   * record into) the Hostinger reuse pool.
+   */
+  vpsProvider: VpsProvider;
   billingPeriod: BillingPeriod | null;
   skipPoolAdopt: boolean;
   vpsPool: VpsPool | null;
   vpsAdopter: VpsAdopter;
   vpsProvisioner: VpsProvisioner;
 }): Promise<ProvisionVpsForBusinessResult> {
-  const { businessId, tier, vpsSize, billingPeriod, skipPoolAdopt, vpsPool, vpsAdopter, vpsProvisioner } =
+  const { businessId, tier, vpsSize, vpsProvider, billingPeriod, skipPoolAdopt, vpsPool, vpsAdopter, vpsProvisioner } =
     args;
+  const hostingerManaged = providerUsesHostingerLifecycle(vpsProvider);
 
-  if (vpsPool && !skipPoolAdopt) {
+  if (vpsPool && !skipPoolAdopt && hostingerManaged) {
     let claimed: Awaited<ReturnType<VpsPool["claim"]>> = null;
     try {
       claimed = await vpsPool.claim(vpsSize, businessId);
@@ -712,7 +746,7 @@ async function acquireVps(args: {
   }
 
   const purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod });
-  if (vpsPool) {
+  if (vpsPool && hostingerManaged) {
     try {
       await vpsPool.record({
         vmId: purchased.virtualMachineId,
@@ -740,6 +774,17 @@ async function runOrchestrator(
 ): Promise<ProvisioningResult> {
   const { businessId, ownerEmail, ownerPhone, tier: narrowTier, vpsSize } = input;
 
+  // Provider axis: which provider runs this tenant's box. Resolved from the
+  // business row (single source of truth — callers don't thread it) so a
+  // BYOS/OVH tenant can never be silently re-provisioned onto a Hostinger
+  // purchase by a caller that predates the axis. Loaded ONCE here and
+  // reused below for the config/tunnel phases. Non-hostinger providers are
+  // enterprise-only; the gate reads the REAL tier from the row (narrowTier
+  // collapses enterprise onto the standard box profile).
+  const businessRow = await getBusiness(businessId);
+  const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
+  assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
+
   const hostinger =
     deps?.hostinger ??
     new HostingerClient({
@@ -749,8 +794,17 @@ async function runOrchestrator(
       /* c8 ignore stop */
     });
 
-  /* c8 ignore next -- defaultVpsProvisioner is the production path; tests inject vpsProvisioner */
-  const vpsProvisioner = deps?.vpsProvisioner ?? defaultVpsProvisioner(hostinger);
+  // Default provisioner selection keys on the provider: hostinger gets the
+  // real purchase path; byos/ovh get a loud thrower until their enrollment/
+  // purchase provisioners land (those flows — and tests — inject
+  // vpsProvisioner). Selected eagerly so the provider branch is exercised
+  // on every run; the factories themselves are cheap closures.
+  /* c8 ignore start -- selection of the production default; tests inject vpsProvisioner (the thrower itself IS executed by the no-injection tests) */
+  const fallbackProvisioner = providerUsesHostingerLifecycle(vpsProvider)
+    ? defaultVpsProvisioner(hostinger)
+    : unavailableProviderProvisioner(vpsProvider);
+  /* c8 ignore stop */
+  const vpsProvisioner = deps?.vpsProvisioner ?? fallbackProvisioner;
   /* c8 ignore next -- defaultVpsAdopter is the production path; tests inject vpsAdopter */
   const vpsAdopter = deps?.vpsAdopter ?? defaultVpsAdopter(hostinger);
   const vpsPool: VpsPool | null =
@@ -771,6 +825,7 @@ async function runOrchestrator(
     businessId,
     tier: narrowTier,
     vpsSize,
+    vpsProvider,
     billingPeriod: input.billingPeriod ?? null,
     skipPoolAdopt: input.skipPoolAdopt ?? false,
     vpsPool,
@@ -882,8 +937,10 @@ async function runOrchestrator(
   // provision retry.
   await updateBusinessVpsSize(businessId, vpsSize);
 
+  // `businessRow` was loaded once at the top of this orchestrator (provider
+  // resolution); none of the fields consumed below (business_type, tier,
+  // phone, data_residency_mode) change during a provision run.
   const existingConfig = await getBusinessConfig(businessId);
-  const businessRow = await getBusiness(businessId);
   await upsertBusinessConfig({
     business_id: businessId,
     soul_md: existingConfig?.soul_md ?? loadSoulTemplate(businessRow?.business_type),

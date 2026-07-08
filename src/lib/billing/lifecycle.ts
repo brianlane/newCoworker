@@ -33,6 +33,7 @@ import type { CustomerProfileRow } from "@/lib/db/customer-profiles";
 import { isWithinLifetimeRefundWindow } from "@/lib/db/customer-profiles";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import { isVpsSize } from "@/lib/vps/size";
+import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 
 /** 30-day grace window after any cancellation. Centralised so callers stay in sync. */
 export const GRACE_WINDOW_DAYS = 30;
@@ -249,6 +250,15 @@ export type LifecycleContext = {
    * adopt-first match reuses the box for a same-size signup.
    */
   vpsSize?: string | null;
+  /**
+   * Raw `businesses.vps_provider` value (null/omitted → 'hostinger' via
+   * resolveVpsProvider). Non-hostinger boxes (customer-owned BYOS,
+   * OVH Canada) get NONE of the Hostinger lifecycle: no snapshot/stop VM
+   * ops, no Hostinger billing auto-renew op, no `vps_inventory` pool
+   * return, no hPanel deletion-request email. The SSH backup op still
+   * applies (any reachable box can be backed up).
+   */
+  vpsProvider?: string | null;
   /** Public IPv4 for the SSH backup/restore. Null → SSH ops omitted. */
   vpsHost: string | null;
   /**
@@ -571,6 +581,12 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     emailsToSend: []
   };
 
+  // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op —
+  // see the LifecycleContext.vpsProvider docstring.
+  const hostingerManaged = providerUsesHostingerLifecycle(
+    resolveVpsProvider(ctx.vpsProvider)
+  );
+
   // Backstop teardown: if the cancel path that produced this grace row
   // skipped the VPS teardown (e.g. manual operator cancel in the Stripe
   // Dashboard, or an `autoCancelOnPaymentFailure` dispatch that failed
@@ -582,16 +598,16 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // via 404-tolerance in the executor, so re-running against an already
   // torn-down VPS is benign. Actual VM deletion is manual (hPanel), so we
   // also re-send the ops deletion request below.
-  if (ctx.virtualMachineId !== null) {
+  if (hostingerManaged && ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "stop_vm", virtualMachineId: ctx.virtualMachineId });
   }
-  if (sub.hostinger_billing_subscription_id) {
+  if (hostingerManaged && sub.hostinger_billing_subscription_id) {
     plan.hostingerOps.push({
       type: "disable_billing_auto_renewal",
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
     });
   }
-  if (ctx.virtualMachineId !== null) {
+  if (hostingerManaged && ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "delete_snapshot", virtualMachineId: ctx.virtualMachineId });
     // Pool the box (idempotent upsert — the cancel path usually already
     // did this; wipes reached via the manual-Stripe-cancel backstop haven't).
@@ -656,8 +672,12 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
   // Re-request the manual hPanel deletion at wipe time: either the original
   // cancel-path email was already actioned (this one 404s harmlessly when the
   // operator checks) or the box is still alive and this is the last automated
-  // reminder before we stop tracking the subscription.
-  if (ctx.virtualMachineId !== null || sub.hostinger_billing_subscription_id) {
+  // reminder before we stop tracking the subscription. Hostinger-only —
+  // there is no hPanel entry for BYOS/OVH boxes.
+  if (
+    hostingerManaged &&
+    (ctx.virtualMachineId !== null || sub.hostinger_billing_subscription_id)
+  ) {
     plan.emailsToSend.push({
       type: "send_ops_vps_deletion_request",
       businessId: sub.business_id,
@@ -721,6 +741,11 @@ function buildCancelPlan(args: {
   const sub = ctx.subscription;
   const profileId = sub.customer_profile_id ?? ctx.profile?.id ?? null;
   const graceEndsAtIso = new Date(now.getTime() + graceMs).toISOString();
+  // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op —
+  // see the LifecycleContext.vpsProvider docstring.
+  const hostingerManaged = providerUsesHostingerLifecycle(
+    resolveVpsProvider(ctx.vpsProvider)
+  );
 
   const plan: LifecyclePlan = {
     stripeOps: [],
@@ -758,11 +783,11 @@ function buildCancelPlan(args: {
       vpsHost: ctx.vpsHost
     });
   }
-  if (ctx.virtualMachineId !== null) {
+  if (hostingerManaged && ctx.virtualMachineId !== null) {
     plan.hostingerOps.push({ type: "create_snapshot", virtualMachineId: ctx.virtualMachineId });
     plan.hostingerOps.push({ type: "stop_vm", virtualMachineId: ctx.virtualMachineId });
   }
-  if (sub.hostinger_billing_subscription_id) {
+  if (hostingerManaged && sub.hostinger_billing_subscription_id) {
     plan.hostingerOps.push({
       type: "disable_billing_auto_renewal",
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
@@ -783,8 +808,13 @@ function buildCancelPlan(args: {
       wiped_at: graceMs === 0 ? now.toISOString() : sub.wiped_at,
       // Coalesce vps_stopped_at so an idempotent retry (VM already gone,
       // ctx.virtualMachineId null) doesn't erase the accurate earlier stamp
-      // produced on the first run.
-      vps_stopped_at: ctx.virtualMachineId !== null ? now.toISOString() : sub.vps_stopped_at,
+      // produced on the first run. Only Hostinger boxes are actually
+      // stopped by this plan — a BYOS/OVH cancel must not claim a stop
+      // that never happened.
+      vps_stopped_at:
+        hostingerManaged && ctx.virtualMachineId !== null
+          ? now.toISOString()
+          : sub.vps_stopped_at,
       cancel_at_period_end: false,
       // Invalidate the cached Stripe billing-period bounds on cancel so the
       // Edge voice inbound's `cacheLooksValidForQuotaAfterJitFailure` path
@@ -802,8 +832,9 @@ function buildCancelPlan(args: {
   // next matching-size signup to adopt. The executor treats this write as
   // best-effort; the ops deletion email below still goes out so the
   // operator knows the box exists and can delete it in hPanel instead if
-  // the pool doesn't need it.
-  if (ctx.virtualMachineId !== null) {
+  // the pool doesn't need it. Hostinger-only: a customer-owned BYOS box or
+  // an OVH box must never enter the Hostinger reuse pool.
+  if (hostingerManaged && ctx.virtualMachineId !== null) {
     plan.dbUpdates.push({
       type: "return_vps_to_pool",
       virtualMachineId: ctx.virtualMachineId,
@@ -849,8 +880,13 @@ function buildCancelPlan(args: {
     });
   }
   // Hostinger deletion is manual-only (panel): every cancel that tears a box
-  // down asks ops to finish the job in hPanel.
-  if (ctx.virtualMachineId !== null || sub.hostinger_billing_subscription_id) {
+  // down asks ops to finish the job in hPanel. Non-hostinger boxes have no
+  // hPanel entry to delete — their teardown is provider-specific (BYOS SSH
+  // wipe / OVH service termination).
+  if (
+    hostingerManaged &&
+    (ctx.virtualMachineId !== null || sub.hostinger_billing_subscription_id)
+  ) {
     plan.emailsToSend.push({
       type: "send_ops_vps_deletion_request",
       businessId: sub.business_id,
