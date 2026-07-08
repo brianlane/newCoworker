@@ -16,6 +16,7 @@
  * silently dropping the lead).
  */
 import PostalMime from "postal-mime";
+import { htmlToText } from "./html-text";
 
 interface Env {
   APP_INBOUND_URL: string;
@@ -35,15 +36,15 @@ const MAX_ATTACHMENTS = 25;
 type UploadedAttachment = { filename: string; mimeType: string; size: number; path: string };
 
 /** Bytes for a postal-mime attachment, regardless of decode mode. */
-function attachmentBytes(content: ArrayBuffer | string): Uint8Array {
+function attachmentBytes(content: ArrayBuffer | Uint8Array | string): Uint8Array {
   if (typeof content === "string") return new TextEncoder().encode(content);
-  return new Uint8Array(content);
+  return content instanceof Uint8Array ? content : new Uint8Array(content);
 }
 
 /** Upload one attachment to the private bucket; returns metadata or null on skip/failure. */
 async function uploadAttachment(
   env: Env,
-  att: { filename?: string | null; mimeType?: string; content: ArrayBuffer | string },
+  att: { filename?: string | null; mimeType?: string; content: ArrayBuffer | Uint8Array | string },
   messageId: string,
   index: number
 ): Promise<UploadedAttachment | null> {
@@ -106,10 +107,11 @@ export default {
 
     const email = await PostalMime.parse(message.raw);
 
+    // Prefer the text/plain part; otherwise collapse the HTML part properly —
+    // htmlToText drops <style>/<script>/<title>/comment CONTENTS too, so
+    // template CSS and unrendered merge tags never masquerade as body text.
     const text =
-      (email.text && email.text.trim().length > 0
-        ? email.text
-        : (email.html ?? "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim()) ?? "";
+      email.text && email.text.trim().length > 0 ? email.text : htmlToText(email.html ?? "");
 
     const messageId =
       message.headers.get("message-id") ||

@@ -89,3 +89,23 @@ export function normalizeContactNumber(
     reason: "Enter a 10-digit US number, a +country-code number, or a short code"
   };
 }
+
+/**
+ * Like {@link normalizeContactNumber} but for numbers that must be dialable
+ * (employee roster, SMS offer targets): the same forgiving parsing — bare
+ * 10-digit US numbers get `+1` — except short codes are refused because they
+ * can't receive calls or route_to_team offers.
+ */
+export function normalizeDialableNumber(
+  raw: string | null | undefined
+): NormalizedContactNumber {
+  const normalized = normalizeContactNumber(raw);
+  if (!normalized.ok) return normalized;
+  if (!E164_RE.test(normalized.value)) {
+    return {
+      ok: false,
+      reason: "Enter a full phone number, e.g. 602-555-1234 or +442071234567"
+    };
+  }
+  return normalized;
+}

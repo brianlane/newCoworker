@@ -224,8 +224,8 @@ export function EmployeesManager(props: Props) {
             <input
               type="tel"
               value={addPhone}
-              onChange={(e) => setAddPhone(e.target.value.slice(0, 16))}
-              placeholder="+16025551234"
+              onChange={(e) => setAddPhone(e.target.value.slice(0, 20))}
+              placeholder="602-555-1234"
               className="bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60 font-mono"
             />
             <input
@@ -473,11 +473,11 @@ function EmployeeCard({
               />
             </label>
             <label className="text-xs text-parchment/70">
-              Phone (E.164)
+              Phone (US numbers assume +1)
               <input
                 type="tel"
                 value={phone}
-                onChange={(e) => setPhone(e.target.value.slice(0, 16))}
+                onChange={(e) => setPhone(e.target.value.slice(0, 20))}
                 className="mt-1 w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment font-mono focus:outline-none focus:border-claw-green/60"
               />
             </label>
