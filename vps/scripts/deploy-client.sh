@@ -1698,6 +1698,9 @@ SUPABASE_URL=${SUPABASE_URL}
 SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
 RESIDENCY_BACKUP_PASSPHRASE=${RESIDENCY_BACKUP_PASSPHRASE}
 RESIDENCY_BACKUP_BUCKET=${RESIDENCY_BACKUP_BUCKET:-business-backups}
+# central = upload ciphertext to central Storage; onbox = dumps stay on the
+# box (in-region even for ciphertext — Canadian/insurance deals).
+RESIDENCY_BACKUP_DESTINATION=${RESIDENCY_BACKUP_DESTINATION:-central}
 RBENV_EOF
         chmod 600 /opt/data-api/backup.env
 

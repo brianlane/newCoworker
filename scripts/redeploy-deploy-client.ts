@@ -61,7 +61,8 @@ import {
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getOrCreateResidencyBackupKey } from "@/lib/residency/backup-keys";
+import { resolveResidencyBackupPassphraseForDeploy } from "@/lib/residency/backup-keys";
+import { getBusiness } from "@/lib/db/businesses";
 import { cloudflareTunnelProvisionerFromEnv } from "@/lib/cloudflare/tunnel";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
@@ -95,7 +96,8 @@ function buildDeployEnvPrefix(
   repoRef: string,
   dataResidencyEnabled: boolean,
   dataApiTokens: string,
-  residencyBackupPassphrase: string
+  residencyBackupPassphrase: string,
+  residencyBackupDestination: string
 ): string {
   const bashQuote = quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -143,6 +145,8 @@ function buildDeployEnvPrefix(
     // Every non-revoked per-tenant token (rotation overlap window).
     ["DATA_API_TOKENS", dataApiTokens],
     ["RESIDENCY_BACKUP_PASSPHRASE", residencyBackupPassphrase],
+    // central = ciphertext to central Storage; onbox = dumps stay on the box.
+    ["RESIDENCY_BACKUP_DESTINATION", residencyBackupDestination],
     ["CLOUDFLARE_TUNNEL_TOKEN", process.env.CLOUDFLARE_TUNNEL_TOKEN ?? ""],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken],
@@ -248,12 +252,20 @@ async function redeployOne(
   // token this deploy stamps guaranteed present.
   let dataApiTokens = "";
   let residencyBackupPassphrase = "";
+  let residencyBackupDestination = "central";
   if (dataResidencyEnabled) {
     const activeTokens = await listActiveGatewayTokensForBusiness(target.businessId);
     dataApiTokens = (
       activeTokens.includes(gatewayToken) ? activeTokens : [gatewayToken, ...activeTokens]
     ).join(",");
-    residencyBackupPassphrase = await getOrCreateResidencyBackupKey(target.businessId);
+    // Custody-aware: customer_held resolves to "" and deploy-client
+    // uninstalls the platform backup timer (customer owns DR).
+    residencyBackupPassphrase = await resolveResidencyBackupPassphraseForDeploy(
+      target.businessId
+    );
+    const biz = await getBusiness(target.businessId);
+    residencyBackupDestination =
+      biz?.residency_backup_destination === "onbox" ? "onbox" : "central";
   }
   // Reconcile the tunnel ingress with the residency gate. The redeploy path
   // is how an admin residency flip reaches an EXISTING box, and cloudflared
@@ -286,7 +298,8 @@ async function redeployOne(
     ref,
     dataResidencyEnabled,
     dataApiTokens,
-    residencyBackupPassphrase
+    residencyBackupPassphrase,
+    residencyBackupDestination
   );
   const command = buildRedeployCommand(ref, envPrefix);
   try {

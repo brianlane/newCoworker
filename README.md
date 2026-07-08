@@ -113,7 +113,13 @@ Per-tenant enablement runbook (one deal at a time, no fleet rollout):
 DR: a 6h systemd timer on the box streams `pg_dump → gzip → AES-256` and
 uploads **ciphertext only** to `business-backups/residency/<id>/`; the
 passphrase is escrowed in `residency_backup_keys` (service-role-only,
-rotatable per deal). Restore with `npx tsx debug/residency-restore.ts
+rotatable per deal). Per-deal compliance knobs (`POST /api/admin/residency-backup`):
+`residency_backup_destination='onbox'` keeps even ciphertext on the box
+(in-region for Canadian tenants), and `custody='customer_held'` drops the
+plaintext passphrase forever (fingerprint only — the customer owns DR).
+Canadian (`vps_region='ca'`) and BYOS placements REQUIRE residency ≥ `dual`
+before provisioning; see [docs/COMPLIANCE-CANADA.md](docs/COMPLIANCE-CANADA.md)
+for the full data-flow map, subprocessor list, and contract artifacts. Restore with `npx tsx debug/residency-restore.ts
 --business <id> [--apply]`. Hardware migrations for residency tenants FAIL
 CLOSED in `migrate-vps-size` — the box datastore is the only copy of purged
 history, so the move is manual: fresh backup → migrate → restore → flip.

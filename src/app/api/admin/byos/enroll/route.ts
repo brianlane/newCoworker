@@ -9,6 +9,10 @@ import {
   runByosPreflight
 } from "@/lib/provisioning/byos";
 import { VpsProviderValidationError, VPS_REGIONS } from "@/lib/vps/provider";
+import {
+  assertResidencyForPlacement,
+  ResidencyPlacementError
+} from "@/lib/residency/enforce";
 import { resolveVpsSize } from "@/lib/vps/size";
 import {
   getLatestProvisioningStatus,
@@ -80,6 +84,11 @@ export async function POST(request: Request) {
         `Business is pinned to vps_provider='${business.vps_provider ?? "hostinger"}', not 'byos' — run the prepare step first.`
       );
     }
+
+    // Compliance pre-check (fast feedback; the orchestrator enforces the
+    // same gate): a BYOS box with residency still 'supabase' would leave
+    // all customer content in central US Supabase.
+    assertResidencyForPlacement(business);
 
     // In-flight guard: a provisioning run takes many minutes and the button
     // re-enables as soon as this response returns, so a double-click (or an
@@ -154,7 +163,11 @@ export async function POST(request: Request) {
     if (err instanceof z.ZodError) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");
     }
-    if (err instanceof ByosEnrollmentError || err instanceof VpsProviderValidationError) {
+    if (
+      err instanceof ByosEnrollmentError ||
+      err instanceof VpsProviderValidationError ||
+      err instanceof ResidencyPlacementError
+    ) {
       return errorResponse("VALIDATION_ERROR", err.message);
     }
     return handleRouteError(err);

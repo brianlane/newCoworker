@@ -3,6 +3,9 @@ import type { Business } from "@/lib/db/schema";
 import type { EnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import {
   assertResidencyModeAllowed,
+  residencyAllowedForTier,
+  RESIDENCY_TIER_MESSAGE,
+  ResidencyValidationError,
   type DataResidencyMode
 } from "@/lib/residency/tier-gate";
 import {
@@ -78,6 +81,12 @@ export type BusinessRow = {
    * residency (OVH Beauharnois or a Canadian BYOS box).
    */
   vps_region?: "us" | "ca" | null;
+  /**
+   * Where encrypted residency dumps go (default 'central'): 'central' =
+   * ciphertext to central Supabase Storage; 'onbox' = dumps stay on the
+   * tenant box (in-region even for ciphertext — Canadian/insurance deals).
+   */
+  residency_backup_destination?: "central" | "onbox" | null;
   /**
    * Enterprise-only data-residency rollout gate (default 'supabase').
    * 'dual' = both stores written during migration; 'vps' = the tenant's box
@@ -370,6 +379,42 @@ export async function updateDataResidencyMode(
     .update({ data_residency_mode: mode })
     .eq("id", id);
   if (error) throw new Error(`updateDataResidencyMode: ${error.message}`);
+}
+
+/**
+ * Flip where a tenant's encrypted residency dumps go. Enterprise-only for
+ * 'onbox' (it is a residency-program lever); reverting to the 'central'
+ * default is always allowed so a downgraded tenant can never be wedged.
+ * Takes effect on the next deploy (the backup timer's env is rewritten).
+ */
+export async function updateResidencyBackupDestination(
+  id: string,
+  destination: "central" | "onbox",
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  await assertOnboxDestinationAllowed(id, destination, db);
+  const { error } = await db
+    .from("businesses")
+    .update({ residency_backup_destination: destination })
+    .eq("id", id);
+  if (error) throw new Error(`updateResidencyBackupDestination: ${error.message}`);
+}
+
+/** Enterprise gate for the 'onbox' flip; 'central' reverts are ungated. */
+async function assertOnboxDestinationAllowed(
+  id: string,
+  destination: "central" | "onbox",
+  db: SupabaseClient
+): Promise<void> {
+  if (destination !== "onbox") return;
+  const business = await getBusiness(id, db);
+  if (!business) {
+    throw new Error(`updateResidencyBackupDestination: business ${id} not found`);
+  }
+  if (!residencyAllowedForTier(business.tier)) {
+    throw new ResidencyValidationError(RESIDENCY_TIER_MESSAGE);
+  }
 }
 
 export async function updateBusinessOwnerEmail(
