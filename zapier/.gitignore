@@ -1,0 +1,4 @@
+# Also read by `zapier-platform push` when zipping source.zip — without this
+# it bundles node_modules and warns "source.zip file too large".
+node_modules/
+build/
