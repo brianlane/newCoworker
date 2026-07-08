@@ -54,10 +54,17 @@ export async function listAccessibleBusinesses(
   if (!email) return [];
   const db = client ?? (await createSupabaseServiceClient());
 
+  // Case-insensitive owner match: businesses.owner_email is NOT lowercased
+  // by schema (unlike business_members.email), and getBusinessRoleForEmail
+  // compares case-insensitively — an exact-case eq here would hide owned
+  // businesses from the switcher while API calls still treat the login as
+  // owner. LIKE metacharacters are escaped so an email like a_b@x.com can't
+  // wildcard-match other rows.
+  const ownerPattern = email.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
   const { data: owned, error: ownedErr } = await db
     .from("businesses")
     .select("id, name, tier, created_at")
-    .eq("owner_email", user.email)
+    .ilike("owner_email", ownerPattern)
     .order("created_at", { ascending: false });
   if (ownedErr) throw new Error(`listAccessibleBusinesses: ${ownedErr.message}`);
 

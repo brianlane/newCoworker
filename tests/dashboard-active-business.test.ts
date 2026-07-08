@@ -50,8 +50,8 @@ function twoTableDb(
     from: vi.fn((table: string) => {
       if (table === "businesses") {
         const order = vi.fn(async () => ({ data: owned.data ?? null, error: owned.error ?? null }));
-        const eq = vi.fn(() => ({ order }));
-        const select = vi.fn(() => ({ eq }));
+        const ilike = vi.fn(() => ({ order }));
+        const select = vi.fn(() => ({ ilike }));
         return { select };
       }
       const neq = vi.fn(async () => ({
@@ -143,6 +143,30 @@ describe("listAccessibleBusinesses", () => {
     const result = await listAccessibleBusinesses(USER);
     expect(result).toHaveLength(1);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches owned businesses case-insensitively with LIKE metacharacters escaped", async () => {
+    const ilikeCalls: unknown[][] = [];
+    const db = {
+      from: vi.fn((table: string) =>
+        table === "businesses"
+          ? {
+              select: () => ({
+                ilike: (...args: unknown[]) => {
+                  ilikeCalls.push(args);
+                  return { order: async () => ({ data: [], error: null }) };
+                }
+              })
+            }
+          : {
+              select: () => ({
+                eq: () => ({ neq: async () => ({ data: [], error: null }) })
+              })
+            }
+      )
+    };
+    await listAccessibleBusinesses({ ...USER, email: " Owner_Name%@Example.COM " }, db as never);
+    expect(ilikeCalls[0]).toEqual(["owner_email", "owner\\_name\\%@example.com"]);
   });
 });
 
