@@ -11,12 +11,16 @@ vi.mock("@/lib/residency/read", async (importOriginal) => {
 import {
   ANALYTICS_CALL_SCAN_LIMIT,
   ANALYTICS_DAY_CALL_LIMIT,
+  ANALYTICS_DAY_TEXT_LIMIT,
+  ANALYTICS_SEGMENT_CALL_LIMIT,
   ANALYTICS_WINDOW_DAYS,
   analyticsWindowStart,
   getAnalyticsDayDetail,
   getAnswerRateStats,
   getDailyUsageSeries,
+  getHourCallsDetail,
   getInboundCallStats,
+  getSentimentCallsDetail,
   hourInTimeZone,
   isValidAnalyticsDay
 } from "@/lib/analytics/dashboard-analytics";
@@ -70,12 +74,26 @@ describe("analyticsWindowStart", () => {
 });
 
 describe("getDailyUsageSeries", () => {
-  it("zero-fills the window and totals the rows", async () => {
+  it("derives calls + voice minutes from transcripts and texts from daily_usage", async () => {
     const { client, chains } = makeClient({
+      // sms_sent is the only daily_usage column with a live writer.
       daily_usage: {
         data: [
-          { usage_date: "2026-07-03", calls_made: 4, sms_sent: 10, voice_minutes_used: 12 },
-          { usage_date: "2026-07-04", calls_made: 1, sms_sent: null, voice_minutes_used: 3 }
+          { usage_date: "2026-07-03", sms_sent: 10 },
+          { usage_date: "2026-07-04", sms_sent: null }
+        ],
+        error: null
+      },
+      voice_call_transcripts: {
+        data: [
+          // 150s + an in-progress call (0s) on the 3rd; 40s on the 4th.
+          { started_at: "2026-07-03T10:00:00Z", ended_at: "2026-07-03T10:02:30Z" },
+          { started_at: "2026-07-03T22:00:00Z", ended_at: null },
+          { started_at: "2026-07-04T01:00:00Z", ended_at: "2026-07-04T01:00:40Z" },
+          // Clock-skewed (end before start) and unparseable ends count the
+          // call but contribute zero minutes.
+          { started_at: "2026-07-02T05:00:00Z", ended_at: "2026-07-02T04:00:00Z" },
+          { started_at: "2026-07-02T06:00:00Z", ended_at: "garbage" }
         ],
         error: null
       }
@@ -84,31 +102,73 @@ describe("getDailyUsageSeries", () => {
     const series = await getDailyUsageSeries("biz-1", { client, days: 3, now: NOW });
 
     expect(series.days).toEqual([
-      { date: "2026-07-02", calls: 0, sms: 0, voiceMinutes: 0 },
-      { date: "2026-07-03", calls: 4, sms: 10, voiceMinutes: 12 },
-      { date: "2026-07-04", calls: 1, sms: 0, voiceMinutes: 3 }
+      { date: "2026-07-02", calls: 2, sms: 0, voiceMinutes: 0 },
+      { date: "2026-07-03", calls: 2, sms: 10, voiceMinutes: 3 },
+      { date: "2026-07-04", calls: 1, sms: 0, voiceMinutes: 1 }
     ]);
-    expect(series.totals).toEqual({ calls: 5, sms: 10, voiceMinutes: 15 });
-    const chain = chains.daily_usage as { gte: ReturnType<typeof vi.fn> };
-    expect(chain.gte).toHaveBeenCalledWith("usage_date", "2026-07-02");
+    expect(series.totals).toEqual({ calls: 5, sms: 10, voiceMinutes: 4 });
+    expect(series.clipped).toBe(false);
+    const usage = chains.daily_usage as { gte: ReturnType<typeof vi.fn> };
+    expect(usage.gte).toHaveBeenCalledWith("usage_date", "2026-07-02");
+    // Transcript scan shares the same day-aligned boundary.
+    const transcripts = chains.voice_call_transcripts as {
+      gte: ReturnType<typeof vi.fn>;
+      neq: ReturnType<typeof vi.fn>;
+      limit: ReturnType<typeof vi.fn>;
+    };
+    expect(transcripts.gte).toHaveBeenCalledWith("started_at", "2026-07-02T00:00:00.000Z");
+    expect(transcripts.neq).toHaveBeenCalledWith("status", "missed");
+    expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_CALL_SCAN_LIMIT);
   });
 
-  it("handles a null data payload", async () => {
-    const { client } = makeClient({ daily_usage: { data: null, error: null } });
+  it("handles null data payloads", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: null, error: null }
+    });
     const series = await getDailyUsageSeries("biz-1", { client, days: 2, now: NOW });
     expect(series.days).toHaveLength(2);
     expect(series.totals).toEqual({ calls: 0, sms: 0, voiceMinutes: 0 });
   });
 
-  it("throws on query error", async () => {
-    const { client } = makeClient({ daily_usage: { data: null, error: { message: "boom" } } });
+  it("flags the series as clipped when the transcript scan hits the row cap", async () => {
+    const full = Array.from({ length: ANALYTICS_CALL_SCAN_LIMIT }, (_, i) => ({
+      started_at: new Date(NOW.getTime() - i * 60_000).toISOString(),
+      ended_at: null
+    }));
+    const { client } = makeClient({
+      daily_usage: { data: [], error: null },
+      voice_call_transcripts: { data: full, error: null }
+    });
+    const series = await getDailyUsageSeries("biz-1", { client, now: NOW });
+    expect(series.clipped).toBe(true);
+  });
+
+  it("throws on daily_usage query error", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: { message: "boom" } },
+      voice_call_transcripts: { data: [], error: null }
+    });
     await expect(getDailyUsageSeries("biz-1", { client, now: NOW })).rejects.toThrow(
       "getDailyUsageSeries: boom"
     );
   });
 
+  it("throws on transcript scan error", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: [], error: null },
+      voice_call_transcripts: { data: null, error: { message: "scan down" } }
+    });
+    await expect(getDailyUsageSeries("biz-1", { client, now: NOW })).rejects.toThrow(
+      "getDailyUsageSeries calls: scan down"
+    );
+  });
+
   it("defaults to the shared client, window, and now", async () => {
-    const { client } = makeClient({ daily_usage: { data: [], error: null } });
+    const { client } = makeClient({
+      daily_usage: { data: [], error: null },
+      voice_call_transcripts: { data: [], error: null }
+    });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
     const series = await getDailyUsageSeries("biz-1");
     expect(series.days).toHaveLength(ANALYTICS_WINDOW_DAYS);
@@ -152,25 +212,40 @@ describe("getAnalyticsDayDetail", () => {
     sentiment: "positive"
   };
 
-  it("returns the day's usage, calls, and turned-away count", async () => {
+  /** Telnyx inbound envelope with the given sender + text. */
+  const jobPayload = (from: string, text: string) => ({
+    data: { payload: { from: { phone_number: from }, text } }
+  });
+
+  const emptyTables = {
+    daily_usage: { data: null, error: null },
+    voice_call_transcripts: { data: [], error: null },
+    system_logs: { count: 0, error: null },
+    sms_inbound_jobs: { data: [], error: null },
+    sms_outbound_log: { data: [], error: null }
+  };
+
+  it("returns the day's derived usage, calls, and turned-away count", async () => {
     const { client, chains } = makeClient({
-      daily_usage: {
-        data: { calls_made: 4, sms_sent: 10, voice_minutes_used: 12 },
-        error: null
-      },
+      ...emptyTables,
+      daily_usage: { data: { sms_sent: 10 }, error: null },
       voice_call_transcripts: {
         data: [
+          // 300s
           CALL,
           {
             ...CALL,
             id: "t-2",
+            // 60s
+            ended_at: "2026-07-03T09:16:00Z",
             call_kind: "forwarded",
             forwarded_to_e164: "+15559998888",
             summary: null,
             // Unknown sentiment strings are dropped rather than rendered.
             sentiment: "confused"
           },
-          { ...CALL, id: "t-3", sentiment: null }
+          // In progress — counts as a call, contributes no minutes.
+          { ...CALL, id: "t-3", ended_at: null, sentiment: null }
         ],
         error: null
       },
@@ -180,7 +255,9 @@ describe("getAnalyticsDayDetail", () => {
     const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
 
     expect(detail.date).toBe(DAY);
-    expect(detail.usage).toEqual({ calls: 4, sms: 10, voiceMinutes: 12 });
+    // Calls + minutes come from the fetched transcripts (daily_usage's call
+    // columns have no writer); texts stay on daily_usage.sms_sent.
+    expect(detail.usage).toEqual({ calls: 3, sms: 10, voiceMinutes: 6 });
     expect(detail.turnedAway).toBe(2);
     expect(detail.clipped).toBe(false);
     expect(detail.calls).toHaveLength(3);
@@ -200,7 +277,7 @@ describe("getAnalyticsDayDetail", () => {
     expect(detail.calls[1].sentiment).toBeNull();
     expect(detail.calls[2].sentiment).toBeNull();
 
-    // The day is sliced [00:00 UTC, next 00:00 UTC) — same bucketing as daily_usage.
+    // The day is sliced [00:00 UTC, next 00:00 UTC) — same bucketing as the series.
     const transcripts = chains.voice_call_transcripts as {
       gte: ReturnType<typeof vi.fn>;
       lt: ReturnType<typeof vi.fn>;
@@ -220,30 +297,238 @@ describe("getAnalyticsDayDetail", () => {
     expect(logs.lt).toHaveBeenCalledWith("created_at", "2026-07-04T00:00:00.000Z");
   });
 
-  it("zero-fills when the day has no usage row, calls, or blocked count", async () => {
+  it("expands the day's texts from inbound jobs + the outbound log, newest first", async () => {
+    const { client, chains } = makeClient({
+      ...emptyTables,
+      sms_inbound_jobs: {
+        data: [
+          // Inbound + reply, both inside the day. RCS inbound answered on SMS.
+          {
+            id: "j-1",
+            payload: jobPayload("+15550001111", "Are you open today?"),
+            status: "done",
+            assistant_reply_text: "Yes, until 5pm!",
+            rowboat_reply_cached: null,
+            channel: "rcs",
+            reply_channel: "sms",
+            created_at: "2026-07-03T09:00:00Z",
+            updated_at: "2026-07-03T09:00:30Z"
+          },
+          // Job created the PREVIOUS day whose reply landed inside the day —
+          // only the outbound message is attributed to this day.
+          {
+            id: "j-2",
+            payload: jobPayload("+15550002222", "Quote please"),
+            status: "done",
+            assistant_reply_text: null,
+            rowboat_reply_cached: "Sent you a quote.",
+            channel: null,
+            reply_channel: "rcs",
+            created_at: "2026-07-02T23:50:00Z",
+            updated_at: "2026-07-03T00:10:00Z"
+          },
+          // Unparseable envelope with no reply — contributes nothing.
+          {
+            id: "j-3",
+            payload: {},
+            status: "pending",
+            assistant_reply_text: null,
+            rowboat_reply_cached: null,
+            channel: null,
+            reply_channel: null,
+            created_at: "2026-07-03T11:00:00Z",
+            updated_at: null
+          },
+          // Unparseable envelope WITH a reply — the outbound renders with no
+          // linkable customer number.
+          {
+            id: "j-4",
+            payload: {},
+            status: "done",
+            assistant_reply_text: "Following up.",
+            rowboat_reply_cached: null,
+            channel: null,
+            reply_channel: null,
+            created_at: "2026-07-03T11:30:00Z",
+            updated_at: "2026-07-03T11:30:05Z"
+          },
+          // Created inside the day but replied AFTER it — only the inbound
+          // side belongs to this day.
+          {
+            id: "j-5",
+            payload: jobPayload("+15550005555", "Late question"),
+            status: "done",
+            assistant_reply_text: "Answered next day.",
+            rowboat_reply_cached: null,
+            channel: null,
+            reply_channel: null,
+            created_at: "2026-07-03T23:00:00Z",
+            updated_at: "2026-07-04T00:05:00Z"
+          }
+        ],
+        error: null
+      },
+      sms_outbound_log: {
+        data: [
+          {
+            id: "o-1",
+            to_e164: "+15550003333",
+            body: "Your appointment is confirmed.",
+            source: "ai_flow",
+            channel: null,
+            created_at: "2026-07-03T10:00:00Z"
+          },
+          {
+            id: "o-2",
+            to_e164: "+15550004444",
+            body: "Rich card follow-up.",
+            source: "owner_manual",
+            channel: "rcs",
+            created_at: "2026-07-03T12:00:00Z"
+          }
+        ],
+        error: null
+      }
+    });
+
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+
+    expect(detail.texts.map((t) => t.id)).toEqual([
+      "j-5:inbound",
+      "o-2:flow-outbound",
+      "j-4:outbound",
+      "o-1:flow-outbound",
+      "j-1:outbound",
+      "j-1:inbound",
+      "j-2:outbound"
+    ]);
+    expect(detail.texts[1]).toMatchObject({ channel: "rcs", source: "owner_manual" });
+    expect(detail.texts[2]).toMatchObject({
+      direction: "outbound",
+      otherE164: null,
+      content: "Following up."
+    });
+    expect(detail.texts[3]).toEqual({
+      id: "o-1:flow-outbound",
+      direction: "outbound",
+      otherE164: "+15550003333",
+      content: "Your appointment is confirmed.",
+      timestamp: "2026-07-03T10:00:00Z",
+      source: "ai_flow",
+      channel: "sms"
+    });
+    expect(detail.texts[4]).toMatchObject({ direction: "outbound", channel: "sms" });
+    expect(detail.texts[5]).toMatchObject({
+      direction: "inbound",
+      otherE164: "+15550001111",
+      channel: "rcs"
+    });
+    expect(detail.texts[6]).toMatchObject({
+      direction: "outbound",
+      content: "Sent you a quote.",
+      channel: "rcs"
+    });
+    expect(detail.textsClipped).toBe(false);
+
+    // Jobs are scanned from a day EARLIER so replies landing in this day are
+    // caught; the outbound log is sliced to the day directly.
+    const jobs = chains.sms_inbound_jobs as {
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+    };
+    expect(jobs.gte).toHaveBeenCalledWith("created_at", "2026-07-02T00:00:00.000Z");
+    expect(jobs.lt).toHaveBeenCalledWith("created_at", "2026-07-04T00:00:00.000Z");
+    const outbound = chains.sms_outbound_log as {
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+    };
+    expect(outbound.gte).toHaveBeenCalledWith("created_at", "2026-07-03T00:00:00.000Z");
+    expect(outbound.lt).toHaveBeenCalledWith("created_at", "2026-07-04T00:00:00.000Z");
+  });
+
+  it("caps the text list and flags it clipped", async () => {
+    // 101 jobs × 2 messages each = 202 expanded texts > the 200 cap.
+    const jobs = Array.from({ length: 101 }, (_, i) => ({
+      id: `j-${i}`,
+      payload: jobPayload("+15550001111", `msg ${i}`),
+      status: "done",
+      assistant_reply_text: `reply ${i}`,
+      rowboat_reply_cached: null,
+      channel: null,
+      reply_channel: null,
+      created_at: `2026-07-03T09:${String(i % 60).padStart(2, "0")}:00Z`,
+      updated_at: `2026-07-03T09:${String(i % 60).padStart(2, "0")}:01Z`
+    }));
+    const { client } = makeClient({
+      ...emptyTables,
+      sms_inbound_jobs: { data: jobs, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.texts).toHaveLength(ANALYTICS_DAY_TEXT_LIMIT);
+    expect(detail.textsClipped).toBe(true);
+  });
+
+  it("zero-fills when the day has no usage row, calls, texts, or blocked count", async () => {
     const { client } = makeClient({
       daily_usage: { data: null, error: null },
       voice_call_transcripts: { data: null, error: null },
-      system_logs: { count: null, error: null }
+      system_logs: { count: null, error: null },
+      sms_inbound_jobs: { data: null, error: null },
+      sms_outbound_log: { data: null, error: null }
     });
     const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
     expect(detail.usage).toEqual({ calls: 0, sms: 0, voiceMinutes: 0 });
     expect(detail.calls).toEqual([]);
+    expect(detail.texts).toEqual([]);
     expect(detail.turnedAway).toBe(0);
     expect(detail.clipped).toBe(false);
+    expect(detail.textsClipped).toBe(false);
   });
 
-  it("treats null usage columns as zero", async () => {
+  it("ignores unparseable call timestamps when deriving minutes", async () => {
     const { client } = makeClient({
-      daily_usage: {
-        data: { calls_made: null, sms_sent: null, voice_minutes_used: null },
+      ...emptyTables,
+      voice_call_transcripts: {
+        data: [{ ...CALL, id: "t-x", started_at: "garbage", ended_at: "2026-07-03T09:00:00Z" }],
         error: null
-      },
-      voice_call_transcripts: { data: [], error: null },
-      system_logs: { count: 0, error: null }
+      }
     });
     const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
-    expect(detail.usage).toEqual({ calls: 0, sms: 0, voiceMinutes: 0 });
+    expect(detail.usage.calls).toBe(1);
+    expect(detail.usage.voiceMinutes).toBe(0);
+  });
+
+  it("drops texts with unparseable timestamps", async () => {
+    const { client } = makeClient({
+      ...emptyTables,
+      sms_inbound_jobs: {
+        data: [
+          {
+            id: "j-x",
+            payload: jobPayload("+15550001111", "hello"),
+            status: "done",
+            assistant_reply_text: null,
+            rowboat_reply_cached: null,
+            channel: null,
+            reply_channel: null,
+            created_at: "garbage",
+            updated_at: null
+          }
+        ],
+        error: null
+      }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.texts).toEqual([]);
+  });
+
+  it("treats a null sms_sent as zero", async () => {
+    const { client } = makeClient({
+      ...emptyTables,
+      daily_usage: { data: { sms_sent: null }, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.usage.sms).toBe(0);
   });
 
   it("flags the call list as clipped at the row cap", async () => {
@@ -252,9 +537,8 @@ describe("getAnalyticsDayDetail", () => {
       id: `t-${i}`
     }));
     const { client } = makeClient({
-      daily_usage: { data: null, error: null },
-      voice_call_transcripts: { data: full, error: null },
-      system_logs: { count: 0, error: null }
+      ...emptyTables,
+      voice_call_transcripts: { data: full, error: null }
     });
     const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
     expect(detail.clipped).toBe(true);
@@ -263,9 +547,8 @@ describe("getAnalyticsDayDetail", () => {
 
   it("throws when the usage lookup errors", async () => {
     const { client } = makeClient({
-      daily_usage: { data: null, error: { message: "u down" } },
-      voice_call_transcripts: { data: [], error: null },
-      system_logs: { count: 0, error: null }
+      ...emptyTables,
+      daily_usage: { data: null, error: { message: "u down" } }
     });
     await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
       "getAnalyticsDayDetail usage: u down"
@@ -274,9 +557,8 @@ describe("getAnalyticsDayDetail", () => {
 
   it("throws when the call scan errors", async () => {
     const { client } = makeClient({
-      daily_usage: { data: null, error: null },
-      voice_call_transcripts: { data: null, error: { message: "c down" } },
-      system_logs: { count: 0, error: null }
+      ...emptyTables,
+      voice_call_transcripts: { data: null, error: { message: "c down" } }
     });
     await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
       "getAnalyticsDayDetail calls: c down"
@@ -285,8 +567,7 @@ describe("getAnalyticsDayDetail", () => {
 
   it("throws when the blocked count errors", async () => {
     const { client } = makeClient({
-      daily_usage: { data: null, error: null },
-      voice_call_transcripts: { data: [], error: null },
+      ...emptyTables,
       system_logs: { count: null, error: { message: "b down" } }
     });
     await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
@@ -294,14 +575,213 @@ describe("getAnalyticsDayDetail", () => {
     );
   });
 
-  it("defaults to the shared client", async () => {
+  it("throws when the inbound-jobs scan errors", async () => {
     const { client } = makeClient({
-      daily_usage: { data: null, error: null },
-      voice_call_transcripts: { data: [], error: null },
-      system_logs: { count: 0, error: null }
+      ...emptyTables,
+      sms_inbound_jobs: { data: null, error: { message: "j down" } }
     });
+    await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
+      "getAnalyticsDayDetail texts: j down"
+    );
+  });
+
+  it("throws when the outbound-log scan errors", async () => {
+    const { client } = makeClient({
+      ...emptyTables,
+      sms_outbound_log: { data: null, error: { message: "o down" } }
+    });
+    await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
+      "getAnalyticsDayDetail outbound texts: o down"
+    );
+  });
+
+  it("defaults to the shared client", async () => {
+    const { client } = makeClient(emptyTables);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
     const detail = await getAnalyticsDayDetail("biz-1", DAY);
+    expect(detail.calls).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("getSentimentCallsDetail", () => {
+  const CALL = {
+    id: "t-9",
+    caller_e164: "+15550001111",
+    started_at: "2026-07-03T09:15:00Z",
+    ended_at: "2026-07-03T09:20:00Z",
+    status: "completed",
+    direction: "inbound",
+    call_kind: "ai",
+    forwarded_to_e164: null,
+    summary: "Asked about hours.",
+    sentiment: "neutral"
+  };
+
+  it("lists the window's inbound calls with the given sentiment", async () => {
+    const { client, chains } = makeClient({
+      voice_call_transcripts: { data: [CALL], error: null }
+    });
+    const detail = await getSentimentCallsDetail("biz-1", "neutral", { client, now: NOW });
+    expect(detail.calls).toHaveLength(1);
+    expect(detail.calls[0]).toMatchObject({
+      id: "t-9",
+      sentiment: "neutral",
+      summary: "Asked about hours."
+    });
+    expect(detail.clipped).toBe(false);
+    // Same population as the sentiment mix: inbound only, sentiment-filtered,
+    // window-aligned.
+    const expectedCutoff = analyticsWindowStart(NOW, ANALYTICS_WINDOW_DAYS).toISOString();
+    const transcripts = chains.voice_call_transcripts as {
+      eq: ReturnType<typeof vi.fn>;
+      gte: ReturnType<typeof vi.fn>;
+      limit: ReturnType<typeof vi.fn>;
+    };
+    expect(transcripts.eq).toHaveBeenCalledWith("direction", "inbound");
+    expect(transcripts.eq).toHaveBeenCalledWith("sentiment", "neutral");
+    expect(transcripts.gte).toHaveBeenCalledWith("started_at", expectedCutoff);
+    expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_SEGMENT_CALL_LIMIT);
+  });
+
+  it("flags the list as clipped at the row cap", async () => {
+    const full = Array.from({ length: ANALYTICS_SEGMENT_CALL_LIMIT }, (_, i) => ({
+      ...CALL,
+      id: `t-${i}`
+    }));
+    const { client } = makeClient({
+      voice_call_transcripts: { data: full, error: null }
+    });
+    const detail = await getSentimentCallsDetail("biz-1", "neutral", { client, now: NOW });
+    expect(detail.clipped).toBe(true);
+  });
+
+  it("throws on scan error", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: null, error: { message: "s down" } }
+    });
+    await expect(
+      getSentimentCallsDetail("biz-1", "neutral", { client, now: NOW })
+    ).rejects.toThrow("getSentimentCallsDetail: s down");
+  });
+
+  it("defaults to the shared client and window", async () => {
+    const { client } = makeClient({ voice_call_transcripts: { data: [], error: null } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    const detail = await getSentimentCallsDetail("biz-1", "positive");
+    expect(detail.calls).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("getHourCallsDetail", () => {
+  const call = (id: string, startedAt: string) => ({
+    id,
+    caller_e164: "+15550001111",
+    started_at: startedAt,
+    ended_at: null,
+    status: "completed",
+    direction: "inbound",
+    call_kind: "ai",
+    forwarded_to_e164: null,
+    summary: null,
+    sentiment: null
+  });
+
+  it("filters the window's calls to the hour in the business timezone", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: {
+        data: [
+          // 19:30 UTC = 12:30 in Phoenix — matches hour 12.
+          call("t-1", "2026-07-04T19:30:00Z"),
+          // 20:30 UTC = 13:30 in Phoenix — does not match.
+          call("t-2", "2026-07-04T20:30:00Z")
+        ],
+        error: null
+      },
+      system_logs: {
+        data: [
+          // 19:50 UTC = 12:50 Phoenix — a turned-away attempt in the hour.
+          { created_at: "2026-07-04T19:50:00Z" },
+          { created_at: "2026-07-04T08:00:00Z" }
+        ],
+        error: null
+      }
+    });
+    const detail = await getHourCallsDetail("biz-1", 12, {
+      client,
+      now: NOW,
+      timeZone: "America/Phoenix"
+    });
+    expect(detail.calls.map((c) => c.id)).toEqual(["t-1"]);
+    expect(detail.turnedAway).toBe(1);
+    expect(detail.clipped).toBe(false);
+  });
+
+  it("flags the list as clipped when the scan hits the row cap", async () => {
+    const full = Array.from({ length: ANALYTICS_CALL_SCAN_LIMIT }, (_, i) =>
+      call(`t-${i}`, "2026-07-04T09:15:00Z")
+    );
+    const { client } = makeClient({
+      voice_call_transcripts: { data: full, error: null },
+      system_logs: { data: [], error: null }
+    });
+    const detail = await getHourCallsDetail("biz-1", 9, { client, now: NOW });
+    // 2000 in-hour matches also exceed the 200-row display cap.
+    expect(detail.calls).toHaveLength(ANALYTICS_SEGMENT_CALL_LIMIT);
+    expect(detail.clipped).toBe(true);
+  });
+
+  it("flags the list as clipped when the blocked scan hits the row cap", async () => {
+    const blocked = Array.from({ length: ANALYTICS_CALL_SCAN_LIMIT }, (_, i) => ({
+      created_at: new Date(NOW.getTime() - i * 60_000).toISOString()
+    }));
+    const { client } = makeClient({
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: blocked, error: null }
+    });
+    const detail = await getHourCallsDetail("biz-1", 9, { client, now: NOW });
+    expect(detail.clipped).toBe(true);
+  });
+
+  it("handles null blocked data", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: null, error: null }
+    });
+    const detail = await getHourCallsDetail("biz-1", 9, { client, now: NOW });
+    expect(detail.calls).toEqual([]);
+    expect(detail.turnedAway).toBe(0);
+    expect(detail.clipped).toBe(false);
+  });
+
+  it("throws on transcript scan error", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: null, error: { message: "h down" } },
+      system_logs: { data: [], error: null }
+    });
+    await expect(getHourCallsDetail("biz-1", 9, { client, now: NOW })).rejects.toThrow(
+      "getHourCallsDetail: h down"
+    );
+  });
+
+  it("throws on blocked scan error", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: null, error: { message: "hb down" } }
+    });
+    await expect(getHourCallsDetail("biz-1", 9, { client, now: NOW })).rejects.toThrow(
+      "getHourCallsDetail blocked: hb down"
+    );
+  });
+
+  it("defaults to the shared client and window", async () => {
+    const { client } = makeClient({
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: [], error: null }
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    const detail = await getHourCallsDetail("biz-1", 9);
     expect(detail.calls).toEqual([]);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });

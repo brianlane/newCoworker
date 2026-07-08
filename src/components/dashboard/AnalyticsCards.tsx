@@ -3,10 +3,10 @@
  *
  * Pure server-renderable markup — no state, no client JS beyond Next's Link.
  * Charts are CSS flex bars (the datasets are tiny: 30 day-points or 24
- * hour-buckets), which keeps the page dependency-free and instant. Day
- * drill-down is plain navigation (`?day=YYYY-MM-DD`), so the page stays a
- * server component. Data shaping lives in
- * `src/lib/analytics/dashboard-analytics.ts`.
+ * hour-buckets), which keeps the page dependency-free and instant. Every
+ * drill-down (day / sentiment / hour) is plain navigation (`?day=`,
+ * `?sentiment=`, `?hour=`), so the page stays a server component. Data
+ * shaping lives in `src/lib/analytics/dashboard-analytics.ts`.
  */
 
 import Link from "next/link";
@@ -19,7 +19,11 @@ import {
   StatusBadge,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
-import type { AnalyticsDayDetail, DailyUsagePoint } from "@/lib/analytics/dashboard-analytics";
+import type {
+  AnalyticsDayDetail,
+  DailyUsagePoint,
+  DayDetailText
+} from "@/lib/analytics/dashboard-analytics";
 import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
 
 /** Weekday + day-of-month label for chart tooltips (UTC date string in, e.g. "Jun 12" out). */
@@ -136,7 +140,7 @@ export function DailyVolumeCard({
 }
 
 /**
- * One call row in the day drill-down, pre-labeled on the server (owner /
+ * One call row in a drill-down list, pre-labeled on the server (owner /
  * employee / contact-name overrides already resolved) — mirrors CallListRow.
  */
 export type DayDetailCallDisplayRow = AnalyticsDayDetail["calls"][number] & {
@@ -144,18 +148,127 @@ export type DayDetailCallDisplayRow = AnalyticsDayDetail["calls"][number] & {
   badgeKind: "owner" | "employee" | null;
 };
 
+/** One text row in the day drill-down, pre-labeled on the server. */
+export type DayDetailTextDisplayRow = DayDetailText & {
+  label: string;
+};
+
+/** Shared call list for every drill-down card (day / sentiment / hour). */
+function CallRowsList({ calls }: { calls: DayDetailCallDisplayRow[] }) {
+  return (
+    <ul className="divide-y divide-parchment/10 mt-3">
+      {calls.map((row) => (
+        <li key={row.id}>
+          <Link
+            href={`/dashboard/calls/${row.id}`}
+            className="flex items-center justify-between gap-4 px-2 py-2.5 rounded-lg hover:bg-parchment/5 transition-colors"
+          >
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <CallDirectionBadge direction={row.direction} />
+                <span className="text-sm font-semibold text-parchment truncate">{row.label}</span>
+                {row.badgeKind && (
+                  <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                    {row.badgeKind}
+                  </span>
+                )}
+                {row.callKind === "forwarded" && <ForwardedBadge />}
+                <StatusBadge status={row.status} />
+                {row.sentiment && <SentimentBadge sentiment={row.sentiment} />}
+              </div>
+              <p className="text-xs text-parchment/50 mt-0.5">
+                <LocalDateTime iso={row.startedAt} /> ·{" "}
+                {formatDuration(row.startedAt, row.endedAt)}
+                {row.callKind === "forwarded" && row.forwardedTo && (
+                  <span className="font-mono"> · to {row.forwardedTo}</span>
+                )}
+              </p>
+              {row.summary && (
+                <p className="text-xs text-parchment/60 mt-1 line-clamp-2">{row.summary}</p>
+              )}
+            </div>
+            <span className="text-parchment/40 text-sm shrink-0">View →</span>
+          </Link>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** Received / Sent pill for text rows, mirroring the call direction badge. */
+function TextDirectionBadge({ direction }: { direction: "inbound" | "outbound" }) {
+  const outbound = direction === "outbound";
+  return (
+    <span
+      className={[
+        "text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5",
+        outbound ? "bg-claw-green/15 text-claw-green" : "bg-signal-teal/15 text-signal-teal"
+      ].join(" ")}
+    >
+      {outbound ? "Sent" : "Received"}
+    </span>
+  );
+}
+
+/** Text list for the day drill-down; rows link into the SMS thread. */
+function TextRowsList({ texts }: { texts: DayDetailTextDisplayRow[] }) {
+  return (
+    <ul className="divide-y divide-parchment/10 mt-3">
+      {texts.map((row) => {
+        const inner = (
+          <>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <TextDirectionBadge direction={row.direction} />
+                <span className="text-sm font-semibold text-parchment truncate">{row.label}</span>
+                {row.channel === "rcs" && (
+                  <span className="text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5 bg-parchment/10 text-parchment/60">
+                    RCS
+                  </span>
+                )}
+              </div>
+              <p className="text-xs text-parchment/50 mt-0.5">
+                <LocalDateTime iso={row.timestamp} />
+              </p>
+              <p className="text-xs text-parchment/60 mt-1 line-clamp-2">{row.content}</p>
+            </div>
+            {row.otherE164 && <span className="text-parchment/40 text-sm shrink-0">View →</span>}
+          </>
+        );
+        return (
+          <li key={row.id}>
+            {row.otherE164 ? (
+              <Link
+                href={`/dashboard/messages/${encodeURIComponent(row.otherE164)}`}
+                className="flex items-center justify-between gap-4 px-2 py-2.5 rounded-lg hover:bg-parchment/5 transition-colors"
+              >
+                {inner}
+              </Link>
+            ) : (
+              <div className="flex items-center justify-between gap-4 px-2 py-2.5">{inner}</div>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 /**
  * Drill-down card for one UTC day of the volume charts: that day's totals,
- * the individual calls (deep-linking into /dashboard/calls/[id]), and the
+ * the individual calls (deep-linking into /dashboard/calls/[id]), the
+ * individual texts (deep-linking into /dashboard/messages/[e164]), and the
  * turned-away count. Rendered when the owner clicks a bar (`?day=…`).
  */
 export function DayDetailCard({
   detail,
   calls,
+  texts,
   closeHref
 }: {
   detail: AnalyticsDayDetail;
   calls: DayDetailCallDisplayRow[];
+  texts: DayDetailTextDisplayRow[];
   closeHref: string;
 }) {
   return (
@@ -180,7 +293,7 @@ export function DayDetailCard({
         </span>
         <span>
           <span className="font-semibold text-parchment">{detail.usage.sms.toLocaleString()}</span>{" "}
-          texts
+          texts sent
         </span>
         <span>
           <span className="font-semibold text-parchment">
@@ -195,55 +308,91 @@ export function DayDetailCard({
         )}
       </div>
 
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mt-5">
+        Calls ({calls.length.toLocaleString()})
+      </p>
       {calls.length === 0 ? (
-        <p className="text-sm text-parchment/50 mt-4">No calls on this day.</p>
+        <p className="text-sm text-parchment/50 mt-2">No calls on this day.</p>
       ) : (
-        <ul className="divide-y divide-parchment/10 mt-3">
-          {calls.map((row) => (
-            <li key={row.id}>
-              <Link
-                href={`/dashboard/calls/${row.id}`}
-                className="flex items-center justify-between gap-4 px-2 py-2.5 rounded-lg hover:bg-parchment/5 transition-colors"
-              >
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <CallDirectionBadge direction={row.direction} />
-                    <span className="text-sm font-semibold text-parchment truncate">
-                      {row.label}
-                    </span>
-                    {row.badgeKind && (
-                      <span className="text-[10px] uppercase tracking-wide text-parchment/40">
-                        {row.badgeKind}
-                      </span>
-                    )}
-                    {row.callKind === "forwarded" && <ForwardedBadge />}
-                    <StatusBadge status={row.status} />
-                    {row.sentiment && <SentimentBadge sentiment={row.sentiment} />}
-                  </div>
-                  <p className="text-xs text-parchment/50 mt-0.5">
-                    <LocalDateTime iso={row.startedAt} /> ·{" "}
-                    {formatDuration(row.startedAt, row.endedAt)}
-                    {row.callKind === "forwarded" && row.forwardedTo && (
-                      <span className="font-mono"> · to {row.forwardedTo}</span>
-                    )}
-                  </p>
-                  {row.summary && (
-                    <p className="text-xs text-parchment/60 mt-1 line-clamp-2">{row.summary}</p>
-                  )}
-                </div>
-                <span className="text-parchment/40 text-sm shrink-0">View →</span>
-              </Link>
-            </li>
-          ))}
-        </ul>
+        <CallRowsList calls={calls} />
+      )}
+
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mt-5">
+        Texts ({texts.length.toLocaleString()})
+      </p>
+      {texts.length === 0 ? (
+        <p className="text-sm text-parchment/50 mt-2">No texts on this day.</p>
+      ) : (
+        <TextRowsList texts={texts} />
       )}
 
       <p className="text-[10px] text-parchment/35 mt-3">
         {detail.clipped
           ? `Showing the most recent ${calls.length.toLocaleString()} calls for this day. `
           : ""}
+        {detail.textsClipped
+          ? `Showing the most recent ${texts.length.toLocaleString()} texts for this day. `
+          : ""}
         Days follow the UTC calendar, matching the charts above.
       </p>
+    </Card>
+  );
+}
+
+/**
+ * Drill-down card for a sentiment row or a peak-hours bar: the window's
+ * matching calls with their AI summaries — "what made all the calls
+ * Neutral" is answered by reading them. Rendered on `?sentiment=` / `?hour=`.
+ */
+export function SegmentDetailCard({
+  title,
+  subtitle,
+  calls,
+  turnedAway,
+  clipped,
+  closeHref
+}: {
+  title: string;
+  subtitle: string;
+  calls: DayDetailCallDisplayRow[];
+  /** Only set for the hour drill-down (refused attempts have no transcript). */
+  turnedAway?: number;
+  clipped: boolean;
+  closeHref: string;
+}) {
+  return (
+    <Card>
+      <div id="segment-detail" className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">{subtitle}</p>
+          <p className="text-lg font-bold text-parchment">{title}</p>
+        </div>
+        <Link
+          href={closeHref}
+          className="text-xs text-parchment/50 hover:text-parchment transition-colors shrink-0 mt-1"
+        >
+          ✕ Back to 30 days
+        </Link>
+      </div>
+
+      {typeof turnedAway === "number" && turnedAway > 0 && (
+        <p className="text-xs text-red-300 mt-2">
+          {turnedAway.toLocaleString()} caller{turnedAway === 1 ? "" : "s"} turned away in this
+          hour (no transcript to show).
+        </p>
+      )}
+
+      {calls.length === 0 ? (
+        <p className="text-sm text-parchment/50 mt-4">No matching calls in the last 30 days.</p>
+      ) : (
+        <CallRowsList calls={calls} />
+      )}
+
+      {clipped && (
+        <p className="text-[10px] text-parchment/35 mt-3">
+          Showing the most recent {calls.length.toLocaleString()} matching calls.
+        </p>
+      )}
     </Card>
   );
 }
@@ -293,13 +442,19 @@ export function PeakHoursCard({
   hourBuckets,
   callCount,
   clipped,
-  timeZoneLabel
+  timeZoneLabel,
+  hourHref,
+  selectedHour
 }: {
   hourBuckets: number[];
   callCount: number;
   /** Scan hit its row cap — the histogram covers the most recent attempts only. */
   clipped: boolean;
   timeZoneLabel: string;
+  /** When set, each hour bar links to its drill-down URL. */
+  hourHref?: (hour: number) => string;
+  /** Hour currently drilled into (highlighted). */
+  selectedHour?: number | null;
 }) {
   const max = Math.max(...hourBuckets, 0);
   return (
@@ -319,6 +474,8 @@ export function PeakHoursCard({
                 max={max}
                 title={`${hour}:00 – ${count.toLocaleString()} call${count === 1 ? "" : "s"}`}
                 colorClass="bg-signal-teal/70"
+                href={hourHref ? hourHref(hour) : undefined}
+                selected={selectedHour === hour}
               />
             ))}
           </div>
@@ -333,6 +490,7 @@ export function PeakHoursCard({
             {clipped ? "Most recent " : ""}
             {callCount.toLocaleString()} inbound call attempts (answered + turned away) ·{" "}
             {timeZoneLabel}
+            {hourHref ? " · click an hour to see its calls" : ""}
           </p>
         </>
       )}
@@ -349,10 +507,16 @@ const SENTIMENT_STYLES: Record<VoiceCallSentiment, { bar: string; label: string 
 
 export function SentimentMixCard({
   sentiment,
-  total
+  total,
+  sentimentHref,
+  selectedSentiment
 }: {
   sentiment: Record<VoiceCallSentiment, number>;
   total: number;
+  /** When set, each sentiment row links to its drill-down URL. */
+  sentimentHref?: (key: VoiceCallSentiment) => string;
+  /** Sentiment currently drilled into (highlighted). */
+  selectedSentiment?: VoiceCallSentiment | null;
 }) {
   return (
     <Card>
@@ -364,24 +528,54 @@ export function SentimentMixCard({
           No summarized calls yet; sentiment appears as AI call summaries are generated.
         </p>
       ) : (
-        <div className="space-y-2 mt-3">
-          {(Object.keys(SENTIMENT_STYLES) as VoiceCallSentiment[]).map((key) => {
-            const count = sentiment[key];
-            const pct = Math.round((count / total) * 100);
-            return (
-              <div key={key} className="flex items-center gap-2">
-                <span className="text-xs text-parchment/60 w-16">{SENTIMENT_STYLES[key].label}</span>
-                <div className="flex-1 h-2 rounded bg-parchment/5 overflow-hidden">
-                  <div
-                    className={["h-full rounded", SENTIMENT_STYLES[key].bar].join(" ")}
-                    style={{ width: `${pct}%` }}
-                  />
+        <>
+          <div className="space-y-1 mt-3">
+            {(Object.keys(SENTIMENT_STYLES) as VoiceCallSentiment[]).map((key) => {
+              const count = sentiment[key];
+              const pct = Math.round((count / total) * 100);
+              const row = (
+                <>
+                  <span className="text-xs text-parchment/60 w-16">
+                    {SENTIMENT_STYLES[key].label}
+                  </span>
+                  <div className="flex-1 h-2 rounded bg-parchment/5 overflow-hidden">
+                    <div
+                      className={["h-full rounded", SENTIMENT_STYLES[key].bar].join(" ")}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span className="text-xs text-parchment/50 w-10 text-right">{pct}%</span>
+                </>
+              );
+              const rowClass = [
+                "flex items-center gap-2 rounded px-1 py-1",
+                sentimentHref ? "hover:bg-parchment/10 transition-colors" : "",
+                selectedSentiment === key ? "bg-parchment/10" : ""
+              ]
+                .filter(Boolean)
+                .join(" ");
+              return sentimentHref ? (
+                <Link
+                  key={key}
+                  href={sentimentHref(key)}
+                  className={rowClass}
+                  aria-label={`${SENTIMENT_STYLES[key].label}: ${count.toLocaleString()} calls`}
+                >
+                  {row}
+                </Link>
+              ) : (
+                <div key={key} className={rowClass}>
+                  {row}
                 </div>
-                <span className="text-xs text-parchment/50 w-10 text-right">{pct}%</span>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+          {sentimentHref && (
+            <p className="text-[10px] text-parchment/35 mt-2">
+              Click a sentiment to see those calls and their summaries.
+            </p>
+          )}
+        </>
       )}
     </Card>
   );

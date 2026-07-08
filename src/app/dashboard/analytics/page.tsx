@@ -9,10 +9,14 @@
  *   - peak call hours (business timezone) ← voice_call_transcripts
  *   - caller sentiment mix ← the AI call-summary perk's output
  *
- * Clicking a bar in any volume chart drills into that UTC day
- * (`?day=YYYY-MM-DD`): the day's totals plus its individual calls, each
- * deep-linking into /dashboard/calls/[id]. Plain navigation — the page stays
- * a server component.
+ * Drill-downs (all plain navigation — the page stays a server component):
+ *   - `?day=YYYY-MM-DD`   — a volume-chart bar: that UTC day's totals plus
+ *     its individual calls and texts, deep-linking into
+ *     /dashboard/calls/[id] and /dashboard/messages/[e164].
+ *   - `?sentiment=<key>`  — a sentiment row: the window's calls with that
+ *     sentiment and their AI summaries.
+ *   - `?hour=<0-23>`      — a peak-hours bar: the window's calls in that
+ *     local-time hour.
  *
  * Starter tenants see an upgrade card instead of data — the gate is
  * server-side here, mirroring the messages/tools pattern.
@@ -30,27 +34,50 @@ import {
 import {
   ANALYTICS_WINDOW_DAYS,
   analyticsWindowStart,
+  CALL_SENTIMENT_KEYS,
   getAnalyticsDayDetail,
   getAnswerRateStats,
   getDailyUsageSeries,
+  getHourCallsDetail,
   getInboundCallStats,
-  isValidAnalyticsDay
+  getSentimentCallsDetail,
+  isValidAnalyticsDay,
+  type DayDetailCall
 } from "@/lib/analytics/dashboard-analytics";
 import {
   AnswerRateCard,
   DailyVolumeCard,
   DayDetailCard,
   PeakHoursCard,
+  SegmentDetailCard,
   SentimentMixCard,
-  type DayDetailCallDisplayRow
+  type DayDetailCallDisplayRow,
+  type DayDetailTextDisplayRow
 } from "@/components/dashboard/AnalyticsCards";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { callerLabel } from "@/components/dashboard/voice-transcript-helpers";
+import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
 
 export const dynamic = "force-dynamic";
 
+const SENTIMENT_TITLES: Record<VoiceCallSentiment, string> = {
+  positive: "Positive calls",
+  neutral: "Neutral calls",
+  negative: "Negative calls",
+  mixed: "Mixed-sentiment calls"
+};
+
+/** "13" → "1 PM – 2 PM" for the hour drill-down header. */
+function hourRangeLabel(hour: number): string {
+  const fmt = (h: number) => {
+    const twelve = h % 12 === 0 ? 12 : h % 12;
+    return `${twelve} ${h < 12 ? "AM" : "PM"}`;
+  };
+  return `${fmt(hour)} – ${fmt((hour + 1) % 24)}`;
+}
+
 export default async function DashboardAnalyticsPage(props: {
-  searchParams?: Promise<{ day?: string }>;
+  searchParams?: Promise<{ day?: string; sentiment?: string; hour?: string }>;
 }) {
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/analytics");
@@ -116,44 +143,72 @@ export default async function DashboardAnalyticsPage(props: {
 
   const timeZone = (business.timezone as string | null) ?? null;
 
-  // Day drill-down (?day=YYYY-MM-DD). A malformed or out-of-window value is
-  // ignored rather than reaching a query — same posture as the aiflows runs
-  // page's flowId guard.
-  const { day: rawDay } = (await props.searchParams) ?? {};
+  // Drill-down params. A malformed or out-of-window value is ignored rather
+  // than reaching a query — same posture as the aiflows runs page's flowId
+  // guard. Only one drill-down renders at a time (day > sentiment > hour).
+  const params = (await props.searchParams) ?? {};
   const now = new Date();
   const windowStartYmd = analyticsWindowStart(now, ANALYTICS_WINDOW_DAYS)
     .toISOString()
     .slice(0, 10);
   const todayYmd = now.toISOString().slice(0, 10);
   const selectedDay =
-    rawDay && isValidAnalyticsDay(rawDay) && rawDay >= windowStartYmd && rawDay <= todayYmd
-      ? rawDay
+    params.day &&
+    isValidAnalyticsDay(params.day) &&
+    params.day >= windowStartYmd &&
+    params.day <= todayYmd
+      ? params.day
+      : null;
+  const selectedSentiment =
+    params.sentiment && (CALL_SENTIMENT_KEYS as string[]).includes(params.sentiment)
+      ? (params.sentiment as VoiceCallSentiment)
+      : null;
+  const selectedHour =
+    params.hour && /^\d{1,2}$/.test(params.hour) && Number(params.hour) <= 23
+      ? Number(params.hour)
       : null;
 
   // Lookup blips degrade a single card rather than 500-ing the whole page.
-  // Every fetcher shares the page's `now` so the cards, the ?day= clamp, and
-  // the chart highlight all describe the same window even if UTC midnight
-  // passes mid-request.
-  const [usage, answerRate, callStats, dayDetail] = await Promise.all([
-    getDailyUsageSeries(business.id, { client: db, now }).catch(() => null),
-    getAnswerRateStats(business.id, { client: db, now }).catch(() => null),
-    getInboundCallStats(business.id, { client: db, timeZone, now }).catch(() => null),
-    selectedDay
-      ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
-      : Promise.resolve(null)
-  ]);
+  // Every fetcher shares the page's `now` so the cards, the drill-down
+  // clamps, and the chart highlights all describe the same window even if
+  // UTC midnight passes mid-request.
+  const [usage, answerRate, callStats, dayDetail, sentimentDetail, hourDetail] =
+    await Promise.all([
+      getDailyUsageSeries(business.id, { client: db, now }).catch(() => null),
+      getAnswerRateStats(business.id, { client: db, now }).catch(() => null),
+      getInboundCallStats(business.id, { client: db, timeZone, now }).catch(() => null),
+      selectedDay
+        ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
+        : Promise.resolve(null),
+      selectedSentiment
+        ? getSentimentCallsDetail(business.id, selectedSentiment, { client: db, now }).catch(
+            () => null
+          )
+        : Promise.resolve(null),
+      selectedHour !== null
+        ? getHourCallsDetail(business.id, selectedHour, { client: db, timeZone, now }).catch(
+            () => null
+          )
+        : Promise.resolve(null)
+    ]);
+  const segmentDetail = sentimentDetail ?? hourDetail;
 
-  // Name known callers (owner / roster / manual overrides) in the drill-down,
-  // mirroring the call-history list.
+  // Name known callers (owner / roster / manual overrides) across every
+  // drill-down list, mirroring the call-history page. One lookup covers the
+  // day's calls + texts and the sentiment/hour segment.
+  const segmentCallRows = segmentDetail?.calls ?? [];
+  const nameNumbers = [
+    ...(dayDetail?.calls ?? []).map((c) => c.callerE164),
+    ...(dayDetail?.texts ?? []).map((t) => t.otherE164),
+    ...segmentCallRows.map((c) => c.callerE164)
+  ].filter((p): p is string => Boolean(p));
   const contactNames =
-    dayDetail && dayDetail.calls.length > 0
-      ? await resolveContactNames(
-          business.id,
-          dayDetail.calls.map((c) => c.callerE164).filter((p): p is string => Boolean(p)),
-          db
-        ).catch(() => new Map<string, ContactName>())
+    nameNumbers.length > 0
+      ? await resolveContactNames(business.id, nameNumbers, db).catch(
+          () => new Map<string, ContactName>()
+        )
       : new Map<string, ContactName>();
-  const dayCalls: DayDetailCallDisplayRow[] = (dayDetail?.calls ?? []).map((call) => {
+  const toDisplayCall = (call: DayDetailCall): DayDetailCallDisplayRow => {
     const contact = call.callerE164 ? contactNames.get(call.callerE164) : undefined;
     return {
       ...call,
@@ -161,7 +216,15 @@ export default async function DashboardAnalyticsPage(props: {
       badgeKind:
         contact?.kind === "employee" ? "employee" : contact?.kind === "owner" ? "owner" : null
     };
-  });
+  };
+  const dayCalls = (dayDetail?.calls ?? []).map(toDisplayCall);
+  const segmentCalls = segmentCallRows.map(toDisplayCall);
+  const dayTexts: DayDetailTextDisplayRow[] = (dayDetail?.texts ?? []).map((text) => ({
+    ...text,
+    label:
+      (text.otherE164 ? contactNames.get(text.otherE164)?.name : undefined) ??
+      callerLabel(text.otherE164)
+  }));
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -202,7 +265,8 @@ export default async function DashboardAnalyticsPage(props: {
             />
           </div>
           <p className="text-xs text-parchment/40 -mt-3">
-            Click a day in any chart to see that day&apos;s calls and totals.
+            Click a day in any chart to see that day&apos;s calls, texts, and totals.
+            {usage.clipped ? " Call counts cover the most recent calls only." : ""}
           </p>
         </>
       ) : (
@@ -213,7 +277,12 @@ export default async function DashboardAnalyticsPage(props: {
 
       {selectedDay &&
         (dayDetail ? (
-          <DayDetailCard detail={dayDetail} calls={dayCalls} closeHref="/dashboard/analytics" />
+          <DayDetailCard
+            detail={dayDetail}
+            calls={dayCalls}
+            texts={dayTexts}
+            closeHref="/dashboard/analytics"
+          />
         ) : (
           <Card>
             <p className="text-sm text-parchment/50">
@@ -240,7 +309,12 @@ export default async function DashboardAnalyticsPage(props: {
           </Card>
         )}
         {callStats ? (
-          <SentimentMixCard sentiment={callStats.sentiment} total={callStats.sentimentTotal} />
+          <SentimentMixCard
+            sentiment={callStats.sentiment}
+            total={callStats.sentimentTotal}
+            sentimentHref={(key) => `/dashboard/analytics?sentiment=${key}#segment-detail`}
+            selectedSentiment={selectedSentiment}
+          />
         ) : (
           <Card>
             <p className="text-sm text-parchment/50">
@@ -256,8 +330,39 @@ export default async function DashboardAnalyticsPage(props: {
           callCount={callStats.callCount}
           clipped={callStats.clipped}
           timeZoneLabel={timeZone ?? "UTC"}
+          hourHref={(hour) => `/dashboard/analytics?hour=${hour}#segment-detail`}
+          selectedHour={selectedHour}
         />
       )}
+
+      {(selectedSentiment || selectedHour !== null) &&
+        (segmentDetail ? (
+          <SegmentDetailCard
+            title={
+              selectedSentiment
+                ? SENTIMENT_TITLES[selectedSentiment]
+                : `Calls between ${hourRangeLabel(selectedHour as number)}`
+            }
+            subtitle={
+              selectedSentiment
+                ? "Sentiment detail (30 days)"
+                : `Hour detail (30 days) · ${timeZone ?? "UTC"}`
+            }
+            calls={segmentCalls}
+            turnedAway={hourDetail && !selectedSentiment ? hourDetail.turnedAway : undefined}
+            clipped={segmentDetail.clipped}
+            closeHref="/dashboard/analytics"
+          />
+        ) : (
+          <Card>
+            <p className="text-sm text-parchment/50">
+              Call detail is temporarily unavailable.{" "}
+              <a href="/dashboard/analytics" className="underline hover:text-parchment">
+                Back to 30 days
+              </a>
+            </p>
+          </Card>
+        ))}
     </div>
   );
 }

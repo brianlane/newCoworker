@@ -36,7 +36,14 @@ import {
   listVoiceTurnsForCustomer
 } from "@/lib/db/voice-transcripts";
 import { listConversationsForBusiness, listMessagesForCustomer } from "@/lib/db/sms-history";
-import { getAnalyticsDayDetail } from "@/lib/analytics/dashboard-analytics";
+import {
+  getAnalyticsDayDetail,
+  getAnswerRateStats,
+  getDailyUsageSeries,
+  getHourCallsDetail,
+  getInboundCallStats,
+  getSentimentCallsDetail
+} from "@/lib/analytics/dashboard-analytics";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -268,56 +275,84 @@ describe("voice-transcripts vps reads", () => {
   });
 });
 
-describe("analytics day drill-down vps reads", () => {
+describe("analytics vps reads", () => {
+  const NOW = new Date("2026-07-04T12:00:00Z");
+
   /**
-   * Db stub for the two tables getAnalyticsDayDetail still reads centrally
-   * on the vps path: `daily_usage` (maybeSingle) and `system_logs` (thenable
-   * head count) — both control-plane tables that never move to the box.
+   * Db stub for the tables the analytics lib still reads centrally on the
+   * vps path: `daily_usage` (maybeSingle / thenable list), `system_logs`
+   * (thenable head count or list), and `sms_inbound_jobs` (thenable list) —
+   * all control-plane/engine tables that never move to the box.
    */
-  function analyticsCentralDb() {
-    const builder = () => {
+  function analyticsCentralDb(resultsByTable: Record<string, unknown> = {}) {
+    const builder = (table: string) => {
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "gte", "lt"]) {
+      for (const m of ["select", "eq", "neq", "gte", "lt", "order", "limit"]) {
         chain[m] = vi.fn(() => chain);
       }
       chain.maybeSingle = vi.fn(async () => ({
-        data: { calls_made: 2, sms_sent: 5, voice_minutes_used: 7 },
+        data: (resultsByTable[table] as Record<string, unknown>) ?? null,
         error: null
       }));
       (chain as { then: unknown }).then = (
         onF: (v: unknown) => unknown,
         onR: (e: unknown) => unknown
-      ) => Promise.resolve({ count: 1, error: null }).then(onF, onR);
+      ) =>
+        Promise.resolve(
+          resultsByTable[table] ?? { data: [], count: 1, error: null }
+        ).then(onF, onR);
       return chain;
     };
-    return { from: vi.fn(() => builder()) } as never;
+    return { from: vi.fn((t: string) => builder(t)) } as never;
   }
 
-  it("reads the day's calls from the box, usage and blocked counts centrally", async () => {
-    vi.mocked(readMovedRows).mockResolvedValueOnce([
-      {
-        id: "t1",
-        caller_e164: "+1555",
-        started_at: "2026-07-03T09:00:00Z",
-        ended_at: "2026-07-03T09:05:00Z",
-        status: "completed",
-        direction: "inbound",
-        call_kind: "ai",
-        forwarded_to_e164: null,
-        summary: null,
-        sentiment: "positive"
-      }
-    ] as never);
+  /** readMovedRows stub dispatching per moved table. */
+  function dispatchMovedRows(rowsByTable: Record<string, unknown[]>) {
+    vi.mocked(readMovedRows).mockImplementation(async (_biz, request) => {
+      return (rowsByTable[(request as { table: string }).table] ?? []) as never;
+    });
+  }
 
-    const detail = await getAnalyticsDayDetail(BIZ, "2026-07-03", {
-      client: analyticsCentralDb()
+  const BOX_CALL = {
+    id: "t1",
+    caller_e164: "+1555",
+    started_at: "2026-07-03T09:00:00Z",
+    ended_at: "2026-07-03T09:05:00Z",
+    status: "completed",
+    direction: "inbound",
+    call_kind: "ai",
+    forwarded_to_e164: null,
+    summary: "Neutral chat.",
+    sentiment: "neutral"
+  };
+
+  it("day detail reads calls + outbound texts from the box; the rest central", async () => {
+    dispatchMovedRows({
+      voice_call_transcripts: [BOX_CALL],
+      sms_outbound_log: [
+        {
+          id: "o1",
+          to_e164: "+1777",
+          body: "hi",
+          source: "ai_flow",
+          channel: null,
+          created_at: "2026-07-03T10:00:00Z"
+        }
+      ]
     });
 
-    expect(detail.usage).toEqual({ calls: 2, sms: 5, voiceMinutes: 7 });
+    const detail = await getAnalyticsDayDetail(BIZ, "2026-07-03", {
+      client: analyticsCentralDb({ daily_usage: { sms_sent: 5 } })
+    });
+
+    // calls + minutes derive from the box transcripts; sms from central.
+    expect(detail.usage).toEqual({ calls: 1, sms: 5, voiceMinutes: 5 });
     expect(detail.turnedAway).toBe(1);
-    expect(detail.calls).toHaveLength(1);
-    expect(detail.calls[0]).toMatchObject({ id: "t1", sentiment: "positive" });
-    expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+    expect(detail.calls[0]).toMatchObject({ id: "t1", sentiment: "neutral" });
+    expect(detail.texts[0]).toMatchObject({ id: "o1:flow-outbound", otherE164: "+1777" });
+
+    const calls = vi.mocked(readMovedRows).mock.calls;
+    expect(calls[0][1]).toMatchObject({
       table: "voice_call_transcripts",
       columns: expect.arrayContaining(["id", "caller_e164", "started_at", "sentiment"]),
       filters: [
@@ -329,6 +364,101 @@ describe("analytics day drill-down vps reads", () => {
       order: [{ column: "started_at", ascending: false }],
       limit: 200
     });
+    expect(calls[1][1]).toMatchObject({
+      table: "sms_outbound_log",
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "created_at", op: "gte", value: "2026-07-03T00:00:00.000Z" },
+        { column: "created_at", op: "lt", value: "2026-07-04T00:00:00.000Z" }
+      ]
+    });
+  });
+
+  it("daily series derives calls/minutes from box transcripts", async () => {
+    dispatchMovedRows({ voice_call_transcripts: [BOX_CALL] });
+    const series = await getDailyUsageSeries(BIZ, {
+      client: analyticsCentralDb({ daily_usage: { data: [], error: null } }),
+      days: 3,
+      now: NOW
+    });
+    expect(series.totals).toEqual({ calls: 1, sms: 0, voiceMinutes: 5 });
+    // Open-ended trailing window: gte only, no lt filter.
+    expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
+      table: "voice_call_transcripts",
+      columns: ["started_at", "ended_at"],
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "status", op: "neq", value: "missed" },
+        { column: "started_at", op: "gte", value: "2026-07-02T00:00:00.000Z" }
+      ]
+    });
+  });
+
+  it("inbound stats scan box transcripts with the inbound direction filter", async () => {
+    dispatchMovedRows({
+      voice_call_transcripts: [{ started_at: "2026-07-03T09:00:00Z", sentiment: "neutral" }]
+    });
+    const stats = await getInboundCallStats(BIZ, {
+      client: analyticsCentralDb({ system_logs: { data: [], error: null } }),
+      now: NOW
+    });
+    expect(stats.callCount).toBe(1);
+    expect(stats.sentiment.neutral).toBe(1);
+    expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
+      table: "voice_call_transcripts",
+      columns: ["started_at", "sentiment"],
+      filters: expect.arrayContaining([{ column: "direction", op: "eq", value: "inbound" }])
+    });
+  });
+
+  it("answer rate counts answered calls on the box", async () => {
+    vi.mocked(countMovedRows).mockResolvedValue(9);
+    const stats = await getAnswerRateStats(BIZ, {
+      client: analyticsCentralDb({ system_logs: { count: 1, error: null } }),
+      now: NOW
+    });
+    expect(stats).toEqual({ answered: 9, missed: 1, rate: 0.9 });
+    expect(countMovedRows).toHaveBeenCalledWith(BIZ, {
+      table: "voice_call_transcripts",
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "direction", op: "eq", value: "inbound" },
+        { column: "status", op: "neq", value: "missed" },
+        { column: "started_at", op: "gte", value: expect.any(String) }
+      ]
+    });
+  });
+
+  it("sentiment drill-down filters by sentiment on the box", async () => {
+    dispatchMovedRows({ voice_call_transcripts: [BOX_CALL] });
+    const detail = await getSentimentCallsDetail(BIZ, "neutral", {
+      client: analyticsCentralDb(),
+      now: NOW
+    });
+    expect(detail.calls[0]).toMatchObject({ id: "t1", summary: "Neutral chat." });
+    expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
+      table: "voice_call_transcripts",
+      filters: expect.arrayContaining([
+        { column: "direction", op: "eq", value: "inbound" },
+        { column: "sentiment", op: "eq", value: "neutral" }
+      ])
+    });
+  });
+
+  it("hour drill-down scans box transcripts and filters by local hour", async () => {
+    dispatchMovedRows({
+      voice_call_transcripts: [
+        { ...BOX_CALL, id: "match", started_at: "2026-07-04T19:30:00Z" },
+        { ...BOX_CALL, id: "miss", started_at: "2026-07-04T20:30:00Z" }
+      ]
+    });
+    const detail = await getHourCallsDetail(BIZ, 12, {
+      client: analyticsCentralDb({ system_logs: { data: [], error: null } }),
+      now: NOW,
+      timeZone: "America/Phoenix"
+    });
+    expect(detail.calls.map((c) => c.id)).toEqual(["match"]);
+    expect(detail.turnedAway).toBe(0);
   });
 });
 
