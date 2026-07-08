@@ -396,6 +396,18 @@ callable surfaces go through service-role clients, never `anon`/`authenticated` 
 - SMS keyword auto-replies (**STOP** / **HELP** / **START**) need **`TELNYX_API_KEY`**, **`TELNYX_MESSAGING_PROFILE_ID`**, and **`TELNYX_SMS_FROM_E164`** on the `telnyx-sms-inbound` function; without them the handler still returns **200** but logs a warning.
 - After first-time deploy (or any time you reset the cache columns), backfill `subscriptions.stripe_current_period_{start,end}` from Stripe so voice quota gating works before the next subscription lifecycle webhook runs: `npx tsx scripts/backfill-stripe-subscription-periods.ts` (dry-run), then re-run with `--apply`. Requires `STRIPE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`.
 
+## AiFlow webhook trigger (Meta Lead Ads etc.)
+
+AiFlows can start from an inbound webhook: `POST /api/public/v1/flow-events`
+(bearer = the tenant's `nck_` public API key) enqueues a run for every enabled
+`webhook`-channel flow whose conditions match; the JSON payload is flattened
+into `{{trigger.windowText}}` so `extract_text` parses lead fields with no
+browser. This is how Meta (Facebook/Instagram) Lead Ads reach the flow engine —
+via a Zapier ("Send Lead to Coworker" action) or Make.com bridge, no Meta App
+Review required. The canonical, owner-facing setup doc is the in-app guide at
+`/dashboard/aiflows/guides/meta-leads` (installs the starter flow, mints the
+key, walks the bridge setup, and shows deliveries live).
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”

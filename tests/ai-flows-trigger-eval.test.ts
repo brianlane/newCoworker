@@ -4,10 +4,12 @@ import {
   emailTriggerScope,
   evaluateTriggerConditions,
   firstUrlInText,
+  flattenWebhookPayload,
   htmlToText,
   manualTriggerScope,
   safeRegexTest,
-  tenantEmailTriggerScope
+  tenantEmailTriggerScope,
+  webhookTriggerScope
 } from "@/lib/ai-flows/trigger-eval";
 
 describe("firstUrlInText", () => {
@@ -172,5 +174,63 @@ describe("tenantEmailTriggerScope", () => {
     });
     expect("to" in scope).toBe(false);
     expect("received_at" in scope).toBe(false);
+  });
+});
+
+describe("flattenWebhookPayload", () => {
+  it("renders scalars as key: value lines, nesting with dotted paths", () => {
+    expect(
+      flattenWebhookPayload({
+        full_name: "Jane Lead",
+        phone_number: "+16025551234",
+        field_data: { city: "Phoenix", budget: 500000 },
+        tags: ["buyer", "urgent"]
+      })
+    ).toBe(
+      [
+        "full_name: Jane Lead",
+        "phone_number: +16025551234",
+        "field_data.city: Phoenix",
+        "field_data.budget: 500000",
+        "tags.0: buyer",
+        "tags.1: urgent"
+      ].join("\n")
+    );
+  });
+  it("skips null/undefined values and caps total size", () => {
+    expect(flattenWebhookPayload({ a: null, b: undefined, c: "x" })).toBe("c: x");
+    const big = flattenWebhookPayload({ text: "y".repeat(EMAIL_WINDOW_TEXT_MAX + 500) });
+    expect(big.length).toBe(EMAIL_WINDOW_TEXT_MAX);
+  });
+  it("bounds hostile payloads: deep nesting and huge key counts stop early", () => {
+    // 6 levels deep — beyond the depth bound, so the innermost leaf is dropped.
+    const deep = { a: { b: { c: { d: { e: { f: "too deep" } } } } } };
+    expect(flattenWebhookPayload(deep)).toBe("");
+    const wide: Record<string, unknown> = {};
+    for (let i = 0; i < 500; i++) wide[`k${i}`] = i;
+    const lines = flattenWebhookPayload(wide).split("\n");
+    expect(lines.length).toBeLessThanOrEqual(201);
+  });
+});
+
+describe("webhookTriggerScope", () => {
+  it("tags the webhook channel, flattens the payload, and finds the url", () => {
+    const scope = webhookTriggerScope({
+      source: "facebook_lead_ads",
+      eventId: "lead-123",
+      data: { full_name: "Jane", link: "https://fb.me/lead/1" }
+    });
+    expect(scope).toEqual({
+      channel: "webhook",
+      windowText: "full_name: Jane\nlink: https://fb.me/lead/1",
+      url: "https://fb.me/lead/1",
+      from: "facebook_lead_ads",
+      event_id: "lead-123"
+    });
+  });
+  it("omits event_id when unknown and bounds the source label", () => {
+    const scope = webhookTriggerScope({ source: "s".repeat(200), data: { a: 1 } });
+    expect("event_id" in scope).toBe(false);
+    expect(scope.from.length).toBe(120);
   });
 });

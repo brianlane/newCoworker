@@ -234,6 +234,21 @@ const tenantEmailTriggerSchema = z.object({
 });
 
 /**
+ * Inbound-webhook trigger: an authenticated POST to the public API
+ * (`/api/public/v1/flow-events`, bearer = the tenant's `nck_` API key) fires
+ * every enabled webhook flow whose conditions match. Push-based like
+ * `tenant_email`; the endpoint flattens the JSON event payload into
+ * windowText so conditions / extract_text / templates work unchanged. This is
+ * the substrate for external lead sources (e.g. Meta Lead Ads via a
+ * Zapier/Make bridge). `from_matches` tests the caller-supplied `source`
+ * label (e.g. "facebook_lead_ads").
+ */
+const webhookTriggerSchema = z.object({
+  channel: z.literal("webhook"),
+  conditions: z.array(conditionSchema).max(20)
+});
+
+/**
  * Inbound-voice trigger: a call FROM `fromE164` to one of the business's voice
  * numbers fires this flow. Unlike every other channel this does NOT enqueue an
  * ai_flow_run; the Telnyx voice webhook (telnyx-voice-inbound) resolves the
@@ -292,6 +307,7 @@ const triggerSchema = z.discriminatedUnion("channel", [
   scheduleTriggerSchema,
   emailTriggerSchema,
   tenantEmailTriggerSchema,
+  webhookTriggerSchema,
   voiceTriggerSchema
 ]);
 
@@ -696,7 +712,15 @@ export type StepCondition = z.infer<typeof whenSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 /** The trigger channels the builder offers. */
-export const TRIGGER_CHANNELS = ["sms", "manual", "schedule", "email", "tenant_email", "voice"] as const;
+export const TRIGGER_CHANNELS = [
+  "sms",
+  "manual",
+  "schedule",
+  "email",
+  "tenant_email",
+  "webhook",
+  "voice"
+] as const;
 
 export class AiFlowValidationError extends Error {
   constructor(
@@ -1282,6 +1306,12 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
         t.conditions.length === 0
           ? "When the AI mailbox receives any email"
           : `When AI mailbox email matches ${t.conditions.length} condition(s)`;
+      break;
+    case "webhook":
+      trigPart =
+        t.conditions.length === 0
+          ? "When any webhook event arrives"
+          : `When a webhook event matches ${t.conditions.length} condition(s)`;
       break;
     case "voice":
       trigPart =

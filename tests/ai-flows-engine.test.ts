@@ -521,6 +521,9 @@ describe("isExecutableDefinition", () => {
     expect(
       isExecutableDefinition({ ...valid, trigger: { channel: "tenant_email", conditions: [] } })
     ).toBe(true);
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "webhook", conditions: [] } })
+    ).toBe(true);
   });
   it("rejects malformed schedule / email triggers", () => {
     // schedule: neither mode, both modes, or a half-configured daily mode
@@ -552,6 +555,10 @@ describe("isExecutableDefinition", () => {
     // tenant_email: non-array conditions
     expect(
       isExecutableDefinition({ ...valid, trigger: { channel: "tenant_email", conditions: "x" } })
+    ).toBe(false);
+    // webhook: non-array conditions
+    expect(
+      isExecutableDefinition({ ...valid, trigger: { channel: "webhook", conditions: "x" } })
     ).toBe(false);
   });
   it("rejects non-array steps", () => {

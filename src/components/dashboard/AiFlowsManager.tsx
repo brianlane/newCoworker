@@ -73,6 +73,7 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
+  webhook: "Webhook (Zapier, Make, or API)",
   voice: "Voice call routing"
 };
 
@@ -199,6 +200,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
         emailConnectionId: trigger.connectionId
       };
     case "tenant_email":
+      return { ...base, conditions: trigger.conditions };
+    case "webhook":
       return { ...base, conditions: trigger.conditions };
     case "voice": {
       const scheduled =
@@ -414,6 +417,8 @@ function editorTrigger(s: EditorState): FlowTrigger {
       };
     case "tenant_email":
       return { channel: "tenant_email", conditions: sanitizeConditions(s.conditions) };
+    case "webhook":
+      return { channel: "webhook", conditions: sanitizeConditions(s.conditions) };
     case "voice":
       if (s.voiceDirection !== "outbound") {
         // Exactly one caller source: a saved-person ref (live number) or a
@@ -1109,6 +1114,28 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
+          {editor.channel === "webhook" && (
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-1.5">
+              <p className="text-[11px] text-parchment/60">
+                This runs when an outside tool (Zapier, Make.com, or any API client) sends an
+                event to your coworker&apos;s webhook address. Point the tool at{" "}
+                <code className="font-mono text-signal-teal break-all">
+                  POST /api/public/v1/flow-events
+                </code>{" "}
+                with an API key from the dashboard Integrations page. Great for capturing leads
+                from Meta (Facebook/Instagram) lead ads and other lead sources.
+              </p>
+              <p className="text-[11px] text-parchment/50">
+                Step-by-step setup:{" "}
+                <Link
+                  href="/dashboard/aiflows/guides/meta-leads"
+                  className="text-signal-teal hover:underline"
+                >
+                  How to capture Meta ad leads
+                </Link>
+              </p>
+            </div>
+          )}
           {editor.channel === "voice" && (
             <div className="space-y-2">
               <div>
@@ -1262,7 +1289,8 @@ export function AiFlowsManager({
           )}
           {(editor.channel === "sms" ||
             editor.channel === "email" ||
-            editor.channel === "tenant_email") &&
+            editor.channel === "tenant_email" ||
+            editor.channel === "webhook") &&
             editor.conditions.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
@@ -1344,7 +1372,8 @@ export function AiFlowsManager({
           ))}
           {(editor.channel === "sms" ||
             editor.channel === "email" ||
-            editor.channel === "tenant_email") && (
+            editor.channel === "tenant_email" ||
+            editor.channel === "webhook") && (
             <button
               onClick={() =>
                 setEditor({ ...editor, conditions: [...editor.conditions, { type: "contains", value: "" }] })

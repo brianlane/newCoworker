@@ -92,7 +92,7 @@ export function htmlToText(html: string): string {
 
 /** What an enqueued run's `context.trigger` looks like for these channels. */
 export type TriggerScope = {
-  channel: "manual" | "email" | "schedule" | "tenant_email";
+  channel: "manual" | "email" | "schedule" | "tenant_email" | "webhook";
   windowText: string;
   url: string | null;
   from: string;
@@ -155,5 +155,63 @@ export function tenantEmailTriggerScope(
     message_id: msg.id,
     ...(msg.toEmail ? { to: msg.toEmail } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
+  };
+}
+
+/**
+ * Flatten a webhook event payload into readable "key: value" lines, so trigger
+ * conditions and the Gemini `extract_text` step see the lead exactly the way
+ * they'd see an email body. Nested objects flatten with dotted keys
+ * (`field_data.city: Phoenix`), arrays with indices. Depth/size-bounded so a
+ * hostile payload can't blow up the run context.
+ */
+export function flattenWebhookPayload(
+  data: Record<string, unknown>,
+  maxChars = EMAIL_WINDOW_TEXT_MAX
+): string {
+  const lines: string[] = [];
+  const walk = (value: unknown, path: string, depth: number): void => {
+    if (depth > 4 || lines.length >= 200) return;
+    if (value === null || value === undefined) return;
+    if (Array.isArray(value)) {
+      // The root is always an object (Record), so an array is always reached
+      // under a key — `path` is never empty here.
+      value.forEach((v, i) => walk(v, `${path}.${i}`, depth + 1));
+      return;
+    }
+    if (typeof value === "object") {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        walk(v, path ? `${path}.${k}` : k, depth + 1);
+      }
+      return;
+    }
+    lines.push(`${path}: ${String(value)}`);
+  };
+  walk(data, "", 0);
+  return lines.join("\n").slice(0, maxChars);
+}
+
+export type WebhookEventInput = {
+  /** Caller-supplied source label, e.g. "facebook_lead_ads". */
+  source: string;
+  /** The event payload (already parsed JSON object). */
+  data: Record<string, unknown>;
+  /** Caller-supplied event id (drives the run dedupe key), if any. */
+  eventId?: string;
+};
+
+/**
+ * Trigger scope for a public-API webhook event (the `webhook` channel).
+ * windowText is the flattened payload; `from` is the source label so a
+ * `from_matches` condition can scope a flow to one bridge/lead source.
+ */
+export function webhookTriggerScope(event: WebhookEventInput): TriggerScope {
+  const windowText = flattenWebhookPayload(event.data);
+  return {
+    channel: "webhook",
+    windowText,
+    url: firstUrlInText(windowText),
+    from: event.source.slice(0, 120),
+    ...(event.eventId ? { event_id: event.eventId.slice(0, 200) } : {})
   };
 }

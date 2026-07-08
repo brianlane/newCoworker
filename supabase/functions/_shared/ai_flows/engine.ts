@@ -762,6 +762,11 @@ export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
       // the AND-ed condition list (which may be empty = match every email).
       if (!Array.isArray(trigger.conditions)) return false;
       break;
+    case "webhook":
+      // Public-API push (POST /api/public/v1/flow-events): same shape as
+      // tenant_email — an AND-ed condition list, empty = match every event.
+      if (!Array.isArray(trigger.conditions)) return false;
+      break;
     case "schedule": {
       const daily = typeof trigger.time === "string" && typeof trigger.timezone === "string";
       const interval = typeof trigger.everyMinutes === "number";

@@ -99,6 +99,21 @@ export type TenantEmailTrigger = {
 };
 
 /**
+ * Inbound-webhook trigger: an authenticated POST to the public API
+ * (`/api/public/v1/flow-events`, bearer = the tenant's `nck_` key) enqueues a
+ * run for every enabled webhook flow whose conditions match. Push-based like
+ * TenantEmailTrigger — the endpoint flattens the event payload into
+ * windowText, so extract_text and templating work unchanged. This is how
+ * external lead sources (e.g. Meta Lead Ads via a Zapier/Make bridge) start a
+ * flow without a phone/email/browser trigger.
+ */
+export type WebhookTrigger = {
+  channel: "webhook";
+  /** AND-ed conditions; empty means "match every event". */
+  conditions: TriggerCondition[];
+};
+
+/**
  * Inbound-voice trigger: a call FROM `fromE164` to a business voice number fires
  * this flow. Unlike every other channel it does NOT enqueue an ai_flow_run — the
  * Telnyx voice webhook resolves the matching enabled voice flow in real time and
@@ -141,6 +156,7 @@ export type FlowTrigger =
   | ScheduleTrigger
   | EmailTrigger
   | TenantEmailTrigger
+  | WebhookTrigger
   | VoiceTrigger;
 
 export type ExtractField = {

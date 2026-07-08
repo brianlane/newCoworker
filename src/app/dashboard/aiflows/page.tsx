@@ -47,6 +47,12 @@ export default async function AiFlowsPage({ searchParams }: Props) {
         {businessId && (
           <div className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm">
             <Link
+              href="/dashboard/aiflows/guides/meta-leads"
+              className="text-signal-teal hover:underline"
+            >
+              How to: Meta ad leads
+            </Link>
+            <Link
               href="/dashboard/aiflows/library"
               className="text-signal-teal hover:underline"
             >

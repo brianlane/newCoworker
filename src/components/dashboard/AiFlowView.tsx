@@ -19,6 +19,7 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   schedule: "On a schedule",
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
+  webhook: "Webhook (Zapier, Make, or API)",
   voice: "Voice call routing"
 };
 
@@ -117,6 +118,12 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
       {trigger.channel === "tenant_email" && (
         <>
           <Row label="Watched mailbox" value="AI coworker's dedicated mailbox" />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+      {trigger.channel === "webhook" && (
+        <>
+          <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
