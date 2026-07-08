@@ -34,7 +34,7 @@ const principles = [
   {
     title: "Memory that compounds",
     description:
-      "Standard LLM tools forget everything between sessions. Your coworker keeps permanent, lossless memory of your business and customers, so every conversation makes the next one better.",
+      "Typical AI tools forget everything between sessions. Your coworker keeps permanent, lossless memory of your business and customers, so every conversation makes the next one better.",
     Icon: Brain
   },
   {

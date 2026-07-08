@@ -187,7 +187,7 @@ export default function IntegrationsPage() {
               </p>
               <h2 className="text-2xl font-bold text-parchment">A real API, not a widget</h2>
               <p className="mt-4 leading-relaxed text-parchment/60">
-                Standard and Enterprise plans include per-business API keys managed from your
+                Your coworker comes with per-business API keys managed from your
                 dashboard. Send messages, read call and message events (with AI summaries), and
                 subscribe webhook endpoints to real-time events.
               </p>
@@ -214,7 +214,7 @@ Authorization: Bearer nck_...
 
       <CtaBanner
         title="Plug your coworker into your stack"
-        subtitle="Zapier, calendar, email, and API access are included with Standard plans."
+        subtitle="Zapier, calendar, email, and API access are built in. No connector fees."
         ctaLabel="Get Started"
         ctaHref="/onboard"
       />

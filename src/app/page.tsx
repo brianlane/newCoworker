@@ -211,7 +211,7 @@ export default function HomePage() {
           { value: "24/7", label: "Every call and text answered: nights, weekends, holidays" },
           {
             value: `${TIER_LIMITS.standard.maxConcurrentCalls} calls`,
-            label: "Handled at once on Standard, so there are no busy signals during your rush"
+            label: "Handled at once, so there are no busy signals during your rush"
           },
           { value: "8,000+", label: "Everyday apps connected through Zapier, no code required" },
           { value: "1 server", label: "Dedicated to your business, so your data stays yours" }

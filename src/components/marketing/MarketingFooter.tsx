@@ -65,10 +65,16 @@ export function MarketingFooter() {
           <FooterColumn title="Company" links={COMPANY_LINKS} />
           <FooterColumn title="Legal" links={LEGAL_LINKS} />
         </div>
-        <div className="mt-10 border-t border-parchment/10 pt-6">
+        <div className="mt-10 flex flex-col gap-2 border-t border-parchment/10 pt-6 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-xs text-parchment/30">
             &copy; {new Date().getFullYear()} New Coworker. All rights reserved.
           </p>
+          <a
+            href="/llms.txt"
+            className="text-xs text-parchment/30 transition-colors hover:text-parchment/60"
+          >
+            For AI assistants
+          </a>
         </div>
       </div>
     </footer>
