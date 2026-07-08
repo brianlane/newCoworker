@@ -16,7 +16,13 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import type {
+  VoiceCallKind,
+  VoiceCallSentiment,
+  VoiceTranscriptDirection,
+  VoiceTranscriptStatus
+} from "@/lib/db/voice-transcripts";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -113,6 +119,191 @@ export async function getDailyUsageSeries(
   return { days: series, totals };
 }
 
+export const CALL_SENTIMENT_KEYS: VoiceCallSentiment[] = [
+  "positive",
+  "neutral",
+  "negative",
+  "mixed"
+];
+
+/**
+ * Strict YYYY-MM-DD guard for the drill-down query param (rejects garbage
+ * before it reaches queries). The round-trip check catches impossible
+ * calendar dates like 2026-02-31, which V8 silently rolls over to March.
+ */
+export function isValidAnalyticsDay(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && utcYmd(parsed) === value;
+}
+
+/** One call row in the day drill-down, shaped for the analytics page's list. */
+export type DayDetailCall = {
+  /** Transcript row UUID — links into /dashboard/calls/[id]. */
+  id: string;
+  callerE164: string | null;
+  startedAt: string;
+  endedAt: string | null;
+  status: VoiceTranscriptStatus;
+  direction: VoiceTranscriptDirection;
+  callKind: VoiceCallKind;
+  /** For forwarded calls: the human number the call was sent to. */
+  forwardedTo: string | null;
+  summary: string | null;
+  sentiment: VoiceCallSentiment | null;
+};
+
+export type AnalyticsDayDetail = {
+  /** UTC calendar date, YYYY-MM-DD (same bucketing as the volume series). */
+  date: string;
+  usage: { calls: number; sms: number; voiceMinutes: number };
+  /** Calls that day, newest first (answered + forwarded; missed excluded like the 30-day cards). */
+  calls: DayDetailCall[];
+  /** Inbound calls refused that day (concurrency limit / out of minutes). */
+  turnedAway: number;
+  /** True when the call list hit its row cap and shows only the most recent calls. */
+  clipped: boolean;
+};
+
+/** Row cap for the day drill-down call list — far above any single tenant's daily volume. */
+export const ANALYTICS_DAY_CALL_LIMIT = 200;
+
+/**
+ * Everything the analytics page shows when the owner clicks into one day of
+ * the 30-day volume charts: that day's usage totals, the individual calls
+ * (deep-linking into /dashboard/calls/[id]), and the turned-away count.
+ *
+ * The day is a UTC calendar date because that's how `daily_usage` buckets —
+ * the drill-down must slice transcripts on the same boundary or its call
+ * list would disagree with the bar the owner clicked.
+ */
+export async function getAnalyticsDayDetail(
+  businessId: string,
+  date: string,
+  opts: { client?: SupabaseClient } = {}
+): Promise<AnalyticsDayDetail> {
+  const db = opts.client ?? (await createSupabaseServiceClient());
+  const dayStart = new Date(`${date}T00:00:00.000Z`);
+  const startIso = dayStart.toISOString();
+  const endIso = new Date(dayStart.getTime() + 86_400_000).toISOString();
+
+  type CallRow = {
+    id: string;
+    caller_e164: string | null;
+    started_at: string;
+    ended_at: string | null;
+    status: VoiceTranscriptStatus;
+    direction: VoiceTranscriptDirection;
+    call_kind: VoiceCallKind;
+    forwarded_to_e164: string | null;
+    summary: string | null;
+    sentiment: string | null;
+  };
+  const CALL_COLUMNS = [
+    "id",
+    "caller_e164",
+    "started_at",
+    "ended_at",
+    "status",
+    "direction",
+    "call_kind",
+    "forwarded_to_e164",
+    "summary",
+    "sentiment"
+  ];
+
+  // `voice_call_transcripts` is a residency-moved table: vps-mode tenants
+  // read it from their box (like the call-history list). `daily_usage` and
+  // `system_logs` are central control-plane tables and always read central.
+  const fetchCalls = async (): Promise<CallRow[]> => {
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+    if (vpsReadMode) {
+      return await readMovedRows<CallRow>(businessId, {
+        table: "voice_call_transcripts",
+        columns: CALL_COLUMNS,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          // Missed forwarded calls are represented by the turned-away count
+          // (their voice_call_blocked ledger row) — same single-bucket rule
+          // as the 30-day cards.
+          { column: "status", op: "neq", value: "missed" },
+          { column: "started_at", op: "gte", value: startIso },
+          { column: "started_at", op: "lt", value: endIso }
+        ],
+        order: [{ column: "started_at", ascending: false }],
+        limit: ANALYTICS_DAY_CALL_LIMIT
+      });
+    }
+    const { data, error } = await db
+      .from("voice_call_transcripts")
+      .select(
+        "id, caller_e164, started_at, ended_at, status, direction, call_kind, forwarded_to_e164, summary, sentiment"
+      )
+      .eq("business_id", businessId)
+      .neq("status", "missed")
+      .gte("started_at", startIso)
+      .lt("started_at", endIso)
+      .order("started_at", { ascending: false })
+      .limit(ANALYTICS_DAY_CALL_LIMIT);
+    if (error) throw new Error(`getAnalyticsDayDetail calls: ${error.message}`);
+    return (data as CallRow[] | null) ?? [];
+  };
+
+  const [usageRes, callRows, blockedRes] = await Promise.all([
+    db
+      .from("daily_usage")
+      .select("calls_made, sms_sent, voice_minutes_used")
+      .eq("business_id", businessId)
+      .eq("usage_date", date)
+      .maybeSingle(),
+    fetchCalls(),
+    db
+      .from("system_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", businessId)
+      .eq("event", "voice_call_blocked")
+      .gte("created_at", startIso)
+      .lt("created_at", endIso)
+  ]);
+  if (usageRes.error) throw new Error(`getAnalyticsDayDetail usage: ${usageRes.error.message}`);
+  if (blockedRes.error) {
+    throw new Error(`getAnalyticsDayDetail blocked: ${blockedRes.error.message}`);
+  }
+
+  type UsageRow = {
+    calls_made: number | null;
+    sms_sent: number | null;
+    voice_minutes_used: number | null;
+  };
+  const usageRow = (usageRes.data as UsageRow | null) ?? null;
+
+  return {
+    date,
+    usage: {
+      calls: Number(usageRow?.calls_made ?? 0),
+      sms: Number(usageRow?.sms_sent ?? 0),
+      voiceMinutes: Number(usageRow?.voice_minutes_used ?? 0)
+    },
+    calls: callRows.map((row) => ({
+      id: row.id,
+      callerE164: row.caller_e164,
+      startedAt: row.started_at,
+      endedAt: row.ended_at,
+      status: row.status,
+      direction: row.direction,
+      callKind: row.call_kind,
+      forwardedTo: row.forwarded_to_e164,
+      summary: row.summary,
+      sentiment:
+        row.sentiment && (CALL_SENTIMENT_KEYS as string[]).includes(row.sentiment)
+          ? (row.sentiment as VoiceCallSentiment)
+          : null
+    })),
+    turnedAway: blockedRes.count ?? 0,
+    clipped: callRows.length >= ANALYTICS_DAY_CALL_LIMIT
+  };
+}
+
 /**
  * Hour-of-day (0-23) for an ISO timestamp in the business's IANA timezone.
  * Peak hours only make sense on the owner's clock — a plumber in Phoenix
@@ -135,13 +326,6 @@ export function hourInTimeZone(iso: string, timeZone: string | null | undefined)
   }
   return date.getUTCHours();
 }
-
-export const CALL_SENTIMENT_KEYS: VoiceCallSentiment[] = [
-  "positive",
-  "neutral",
-  "negative",
-  "mixed"
-];
 
 export type InboundCallStats = {
   /** Inbound call attempts per hour-of-day (24 buckets) in the given timezone. */
