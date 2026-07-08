@@ -52,6 +52,19 @@ this directory to it, so a new machine only needs `login` + `push`. Until a
 version is promoted and either shared by invite or published to the App
 Directory, tenants cannot find "New Coworker" inside Zapier.
 
+After a push, make the version usable:
+
+```bash
+npx zapier-platform promote 1.0.0 -y   # reads CHANGELOG.md for release notes
+npx zapier-platform users:links        # per-version invite URLs for tenants
+```
+
+Note: `promote` runs Zapier's publishing checks; usage-based ones (e.g. S002
+"action has no live Zaps") only clear once real Zaps use the app, so early on
+share the **invite link** — invited users can build Zaps against the pushed
+version without promotion. Manage everything visually at
+https://developer.zapier.com (NOT the regular zapier.com/app dashboard).
+
 `BASE_URL` defaults to `https://www.newcoworker.com`; point a version at a
 preview deployment with `zapier env:set <version> BASE_URL=https://…`.
 
