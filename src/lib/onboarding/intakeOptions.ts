@@ -109,6 +109,7 @@ export const CRM_OPTIONS: readonly CrmOption[] = [
   { value: "kvCORE", label: "kvCORE" },
   { value: "BoomTown", label: "BoomTown" },
   { value: "Real Geeks", label: "Real Geeks" },
+  { value: "Privyr", label: "Privyr" },
   { value: "Zoho CRM", label: "Zoho CRM" },
   { value: "GoHighLevel", label: "GoHighLevel" },
   { value: "ActiveCampaign", label: "ActiveCampaign" },
