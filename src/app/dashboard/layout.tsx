@@ -12,6 +12,7 @@ import {
   resolveActiveBusinessContext,
   type AccessibleBusiness
 } from "@/lib/dashboard/active-business";
+import { can } from "@/lib/authz/policy";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
@@ -88,7 +89,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
     const ctx = await resolveActiveBusinessContext(user, db);
     businessId = ctx.businessId;
     accessible = ctx.accessible;
-    if (businessId) {
+    // The grace banner's CTA is /api/billing/reactivate (manage_billing,
+    // owner-only) — don't dangle it in front of managers/staff whose click
+    // would just 403. Billing state is the owner's concern.
+    if (businessId && ctx.role && can(ctx.role, "manage_billing")) {
       const { data: subs } = await db
         .from("subscriptions")
         .select("status, grace_ends_at, wiped_at, cancel_reason, created_at")
