@@ -96,11 +96,37 @@ describe("db/enterprise-deals", () => {
     expect(await listEnterpriseDeals(DEAL.business_id)).toEqual([]);
   });
 
+  it("listEnterpriseDeals throws on error", async () => {
+    const db = mockDb({ order: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(listEnterpriseDeals(DEAL.business_id)).rejects.toThrow(
+      "listEnterpriseDeals: boom"
+    );
+  });
+
   it("getEnterpriseDeal / getEnterpriseDealByPayToken return null when absent", async () => {
     const db = mockDb();
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await getEnterpriseDeal(DEAL.id)).toBeNull();
     expect(await getEnterpriseDealByPayToken(DEAL.pay_token)).toBeNull();
+  });
+
+  it("getEnterpriseDeal / getEnterpriseDealByPayToken return the row when present (accepting an explicit client)", async () => {
+    const db = mockDb({ maybeSingle: vi.fn().mockResolvedValue({ data: DEAL, error: null }) });
+    expect(await getEnterpriseDeal(DEAL.id, db as never)).toEqual(DEAL);
+    expect(await getEnterpriseDealByPayToken(DEAL.pay_token, db as never)).toEqual(DEAL);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("getEnterpriseDeal / getEnterpriseDealByPayToken throw on error", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(getEnterpriseDeal(DEAL.id)).rejects.toThrow("getEnterpriseDeal: boom");
+    await expect(getEnterpriseDealByPayToken(DEAL.pay_token)).rejects.toThrow(
+      "getEnterpriseDealByPayToken: boom"
+    );
   });
 
   it("revokeEnterpriseDeal only flips OPEN deals (guarded update)", async () => {
@@ -110,9 +136,17 @@ describe("db/enterprise-deals", () => {
     expect(db.update).toHaveBeenCalledWith({ status: "revoked" });
     expect(db.eq).toHaveBeenCalledWith("status", "open");
 
-    const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: [], error: null }) });
+    const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: null, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(noMatch as never);
     expect(await revokeEnterpriseDeal(DEAL.id)).toBe(false);
+  });
+
+  it("revokeEnterpriseDeal throws on error", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(revokeEnterpriseDeal(DEAL.id)).rejects.toThrow("revokeEnterpriseDeal: boom");
   });
 
   it("markEnterpriseDealActive claims atomically and reports duplicate sessions", async () => {
@@ -133,7 +167,7 @@ describe("db/enterprise-deals", () => {
     // The claim predicate: not-yet-active OR already active from this session.
     expect(db.or).toHaveBeenCalledWith("status.neq.active,stripe_session_id.eq.cs_1");
 
-    const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: [], error: null }) });
+    const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: null, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(noMatch as never);
     expect(
       await markEnterpriseDealActive(DEAL.id, {
@@ -144,6 +178,20 @@ describe("db/enterprise-deals", () => {
     ).toBe("duplicate_session");
   });
 
+  it("markEnterpriseDealActive throws on error", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(
+      markEnterpriseDealActive(DEAL.id, {
+        activatedAt: new Date(),
+        stripeSessionId: "cs_3",
+        stripeSubscriptionId: null
+      })
+    ).rejects.toThrow("markEnterpriseDealActive: boom");
+  });
+
   it("markEnterpriseDealCanceledByStripeSubscriptionId only flips ACTIVE deals", async () => {
     const db = mockDb({ select: vi.fn().mockResolvedValue({ data: [{ id: DEAL.id }], error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
@@ -152,17 +200,59 @@ describe("db/enterprise-deals", () => {
     expect(db.eq).toHaveBeenCalledWith("stripe_subscription_id", "sub_1");
     expect(db.eq).toHaveBeenCalledWith("status", "active");
 
-    const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: [], error: null }) });
+    const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: null, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(noMatch as never);
     expect(await markEnterpriseDealCanceledByStripeSubscriptionId("sub_other")).toBe(false);
   });
 
-  it("enterpriseDealPayUrl builds the public link from NEXT_PUBLIC_APP_URL", () => {
+  it("markEnterpriseDealCanceledByStripeSubscriptionId throws on error", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(markEnterpriseDealCanceledByStripeSubscriptionId("sub_1")).rejects.toThrow(
+      "markEnterpriseDealCanceledByStripeSubscriptionId: boom"
+    );
+  });
+
+  it("every mutator accepts an explicit client (no service-client construction)", async () => {
+    const insertDb = mockDb({ single: vi.fn().mockResolvedValue({ data: DEAL, error: null }) });
+    await createEnterpriseDeal(
+      {
+        businessId: DEAL.business_id,
+        setupCents: 0,
+        monthlyCents: 100,
+        createdBy: "a@b.c"
+      },
+      insertDb as never
+    );
+
+    const listDb = mockDb({ order: vi.fn().mockResolvedValue({ data: [DEAL], error: null }) });
+    await listEnterpriseDeals(DEAL.business_id, listDb as never);
+
+    const writeDb = mockDb({
+      select: vi.fn().mockResolvedValue({ data: [{ id: DEAL.id }], error: null })
+    });
+    await revokeEnterpriseDeal(DEAL.id, writeDb as never);
+    await markEnterpriseDealActive(
+      DEAL.id,
+      { activatedAt: new Date(), stripeSessionId: "cs_x", stripeSubscriptionId: "sub_x" },
+      writeDb as never
+    );
+    await markEnterpriseDealCanceledByStripeSubscriptionId("sub_x", writeDb as never);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("enterpriseDealPayUrl builds the public link from NEXT_PUBLIC_APP_URL (with localhost fallback)", () => {
     const prev = process.env.NEXT_PUBLIC_APP_URL;
     process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com/";
     try {
       expect(enterpriseDealPayUrl(DEAL)).toBe(
         `https://app.example.com/enterprise-offer/${DEAL.pay_token}`
+      );
+      delete process.env.NEXT_PUBLIC_APP_URL;
+      expect(enterpriseDealPayUrl(DEAL)).toBe(
+        `http://localhost:3000/enterprise-offer/${DEAL.pay_token}`
       );
     } finally {
       process.env.NEXT_PUBLIC_APP_URL = prev;

@@ -5,6 +5,7 @@ import {
   createCheckoutSession,
   createChatCreditCheckoutSession,
   createCustomerPortalSession,
+  createEnterpriseDealCheckoutSession,
   createSmsBonusCheckoutSession,
   createVoiceBonusCheckoutSession,
   createWhiteGloveCheckoutSession,
@@ -706,6 +707,101 @@ describe("stripe/client", () => {
         ).rejects.toThrow("creditMicros must be a positive integer");
       }
       expect(mockSessionCreate).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("createEnterpriseDealCheckoutSession", () => {
+    const baseParams = {
+      dealId: "deal-1",
+      businessId: "biz-1",
+      businessName: "Acme Corp",
+      monthlyCents: 49_500,
+      setupCents: 82_500,
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel"
+    };
+
+    it("creates a subscription-mode session with a recurring line + one-time setup line", async () => {
+      const result = await createEnterpriseDealCheckoutSession({
+        ...baseParams,
+        customerEmail: "owner@example.com"
+      });
+
+      expect(result.id).toBe("cs_mock_session");
+      expect(result.url).toContain("stripe.com");
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call).toMatchObject({
+        mode: "subscription",
+        line_items: [
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Enterprise plan — Acme Corp" },
+              unit_amount: 49_500,
+              recurring: { interval: "month" }
+            },
+            quantity: 1
+          },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Enterprise setup (one-time)" },
+              unit_amount: 82_500
+            },
+            quantity: 1
+          }
+        ],
+        customer_email: "owner@example.com",
+        metadata: {
+          checkoutKind: "enterprise_deal",
+          enterpriseDealId: "deal-1",
+          businessId: "biz-1",
+          tier: "enterprise"
+        },
+        subscription_data: {
+          metadata: expect.objectContaining({ checkoutKind: "enterprise_deal" })
+        }
+      });
+      expect(call.customer).toBeUndefined();
+    });
+
+    it("omits the setup line when setupCents is 0", async () => {
+      await createEnterpriseDealCheckoutSession({ ...baseParams, setupCents: 0 });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.line_items).toHaveLength(1);
+      expect(call.line_items[0].price_data.recurring).toEqual({ interval: "month" });
+    });
+
+    it("pins the existing Stripe customer and omits customer_email when provided", async () => {
+      await createEnterpriseDealCheckoutSession({
+        ...baseParams,
+        customerEmail: "owner@example.com",
+        customerId: "cus_ent"
+      });
+      const call = mockSessionCreate.mock.calls[0]?.[0];
+      expect(call.customer).toBe("cus_ent");
+      expect(call.customer_email).toBeUndefined();
+    });
+
+    it("rejects non-positive monthlyCents and negative/non-integer setupCents", async () => {
+      for (const monthlyCents of [0, -100, 10.5]) {
+        await expect(
+          createEnterpriseDealCheckoutSession({ ...baseParams, monthlyCents })
+        ).rejects.toThrow("monthlyCents must be a positive integer");
+      }
+      for (const setupCents of [-1, 10.5]) {
+        await expect(
+          createEnterpriseDealCheckoutSession({ ...baseParams, setupCents })
+        ).rejects.toThrow("setupCents must be a non-negative integer");
+      }
+      expect(mockSessionCreate).not.toHaveBeenCalled();
+    });
+
+    it("throws when the session url is null", async () => {
+      mockSessionCreate.mockResolvedValueOnce({ id: "cs_ent_null", url: null });
+      await expect(createEnterpriseDealCheckoutSession(baseParams)).rejects.toThrow(
+        "Stripe checkout session URL is null"
+      );
     });
   });
 
