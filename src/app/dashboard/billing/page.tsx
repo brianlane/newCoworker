@@ -16,7 +16,7 @@
  */
 
 import { redirect } from "next/navigation";
-import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -81,7 +81,7 @@ export default async function BillingPage(props: {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const activeBusinessId = await resolveActiveBusinessId(user);
+  const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
     .select(

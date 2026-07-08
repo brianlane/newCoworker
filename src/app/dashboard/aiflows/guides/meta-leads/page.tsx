@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -29,7 +29,7 @@ export default async function MetaLeadsGuidePage() {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const activeBusinessId = await resolveActiveBusinessId(user);
+  const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_aiflows");
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name")

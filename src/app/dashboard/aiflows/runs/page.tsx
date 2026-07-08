@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
@@ -30,7 +30,7 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const activeBusinessId = await resolveActiveBusinessId(user);
+  const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_aiflows");
   const { data: businesses } = await db
     .from("businesses")
     .select("id")

@@ -1,5 +1,5 @@
 import { getAuthUser } from "@/lib/auth";
-import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { redirect } from "next/navigation";
 import { Card } from "@/components/ui/Card";
@@ -36,7 +36,7 @@ export default async function SettingsPage() {
   const ownerEmail = resolvedEmail ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const activeBusinessId = await resolveActiveBusinessId(user);
+  const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name, tier, enterprise_limits, timezone")
