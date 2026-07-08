@@ -18,6 +18,7 @@ vi.mock("@/lib/provisioning/byos", async (importOriginal) => {
     ...actual,
     prepareByosEnrollment: vi.fn(),
     probeByosSsh: vi.fn(),
+    runByosPreflight: vi.fn(),
     makeByosProvisioner: vi.fn(() => "byos-provisioner-stub")
   };
 });
@@ -27,7 +28,8 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
 }));
 
 vi.mock("@/lib/provisioning/progress", () => ({
-  getLatestProvisioningStatus: vi.fn()
+  getLatestProvisioningStatus: vi.fn(),
+  recordProvisioningProgress: vi.fn().mockResolvedValue({})
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -41,10 +43,14 @@ import { getSubscription } from "@/lib/db/subscriptions";
 import {
   ByosEnrollmentError,
   prepareByosEnrollment,
-  probeByosSsh
+  probeByosSsh,
+  runByosPreflight
 } from "@/lib/provisioning/byos";
+import {
+  getLatestProvisioningStatus,
+  recordProvisioningProgress
+} from "@/lib/provisioning/progress";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
-import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
 import { VpsProviderValidationError } from "@/lib/vps/provider";
 import { logger } from "@/lib/logger";
 
@@ -87,6 +93,11 @@ describe("api/admin/byos/enroll route", () => {
     });
     vi.mocked(probeByosSsh).mockResolvedValue({ host: "203.0.113.7" });
     vi.mocked(getLatestProvisioningStatus).mockResolvedValue(null);
+    vi.mocked(runByosPreflight).mockResolvedValue({
+      ok: true,
+      checks: [],
+      diskEncryption: "detected"
+    });
     vi.mocked(orchestrateProvisioning).mockResolvedValue({
       vpsId: "byos-x",
       tunnelUrl: "https://x",
@@ -198,6 +209,40 @@ describe("api/admin/byos/enroll route", () => {
     });
     const failed = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
     expect(failed.status).toBe(200);
+  });
+
+  it("provision: runs the preflight gate with the resolved size + attestation, and records the audit row", async () => {
+    const res = await POST(
+      makeRequest({
+        action: "provision",
+        businessId: BIZ_ID,
+        attestProviderDiskEncryption: true
+      })
+    );
+    expect(res.status).toBe(200);
+    // Enterprise tier with no pin resolves to kvm8 (DEFAULT_TIER_VPS_SIZE).
+    expect(runByosPreflight).toHaveBeenCalledWith(BIZ_ID, {
+      vpsSize: "kvm8",
+      attestProviderDiskEncryption: true
+    });
+    expect(recordProvisioningProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ_ID,
+        phase: "byos_preflight",
+        message: expect.stringContaining("operator attested")
+      })
+    );
+  });
+
+  it("provision: a preflight failure surfaces as a 400 and never starts the orchestrator", async () => {
+    vi.mocked(runByosPreflight).mockRejectedValue(
+      new ByosEnrollmentError("BYOS preflight failed — os: requires Ubuntu 24.04")
+    );
+    const res = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error.message).toContain("Ubuntu 24.04");
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
   });
 
   it("provision: probe failure surfaces as a 400 with the hint", async () => {

@@ -46,6 +46,7 @@ export function ByosEnrollmentPanel({
   const [loading, setLoading] = useState<"prepare" | "provision" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [attestEncryption, setAttestEncryption] = useState(false);
 
   async function callEnroll(body: Record<string, unknown>) {
     const res = await fetch("/api/admin/byos/enroll", {
@@ -89,9 +90,12 @@ export function ByosEnrollmentPanel({
     setError(null);
     setNotice(null);
     try {
-      const data = await callEnroll({ action: "provision" });
+      const data = await callEnroll({
+        action: "provision",
+        attestProviderDiskEncryption: attestEncryption
+      });
       setNotice(
-        `SSH probe to ${data.host} passed — provisioning started. Follow progress in the provisioning logs below.`
+        `SSH probe + preflight on ${data.host} passed — provisioning started. Follow progress in the provisioning logs below.`
       );
       router.refresh();
     } catch (err) {
@@ -162,8 +166,21 @@ export function ByosEnrollmentPanel({
           <pre className="max-h-24 overflow-auto rounded-md bg-deep-ink p-2 text-[10px] font-mono text-parchment/80 whitespace-pre-wrap break-all">
             {enrollment.publicKey}
           </pre>
+          <label className="flex items-start gap-2 text-xs text-parchment/60">
+            <input
+              type="checkbox"
+              checked={attestEncryption}
+              onChange={(e) => setAttestEncryption(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              I attest the box has provider-level encryption at rest (required when the
+              preflight finds no dm-crypt/LUKS on the box — PII must not land on an
+              unencrypted disk).
+            </span>
+          </label>
           <Button size="sm" onClick={provision} loading={loading === "provision"} disabled={loading !== null}>
-            Verify SSH &amp; provision
+            Verify SSH, run preflight &amp; provision
           </Button>
         </div>
       )}

@@ -1038,6 +1038,46 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     });
   });
 
+  it("byos grace-expired wipe emits the on-box wipe op (and skips it when the host is unknown)", () => {
+    const wipeSub = makeSub({
+      status: "canceled",
+      grace_ends_at: "2026-04-01T00:00:00.000Z",
+      wiped_at: null,
+      cancel_reason: "user_period_end"
+    });
+
+    const withHost = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ vpsProvider: "byos", vpsHost: "203.0.113.7", subscription: wipeSub })
+    );
+    if (!withHost.ok) throw new Error(`expected ok, got ${withHost.reason}`);
+    expect(withHost.plan.sshOps).toContainEqual({
+      type: "wipe_byos_box",
+      businessId: "biz-1",
+      vpsHost: "203.0.113.7"
+    });
+    // Hostinger teardown stays skipped for a customer-owned box.
+    expect(withHost.plan.hostingerOps).toEqual([]);
+
+    // Unknown host (box unreachable): no wipe op this tick — the sweep
+    // retries idempotently on the next one.
+    const noHost = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ vpsProvider: "byos", vpsHost: null, subscription: wipeSub })
+    );
+    if (!noHost.ok) throw new Error(`expected ok, got ${noHost.reason}`);
+    expect(noHost.plan.sshOps.some((op) => op.type === "wipe_byos_box")).toBe(false);
+
+    // OVH boxes are platform-owned — terminated provider-side, never wiped
+    // over SSH like a customer box.
+    const ovh = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ vpsProvider: "ovh", vpsHost: "203.0.113.8", subscription: wipeSub })
+    );
+    if (!ovh.ok) throw new Error(`expected ok, got ${ovh.reason}`);
+    expect(ovh.plan.sshOps.some((op) => op.type === "wipe_byos_box")).toBe(false);
+  });
+
   it("a corrupt provider value resolves to hostinger (full lifecycle preserved)", () => {
     const res = planLifecycleAction(
       { type: "cancelWithRefund" },

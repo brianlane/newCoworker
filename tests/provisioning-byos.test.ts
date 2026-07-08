@@ -25,8 +25,10 @@ import {
   byosBoxId,
   isValidByosHost,
   makeByosProvisioner,
+  parseByosPreflightOutput,
   prepareByosEnrollment,
-  probeByosSsh
+  probeByosSsh,
+  runByosPreflight
 } from "@/lib/provisioning/byos";
 import { getBusiness, updateBusinessVpsProvider } from "@/lib/db/businesses";
 import {
@@ -251,6 +253,148 @@ describe("probeByosSsh", () => {
         command: `echo ${BYOS_PROBE_MARKER}`
       })
     );
+  });
+});
+
+const PREFLIGHT_PASS_OUTPUT = [
+  "PREFLIGHT os PASS ubuntu 24.04",
+  "PREFLIGHT cpu PASS 8 vCPU (min 8 for kvm8)",
+  "PREFLIGHT disk_encryption PASS dm-crypt/LUKS volume detected",
+  "PREFLIGHT RESULT PASS"
+].join("\n");
+
+const PREFLIGHT_WARN_ENCRYPTION_OUTPUT = [
+  "PREFLIGHT os PASS ubuntu 24.04",
+  "PREFLIGHT disk_encryption WARN no dm-crypt/LUKS detected — provider-level encryption-at-rest attestation required",
+  "PREFLIGHT RESULT PASS"
+].join("\n");
+
+describe("parseByosPreflightOutput", () => {
+  it("parses checks, tolerates noise lines, and reads the verdict", () => {
+    const report = parseByosPreflightOutput(
+      `random boot noise\n${PREFLIGHT_PASS_OUTPUT}\ntrailing`
+    );
+    expect(report.ok).toBe(true);
+    expect(report.diskEncryption).toBe("detected");
+    expect(report.checks).toHaveLength(3);
+    expect(report.checks[0]).toEqual({
+      name: "os",
+      status: "PASS",
+      detail: "ubuntu 24.04"
+    });
+  });
+
+  it("fails closed when the verdict line is missing (script died mid-run)", () => {
+    const report = parseByosPreflightOutput("PREFLIGHT os PASS ubuntu 24.04\n");
+    expect(report.ok).toBe(false);
+  });
+
+  it("any FAIL check fails the report and WARN encryption requires attestation", () => {
+    const failed = parseByosPreflightOutput(
+      [
+        "PREFLIGHT os FAIL requires Ubuntu 24.04, found debian 12",
+        "PREFLIGHT RESULT FAIL"
+      ].join("\n")
+    );
+    expect(failed.ok).toBe(false);
+    expect(failed.diskEncryption).toBe("attestation_required");
+
+    const warned = parseByosPreflightOutput(PREFLIGHT_WARN_ENCRYPTION_OUTPUT);
+    expect(warned.ok).toBe(true);
+    expect(warned.diskEncryption).toBe("attestation_required");
+  });
+
+  it("tolerates a check line without detail", () => {
+    const report = parseByosPreflightOutput(
+      "PREFLIGHT egress443 PASS\nPREFLIGHT RESULT PASS"
+    );
+    expect(report.checks[0]).toEqual({ name: "egress443", status: "PASS", detail: "" });
+  });
+});
+
+describe("runByosPreflight", () => {
+  const loadScript = () => "#!/bin/bash\necho preflight-script";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getActiveVpsSshKey).mockResolvedValue(keyRow() as never);
+  });
+
+  it("stages the script base64-encoded with the VPS_SIZE and returns the report", async () => {
+    const exec = vi
+      .fn()
+      .mockResolvedValue({ exitCode: 0, signal: null, stdout: PREFLIGHT_PASS_OUTPUT, stderr: "" });
+    const report = await runByosPreflight(
+      BIZ,
+      { vpsSize: "kvm8", attestProviderDiskEncryption: false },
+      { exec, loadScript }
+    );
+    expect(report.ok).toBe(true);
+    const cmd = exec.mock.calls[0][0].command as string;
+    expect(cmd).toContain("base64 -d");
+    expect(cmd).toContain("VPS_SIZE='kvm8'");
+    expect(cmd).toContain(
+      Buffer.from(loadScript(), "utf8").toString("base64")
+    );
+  });
+
+  it("wraps SSH failures (Error and non-Error)", async () => {
+    const exec = vi.fn().mockRejectedValueOnce(new Error("connection error"));
+    await expect(
+      runByosPreflight(BIZ, { vpsSize: "kvm2", attestProviderDiskEncryption: false }, { exec, loadScript })
+    ).rejects.toThrow(/Preflight SSH run .* failed: connection error/);
+
+    exec.mockRejectedValueOnce("plain failure");
+    await expect(
+      runByosPreflight(BIZ, { vpsSize: "kvm2", attestProviderDiskEncryption: false }, { exec, loadScript })
+    ).rejects.toThrow(/plain failure/);
+  });
+
+  it("throws with the failed-check summary on a FAIL", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      exitCode: 1,
+      signal: null,
+      stdout: [
+        "PREFLIGHT os FAIL requires Ubuntu 24.04, found debian 12",
+        "PREFLIGHT containers FAIL running containers found: crypto-miner",
+        "PREFLIGHT RESULT FAIL"
+      ].join("\n"),
+      stderr: ""
+    });
+    await expect(
+      runByosPreflight(BIZ, { vpsSize: "kvm8", attestProviderDiskEncryption: true }, { exec, loadScript })
+    ).rejects.toThrow(/os: requires Ubuntu 24.04.*containers: running containers found/s);
+  });
+
+  it("throws a no-verdict summary when the script died without a RESULT line", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      exitCode: 137,
+      signal: null,
+      stdout: "PREFLIGHT os PASS ubuntu 24.04",
+      stderr: ""
+    });
+    await expect(
+      runByosPreflight(BIZ, { vpsSize: "kvm8", attestProviderDiskEncryption: false }, { exec, loadScript })
+    ).rejects.toThrow(/no verdict from the preflight script \(exit 137\)/);
+  });
+
+  it("requires the operator attestation when disk encryption is undetectable", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      stdout: PREFLIGHT_WARN_ENCRYPTION_OUTPUT,
+      stderr: ""
+    });
+    await expect(
+      runByosPreflight(BIZ, { vpsSize: "kvm8", attestProviderDiskEncryption: false }, { exec, loadScript })
+    ).rejects.toThrow(/attestation/);
+
+    const attested = await runByosPreflight(
+      BIZ,
+      { vpsSize: "kvm8", attestProviderDiskEncryption: true },
+      { exec, loadScript }
+    );
+    expect(attested.diskEncryption).toBe("attestation_required");
   });
 });
 
