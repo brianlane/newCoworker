@@ -9,7 +9,7 @@
     "start": "node worker.mjs"
   },
   "dependencies": {
-    "@supabase/supabase-js": "2.110.0"
+    "@supabase/supabase-js": "2.110.1"
   },
   "engines": {
     "node": ">=22"
