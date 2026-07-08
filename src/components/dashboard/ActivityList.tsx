@@ -16,24 +16,33 @@ const PAGE_SIZE = 25;
  * Full "See all activity" list. The parent server page loads ONE gap-free
  * chunk of activity items (newest-first, already ranked by recency); this
  * component filters them with the shared free-text search and paginates the
- * chunk in the browser, matching the calls/texts/emails list views. When the
- * tier window holds more history than one chunk, the server page passes
- * `olderHref`/`newestHref` cursor links so the ENTIRE window is reachable —
- * the search box only covers the currently loaded chunk.
+ * chunk in the browser, matching the calls/texts/emails list views.
+ *
+ * There is ONE Previous/Next control: within the loaded chunk it flips client
+ * pages, and at either edge it becomes the server cursor link to the adjacent
+ * chunk (`olderHref`/`newerHref`), so walking the entire tier window feels
+ * like one continuous list. Cross-chunk steps are real navigations, so they're
+ * suppressed while a search query is active — the search box only covers the
+ * currently loaded chunk.
  */
 export function ActivityList({
   items,
   olderHref = null,
-  newestHref = null
+  newerHref = null,
+  startAtEnd = false
 }: {
   items: ActivityItem[];
   /** Server link to the next-older chunk; null when the window is exhausted. */
   olderHref?: string | null;
-  /** Server link back to the newest chunk; null when already on it. */
-  newestHref?: string | null;
+  /** Server link to the next-newer chunk; null when already on the newest. */
+  newerHref?: string | null;
+  /** Open on the LAST client page (arriving here by stepping back from an older chunk). */
+  startAtEnd?: boolean;
 }) {
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(0);
+  const [page, setPage] = useState(() =>
+    startAtEnd ? Math.max(1, Math.ceil(items.length / PAGE_SIZE)) - 1 : 0
+  );
 
   const filtered = useMemo(
     () => items.filter((item) => matchesQuery(query, [item.label, ACTIVITY_BADGE[item.kind].label])),
@@ -45,6 +54,13 @@ export function ActivityList({
   const currentPage = Math.min(page, pageCount - 1);
   const start = currentPage * PAGE_SIZE;
   const visible = filtered.slice(start, start + PAGE_SIZE);
+
+  // Cross-chunk steps reload the page (losing the query), so only offer them
+  // when no search is active.
+  const olderChunkHref = query === "" ? olderHref : null;
+  const newerChunkHref = query === "" ? newerHref : null;
+  const onFirstPage = currentPage === 0;
+  const onLastPage = currentPage >= pageCount - 1;
 
   const onQueryChange = (next: string) => {
     setQuery(next);
@@ -98,44 +114,46 @@ export function ActivityList({
         )}
       </Card>
 
-      {pageCount > 1 && (
+      {(pageCount > 1 || olderChunkHref || newerChunkHref) && (
         <div className="flex items-center justify-between gap-3">
-          <button
-            type="button"
-            onClick={() => setPage(currentPage - 1)}
-            disabled={currentPage === 0}
-            className="rounded-md border border-parchment/15 px-3 py-1.5 text-xs text-parchment/80 hover:border-signal-teal/60 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            ← Previous
-          </button>
+          {onFirstPage && newerChunkHref ? (
+            <a href={newerChunkHref} className={NAV_BUTTON}>
+              ← Previous
+            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPage(currentPage - 1)}
+              disabled={onFirstPage}
+              className={NAV_BUTTON}
+            >
+              ← Previous
+            </button>
+          )}
           <span className="text-xs text-parchment/40">
             Page {currentPage + 1} of {pageCount}
+            {olderChunkHref ? "+" : ""}
           </span>
-          <button
-            type="button"
-            onClick={() => setPage(currentPage + 1)}
-            disabled={currentPage >= pageCount - 1}
-            className="rounded-md border border-parchment/15 px-3 py-1.5 text-xs text-parchment/80 hover:border-signal-teal/60 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            Next →
-          </button>
-        </div>
-      )}
-
-      {(olderHref || newestHref) && (
-        <div className="flex items-center justify-center gap-4 border-t border-parchment/10 pt-3">
-          {newestHref && (
-            <a href={newestHref} className="text-xs text-signal-teal hover:underline">
-              ← Back to newest
+          {onLastPage && olderChunkHref ? (
+            <a href={olderChunkHref} className={NAV_BUTTON}>
+              Next →
             </a>
-          )}
-          {olderHref && (
-            <a href={olderHref} className="text-xs text-signal-teal hover:underline">
-              Older activity →
-            </a>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPage(currentPage + 1)}
+              disabled={onLastPage}
+              className={NAV_BUTTON}
+            >
+              Next →
+            </button>
           )}
         </div>
       )}
     </div>
   );
 }
+
+/** Shared look for the pager controls, whether rendered as <button> or <a>. */
+const NAV_BUTTON =
+  "rounded-md border border-parchment/15 px-3 py-1.5 text-xs text-parchment/80 hover:border-signal-teal/60 disabled:cursor-not-allowed disabled:opacity-40";

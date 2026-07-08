@@ -13,8 +13,20 @@ import { ActivityList } from "@/components/dashboard/ActivityList";
 
 export const dynamic = "force-dynamic";
 
+/** Build a chunk URL from its cursor, the trail of prior cursors, and whether
+ * the client list should open on its LAST page (used when stepping back from
+ * an older chunk, so "Previous" lands adjacent to where the reader was). */
+function chunkHref(before: string | undefined, trail: string[], atEnd: boolean): string {
+  const q = new URLSearchParams();
+  if (before) q.set("before", before);
+  if (trail.length > 0) q.set("trail", trail.join(","));
+  if (atEnd) q.set("at", "end");
+  const qs = q.toString();
+  return qs ? `/dashboard/activity?${qs}` : "/dashboard/activity";
+}
+
 export default async function ActivityPage(props: {
-  searchParams?: Promise<{ before?: string }>;
+  searchParams?: Promise<{ before?: string; trail?: string; at?: string }>;
 }) {
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/activity");
@@ -23,11 +35,21 @@ export default async function ActivityPage(props: {
   // Admin view-as swaps in the impersonated tenant's owner email.
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
+  const params = (await props.searchParams) ?? {};
+
   // Older-chunk cursor (a previous chunk's nextBefore). Anything that doesn't
   // parse as a date is ignored rather than passed into queries.
-  const rawBefore = (await props.searchParams)?.before;
+  const rawBefore = params.before;
   const before =
     rawBefore && !Number.isNaN(Date.parse(rawBefore)) ? rawBefore : undefined;
+
+  // Cursors of the chunks walked through to get here (oldest hop first). The
+  // chunk cursor is forward-only, so this trail is what lets "Previous" return
+  // to the exact chunk the reader came from instead of jumping to the newest.
+  const trail = (params.trail ?? "")
+    .split(",")
+    .filter((t) => t && !Number.isNaN(Date.parse(t)));
+  const startAtEnd = params.at === "end";
 
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
@@ -48,10 +70,16 @@ export default async function ActivityPage(props: {
     }));
   }
 
+  // Next-older chunk: push the current cursor onto the trail. On the newest
+  // chunk (no cursor) the trail is always restarted empty — a stray `trail`
+  // param there would otherwise send "Previous" to the wrong chunk. Next-newer
+  // chunk: pop the trail and open that chunk on its last client page.
   const olderHref = page.nextBefore
-    ? `/dashboard/activity?before=${encodeURIComponent(page.nextBefore)}`
+    ? chunkHref(page.nextBefore, before ? [...trail, before] : [], false)
     : null;
-  const newestHref = before ? "/dashboard/activity" : null;
+  const newerHref = before
+    ? chunkHref(trail[trail.length - 1], trail.slice(0, -1), true)
+    : null;
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -75,7 +103,12 @@ export default async function ActivityPage(props: {
           <p className="py-6 text-center text-sm text-parchment/60">No business found.</p>
         </Card>
       ) : (
-        <ActivityList items={page.items} olderHref={olderHref} newestHref={newestHref} />
+        <ActivityList
+          items={page.items}
+          olderHref={olderHref}
+          newerHref={newerHref}
+          startAtEnd={startAtEnd}
+        />
       )}
     </div>
   );
