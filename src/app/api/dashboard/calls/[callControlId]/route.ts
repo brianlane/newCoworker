@@ -4,13 +4,13 @@
  * GET /api/dashboard/calls/:callControlId?businessId=<uuid>
  *   → { transcript, turns } or 404 when the call doesn't belong to the caller.
  *
- * Auth: getAuthUser + requireOwner(businessId). Non-admin callers cannot read
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Non-admin callers cannot read
  * transcripts for another business. Admins (per existing dashboard-chat
  * convention) may query any businessId without the ownership check.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -48,7 +48,7 @@ export async function GET(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(
       `dashboard-calls:${businessId}:${user.userId}`,

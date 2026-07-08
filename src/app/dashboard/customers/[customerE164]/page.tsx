@@ -9,8 +9,9 @@
  */
 
 import { notFound, redirect } from "next/navigation";
+import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import Link from "next/link";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
@@ -53,16 +54,19 @@ export default async function CustomerDetailPage({ params }: Props) {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
+  const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name")
-    .eq("owner_email", ownerEmail)
+    .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
   const business = businesses?.[0];
   if (!business) redirect("/onboard");
 
-  if (!user.isAdmin) await requireOwner(business.id);
+  // Defense-in-depth (resolveActiveBusinessId already validated access):
+  // customer profiles are day-to-day inbox work, so staff+ may open them.
+  if (!user.isAdmin) await requireBusinessRole(business.id, "operate_messages");
 
   const memory = await getCustomerMemory(business.id, customerE164);
   if (!memory) notFound();

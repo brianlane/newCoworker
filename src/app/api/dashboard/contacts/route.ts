@@ -9,11 +9,11 @@
  * real E.164 number or a bare 3-8 digit short code (lead sources like
  * ReferralExchange text from short codes).
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass.
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"); admins bypass.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
@@ -61,7 +61,7 @@ async function authorize(request: Request) {
   const { businessId } = querySchema.parse({
     businessId: url.searchParams.get("businessId") ?? ""
   });
-  if (!user.isAdmin) await requireOwner(businessId);
+  if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
   const limiter = rateLimit(`dashboard-contacts:${businessId}:${user.userId}`, WRITE_RATE);
   if (!limiter.success) {
     return { error: errorResponse("CONFLICT", "Too many requests, please slow down.", 429) };
@@ -77,7 +77,7 @@ export async function GET(request: Request) {
     const { businessId } = querySchema.parse({
       businessId: url.searchParams.get("businessId") ?? ""
     });
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
     const limiter = rateLimit(`dashboard-contacts-list:${businessId}`, READ_RATE);
     if (!limiter.success) {
       return errorResponse("CONFLICT", "Too many requests, please slow down.", 429);

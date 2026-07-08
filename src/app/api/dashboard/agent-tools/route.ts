@@ -9,12 +9,12 @@
  *                      that don't exist — the table must never accumulate
  *                      rows the enforcement layer won't honor.
  *
- * Auth: getAuthUser + requireOwner(businessId) (admin bypasses ownership,
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings") (admin bypasses ownership,
  * same as /api/dashboard/chat).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { findAgentToolDefinition } from "@/lib/agent-tools/registry";
 import { resolveAgentTools, upsertAgentToolSetting } from "@/lib/db/agent-tool-settings";
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const businessId = businessIdSchema.parse(url.searchParams.get("businessId") ?? "");
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const agents = await resolveAgentTools(businessId);
     return successResponse({ agents });
@@ -53,7 +53,7 @@ export async function PUT(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const body = putBodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
     const def = findAgentToolDefinition(body.agentKey, body.toolKey);
     if (!def) {

@@ -5,7 +5,7 @@
  * definition is re-validated by `parseAiFlowDefinition` in the db layer.
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { deleteAiFlow, getAiFlow, updateAiFlow } from "@/lib/ai-flows/db";
 import { AiFlowValidationError } from "@/lib/ai-flows/schema";
@@ -34,7 +34,7 @@ export async function GET(request: Request, { params }: Ctx) {
     if (!businessId || !idSchema.safeParse(businessId).success) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_aiflows");
     const row = await getAiFlow(businessId, id);
     if (!row) return errorResponse("NOT_FOUND", "AiFlow not found");
     return successResponse(row);
@@ -50,7 +50,7 @@ export async function PATCH(request: Request, { params }: Ctx) {
     const { id } = await params;
     if (!idSchema.safeParse(id).success) return errorResponse("VALIDATION_ERROR", "id is invalid");
     const body = patchSchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
     const row = await updateAiFlow({
       businessId: body.businessId,
       id,
@@ -74,7 +74,7 @@ export async function DELETE(request: Request, { params }: Ctx) {
     const { id } = await params;
     if (!idSchema.safeParse(id).success) return errorResponse("VALIDATION_ERROR", "id is invalid");
     const body = deleteSchema.parse(await request.json().catch(() => ({})));
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
     await deleteAiFlow(body.businessId, id);
     return successResponse({ deleted: true });
   } catch (err) {

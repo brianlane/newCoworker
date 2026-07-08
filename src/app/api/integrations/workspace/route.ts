@@ -1,4 +1,4 @@
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   deleteWorkspaceOAuthConnection,
   getWorkspaceOAuthConnection,
@@ -29,7 +29,7 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
 
-    await requireOwner(parsed.data);
+    await requireBusinessRole(parsed.data, "manage_settings");
     const rows = await listWorkspaceOAuthConnections(parsed.data);
     return successResponse(
       rows.map((r) => ({
@@ -55,7 +55,7 @@ export async function DELETE(request: Request) {
     const body = deleteBodySchema.parse(await request.json());
 
     if (!user.isAdmin) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     }
 
     const row = await getWorkspaceOAuthConnection(body.businessId, body.id);

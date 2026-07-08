@@ -1,4 +1,4 @@
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { deleteIntegration, getIntegrations, INTEGRATION_PROVIDERS } from "@/lib/db/integrations";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { z } from "zod";
@@ -24,7 +24,7 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
 
-    await requireOwner(parsed.data);
+    await requireBusinessRole(parsed.data, "manage_settings");
     const integrations = await getIntegrations(parsed.data);
     return successResponse(integrations);
   } catch (err) {
@@ -42,7 +42,7 @@ export async function DELETE(request: Request) {
     const body = deleteSchema.parse(await request.json());
 
     if (!user.isAdmin) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     }
 
     await deleteIntegration(body.businessId, body.provider);

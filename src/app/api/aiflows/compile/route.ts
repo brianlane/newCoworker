@@ -8,7 +8,7 @@
  * reviews/edits, then saves via POST /api/aiflows).
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   GeminiEmptyError,
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const user = await getAuthUser();
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
     const body = bodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
 
     const apiKey = process.env.GOOGLE_API_KEY ?? "";
     if (!apiKey) {

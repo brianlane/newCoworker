@@ -1,4 +1,6 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
+import { getBusinessRoleForEmail } from "@/lib/db/business-members";
+import { can } from "@/lib/authz/policy";
 import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -108,20 +110,22 @@ export async function POST(request: Request) {
       }
     }
 
-    const { data } = ownerEmail
-      ? await db
-          .from("businesses")
-          .select("id")
-          .eq("id", body.businessId)
-          .eq("owner_email", ownerEmail)
-          .single()
-      : await db
-          .from("businesses")
-          .select("id")
-          .eq("id", body.businessId)
-          .single();
-
-    if (!data && !isAdmin) return errorResponse("FORBIDDEN", "Not authorized for this business");
+    if (ownerEmail && !isAdmin) {
+      // Role-aware ownership check (Phase 2): editing the agent config is a
+      // manage_settings action, so owners AND managers pass; staff and
+      // strangers are refused. Replaces the legacy owner_email-only filter.
+      const role = await getBusinessRoleForEmail(body.businessId, ownerEmail, db);
+      if (!role || !can(role, "manage_settings")) {
+        return errorResponse("FORBIDDEN", "Not authorized for this business");
+      }
+    } else {
+      const { data } = await db
+        .from("businesses")
+        .select("id")
+        .eq("id", body.businessId)
+        .single();
+      if (!data && !isAdmin) return errorResponse("FORBIDDEN", "Not authorized for this business");
+    }
 
     // Persist `website_url` on the `businesses` row when the dashboard sends
     // one. The Re-crawl path has always written this column; without this

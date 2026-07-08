@@ -1,5 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
+// Phase 2 (agency): the route resolves the ACTIVE business through the
+// cookie-aware helper; pin it to a fixed id here — the supabase chain mock
+// below still decides which rows come back, so existing fixtures keep
+// driving each scenario.
+vi.mock("@/lib/dashboard/active-business", () => ({
+  resolveActiveBusinessIdForAction: vi.fn().mockResolvedValue("11111111-1111-4111-8111-111111111111")
+}));
+
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn()
 }));
@@ -33,6 +41,7 @@ function mockBusinessesQuery(rows: Array<{ id: string }>) {
     from: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: rows, error: null })
   } as never);

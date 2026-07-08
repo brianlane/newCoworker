@@ -13,7 +13,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { setStaffSmsSettings } from "@/lib/db/telnyx-routes";
 
@@ -35,7 +35,7 @@ export async function POST(request: Request) {
     ) {
       return errorResponse("VALIDATION_ERROR", "Nothing to update.");
     }
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
     const row = await setStaffSmsSettings(body.businessId, {
       assistantReplyEnabled: body.assistantReplyEnabled,

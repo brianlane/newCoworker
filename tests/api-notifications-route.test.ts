@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/notifications", () => ({
@@ -12,7 +12,7 @@ vi.mock("@/lib/db/notifications", () => ({
 }));
 
 import { GET, POST } from "@/app/api/notifications/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   getNotifications,
   markAllNotificationsRead,
@@ -34,7 +34,7 @@ describe("api/notifications route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(OWNER as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
   });
 
   it("GET 401 when not signed in", async () => {
@@ -67,7 +67,7 @@ describe("api/notifications route", () => {
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.data.items).toHaveLength(1);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "view_dashboard");
   });
 
   it("GET respects unreadOnly=1", async () => {

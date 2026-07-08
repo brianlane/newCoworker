@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/notifications", () => ({
@@ -10,7 +10,7 @@ vi.mock("@/lib/db/notifications", () => ({
 }));
 
 import { GET } from "@/app/api/notifications/unread-count/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { getUnreadNotificationCount } from "@/lib/db/notifications";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -23,7 +23,7 @@ describe("api/notifications/unread-count", () => {
       email: "o@example.com",
       isAdmin: false
     } as never);
-    vi.mocked(requireOwner).mockResolvedValue({} as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue({} as never);
   });
 
   it("returns count for owner", async () => {

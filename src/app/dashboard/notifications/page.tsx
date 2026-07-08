@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -35,10 +36,11 @@ export default async function NotificationsPage() {
   const seedAuthPhone = viewAsCtx.viewAs ? null : (user.phone ?? null);
 
   const db = await createSupabaseServiceClient();
+  const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
     .select("id, owner_email, phone")
-    .eq("owner_email", ownerEmail)
+    .in("id", activeBusinessId ? [activeBusinessId] : [])
     .limit(1);
 
   const businessRow = businesses?.[0] ?? null;

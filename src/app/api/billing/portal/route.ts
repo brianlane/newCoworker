@@ -1,4 +1,5 @@
 import { getAuthUser } from "@/lib/auth";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { createCustomerPortalSession } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -19,10 +20,11 @@ export async function POST() {
     }
 
     const db = await createSupabaseServiceClient();
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .limit(1);
 
     const business = businesses?.[0] ?? null;

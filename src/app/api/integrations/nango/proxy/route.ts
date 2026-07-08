@@ -1,4 +1,4 @@
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { extractBearerToken, verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
     const body = bodySchema.parse(await request.json());
 
     if (user?.email) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     } else {
       // Gateway (VPS/Rowboat) path: the presented bearer must resolve to the
       // body's businessId (per-tenant token), so a leaked tenant token can't

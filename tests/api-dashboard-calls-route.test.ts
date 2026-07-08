@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/voice-transcripts", () => ({
@@ -15,7 +15,7 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 
 import { GET } from "@/app/api/dashboard/calls/[callControlId]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   getTranscriptById,
   listTurns
@@ -98,21 +98,21 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
     expect(res.status).toBe(400);
   });
 
-  it("calls requireOwner for non-admin users", async () => {
+  it("calls requireBusinessRole for non-admin users", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
       isAdmin: false
     });
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(getTranscriptById).mockResolvedValue(TRANSCRIPT);
     vi.mocked(listTurns).mockResolvedValue([]);
 
     await GET(new Request(urlFor(CCI)), params(CCI));
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
   });
 
-  it("skips requireOwner for admins", async () => {
+  it("skips requireBusinessRole for admins", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "admin",
       email: "a@a.com",
@@ -122,7 +122,7 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
     vi.mocked(listTurns).mockResolvedValue([]);
 
     const res = await GET(new Request(urlFor(CCI)), params(CCI));
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(res.status).toBe(200);
   });
 
@@ -132,7 +132,7 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
       email: "o@o.com",
       isAdmin: false
     });
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({
       success: false,
       limit: 60,
@@ -150,7 +150,7 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
       email: "o@o.com",
       isAdmin: false
     });
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(getTranscriptById).mockResolvedValue(null);
 
     const res = await GET(new Request(urlFor(CCI)), params(CCI));
@@ -164,7 +164,7 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
       email: "o@o.com",
       isAdmin: false
     });
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(getTranscriptById).mockResolvedValue(TRANSCRIPT);
     vi.mocked(listTurns).mockResolvedValue([
       {
@@ -219,7 +219,7 @@ describe("GET /api/dashboard/calls/:callControlId", () => {
       email: "o@o.com",
       isAdmin: false
     });
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(getTranscriptById).mockRejectedValue(new Error("boom"));
     const res = await GET(new Request(urlFor(CCI)), params(CCI));
     expect(res.status).toBe(500);

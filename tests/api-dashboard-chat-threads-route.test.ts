@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/dashboard-chat", () => ({
@@ -14,7 +14,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { GET } from "@/app/api/dashboard/chat/threads/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { listThreadsForBusiness } from "@/lib/db/dashboard-chat";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -43,7 +43,7 @@ beforeEach(() => {
     email: "owner@example.com",
     isAdmin: false
   } as never);
-  vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
 });
 
 describe("GET /api/dashboard/chat/threads", () => {
@@ -74,7 +74,7 @@ describe("GET /api/dashboard/chat/threads", () => {
         messageCount: 1
       }
     ]);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
     expect(listThreadsForBusiness).toHaveBeenCalledWith(BIZ);
   });
 
@@ -82,7 +82,7 @@ describe("GET /api/dashboard/chat/threads", () => {
     vi.mocked(getAuthUser).mockResolvedValueOnce(null as never);
     const res = await GET(urlFor(BIZ));
     expect(res.status).toBe(401);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(listThreadsForBusiness).not.toHaveBeenCalled();
   });
 
@@ -103,7 +103,7 @@ describe("GET /api/dashboard/chat/threads", () => {
   it("propagates owner-check rejection (cross-tenant browsing is forbidden)", async () => {
     // Anti-IDOR: an authenticated owner of business A must not be able
     // to list threads for business B by swapping the query param.
-    vi.mocked(requireOwner).mockRejectedValueOnce(
+    vi.mocked(requireBusinessRole).mockRejectedValueOnce(
       Object.assign(new Error("Forbidden"), { code: "FORBIDDEN", status: 403 })
     );
     const res = await GET(urlFor(BIZ));
@@ -111,7 +111,7 @@ describe("GET /api/dashboard/chat/threads", () => {
     expect(listThreadsForBusiness).not.toHaveBeenCalled();
   });
 
-  it("admin callers skip requireOwner but still hit the DB", async () => {
+  it("admin callers skip requireBusinessRole but still hit the DB", async () => {
     vi.mocked(getAuthUser).mockResolvedValueOnce({
       email: "admin@example.com",
       isAdmin: true
@@ -119,7 +119,7 @@ describe("GET /api/dashboard/chat/threads", () => {
     vi.mocked(listThreadsForBusiness).mockResolvedValueOnce([] as never);
     const res = await GET(urlFor(BIZ));
     expect(res.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(listThreadsForBusiness).toHaveBeenCalledWith(BIZ);
   });
 

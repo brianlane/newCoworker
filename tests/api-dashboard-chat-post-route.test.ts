@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/rate-limit", () => ({
@@ -61,7 +61,7 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
 
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   appendMessage,
@@ -125,7 +125,7 @@ beforeEach(() => {
     email: "owner@example.com",
     isAdmin: false
   } as never);
-  vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
   vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
   vi.mocked(rateLimit).mockReturnValue({
     success: true,

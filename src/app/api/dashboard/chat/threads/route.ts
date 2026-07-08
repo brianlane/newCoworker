@@ -6,13 +6,13 @@
  *        the sidebar can render "Started Apr 23 · 6 messages" without an
  *        N+1 fetch per thread.
  *
- * Auth: getAuthUser + requireOwner(businessId). Mirrors the parent
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Mirrors the parent
  * `/api/dashboard/chat` route — read-only here, no rate limiting (the
  * sidebar polls on mount + after each new conversation, not per-keystroke).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   listThreadsForBusiness,
@@ -46,7 +46,7 @@ export async function GET(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const businessId = businessIdFromUrl(request);
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const threads = await listThreadsForBusiness(businessId);
     return successResponse({ threads: threads.map(serializeThread) });

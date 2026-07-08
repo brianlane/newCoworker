@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/agent-tool-settings", () => ({
@@ -19,7 +19,7 @@ vi.mock("@/lib/agent-tools/registry", async (importOriginal) => {
 });
 
 import { GET, PUT } from "@/app/api/dashboard/agent-tools/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { resolveAgentTools, upsertAgentToolSetting } from "@/lib/db/agent-tool-settings";
 import { findAgentToolDefinition } from "@/lib/agent-tools/registry";
 
@@ -40,7 +40,7 @@ function putRequest(body: unknown): Request {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@x.co", isAdmin: false } as never);
-  vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
   vi.mocked(resolveAgentTools).mockResolvedValue([] as never);
   vi.mocked(upsertAgentToolSetting).mockImplementation(async (args) => ({
     business_id: args.businessId,
@@ -58,19 +58,19 @@ describe("GET /api/dashboard/agent-tools", () => {
     expect(res.status).toBe(401);
   });
 
-  it("gates on requireOwner for non-admin users", async () => {
+  it("gates on requireBusinessRole for non-admin users", async () => {
     const err = Object.assign(new Error("forbidden"), { status: 403 });
-    vi.mocked(requireOwner).mockRejectedValue(err);
+    vi.mocked(requireBusinessRole).mockRejectedValue(err);
     const res = await GET(getRequest());
     expect(res.status).toBe(403);
-    expect(vi.mocked(requireOwner)).toHaveBeenCalledWith(BIZ);
+    expect(vi.mocked(requireBusinessRole)).toHaveBeenCalledWith(BIZ, "manage_settings");
   });
 
-  it("admin bypasses requireOwner", async () => {
+  it("admin bypasses requireBusinessRole", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@x.co", isAdmin: true } as never);
     const res = await GET(getRequest());
     expect(res.status).toBe(200);
-    expect(vi.mocked(requireOwner)).not.toHaveBeenCalled();
+    expect(vi.mocked(requireBusinessRole)).not.toHaveBeenCalled();
   });
 
   it("rejects a malformed businessId", async () => {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/custom-integrations", async () => {
@@ -25,7 +25,7 @@ import {
   GET as GET_BY_ID,
   PATCH
 } from "@/app/api/integrations/custom/[id]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   CustomIntegrationValidationError,
   createCustomIntegration,
@@ -58,7 +58,7 @@ const PUBLIC_ROW = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-  vi.mocked(requireOwner).mockResolvedValue(OWNER as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
   vi.mocked(listCustomIntegrations).mockResolvedValue([PUBLIC_ROW]);
   vi.mocked(createCustomIntegration).mockResolvedValue(PUBLIC_ROW);
   vi.mocked(getCustomIntegrationById).mockResolvedValue(PUBLIC_ROW);
@@ -79,7 +79,7 @@ describe("api/integrations/custom GET (list)", () => {
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
     expect(body.data).toHaveLength(1);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_settings");
   });
 
   it("rejects unauthenticated", async () => {
@@ -100,7 +100,7 @@ describe("api/integrations/custom GET (list)", () => {
     await GET(
       new Request(`http://localhost/api/integrations/custom?businessId=${BIZ}`)
     );
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("does not leak secrets in response", async () => {
@@ -287,7 +287,7 @@ describe("api/integrations/custom/[id] GET", () => {
       ),
       ctx(ID)
     );
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("returns 500 when getCustomIntegrationById throws", async () => {
@@ -435,7 +435,7 @@ describe("api/integrations/custom/[id] PATCH", () => {
       }),
       ctx(ID)
     );
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 });
 
@@ -531,6 +531,6 @@ describe("api/integrations/custom/[id] DELETE", () => {
       }),
       ctx(ID)
     );
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,5 @@
 import { requireAuth } from "@/lib/auth";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 
@@ -9,11 +10,11 @@ export async function GET() {
       return errorResponse("VALIDATION_ERROR", "Account has no email address");
     }
     const db = await createSupabaseServiceClient();
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "view_dashboard", db);
     const { data } = await db
       .from("businesses")
       .select("id, status, name")
-      .eq("owner_email", user.email)
-      .order("created_at", { ascending: false })
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .limit(1)
       .single();
 

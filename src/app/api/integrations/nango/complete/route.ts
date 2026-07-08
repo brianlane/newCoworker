@@ -1,4 +1,4 @@
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   getWorkspaceOAuthConnectionByNangoIds,
@@ -33,7 +33,7 @@ export async function POST(request: Request) {
     }
 
     const parsed = bodySchema.parse(await request.json());
-    await requireOwner(parsed.businessId);
+    await requireBusinessRole(parsed.businessId, "manage_settings");
 
     const nango = getNangoClient();
     const connection = await nango.getConnection(parsed.providerConfigKey, parsed.connectionId);

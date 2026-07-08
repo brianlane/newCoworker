@@ -7,7 +7,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const body = bodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
     const trimmed = body.phone.trim();
     const clearing = trimmed.length === 0;

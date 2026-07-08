@@ -14,6 +14,7 @@
  * behavior Stripe isn't actually configured for.
  */
 import { z } from "zod";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -44,10 +45,11 @@ export async function POST(request: Request) {
     const db = await createSupabaseServiceClient();
     // Latest owned business — same ordering as /dashboard/billing and
     // /api/billing/cancel so the toggle acts on the row the page renders.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0];

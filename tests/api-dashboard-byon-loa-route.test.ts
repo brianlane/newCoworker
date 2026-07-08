@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/byon/loa-pdf", () => ({
@@ -19,7 +19,7 @@ vi.mock("@/lib/byon/tier-gate", async (importOriginal) => {
 });
 
 import { POST } from "@/app/api/dashboard/byon/loa/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { generateLoaPdf } from "@/lib/byon/loa-pdf";
 import { ByonValidationError } from "@/lib/byon/port-requests";
 import { assertByonAllowedForBusiness, BYON_UPGRADE_MESSAGE } from "@/lib/byon/tier-gate";
@@ -50,7 +50,7 @@ describe("api/dashboard/byon/loa route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({ success: true } as never);
     vi.mocked(assertByonAllowedForBusiness).mockResolvedValue(undefined);
   });
@@ -84,13 +84,13 @@ describe("api/dashboard/byon/loa route", () => {
     expect(generateLoaPdf).not.toHaveBeenCalled();
   });
 
-  it("returns the prefilled PDF as a download (admin bypasses requireOwner)", async () => {
+  it("returns the prefilled PDF as a download (admin bypasses requireBusinessRole)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true } as never);
     const res = await POST(req(validBody()));
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/pdf");
     expect(res.headers.get("Content-Disposition")).toContain("letter-of-authorization.pdf");
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(generateLoaPdf).toHaveBeenCalledWith(
       expect.objectContaining({
         phoneE164: "+13125550001",
@@ -105,6 +105,6 @@ describe("api/dashboard/byon/loa route", () => {
   it("500 when generation fails", async () => {
     vi.mocked(generateLoaPdf).mockRejectedValueOnce(new Error("pdf broke"));
     expect((await POST(req(validBody()))).status).toBe(500);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_settings");
   });
 });

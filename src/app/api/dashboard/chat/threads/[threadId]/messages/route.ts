@@ -14,7 +14,7 @@
  *     write-side rate limit and Rowboat-readiness checks — neither is
  *     relevant when the model isn't being invoked.
  *
- * Auth: getAuthUser + requireOwner(thread.business_id). Anti-IDOR: we
+ * Auth: getAuthUser + requireBusinessRole(thread.business_id, "operate_messages"). Anti-IDOR: we
  * MUST resolve the thread first, then enforce ownership against
  * `thread.business_id` rather than trusting any caller-supplied
  * businessId in the URL — otherwise an authenticated owner could page
@@ -22,7 +22,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   getThreadById,
@@ -50,7 +50,7 @@ export async function GET(
 
     // IDOR guard: enforce ownership against the row we just read, never
     // a caller-supplied parameter.
-    if (!user.isAdmin) await requireOwner(thread.business_id);
+    if (!user.isAdmin) await requireBusinessRole(thread.business_id, "operate_messages");
 
     const messages = await listMessages(threadId);
     return successResponse({

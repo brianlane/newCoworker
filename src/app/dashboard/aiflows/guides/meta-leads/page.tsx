@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
+import { can } from "@/lib/authz/policy";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -28,10 +30,16 @@ export default async function MetaLeadsGuidePage() {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
+  const ctx = await resolveActiveBusinessContext(user, db);
+  const activeBusinessId =
+    ctx.businessId && ctx.role && can(ctx.role, "manage_aiflows") ? ctx.businessId : null;
+  // API keys are a manage_billing (owner) capability — managers get the
+  // guide without key metadata (hasApiKey drives copy only).
+  const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name")
-    .eq("owner_email", ownerEmail)
+    .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
@@ -40,7 +48,7 @@ export default async function MetaLeadsGuidePage() {
   const [flows, apiKeys, recentLogs] = businessId
     ? await Promise.all([
         listAiFlows(businessId),
-        listApiKeys(businessId),
+        canManageApiKeys ? listApiKeys(businessId) : Promise.resolve([]),
         listSystemLogs(businessId, {
           source: "aiflow",
           search: "webhook_event_received",

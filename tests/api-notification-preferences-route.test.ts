@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/notification-preferences", () => ({
@@ -23,7 +23,7 @@ import {
   getOrCreateNotificationPreferences,
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 
 const OWNER = {
@@ -49,7 +49,7 @@ describe("api/notifications/preferences route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(OWNER as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS as never);
     vi.mocked(updateNotificationPreferences).mockResolvedValue(PREFS as never);
     vi.mocked(isViewAsActive).mockResolvedValue(false);
@@ -65,7 +65,7 @@ describe("api/notifications/preferences route", () => {
 
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(requireOwner).toHaveBeenCalledWith(PREFS.business_id);
+    expect(requireBusinessRole).toHaveBeenCalledWith(PREFS.business_id, "manage_settings");
   });
 
   it("GET during view-as never inserts: read-only lookup, defaults when no row", async () => {

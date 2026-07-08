@@ -5,11 +5,11 @@
  *   body: { businessId: uuid, phone: string }
  *   → { check: PortabilityCheckSummary } ("ports in 1-4 business days" etc.)
  *
- * Auth mirrors /api/dashboard/csv: getAuthUser + requireOwner (admins bypass).
+ * Auth mirrors /api/dashboard/csv: getAuthUser + requireBusinessRole (admins bypass).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { ByonValidationError, runPortabilityCheck } from "@/lib/byon/port-requests";
@@ -30,7 +30,7 @@ export async function POST(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const parsed = bodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "manage_settings");
 
     const limiter = rateLimit(`byon-check:${parsed.businessId}`, CHECK_RATE);
     if (!limiter.success) {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/nango/workspace", () => ({
@@ -18,7 +18,7 @@ vi.mock("@/lib/rowboat/gateway-token", async (importOriginal) => {
 });
 
 import { POST } from "@/app/api/integrations/nango/proxy/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 
@@ -39,7 +39,7 @@ describe("api/integrations/nango/proxy", () => {
       email: "owner@example.com",
       isAdmin: false
     } as never);
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
   });
 
@@ -104,7 +104,7 @@ describe("api/integrations/nango/proxy", () => {
     expect(json.ok).toBe(true);
     expect(json.data.status).toBe(200);
     expect(json.data.data.emailAddress).toBe("a@b.com");
-    expect(requireOwner).toHaveBeenCalledWith(businessId);
+    expect(requireBusinessRole).toHaveBeenCalledWith(businessId, "manage_settings");
     expect(nangoProxyForBusiness).toHaveBeenCalledWith(
       businessId,
       { connectionId: "conn-a", providerConfigKey: "gmail" },
@@ -134,7 +134,7 @@ describe("api/integrations/nango/proxy", () => {
       })
     );
     expect(res.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("returns 404 when no workspace connection", async () => {

@@ -11,6 +11,7 @@
  * Returns `{ checkoutUrl }` so the client can `window.location = checkoutUrl`.
  */
 import { z } from "zod";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -55,10 +56,11 @@ export async function POST(request: Request) {
     // the billing page displays. Without this, Postgres is free to return
     // rows in an arbitrary order and the checkout session could target a
     // different business than the one shown to the user.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0] ?? null;

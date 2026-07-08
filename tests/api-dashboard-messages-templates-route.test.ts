@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -19,7 +19,7 @@ import {
   DELETE as DELETE_ONE,
   PATCH
 } from "@/app/api/dashboard/messages/templates/[id]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { smsToolsAllowedForBusiness } from "@/lib/plans/sms-tools";
 
@@ -94,16 +94,16 @@ describe("GET /api/dashboard/messages/templates", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.templates).toHaveLength(1);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
   });
 
-  it("tolerates a null data payload and admin callers skip requireOwner", async () => {
+  it("tolerates a null data payload and admin callers skip requireBusinessRole", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true });
     mockDb({ sms_templates: { data: null, error: null } });
     const res = await GET(new Request(`http://localhost/x?businessId=${BIZ}`));
     expect(res.status).toBe(200);
     expect((await res.json()).data.templates).toEqual([]);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("maps DB errors to 500", async () => {

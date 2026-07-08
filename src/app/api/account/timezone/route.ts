@@ -7,6 +7,7 @@
  * with it" — the exact consumer of the value downstream.
  */
 import { z } from "zod";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -34,10 +35,11 @@ export async function POST(request: Request) {
     }
 
     const db = await createSupabaseServiceClient();
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
     const { data: biz } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();

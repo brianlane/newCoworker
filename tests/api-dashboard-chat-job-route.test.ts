@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/dashboard-chat-jobs", async () => {
@@ -16,7 +16,7 @@ vi.mock("@/lib/db/dashboard-chat-jobs", async () => {
 });
 
 import { GET } from "@/app/api/dashboard/chat/jobs/[jobId]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { getChatJobById } from "@/lib/db/dashboard-chat-jobs";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -67,7 +67,7 @@ beforeEach(() => {
     email: "owner@example.com",
     isAdmin: false
   } as never);
-  vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
   vi.mocked(getChatJobById).mockResolvedValue(FAKE_JOB as never);
 });
 
@@ -127,24 +127,24 @@ describe("GET /api/dashboard/chat/jobs/[jobId] — polling endpoint", () => {
       ...FAKE_JOB,
       business_id: OTHER_BIZ
     } as never);
-    vi.mocked(requireOwner).mockRejectedValueOnce(
+    vi.mocked(requireBusinessRole).mockRejectedValueOnce(
       Object.assign(new Error("Forbidden"), { status: 403 })
     );
     const res = await GET(reqWith(JOB_ID), paramsOf(JOB_ID));
     expect(res.status).toBe(403);
-    // requireOwner was called with the ROW's business_id, not anything
+    // requireBusinessRole was called with the ROW's business_id, not anything
     // from the URL.
-    expect(requireOwner).toHaveBeenCalledWith(OTHER_BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(OTHER_BIZ, "operate_messages");
   });
 
-  it("admin users skip requireOwner and can read any tenant's job (audit / debug)", async () => {
+  it("admin users skip requireBusinessRole and can read any tenant's job (audit / debug)", async () => {
     vi.mocked(getAuthUser).mockResolvedValueOnce({
       email: "admin@example.com",
       isAdmin: true
     } as never);
     const res = await GET(reqWith(JOB_ID), paramsOf(JOB_ID));
     expect(res.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("surfaces error_code + error_detail to the client when the worker reported a failure (so the UI can show the friendly message)", async () => {

@@ -24,6 +24,14 @@ const {
   loggerWarnMock: vi.fn()
 }));
 
+// Phase 2 (agency): the route resolves the ACTIVE business through the
+// cookie-aware helper; pin it to a fixed id here — the supabase chain mock
+// below still decides which rows come back, so existing fixtures keep
+// driving each scenario.
+vi.mock("@/lib/dashboard/active-business", () => ({
+  resolveActiveBusinessIdForAction: vi.fn().mockResolvedValue("11111111-1111-4111-8111-111111111111")
+}));
+
 vi.mock("@/lib/auth", () => ({
   getAuthUser: getAuthUserMock
 }));
@@ -100,6 +108,7 @@ function makeSupabaseBusinessChain(businessId: string | null) {
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit
   };

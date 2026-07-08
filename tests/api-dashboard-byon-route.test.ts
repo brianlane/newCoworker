@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 // Keep ByonValidationError real — the route branches on `instanceof`.
@@ -29,7 +29,7 @@ vi.mock("@/lib/byon/tier-gate", async (importOriginal) => {
 });
 
 import { DELETE, GET, POST } from "@/app/api/dashboard/byon/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   ByonValidationError,
   cancelByonPortRequest,
@@ -69,7 +69,7 @@ describe("api/dashboard/byon route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({ success: true } as never);
     vi.mocked(assertByonAllowedForBusiness).mockResolvedValue(undefined);
   });
@@ -97,7 +97,7 @@ describe("api/dashboard/byon route", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.data.requests).toHaveLength(1);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_settings");
     expect(listByonPortRequests).toHaveBeenCalledWith(BIZ);
   });
 
@@ -123,7 +123,7 @@ describe("api/dashboard/byon route", () => {
     expect(createByonPortRequest).not.toHaveBeenCalled();
   });
 
-  it("POST creates the port request and returns 201 (admin bypasses requireOwner)", async () => {
+  it("POST creates the port request and returns 201 (admin bypasses requireBusinessRole)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true } as never);
     vi.mocked(createByonPortRequest).mockResolvedValue({
       rows: [{ id: REQ_ID } as never],
@@ -134,7 +134,7 @@ describe("api/dashboard/byon route", () => {
     const body = await res.json();
     expect(res.status).toBe(201);
     expect(body.data.submitted).toBe(true);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(createByonPortRequest).toHaveBeenCalledWith(BIZ, expect.objectContaining({
       phone: "+13125550001"
     }));

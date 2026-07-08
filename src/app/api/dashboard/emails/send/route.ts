@@ -21,12 +21,12 @@
  * Either way we log to email_log so it renders inline with the rest of the
  * email activity.
  *
- * Auth: getAuthUser + requireOwner(businessId). Admins may target any business
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Admins may target any business
  * (matches the dashboard-chat / SMS-send convention).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
     const { businessId, toEmail, subject, bodyText, cc, bcc, fromConnectionId } =
       bodySchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`dashboard-email-send:${businessId}:${user.userId}`, EMAIL_SEND_RATE);
     if (!limiter.success) {

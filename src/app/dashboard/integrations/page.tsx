@@ -1,4 +1,6 @@
 import { redirect } from "next/navigation";
+import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
+import { can } from "@/lib/authz/policy";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -28,10 +30,16 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
+  const ctx = await resolveActiveBusinessContext(user, db);
+  const activeBusinessId =
+    ctx.businessId && ctx.role && can(ctx.role, "manage_settings") ? ctx.businessId : null;
+  // API keys are a manage_billing (owner) capability — the key routes refuse
+  // managers, so don't server-render key metadata into their HTML either.
+  const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
     .select("id")
-    .eq("owner_email", ownerEmail)
+    .in("id", activeBusinessId ? [activeBusinessId] : [])
     .limit(1);
 
   const businessId = businesses?.[0]?.id ?? null;
@@ -41,7 +49,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const workspaceConnected = workspaceConnections.length > 0;
   const customIntegrations =
     businessId ? await listCustomIntegrations(businessId) : [];
-  const apiKeys = businessId ? await listApiKeys(businessId) : [];
+  const apiKeys = businessId && canManageApiKeys ? await listApiKeys(businessId) : [];
   const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
 
   return (
@@ -119,6 +127,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </div>
           </section>
 
+          {canManageApiKeys && (
           <section className="space-y-4">
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
               Zapier &amp; API
@@ -142,6 +151,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               />
             </div>
           </section>
+          )}
         </>
       )}
     </div>

@@ -7,7 +7,7 @@
  * live at `./[id]/route.ts`.
  *
  * Auth: owner-only (Supabase session). RLS on the table itself enforces
- * the same boundary, but we still call `requireOwner` so a missing
+ * the same boundary, but we still call `requireBusinessRole` so a missing
  * session 401s before we touch the DB.
  *
  * Why we don't accept the Rowboat gateway token here: this surface is
@@ -18,7 +18,7 @@
  * exfiltrate the stored credentials.
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   errorResponse,
   handleRouteError,
@@ -60,7 +60,7 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
     if (!user.isAdmin) {
-      await requireOwner(parsed.data);
+      await requireBusinessRole(parsed.data, "manage_settings");
     }
     const rows = await listCustomIntegrations(parsed.data);
     return successResponse(rows);
@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     }
     const body = createSchema.parse(await request.json());
     if (!user.isAdmin) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     }
     const row = await createCustomIntegration(body);
     return successResponse(row, 201);

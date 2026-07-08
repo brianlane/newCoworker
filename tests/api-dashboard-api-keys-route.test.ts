@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/api-keys", async (importOriginal) => {
@@ -18,7 +18,7 @@ vi.mock("@/lib/db/api-keys", async (importOriginal) => {
 
 import { GET, POST } from "@/app/api/dashboard/api-keys/route";
 import { DELETE } from "@/app/api/dashboard/api-keys/[id]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   MAX_ACTIVE_API_KEYS_PER_BUSINESS,
   countActiveApiKeys,
@@ -70,7 +70,7 @@ function deleteReq(id: string, body: unknown) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-  vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
   vi.mocked(listApiKeys).mockResolvedValue([KEY_ROW]);
   vi.mocked(countActiveApiKeys).mockResolvedValue(0);
   vi.mocked(insertApiKey).mockResolvedValue({ ...KEY_ROW, key_hash: "h".repeat(64) });
@@ -89,7 +89,7 @@ describe("GET /api/dashboard/api-keys", () => {
   it("enforces ownership for non-admins and lists keys without hashes", async () => {
     const res = await GET(getReq());
     expect(res.status).toBe(200);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_billing");
     const body = await res.json();
     expect(body.data).toEqual([
       {
@@ -103,10 +103,10 @@ describe("GET /api/dashboard/api-keys", () => {
     ]);
   });
 
-  it("skips requireOwner for admins", async () => {
+  it("skips requireBusinessRole for admins", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true } as never);
     await GET(getReq());
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 });
 
@@ -183,6 +183,6 @@ describe("DELETE /api/dashboard/api-keys/:id", () => {
   it("enforces ownership for non-admins", async () => {
     const [request, ctx] = deleteReq(KEY_ID, { businessId: BIZ });
     await DELETE(request, ctx);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_billing");
   });
 });

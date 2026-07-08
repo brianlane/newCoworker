@@ -10,12 +10,12 @@
  * Tier-gated server-side; the composer hides the picker for Starter tenants
  * but the gate here is what actually enforces it.
  *
- * Auth: getAuthUser + requireOwner(businessId). Admins may target any
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Admins may target any
  * business (dashboard-chat / messages-send convention).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -40,7 +40,7 @@ export async function GET(request: Request) {
     if (!z.string().uuid().safeParse(businessId).success) {
       return errorResponse("VALIDATION_ERROR", "businessId must be a UUID");
     }
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     const { data, error } = await db
@@ -64,7 +64,7 @@ export async function POST(request: Request) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId, name, body } = createSchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     if (!(await smsToolsAllowedForBusiness(businessId, db))) {

@@ -6,6 +6,7 @@
  * so a caller can only ever rename their own business.
  */
 import { z } from "zod";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -34,10 +35,11 @@ export async function POST(request: Request) {
     // routes, and the Settings page resolve "the" business for an owner who has
     // more than one row under the same owner_email — so the rename hits the row
     // the user is actually looking at.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
     const { data: biz } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();

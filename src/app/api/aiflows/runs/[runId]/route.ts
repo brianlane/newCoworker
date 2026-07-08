@@ -3,7 +3,7 @@
  * Query: ?businessId=...
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getAiFlowRun, listAiFlowRunSteps } from "@/lib/ai-flows/db";
 
@@ -24,7 +24,7 @@ export async function GET(request: Request, { params }: Ctx) {
     if (!businessId || !idSchema.safeParse(businessId).success) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_aiflows");
     const run = await getAiFlowRun(businessId, runId);
     if (!run) return errorResponse("NOT_FOUND", "Run not found");
     const steps = await listAiFlowRunSteps(businessId, runId);

@@ -4,7 +4,7 @@
  * GET /api/dashboard/messages/:customerE164?businessId=<uuid>
  *   → { customerE164, messages } or 404 when no thread exists.
  *
- * Auth: getAuthUser + requireOwner(businessId). Non-admin callers cannot
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Non-admin callers cannot
  * read texts for another business. Admins (per existing dashboard-chat
  * convention) may query any businessId without the ownership check.
  *
@@ -15,7 +15,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
@@ -60,7 +60,7 @@ export async function GET(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(
       `dashboard-messages:${businessId}:${user.userId}`,

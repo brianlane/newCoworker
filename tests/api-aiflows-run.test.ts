@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/ai-flows/db", () => ({
@@ -11,7 +11,7 @@ vi.mock("@/lib/ai-flows/db", () => ({
 }));
 
 import { POST } from "@/app/api/aiflows/[id]/run/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { enqueueAiFlowRun, getAiFlow } from "@/lib/ai-flows/db";
 
 const OWNER = { userId: "u-1", email: "owner@example.com", isAdmin: false };
@@ -34,7 +34,7 @@ describe("api/aiflows/[id]/run route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(OWNER as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
     vi.mocked(getAiFlow).mockResolvedValue({ id: FLOW, enabled: true } as never);
     vi.mocked(enqueueAiFlowRun).mockResolvedValue({ id: "run-1", status: "queued" } as never);
   });
@@ -76,7 +76,7 @@ describe("api/aiflows/[id]/run route", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_aiflows");
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: BIZ,
@@ -103,11 +103,11 @@ describe("api/aiflows/[id]/run route", () => {
     expect(enqueueAiFlowRun).not.toHaveBeenCalled();
   });
 
-  it("admin bypasses requireOwner; empty input yields an empty scope", async () => {
+  it("admin bypasses requireBusinessRole; empty input yields an empty scope", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true } as never);
     const res = await POST(req({ businessId: BIZ }), ctx());
     expect(res.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: expect.objectContaining({ windowText: "", url: null })

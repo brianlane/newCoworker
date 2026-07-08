@@ -6,6 +6,7 @@
  */
 
 import { redirect } from "next/navigation";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -22,10 +23,11 @@ export default async function ImportExportPage() {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
+  const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name")
-    .eq("owner_email", ownerEmail)
+    .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
   const business = businesses?.[0] ?? null;
