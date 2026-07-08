@@ -92,6 +92,12 @@ describe("eventStartDue", () => {
     expect(eventStartDue({ startIso: undefined }, 30, Date.now())).toBe(false);
     expect(eventStartDue({ startIso: "not-a-date" }, 30, Date.now())).toBe(false);
   });
+  it("skips all-day events (their start is a date, not a moment)", () => {
+    const now = Date.parse("2026-07-08T12:00:00Z");
+    expect(
+      eventStartDue({ startIso: "2026-07-08T12:20:00Z", allDay: true }, 30, now)
+    ).toBe(false);
+  });
 });
 
 describe("eventCreatedDue", () => {
@@ -147,6 +153,7 @@ describe("normalizeGoogleEvent", () => {
     );
     expect(ev).toEqual({
       id: "g1",
+      allDay: true,
       title: "Roof estimate",
       description: "Bring ladder",
       location: "12 Main St",
@@ -219,6 +226,12 @@ describe("normalizeGraphEvent", () => {
     expect(normalizeGraphEvent({ id: "m1", isCancelled: true }, "primary")).toBeNull();
     expect(normalizeGraphEvent({}, "primary")).toBeNull();
     expect(normalizeGraphEvent({ id: "m3" }, "primary")).toMatchObject({ id: "m3", title: "" });
+  });
+  it("marks Outlook all-day events", () => {
+    expect(normalizeGraphEvent({ id: "m4", isAllDay: true }, "primary")).toMatchObject({
+      allDay: true
+    });
+    expect(normalizeGraphEvent({ id: "m5" }, "primary")).toMatchObject({ allDay: false });
   });
 });
 
@@ -407,6 +420,69 @@ describe("pollCalendarTriggers", () => {
       30 + CALENDAR_START_HORIZON_BUFFER_MINUTES - 0.1
     );
     expect(horizonMinutes).toBeLessThan(30 + CALENDAR_START_HORIZON_BUFFER_MINUTES + 1);
+  });
+
+  it("skips all-day events in start mode but still fires them in created mode", async () => {
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async () => ({
+      data: {
+        items: [
+          {
+            id: "allday",
+            summary: "Fair",
+            created: isoIn(-1),
+            start: { date: new Date(Date.now() + 5 * 60_000).toISOString().slice(0, 10) }
+          }
+        ]
+      }
+    })) as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-start", startTrigger(1440)), flowRow("f-created", createdTrigger())])
+    );
+    expect(res.enqueued).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "f-created" }),
+      expect.anything()
+    );
+  });
+
+  it("keeps primary events when the shared calendar's fetch fails", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("shared-cal-x")) return null; // dead shared link
+      return { data: { items: [{ id: "p-ev", summary: "Mine", created: isoIn(-1) }] } };
+    }) as never);
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    // The primary event still enqueues; the shared failure is logged per-calendar.
+    expect(res.enqueued).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ trigger: expect.objectContaining({ calendar: "primary" }) }),
+      expect.anything()
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        message: expect.stringContaining("shared calendar"),
+        payload: { calendar: "shared" }
+      })
+    );
+  });
+
+  it("stringifies a non-Error per-calendar fetch failure", async () => {
+    vi.mocked(nangoProxyForBusiness).mockRejectedValueOnce("proxy blew up");
+    await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        message: expect.stringContaining("proxy blew up")
+      })
+    );
   });
 
   it("is a quiet no-op for a shared-only flow when the shared calendar does not exist", async () => {

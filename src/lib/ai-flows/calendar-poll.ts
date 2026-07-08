@@ -92,10 +92,14 @@ export type CalendarPollResult = {
 
 /** Whether an event_start flow is due for `ev` at `nowMs` (pure, for tests). */
 export function eventStartDue(
-  ev: Pick<CalendarEventInput, "startIso">,
+  ev: Pick<CalendarEventInput, "startIso" | "allDay">,
   leadMinutes: number,
   nowMs: number
 ): boolean {
+  // An all-day event's "start" is a calendar-local date, not a moment in
+  // time — a minutes-before reminder would fire at an arbitrary wall-clock
+  // time, so start-mode skips all-day events (created mode still fires).
+  if (ev.allDay) return false;
   if (!ev.startIso) return false;
   const startMs = Date.parse(ev.startIso);
   if (!Number.isFinite(startMs)) return false;
@@ -152,6 +156,9 @@ export function normalizeGoogleEvent(
   if (typeof raw.id !== "string" || raw.status === "cancelled") return null;
   return {
     id: raw.id,
+    // A date-only start marks an all-day event (its ISO form below is a
+    // convention, not a real instant — see CalendarEventInput.allDay).
+    allDay: raw.start?.date !== undefined,
     title: raw.summary ?? "",
     description: raw.description,
     location: raw.location,
@@ -171,6 +178,7 @@ export function normalizeGoogleEvent(
 type GraphEvent = {
   id?: string;
   isCancelled?: boolean;
+  isAllDay?: boolean;
   subject?: string;
   bodyPreview?: string;
   location?: { displayName?: string };
@@ -200,6 +208,7 @@ export function normalizeGraphEvent(
   if (typeof raw.id !== "string" || raw.isCancelled === true) return null;
   return {
     id: raw.id,
+    allDay: raw.isAllDay === true,
     title: raw.subject ?? "",
     description: raw.bodyPreview,
     location: raw.location?.displayName,
@@ -221,12 +230,12 @@ export function normalizeGraphEvent(
 // ── Provider fetchers ───────────────────────────────────────────────────────
 
 const GRAPH_EVENT_SELECT =
-  "id,subject,bodyPreview,location,organizer,attendees,start,end,createdDateTime,isCancelled";
+  "id,subject,bodyPreview,location,organizer,attendees,start,end,createdDateTime,isCancelled,isAllDay";
 
 // calendarView does not support $select on createdDateTime (Graph rejects the
 // request); the upcoming query never reads it, so select everything else.
 const GRAPH_VIEW_SELECT =
-  "id,subject,bodyPreview,location,organizer,attendees,start,end,isCancelled";
+  "id,subject,bodyPreview,location,organizer,attendees,start,end,isCancelled,isAllDay";
 
 /**
  * Graph returns start/end in the event's stored zone unless told otherwise,
@@ -449,22 +458,38 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           }
         };
         let overflowed = false;
-        if (group.some((f) => f.on === "event_created" && f.sources.includes(source))) {
-          const fetched = await fetchRecentlyCreated(target, createdSinceMs);
-          push(fetched.events);
-          overflowed ||= fetched.overflowed;
-        }
-        const leads = group
-          .filter((f) => f.on === "event_start" && f.sources.includes(source))
-          .map((f) => f.leadMinutes);
-        if (leads.length > 0) {
-          const fetched = await fetchUpcoming(
-            target,
-            nowMs,
-            Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
-          );
-          push(fetched.events);
-          overflowed ||= fetched.overflowed;
+        // Per-calendar isolation: one calendar failing (e.g. the shared one
+        // was deleted on the provider) must not drop the events already
+        // fetched from the other — log and keep going; dedupe keys make the
+        // retry on the next tick benign.
+        try {
+          if (group.some((f) => f.on === "event_created" && f.sources.includes(source))) {
+            const fetched = await fetchRecentlyCreated(target, createdSinceMs);
+            push(fetched.events);
+            overflowed ||= fetched.overflowed;
+          }
+          const leads = group
+            .filter((f) => f.on === "event_start" && f.sources.includes(source))
+            .map((f) => f.leadMinutes);
+          if (leads.length > 0) {
+            const fetched = await fetchUpcoming(
+              target,
+              nowMs,
+              Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+            );
+            push(fetched.events);
+            overflowed ||= fetched.overflowed;
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          await recordSystemLog({
+            businessId,
+            source: "aiflow",
+            level: "error",
+            event: "ai_flow_calendar_poll_failed",
+            message: `Calendar-trigger poll failed for the ${source} calendar: ${message}`,
+            payload: { calendar: source }
+          });
         }
         if (overflowed) {
           // A full page means this poll may not have covered every candidate
