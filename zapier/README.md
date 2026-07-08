@@ -46,10 +46,11 @@ npx zapier-platform register      # FIRST TIME ONLY: creates the app + .zapierap
 npx zapier-platform push
 ```
 
-`.zapierapprc` (created by register/link) should be committed so later
-machines only need `login` + `push`. Until the app is pushed and either
-shared by invite or published to the App Directory, tenants cannot find
-"NewCoworker" inside Zapier.
+The integration is registered as **"New Coworker" (app 243681)** under the
+`team@newcoworker.com` Zapier account; the committed `.zapierapprc` links
+this directory to it, so a new machine only needs `login` + `push`. Until a
+version is promoted and either shared by invite or published to the App
+Directory, tenants cannot find "New Coworker" inside Zapier.
 
 `BASE_URL` defaults to `https://www.newcoworker.com`; point a version at a
 preview deployment with `zapier env:set <version> BASE_URL=https://…`.
