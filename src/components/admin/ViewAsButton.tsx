@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Eye } from "lucide-react";
+import { VIEW_AS_BANNER_HIDE_KEY } from "./ViewAsBanner";
 
 /**
  * "View dashboard as tenant" — starts an admin view-as session for this
@@ -27,6 +28,9 @@ export function ViewAsButton({ businessId }: { businessId: string }) {
         } | null;
         throw new Error(body?.error?.message ?? `HTTP ${res.status}`);
       }
+      // A previous session's Hide must not suppress the fresh session's
+      // banner (it carries the only Exit button in this tab).
+      sessionStorage.removeItem(VIEW_AS_BANNER_HIDE_KEY);
       window.location.href = "/dashboard";
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to start view-as");

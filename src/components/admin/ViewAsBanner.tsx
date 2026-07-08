@@ -6,9 +6,11 @@ import { Eye, EyeOff, X } from "lucide-react";
 /**
  * Key is per-tab (sessionStorage): hiding the banner lasts for this browser
  * tab only. A new tab shows the banner (and its Exit button) again, and the
- * view-as cookie itself still expires on its own 4h cap.
+ * view-as cookie itself still expires on its own 4h cap. The flag is cleared
+ * whenever a view-as session starts (ViewAsButton) or exits (here), so a
+ * NEW session in the same tab always gets the banner back.
  */
-const HIDE_KEY = "admin-view-as-banner-hidden";
+export const VIEW_AS_BANNER_HIDE_KEY = "admin-view-as-banner-hidden";
 
 /**
  * Sticky banner shown at the top of the owner dashboard while the admin is
@@ -32,7 +34,7 @@ export function ViewAsBanner({
   // and first client render agree and hydration stays clean.
   const [hidden, setHidden] = useState(false);
   useEffect(() => {
-    if (sessionStorage.getItem(HIDE_KEY) === "1") setHidden(true);
+    if (sessionStorage.getItem(VIEW_AS_BANNER_HIDE_KEY) === "1") setHidden(true);
   }, []);
 
   const exit = async () => {
@@ -43,6 +45,7 @@ export function ViewAsBanner({
       // next /dashboard visit would silently still be impersonating.
       const res = await fetch("/api/admin/view-as", { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      sessionStorage.removeItem(VIEW_AS_BANNER_HIDE_KEY);
       window.location.href = `/admin/${businessId}`;
     } catch {
       setError("Couldn't exit view-as; try again.");
@@ -51,7 +54,7 @@ export function ViewAsBanner({
   };
 
   const hide = () => {
-    sessionStorage.setItem(HIDE_KEY, "1");
+    sessionStorage.setItem(VIEW_AS_BANNER_HIDE_KEY, "1");
     setHidden(true);
   };
 
