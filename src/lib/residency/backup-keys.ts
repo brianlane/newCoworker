@@ -11,6 +11,11 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import {
+  residencyAllowedForTier,
+  RESIDENCY_TIER_MESSAGE,
+  ResidencyValidationError
+} from "@/lib/residency/tier-gate";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -69,7 +74,7 @@ export async function getOrCreateResidencyBackupKey(
     // Lost a concurrent-mint race (unique PK): the winner's key is canon.
     const { data: winner, error: rereadError } = await db
       .from("residency_backup_keys")
-      .select("passphrase")
+      .select("passphrase, custody")
       .eq("business_id", businessId)
       .maybeSingle();
     if (rereadError || !winner) {
@@ -77,7 +82,14 @@ export async function getOrCreateResidencyBackupKey(
         `getOrCreateResidencyBackupKey(insert): ${insertError.message}; reread: ${rereadError?.message ?? "no row"}`
       );
     }
-    return (winner as { passphrase: string }).passphrase;
+    // Same custody guard as the primary read: the "winner" of the race may
+    // have been a concurrent customer_held flip, whose null passphrase must
+    // never be returned as a deployable key.
+    const winnerRow = winner as { passphrase: string | null; custody?: string | null };
+    if (winnerRow.custody === "customer_held" || winnerRow.passphrase === null) {
+      throw new CustomerHeldBackupKeyError(businessId);
+    }
+    return winnerRow.passphrase;
   }
   return passphrase;
 }
@@ -122,7 +134,27 @@ export async function setResidencyBackupCustody(
     : remintEscrowed(businessId, db);
 }
 
+/**
+ * Enterprise gate for the customer_held flip — same server-side posture as
+ * updateResidencyBackupDestination's onbox gate (custody is a residency-
+ * program lever). Reverting to escrow stays ungated so a downgraded tenant
+ * can never be wedged.
+ */
+async function assertCustomerHeldAllowed(businessId: string, db: SupabaseClient): Promise<void> {
+  const { data, error } = await db
+    .from("businesses")
+    .select("tier")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (error) throw new Error(`setResidencyBackupCustody(tier): ${error.message}`);
+  if (!data) throw new Error(`setResidencyBackupCustody: business ${businessId} not found`);
+  if (!residencyAllowedForTier((data as { tier?: string }).tier)) {
+    throw new ResidencyValidationError(RESIDENCY_TIER_MESSAGE);
+  }
+}
+
 async function dropToCustomerHeld(businessId: string, db: SupabaseClient): Promise<void> {
+  await assertCustomerHeldAllowed(businessId, db);
   const { data, error } = await db
     .from("residency_backup_keys")
     .select("passphrase")

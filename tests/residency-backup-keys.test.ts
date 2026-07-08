@@ -63,11 +63,37 @@ describe("getOrCreateResidencyBackupKey", () => {
     const { db } = makeDb({
       reads: [
         { data: null, error: null },
-        { data: { passphrase: "winner" }, error: null }
+        { data: { passphrase: "winner", custody: "escrowed" }, error: null }
       ],
       insertError: { message: "duplicate key value" }
     });
     expect(await getOrCreateResidencyBackupKey(BIZ, db as never)).toBe("winner");
+  });
+
+  it("the race reread applies the same custody guard as the primary read", async () => {
+    const custodyWinner = makeDb({
+      reads: [
+        { data: null, error: null },
+        { data: { passphrase: null, custody: "customer_held" }, error: null }
+      ],
+      insertError: { message: "duplicate key value" }
+    });
+    await expect(
+      getOrCreateResidencyBackupKey(BIZ, custodyWinner.db as never)
+    ).rejects.toThrow(CustomerHeldBackupKeyError);
+
+    // Defensive: a null passphrase must never be returned as a key even if
+    // the custody column were stale.
+    const nullWinner = makeDb({
+      reads: [
+        { data: null, error: null },
+        { data: { passphrase: null, custody: "escrowed" }, error: null }
+      ],
+      insertError: { message: "duplicate key value" }
+    });
+    await expect(
+      getOrCreateResidencyBackupKey(BIZ, nullWinner.db as never)
+    ).rejects.toThrow(/customer_held/);
   });
 
   it("throws when the race reread also fails or is empty", async () => {
@@ -152,9 +178,12 @@ describe("resolveResidencyBackupPassphraseForDeploy", () => {
 describe("setResidencyBackupCustody", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  // customer_held reads run in order: [0] businesses tier gate, [1] key row.
+  const enterpriseTier = { data: { tier: "enterprise" }, error: null };
+
   it("customer_held drops the plaintext and keeps the SHA-256 fingerprint", async () => {
     const { db, upsert } = makeDb({
-      reads: [{ data: { passphrase: "the-escrowed-key" }, error: null }]
+      reads: [enterpriseTier, { data: { passphrase: "the-escrowed-key" }, error: null }]
     });
     await setResidencyBackupCustody(BIZ, "customer_held", db as never);
     expect(upsert).toHaveBeenCalledWith(
@@ -168,14 +197,32 @@ describe("setResidencyBackupCustody", () => {
   });
 
   it("customer_held with no existing key stores a null fingerprint", async () => {
-    const { db, upsert } = makeDb({ reads: [{ data: null, error: null }] });
+    const { db, upsert } = makeDb({ reads: [enterpriseTier, { data: null, error: null }] });
     await setResidencyBackupCustody(BIZ, "customer_held", db as never);
     expect(upsert).toHaveBeenCalledWith(
       expect.objectContaining({ passphrase: null, passphrase_sha256: null })
     );
   });
 
-  it("escrowed mints a FRESH key (the dropped one is unrecoverable by design)", async () => {
+  it("customer_held is enterprise-gated (same posture as the destination setter)", async () => {
+    const gated = makeDb({ reads: [{ data: { tier: "standard" }, error: null }] });
+    await expect(
+      setResidencyBackupCustody(BIZ, "customer_held", gated.db as never)
+    ).rejects.toThrow(/Enterprise plan feature/);
+    expect(gated.upsert).not.toHaveBeenCalled();
+
+    const missing = makeDb({ reads: [{ data: null, error: null }] });
+    await expect(
+      setResidencyBackupCustody(BIZ, "customer_held", missing.db as never)
+    ).rejects.toThrow(/not found/);
+
+    const tierFail = makeDb({ reads: [{ data: null, error: { message: "tier boom" } }] });
+    await expect(
+      setResidencyBackupCustody(BIZ, "customer_held", tierFail.db as never)
+    ).rejects.toThrow(/tier boom/);
+  });
+
+  it("escrowed mints a FRESH key without a tier read (revert is never wedged)", async () => {
     const { db, upsert } = makeDb({ reads: [{ data: null, error: null }] });
     await setResidencyBackupCustody(BIZ, "escrowed", db as never);
     const arg = (upsert.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
@@ -185,13 +232,15 @@ describe("setResidencyBackupCustody", () => {
   });
 
   it("surfaces read/write errors and uses the default client when none is passed", async () => {
-    const readFail = makeDb({ reads: [{ data: null, error: { message: "read boom" } }] });
+    const readFail = makeDb({
+      reads: [enterpriseTier, { data: null, error: { message: "read boom" } }]
+    });
     await expect(
       setResidencyBackupCustody(BIZ, "customer_held", readFail.db as never)
     ).rejects.toThrow(/read boom/);
 
     const writeFail = makeDb({
-      reads: [{ data: null, error: null }],
+      reads: [enterpriseTier, { data: null, error: null }],
       upsertError: { message: "write boom" }
     });
     await expect(
@@ -206,7 +255,7 @@ describe("setResidencyBackupCustody", () => {
     await setResidencyBackupCustody(BIZ, "escrowed");
     expect(ok.upsert).toHaveBeenCalled();
 
-    const okCustomer = makeDb({ reads: [{ data: null, error: null }] });
+    const okCustomer = makeDb({ reads: [enterpriseTier, { data: null, error: null }] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(okCustomer.db as never);
     await setResidencyBackupCustody(BIZ, "customer_held");
     expect(okCustomer.upsert).toHaveBeenCalled();
