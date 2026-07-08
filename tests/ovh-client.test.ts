@@ -110,6 +110,37 @@ describe("OvhClient request signing", () => {
     expect(timeCalls).toHaveLength(1);
   });
 
+  it("maps /auth/time aborts and network errors to OvhApiError (bounded clock fetch)", async () => {
+    const hangingClock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      if (String(url).endsWith("/auth/time")) {
+        await new Promise<void>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+          });
+        });
+      }
+      return new Response("[]", { status: 200 });
+    }) as unknown as typeof fetch;
+    const timingOut = new OvhClient({
+      baseUrl: BASE,
+      applicationKey: "APPKEY",
+      applicationSecret: "APPSECRET",
+      consumerKey: "CONSUMER",
+      fetchImpl: hangingClock,
+      now: () => 1_800_000_123_000,
+      timeoutMs: 10
+    });
+    await expect(timingOut.listVps()).rejects.toThrow(/auth\/time timed out after 10ms/);
+
+    const flakyClock = vi.fn(async (url: string | URL | Request) => {
+      if (String(url).endsWith("/auth/time")) throw new Error("dns failure");
+      return new Response("[]", { status: 200 });
+    }) as unknown as typeof fetch;
+    await expect(makeClient(flakyClock).listVps()).rejects.toThrow(
+      /auth\/time network error: dns failure/
+    );
+  });
+
   it("throws OvhApiError when /auth/time fails or returns garbage", async () => {
     const failing = vi.fn(async (url: string | URL | Request) => {
       if (String(url).endsWith("/auth/time")) return new Response("", { status: 500 });

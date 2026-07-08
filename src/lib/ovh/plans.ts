@@ -36,7 +36,12 @@ export const OVH_UBUNTU_IMAGE_MATCH = "ubuntu 24.04";
  * against the live ovh-ca catalog before first purchase — see module doc.
  */
 const DEFAULT_PLAN_CODES: Record<VpsSize, string> = {
-  kvm1: "vps-le-2-2-40",
+  // RAM floors must satisfy the profile the box will run (and the BYOS
+  // preflight minimums in vps/scripts/byos-preflight.sh): kvm1 ≈ 4GB,
+  // kvm2 ≈ 8GB, kvm4 ≈ 16GB, kvm8 ≈ 32GB. OVH "vps-le" codes encode
+  // vCPU-RAM-disk; kvm1 maps to a 4GB SKU (a 2GB box cannot host even the
+  // Gemini-only starter stack).
+  kvm1: "vps-le-2-4-80",
   kvm2: "vps-le-2-8-80",
   kvm4: "vps-le-4-16-160",
   kvm8: "vps-le-8-32-320"

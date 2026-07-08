@@ -329,7 +329,29 @@ export class OvhClient {
     const localSec = Math.floor(this.now() / 1000);
     if (this.timeDeltaSec === null) {
       const url = `${this.baseUrl}/auth/time`;
-      const response = await this.fetchImpl(url, { method: "GET" });
+      // Same per-request timeout as signed calls — a hung clock endpoint
+      // must not hang every client call forever.
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), this.timeoutMs);
+      let response: Response;
+      try {
+        response = await this.fetchImpl(url, { method: "GET", signal: ac.signal });
+      } catch (err) {
+        /* c8 ignore next -- fetch always rejects with Error; non-Error is defensive */
+        const msg = err instanceof Error ? err.message : String(err);
+        const isAbort =
+          typeof err === "object" && err !== null && "name" in err && (err as { name?: string }).name === "AbortError";
+        throw new OvhApiError(
+          "/auth/time",
+          0,
+          null,
+          isAbort
+            ? `OVH API /auth/time timed out after ${this.timeoutMs}ms`
+            : `OVH API /auth/time network error: ${msg}`
+        );
+      } finally {
+        clearTimeout(timer);
+      }
       if (!response.ok) {
         throw new OvhApiError("/auth/time", response.status, null, `OVH API /auth/time → HTTP ${response.status}`);
       }
