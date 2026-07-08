@@ -340,6 +340,81 @@ export async function createWhiteGloveCheckoutSession(
   return { id: session.id, url: session.url };
 }
 
+export type EnterpriseDealCheckoutParams = {
+  /** enterprise_deals.id — the row is the pricing source of truth. */
+  dealId: string;
+  businessId: string;
+  businessName: string;
+  monthlyCents: number;
+  /** One-time setup fee billed on the first invoice; 0 omits the line. */
+  setupCents: number;
+  successUrl: string;
+  cancelUrl: string;
+  customerEmail?: string;
+  customerId?: string;
+};
+
+/**
+ * Recurring Checkout Session for an admin-authored enterprise deal: a
+ * `mode=subscription` session whose monthly price is inline `price_data`
+ * (custom per deal — no per-environment Stripe product/price setup), plus an
+ * optional one-time setup-fee line billed on the first invoice. Metadata
+ * shape is what the Stripe webhook expects (`checkoutKind:
+ * "enterprise_deal"`); it is mirrored onto the subscription so later
+ * subscription lifecycle events can be traced back to the business.
+ */
+export async function createEnterpriseDealCheckoutSession(
+  params: EnterpriseDealCheckoutParams
+): Promise<{ id: string; url: string }> {
+  if (!Number.isInteger(params.monthlyCents) || params.monthlyCents <= 0) {
+    throw new Error("monthlyCents must be a positive integer");
+  }
+  if (!Number.isInteger(params.setupCents) || params.setupCents < 0) {
+    throw new Error("setupCents must be a non-negative integer");
+  }
+  const stripe = getStripe();
+  const metadata: Record<string, string> = {
+    checkoutKind: "enterprise_deal",
+    enterpriseDealId: params.dealId,
+    businessId: params.businessId,
+    tier: "enterprise"
+  };
+  const lineItems: Stripe.Checkout.SessionCreateParams.LineItem[] = [
+    {
+      price_data: {
+        currency: "usd",
+        product_data: { name: `Enterprise plan — ${params.businessName}` },
+        unit_amount: params.monthlyCents,
+        recurring: { interval: "month" }
+      },
+      quantity: 1
+    }
+  ];
+  if (params.setupCents > 0) {
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: { name: "Enterprise setup (one-time)" },
+        unit_amount: params.setupCents
+      },
+      quantity: 1
+    });
+  }
+  const session = await stripe.checkout.sessions.create({
+    mode: "subscription",
+    line_items: lineItems,
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    customer: params.customerId,
+    customer_email: params.customerId ? undefined : params.customerEmail,
+    billing_address_collection: "auto",
+    metadata,
+    subscription_data: { metadata }
+  });
+  if (!session.url) throw new Error("Stripe checkout session URL is null");
+  return { id: session.id, url: session.url };
+}
+
 export async function createCustomerPortalSession(params: {
   customerId: string;
   returnUrl: string;

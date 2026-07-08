@@ -1,6 +1,7 @@
 import { after } from "next/server";
 import { ensureCommitmentSchedule, getStripe, verifyWebhook } from "@/lib/stripe/client";
 import {
+  createSubscription,
   getSubscription,
   getSubscriptionByStripeSubscriptionId,
   stripeSubscriptionPeriodCache,
@@ -34,6 +35,11 @@ import {
   getWhiteGlovePackage,
   prioritySupportUntil
 } from "@/lib/plans/white-glove";
+import {
+  getEnterpriseDeal,
+  markEnterpriseDealActive,
+  markEnterpriseDealCanceledByStripeSubscriptionId
+} from "@/lib/db/enterprise-deals";
 import { buildWhiteGloveConfirmationEmail } from "@/lib/email/templates/white-glove-confirmation";
 import { sendOwnerEmail } from "@/lib/email/client";
 import {
@@ -437,6 +443,24 @@ export async function POST(request: Request) {
 
       case "customer.subscription.deleted": {
         const sub = event.data.object as Stripe.Subscription;
+        // Enterprise-deal bookkeeping: flip the deal row to 'canceled' so the
+        // one-live-deal-per-business slot frees up for a future re-deal.
+        // Best-effort — the subscription lifecycle below is the authority.
+        try {
+          const dealCanceled = await markEnterpriseDealCanceledByStripeSubscriptionId(sub.id);
+          if (dealCanceled) {
+            logger.info("Enterprise deal marked canceled on subscription deletion", {
+              stripeSubscriptionId: sub.id,
+              eventId: event.id
+            });
+          }
+        } catch (err) {
+          logger.warn("Enterprise deal cancel mirror failed (non-fatal)", {
+            stripeSubscriptionId: sub.id,
+            eventId: event.id,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
         const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
         if (existing) {
           const businessId = existing.business_id;
@@ -801,6 +825,15 @@ async function dispatchAutoCancelOnPaymentFailure(params: {
 }
 
 async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId: string) {
+  // Enterprise deals are mode=subscription but must NOT run the default
+  // signup activation below: no lifetime-cap accounting (the deal is
+  // admin-vetted), no commitment schedule (month-to-month by design), and no
+  // provisioning trigger (the admin provisions from the panel — the box may
+  // already exist).
+  if (session.metadata?.checkoutKind === "enterprise_deal") {
+    await applyEnterpriseDealFromCheckout(session, eventId);
+    return;
+  }
   if (
     session.mode === "payment" &&
     session.metadata?.checkoutKind === "voice_bonus_seconds"
@@ -1462,6 +1495,187 @@ async function applyChatCreditGrantFromCheckout(session: Stripe.Checkout.Session
     amount: micros,
     rpcName: "apply_chat_credit_grant_from_checkout",
     rpcAmountParam: "p_credit_micros"
+  });
+}
+
+/**
+ * Activates an enterprise deal (checkout.session.completed on a
+ * `checkoutKind: "enterprise_deal"` subscription-mode session):
+ *
+ *   1. ATOMICALLY claims the enterprise_deals row as 'active' (idempotent
+ *      under webhook retries; a completion from a DIFFERENT session cancels
+ *      the duplicate Stripe subscription instead of double-linking).
+ *   2. Wires stripe_customer_id + stripe_subscription_id +
+ *      billing_period="monthly" + the Stripe period cache onto the tenant's
+ *      existing subscriptions row (admin-created enterprise rows are active
+ *      and Stripe-less until this moment). From here the tenant behaves like
+ *      a normal month-to-month subscriber: renewals via invoice.paid,
+ *      payment-failure lifecycle, cancel flow.
+ *
+ * Deliberately NOT done here (differences from the default signup path):
+ * lifetime-cap increment (admin-vetted deal, not self-serve abuse surface),
+ * commitment schedule (month-to-month), and provisioning (admin-driven; the
+ * box may already exist).
+ */
+async function applyEnterpriseDealFromCheckout(
+  session: Stripe.Checkout.Session,
+  eventId: string
+) {
+  const dealId = session.metadata?.enterpriseDealId?.trim();
+  if (!dealId) {
+    logger.warn("enterprise_deal checkout missing enterpriseDealId", {
+      eventId,
+      sessionId: session.id
+    });
+    return;
+  }
+  const deal = await getEnterpriseDeal(dealId);
+  const metaBusinessId = session.metadata?.businessId?.trim() || null;
+  // The deal row is the source of truth; metadata businessId must agree.
+  if (!deal || (metaBusinessId && deal.business_id !== metaBusinessId)) {
+    logger.warn("enterprise_deal checkout for unknown/mismatched deal", {
+      eventId,
+      sessionId: session.id,
+      businessId: metaBusinessId,
+      dealId
+    });
+    return;
+  }
+  const businessId = deal.business_id;
+
+  const customerId =
+    typeof session.customer === "string" ? session.customer : session.customer?.id ?? null;
+  const subscriptionId =
+    typeof session.subscription === "string"
+      ? session.subscription
+      : session.subscription?.id ?? null;
+  if (!subscriptionId) {
+    logger.error("enterprise_deal checkout session has no subscription id", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      dealId
+    });
+    return;
+  }
+
+  const existing = await getSubscription(businessId);
+
+  // Linkage guard, checked BEFORE claiming the deal so a refused payment
+  // never wedges the deal row in 'active': an ACTIVE local row already
+  // linked to a DIFFERENT live Stripe sub means this payment would
+  // double-bill the tenant — cancel the fresh sub. (A CANCELED row linked
+  // to an old, dead Stripe sub is the normal returning-tenant re-deal shape
+  // and is handled below.)
+  if (
+    existing?.stripe_subscription_id &&
+    existing.stripe_subscription_id !== subscriptionId &&
+    existing.status === "active"
+  ) {
+    logger.error(
+      "enterprise_deal activation refused: subscription row already linked to a different Stripe sub",
+      {
+        eventId,
+        sessionId: session.id,
+        businessId,
+        dealId,
+        existingStripeSubscriptionId: existing.stripe_subscription_id,
+        incomingStripeSubscriptionId: subscriptionId
+      }
+    );
+    await cancelStripeSubscriptionSafely(subscriptionId, businessId);
+    return;
+  }
+
+  const createdSec =
+    typeof session.created === "number" && Number.isFinite(session.created)
+      ? session.created
+      : Math.floor(Date.now() / 1000);
+  const claim = await markEnterpriseDealActive(dealId, {
+    activatedAt: new Date(createdSec * 1000),
+    stripeSessionId: session.id,
+    stripeSubscriptionId: subscriptionId
+  });
+  if (claim === "not_claimable") {
+    // The deal is no longer claimable by this session: either it was already
+    // activated by a DIFFERENT Checkout Session (two pay tabs both reached
+    // Stripe before the first completion landed), or this is a STALE session
+    // completing after an admin revoke / after the deal's subscription ended.
+    // Either way, cancel this fresh Stripe subscription so the customer
+    // isn't billed monthly against a dead or duplicate deal; support refunds
+    // any captured first invoice out-of-band.
+    logger.error("enterprise_deal not claimable by this session — canceling its subscription", {
+      eventId,
+      sessionId: session.id,
+      businessId,
+      dealId,
+      dealStatus: deal.status,
+      firstSessionId: deal.stripe_session_id,
+      monthlyCents: deal.monthly_cents
+    });
+    await cancelStripeSubscriptionSafely(subscriptionId, businessId);
+    return;
+  }
+
+  const periodCache = await fetchSubscriptionPeriodCacheOrEmpty(
+    subscriptionId,
+    "Stripe subscription retrieve failed on enterprise deal activation",
+    { businessId, dealId }
+  );
+
+  if (existing && !existing.wiped_at) {
+    // Re-deal for a canceled-in-grace tenant is legitimate (the admin
+    // authored a fresh deal after the old subscription ended), but the row
+    // must not keep its cancellation bookkeeping alongside status=active —
+    // that Frankenstein state races the grace-sweep and confuses the
+    // dashboard. Clear it in the same write, mirroring what the resubscribe
+    // orchestrator does for self-serve reactivations.
+    const clearCancellation =
+      existing.status === "canceled"
+        ? {
+            canceled_at: null,
+            cancel_reason: null,
+            grace_ends_at: null,
+            cancel_at_period_end: false
+          }
+        : {};
+    await updateSubscription(existing.id, {
+      status: "active",
+      tier: "enterprise",
+      billing_period: "monthly",
+      commitment_months: 1,
+      ...(customerId ? { stripe_customer_id: customerId } : {}),
+      stripe_subscription_id: subscriptionId,
+      ...clearCancellation,
+      ...periodCache
+    });
+  } else {
+    // No row (defensive — admin-created enterprise businesses always have
+    // one), or the prior lifetime was WIPED: a wiped row is terminal
+    // bookkeeping (its data backup is gone) and must never be resurrected,
+    // so the re-deal starts a fresh row. getSubscription reads newest-first,
+    // so the new active row supersedes the wiped one everywhere.
+    await createSubscription({
+      id: crypto.randomUUID(),
+      business_id: businessId,
+      tier: "enterprise",
+      status: "active",
+      stripe_customer_id: customerId,
+      stripe_subscription_id: subscriptionId,
+      billing_period: "monthly",
+      commitment_months: 1,
+      ...periodCache
+    });
+  }
+
+  logger.info("Enterprise deal activated", {
+    eventId,
+    sessionId: session.id,
+    businessId,
+    dealId,
+    stripeSubscriptionId: subscriptionId,
+    setupCents: deal.setup_cents,
+    monthlyCents: deal.monthly_cents
   });
 }
 
