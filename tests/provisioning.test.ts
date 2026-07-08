@@ -37,8 +37,9 @@ vi.mock("@/lib/db/businesses", () => ({
 // deterministic; when the env is unset the reader returns null so the mint path
 // runs with a fixed persisted value.
 vi.mock("@/lib/residency/backup-keys", () => ({
-  // Escrow mint hits the DB only on the residency path; deterministic here.
-  getOrCreateResidencyBackupKey: vi.fn(async () => "escrowed-backup-pass")
+  // Escrow resolve hits the DB only on the residency path; deterministic
+  // here ("" would mean customer_held custody — see the dedicated test).
+  resolveResidencyBackupPassphraseForDeploy: vi.fn(async () => "escrowed-backup-pass")
 }));
 
 vi.mock("@/lib/db/vps-gateway-tokens", () => ({
@@ -929,6 +930,26 @@ describe("provisioning/orchestrate", () => {
     expectDeployHasEnv(cmd, "DATA_API_TOKENS", "mock_gateway_token,old-rotated-token");
     // Escrowed backup passphrase reaches the box for the encrypted-dump timer.
     expectDeployHasEnv(cmd, "RESIDENCY_BACKUP_PASSPHRASE", "escrowed-backup-pass");
+    // Default destination: ciphertext uploads to central Storage.
+    expectDeployHasEnv(cmd, "RESIDENCY_BACKUP_DESTINATION", "central");
+  });
+
+  it("residency_backup_destination='onbox' reaches the box (in-region ciphertext)", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      data_residency_mode: "vps",
+      residency_backup_destination: "onbox"
+    } as never);
+    vi.mocked(listActiveGatewayTokensForBusiness).mockResolvedValueOnce(["mock_gateway_token"]);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("e9"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-res-onbox", tier: "enterprise", ownerEmail: "o@test.com" },
+      { vpsProvisioner, remoteExec }
+    );
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "RESIDENCY_BACKUP_DESTINATION", "onbox");
   });
 
   it("prepends the deploy token to DATA_API_TOKENS when the DB list lacks it", async () => {
@@ -2387,7 +2408,8 @@ describe("provisioning/orchestrate", () => {
       vi.mocked(getBusiness).mockResolvedValue({
         business_type: "real_estate",
         tier: "enterprise",
-        vps_provider: "byos"
+        vps_provider: "byos",
+        data_residency_mode: "dual"
       } as never);
       const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("777"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
@@ -2427,11 +2449,45 @@ describe("provisioning/orchestrate", () => {
       expect(vpsProvisioner).not.toHaveBeenCalled();
     });
 
+    it("byos with residency still 'supabase' is refused before anything is purchased (compliance gate)", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "byos",
+        data_residency_mode: "supabase"
+      } as never);
+      const vpsProvisioner = vi.fn();
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-byos-res", tier: "enterprise" },
+          { vpsProvisioner, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/Flip data residency to 'dual' first/);
+      expect(vpsProvisioner).not.toHaveBeenCalled();
+    });
+
+    it("canada-region (ovh/ca) placements are also residency-gated", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "ovh",
+        vps_region: "ca"
+        // data_residency_mode missing → 'supabase'
+      } as never);
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-ovh-res", tier: "enterprise" },
+          { vpsProvisioner: vi.fn(), remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/Canadian-region box/);
+    });
+
     it("byos without an injected provisioner fails loudly instead of buying a Hostinger box", async () => {
       vi.mocked(getBusiness).mockResolvedValue({
         business_type: "real_estate",
         tier: "enterprise",
-        vps_provider: "byos"
+        vps_provider: "byos",
+        data_residency_mode: "dual"
       } as never);
 
       await expect(

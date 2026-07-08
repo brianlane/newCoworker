@@ -35,7 +35,8 @@ import {
   listActiveGatewayTokensForBusiness,
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
-import { getOrCreateResidencyBackupKey } from "@/lib/residency/backup-keys";
+import { resolveResidencyBackupPassphraseForDeploy } from "@/lib/residency/backup-keys";
+import { assertResidencyForPlacement } from "@/lib/residency/enforce";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -800,6 +801,11 @@ async function runOrchestrator(
   const businessRow = await getBusiness(businessId);
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
+  // Compliance gate: a BYOS/Canada placement whose residency mode is still
+  // 'supabase' would put the box up while every piece of customer content
+  // stays in central US Supabase — refuse before anything is purchased or
+  // bootstrapped. (Hostinger/us tenants no-op here.)
+  assertResidencyForPlacement(businessRow ?? {});
 
   const hostinger =
     deps?.hostinger ??
@@ -1287,16 +1293,23 @@ async function runOrchestrator(
   // through that overlap. Only resolved for residency-enabled tenants.
   let dataApiTokens = "";
   let residencyBackupPassphrase = "";
+  // Where the box's encrypted dumps go: 'central' (ciphertext to central
+  // Storage) or 'onbox' (dumps stay on the box — in-region even for
+  // ciphertext, per Canadian/insurance deals). Only meaningful when the
+  // residency stack is enabled.
+  const residencyBackupDestination =
+    businessRow?.residency_backup_destination === "onbox" ? "onbox" : "central";
   if (dataResidencyEnabled) {
     const activeTokens = await listActiveGatewayTokensForBusiness(businessId);
     const all = activeTokens.includes(gatewayToken)
       ? activeTokens
       : [gatewayToken, ...activeTokens];
     dataApiTokens = all.join(",");
-    // Escrowed AES passphrase for the box's encrypted datastore dumps
+    // AES passphrase for the box's encrypted datastore dumps
     // (residency_backup_keys). Minted once per tenant; only ciphertext
-    // ever leaves the box.
-    residencyBackupPassphrase = await getOrCreateResidencyBackupKey(businessId);
+    // ever leaves the box. Empty for customer_held custody — the deploy
+    // then uninstalls the platform backup timer (customer owns DR).
+    residencyBackupPassphrase = await resolveResidencyBackupPassphraseForDeploy(businessId);
   }
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -1358,9 +1371,12 @@ async function runOrchestrator(
     // Comma-separated bearer list for the data-api (all non-revoked tokens,
     // so a rotation's overlap window never drops authenticated requests).
     ["DATA_API_TOKENS", dataApiTokens],
-    // Escrowed backup-encryption passphrase (empty when residency is off —
-    // deploy-client then skips the backup timer install).
+    // Backup-encryption passphrase (empty when residency is off OR custody
+    // is customer_held — deploy-client then skips/uninstalls the backup timer).
     ["RESIDENCY_BACKUP_PASSPHRASE", residencyBackupPassphrase],
+    // 'central' uploads ciphertext to central Storage; 'onbox' keeps dumps
+    // on the box (in-region even for ciphertext).
+    ["RESIDENCY_BACKUP_DESTINATION", residencyBackupDestination],
     ["CLOUDFLARE_TUNNEL_TOKEN", cloudflareTunnelToken],
     ["PROVISIONING_PROGRESS_URL", progressUrl],
     ["PROVISIONING_PROGRESS_TOKEN", progressToken]

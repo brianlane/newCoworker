@@ -9,12 +9,17 @@
 # lockstep with src/lib/db/data-backups.ts), and prune local copies.
 #
 # Env (from /opt/data-api/backup.env, root-only):
-#   BUSINESS_ID                  tenant uuid
-#   SUPABASE_URL                 https://<ref>.supabase.co
-#   SUPABASE_SERVICE_KEY         upload credential
-#   RESIDENCY_BACKUP_PASSPHRASE  AES passphrase (escrowed centrally)
-#   RESIDENCY_BACKUP_BUCKET      default "business-backups" (DATA_BACKUP_BUCKET)
-#   RESIDENCY_BACKUP_KEEP        local copies to keep, default 7
+#   BUSINESS_ID                     tenant uuid
+#   SUPABASE_URL                    https://<ref>.supabase.co
+#   SUPABASE_SERVICE_KEY            upload credential
+#   RESIDENCY_BACKUP_PASSPHRASE     AES passphrase (escrowed centrally)
+#   RESIDENCY_BACKUP_BUCKET         default "business-backups" (DATA_BACKUP_BUCKET)
+#   RESIDENCY_BACKUP_DESTINATION    central (upload ciphertext, default) |
+#                                   onbox (dumps stay on the box — in-region
+#                                   even for ciphertext; no upload at all)
+#   RESIDENCY_BACKUP_KEEP           local copies to keep; default 7
+#                                   (central) / 28 (onbox = ~7 days at 6h,
+#                                   since local copies ARE the DR there)
 set -euo pipefail
 
 : "${BUSINESS_ID:?BUSINESS_ID required}"
@@ -22,7 +27,12 @@ set -euo pipefail
 : "${SUPABASE_SERVICE_KEY:?SUPABASE_SERVICE_KEY required}"
 : "${RESIDENCY_BACKUP_PASSPHRASE:?RESIDENCY_BACKUP_PASSPHRASE required}"
 BUCKET="${RESIDENCY_BACKUP_BUCKET:-business-backups}"
-KEEP="${RESIDENCY_BACKUP_KEEP:-7}"
+DESTINATION="${RESIDENCY_BACKUP_DESTINATION:-central}"
+if [[ "${DESTINATION}" == "onbox" ]]; then
+  KEEP="${RESIDENCY_BACKUP_KEEP:-28}"
+else
+  KEEP="${RESIDENCY_BACKUP_KEEP:-7}"
+fi
 
 BACKUP_DIR="/opt/data-api/backups"
 mkdir -p "${BACKUP_DIR}"
@@ -45,6 +55,14 @@ SIZE=$(stat -c%s "${OUT}")
 if [[ "${SIZE}" -lt 128 ]]; then
   echo "FATAL: backup suspiciously small (${SIZE} bytes) — refusing to upload/prune" >&2
   exit 1
+fi
+
+if [[ "${DESTINATION}" == "onbox" ]]; then
+  # In-region-only mode: even ciphertext never leaves the box. The rotated
+  # local set IS the DR (disclosed per-deal trade — a dead box loses it).
+  ls -1t "${BACKUP_DIR}"/residency-*.sql.gz.enc 2>/dev/null | tail -n "+$((KEEP + 1))" | xargs -r rm -f
+  echo "residency backup ok: ${FILE} (${SIZE} bytes, kept on-box; destination=onbox, no upload)"
+  exit 0
 fi
 
 # Upload ciphertext. x-upsert lets a same-second rerun overwrite instead of 409.
