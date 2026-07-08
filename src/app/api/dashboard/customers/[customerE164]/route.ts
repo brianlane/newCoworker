@@ -11,7 +11,7 @@
  * DELETE /api/dashboard/customers/:e164?businessId=<uuid>
  *          → { ok: true }
  *
- * Auth: getAuthUser + requireOwner(businessId). Admins may bypass the
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Admins may bypass the
  * ownership check, matching the rest of the dashboard API. The
  * cascade-on-business-delete is enforced by the FK in
  * supabase/migrations/20260507000000_customer_memories.sql; this
@@ -20,7 +20,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -92,7 +92,7 @@ export async function GET(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`customer-detail:${businessId}:${customerE164}`, READ_RATE);
     if (!limiter.success) {
@@ -145,7 +145,7 @@ export async function PATCH(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`customer-write:${businessId}:${customerE164}`, WRITE_RATE);
     if (!limiter.success) {
@@ -214,7 +214,7 @@ export async function DELETE(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`customer-delete:${businessId}`, WRITE_RATE);
     if (!limiter.success) {

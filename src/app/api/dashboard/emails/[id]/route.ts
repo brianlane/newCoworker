@@ -8,11 +8,11 @@
  * 200 rows and only needs the preview). The reading pane fetches them here when a
  * message is opened. Attachment storage paths never reach the client — they're
  * resolved to short-lived signed download URLs server-side. Scoped by businessId
- * + requireOwner so one tenant can never read another's mail; admins bypass.
+ * + requireBusinessRole so one tenant can never read another's mail; admins bypass.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getEmailBody } from "@/lib/db/email-log";
@@ -41,7 +41,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     const body = await getEmailBody(businessId, id, db);

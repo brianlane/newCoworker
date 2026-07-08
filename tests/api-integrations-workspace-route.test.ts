@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
@@ -22,7 +22,7 @@ import {
   listWorkspaceOAuthConnections
 } from "@/lib/db/workspace-oauth-connections";
 import { getNangoClient } from "@/lib/nango/server";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 const connectionRowId = "22222222-2222-4222-8222-222222222222";
@@ -42,7 +42,7 @@ describe("api/integrations/workspace", () => {
       email: "owner@example.com",
       isAdmin: false
     } as never);
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       {
         id: connectionRowId,

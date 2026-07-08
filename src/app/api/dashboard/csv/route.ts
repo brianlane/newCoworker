@@ -12,12 +12,12 @@
  * Imports run synchronously — files are capped (2000 rows / 1 MB) so a
  * background-job pipeline like BizBlasts' ActiveJob one is unnecessary.
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass the ownership
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass the ownership
  * check (existing dashboard convention).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -67,7 +67,7 @@ export async function GET(request: Request) {
       mode: url.searchParams.get("mode") ?? "export"
     });
 
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "manage_settings");
 
     const limiter = rateLimit(`csv-export:${parsed.businessId}`, READ_RATE);
     if (!limiter.success) {
@@ -100,7 +100,7 @@ export async function POST(request: Request) {
       type: url.searchParams.get("type") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "manage_settings");
 
     const limiter = rateLimit(`csv-import:${parsed.businessId}`, IMPORT_RATE);
     if (!limiter.success) {

@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
-import { requireOwner } from "@/lib/auth";
+import { requireBusinessRole } from "@/lib/auth";
 import {
   getLatestProvisioningStatus,
   shouldShowProvisioningProgress
@@ -25,7 +25,7 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", "Invalid or missing businessId");
     }
 
-    await requireOwner(parsed.data.businessId);
+    await requireBusinessRole(parsed.data.businessId, "view_dashboard");
 
     const [latest, business] = await Promise.all([
       getLatestProvisioningStatus(parsed.data.businessId),

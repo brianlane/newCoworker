@@ -8,6 +8,11 @@ import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
 import { bindBusinessMemberUser } from "@/lib/db/business-members";
+import {
+  resolveActiveBusinessContext,
+  type AccessibleBusiness
+} from "@/lib/dashboard/active-business";
+import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
 
@@ -44,6 +49,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
     | { graceEndsAt: string; reason: Parameters<typeof GraceBanner>[0]["reason"] }
     | null = null;
   let businessId: string | null = null;
+  let accessible: AccessibleBusiness[] = [];
   if (ownerEmail) {
     // Single-round-trip grace lookup. Next.js layouts re-execute on every
     // navigation under `/dashboard`, so we previously paid 2 sequential
@@ -75,26 +81,27 @@ export default async function DashboardLayout({ children }: { children: React.Re
         // Next render retries; membership stays 'invited' meanwhile.
       }
     }
-    const { data: businesses } = await db
-      .from("businesses")
-      .select("id, subscriptions(status, grace_ends_at, wiped_at, cancel_reason, created_at)")
-      .eq("owner_email", ownerEmail)
-      .order("created_at", { ascending: false })
-      .limit(1);
-    const business = businesses?.[0] ?? null;
-    businessId = business?.id ?? null;
-    const embeddedSubs = (business?.subscriptions ?? []) as EmbeddedSubscriptionRow[];
-    const subscription =
-      embeddedSubs.length === 0
-        ? null
-        : embeddedSubs
-            .slice()
-            .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-    if (subscription?.grace_ends_at && isCanceledInGrace(subscription)) {
-      grace = {
-        graceEndsAt: subscription.grace_ends_at,
-        reason: subscription.cancel_reason as CancelReason | null
-      };
+    // Multi-business (agency) resolution: owned businesses ∪ memberships,
+    // with the switcher cookie picking the active one (validated against the
+    // accessible set on every read). Admin view-as resolves to its pinned
+    // business inside the helper, unchanged.
+    const ctx = await resolveActiveBusinessContext(user, db);
+    businessId = ctx.businessId;
+    accessible = ctx.accessible;
+    if (businessId) {
+      const { data: subs } = await db
+        .from("subscriptions")
+        .select("status, grace_ends_at, wiped_at, cancel_reason, created_at")
+        .eq("business_id", businessId)
+        .order("created_at", { ascending: false })
+        .limit(1);
+      const subscription = ((subs ?? []) as EmbeddedSubscriptionRow[])[0] ?? null;
+      if (subscription?.grace_ends_at && isCanceledInGrace(subscription)) {
+        grace = {
+          graceEndsAt: subscription.grace_ends_at,
+          reason: subscription.cancel_reason as CancelReason | null
+        };
+      }
     }
   }
 
@@ -102,6 +109,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
     <div className="flex h-dvh bg-deep-ink">
       <DashboardSidebar userEmail={viewAs ? ownerEmail : user.email} businessId={businessId} />
       <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
+        <BusinessSwitcher
+          businesses={accessible.map((b) => ({
+            businessId: b.businessId,
+            name: b.name,
+            role: b.role
+          }))}
+          activeBusinessId={businessId}
+        />
         {viewAs && (
           <ViewAsBanner
             businessId={viewAs.businessId}

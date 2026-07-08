@@ -5,12 +5,12 @@
  * GET  ?businessId=&check=<handle>  → live availability for a proposed handle
  * POST { businessId, localPart }    → set a personalized handle (standard/enterprise only)
  *
- * Auth: getAuthUser + requireOwner(businessId) (admin bypasses ownership),
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings") (admin bypasses ownership),
  * mirroring /api/dashboard/agent-tools. The tier gate is enforced server-side
  * from the businesses row, never trusting the client.
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
 import {
@@ -50,7 +50,7 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const businessId = businessIdSchema.parse(url.searchParams.get("businessId") ?? "");
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const check = url.searchParams.get("check");
     if (check !== null) {
@@ -78,7 +78,7 @@ export async function POST(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const body = postBodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
     const business = await getBusiness(body.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/integrations", () => ({
@@ -22,7 +22,7 @@ vi.mock("@/lib/db/integrations", () => ({
 
 import { DELETE, GET } from "@/app/api/integrations/route";
 import { deleteIntegration, getIntegrations } from "@/lib/db/integrations";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 
 const OWNER = {
   userId: "user-1",
@@ -34,7 +34,7 @@ describe("api/integrations route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(OWNER as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
     vi.mocked(getIntegrations).mockResolvedValue([
       {
         id: "int-1",
@@ -65,7 +65,7 @@ describe("api/integrations route", () => {
     expect(body.data[0]).not.toHaveProperty("access_token");
     expect(body.data[0]).not.toHaveProperty("refresh_token");
     expect(body.data[0]).not.toHaveProperty("api_key_encrypted");
-    expect(requireOwner).toHaveBeenCalledWith(businessId);
+    expect(requireBusinessRole).toHaveBeenCalledWith(businessId, "manage_settings");
     expect(getIntegrations).toHaveBeenCalledWith(businessId);
   });
 
@@ -91,7 +91,7 @@ describe("api/integrations route", () => {
 
     expect(response.status).toBe(200);
     expect(body.ok).toBe(true);
-    expect(requireOwner).toHaveBeenCalledWith(businessId);
+    expect(requireBusinessRole).toHaveBeenCalledWith(businessId, "manage_settings");
     expect(deleteIntegration).toHaveBeenCalledWith(businessId, "slack");
   });
 
@@ -114,7 +114,7 @@ describe("api/integrations route", () => {
     );
 
     expect(response.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("rejects unauthenticated DELETE", async () => {

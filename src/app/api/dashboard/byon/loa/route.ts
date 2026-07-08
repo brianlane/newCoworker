@@ -7,11 +7,11 @@
  *   → application/pdf attachment prefilled with the wizard's fields; the
  *     owner signs it and uploads it back on the final step.
  *
- * Auth mirrors /api/dashboard/csv: getAuthUser + requireOwner (admins bypass).
+ * Auth mirrors /api/dashboard/csv: getAuthUser + requireBusinessRole (admins bypass).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { generateLoaPdf } from "@/lib/byon/loa-pdf";
@@ -47,7 +47,7 @@ export async function POST(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const parsed = bodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "manage_settings");
 
     const limiter = rateLimit(`byon-loa:${parsed.businessId}`, LOA_RATE);
     if (!limiter.success) {

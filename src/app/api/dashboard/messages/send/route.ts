@@ -16,12 +16,12 @@
  * and we log the send to sms_outbound_log (source 'owner_manual') so it renders
  * inline with the rest of the conversation.
  *
- * Auth: getAuthUser + requireOwner(businessId). Admins may target any business
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Admins may target any business
  * (matches the dashboard-chat / thread-read convention).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -62,7 +62,7 @@ export async function POST(request: Request) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId, toE164, text } = bodySchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`dashboard-sms-send:${businessId}:${user.userId}`, SMS_SEND_RATE);
     if (!limiter.success) {

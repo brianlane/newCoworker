@@ -8,7 +8,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { setCustomerChannelsEnabled } from "@/lib/db/businesses";
 import { getBusinessTelnyxSettings } from "@/lib/db/telnyx-routes";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
 
     const body = bodySchema.parse(await request.json());
 
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
     // `enabled` in the request = Safe Mode ON (inverse of customer_channels_enabled).
     // When turning Safe Mode ON we must have a forwarding number; turning it

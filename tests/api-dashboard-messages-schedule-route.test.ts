@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -20,7 +20,7 @@ vi.mock("@/lib/plans/sms-tools", async (importOriginal) => {
 
 import { GET, POST } from "@/app/api/dashboard/messages/schedule/route";
 import { DELETE } from "@/app/api/dashboard/messages/schedule/[id]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { rateLimit } from "@/lib/rate-limit";
 import { smsToolsAllowedForBusiness } from "@/lib/plans/sms-tools";
@@ -113,15 +113,15 @@ describe("GET /api/dashboard/messages/schedule", () => {
     expect(res.status).toBe(200);
     const scheduled = (await res.json()).data.scheduled;
     expect(scheduled.map((s: { id: string }) => s.id)).toEqual([SCHED, "past-1"]);
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
   });
 
-  it("tolerates null data and admins skip requireOwner", async () => {
+  it("tolerates null data and admins skip requireBusinessRole", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true });
     mockDb({ scheduled_sms: { data: null, error: null } });
     const adminRes = await GET(new Request(`http://localhost/x?businessId=${BIZ}`));
     expect((await adminRes.json()).data.scheduled).toEqual([]);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("maps DB errors on either query to 500", async () => {

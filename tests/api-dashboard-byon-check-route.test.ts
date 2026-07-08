@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 // Keep ByonValidationError real — the route branches on `instanceof`.
@@ -21,7 +21,7 @@ vi.mock("@/lib/byon/tier-gate", async (importOriginal) => {
 });
 
 import { POST } from "@/app/api/dashboard/byon/check/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { ByonValidationError, runPortabilityCheck } from "@/lib/byon/port-requests";
 import { assertByonAllowedForBusiness, BYON_UPGRADE_MESSAGE } from "@/lib/byon/tier-gate";
 import { rateLimit } from "@/lib/rate-limit";
@@ -41,7 +41,7 @@ describe("api/dashboard/byon/check route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
-    vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+    vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
     vi.mocked(rateLimit).mockReturnValue({ success: true, limit: 10, remaining: 9, reset: 0 } as never);
     vi.mocked(assertByonAllowedForBusiness).mockResolvedValue(undefined);
   });
@@ -57,12 +57,12 @@ describe("api/dashboard/byon/check route", () => {
     expect(res.status).toBe(400);
   });
 
-  it("admin bypasses requireOwner", async () => {
+  it("admin bypasses requireBusinessRole", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ ...OWNER, isAdmin: true } as never);
     vi.mocked(runPortabilityCheck).mockResolvedValue({ portable: true } as never);
     const res = await POST(req({ businessId: BIZ, phone: "+13125550001" }));
     expect(res.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
   });
 
   it("429 when rate limited", async () => {
@@ -84,7 +84,7 @@ describe("api/dashboard/byon/check route", () => {
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(body.data.check.etaDays).toBe("1-4 business days");
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "manage_settings");
     expect(runPortabilityCheck).toHaveBeenCalledWith("312-555-0001");
   });
 

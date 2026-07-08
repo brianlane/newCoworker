@@ -11,6 +11,7 @@
  * Returns `{ checkoutUrl }` so the client can `window.location = checkoutUrl`.
  */
 import { z } from "zod";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -50,10 +51,11 @@ export async function POST(request: Request) {
     // Mirror the ordering the dashboard uses (created_at DESC) so an owner
     // with multiple businesses always checks out for the row the billing
     // page displays.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0] ?? null;

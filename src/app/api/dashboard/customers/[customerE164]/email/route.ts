@@ -7,13 +7,13 @@
  *
  * Sends from the owner's connected mailbox (Gmail/Outlook) to the address
  * linked on the customer profile, then logs it so it rolls up under the
- * profile's Email history. Auth: getAuthUser + requireOwner(businessId);
+ * profile's Email history. Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages");
  * admins bypass. Requires the profile to have a linked email and the owner to
  * have connected a mailbox (Integrations) — otherwise a clear 4xx.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
@@ -62,7 +62,7 @@ export async function POST(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`customer-email:${businessId}:${customerE164}`, SEND_RATE);
     if (!limiter.success) {

@@ -6,7 +6,7 @@
  * db layer, so an invalid automation 400s instead of being persisted.
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createAiFlow, listAiFlows } from "@/lib/ai-flows/db";
 import { AiFlowValidationError } from "@/lib/ai-flows/schema";
@@ -28,7 +28,7 @@ export async function GET(request: Request) {
     const businessId = url.searchParams.get("businessId");
     const parsed = businessIdSchema.safeParse(businessId);
     if (!parsed.success) return errorResponse("VALIDATION_ERROR", "businessId is required");
-    if (!user.isAdmin) await requireOwner(parsed.data);
+    if (!user.isAdmin) await requireBusinessRole(parsed.data, "manage_aiflows");
     const rows = await listAiFlows(parsed.data);
     return successResponse(rows);
   } catch (err) {
@@ -41,7 +41,7 @@ export async function POST(request: Request) {
     const user = await getAuthUser();
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
     const body = createSchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
     const row = await createAiFlow({
       businessId: body.businessId,
       name: body.name,

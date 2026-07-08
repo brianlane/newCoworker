@@ -9,7 +9,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { revokeApiKey } from "@/lib/db/api-keys";
 
@@ -30,7 +30,7 @@ export async function DELETE(
     const keyId = idSchema.parse(id);
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId } = bodySchema.parse(json);
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_billing");
 
     const revoked = await revokeApiKey(businessId, keyId);
     if (!revoked) return errorResponse("NOT_FOUND", "API key not found");

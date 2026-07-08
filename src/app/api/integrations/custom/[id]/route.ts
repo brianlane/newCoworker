@@ -8,7 +8,7 @@
  * without ever holding the cleartext in browser memory.
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   errorResponse,
   handleRouteError,
@@ -59,7 +59,7 @@ export async function GET(request: Request, { params }: Ctx) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
     if (!user.isAdmin) {
-      await requireOwner(businessId);
+      await requireBusinessRole(businessId, "manage_settings");
     }
     const row = await getCustomIntegrationById(businessId, id);
     if (!row) {
@@ -83,7 +83,7 @@ export async function PATCH(request: Request, { params }: Ctx) {
     }
     const body = patchSchema.parse(await request.json());
     if (!user.isAdmin) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     }
     const row = await updateCustomIntegration({ ...body, id });
     return successResponse(row);
@@ -116,7 +116,7 @@ export async function DELETE(request: Request, { params }: Ctx) {
     }
     const body = deleteSchema.parse(await request.json().catch(() => ({})));
     if (!user.isAdmin) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     }
     await deleteCustomIntegration(body.businessId, id);
     return successResponse({ deleted: true });

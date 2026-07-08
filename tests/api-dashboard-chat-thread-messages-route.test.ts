@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/db/dashboard-chat", async () => {
@@ -25,7 +25,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { GET } from "@/app/api/dashboard/chat/threads/[threadId]/messages/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { getThreadById, listMessages } from "@/lib/db/dashboard-chat";
 
 const BIZ_OWNED = "11111111-1111-4111-8111-111111111111";
@@ -74,7 +74,7 @@ beforeEach(() => {
     email: "owner@example.com",
     isAdmin: false
   } as never);
-  vi.mocked(requireOwner).mockResolvedValue(undefined as never);
+  vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
   vi.mocked(listMessages).mockResolvedValue(MESSAGE_ROWS as never);
 });
 
@@ -98,7 +98,7 @@ describe("GET /api/dashboard/chat/threads/[threadId]/messages", () => {
     });
     // Ownership MUST be enforced against the row's business_id, not a
     // caller-supplied query param. This is the IDOR guard.
-    expect(requireOwner).toHaveBeenCalledWith(BIZ_OWNED);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ_OWNED, "operate_messages");
     expect(listMessages).toHaveBeenCalledWith(THREAD_ID);
   });
 
@@ -124,7 +124,7 @@ describe("GET /api/dashboard/chat/threads/[threadId]/messages", () => {
     vi.mocked(getThreadById).mockResolvedValueOnce(null as never);
     const res = await GET(req(), paramsFor(THREAD_ID));
     expect(res.status).toBe(404);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(listMessages).not.toHaveBeenCalled();
   });
 
@@ -133,18 +133,18 @@ describe("GET /api/dashboard/chat/threads/[threadId]/messages", () => {
       ...THREAD,
       business_id: BIZ_OTHER
     } as never);
-    vi.mocked(requireOwner).mockRejectedValueOnce(
+    vi.mocked(requireBusinessRole).mockRejectedValueOnce(
       Object.assign(new Error("Forbidden"), { status: 403 })
     );
     const res = await GET(req(), paramsFor(THREAD_ID));
     expect(res.status).toBe(403);
     // Critically — the ownership check ran against the row's
     // business_id, not anything the caller supplied.
-    expect(requireOwner).toHaveBeenCalledWith(BIZ_OTHER);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ_OTHER, "operate_messages");
     expect(listMessages).not.toHaveBeenCalled();
   });
 
-  it("admin callers skip requireOwner but still get the messages", async () => {
+  it("admin callers skip requireBusinessRole but still get the messages", async () => {
     vi.mocked(getAuthUser).mockResolvedValueOnce({
       email: "admin@example.com",
       isAdmin: true
@@ -152,7 +152,7 @@ describe("GET /api/dashboard/chat/threads/[threadId]/messages", () => {
     vi.mocked(getThreadById).mockResolvedValueOnce(THREAD as never);
     const res = await GET(req(), paramsFor(THREAD_ID));
     expect(res.status).toBe(200);
-    expect(requireOwner).not.toHaveBeenCalled();
+    expect(requireBusinessRole).not.toHaveBeenCalled();
     expect(listMessages).toHaveBeenCalledWith(THREAD_ID);
   });
 

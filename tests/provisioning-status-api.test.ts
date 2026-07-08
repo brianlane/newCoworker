@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { BusinessRow } from "@/lib/db/businesses";
 
 vi.mock("@/lib/auth", () => ({
-  requireOwner: vi.fn().mockResolvedValue({})
+  requireBusinessRole: vi.fn().mockResolvedValue({})
 }));
 
 vi.mock("@/lib/db/businesses", () => ({

@@ -14,12 +14,12 @@
  * 09:00-17:00") and are parsed server-side so the stored jsonb is always
  * canonical.
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass the ownership
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass the ownership
  * check (existing dashboard convention).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -68,7 +68,7 @@ export async function GET(request: Request) {
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-list:${businessId}`, READ_RATE);
     if (!limiter.success) {
@@ -98,7 +98,7 @@ export async function POST(request: Request) {
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-write:${businessId}`, WRITE_RATE);
     if (!limiter.success) {

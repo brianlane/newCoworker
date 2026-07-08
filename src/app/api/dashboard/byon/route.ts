@@ -10,11 +10,11 @@
  * DELETE /api/dashboard/byon?businessId=<uuid>&id=<uuid>
  *          → { request } — cancels a not-yet-ported order.
  *
- * Auth mirrors /api/dashboard/csv: getAuthUser + requireOwner (admins bypass).
+ * Auth mirrors /api/dashboard/csv: getAuthUser + requireBusinessRole (admins bypass).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -64,7 +64,7 @@ async function authorizedBusinessId(request: Request): Promise<string | NextResp
   if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
   const url = new URL(request.url);
   const businessId = z.string().uuid().parse(url.searchParams.get("businessId") ?? "");
-  if (!user.isAdmin) await requireOwner(businessId);
+  if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
   return businessId;
 }
 

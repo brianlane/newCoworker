@@ -11,7 +11,7 @@
  * one-off call.
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getAiFlow } from "@/lib/ai-flows/db";
 
@@ -32,7 +32,7 @@ export async function POST(request: Request, { params }: Ctx) {
     const { id } = await params;
     if (!idSchema.safeParse(id).success) return errorResponse("VALIDATION_ERROR", "id is invalid");
     const body = bodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
 
     const flow = await getAiFlow(body.businessId, id);
     if (!flow) return errorResponse("NOT_FOUND", "AiFlow not found");

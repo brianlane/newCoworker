@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -33,7 +33,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId } = deleteSchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     const { data, error } = await db

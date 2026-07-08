@@ -1,4 +1,4 @@
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import {
   defaultNotificationPreferencesRow,
@@ -43,9 +43,9 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
 
-    await requireOwner(parsed.data);
+    await requireBusinessRole(parsed.data, "manage_settings");
 
-    // requireOwner passes admins through, so during view-as this GET reaches
+    // requireBusinessRole passes admins through, so during view-as this GET reaches
     // the tenant's data. Keep impersonation read-only: never let the
     // create-if-missing path insert a row on behalf of the tenant — serve
     // the same in-memory defaults the page renders instead.
@@ -66,7 +66,7 @@ export async function POST(request: Request) {
       return errorResponse("UNAUTHORIZED", "Authentication required");
     }
 
-    // requireOwner passes admins through, so without this guard an admin in
+    // requireBusinessRole passes admins through, so without this guard an admin in
     // view-as could hit Save and mutate the impersonated tenant's real prefs.
     if (await isViewAsActive(user)) {
       return errorResponse(
@@ -77,7 +77,7 @@ export async function POST(request: Request) {
     }
 
     const body = patchSchema.parse(await request.json());
-    await requireOwner(body.businessId);
+    await requireBusinessRole(body.businessId, "manage_settings");
 
     const {
       businessId,

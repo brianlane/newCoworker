@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { getUnreadNotificationCount } from "@/lib/db/notifications";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 
@@ -21,7 +21,7 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", "businessId is required");
     }
 
-    await requireOwner(parsed.data);
+    await requireBusinessRole(parsed.data, "view_dashboard");
     const count = await getUnreadNotificationCount(parsed.data);
     return successResponse({ count });
   } catch (err) {

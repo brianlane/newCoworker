@@ -10,13 +10,13 @@
  * interaction count without an N+1 lookup; the per-customer detail
  * route returns the full summary_md/pinned_md plus channel history.
  *
- * Auth: getAuthUser + requireOwner(businessId). Admins (per existing
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Admins (per existing
  * dashboard convention) may query any businessId without the
  * ownership check.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
@@ -99,7 +99,7 @@ export async function GET(request: Request) {
       limit: url.searchParams.get("limit") ?? undefined
     });
 
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "operate_messages");
 
     const limiter = rateLimit(`customers-list:${parsed.businessId}`, RATE);
     if (!limiter.success) {
@@ -133,7 +133,7 @@ export async function POST(request: Request) {
       type: body.type === "" ? undefined : body.type
     });
 
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "operate_messages");
 
     const limiter = rateLimit(`customers-create:${parsed.businessId}`, WRITE_RATE);
     if (!limiter.success) {

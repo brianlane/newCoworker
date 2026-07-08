@@ -11,7 +11,7 @@
  * GET    Hydrate the active thread + flag state for the client.
  * DELETE End the active thread so the next POST starts fresh.
  *
- * Auth: getAuthUser + requireOwner(businessId). Kill switch (is_paused)
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Kill switch (is_paused)
  * soft-blocks POST with a 409 so the UI can show a Resume CTA; Safe Mode
  * is deliberately NOT gated (the whole point is the owner stays online
  * while customer channels forward to their cell).
@@ -61,7 +61,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -413,7 +413,7 @@ export async function POST(request: Request) {
     }
 
     const body = postBodySchema.parse(await request.json());
-    if (!user.isAdmin) await requireOwner(body.businessId);
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "operate_messages");
 
     const limiter = rateLimit(`dashboard-chat:${body.businessId}`, DASHBOARD_CHAT_RATE);
     if (!limiter.success) {
@@ -615,7 +615,7 @@ export async function GET(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const businessId = businessIdFromUrl(request);
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const flags = await loadBusinessFlags(businessId);
     if (!flags) return errorResponse("NOT_FOUND", "Business not found");
@@ -648,7 +648,7 @@ export async function DELETE(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const businessId = businessIdFromUrl(request);
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     await deactivateActiveThread(businessId);
     return successResponse({ ok: true });

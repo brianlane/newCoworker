@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   getNotifications,
   markAllNotificationsRead,
@@ -53,7 +53,7 @@ export async function GET(request: Request) {
       return errorResponse("VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Invalid query");
     }
 
-    await requireOwner(parsed.data.businessId);
+    await requireBusinessRole(parsed.data.businessId, "view_dashboard");
 
     const unreadOnly = parsed.data.unreadOnly === "1" || parsed.data.unreadOnly === "true";
     const items = await getNotifications(parsed.data.businessId, {
@@ -74,7 +74,7 @@ export async function POST(request: Request) {
     }
 
     const body = markReadSchema.parse(await request.json());
-    await requireOwner(body.businessId);
+    await requireBusinessRole(body.businessId, "view_dashboard");
 
     if (body.action === "mark_read") {
       const row = await markNotificationRead(body.id, body.businessId);

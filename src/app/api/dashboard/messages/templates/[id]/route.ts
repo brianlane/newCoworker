@@ -4,13 +4,13 @@
  * PATCH  /api/dashboard/messages/templates/:id  body { businessId, name?, body? }
  * DELETE /api/dashboard/messages/templates/:id  body { businessId }
  *
- * businessId rides in the body (PATCH/DELETE) so requireOwner can gate before
+ * businessId rides in the body (PATCH/DELETE) so requireBusinessRole can gate before
  * any row is touched; the row update itself is additionally scoped by
  * business_id so a template id from another tenant can never be affected.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -47,7 +47,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     const json = (await request.json().catch(() => null)) as unknown;
     const parsed = patchSchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(parsed.businessId);
+    if (!user.isAdmin) await requireBusinessRole(parsed.businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     if (!(await smsToolsAllowedForBusiness(parsed.businessId, db))) {
@@ -92,7 +92,7 @@ export async function DELETE(request: Request, context: RouteContext) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId } = deleteSchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     if (!(await smsToolsAllowedForBusiness(businessId, db))) {

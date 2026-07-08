@@ -12,11 +12,11 @@
  * cascades the employee's time-off entries. Either way the member drops out
  * of route_to_team immediately.
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass.
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { deleteTeamMember, updateTeamMember, type TeamMemberPatch } from "@/lib/db/employees";
@@ -57,7 +57,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-write:${businessId}`, WRITE_RATE);
     if (!limiter.success) {
@@ -107,7 +107,7 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-write:${businessId}`, WRITE_RATE);
     if (!limiter.success) {

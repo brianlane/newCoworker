@@ -9,12 +9,12 @@
  *   Edge cron (every minute); sends are metered against the monthly SMS cap
  *   at dispatch time, exactly like an immediate send.
  *
- * Auth: getAuthUser + requireOwner(businessId). Admins may target any
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"). Admins may target any
  * business (messages-send convention).
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     if (!z.string().uuid().safeParse(businessId).success) {
       return errorResponse("VALIDATION_ERROR", "businessId must be a UUID");
     }
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const db = await createSupabaseServiceClient();
     // Pending soonest-first so a deep queue never hides what dispatches next
@@ -108,7 +108,7 @@ export async function POST(request: Request) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId, toE164, text, sendAt } = createSchema.parse(json);
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`dashboard-sms-schedule:${businessId}:${user.userId}`, SCHEDULE_RATE);
     if (!limiter.success) {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
-  requireOwner: vi.fn()
+  requireBusinessRole: vi.fn()
 }));
 
 vi.mock("@/lib/customer-memory/db", () => ({
@@ -26,7 +26,7 @@ import {
   PATCH as DETAIL_PATCH,
   DELETE as DETAIL_DELETE
 } from "@/app/api/dashboard/customers/[customerE164]/route";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   deleteCustomerMemory,
   getCustomerMemory,
@@ -81,7 +81,7 @@ describe("GET /api/dashboard/customers (list)", () => {
     expect(res.status).toBe(400);
   });
 
-  it("calls requireOwner for non-admin owners — IDOR guard", async () => {
+  it("calls requireBusinessRole for non-admin owners — IDOR guard", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
@@ -89,7 +89,7 @@ describe("GET /api/dashboard/customers (list)", () => {
     });
     vi.mocked(listCustomerMemories).mockResolvedValueOnce([]);
     await LIST_GET(listUrl());
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
   });
 
   it("returns a summary projection — no summary_md/pinned_md leakage in the list view", async () => {
@@ -351,13 +351,13 @@ describe("DELETE /api/dashboard/customers/:e164", () => {
     expect(deleteCustomerMemory).toHaveBeenCalledWith(BIZ, CUSTOMER);
   });
 
-  it("calls requireOwner for non-admin owners before deleting", async () => {
+  it("calls requireBusinessRole for non-admin owners before deleting", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({
       userId: "u",
       email: "o@o.com",
       isAdmin: false
     });
     await DETAIL_DELETE(detailUrl(), params(encodeURIComponent(CUSTOMER)));
-    expect(requireOwner).toHaveBeenCalledWith(BIZ);
+    expect(requireBusinessRole).toHaveBeenCalledWith(BIZ, "operate_messages");
   });
 });

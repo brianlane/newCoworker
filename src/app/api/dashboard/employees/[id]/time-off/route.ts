@@ -12,11 +12,11 @@
  * member whose range covers the business-local "today" — supersedes pinned
  * routing).
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass.
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import {
@@ -59,7 +59,7 @@ export async function POST(request: Request, ctx: { params: Promise<{ id: string
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-write:${businessId}`, WRITE_RATE);
     if (!limiter.success) {
@@ -118,7 +118,7 @@ export async function DELETE(request: Request, ctx: { params: Promise<{ id: stri
     });
     const timeOffId = z.string().uuid().parse(url.searchParams.get("timeOffId") ?? "");
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-write:${businessId}`, WRITE_RATE);
     if (!limiter.success) {

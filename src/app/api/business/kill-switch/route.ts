@@ -1,4 +1,4 @@
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { setBusinessPaused } from "@/lib/db/businesses";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { z } from "zod";
@@ -18,7 +18,7 @@ export async function POST(request: Request) {
     const body = bodySchema.parse(await request.json());
 
     if (!user.isAdmin) {
-      await requireOwner(body.businessId);
+      await requireBusinessRole(body.businessId, "manage_settings");
     }
 
     await setBusinessPaused(body.businessId, body.paused);

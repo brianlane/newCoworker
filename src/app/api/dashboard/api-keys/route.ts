@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { mintApiKey } from "@/lib/public-api/keys";
 import {
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
 
     const url = new URL(request.url);
     const businessId = z.string().uuid().parse(url.searchParams.get("businessId"));
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_billing");
 
     const keys = await listApiKeys(businessId);
     return successResponse(
@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId, name } = createSchema.parse(json);
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_billing");
 
     // Friendly pre-check; the api_keys_cap DB trigger is the racy-proof
     // backstop (two concurrent mints can both pass this read).

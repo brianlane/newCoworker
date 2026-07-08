@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/db/business-members", () => ({
+  getBusinessRoleForEmail: vi.fn().mockResolvedValue("owner")
+}));
+
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
   verifySignupIdentity: vi.fn()

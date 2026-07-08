@@ -9,11 +9,11 @@
  * member with an email that hasn't already been granted. Re-running after
  * adding employees only grants the new ones.
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass.
+ * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { shareSharedCalendarWithEmployees } from "@/lib/calendar-tools/shared-calendar";
@@ -34,7 +34,7 @@ export async function POST(request: Request) {
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "manage_settings");
 
     const limiter = rateLimit(`employees-share-calendar:${businessId}`, WRITE_RATE);
     if (!limiter.success) {

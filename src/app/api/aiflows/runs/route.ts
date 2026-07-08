@@ -3,7 +3,7 @@
  * Query: ?businessId=...&flowId=...&status=...&limit=...
  */
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { listAiFlowRuns, type AiFlowRunStatus } from "@/lib/ai-flows/db";
 import { resolveContactNames } from "@/lib/db/contact-names";
@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     const businessId = url.searchParams.get("businessId");
     const parsed = idSchema.safeParse(businessId);
     if (!parsed.success) return errorResponse("VALIDATION_ERROR", "businessId is required");
-    if (!user.isAdmin) await requireOwner(parsed.data);
+    if (!user.isAdmin) await requireBusinessRole(parsed.data, "manage_aiflows");
 
     const flowId = url.searchParams.get("flowId") ?? undefined;
     const statusRaw = url.searchParams.get("status");

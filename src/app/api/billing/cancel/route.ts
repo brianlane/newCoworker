@@ -15,6 +15,7 @@
  */
 
 import { z } from "zod";
+import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { after } from "next/server";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
@@ -62,10 +63,11 @@ export async function POST(request: Request) {
     // same row the page renders. Without an explicit order, Postgres is
     // free to return any row and the API would silently target a
     // different subscription than the one the user sees.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: businesses } = await db
       .from("businesses")
       .select("id")
-      .eq("owner_email", user.email)
+      .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1);
     const business = businesses?.[0];

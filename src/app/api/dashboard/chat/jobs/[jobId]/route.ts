@@ -38,13 +38,13 @@
  *     "completedAt": "..." | null
  *   }
  *
- * Auth: getAuthUser + requireOwner(job.business_id). IDOR-safe — same
+ * Auth: getAuthUser + requireBusinessRole(job.business_id, "operate_messages"). IDOR-safe — same
  * pattern as the per-thread messages route: resolve the row, then
  * gate ownership against the row's tenant.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   getChatJobById,
@@ -73,7 +73,7 @@ export async function GET(
     // caller-supplied parameter. A stolen jobId paired with an owned
     // businessId in a query param could otherwise read another
     // tenant's job state.
-    if (!user.isAdmin) await requireOwner(job.business_id);
+    if (!user.isAdmin) await requireBusinessRole(job.business_id, "operate_messages");
 
     return successResponse(serializeChatJobStatus(job));
   } catch (err) {

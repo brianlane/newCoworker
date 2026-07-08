@@ -12,11 +12,11 @@
  * in the merge_customer_memories RPC
  * (supabase/migrations/20260617000000_employees_and_customer_merge.sql).
  *
- * Auth: getAuthUser + requireOwner(businessId); admins bypass.
+ * Auth: getAuthUser + requireBusinessRole(businessId, "operate_messages"); admins bypass.
  */
 
 import { z } from "zod";
-import { getAuthUser, requireOwner } from "@/lib/auth";
+import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { getCustomerMemory, mergeCustomerMemories } from "@/lib/customer-memory/db";
@@ -59,7 +59,7 @@ export async function POST(
       businessId: url.searchParams.get("businessId") ?? ""
     });
 
-    if (!user.isAdmin) await requireOwner(businessId);
+    if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
     const limiter = rateLimit(`customer-merge:${businessId}`, WRITE_RATE);
     if (!limiter.success) {
