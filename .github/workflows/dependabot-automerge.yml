@@ -8,11 +8,17 @@ name: Dependabot auto-merge
 # Runs after CI finishes (workflow_run) so we never sit on an idle runner
 # polling. If a check is still in progress when this fires, it exits quietly and
 # is re-triggered when the next workflow completes.
+#
+# Also runs on commit `status` events: Vercel reports its deployment as a
+# legacy commit status, which often flips to success minutes AFTER the last CI
+# workflow completes. Without this trigger the final workflow_run evaluation
+# sees state=pending, skips, and nothing ever re-evaluates the PR.
 
 on:
   workflow_run:
     workflows: ["CI", "CodeQL", "Dependency Audit"]
     types: [completed]
+  status:
 
 permissions:
   contents: write
@@ -21,15 +27,25 @@ permissions:
 jobs:
   auto-merge:
     runs-on: ubuntu-latest
+    # For status events we can't filter on branch here: the payload's
+    # `branches` array is often empty (e.g. commits pushed to an existing
+    # branch), so the job runs for every successful status and the script's
+    # PR-lookup / dependabot-author / label guards exit quietly when the
+    # status is unrelated to an eligible Dependabot PR.
     if: >-
-      github.event.workflow_run.event == 'pull_request' &&
-      startsWith(github.event.workflow_run.head_branch, 'dependabot/')
+      (github.event_name == 'workflow_run' &&
+       github.event.workflow_run.event == 'pull_request' &&
+       startsWith(github.event.workflow_run.head_branch, 'dependabot/')) ||
+      (github.event_name == 'status' &&
+       github.event.state == 'success')
     steps:
       - name: Evaluate checks and merge if all green
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          # workflow_run events carry head_sha/head_branch; status events only
+          # carry the commit sha, so the script resolves the PR from the sha.
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha || github.event.sha }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           REQUIRED_LABEL: dependabot-automerge
           # Checks to ignore in the strict evaluation:
@@ -38,10 +54,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          PR_NUMBER=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" \
-            --state open --json number --jq '.[0].number // empty')
+          if [ -n "${HEAD_BRANCH:-}" ]; then
+            PR_NUMBER=$(gh pr list --repo "$REPO" --head "$HEAD_BRANCH" \
+              --state open --json number --jq '.[0].number // empty')
+          else
+            # status event: the payload has no branch, so find the open PR
+            # whose head commit is this sha. The endpoint lists every PR
+            # associated with the commit, so filter to PRs headed by it.
+            PR_NUMBER=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" |
+              jq -r --arg sha "$HEAD_SHA" \
+                '[.[] | select(.state == "open" and .head.sha == $sha)][0].number // empty')
+          fi
           if [ -z "$PR_NUMBER" ]; then
-            echo "No open PR for branch $HEAD_BRANCH; nothing to do."
+            echo "No open PR for $HEAD_SHA (branch: ${HEAD_BRANCH:-<none>}); nothing to do."
             exit 0
           fi
 
