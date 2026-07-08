@@ -767,6 +767,14 @@ export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
       // tenant_email — an AND-ed condition list, empty = match every event.
       if (!Array.isArray(trigger.conditions)) return false;
       break;
+    case "calendar": {
+      // Calendar poll (aiflow-calendar-poll): conditions + a firing mode;
+      // event_start additionally needs the leadMinutes offset.
+      if (!Array.isArray(trigger.conditions)) return false;
+      if (trigger.on !== "event_created" && trigger.on !== "event_start") return false;
+      if (trigger.on === "event_start" && typeof trigger.leadMinutes !== "number") return false;
+      break;
+    }
     case "schedule": {
       const daily = typeof trigger.time === "string" && typeof trigger.timezone === "string";
       const interval = typeof trigger.everyMinutes === "number";

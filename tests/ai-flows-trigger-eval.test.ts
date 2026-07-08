@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   EMAIL_WINDOW_TEXT_MAX,
+  calendarEventText,
+  calendarTriggerScope,
   emailTriggerScope,
   evaluateTriggerConditions,
   firstUrlInText,
@@ -232,5 +234,86 @@ describe("webhookTriggerScope", () => {
     const scope = webhookTriggerScope({ source: "s".repeat(200), data: { a: 1 } });
     expect("event_id" in scope).toBe(false);
     expect(scope.from.length).toBe(120);
+  });
+});
+
+describe("calendarEventText", () => {
+  it("renders every populated field as a labeled line, stripping description html", () => {
+    const text = calendarEventText({
+      id: "e1",
+      title: "Roof estimate",
+      description: "<p>Bring&nbsp;ladder</p>",
+      location: "12 Main St",
+      organizerEmail: "owner@biz.com",
+      attendees: ["Jane <jane@x.com>", "bare@x.com"],
+      startIso: "2026-07-09T14:00:00Z",
+      endIso: "2026-07-09T15:00:00Z",
+      calendar: "shared"
+    });
+    expect(text).toBe(
+      [
+        "title: Roof estimate",
+        "starts: 2026-07-09T14:00:00Z",
+        "ends: 2026-07-09T15:00:00Z",
+        "location: 12 Main St",
+        "organizer: owner@biz.com",
+        "attendee: Jane <jane@x.com>",
+        "attendee: bare@x.com",
+        "description: Bring ladder"
+      ].join("\n")
+    );
+  });
+  it("keeps only the title line for a bare event", () => {
+    expect(calendarEventText({ id: "e1", title: "Solo", calendar: "primary" })).toBe(
+      "title: Solo"
+    );
+  });
+});
+
+describe("calendarTriggerScope", () => {
+  it("tags the calendar channel and carries the event metadata keys", () => {
+    const scope = calendarTriggerScope({
+      id: "e1",
+      title: "Estimate",
+      description: "Details at https://leads.example/1",
+      organizerEmail: "owner@biz.com",
+      startIso: "2026-07-09T14:00:00Z",
+      endIso: "2026-07-09T15:00:00Z",
+      calendar: "primary"
+    });
+    expect(scope).toEqual({
+      channel: "calendar",
+      windowText:
+        "title: Estimate\nstarts: 2026-07-09T14:00:00Z\nends: 2026-07-09T15:00:00Z\n" +
+        "organizer: owner@biz.com\ndescription: Details at https://leads.example/1",
+      url: "https://leads.example/1",
+      from: "owner@biz.com",
+      event_id: "e1",
+      event_title: "Estimate",
+      calendar: "primary",
+      starts_at: "2026-07-09T14:00:00Z",
+      ends_at: "2026-07-09T15:00:00Z"
+    });
+  });
+  it("defaults from to empty, omits absent times, and bounds the title", () => {
+    const scope = calendarTriggerScope({
+      id: "e2",
+      title: "t".repeat(400),
+      calendar: "shared"
+    });
+    expect(scope.from).toBe("");
+    expect(scope.url).toBeNull();
+    expect("starts_at" in scope).toBe(false);
+    expect("ends_at" in scope).toBe(false);
+    expect((scope.event_title as string).length).toBe(300);
+  });
+  it("caps windowText at the shared max", () => {
+    const scope = calendarTriggerScope({
+      id: "e3",
+      title: "big",
+      description: "x".repeat(EMAIL_WINDOW_TEXT_MAX + 100),
+      calendar: "primary"
+    });
+    expect(scope.windowText.length).toBe(EMAIL_WINDOW_TEXT_MAX);
   });
 });

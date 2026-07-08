@@ -987,6 +987,25 @@ describe("summarizeDefinition", () => {
         steps
       })
     ).toBe("When a webhook event matches 1 condition(s): notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_created", conditions: [] },
+        steps
+      })
+    ).toBe("When a calendar event is created: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: {
+          channel: "calendar",
+          on: "event_start",
+          leadMinutes: 30,
+          conditions: [{ type: "has_url" }]
+        },
+        steps
+      })
+    ).toBe("30 min before a calendar event starts (matching 1 condition(s)): notify_owner");
   });
 });
 
@@ -1097,6 +1116,54 @@ describe("trigger channels", () => {
     expect(() =>
       parseAiFlowDefinition({ version: 1, trigger: { channel: "webhook" }, steps })
     ).toThrow(AiFlowValidationError);
+  });
+
+  it("accepts a calendar event_created trigger (leadMinutes rejected there)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "calendar", on: "event_created", calendar: "shared", conditions: [] },
+      steps
+    });
+    expect(def.trigger.channel === "calendar" && def.trigger.calendar).toBe("shared");
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_created", leadMinutes: 30, conditions: [] },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("accepts a calendar event_start trigger and requires leadMinutes", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "calendar", on: "event_start", leadMinutes: 30, conditions: [] },
+      steps
+    });
+    expect(def.trigger.channel === "calendar" && def.trigger.leadMinutes).toBe(30);
+    expect(def.trigger.channel === "calendar" && def.trigger.calendar).toBeUndefined();
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_start", conditions: [] },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("calendar-triggered steps may reference the calendar trigger scope keys", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "calendar", on: "event_start", leadMinutes: 15, conditions: [] },
+      steps: [
+        {
+          id: "n",
+          type: "notify_owner",
+          message: "{{trigger.event_title}} starts at {{trigger.starts_at}} ({{trigger.calendar}})"
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
   it("steps in non-SMS flows may still reference {{trigger.x}} scope keys", () => {

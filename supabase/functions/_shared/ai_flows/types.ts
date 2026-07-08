@@ -114,6 +114,28 @@ export type WebhookTrigger = {
 };
 
 /**
+ * Calendar-event trigger: the app polls the business's connected calendar
+ * (resolved Google-first like the calendar tools, so no connectionId here)
+ * via /api/internal/aiflow-calendar-poll, kicked each worker tick. Fires when
+ * an event is created (`on: "event_created"`) or `leadMinutes` before an
+ * event's start (`on: "event_start"`). `calendar` scopes which calendar(s)
+ * are watched: the account's primary, the shared NewCoworker calendar, or
+ * both (default). Trigger scope: windowText = title + description + location
+ * + attendees, from = organizer email. Exactly-once per event (or per
+ * occurrence in event_start mode) via ai_flow_runs.dedupe_key.
+ */
+export type CalendarTrigger = {
+  channel: "calendar";
+  /** Which calendar(s) to watch. Default "both". */
+  calendar?: "primary" | "shared" | "both";
+  on: "event_created" | "event_start";
+  /** event_start only: run this many minutes before the event starts. */
+  leadMinutes?: number;
+  /** AND-ed conditions; empty means "match every event". */
+  conditions: TriggerCondition[];
+};
+
+/**
  * Inbound-voice trigger: a call FROM `fromE164` to a business voice number fires
  * this flow. Unlike every other channel it does NOT enqueue an ai_flow_run — the
  * Telnyx voice webhook resolves the matching enabled voice flow in real time and
@@ -157,6 +179,7 @@ export type FlowTrigger =
   | EmailTrigger
   | TenantEmailTrigger
   | WebhookTrigger
+  | CalendarTrigger
   | VoiceTrigger;
 
 export type ExtractField = {

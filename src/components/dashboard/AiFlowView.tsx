@@ -20,7 +20,15 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
   webhook: "Webhook (Zapier, Make, or API)",
+  calendar: "Calendar event",
   voice: "Voice call routing"
+};
+
+/** Read-only summary of which calendar(s) a calendar trigger watches. */
+const CALENDAR_SOURCE_LABELS: Record<"primary" | "shared" | "both", string> = {
+  primary: "Your connected calendar",
+  shared: "The shared NewCoworker calendar",
+  both: "Your connected calendar + the shared NewCoworker calendar"
 };
 
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
@@ -124,6 +132,20 @@ function TriggerView({ trigger }: { trigger: FlowTrigger }) {
       {trigger.channel === "webhook" && (
         <>
           <Row label="Listens on" value="POST /api/public/v1/flow-events (API key)" mono />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+      {trigger.channel === "calendar" && (
+        <>
+          <Row
+            label="Runs"
+            value={
+              trigger.on === "event_start"
+                ? `${trigger.leadMinutes ?? 0} minute(s) before an event starts`
+                : "When a new event is added"
+            }
+          />
+          <Row label="Watches" value={CALENDAR_SOURCE_LABELS[trigger.calendar ?? "both"]} />
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
