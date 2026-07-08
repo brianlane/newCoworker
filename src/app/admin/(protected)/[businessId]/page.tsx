@@ -32,6 +32,8 @@ import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
 import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
+import { EnterpriseBillingPanel } from "@/components/admin/EnterpriseBillingPanel";
+import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 
 export const dynamic = "force-dynamic";
@@ -52,7 +54,8 @@ export default async function BusinessDetailPage({
     subscription,
     telnyxRoute,
     telnyxSettings,
-    whiteGloveOffers
+    whiteGloveOffers,
+    enterpriseDeals
   ] = await Promise.all([
     getBusiness(businessId),
     getRecentLogs(businessId, 20, undefined, { excludeProvisioning: true }),
@@ -65,7 +68,8 @@ export default async function BusinessDetailPage({
     getSubscription(businessId),
     getTelnyxVoiceRouteForBusiness(businessId),
     getBusinessTelnyxSettings(businessId),
-    listWhiteGloveOffers(businessId)
+    listWhiteGloveOffers(businessId),
+    listEnterpriseDeals(businessId)
   ]);
 
   if (!business) notFound();
@@ -134,6 +138,27 @@ export default async function BusinessDetailPage({
           }))}
         />
       </Card>
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Enterprise billing
+          </h2>
+          <EnterpriseBillingPanel
+            businessId={businessId}
+            currentVpsSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
+            initialDeals={enterpriseDeals.map((d) => ({
+              id: d.id,
+              setup_cents: d.setup_cents,
+              monthly_cents: d.monthly_cents,
+              status: d.status,
+              created_at: d.created_at,
+              activated_at: d.activated_at,
+              payUrl: enterpriseDealPayUrl(d)
+            }))}
+          />
+        </Card>
+      )}
 
       {business.tier === "enterprise" && (
         <Card>
