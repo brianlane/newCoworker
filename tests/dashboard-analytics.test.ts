@@ -1,4 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// The residency read-routing layer is unit-tested in tests/residency-read.test.ts
+// and the VPS branch of getAnalyticsDayDetail in tests/residency-read-flip.test.ts.
+// Pin CENTRAL mode here so these tests exercise the Supabase path unchanged.
+vi.mock("@/lib/residency/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/residency/read")>();
+  return { ...actual, isVpsReadMode: vi.fn(async () => false) };
+});
+
 import {
   ANALYTICS_CALL_SCAN_LIMIT,
   ANALYTICS_DAY_CALL_LIMIT,

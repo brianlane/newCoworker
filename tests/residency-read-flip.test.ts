@@ -36,6 +36,7 @@ import {
   listVoiceTurnsForCustomer
 } from "@/lib/db/voice-transcripts";
 import { listConversationsForBusiness, listMessagesForCustomer } from "@/lib/db/sms-history";
+import { getAnalyticsDayDetail } from "@/lib/analytics/dashboard-analytics";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -263,6 +264,70 @@ describe("voice-transcripts vps reads", () => {
     expect(vi.mocked(readMovedRows).mock.calls[1][1]).toMatchObject({
       table: "voice_call_transcript_turns",
       filters: [{ column: "transcript_id", op: "in", value: ["t1", "t2"] }]
+    });
+  });
+});
+
+describe("analytics day drill-down vps reads", () => {
+  /**
+   * Db stub for the two tables getAnalyticsDayDetail still reads centrally
+   * on the vps path: `daily_usage` (maybeSingle) and `system_logs` (thenable
+   * head count) — both control-plane tables that never move to the box.
+   */
+  function analyticsCentralDb() {
+    const builder = () => {
+      const chain: Record<string, unknown> = {};
+      for (const m of ["select", "eq", "gte", "lt"]) {
+        chain[m] = vi.fn(() => chain);
+      }
+      chain.maybeSingle = vi.fn(async () => ({
+        data: { calls_made: 2, sms_sent: 5, voice_minutes_used: 7 },
+        error: null
+      }));
+      (chain as { then: unknown }).then = (
+        onF: (v: unknown) => unknown,
+        onR: (e: unknown) => unknown
+      ) => Promise.resolve({ count: 1, error: null }).then(onF, onR);
+      return chain;
+    };
+    return { from: vi.fn(() => builder()) } as never;
+  }
+
+  it("reads the day's calls from the box, usage and blocked counts centrally", async () => {
+    vi.mocked(readMovedRows).mockResolvedValueOnce([
+      {
+        id: "t1",
+        caller_e164: "+1555",
+        started_at: "2026-07-03T09:00:00Z",
+        ended_at: "2026-07-03T09:05:00Z",
+        status: "completed",
+        direction: "inbound",
+        call_kind: "ai",
+        forwarded_to_e164: null,
+        summary: null,
+        sentiment: "positive"
+      }
+    ] as never);
+
+    const detail = await getAnalyticsDayDetail(BIZ, "2026-07-03", {
+      client: analyticsCentralDb()
+    });
+
+    expect(detail.usage).toEqual({ calls: 2, sms: 5, voiceMinutes: 7 });
+    expect(detail.turnedAway).toBe(1);
+    expect(detail.calls).toHaveLength(1);
+    expect(detail.calls[0]).toMatchObject({ id: "t1", sentiment: "positive" });
+    expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+      table: "voice_call_transcripts",
+      columns: expect.arrayContaining(["id", "caller_e164", "started_at", "sentiment"]),
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "status", op: "neq", value: "missed" },
+        { column: "started_at", op: "gte", value: "2026-07-03T00:00:00.000Z" },
+        { column: "started_at", op: "lt", value: "2026-07-04T00:00:00.000Z" }
+      ],
+      order: [{ column: "started_at", ascending: false }],
+      limit: 200
     });
   });
 });

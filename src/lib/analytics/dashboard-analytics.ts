@@ -16,6 +16,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import type {
   VoiceCallKind,
   VoiceCallSentiment,
@@ -186,46 +187,6 @@ export async function getAnalyticsDayDetail(
   const startIso = dayStart.toISOString();
   const endIso = new Date(dayStart.getTime() + 86_400_000).toISOString();
 
-  const [usageRes, callsRes, blockedRes] = await Promise.all([
-    db
-      .from("daily_usage")
-      .select("calls_made, sms_sent, voice_minutes_used")
-      .eq("business_id", businessId)
-      .eq("usage_date", date)
-      .maybeSingle(),
-    db
-      .from("voice_call_transcripts")
-      .select(
-        "id, caller_e164, started_at, ended_at, status, direction, call_kind, forwarded_to_e164, summary, sentiment"
-      )
-      .eq("business_id", businessId)
-      // Missed forwarded calls are represented by the turned-away count
-      // (their voice_call_blocked ledger row) — same single-bucket rule as
-      // the 30-day cards.
-      .neq("status", "missed")
-      .gte("started_at", startIso)
-      .lt("started_at", endIso)
-      .order("started_at", { ascending: false })
-      .limit(ANALYTICS_DAY_CALL_LIMIT),
-    db
-      .from("system_logs")
-      .select("id", { count: "exact", head: true })
-      .eq("business_id", businessId)
-      .eq("event", "voice_call_blocked")
-      .gte("created_at", startIso)
-      .lt("created_at", endIso)
-  ]);
-  if (usageRes.error) throw new Error(`getAnalyticsDayDetail usage: ${usageRes.error.message}`);
-  if (callsRes.error) throw new Error(`getAnalyticsDayDetail calls: ${callsRes.error.message}`);
-  if (blockedRes.error) {
-    throw new Error(`getAnalyticsDayDetail blocked: ${blockedRes.error.message}`);
-  }
-
-  type UsageRow = {
-    calls_made: number | null;
-    sms_sent: number | null;
-    voice_minutes_used: number | null;
-  };
   type CallRow = {
     id: string;
     caller_e164: string | null;
@@ -238,8 +199,83 @@ export async function getAnalyticsDayDetail(
     summary: string | null;
     sentiment: string | null;
   };
+  const CALL_COLUMNS = [
+    "id",
+    "caller_e164",
+    "started_at",
+    "ended_at",
+    "status",
+    "direction",
+    "call_kind",
+    "forwarded_to_e164",
+    "summary",
+    "sentiment"
+  ];
+
+  // `voice_call_transcripts` is a residency-moved table: vps-mode tenants
+  // read it from their box (like the call-history list). `daily_usage` and
+  // `system_logs` are central control-plane tables and always read central.
+  const fetchCalls = async (): Promise<CallRow[]> => {
+    const vpsReadMode = await isVpsReadMode(businessId, db);
+    if (vpsReadMode) {
+      return await readMovedRows<CallRow>(businessId, {
+        table: "voice_call_transcripts",
+        columns: CALL_COLUMNS,
+        filters: [
+          { column: "business_id", op: "eq", value: businessId },
+          // Missed forwarded calls are represented by the turned-away count
+          // (their voice_call_blocked ledger row) — same single-bucket rule
+          // as the 30-day cards.
+          { column: "status", op: "neq", value: "missed" },
+          { column: "started_at", op: "gte", value: startIso },
+          { column: "started_at", op: "lt", value: endIso }
+        ],
+        order: [{ column: "started_at", ascending: false }],
+        limit: ANALYTICS_DAY_CALL_LIMIT
+      });
+    }
+    const { data, error } = await db
+      .from("voice_call_transcripts")
+      .select(
+        "id, caller_e164, started_at, ended_at, status, direction, call_kind, forwarded_to_e164, summary, sentiment"
+      )
+      .eq("business_id", businessId)
+      .neq("status", "missed")
+      .gte("started_at", startIso)
+      .lt("started_at", endIso)
+      .order("started_at", { ascending: false })
+      .limit(ANALYTICS_DAY_CALL_LIMIT);
+    if (error) throw new Error(`getAnalyticsDayDetail calls: ${error.message}`);
+    return (data as CallRow[] | null) ?? [];
+  };
+
+  const [usageRes, callRows, blockedRes] = await Promise.all([
+    db
+      .from("daily_usage")
+      .select("calls_made, sms_sent, voice_minutes_used")
+      .eq("business_id", businessId)
+      .eq("usage_date", date)
+      .maybeSingle(),
+    fetchCalls(),
+    db
+      .from("system_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", businessId)
+      .eq("event", "voice_call_blocked")
+      .gte("created_at", startIso)
+      .lt("created_at", endIso)
+  ]);
+  if (usageRes.error) throw new Error(`getAnalyticsDayDetail usage: ${usageRes.error.message}`);
+  if (blockedRes.error) {
+    throw new Error(`getAnalyticsDayDetail blocked: ${blockedRes.error.message}`);
+  }
+
+  type UsageRow = {
+    calls_made: number | null;
+    sms_sent: number | null;
+    voice_minutes_used: number | null;
+  };
   const usageRow = (usageRes.data as UsageRow | null) ?? null;
-  const callRows = (callsRes.data as CallRow[] | null) ?? [];
 
   return {
     date,
