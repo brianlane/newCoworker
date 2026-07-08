@@ -30,6 +30,7 @@ import {
 } from "@/lib/db/employees";
 import { parseScheduleText } from "@/lib/employees/schedule-text";
 import { sharedCalendarStatus } from "@/lib/calendar-tools/shared-calendar";
+import { normalizeDialableNumber } from "@/lib/telnyx/format";
 
 export const dynamic = "force-dynamic";
 
@@ -40,9 +41,21 @@ const querySchema = z.object({
   businessId: z.string().uuid()
 });
 
+// Forgiving phone input: "602-555-1234" and "(602) 555-1234" are assumed US
+// (+1); explicit +country-code numbers pass through. Short codes are refused
+// — roster numbers must be dialable. The parsed value is canonical E.164.
+const phoneField = z.string().transform((val, ctx) => {
+  const result = normalizeDialableNumber(val);
+  if (!result.ok) {
+    ctx.addIssue({ code: "custom", message: result.reason });
+    return z.NEVER;
+  }
+  return result.value;
+});
+
 const createSchema = z.object({
   name: z.string().trim().min(1).max(120),
-  phoneE164: z.string().regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164, e.g. +16025551234"),
+  phoneE164: phoneField,
   email: z.string().trim().email().max(254).nullable().optional(),
   scheduleText: z.string().max(500).optional(),
   preferredText: z.string().max(500).optional()

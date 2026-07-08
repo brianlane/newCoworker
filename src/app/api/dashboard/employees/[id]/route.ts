@@ -21,6 +21,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import { deleteTeamMember, updateTeamMember, type TeamMemberPatch } from "@/lib/db/employees";
 import { parseScheduleText } from "@/lib/employees/schedule-text";
+import { normalizeDialableNumber } from "@/lib/telnyx/format";
 
 export const dynamic = "force-dynamic";
 
@@ -33,9 +34,18 @@ const querySchema = z.object({ businessId: z.string().uuid() });
 const patchSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),
+    // Forgiving phone input: bare US numbers are assumed +1, short codes are
+    // refused (roster numbers must be dialable). Parses to canonical E.164.
     phoneE164: z
       .string()
-      .regex(/^\+[1-9]\d{6,14}$/, "Phone must be E.164, e.g. +16025551234")
+      .transform((val, ctx) => {
+        const result = normalizeDialableNumber(val);
+        if (!result.ok) {
+          ctx.addIssue({ code: "custom", message: result.reason });
+          return z.NEVER;
+        }
+        return result.value;
+      })
       .optional(),
     email: z.string().trim().email().max(254).nullable().optional(),
     active: z.boolean().optional(),

@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { formatDid, normalizeContactNumber } from "@/lib/telnyx/format";
+import {
+  formatDid,
+  normalizeContactNumber,
+  normalizeDialableNumber
+} from "@/lib/telnyx/format";
 
 describe("formatDid", () => {
   it("pretty-prints a valid +1 NANP number", () => {
@@ -84,5 +88,42 @@ describe("normalizeContactNumber", () => {
 
   it("rejects a + number that isn't structurally valid E.164", () => {
     expect(normalizeContactNumber("+1").ok).toBe(false);
+  });
+});
+
+describe("normalizeDialableNumber", () => {
+  it("assumes +1 for bare US numbers (the employee-add case)", () => {
+    const r = normalizeDialableNumber("602-555-1234");
+    expect(r).toEqual({ ok: true, value: "+16025551234" });
+  });
+
+  it("passes explicit country codes through", () => {
+    const r = normalizeDialableNumber("+44 20 7123 4567");
+    expect(r).toEqual({ ok: true, value: "+442071234567" });
+  });
+
+  it("refuses short codes (not dialable)", () => {
+    const r = normalizeDialableNumber("72825");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("full phone number");
+  });
+
+  it("propagates the base rejection for junk input", () => {
+    expect(normalizeDialableNumber("not-a-number").ok).toBe(false);
+    expect(normalizeDialableNumber("").ok).toBe(false);
+    expect(normalizeDialableNumber(null).ok).toBe(false);
+  });
+
+  it("rejects extension text instead of silently storing a wrong number", () => {
+    const r = normalizeDialableNumber("+1 (602) 555-1234 x99");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("extensions");
+    expect(normalizeDialableNumber("602-555-1234 ext 99").ok).toBe(false);
+  });
+
+  it("rejects a +1 number whose digits include a pasted extension", () => {
+    const r = normalizeDialableNumber("+1 (602) 555-1234 99");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("10 digits");
   });
 });
