@@ -94,7 +94,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Bring Your Own Number",
         description:
-          "Port your existing business number in, or use the dedicated number included with every plan.",
+          "Port your existing business number in, or use the dedicated number.",
         Icon: Smartphone
       }
     ]
