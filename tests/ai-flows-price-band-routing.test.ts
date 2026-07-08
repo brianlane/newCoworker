@@ -101,6 +101,21 @@ describe("addPriceBandRouting", () => {
     );
   });
 
+  it("never stamps the rule when the wired extraction step is missing (no price_band producer)", () => {
+    // A reshaped Realtor.com flow whose s1 is extract_url (no fields): adding
+    // ownerDirectWhen would reference a var nothing produces and fail
+    // validation for the WHOLE apply. The safe outcome is price_band skipped
+    // AND the rule left off, flow unchanged.
+    const def: Def = {
+      steps: [
+        { id: "s1", type: "extract_url", saveAs: "lead_url" },
+        { id: "s4", type: "route_to_team" }
+      ]
+    };
+    expect(addPriceBandRouting(def, "Realtor.com Lead")).toBe(false);
+    expect(def.steps.find((s) => s.id === "s4")!.ownerDirectWhen).toBeUndefined();
+  });
+
   it("leaves unknown flows untouched", () => {
     const def: Def = {
       steps: [{ id: "route", type: "route_to_team" }]

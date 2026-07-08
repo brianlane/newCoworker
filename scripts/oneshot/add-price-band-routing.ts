@@ -171,6 +171,22 @@ export function addPriceBandRouting(def: Definition, flowName: string): boolean 
     }
   }
 
+  // Never stamp a rule that references a var nothing produces: if the wired
+  // extraction step wasn't found (a reshaped flow), price_band has no
+  // producer, ownerDirectWhen would fail validation, and the whole apply
+  // would abort. Leaving this flow unstamped (and loudly unchanged) is the
+  // safe outcome for a shape we don't recognize.
+  const producesPriceBand = steps.some(
+    (s) => Array.isArray(s.fields) && s.fields.some((f) => f.name === "price_band")
+  );
+  if (!producesPriceBand) {
+    console.warn(
+      `  [warn] ${flowName}: extraction step "${wiring.extractStepId}" not found — ` +
+        "price_band has no producer, so the keep-for-owner rule was NOT stamped."
+    );
+    return changed;
+  }
+
   // 2. Stamp the keep-for-owner rule on each route step (skip when present so
   //    a later manual tweak to the template survives re-runs).
   for (const step of steps) {
