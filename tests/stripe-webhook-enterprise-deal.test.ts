@@ -232,8 +232,8 @@ describe("stripe webhook: enterprise deal", () => {
     expect(updateSubscription).not.toHaveBeenCalled();
   });
 
-  it("cancels the duplicate Stripe subscription when a second session activates an already-active deal", async () => {
-    vi.mocked(markEnterpriseDealActive).mockResolvedValue("duplicate_session");
+  it("cancels the fresh Stripe subscription when the deal is not claimable (duplicate or stale session)", async () => {
+    vi.mocked(markEnterpriseDealActive).mockResolvedValue("not_claimable");
 
     const response = await postEvent(checkoutCompletedEvent());
 
@@ -257,18 +257,54 @@ describe("stripe webhook: enterprise deal", () => {
     expect(updateSubscription).not.toHaveBeenCalled();
   });
 
-  it("refuses activation on a canceled local row (must go through reactivation)", async () => {
+  it("re-activates a canceled-in-grace row on a fresh deal (re-deal), clearing cancellation bookkeeping", async () => {
     vi.mocked(getSubscription).mockResolvedValue({
       ...STRIPELESS_ROW,
       status: "canceled",
+      stripe_subscription_id: "sub_old_dead",
+      canceled_at: "2026-06-01T00:00:00Z",
+      cancel_reason: "payment_failed",
       grace_ends_at: "2026-08-01T00:00:00Z"
     } as never);
 
     const response = await postEvent(checkoutCompletedEvent());
 
     expect(response.status).toBe(200);
-    expect(cancelStripeSubscriptionSafely).toHaveBeenCalledWith("sub_ent_1", BIZ_ID);
-    expect(markEnterpriseDealActive).not.toHaveBeenCalled();
+    expect(markEnterpriseDealActive).toHaveBeenCalled();
+    expect(cancelStripeSubscriptionSafely).not.toHaveBeenCalled();
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "row-1",
+      expect.objectContaining({
+        status: "active",
+        stripe_subscription_id: "sub_ent_1",
+        canceled_at: null,
+        cancel_reason: null,
+        grace_ends_at: null,
+        cancel_at_period_end: false
+      })
+    );
+  });
+
+  it("starts a FRESH subscription row when the prior lifetime was wiped (never resurrects)", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      ...STRIPELESS_ROW,
+      status: "canceled",
+      stripe_subscription_id: "sub_old_dead",
+      wiped_at: "2026-06-15T00:00:00Z"
+    } as never);
+
+    const response = await postEvent(checkoutCompletedEvent());
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(createSubscription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: BIZ_ID,
+        tier: "enterprise",
+        status: "active",
+        stripe_subscription_id: "sub_ent_1"
+      })
+    );
   });
 
   it("ignores sessions whose deal is unknown or mismatched", async () => {

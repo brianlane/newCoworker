@@ -149,7 +149,7 @@ describe("db/enterprise-deals", () => {
     await expect(revokeEnterpriseDeal(DEAL.id)).rejects.toThrow("revokeEnterpriseDeal: boom");
   });
 
-  it("markEnterpriseDealActive claims atomically and reports duplicate sessions", async () => {
+  it("markEnterpriseDealActive claims atomically and reports unclaimable deals", async () => {
     const db = mockDb({ select: vi.fn().mockResolvedValue({ data: [{ id: DEAL.id }], error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     const result = await markEnterpriseDealActive(DEAL.id, {
@@ -164,8 +164,12 @@ describe("db/enterprise-deals", () => {
       stripe_session_id: "cs_1",
       stripe_subscription_id: "sub_1"
     });
-    // The claim predicate: not-yet-active OR already active from this session.
-    expect(db.or).toHaveBeenCalledWith("status.neq.active,stripe_session_id.eq.cs_1");
+    // The claim predicate: still OPEN, or a retry of the session that
+    // activated it (idempotent only while still active — a revoked/canceled
+    // deal is never resurrected).
+    expect(db.or).toHaveBeenCalledWith(
+      "status.eq.open,and(status.eq.active,stripe_session_id.eq.cs_1)"
+    );
 
     const noMatch = mockDb({ select: vi.fn().mockResolvedValue({ data: null, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(noMatch as never);
@@ -175,7 +179,7 @@ describe("db/enterprise-deals", () => {
         stripeSessionId: "cs_2",
         stripeSubscriptionId: "sub_2"
       })
-    ).toBe("duplicate_session");
+    ).toBe("not_claimable");
   });
 
   it("markEnterpriseDealActive throws on error", async () => {

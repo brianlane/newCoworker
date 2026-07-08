@@ -127,21 +127,28 @@ export async function revokeEnterpriseDeal(
 /**
  * Mark a deal active (Stripe webhook, checkout.session.completed) — an
  * ATOMIC CLAIM, not a blind write (same pattern as markWhiteGloveOfferPaid).
- * The update only matches when the deal is not yet active OR is already
- * active from THIS same Stripe session (webhook retry → idempotent re-write
- * of identical values). A completion from a DIFFERENT session on an
- * already-active deal matches nothing and returns "duplicate_session": the
- * customer started two subscriptions (two pay tabs both reached Stripe
- * before the first completion landed) and the caller must cancel the second
- * Stripe subscription instead of double-linking. An admin revoke that raced
- * the payment still flips to 'active' — the subscription is real; support
- * cancels/refunds out-of-band.
+ * The update only matches when the deal is still OPEN, or was already
+ * activated by THIS same Stripe session (webhook retry → idempotent re-write
+ * of identical values). Everything else returns "not_claimable" and the
+ * caller must cancel the fresh Stripe subscription instead of linking it:
+ *
+ *  - already active from a DIFFERENT session — the customer started two
+ *    subscriptions (two pay tabs both reached Stripe before the first
+ *    completion landed);
+ *  - revoked/canceled — a stale Checkout session (created while the deal was
+ *    open, completed after an admin revoke or after the deal's subscription
+ *    ended) must NOT resurrect an old price. Unlike the one-time white-glove
+ *    claim (where a revoke-racing payment still flips to paid because the
+ *    money is real), silently reviving a dead RECURRING deal could put two
+ *    live deals on one business (unique-index blowup → endless webhook
+ *    retries) or bill a price the admin withdrew; support refunds the first
+ *    invoice out-of-band instead.
  */
 export async function markEnterpriseDealActive(
   dealId: string,
   data: { activatedAt: Date; stripeSessionId: string; stripeSubscriptionId: string | null },
   client?: SupabaseClient
-): Promise<"active" | "duplicate_session"> {
+): Promise<"active" | "not_claimable"> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data: rows, error } = await db
     .from("enterprise_deals")
@@ -152,10 +159,13 @@ export async function markEnterpriseDealActive(
       stripe_subscription_id: data.stripeSubscriptionId
     })
     .eq("id", dealId)
-    .or(`status.neq.active,stripe_session_id.eq.${data.stripeSessionId}`)
+    // Retry idempotency (the and() arm) applies only while the deal is still
+    // ACTIVE — a late retry of the original completion must not resurrect a
+    // deal that has since been revoked/canceled.
+    .or(`status.eq.open,and(status.eq.active,stripe_session_id.eq.${data.stripeSessionId})`)
     .select("id");
   if (error) throw new Error(`markEnterpriseDealActive: ${error.message}`);
-  return ((rows as unknown[] | null) ?? []).length > 0 ? "active" : "duplicate_session";
+  return ((rows as unknown[] | null) ?? []).length > 0 ? "active" : "not_claimable";
 }
 
 /**
