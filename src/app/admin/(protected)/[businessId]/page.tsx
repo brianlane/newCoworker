@@ -280,11 +280,15 @@ export default async function BusinessDetailPage({
         </dl>
         {!business.hostinger_vps_id &&
           subscription?.status === "active" &&
-          business.status !== "wiped" && (
+          business.status !== "wiped" &&
+          (business.vps_provider ?? "hostinger") !== "byos" && (
             <div className="mb-4">
               {/* Active subscription but no box yet — the admin-created
                   enterprise path lands here (create-client writes an active
-                  Stripe-less subscription without provisioning). */}
+                  Stripe-less subscription without provisioning). Hidden for
+                  BYOS tenants: their provisioning path is the SSH-handover
+                  card above (skip-payment would run the generic purchase
+                  orchestrator, which fails closed for byos). */}
               <SkipPaymentButton businessId={businessId} label="Provision VPS" />
             </div>
           )}

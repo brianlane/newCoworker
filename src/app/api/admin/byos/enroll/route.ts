@@ -8,6 +8,7 @@ import {
   probeByosSsh
 } from "@/lib/provisioning/byos";
 import { VpsProviderValidationError, VPS_REGIONS } from "@/lib/vps/provider";
+import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { z } from "zod";
@@ -57,6 +58,27 @@ export async function POST(request: Request) {
     }
 
     // action === "provision"
+    // In-flight guard: a provisioning run takes many minutes and the button
+    // re-enables as soon as this response returns, so a double-click (or an
+    // impatient re-try) must not start a second orchestrator against the
+    // same box. The latest provisioning log row is the source of truth: a
+    // recent non-terminal ("thinking") row below 100% means a run is live.
+    // The window bound (30 min) lets a crashed run be retried without ops
+    // surgery.
+    const latest = await getLatestProvisioningStatus(body.businessId);
+    if (
+      latest &&
+      latest.logStatus === "thinking" &&
+      latest.percent < 100 &&
+      Date.now() - new Date(latest.updatedAt).getTime() < 30 * 60 * 1000
+    ) {
+      return errorResponse(
+        "CONFLICT",
+        `Provisioning already in progress (${latest.phase}, ${latest.percent}%). ` +
+          "Follow the provisioning logs; retry only after it fails or completes."
+      );
+    }
+
     const { host } = await probeByosSsh(body.businessId);
 
     // Fire-and-forget, mirroring the Stripe-webhook provisioning kick: the

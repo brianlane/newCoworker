@@ -283,12 +283,38 @@ describe("makeByosProvisioner", () => {
     const provision = makeByosProvisioner({ exec });
     await expect(
       provision({ businessId: BIZ, tier: "standard", vpsSize: "kvm8" })
-    ).rejects.toThrow(/exited 7.*denied/s);
+    ).rejects.toThrow(/exit 7, marker missing.*denied/s);
 
     vi.mocked(getActiveVpsSshKey).mockResolvedValueOnce(null);
     await expect(
       provision({ businessId: BIZ, tier: "standard", vpsSize: "kvm8" })
     ).rejects.toThrow(/No BYOS enrollment/);
+  });
+
+  it("rejects a zero-exit probe whose output lacks the marker (same contract as the admin probe)", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      exitCode: 0,
+      signal: null,
+      stdout: "Welcome to Ubuntu banner only",
+      stderr: ""
+    });
+    const provision = makeByosProvisioner({ exec });
+    await expect(
+      provision({ businessId: BIZ, tier: "standard", vpsSize: "kvm8" })
+    ).rejects.toThrow(/exit 0, marker missing/);
+  });
+
+  it("reports the marker as present when a non-zero exit still echoed it", async () => {
+    const exec = vi.fn().mockResolvedValue({
+      exitCode: 3,
+      signal: null,
+      stdout: `${BYOS_PROBE_MARKER}\n`,
+      stderr: "post-echo failure"
+    });
+    const provision = makeByosProvisioner({ exec });
+    await expect(
+      provision({ businessId: BIZ, tier: "standard", vpsSize: "kvm8" })
+    ).rejects.toThrow(/exit 3, marker present/);
   });
 
   it("falls back to <no output> when the failing probe produced no streams", async () => {

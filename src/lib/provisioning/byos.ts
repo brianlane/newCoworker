@@ -249,9 +249,14 @@ export function makeByosProvisioner(deps: ByosSshDeps = {}): VpsProvisioner {
         }),
       deps.sleep ? { sleep: deps.sleep } : undefined
     );
-    if (probe.exitCode !== 0) {
+    // Same success contract as probeByosSsh: exit 0 AND the echoed marker —
+    // a zero exit with mangled output (broken shell, MOTD-only session)
+    // must not pass the orchestrator probe when the admin probe would
+    // reject it.
+    if (probe.exitCode !== 0 || !probe.stdout.includes(BYOS_PROBE_MARKER)) {
       throw new ByosEnrollmentError(
-        `BYOS box ${row.host} is reachable but the SSH probe exited ${probe.exitCode}: ` +
+        `BYOS box ${row.host} is reachable but the SSH probe failed ` +
+          `(exit ${probe.exitCode}, marker ${probe.stdout.includes(BYOS_PROBE_MARKER) ? "present" : "missing"}): ` +
           `${(probe.stderr || probe.stdout || "<no output>").slice(0, 500)}`
       );
     }

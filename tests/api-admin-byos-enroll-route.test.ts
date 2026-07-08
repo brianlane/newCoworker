@@ -26,6 +26,10 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
   orchestrateProvisioning: vi.fn()
 }));
 
+vi.mock("@/lib/provisioning/progress", () => ({
+  getLatestProvisioningStatus: vi.fn()
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -40,6 +44,7 @@ import {
   probeByosSsh
 } from "@/lib/provisioning/byos";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
 import { VpsProviderValidationError } from "@/lib/vps/provider";
 import { logger } from "@/lib/logger";
 
@@ -80,6 +85,7 @@ describe("api/admin/byos/enroll route", () => {
       reusedExistingKey: false
     });
     vi.mocked(probeByosSsh).mockResolvedValue({ host: "203.0.113.7" });
+    vi.mocked(getLatestProvisioningStatus).mockResolvedValue(null);
     vi.mocked(orchestrateProvisioning).mockResolvedValue({
       vpsId: "byos-x",
       tunnelUrl: "https://x",
@@ -138,6 +144,43 @@ describe("api/admin/byos/enroll route", () => {
       "BYOS provisioning run failed",
       expect.objectContaining({ error: "plain failure" })
     );
+  });
+
+  it("provision: 409s while a recent run is still in flight (double-click guard)", async () => {
+    vi.mocked(getLatestProvisioningStatus).mockResolvedValue({
+      percent: 40,
+      phase: "remote_deploy_starting",
+      logStatus: "thinking",
+      updatedAt: new Date().toISOString()
+    });
+    const res = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
+    expect(res.status).toBe(409);
+    const json = await res.json();
+    expect(json.error.message).toContain("already in progress");
+    expect(probeByosSsh).not.toHaveBeenCalled();
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+  });
+
+  it("provision: a stale or terminal previous run does not block a retry", async () => {
+    // Stale thinking row (crashed run > 30 min ago) — retry allowed.
+    vi.mocked(getLatestProvisioningStatus).mockResolvedValueOnce({
+      percent: 40,
+      phase: "remote_deploy_starting",
+      logStatus: "thinking",
+      updatedAt: new Date(Date.now() - 31 * 60 * 1000).toISOString()
+    });
+    const stale = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
+    expect(stale.status).toBe(200);
+
+    // Terminal error row — retry allowed.
+    vi.mocked(getLatestProvisioningStatus).mockResolvedValueOnce({
+      percent: 95,
+      phase: "deploy_failed",
+      logStatus: "error",
+      updatedAt: new Date().toISOString()
+    });
+    const failed = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
+    expect(failed.status).toBe(200);
   });
 
   it("provision: probe failure surfaces as a 400 with the hint", async () => {
