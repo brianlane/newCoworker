@@ -12,7 +12,7 @@ import {
   listActiveVpsSshKeys,
   reassignVpsSshKeyBusiness,
   rotateVpsSshKey,
-  updateVpsSshKeyHost
+  updateVpsSshKeyPlacement
 } from "@/lib/db/vps-ssh-keys";
 import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
 import { promisify } from "node:util";
@@ -288,14 +288,18 @@ describe("vps_ssh_keys DB layer", () => {
     expect(insertArg.host).toBe("203.0.113.7");
   });
 
-  describe("updateVpsSshKeyHost", () => {
-    it("updates the host on the row", async () => {
+  describe("updateVpsSshKeyPlacement", () => {
+    it("updates host + region together on the row", async () => {
       const chain = makeChain();
       chain.eq.mockResolvedValueOnce({ error: null });
       const db = makeDb(chain);
-      await updateVpsSshKeyHost("row-uuid", "198.51.100.9", db as never);
+      await updateVpsSshKeyPlacement(
+        "row-uuid",
+        { host: "198.51.100.9", region: "ca" },
+        db as never
+      );
       expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
-      expect(chain.update).toHaveBeenCalledWith({ host: "198.51.100.9" });
+      expect(chain.update).toHaveBeenCalledWith({ host: "198.51.100.9", region: "ca" });
       expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
     });
 
@@ -304,15 +308,15 @@ describe("vps_ssh_keys DB layer", () => {
       chain.eq.mockResolvedValueOnce({ error: { message: "host boom" } });
       const db = makeDb(chain);
       await expect(
-        updateVpsSshKeyHost("row-uuid", "198.51.100.9", db as never)
-      ).rejects.toThrow(/updateVpsSshKeyHost: host boom/);
+        updateVpsSshKeyPlacement("row-uuid", { host: "198.51.100.9", region: "us" }, db as never)
+      ).rejects.toThrow(/updateVpsSshKeyPlacement: host boom/);
     });
 
     it("uses the default service client when none is provided", async () => {
       const chain = makeChain();
       chain.eq.mockResolvedValueOnce({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
-      await updateVpsSshKeyHost("row-uuid", "198.51.100.9");
+      await updateVpsSshKeyPlacement("row-uuid", { host: "198.51.100.9", region: "us" });
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

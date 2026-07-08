@@ -175,18 +175,23 @@ export async function reassignVpsSshKeyBusiness(
 }
 
 /**
- * Update the persisted host (public IP / hostname) of a key row. Only
+ * Update the persisted placement (host + region) of a key row. Only
  * meaningful for byos/ovh rows, whose host has no live provider lookup —
- * used by the BYOS re-prepare path when the operator corrects the address.
+ * used by the BYOS re-prepare path when the operator corrects the address
+ * or the region. Both fields are written together so the row can never
+ * describe a Canadian tenant on a key still labeled 'us' (or vice versa).
  */
-export async function updateVpsSshKeyHost(
+export async function updateVpsSshKeyPlacement(
   id: string,
-  host: string,
+  placement: { host: string; region: string },
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db.from("vps_ssh_keys").update({ host }).eq("id", id);
-  if (error) throw new Error(`updateVpsSshKeyHost: ${error.message}`);
+  const { error } = await db
+    .from("vps_ssh_keys")
+    .update({ host: placement.host, region: placement.region })
+    .eq("id", id);
+  if (error) throw new Error(`updateVpsSshKeyPlacement: ${error.message}`);
 }
 
 /**

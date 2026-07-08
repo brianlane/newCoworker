@@ -28,7 +28,7 @@ import { getBusiness, updateBusinessVpsProvider } from "@/lib/db/businesses";
 import {
   getActiveVpsSshKey,
   insertVpsSshKey,
-  updateVpsSshKeyHost,
+  updateVpsSshKeyPlacement,
   type VpsSshKeyRow
 } from "@/lib/db/vps-ssh-keys";
 import { generateSshKeypair } from "@/lib/hostinger/keypair";
@@ -119,9 +119,10 @@ export async function prepareByosEnrollment(input: {
   const existing = await getActiveVpsSshKey(boxId);
   if (existing) {
     // Idempotent re-prepare: keep the keypair the customer may already have
-    // installed; only the operator-entered host is refreshed.
-    if (existing.host !== host) {
-      await updateVpsSshKeyHost(existing.id, host);
+    // installed; only the operator-entered placement (host and/or region)
+    // is refreshed.
+    if (existing.host !== host || existing.region !== region) {
+      await updateVpsSshKeyPlacement(existing.id, { host, region });
     }
     return {
       publicKey: existing.public_key,

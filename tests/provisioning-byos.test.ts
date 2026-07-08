@@ -8,7 +8,7 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
   getActiveVpsSshKey: vi.fn(),
   insertVpsSshKey: vi.fn(),
-  updateVpsSshKeyHost: vi.fn()
+  updateVpsSshKeyPlacement: vi.fn()
 }));
 
 vi.mock("@/lib/hostinger/keypair", () => ({
@@ -32,7 +32,7 @@ import { getBusiness, updateBusinessVpsProvider } from "@/lib/db/businesses";
 import {
   getActiveVpsSshKey,
   insertVpsSshKey,
-  updateVpsSshKeyHost
+  updateVpsSshKeyPlacement
 } from "@/lib/db/vps-ssh-keys";
 import { generateSshKeypair } from "@/lib/hostinger/keypair";
 import { VpsProviderValidationError } from "@/lib/vps/provider";
@@ -152,7 +152,7 @@ describe("prepareByosEnrollment", () => {
     });
   });
 
-  it("re-prepare reuses the existing key and only updates a changed host", async () => {
+  it("re-prepare reuses the existing key and only updates a changed placement", async () => {
     vi.mocked(getActiveVpsSshKey).mockResolvedValue(keyRow() as never);
 
     const changed = await prepareByosEnrollment({
@@ -160,7 +160,10 @@ describe("prepareByosEnrollment", () => {
       host: "198.51.100.9",
       region: "ca"
     });
-    expect(updateVpsSshKeyHost).toHaveBeenCalledWith("row-1", "198.51.100.9");
+    expect(updateVpsSshKeyPlacement).toHaveBeenCalledWith("row-1", {
+      host: "198.51.100.9",
+      region: "ca"
+    });
     expect(insertVpsSshKey).not.toHaveBeenCalled();
     expect(changed).toEqual(
       expect.objectContaining({
@@ -170,13 +173,26 @@ describe("prepareByosEnrollment", () => {
       })
     );
 
-    vi.mocked(updateVpsSshKeyHost).mockClear();
+    // Region-only change (fixture row is region 'ca') must also refresh.
+    vi.mocked(updateVpsSshKeyPlacement).mockClear();
+    const regionOnly = await prepareByosEnrollment({
+      businessId: BIZ,
+      host: "203.0.113.7",
+      region: "us"
+    });
+    expect(updateVpsSshKeyPlacement).toHaveBeenCalledWith("row-1", {
+      host: "203.0.113.7",
+      region: "us"
+    });
+    expect(regionOnly.reusedExistingKey).toBe(true);
+
+    vi.mocked(updateVpsSshKeyPlacement).mockClear();
     const same = await prepareByosEnrollment({
       businessId: BIZ,
       host: "203.0.113.7",
       region: "ca"
     });
-    expect(updateVpsSshKeyHost).not.toHaveBeenCalled();
+    expect(updateVpsSshKeyPlacement).not.toHaveBeenCalled();
     expect(same.reusedExistingKey).toBe(true);
   });
 });

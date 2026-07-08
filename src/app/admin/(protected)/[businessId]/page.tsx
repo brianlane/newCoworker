@@ -292,13 +292,17 @@ export default async function BusinessDetailPage({
               <SkipPaymentButton businessId={businessId} label="Provision VPS" />
             </div>
           )}
-        {business.hostinger_vps_id && (
-          <HardwareSizePanel
-            businessId={businessId}
-            currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
-            pinned={business.vps_size != null}
-          />
-        )}
+        {business.hostinger_vps_id &&
+          (business.vps_provider ?? "hostinger") === "hostinger" && (
+            /* Hardware migration is a Hostinger purchase/teardown flow —
+               migrate-vps-size fails closed for BYOS/OVH tenants, so don't
+               offer the panel for them (resize happens provider-side). */
+            <HardwareSizePanel
+              businessId={businessId}
+              currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
+              pinned={business.vps_size != null}
+            />
+          )}
       </Card>
 
       {/* Voice / SMS DID */}
