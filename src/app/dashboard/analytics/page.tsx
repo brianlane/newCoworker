@@ -131,10 +131,13 @@ export default async function DashboardAnalyticsPage(props: {
       : null;
 
   // Lookup blips degrade a single card rather than 500-ing the whole page.
+  // Every fetcher shares the page's `now` so the cards, the ?day= clamp, and
+  // the chart highlight all describe the same window even if UTC midnight
+  // passes mid-request.
   const [usage, answerRate, callStats, dayDetail] = await Promise.all([
-    getDailyUsageSeries(business.id, { client: db }).catch(() => null),
-    getAnswerRateStats(business.id, { client: db }).catch(() => null),
-    getInboundCallStats(business.id, { client: db, timeZone }).catch(() => null),
+    getDailyUsageSeries(business.id, { client: db, now }).catch(() => null),
+    getAnswerRateStats(business.id, { client: db, now }).catch(() => null),
+    getInboundCallStats(business.id, { client: db, timeZone, now }).catch(() => null),
     selectedDay
       ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
       : Promise.resolve(null)
