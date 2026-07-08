@@ -58,6 +58,18 @@ export async function POST(request: Request) {
     }
 
     // action === "provision"
+    // Provider-pin guard: the orchestrator resolves the provider from the
+    // BUSINESS ROW, not from the injected provisioner — if the row were
+    // still 'hostinger' (prepare never ran, or the pin was reverted) while
+    // a stale BYOS key exists, the pool-adopt path could land the tenant on
+    // a Hostinger box before the injected BYOS provisioner ever ran.
+    if ((business.vps_provider ?? "hostinger") !== "byos") {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `Business is pinned to vps_provider='${business.vps_provider ?? "hostinger"}', not 'byos' — run the prepare step first.`
+      );
+    }
+
     // In-flight guard: a provisioning run takes many minutes and the button
     // re-enables as soon as this response returns, so a double-click (or an
     // impatient re-try) must not start a second orchestrator against the

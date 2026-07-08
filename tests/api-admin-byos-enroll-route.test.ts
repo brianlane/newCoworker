@@ -74,7 +74,8 @@ describe("api/admin/byos/enroll route", () => {
       id: BIZ_ID,
       tier: "enterprise",
       owner_email: "owner@example.com",
-      vps_size: null
+      vps_size: null,
+      vps_provider: "byos"
     } as never);
     vi.mocked(getSubscription).mockResolvedValue({ billing_period: "monthly" } as never);
     vi.mocked(prepareByosEnrollment).mockResolvedValue({
@@ -144,6 +145,22 @@ describe("api/admin/byos/enroll route", () => {
       "BYOS provisioning run failed",
       expect.objectContaining({ error: "plain failure" })
     );
+  });
+
+  it("provision: rejects a business whose provider pin is not byos (stale key + reverted pin)", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ_ID,
+      tier: "enterprise",
+      owner_email: "owner@example.com",
+      vps_size: null
+      // vps_provider missing → resolves to 'hostinger'
+    } as never);
+    const res = await POST(makeRequest({ action: "provision", businessId: BIZ_ID }));
+    expect(res.status).toBe(400);
+    const json = await res.json();
+    expect(json.error.message).toContain("run the prepare step first");
+    expect(probeByosSsh).not.toHaveBeenCalled();
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
   });
 
   it("provision: 409s while a recent run is still in flight (double-click guard)", async () => {
