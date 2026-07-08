@@ -1,14 +1,25 @@
 /**
  * Presentational pieces for /dashboard/analytics (Standard/Enterprise perk).
  *
- * Pure server-renderable markup — no state, no client JS. Charts are CSS
- * flex bars (the datasets are tiny: 30 day-points or 24 hour-buckets), which
- * keeps the page dependency-free and instant. Data shaping lives in
+ * Pure server-renderable markup — no state, no client JS beyond Next's Link.
+ * Charts are CSS flex bars (the datasets are tiny: 30 day-points or 24
+ * hour-buckets), which keeps the page dependency-free and instant. Day
+ * drill-down is plain navigation (`?day=YYYY-MM-DD`), so the page stays a
+ * server component. Data shaping lives in
  * `src/lib/analytics/dashboard-analytics.ts`.
  */
 
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
-import type { DailyUsagePoint } from "@/lib/analytics/dashboard-analytics";
+import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import {
+  CallDirectionBadge,
+  ForwardedBadge,
+  SentimentBadge,
+  StatusBadge,
+  formatDuration
+} from "@/components/dashboard/voice-transcript-helpers";
+import type { AnalyticsDayDetail, DailyUsagePoint } from "@/lib/analytics/dashboard-analytics";
 import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
 
 /** Weekday + day-of-month label for chart tooltips (UTC date string in, e.g. "Jun 12" out). */
@@ -17,25 +28,59 @@ function shortDate(ymd: string): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
 }
 
+/** Full header label for the day drill-down, e.g. "Friday, Jun 12, 2026". */
+function longDate(ymd: string): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  return d.toLocaleDateString("en-US", {
+    weekday: "long",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
+
 function BarColumn({
   value,
   max,
   title,
-  colorClass
+  colorClass,
+  href,
+  selected
 }: {
   value: number;
   max: number;
   title: string;
   colorClass: string;
+  /** When set, the column is a link (day drill-down). */
+  href?: string;
+  selected?: boolean;
 }) {
   // Zero-value days keep a 2px stub so the timeline reads continuously.
   const pct = max > 0 ? Math.max((value / max) * 100, value > 0 ? 4 : 0) : 0;
+  const wrapperClass = [
+    "flex-1 flex flex-col justify-end h-full min-w-0 rounded-sm",
+    href ? "hover:bg-parchment/15 transition-colors" : "",
+    selected ? "bg-parchment/15" : ""
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const bar = (
+    <div
+      className={["rounded-t", colorClass].join(" ")}
+      style={{ height: pct > 0 ? `${pct}%` : "2px" }}
+    />
+  );
+  if (href) {
+    return (
+      <Link href={href} className={wrapperClass} title={title} aria-label={title}>
+        {bar}
+      </Link>
+    );
+  }
   return (
-    <div className="flex-1 flex flex-col justify-end h-full min-w-0" title={title}>
-      <div
-        className={["rounded-t", colorClass].join(" ")}
-        style={{ height: pct > 0 ? `${pct}%` : "2px" }}
-      />
+    <div className={wrapperClass} title={title}>
+      {bar}
     </div>
   );
 }
@@ -46,7 +91,9 @@ export function DailyVolumeCard({
   total,
   days,
   value,
-  colorClass
+  colorClass,
+  dayHref,
+  selectedDate
 }: {
   label: string;
   /** e.g. "calls", "texts", "min" — appended to the total. */
@@ -55,6 +102,10 @@ export function DailyVolumeCard({
   days: DailyUsagePoint[];
   value: (p: DailyUsagePoint) => number;
   colorClass: string;
+  /** When set, each day bar links to its drill-down URL. */
+  dayHref?: (date: string) => string;
+  /** Day currently drilled into (highlighted across all three charts). */
+  selectedDate?: string | null;
 }) {
   const max = Math.max(...days.map(value), 0);
   return (
@@ -71,6 +122,8 @@ export function DailyVolumeCard({
             max={max}
             title={`${shortDate(p.date)}: ${value(p).toLocaleString()} ${unit}`}
             colorClass={colorClass}
+            href={dayHref ? dayHref(p.date) : undefined}
+            selected={selectedDate === p.date}
           />
         ))}
       </div>
@@ -78,6 +131,119 @@ export function DailyVolumeCard({
         <span>{days.length > 0 ? shortDate(days[0].date) : ""}</span>
         <span>{days.length > 0 ? shortDate(days[days.length - 1].date) : ""}</span>
       </div>
+    </Card>
+  );
+}
+
+/**
+ * One call row in the day drill-down, pre-labeled on the server (owner /
+ * employee / contact-name overrides already resolved) — mirrors CallListRow.
+ */
+export type DayDetailCallDisplayRow = AnalyticsDayDetail["calls"][number] & {
+  label: string;
+  badgeKind: "owner" | "employee" | null;
+};
+
+/**
+ * Drill-down card for one UTC day of the volume charts: that day's totals,
+ * the individual calls (deep-linking into /dashboard/calls/[id]), and the
+ * turned-away count. Rendered when the owner clicks a bar (`?day=…`).
+ */
+export function DayDetailCard({
+  detail,
+  calls,
+  closeHref
+}: {
+  detail: AnalyticsDayDetail;
+  calls: DayDetailCallDisplayRow[];
+  closeHref: string;
+}) {
+  return (
+    <Card>
+      <div id="day-detail" className="flex items-start justify-between gap-4">
+        <div>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Day detail</p>
+          <p className="text-lg font-bold text-parchment">{longDate(detail.date)}</p>
+        </div>
+        <Link
+          href={closeHref}
+          className="text-xs text-parchment/50 hover:text-parchment transition-colors shrink-0 mt-1"
+        >
+          ✕ Back to 30 days
+        </Link>
+      </div>
+
+      <div className="flex flex-wrap gap-x-6 gap-y-1 mt-3 text-sm text-parchment/70">
+        <span>
+          <span className="font-semibold text-parchment">{detail.usage.calls.toLocaleString()}</span>{" "}
+          calls
+        </span>
+        <span>
+          <span className="font-semibold text-parchment">{detail.usage.sms.toLocaleString()}</span>{" "}
+          texts
+        </span>
+        <span>
+          <span className="font-semibold text-parchment">
+            {detail.usage.voiceMinutes.toLocaleString()}
+          </span>{" "}
+          voice min
+        </span>
+        {detail.turnedAway > 0 && (
+          <span className="text-red-300">
+            <span className="font-semibold">{detail.turnedAway.toLocaleString()}</span> turned away
+          </span>
+        )}
+      </div>
+
+      {calls.length === 0 ? (
+        <p className="text-sm text-parchment/50 mt-4">No calls on this day.</p>
+      ) : (
+        <ul className="divide-y divide-parchment/10 mt-3">
+          {calls.map((row) => (
+            <li key={row.id}>
+              <Link
+                href={`/dashboard/calls/${row.id}`}
+                className="flex items-center justify-between gap-4 px-2 py-2.5 rounded-lg hover:bg-parchment/5 transition-colors"
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <CallDirectionBadge direction={row.direction} />
+                    <span className="text-sm font-semibold text-parchment truncate">
+                      {row.label}
+                    </span>
+                    {row.badgeKind && (
+                      <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                        {row.badgeKind}
+                      </span>
+                    )}
+                    {row.callKind === "forwarded" && <ForwardedBadge />}
+                    <StatusBadge status={row.status} />
+                    {row.sentiment && <SentimentBadge sentiment={row.sentiment} />}
+                  </div>
+                  <p className="text-xs text-parchment/50 mt-0.5">
+                    <LocalDateTime iso={row.startedAt} /> ·{" "}
+                    {formatDuration(row.startedAt, row.endedAt)}
+                    {row.callKind === "forwarded" && row.forwardedTo && (
+                      <span className="font-mono"> · to {row.forwardedTo}</span>
+                    )}
+                  </p>
+                  {row.summary && (
+                    <p className="text-xs text-parchment/60 mt-1 line-clamp-2">{row.summary}</p>
+                  )}
+                </div>
+                <span className="text-parchment/40 text-sm shrink-0">View →</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <p className="text-[10px] text-parchment/35 mt-3">
+        {detail.clipped
+          ? `Showing the most recent ${calls.length.toLocaleString()} calls for this day. `
+          : ""}
+        Days follow the UTC calendar, matching the charts above.
+      </p>
     </Card>
   );
 }

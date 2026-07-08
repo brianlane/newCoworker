@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   ANALYTICS_CALL_SCAN_LIMIT,
+  ANALYTICS_DAY_CALL_LIMIT,
   ANALYTICS_WINDOW_DAYS,
   analyticsWindowStart,
+  getAnalyticsDayDetail,
   getAnswerRateStats,
   getDailyUsageSeries,
   getInboundCallStats,
-  hourInTimeZone
+  hourInTimeZone,
+  isValidAnalyticsDay
 } from "@/lib/analytics/dashboard-analytics";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -24,7 +27,7 @@ type QueryResult = { data?: unknown; count?: number | null; error: { message: st
  */
 function makeChain(result: QueryResult) {
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "neq", "gte", "order", "limit"]) {
+  for (const m of ["select", "eq", "neq", "gte", "lt", "order", "limit", "maybeSingle"]) {
     chain[m] = vi.fn(() => chain);
   }
   (chain as { then: unknown }).then = (
@@ -100,6 +103,197 @@ describe("getDailyUsageSeries", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
     const series = await getDailyUsageSeries("biz-1");
     expect(series.days).toHaveLength(ANALYTICS_WINDOW_DAYS);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("isValidAnalyticsDay", () => {
+  it("accepts a real YYYY-MM-DD date", () => {
+    expect(isValidAnalyticsDay("2026-07-04")).toBe(true);
+    expect(isValidAnalyticsDay("2024-02-29")).toBe(true); // leap day
+  });
+
+  it("rejects malformed strings", () => {
+    expect(isValidAnalyticsDay("2026-7-4")).toBe(false);
+    expect(isValidAnalyticsDay("20260704")).toBe(false);
+    expect(isValidAnalyticsDay("garbage")).toBe(false);
+    expect(isValidAnalyticsDay("2026-07-04T00:00:00Z")).toBe(false);
+  });
+
+  it("rejects unparseable and rolled-over calendar dates", () => {
+    // Regex-shaped but unparseable → Invalid Date.
+    expect(isValidAnalyticsDay("2026-99-99")).toBe(false);
+    // V8 parses 2026-02-31 by rolling into March; the round-trip check catches it.
+    expect(isValidAnalyticsDay("2026-02-31")).toBe(false);
+  });
+});
+
+describe("getAnalyticsDayDetail", () => {
+  const DAY = "2026-07-03";
+  const CALL = {
+    id: "t-1",
+    caller_e164: "+15550001111",
+    started_at: "2026-07-03T09:15:00Z",
+    ended_at: "2026-07-03T09:20:00Z",
+    status: "completed",
+    direction: "inbound",
+    call_kind: "ai",
+    forwarded_to_e164: null,
+    summary: "Booked a repair.",
+    sentiment: "positive"
+  };
+
+  it("returns the day's usage, calls, and turned-away count", async () => {
+    const { client, chains } = makeClient({
+      daily_usage: {
+        data: { calls_made: 4, sms_sent: 10, voice_minutes_used: 12 },
+        error: null
+      },
+      voice_call_transcripts: {
+        data: [
+          CALL,
+          {
+            ...CALL,
+            id: "t-2",
+            call_kind: "forwarded",
+            forwarded_to_e164: "+15559998888",
+            summary: null,
+            // Unknown sentiment strings are dropped rather than rendered.
+            sentiment: "confused"
+          },
+          { ...CALL, id: "t-3", sentiment: null }
+        ],
+        error: null
+      },
+      system_logs: { count: 2, error: null }
+    });
+
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+
+    expect(detail.date).toBe(DAY);
+    expect(detail.usage).toEqual({ calls: 4, sms: 10, voiceMinutes: 12 });
+    expect(detail.turnedAway).toBe(2);
+    expect(detail.clipped).toBe(false);
+    expect(detail.calls).toHaveLength(3);
+    expect(detail.calls[0]).toEqual({
+      id: "t-1",
+      callerE164: "+15550001111",
+      startedAt: "2026-07-03T09:15:00Z",
+      endedAt: "2026-07-03T09:20:00Z",
+      status: "completed",
+      direction: "inbound",
+      callKind: "ai",
+      forwardedTo: null,
+      summary: "Booked a repair.",
+      sentiment: "positive"
+    });
+    expect(detail.calls[1].forwardedTo).toBe("+15559998888");
+    expect(detail.calls[1].sentiment).toBeNull();
+    expect(detail.calls[2].sentiment).toBeNull();
+
+    // The day is sliced [00:00 UTC, next 00:00 UTC) — same bucketing as daily_usage.
+    const transcripts = chains.voice_call_transcripts as {
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+      neq: ReturnType<typeof vi.fn>;
+      limit: ReturnType<typeof vi.fn>;
+    };
+    expect(transcripts.gte).toHaveBeenCalledWith("started_at", "2026-07-03T00:00:00.000Z");
+    expect(transcripts.lt).toHaveBeenCalledWith("started_at", "2026-07-04T00:00:00.000Z");
+    // Missed forwarded calls live in the turned-away count, not the call list.
+    expect(transcripts.neq).toHaveBeenCalledWith("status", "missed");
+    expect(transcripts.limit).toHaveBeenCalledWith(ANALYTICS_DAY_CALL_LIMIT);
+    const logs = chains.system_logs as {
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+    };
+    expect(logs.gte).toHaveBeenCalledWith("created_at", "2026-07-03T00:00:00.000Z");
+    expect(logs.lt).toHaveBeenCalledWith("created_at", "2026-07-04T00:00:00.000Z");
+  });
+
+  it("zero-fills when the day has no usage row, calls, or blocked count", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: null, error: null },
+      system_logs: { count: null, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.usage).toEqual({ calls: 0, sms: 0, voiceMinutes: 0 });
+    expect(detail.calls).toEqual([]);
+    expect(detail.turnedAway).toBe(0);
+    expect(detail.clipped).toBe(false);
+  });
+
+  it("treats null usage columns as zero", async () => {
+    const { client } = makeClient({
+      daily_usage: {
+        data: { calls_made: null, sms_sent: null, voice_minutes_used: null },
+        error: null
+      },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { count: 0, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.usage).toEqual({ calls: 0, sms: 0, voiceMinutes: 0 });
+  });
+
+  it("flags the call list as clipped at the row cap", async () => {
+    const full = Array.from({ length: ANALYTICS_DAY_CALL_LIMIT }, (_, i) => ({
+      ...CALL,
+      id: `t-${i}`
+    }));
+    const { client } = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: full, error: null },
+      system_logs: { count: 0, error: null }
+    });
+    const detail = await getAnalyticsDayDetail("biz-1", DAY, { client });
+    expect(detail.clipped).toBe(true);
+    expect(detail.calls).toHaveLength(ANALYTICS_DAY_CALL_LIMIT);
+  });
+
+  it("throws when the usage lookup errors", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: { message: "u down" } },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { count: 0, error: null }
+    });
+    await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
+      "getAnalyticsDayDetail usage: u down"
+    );
+  });
+
+  it("throws when the call scan errors", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: null, error: { message: "c down" } },
+      system_logs: { count: 0, error: null }
+    });
+    await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
+      "getAnalyticsDayDetail calls: c down"
+    );
+  });
+
+  it("throws when the blocked count errors", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { count: null, error: { message: "b down" } }
+    });
+    await expect(getAnalyticsDayDetail("biz-1", DAY, { client })).rejects.toThrow(
+      "getAnalyticsDayDetail blocked: b down"
+    );
+  });
+
+  it("defaults to the shared client", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { count: 0, error: null }
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    const detail = await getAnalyticsDayDetail("biz-1", DAY);
+    expect(detail.calls).toEqual([]);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });
