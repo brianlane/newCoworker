@@ -169,13 +169,16 @@ function ConditionsView({ conditions }: { conditions: TriggerCondition[] }) {
   );
 }
 
-function WhenView({ when }: { when: StepCondition }) {
+/** "price_band equals \"over_1m\"" — the human reading of a StepCondition. */
+function conditionText(when: StepCondition): string {
   const operator =
     when.equals !== undefined ? "equals" : when.notEquals !== undefined ? "does not equal" : "contains";
   const value = when.equals ?? when.notEquals ?? when.contains ?? "";
-  return (
-    <Row label="Only runs when" value={`${when.var} ${operator} "${value}"`} />
-  );
+  return `${when.var} ${operator} "${value}"`;
+}
+
+function WhenView({ when }: { when: StepCondition }) {
+  return <Row label="Only runs when" value={conditionText(when)} />;
 }
 
 /** The meaningful fields of a single step, rendered read-only. */
@@ -353,6 +356,15 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           )}
           {step.claimedNotifyTemplate && (
             <Row label="Owner notice when claimed" value={step.claimedNotifyTemplate} />
+          )}
+          {step.ownerDirectWhen && step.ownerDirectTemplate && (
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
+              <div className="text-xs font-semibold text-parchment/60">
+                Kept for the owner (no team offer)
+              </div>
+              <Row label="When" value={conditionText(step.ownerDirectWhen)} />
+              <Row label="Owner SMS" value={step.ownerDirectTemplate} />
+            </div>
           )}
           {step.offerWindow && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">

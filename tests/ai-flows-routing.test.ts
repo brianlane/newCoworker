@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  multiOfferHeadsUpLine,
   parseRouting,
   routingOfContext
 } from "../supabase/functions/_shared/ai_flows/routing";
@@ -61,6 +62,20 @@ describe("parseRouting", () => {
   it("preserves unknown/legacy keys at runtime so persisting never drops data", () => {
     const parsed = parseRouting({ offered: "+15550001111", some_future_key: { x: 1 } });
     expect((parsed as Record<string, unknown>).some_future_key).toEqual({ x: 1 });
+  });
+});
+
+describe("multiOfferHeadsUpLine", () => {
+  it("uses the two-offer wording for exactly 2 pending", () => {
+    const line = multiOfferHeadsUpLine(2);
+    expect(line).toContain("2 pending offers");
+    expect(line).toContain('reply "1" twice to take both');
+  });
+
+  it("generalizes for 3+ pending", () => {
+    const line = multiOfferHeadsUpLine(3);
+    expect(line).toContain("3 pending offers");
+    expect(line).toContain('once per offer');
   });
 });
 

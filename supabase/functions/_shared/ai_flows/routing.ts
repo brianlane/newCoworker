@@ -172,3 +172,23 @@ export function routingOfContext(context: Record<string, unknown> | null): Offer
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   return parseRouting(raw);
 }
+
+/**
+ * Warning line prepended to an offer SMS when the recipient ALREADY holds at
+ * least one other live offer, so they know a single digit only answers the
+ * newest one (the Jul 2026 two-leads confusion: Dave replied "1" once and
+ * assumed both were his). `totalPending` counts the offer being sent, so it
+ * is always >= 2 here.
+ */
+export function multiOfferHeadsUpLine(totalPending: number): string {
+  if (totalPending === 2) {
+    return (
+      'Heads up: you now have 2 pending offers. Each "1" claims your newest; ' +
+      'reply "1" twice to take both.'
+    );
+  }
+  return (
+    `Heads up: you now have ${totalPending} pending offers. Each "1" claims ` +
+    'your newest; reply "1" once per offer to take them all.'
+  );
+}

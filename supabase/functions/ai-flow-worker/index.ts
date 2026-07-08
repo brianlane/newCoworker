@@ -82,7 +82,7 @@ import {
   type SpendSupabase
 } from "../_shared/chat_spend_cap.ts";
 import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
-import type { OfferRouting } from "../_shared/ai_flows/routing.ts";
+import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -3116,6 +3116,37 @@ async function routeToTeamStep(
   delete routing.last_event;
   delete routing.reply_from;
 
+  // Keep-for-owner rule (e.g. the $1M+ price band): when the configured
+  // condition matches on FIRST entry — before anyone was ever offered — the
+  // lead is never offered to the team. The owner gets the ownerDirect SMS
+  // with the details, and claimed_agent="none" makes every claim-gated later
+  // step skip (the flow's unclaimed/outcome notify still fires and its
+  // actions_taken line says why). Checked only when offered_log is empty so
+  // a resumed run mid-escalation can never re-branch here.
+  const everOffered = Array.isArray(routing.offered_log) && routing.offered_log.length > 0;
+  if (
+    action.ownerDirectWhen &&
+    action.ownerDirectTemplate &&
+    !everOffered &&
+    tried.length === 0 &&
+    evaluateStepCondition(action.ownerDirectWhen, scope)
+  ) {
+    scope.vars.claimed_agent = "none";
+    const body = renderTemplate(action.ownerDirectTemplate, scope);
+    await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
+    appendActionTaken(
+      scope,
+      `kept for the owner (${action.ownerDirectWhen.var} matched the keep-for-owner rule) — not offered to the team`
+    );
+    await telemetryRecord(supabase, "ai_flow_route_owner_direct", {
+      run_id: run.id,
+      business_id: run.business_id,
+      var: action.ownerDirectWhen.var,
+      value: String(scope.vars[action.ownerDirectWhen.var] ?? "")
+    });
+    return { kind: "ok", result: { routed: "owner_direct" } };
+  }
+
   const leadPhone = leadPhoneE164(scope);
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
     const agent = await pickNextAgent(supabase, run, scope, tried, pinnedAgentName);
@@ -3166,14 +3197,23 @@ async function routeToTeamStep(
     // and a per-agent idempotency key here. The MMS URL is signed fresh per
     // offer so an escalation hours later never carries an expired link.
     const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
+    let offerText = renderTemplate(
+      action.offerTemplate,
+      agentScope(scope, agent, formatInTimeZone(deadlineMs, action.offerWindow?.timezone ?? "UTC"))
+    );
+    // If this teammate ALREADY holds a live offer from another run, lead with
+    // a heads-up: a single "1" only answers the newest offer, so without it
+    // they'd reasonably assume one reply took both leads (the Jul 2026 Dave
+    // two-leads confusion). Best-effort — a count failure never blocks the offer.
+    const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
+    if (alreadyPending > 0) {
+      offerText = `${multiOfferHeadsUpLine(alreadyPending + 1)}\n${offerText}`;
+    }
     return {
       kind: "pause_agent",
       e164: agent.phone,
       respondByMs: Math.max(60_000, deadlineMs - nowMs),
-      offerText: renderTemplate(
-        action.offerTemplate,
-        agentScope(scope, agent, formatInTimeZone(deadlineMs, action.offerWindow?.timezone ?? "UTC"))
-      ),
+      offerText,
       idempotencyKey: `aiflow-offer:${run.id}:${tried.length}`,
       ...(mmsUrl ? { mediaUrls: [mmsUrl] } : {})
     };
@@ -3193,6 +3233,32 @@ async function routeToTeamStep(
   await sendOwnerSms(supabase, run, body, `aiflow-owner-fallback:${run.id}`);
   appendActionTaken(scope, "no agent claimed the lead; handed back to the owner");
   return { kind: "ok", result: { routed: "owner_fallback", tried: tried.length } };
+}
+
+/**
+ * How many OTHER runs of this business currently have a live offer out to
+ * `agentPhone` (status awaiting_agent/queued with routing.offered stamped —
+ * the same bucket the inbound webhook matches replies against). Used for the
+ * multi-offer heads-up line. Best-effort: returns 0 on a query error so a
+ * counting hiccup never blocks the offer itself.
+ */
+async function countOtherLiveOffers(
+  supabase: Supabase,
+  run: RunRow,
+  agentPhone: string
+): Promise<number> {
+  const { count, error } = await supabase
+    .from("ai_flow_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", run.business_id)
+    .in("status", ["awaiting_agent", "queued"])
+    .eq("context->routing->>offered", agentPhone)
+    .neq("id", run.id);
+  if (error) {
+    console.error("countOtherLiveOffers", error);
+    return 0;
+  }
+  return count ?? 0;
 }
 
 /**

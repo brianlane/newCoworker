@@ -713,6 +713,47 @@ describe("planStep: route_to_team", () => {
     ).toBe(false);
   });
 
+  it("carries the keep-for-owner rule through UNRENDERED, trimmed", () => {
+    const r = planStep(
+      {
+        ...base,
+        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+        ownerDirectTemplate: "  Kept for you: {{vars.lead_name}} "
+      },
+      { vars: { lead_name: "Pat" } }
+    );
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.ownerDirectWhen).toEqual({
+      var: "price_band",
+      equals: "over_1m"
+    });
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.ownerDirectTemplate).toBe(
+      "Kept for you: {{vars.lead_name}}"
+    );
+  });
+
+  it("drops a half-configured keep-for-owner rule instead of half-applying it", () => {
+    const onlyWhen = planStep(
+      { ...base, ownerDirectWhen: { var: "price_band", equals: "over_1m" } },
+      {}
+    );
+    expect(
+      onlyWhen.ok && onlyWhen.action.kind === "route_to_team" && "ownerDirectWhen" in onlyWhen.action
+    ).toBe(false);
+    const blankTemplate = planStep(
+      {
+        ...base,
+        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+        ownerDirectTemplate: "   "
+      },
+      {}
+    );
+    expect(
+      blankTemplate.ok &&
+        blankTemplate.action.kind === "route_to_team" &&
+        "ownerDirectTemplate" in blankTemplate.action
+    ).toBe(false);
+  });
+
   it("never carries the removed claimTimeframeOption/lateClaimOption digits", () => {
     // Reply digits are universal ("1" claim, "2" pass); legacy fields on an
     // old stored step type are ignored by planStep, not forwarded.

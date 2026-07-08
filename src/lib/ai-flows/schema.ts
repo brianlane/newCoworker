@@ -544,6 +544,13 @@ const stepSchema = z.discriminatedUnion("type", [
     // can do it first wins. Only a bare "1" yanks; "1, <eta>" from outside the
     // sender's own window never preempts the active countdown.
     firstToClaim: z.boolean().optional(),
+    // Keep-for-owner rule: when ownerDirectWhen matches on first entry (e.g.
+    // price_band equals over_1m for $1M+ leads), the lead is NEVER offered to
+    // the team — the owner is texted ownerDirectTemplate instead and
+    // claimed_agent is set to "none" so claim-gated later steps skip. The two
+    // fields are both-or-neither (validateDefinitionSemantics).
+    ownerDirectWhen: whenSchema.optional(),
+    ownerDirectTemplate: z.string().min(1).max(1600).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -730,7 +737,12 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "http_call":
       return [step.path ?? "", step.bodyTemplate ?? ""];
     case "route_to_team":
-      return [step.offerTemplate, step.ownerFallbackTemplate, step.claimedNotifyTemplate ?? ""];
+      return [
+        step.offerTemplate,
+        step.ownerFallbackTemplate,
+        step.claimedNotifyTemplate ?? "",
+        step.ownerDirectTemplate ?? ""
+      ];
     case "browse_action":
       return step.actions.map((a) => a.valueTemplate ?? "");
     case "email_extract":
@@ -1162,6 +1174,24 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (step.agentRef && step.agentRef.source !== "employee") {
         issues.push(
           `Step "${step.id}" routes to a contact, but route_to_team can only pin a team member; use an employee reference.`
+        );
+      }
+      // The keep-for-owner rule is a pair: a condition without the owner SMS
+      // (or vice versa) would silently do nothing, so reject half a rule.
+      if (Boolean(step.ownerDirectWhen) !== Boolean(step.ownerDirectTemplate)) {
+        issues.push(
+          `Step "${step.id}" must set ownerDirectWhen and ownerDirectTemplate together (the keep-for-owner rule needs both the condition and the owner SMS).`
+        );
+      }
+      // Same scope rule as `when`: the condition may only reference a var an
+      // EARLIER step produced.
+      if (
+        step.ownerDirectWhen &&
+        !vars.has(step.ownerDirectWhen.var) &&
+        !ENGINE_VARS.has(step.ownerDirectWhen.var)
+      ) {
+        issues.push(
+          `Step "${step.id}" has an ownerDirectWhen condition on {{vars.${step.ownerDirectWhen.var}}} which no earlier step produces.`
         );
       }
     }
