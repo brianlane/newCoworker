@@ -388,22 +388,35 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
 /* c8 ignore stop */
 
 /**
- * Placeholder provisioner for providers whose purchase/enrollment path is
- * not wired into the orchestrator yet. BYOS boxes are enrolled through the
- * admin SSH-handover flow (which injects its own provisioner); OVH purchase
- * support lands with the OVH client. Reaching this thrower means a
- * non-hostinger business hit the generic purchase path — fail loudly with
- * the next step instead of silently buying a Hostinger box for a tenant
- * whose deal requires their own / Canadian hardware.
+ * Placeholder provisioner for providers that have no generic purchase path.
+ * BYOS boxes are enrolled through the admin SSH-handover flow (which
+ * injects its own provisioner) — reaching this thrower means a BYOS
+ * business hit the generic purchase path. Fail loudly with the next step
+ * instead of silently buying a box for a tenant who supplies their own.
  */
 function unavailableProviderProvisioner(provider: VpsProvider): VpsProvisioner {
   return async () => {
     throw new Error(
       `No default VPS provisioner for provider '${provider}': ` +
-        (provider === "byos"
-          ? "BYOS boxes are enrolled via the admin SSH-handover flow, not the purchase path."
-          : "OVH purchase support is not wired yet — inject a vpsProvisioner.")
+        "BYOS boxes are enrolled via the admin SSH-handover flow, not the purchase path."
     );
+  };
+}
+
+/**
+ * Default OVH (Canada / Beauharnois) provisioner. Lazily constructed on
+ * first call so that (a) the OVH client module stays out of the module
+ * graph for the 99% of provisions that are Hostinger, and (b) missing
+ * OVH_* env vars fail THIS provision loudly instead of throwing during the
+ * eager fallback selection and breaking every provider's provisioning.
+ */
+function defaultOvhProvisioner(): VpsProvisioner {
+  return async (input) => {
+    const [{ makeOvhProvisioner }, { ovhClientFromEnv }] = await Promise.all([
+      import("@/lib/ovh/provision"),
+      import("@/lib/ovh/client")
+    ]);
+    return makeOvhProvisioner({ client: ovhClientFromEnv() })(input);
   };
 }
 
@@ -798,14 +811,16 @@ async function runOrchestrator(
     });
 
   // Default provisioner selection keys on the provider: hostinger gets the
-  // real purchase path; byos/ovh get a loud thrower until their enrollment/
-  // purchase provisioners land (those flows — and tests — inject
-  // vpsProvisioner). Selected eagerly so the provider branch is exercised
-  // on every run; the factories themselves are cheap closures.
-  /* c8 ignore start -- selection of the production default; tests inject vpsProvisioner (the thrower itself IS executed by the no-injection tests) */
+  // Hostinger purchase path, ovh gets the lazy OVH (Beauharnois) purchase
+  // path, and byos gets a loud thrower (enrollment injects its own
+  // provisioner). Selected eagerly so the provider branch is exercised on
+  // every run; the factories themselves are cheap closures.
+  /* c8 ignore start -- selection of the production default; tests inject vpsProvisioner (the ovh/byos fallbacks ARE executed by the no-injection tests) */
   const fallbackProvisioner = providerUsesHostingerLifecycle(vpsProvider)
     ? defaultVpsProvisioner(hostinger)
-    : unavailableProviderProvisioner(vpsProvider);
+    : vpsProvider === "ovh"
+      ? defaultOvhProvisioner()
+      : unavailableProviderProvisioner(vpsProvider);
   /* c8 ignore stop */
   const vpsProvisioner = deps?.vpsProvisioner ?? fallbackProvisioner;
   /* c8 ignore next -- defaultVpsAdopter is the production path; tests inject vpsAdopter */

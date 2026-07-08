@@ -215,6 +215,52 @@ describe("loadLifecycleContextForBusiness", () => {
     });
   });
 
+  it("ovh: carries the service name from the generic box-id column (non-ovh gets null)", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      customer_profile_id: null,
+      hostinger_vps_id: "vps-abc.vps.ovh.ca",
+      vps_provider: "ovh"
+    });
+    getActiveVpsSshKeyForBusinessMock.mockResolvedValueOnce({ host: "203.0.113.9" });
+    const ovh = await loadLifecycleContextForBusiness("biz-1");
+    expect(ovh).toEqual({
+      ok: true,
+      vpsHost: "203.0.113.9",
+      context: expect.objectContaining({
+        vpsProvider: "ovh",
+        ovhServiceName: "vps-abc.vps.ovh.ca",
+        virtualMachineId: null
+      })
+    });
+
+    // Hostinger tenant: ovhServiceName stays null.
+    const hostinger = await loadLifecycleContextForBusiness("biz-1");
+    expect(hostinger).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ ovhServiceName: null })
+    });
+  });
+
+  it("ovh: a box-id-less row yields a null service name", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      customer_profile_id: null,
+      hostinger_vps_id: null,
+      vps_provider: "ovh"
+    });
+    getActiveVpsSshKeyForBusinessMock.mockResolvedValueOnce(null);
+    const res = await loadLifecycleContextForBusiness("biz-1");
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: null,
+      context: expect.objectContaining({ ovhServiceName: null })
+    });
+  });
+
   it("byos: tolerates a missing key row, a host-less row, and lookup failures (Error and non-Error)", async () => {
     const byosBusiness = {
       id: "biz-1",

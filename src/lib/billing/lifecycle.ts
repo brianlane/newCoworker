@@ -208,9 +208,27 @@ export type EmailOp =
       vmState: string;
     };
 
+/**
+ * OVH-side lifecycle ops (platform-owned Canada boxes). Optional on the
+ * plan so the vast majority of (Hostinger) plans — and their test
+ * fixtures — never mention it.
+ */
+export type OvhOp = {
+  /**
+   * Stop paying for the OVH box: flip the service to delete-at-expiration.
+   * OVH's analog of Hostinger's disable-billing-auto-renewal — immediate
+   * termination requires an emailed confirmation token, so the automated
+   * lever is "lapse at period end". Idempotent (re-flipping is a no-op).
+   */
+  type: "ovh_delete_at_expiration";
+  serviceName: string;
+};
+
 export type LifecyclePlan = {
   stripeOps: StripeOp[];
   hostingerOps: HostingerOp[];
+  /** Present only on plans for `vps_provider='ovh'` tenants. */
+  ovhOps?: OvhOp[];
   sshOps: SshOp[];
   telnyxOps: TelnyxOp[];
   dbUpdates: DbUpdateOp[];
@@ -271,6 +289,12 @@ export type LifecycleContext = {
    * applies (any reachable box can be backed up).
    */
   vpsProvider?: string | null;
+  /**
+   * OVH service name (from `businesses.hostinger_vps_id` — the generic box
+   * id column) when the provider is 'ovh'. Drives the
+   * `ovh_delete_at_expiration` op; null/omitted skips it.
+   */
+  ovhServiceName?: string | null;
   /** Public IPv4 for the SSH backup/restore. Null → SSH ops omitted. */
   vpsHost: string | null;
   /**
@@ -610,6 +634,15 @@ function planGraceExpiredWipe(ctx: LifecycleContext): LifecyclePlanResult {
     });
   }
 
+  // OVH backstop: re-flip delete-at-expiration in case the cancel path that
+  // produced this grace row skipped it (manual Stripe cancel, failed
+  // dispatch). Idempotent, same rationale as the Hostinger backstop below.
+  if (vpsProvider === "ovh" && ctx.ovhServiceName) {
+    plan.ovhOps = [
+      { type: "ovh_delete_at_expiration", serviceName: ctx.ovhServiceName }
+    ];
+  }
+
   // Backstop teardown: if the cancel path that produced this grace row
   // skipped the VPS teardown (e.g. manual operator cancel in the Stripe
   // Dashboard, or an `autoCancelOnPaymentFailure` dispatch that failed
@@ -766,9 +799,8 @@ function buildCancelPlan(args: {
   const graceEndsAtIso = new Date(now.getTime() + graceMs).toISOString();
   // Non-hostinger boxes (BYOS / OVH) skip every Hostinger-specific op —
   // see the LifecycleContext.vpsProvider docstring.
-  const hostingerManaged = providerUsesHostingerLifecycle(
-    resolveVpsProvider(ctx.vpsProvider)
-  );
+  const cancelVpsProvider = resolveVpsProvider(ctx.vpsProvider);
+  const hostingerManaged = providerUsesHostingerLifecycle(cancelVpsProvider);
 
   const plan: LifecyclePlan = {
     stripeOps: [],
@@ -778,6 +810,14 @@ function buildCancelPlan(args: {
     dbUpdates: [],
     emailsToSend: []
   };
+
+  // OVH box: stop paying by flipping delete-at-expiration (the automated
+  // analog of Hostinger's disable-auto-renew below).
+  if (cancelVpsProvider === "ovh" && ctx.ovhServiceName) {
+    plan.ovhOps = [
+      { type: "ovh_delete_at_expiration", serviceName: ctx.ovhServiceName }
+    ];
+  }
 
   // Stripe side: refund (if eligible) before cancel, so we're cancelling a
   // subscription whose charge we already clawed back.

@@ -1078,6 +1078,61 @@ describe("planLifecycleAction: provider axis (BYOS / OVH skip Hostinger lifecycl
     expect(ovh.plan.sshOps.some((op) => op.type === "wipe_byos_box")).toBe(false);
   });
 
+  it("ovh cancel emits delete-at-expiration (and skips it without a service name)", () => {
+    const withName = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsProvider: "ovh", ovhServiceName: "vps-abc.vps.ovh.ca" })
+    );
+    if (!withName.ok) throw new Error(`expected ok, got ${withName.reason}`);
+    expect(withName.plan.ovhOps).toEqual([
+      { type: "ovh_delete_at_expiration", serviceName: "vps-abc.vps.ovh.ca" }
+    ]);
+    // Hostinger ops stay skipped; SSH backup still runs.
+    expect(withName.plan.hostingerOps).toEqual([]);
+    expect(withName.plan.sshOps).toEqual([
+      { type: "backup_durable_data", businessId: "biz-1", vpsHost: "1.2.3.4" }
+    ]);
+
+    const withoutName = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ vpsProvider: "ovh", ovhServiceName: null })
+    );
+    if (!withoutName.ok) throw new Error(`expected ok, got ${withoutName.reason}`);
+    expect(withoutName.plan.ovhOps).toBeUndefined();
+
+    // Non-ovh providers never carry ovhOps, even with a service name set.
+    const hostingerPlan = planLifecycleAction(
+      { type: "cancelWithRefund" },
+      makeCtx({ ovhServiceName: "vps-abc.vps.ovh.ca" })
+    );
+    if (!hostingerPlan.ok) throw new Error(`expected ok, got ${hostingerPlan.reason}`);
+    expect(hostingerPlan.plan.ovhOps).toBeUndefined();
+  });
+
+  it("ovh grace-expired wipe re-emits delete-at-expiration as a backstop", () => {
+    const wipeSub = makeSub({
+      status: "canceled",
+      grace_ends_at: "2026-04-01T00:00:00.000Z",
+      wiped_at: null,
+      cancel_reason: "payment_failed"
+    });
+    const res = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ vpsProvider: "ovh", ovhServiceName: "vps-abc.vps.ovh.ca", subscription: wipeSub })
+    );
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    expect(res.plan.ovhOps).toEqual([
+      { type: "ovh_delete_at_expiration", serviceName: "vps-abc.vps.ovh.ca" }
+    ]);
+
+    const noName = planLifecycleAction(
+      { type: "graceExpiredWipe" },
+      makeCtx({ vpsProvider: "ovh", ovhServiceName: null, subscription: wipeSub })
+    );
+    if (!noName.ok) throw new Error(`expected ok, got ${noName.reason}`);
+    expect(noName.plan.ovhOps).toBeUndefined();
+  });
+
   it("a corrupt provider value resolves to hostinger (full lifecycle preserved)", () => {
     const res = planLifecycleAction(
       { type: "cancelWithRefund" },

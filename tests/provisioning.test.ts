@@ -2442,19 +2442,44 @@ describe("provisioning/orchestrate", () => {
       ).rejects.toThrow(/No default VPS provisioner for provider 'byos'.*SSH-handover/);
     });
 
-    it("ovh without an injected provisioner fails loudly with the OVH-specific message", async () => {
+    it("ovh without an injected provisioner routes to the lazy OVH default (env-gated)", async () => {
       vi.mocked(getBusiness).mockResolvedValue({
         business_type: "real_estate",
         tier: "enterprise",
         vps_provider: "ovh"
       } as never);
+      // No OVH_* env in the test process: the lazy default constructs the
+      // client on first call and fails THIS provision loudly with the
+      // missing-env message (instead of silently buying a Hostinger box).
+      delete process.env.OVH_APP_KEY;
+      delete process.env.OVH_APP_SECRET;
+      delete process.env.OVH_CONSUMER_KEY;
 
       await expect(
         orchestrateProvisioning(
           { businessId: "biz-ovh-1", tier: "enterprise" },
           { remoteExec: vi.fn(), vpsPool: null }
         )
-      ).rejects.toThrow(/No default VPS provisioner for provider 'ovh'.*not wired yet/);
+      ).rejects.toThrow(/OVH client requires OVH_APP_KEY/);
+    });
+
+    it("ovh with an injected provisioner provisions without touching the Hostinger pool", async () => {
+      vi.mocked(getBusiness).mockResolvedValue({
+        business_type: "real_estate",
+        tier: "enterprise",
+        vps_provider: "ovh"
+      } as never);
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("888"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const vpsPool = { claim: vi.fn(), record: vi.fn(), release: vi.fn(), retire: vi.fn() };
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-ovh-2", tier: "enterprise", ownerEmail: "o@test.com" },
+        { vpsProvisioner, remoteExec, vpsPool }
+      );
+      expect(result.vpsId).toBe("888");
+      expect(vpsPool.claim).not.toHaveBeenCalled();
+      expect(vpsPool.record).not.toHaveBeenCalled();
     });
   });
 });
