@@ -23,13 +23,33 @@ Zap editor come from `GET /api/public/v1/events?event=…`.
 
 ## Development
 
+The CLI ships as `zapier-platform-cli` (a devDependency here) and its binary
+is `zapier-platform` — plain `npx zapier` does NOT work.
+
 ```bash
 cd zapier
 npm install
-npm test                # node --test test/
-npx zapier validate     # schema check (requires zapier login)
-npx zapier push         # deploy a new version
+npm test                          # node --test test/
+npx zapier-platform validate      # schema check (no login needed)
+npx zapier-platform push          # deploy a new version (requires login + link)
 ```
+
+### One-time account setup (publishing)
+
+The integration lives under the NewCoworker Zapier developer account —
+pushing uploads the app definition to Zapier's platform, so it needs that
+account's credentials once per machine:
+
+```bash
+npx zapier-platform login         # browser auth; writes ~/.zapierrc
+npx zapier-platform register      # FIRST TIME ONLY: creates the app + .zapierapprc
+npx zapier-platform push
+```
+
+`.zapierapprc` (created by register/link) should be committed so later
+machines only need `login` + `push`. Until the app is pushed and either
+shared by invite or published to the App Directory, tenants cannot find
+"NewCoworker" inside Zapier.
 
 `BASE_URL` defaults to `https://www.newcoworker.com`; point a version at a
 preview deployment with `zapier env:set <version> BASE_URL=https://…`.
