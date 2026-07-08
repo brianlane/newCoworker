@@ -60,6 +60,17 @@ export const CALENDAR_POLL_MAX_EVENTS = 100;
 /** Page size for the flow listing — paged so no flow is silently skipped. */
 export const CALENDAR_POLL_FLOW_PAGE = 100;
 
+/**
+ * Extra minutes added to the event_start fetch window beyond the largest
+ * leadMinutes. Both providers treat the window's upper bound as EXCLUSIVE, so
+ * an event starting exactly at `now + lead` — precisely the moment it first
+ * becomes due — would otherwise be omitted from the listing until a later
+ * tick (and with a 1-minute lead, never listed while still due). The due
+ * check (eventStartDue) still gates enqueueing, so the buffer only widens
+ * what is read, not what fires.
+ */
+export const CALENDAR_START_HORIZON_BUFFER_MINUTES = 5;
+
 type CalendarSource = "primary" | "shared";
 
 type CalendarFlow = {
@@ -437,7 +448,11 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           .filter((f) => f.on === "event_start" && f.sources.includes(source))
           .map((f) => f.leadMinutes);
         if (leads.length > 0) {
-          const fetched = await fetchUpcoming(target, nowMs, Math.max(...leads));
+          const fetched = await fetchUpcoming(
+            target,
+            nowMs,
+            Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+          );
           push(fetched.events);
           overflowed ||= fetched.overflowed;
         }

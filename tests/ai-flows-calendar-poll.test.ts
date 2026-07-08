@@ -10,6 +10,7 @@ vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 import {
   CALENDAR_CREATED_LOOKBACK_MINUTES,
   CALENDAR_POLL_MAX_EVENTS,
+  CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
   eventCreatedDue,
   eventStartDue,
@@ -391,6 +392,21 @@ describe("pollCalendarTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Upcoming calendar event") })
     );
+  });
+
+  it("widens the upcoming fetch window past the lead (exclusive provider bounds)", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+    const before = Date.now();
+    await pollCalendarTriggers(dbWith([flowRow("f1", startTrigger(30))]));
+    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const timeMax = decodeURIComponent(/timeMax=([^&]+)/.exec(endpoint)![1]);
+    const horizonMinutes = (Date.parse(timeMax) - before) / 60_000;
+    // 30-min lead + the exclusive-bound buffer, so an event starting exactly
+    // at now + lead (first tick it is due) is still listed.
+    expect(horizonMinutes).toBeGreaterThanOrEqual(
+      30 + CALENDAR_START_HORIZON_BUFFER_MINUTES - 0.1
+    );
+    expect(horizonMinutes).toBeLessThan(30 + CALENDAR_START_HORIZON_BUFFER_MINUTES + 1);
   });
 
   it("is a quiet no-op for a shared-only flow when the shared calendar does not exist", async () => {
