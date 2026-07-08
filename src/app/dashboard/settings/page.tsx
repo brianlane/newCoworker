@@ -11,6 +11,9 @@ import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
 import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
+import { TeamAccessManager } from "@/components/dashboard/TeamAccessManager";
+import { listBusinessMembers } from "@/lib/db/business-members";
+import { listTeamMembers } from "@/lib/db/employees";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
 import {
@@ -51,6 +54,13 @@ export default async function SettingsPage() {
       ? await getTenantMailbox(business.id)
       : await ensureTenantMailbox(business.id)
     : null;
+  // Team access is enterprise-only; fetch the roster (and the employee list
+  // for the optional person-profile link) only when the card will render.
+  const isEnterprise = business?.tier === "enterprise";
+  const [teamMembers, employees] =
+    business && isEnterprise
+      ? await Promise.all([listBusinessMembers(business.id), listTeamMembers(business.id)])
+      : [[], []];
   // Same rolling next-charge date the Billing page shows (Stripe's
   // current_period_end, cached and webhook-advanced; see resolveActiveRenewalDate).
   const nextBillingAt =
@@ -149,6 +159,21 @@ export default async function SettingsPage() {
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
+      )}
+
+      {business && isEnterprise && (
+        <TeamAccessManager
+          businessId={business.id}
+          initialMembers={teamMembers.map((m) => ({
+            id: m.id,
+            email: m.email,
+            role: m.role,
+            status: m.status,
+            created_at: m.created_at,
+            employee_id: m.employee_id
+          }))}
+          employees={employees.map((e) => ({ id: e.id, name: e.name }))}
+        />
       )}
 
       <Card>

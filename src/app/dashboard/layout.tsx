@@ -7,6 +7,7 @@ import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import type { CancelReason, SubscriptionRow } from "@/lib/db/subscriptions";
 import { GraceBanner } from "@/components/billing/GraceBanner";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
+import { bindBusinessMemberUser } from "@/lib/db/business-members";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
 
@@ -63,6 +64,16 @@ export default async function DashboardLayout({ children }: { children: React.Re
     // any) must not be reconciled onto the impersonated tenant's business.
     if (!viewAs && user.email) {
       await reconcilePendingEmailChange(user.userId, user.email, db);
+      // First-login binding for team invites: flip INVITED business_members
+      // rows addressed to this email to active with the auth user id stamped.
+      // Same layout-render-write precedent as reconcilePendingEmailChange —
+      // a cheap indexed no-op for everyone without a pending invite. Best-
+      // effort: a hiccup here must never take down the dashboard.
+      try {
+        await bindBusinessMemberUser(user.userId, user.email, db);
+      } catch {
+        // Next render retries; membership stays 'invited' meanwhile.
+      }
     }
     const { data: businesses } = await db
       .from("businesses")
