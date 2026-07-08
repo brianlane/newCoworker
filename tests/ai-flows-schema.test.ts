@@ -977,6 +977,16 @@ describe("summarizeDefinition", () => {
         steps
       })
     ).toBe("When AI mailbox email matches 1 condition(s): notify_owner");
+    expect(
+      summarizeDefinition({ version: 1, trigger: { channel: "webhook", conditions: [] }, steps })
+    ).toBe("When any webhook event arrives: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "webhook", conditions: [{ type: "has_url" }] },
+        steps
+      })
+    ).toBe("When a webhook event matches 1 condition(s): notify_owner");
   });
 });
 
@@ -1075,6 +1085,18 @@ describe("trigger channels", () => {
     expect(def.trigger.channel).toBe("tenant_email");
     // tenant_email has no connectionId field; an extra one is stripped, not stored.
     expect("connectionId" in def.trigger).toBe(false);
+  });
+
+  it("accepts a webhook trigger (push from the public API; conditions only)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "webhook", conditions: [{ type: "from_matches", value: "facebook" }] },
+      steps
+    });
+    expect(def.trigger.channel).toBe("webhook");
+    expect(() =>
+      parseAiFlowDefinition({ version: 1, trigger: { channel: "webhook" }, steps })
+    ).toThrow(AiFlowValidationError);
   });
 
   it("steps in non-SMS flows may still reference {{trigger.x}} scope keys", () => {

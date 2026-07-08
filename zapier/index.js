@@ -5,6 +5,7 @@ const { version: platformVersion } = require("zapier-platform-core");
 const authentication = require("./authentication");
 const triggers = require("./triggers");
 const sendSms = require("./creates/send-sms");
+const sendLead = require("./creates/send-lead");
 
 module.exports = {
   version,
@@ -19,7 +20,8 @@ module.exports = {
     [triggers.emailInbound.key]: triggers.emailInbound
   },
   creates: {
-    [sendSms.key]: sendSms
+    [sendSms.key]: sendSms,
+    [sendLead.key]: sendLead
   },
   searches: {},
   resources: {}

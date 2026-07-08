@@ -13,6 +13,7 @@ public REST API (`/api/public/v1/*`) using per-tenant API keys minted on
 | Trigger | `call_completed` | REST hook — a handled call ended (summary + sentiment)  |
 | Trigger | `email_inbound`  | REST hook — AI mailbox received an email                |
 | Action  | `send_sms`       | Send an SMS from the tenant's number (metered, logged)  |
+| Action  | `send_lead`      | Send a lead/event that starts webhook-triggered AiFlows (e.g. Meta Lead Ads → coworker) |
 
 Triggers are REST hooks: on Zap enable, Zapier POSTs
 `/api/public/v1/hooks { event, target_url }`; the `webhook-dispatcher`
