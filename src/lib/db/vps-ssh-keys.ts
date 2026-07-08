@@ -175,6 +175,26 @@ export async function reassignVpsSshKeyBusiness(
 }
 
 /**
+ * Update the persisted placement (host + region) of a key row. Only
+ * meaningful for byos/ovh rows, whose host has no live provider lookup —
+ * used by the BYOS re-prepare path when the operator corrects the address
+ * or the region. Both fields are written together so the row can never
+ * describe a Canadian tenant on a key still labeled 'us' (or vice versa).
+ */
+export async function updateVpsSshKeyPlacement(
+  id: string,
+  placement: { host: string; region: string },
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("vps_ssh_keys")
+    .update({ host: placement.host, region: placement.region })
+    .eq("id", id);
+  if (error) throw new Error(`updateVpsSshKeyPlacement: ${error.message}`);
+}
+
+/**
  * Retire a key row by stamping `rotated_at`. Required before inserting a
  * replacement row for the same VPS: the `vps_ssh_keys_one_active_per_vps`
  * partial unique index allows only one active (rotated_at IS NULL) row per

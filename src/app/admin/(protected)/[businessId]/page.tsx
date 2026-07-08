@@ -31,10 +31,13 @@ import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
+import { ByosEnrollmentPanel } from "@/components/admin/ByosEnrollmentPanel";
 import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
 import { EnterpriseBillingPanel } from "@/components/admin/EnterpriseBillingPanel";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
+import { byosBoxId } from "@/lib/provisioning/byos";
+import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 
 export const dynamic = "force-dynamic";
 
@@ -73,6 +76,21 @@ export default async function BusinessDetailPage({
   ]);
 
   if (!business) notFound();
+
+  // BYOS enrollment state (enterprise only): the active key row for the
+  // byos-<businessId> sentinel box. Only SAFE fields cross into the client
+  // component — never private_key_pem.
+  const byosKeyRow =
+    business.tier === "enterprise" ? await getActiveVpsSshKey(byosBoxId(businessId)) : null;
+  const byosEnrollment =
+    byosKeyRow && byosKeyRow.host
+      ? {
+          host: byosKeyRow.host,
+          publicKey: byosKeyRow.public_key,
+          fingerprintSha256: byosKeyRow.fingerprint_sha256,
+          region: byosKeyRow.region
+        }
+      : null;
 
   const systemLogById = new Map(
     [...recentSystemLogs, ...problemSystemLogs].map((row) => [row.id, row])
@@ -176,6 +194,22 @@ export default async function BusinessDetailPage({
       {business.tier === "enterprise" && (
         <Card>
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Bring your own server (SSH handover)
+          </h2>
+          <ByosEnrollmentPanel
+            // Remount on tenant or enrollment change so useState re-seeds.
+            key={`${businessId}:${business.vps_provider ?? "hostinger"}:${byosEnrollment?.host ?? ""}`}
+            businessId={businessId}
+            initialProvider={business.vps_provider ?? "hostinger"}
+            initialRegion={business.vps_region ?? "us"}
+            initialEnrollment={byosEnrollment}
+          />
+        </Card>
+      )}
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
             Data residency
           </h2>
           <ResidencyPanel
@@ -262,24 +296,38 @@ export default async function BusinessDetailPage({
               {resolveDeployedVpsSize(business.tier, business.vps_size)}
             </dd>
           </div>
+          <div>
+            <dt className="text-parchment/40 text-xs">Provider / region</dt>
+            <dd className="text-parchment font-mono">
+              {business.vps_provider ?? "hostinger"} · {business.vps_region ?? "us"}
+            </dd>
+          </div>
         </dl>
         {!business.hostinger_vps_id &&
           subscription?.status === "active" &&
-          business.status !== "wiped" && (
+          business.status !== "wiped" &&
+          (business.vps_provider ?? "hostinger") !== "byos" && (
             <div className="mb-4">
               {/* Active subscription but no box yet — the admin-created
                   enterprise path lands here (create-client writes an active
-                  Stripe-less subscription without provisioning). */}
+                  Stripe-less subscription without provisioning). Hidden for
+                  BYOS tenants: their provisioning path is the SSH-handover
+                  card above (skip-payment would run the generic purchase
+                  orchestrator, which fails closed for byos). */}
               <SkipPaymentButton businessId={businessId} label="Provision VPS" />
             </div>
           )}
-        {business.hostinger_vps_id && (
-          <HardwareSizePanel
-            businessId={businessId}
-            currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
-            pinned={business.vps_size != null}
-          />
-        )}
+        {business.hostinger_vps_id &&
+          (business.vps_provider ?? "hostinger") === "hostinger" && (
+            /* Hardware migration is a Hostinger purchase/teardown flow —
+               migrate-vps-size fails closed for BYOS/OVH tenants, so don't
+               offer the panel for them (resize happens provider-side). */
+            <HardwareSizePanel
+              businessId={businessId}
+              currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
+              pinned={business.vps_size != null}
+            />
+          )}
       </Card>
 
       {/* Voice / SMS DID */}

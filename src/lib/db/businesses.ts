@@ -5,6 +5,11 @@ import {
   assertResidencyModeAllowed,
   type DataResidencyMode
 } from "@/lib/residency/tier-gate";
+import {
+  assertVpsProviderAllowed,
+  type VpsProvider,
+  type VpsRegion
+} from "@/lib/vps/provider";
 import { createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { attachProspectWhiteGloveOffersToBusiness } from "@/lib/db/white-glove-offers";
 
@@ -285,6 +290,31 @@ export async function updateBusinessVpsSize(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ vps_size: vpsSize }).eq("id", id);
   if (error) throw new Error(`updateBusinessVpsSize: ${error.message}`);
+}
+
+/**
+ * Pin (or revert) the provider/region axis for a business. Non-hostinger
+ * providers are enterprise-only — the gate runs server-side here so every
+ * caller (admin route, future flows) is covered, same pattern as
+ * updateDataResidencyMode. Reverting to 'hostinger' is always allowed so a
+ * downgraded tenant can never be wedged on a provider its plan no longer
+ * supports.
+ */
+export async function updateBusinessVpsProvider(
+  id: string,
+  provider: VpsProvider,
+  region: VpsRegion,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const business = await getBusiness(id, db);
+  if (!business) throw new Error(`updateBusinessVpsProvider: business ${id} not found`);
+  assertVpsProviderAllowed(provider, business.tier);
+  const { error } = await db
+    .from("businesses")
+    .update({ vps_provider: provider, vps_region: region })
+    .eq("id", id);
+  if (error) throw new Error(`updateBusinessVpsProvider: ${error.message}`);
 }
 
 /**
