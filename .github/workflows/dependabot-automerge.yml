@@ -55,9 +55,11 @@ jobs:
               --state open --json number --jq '.[0].number // empty')
           else
             # status event: the payload has no branch, so find the open PR
-            # whose head commit is this sha.
-            PR_NUMBER=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" \
-              --jq '[.[] | select(.state == "open")][0].number // empty')
+            # whose head commit is this sha. The endpoint lists every PR
+            # associated with the commit, so filter to PRs headed by it.
+            PR_NUMBER=$(gh api "repos/$REPO/commits/$HEAD_SHA/pulls" |
+              jq -r --arg sha "$HEAD_SHA" \
+                '[.[] | select(.state == "open" and .head.sha == $sha)][0].number // empty')
           fi
           if [ -z "$PR_NUMBER" ]; then
             echo "No open PR for $HEAD_SHA (branch: ${HEAD_BRANCH:-<none>}); nothing to do."
