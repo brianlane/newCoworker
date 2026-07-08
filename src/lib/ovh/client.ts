@@ -294,7 +294,11 @@ export class OvhClient {
       serviceId: infos.serviceId,
       renew: {
         ...(infos.renew ?? {}),
-        automatic: !deleteAtExpiration && (infos.renew?.automatic ?? true),
+        // The two flags are one intent here: lapse (delete-at-expiration ON,
+        // auto-renew OFF) or keep alive (the inverse). Deriving `automatic`
+        // from the stored value would strand a re-enabled service with
+        // auto-renew still off after an earlier lapse flip.
+        automatic: !deleteAtExpiration,
         deleteAtExpiration
       }
     });

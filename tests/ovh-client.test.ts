@@ -270,14 +270,15 @@ describe("OvhClient endpoints", () => {
     expect(confirm.init.body).toContain('"reason":"OTHER"');
   });
 
-  it("re-enabling renewal keeps automatic renew on", async () => {
+  it("re-enabling renewal restores auto-renew even after an earlier lapse flip", async () => {
     const captured: Captured[] = [];
     const fetchImpl = makeFetch({
       captured,
       routes: {
         "GET /vps/vps-a/serviceInfos": {
-          // No renew block at all — the ?? fallbacks must fill it in.
-          body: { serviceId: 11 }
+          // Stored state after a cancel flip: auto-renew OFF. Re-enabling
+          // must NOT inherit it — the intent is "keep the box alive".
+          body: { serviceId: 11, renew: { automatic: false, deleteAtExpiration: true } }
         },
         "PUT /vps/vps-a/serviceInfos": { status: 200, text: "" }
       }
@@ -286,6 +287,21 @@ describe("OvhClient endpoints", () => {
     const put = captured.find((c) => c.init.method === "PUT");
     expect(put?.init.body).toContain('"automatic":true');
     expect(put?.init.body).toContain('"deleteAtExpiration":false');
+  });
+
+  it("tolerates a serviceInfos response with no renew block at all", async () => {
+    const captured: Captured[] = [];
+    const fetchImpl = makeFetch({
+      captured,
+      routes: {
+        "GET /vps/vps-a/serviceInfos": { body: { serviceId: 11 } },
+        "PUT /vps/vps-a/serviceInfos": { status: 200, text: "" }
+      }
+    });
+    await makeClient(fetchImpl).setDeleteAtExpiration("vps-a", true);
+    const put = captured.find((c) => c.init.method === "PUT");
+    expect(put?.init.body).toContain('"automatic":false');
+    expect(put?.init.body).toContain('"deleteAtExpiration":true');
   });
 });
 
