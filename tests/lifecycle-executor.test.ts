@@ -576,6 +576,53 @@ describe("executeLifecyclePlan refund handling", () => {
     });
   });
 
+  it("dispatches ovh delete-at-expiration through the injected OVH client", async () => {
+    const setDeleteAtExpiration = vi.fn().mockResolvedValue(undefined);
+    await executeLifecyclePlan(
+      {
+        stripeOps: [],
+        telnyxOps: [],
+        hostingerOps: [],
+        ovhOps: [{ type: "ovh_delete_at_expiration", serviceName: "vps-abc.vps.ovh.ca" }],
+        sshOps: [],
+        dbUpdates: [],
+        emailsToSend: []
+      },
+      { businessId: "biz_ovh", vpsHost: null },
+      { stripe: {} as never, ovh: { setDeleteAtExpiration } }
+    );
+    expect(setDeleteAtExpiration).toHaveBeenCalledWith("vps-abc.vps.ovh.ca", true);
+  });
+
+  it("slow phase logs (but survives) ovh op failures — Error and non-Error", async () => {
+    const setDeleteAtExpiration = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ovh 403"))
+      .mockRejectedValueOnce("plain string failure");
+    const plan = {
+      stripeOps: [],
+      telnyxOps: [],
+      hostingerOps: [],
+      ovhOps: [
+        { type: "ovh_delete_at_expiration" as const, serviceName: "vps-abc.vps.ovh.ca" }
+      ],
+      sshOps: [],
+      dbUpdates: [],
+      emailsToSend: []
+    };
+    await executeLifecyclePlanSlowPhase(plan, {}, {
+      hostinger: {} as never,
+      sendEmail: vi.fn(),
+      ovh: { setDeleteAtExpiration }
+    });
+    await executeLifecyclePlanSlowPhase(plan, {}, {
+      hostinger: {} as never,
+      sendEmail: vi.fn(),
+      ovh: { setDeleteAtExpiration }
+    });
+    expect(setDeleteAtExpiration).toHaveBeenCalledTimes(2);
+  });
+
   it("dispatches the ops VPS deletion request to the ops inbox", async () => {
     const opsPlan: LifecyclePlan = {
       stripeOps: [],

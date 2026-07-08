@@ -32,6 +32,7 @@ import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
 import { ByosEnrollmentPanel } from "@/components/admin/ByosEnrollmentPanel";
+import { VpsProviderPanel } from "@/components/admin/VpsProviderPanel";
 import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
 import { EnterpriseBillingPanel } from "@/components/admin/EnterpriseBillingPanel";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
@@ -189,6 +190,21 @@ export default async function BusinessDetailPage({
             businessId={businessId}
             effectiveLimits={getTierLimits("enterprise", business.enterprise_limits)}
             initialOverride={parseEnterpriseLimitsOverride(business.enterprise_limits)}
+          />
+        </Card>
+      )}
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Hosting provider &amp; region
+          </h2>
+          <VpsProviderPanel
+            key={`${businessId}:${business.vps_provider ?? "hostinger"}:${business.vps_region ?? "us"}`}
+            businessId={businessId}
+            initialProvider={business.vps_provider ?? "hostinger"}
+            initialRegion={business.vps_region ?? "us"}
+            hasBox={!!business.hostinger_vps_id}
           />
         </Card>
       )}

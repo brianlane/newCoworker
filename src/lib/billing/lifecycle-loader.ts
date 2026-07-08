@@ -122,6 +122,9 @@ export async function loadLifecycleContextForBusiness(
     virtualMachineId,
     vpsSize: business.vps_size ?? null,
     vpsProvider: business.vps_provider ?? null,
+    // The generic box-id column holds the OVH service name for ovh tenants;
+    // it drives the delete-at-expiration op.
+    ovhServiceName: vpsProvider === "ovh" ? (business.hostinger_vps_id ?? null) : null,
     vpsHost,
     didE164
   };

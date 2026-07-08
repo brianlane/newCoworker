@@ -82,6 +82,7 @@ import type {
   EmailOp,
   HostingerOp,
   LifecyclePlan,
+  OvhOp,
   SshOp,
   StripeOp,
   TelnyxOp
@@ -94,6 +95,12 @@ export type ExecutorDeps = {
   sendEmail?: typeof sendOwnerEmail;
   /** Injected in tests; production default reads TELNYX_API_KEY. */
   telnyxNumbers?: TelnyxNumbersClient;
+  /**
+   * OVH client surface for `ovhOps` (delete-at-expiration). Injected in
+   * tests; the production default is lazily built from OVH_* env vars only
+   * when a plan actually carries ovhOps.
+   */
+  ovh?: { setDeleteAtExpiration(serviceName: string, deleteAtExpiration: boolean): Promise<void> };
 };
 
 /* c8 ignore start -- env-var construction: tests inject `deps.telnyxNumbers`.
@@ -141,6 +148,9 @@ export async function executeLifecyclePlan(
   }
   for (const op of plan.hostingerOps) {
     await runHostingerOp(op, hostinger);
+  }
+  for (const op of plan.ovhOps ?? []) {
+    await runOvhOp(op, deps.ovh);
   }
   for (const op of plan.telnyxOps) {
     await runTelnyxOp(op, deps.telnyxNumbers);
@@ -244,6 +254,16 @@ export async function executeLifecyclePlanSlowPhase(
       await runHostingerOp(op, hostinger);
     } catch (err) {
       logger.error("lifecycle slow-phase hostinger op failed", {
+        type: op.type,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  for (const op of plan.ovhOps ?? []) {
+    try {
+      await runOvhOp(op, deps.ovh);
+    } catch (err) {
+      logger.error("lifecycle slow-phase ovh op failed", {
         type: op.type,
         error: err instanceof Error ? err.message : String(err)
       });
@@ -396,6 +416,20 @@ async function runSshOp(op: SshOp): Promise<void> {
       // the new VPS + SSH key info isn't known to the planner.
       logger.warn("restore_durable_data dispatched through executor; expected out-of-band handling", {
         businessId: op.businessId
+      });
+      return;
+  }
+}
+
+async function runOvhOp(op: OvhOp, ovh: ExecutorDeps["ovh"]): Promise<void> {
+  /* c8 ignore start -- production default builds the client from env; tests inject deps.ovh */
+  const client = ovh ?? (await import("@/lib/ovh/client")).ovhClientFromEnv();
+  /* c8 ignore stop */
+  switch (op.type) {
+    case "ovh_delete_at_expiration":
+      await client.setDeleteAtExpiration(op.serviceName, true);
+      logger.info("OVH service flipped to delete-at-expiration", {
+        serviceName: op.serviceName
       });
       return;
   }
