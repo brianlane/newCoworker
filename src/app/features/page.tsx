@@ -70,7 +70,7 @@ const groups: FeatureGroup[] = [
       },
       {
         title: `Up to ${TIER_LIMITS.standard.maxConcurrentCalls} Concurrent Calls`,
-        description: `On Standard, your coworker holds up to ${TIER_LIMITS.standard.maxConcurrentCalls} conversations at once, so a busy morning never produces a busy signal.`,
+        description: `Your coworker holds up to ${TIER_LIMITS.standard.maxConcurrentCalls} conversations at once, so a busy morning never produces a busy signal.`,
         Icon: PhoneIncoming
       },
       {
@@ -94,7 +94,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Bring Your Own Number",
         description:
-          "Port your existing business number in (Standard and up), or use the dedicated number included with every plan.",
+          "Port your existing business number in, or use the dedicated number included with every plan.",
         Icon: Smartphone
       }
     ]

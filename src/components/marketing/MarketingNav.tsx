@@ -4,6 +4,7 @@ import Image from "next/image";
 import Link from "next/link";
 import { useState } from "react";
 import { Menu, X } from "lucide-react";
+import { AnnouncementBanner } from "./AnnouncementBanner";
 
 export type NavLink = { href: string; label: string };
 
@@ -20,7 +21,9 @@ export function MarketingNav() {
   const [open, setOpen] = useState(false);
 
   return (
-    <header className="sticky top-0 z-40 border-b border-parchment/10 bg-deep-ink/85 backdrop-blur-md">
+    <>
+      <AnnouncementBanner />
+      <header className="sticky top-0 z-40 border-b border-parchment/10 bg-deep-ink/85 backdrop-blur-md">
       <nav className="mx-auto flex max-w-6xl items-center justify-between gap-3 px-6 py-4">
         <Link href="/" className="flex items-center gap-3" onClick={() => setOpen(false)}>
           <Image src="/logo.png" alt="New Coworker" width={34} height={34} className="rounded-full" />
@@ -95,6 +98,7 @@ export function MarketingNav() {
           </div>
         </div>
       )}
-    </header>
+      </header>
+    </>
   );
 }
