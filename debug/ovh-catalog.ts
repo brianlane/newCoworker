@@ -13,7 +13,11 @@
  */
 import { loadEnv } from "./_shared.ts";
 import { ovhClientFromEnv } from "../src/lib/ovh/client.ts";
-import { ovhPlanCodeForSize, OVH_DATACENTER_CANADA } from "../src/lib/ovh/plans.ts";
+import {
+  ovhPlanCodeForSize,
+  OVH_DATACENTER_CANADA,
+  OVH_UBUNTU_IMAGE_MATCH
+} from "../src/lib/ovh/plans.ts";
 import { VPS_SIZES } from "../src/lib/vps/size.ts";
 
 loadEnv();
@@ -55,17 +59,25 @@ for (const size of VPS_SIZES) {
   const osConf = plan.configurations?.find((c) => c.name === "vps_os");
   const hasBhs = (dcConf?.values ?? []).some((v) => v.toLowerCase().includes(OVH_DATACENTER_CANADA));
   const ubuntu = (osConf?.values ?? []).filter((v) => /ubuntu/i.test(v));
+  // Provisioning rebuilds with OVH_UBUNTU_IMAGE_MATCH specifically — a plan
+  // that only ships older Ubuntu releases must FAIL the audit, not pass on
+  // a generic /ubuntu/ match.
+  const ubuntu2404 = ubuntu.filter((v) =>
+    v.toLowerCase().includes(OVH_UBUNTU_IMAGE_MATCH.toLowerCase())
+  );
   const monthly = plan.pricings?.find(
     (p) => p.mode === "default" && (p.interval === "P1M" || p.interval === undefined)
   );
   console.log(`✓ ${size} → ${code} (${plan.invoiceName ?? "?"})`);
   console.log(`    bhs datacenter: ${hasBhs ? "available" : "MISSING"}`);
-  console.log(`    ubuntu images : ${ubuntu.length ? ubuntu.join(", ") : "MISSING"}`);
+  console.log(
+    `    ubuntu 24.04  : ${ubuntu2404.length ? ubuntu2404.join(", ") : `MISSING (ubuntu values: ${ubuntu.join(", ") || "<none>"})`}`
+  );
   if (monthly?.price != null) {
     // OVH public catalog prices are in 10^-8 currency units.
     console.log(`    monthly price : $${(monthly.price / 1e8).toFixed(2)} CAD (excl. tax)`);
   }
-  if (!hasBhs || ubuntu.length === 0) failures += 1;
+  if (!hasBhs || ubuntu2404.length === 0) failures += 1;
 }
 
 if (failures > 0) {
