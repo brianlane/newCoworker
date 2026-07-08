@@ -175,6 +175,9 @@ these standards:
   all VPS ↔ app authentication — see
   [Security: per-tenant gateway tokens](#security-per-tenant-gateway-tokens) for
   the table, inbound/outbound binding, PENDING→CONFIRMED lifecycle, and rotation.
+- **Per-VPS box hardening** (UFW default-deny, outbound-only tunnel, key-only
+  SSH, root-only secrets) is provisioned identically on every box — see
+  [Security: per-VPS box hardening & isolation](#security-per-vps-box-hardening--isolation).
 - **Rate limiting** guards abuse-prone surfaces: a durable per-key limiter
   (`rateLimitDurable`, `…20260618184317_app_rate_limit.sql`) plus per-IP/route
   caps on Telnyx Edge webhooks (`TELNYX_WEBHOOK_RATE_MAX_PER_MINUTE` /
@@ -186,6 +189,65 @@ these standards:
   vulnerabilities are pinned via root `package.json` `overrides` (e.g. `postcss`)
   or by bumping the owning tool when a dependency is implicitly pinned (e.g.
   `wrangler` for the email worker).
+
+## Security: per-VPS box hardening & isolation
+
+Every tenant VPS gets an identical, automatically-provisioned security posture
+— nothing is hand-configured per machine, and everything revocable is
+controlled centrally (DB/API operations, no SSH session required). Layers, in
+order from the wire inward:
+
+- **Network — default-deny, one inbound port.**
+  [bootstrap.sh](vps/scripts/bootstrap.sh) enables UFW with
+  `default deny incoming`; the only inbound rule is SSH/22, plus an internal
+  allowance for the Docker bridge subnet to reach host Ollama (:11434). Any
+  80/443 rules are explicitly deleted. Every service on the box (Rowboat
+  :3000, voice bridge :8090, aiflow-render :8080, residency data-api :8091,
+  llm-router :11435) binds `127.0.0.1` or the private Docker network only —
+  there is no public web surface. The residency Postgres binds no host port
+  at all.
+- **Ingress — outbound-only Cloudflare tunnel.** The box never accepts an
+  inbound internet connection: `cloudflared` dials OUT to Cloudflare, and the
+  per-tenant tunnel's ingress rules (managed remotely via the CF API,
+  `config_src=cloudflare` — [tunnel.ts](src/lib/cloudflare/tunnel.ts)) map the
+  `<biz>`, `voice-`, `render-`, and `data-` hostnames to loopback ports.
+  Hostnames exist only for services that actually run on that box (no render
+  hostname on starter, no data hostname without residency), so a public route
+  can never point at a nonexistent backend.
+- **SSH — per-box keys, no passwords.** Provisioning mints a unique ed25519
+  keypair per VPS (`vps_ssh_keys`, RLS-on/no-policies) and a hardened sshd
+  drop-in enforces `PasswordAuthentication no`,
+  `PermitRootLogin prohibit-password` (key-only root — the orchestrator
+  deploys as root with the per-box key), `MaxAuthTries 3`, and no X11/TCP
+  forwarding; the drop-in is `sshd -t`-validated before reload so a bad
+  config can't lock the fleet out. fail2ban bans brute-forcers,
+  unattended-upgrades patches the OS, and Hostinger's Monarx malware scanner
+  is installed at purchase.
+- **Application auth — one unique bearer per tenant.** Each box's
+  `ROWBOAT_GATEWAY_TOKEN` is its own 256-bit token (next section): it
+  authenticates platform→box calls, signs the box's tool-call JWTs, and
+  authenticates box→platform callbacks. **One token opens one box** — a
+  compromised VPS can impersonate only its own tenant. The residency data-api
+  additionally does a timing-safe multi-token check (rotation overlap), rate
+  limits every route, and rejects any table outside the moved-tables
+  whitelist.
+- **Secrets on the box.** Every `.env` written by
+  [deploy-client.sh](vps/scripts/deploy-client.sh) is `chmod 600` root-only,
+  and a box holds only **its own** credentials — its gateway token, tunnel
+  token, and backup passphrase; never another tenant's, and never central DB
+  credentials. Residency backups are AES-256-encrypted on-box before upload,
+  so central Storage only ever holds ciphertext.
+- **Central control & revocation.** Rotating/revoking a gateway token,
+  deleting a tunnel, expiring an SSH key, pausing a tenant, or flipping
+  residency mode are all central DB/API operations.
+
+Two honest caveats: (1) the Cloudflare Access service-token edge gate on
+`data-*` hostnames (defense-in-depth in front of the bearer check) is
+deferred until the residency client plumbing needs it — the bearer gate alone
+protects the data plane today; (2) SSH keys, gateway tokens, and backup
+passphrases are escrowed centrally, so per-box isolation protects tenants
+from **each other** and shrinks a single-box compromise to one tenant — it
+does not remove the platform as the root of trust.
 
 ## Security: per-tenant gateway tokens
 
