@@ -55,6 +55,12 @@ describe("intakeOptions: CRM_OPTIONS", () => {
   it("ends with an Other escape hatch so the dropdown isn't an exhaustive enumeration", () => {
     expect(CRM_OPTIONS[CRM_OPTIONS.length - 1]?.value).toBe(CRM_OTHER_VALUE);
   });
+
+  it("offers Privyr so lead-response CRM users don't fall into Other", () => {
+    // Privyr tenants have a first-class Meta-leads path (lead forwarding to
+    // the AI mailbox), so knowing they use it matters at onboarding time.
+    expect(CRM_OPTIONS.some((o) => o.value === "Privyr")).toBe(true);
+  });
 });
 
 describe("intakeOptions: deriveCrmSelection / serializeCrmSelection round-trip", () => {
