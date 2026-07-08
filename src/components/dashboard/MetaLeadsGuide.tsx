@@ -33,6 +33,8 @@ type RecentEventItem = {
 
 type Props = {
   businessId: string;
+  /** Business display name, used to personalize the consent-disclaimer text. */
+  businessName: string | null;
   endpointUrl: string;
   hasApiKey: boolean;
   webhookFlows: WebhookFlowItem[];
@@ -79,6 +81,7 @@ function CopyField({ value, label }: { value: string; label: string }) {
 
 export function MetaLeadsGuide({
   businessId,
+  businessName,
   endpointUrl,
   hasApiKey,
   webhookFlows,
@@ -98,6 +101,14 @@ export function MetaLeadsGuide({
   // other webhook flow still gets the one-click install (Bugbot fe7aebd1).
   const existingFlow = webhookFlows.find((f) => f.name === template.name) ?? null;
   const otherWebhookFlow = existingFlow ? null : (webhookFlows[0] ?? null);
+
+  // TCPA express-written-consent disclaimer for the Meta Instant Form,
+  // personalized with the owner's business name so it can be pasted as-is.
+  const consentText =
+    "By clicking submit, I provide my express written consent to receive " +
+    `marketing text messages and phone calls from ${businessName?.trim() || "[Your Business Name]"} ` +
+    "at the phone number provided above. Consent is not a condition of purchase. " +
+    "Message and data rates may apply. View our Privacy Policy.";
 
   async function installFlow() {
     setInstallError(null);
@@ -205,9 +216,31 @@ export function MetaLeadsGuide({
         ) : null}
       </Card>
 
-      {/* ── Step 2: API key ──────────────────────────────────────────── */}
+      {/* ── Step 2: texting consent on the Meta form ─────────────────── */}
       <Card>
-        <StepHeading n={2} title="Create your connection key" />
+        <div className="rounded-md border border-spark-orange/40 bg-spark-orange/5 p-3">
+          <StepHeading n={2} title="Add a consent checkbox to your Instant Form (required to text leads)" />
+          <p className="mt-2 text-sm text-parchment/70">
+            Your coworker texts and can call each lead, and U.S. law (TCPA) requires the lead&apos;s{" "}
+            <strong>prior express written consent</strong> before marketing texts or calls. Meta&apos;s
+            forms don&apos;t include this by default. In Ads Manager, open your Instant Form&apos;s{" "}
+            <strong>Privacy</strong> section, choose <strong>Add custom disclaimer</strong>, add a
+            checkbox that is <strong>unchecked by default</strong> (never pre-checked), and paste:
+          </p>
+          <div className="mt-3">
+            <CopyField value={consentText} label="consent text" />
+          </div>
+          <p className="mt-2 text-xs text-parchment/55">
+            Link the words “Privacy Policy” to your policy page in the disclaimer editor. Making the
+            checkbox required means every lead you receive has consented; if you leave it optional,
+            only text the leads who checked it.
+          </p>
+        </div>
+      </Card>
+
+      {/* ── Step 3: API key ──────────────────────────────────────────── */}
+      <Card>
+        <StepHeading n={3} title="Create your connection key" />
         <p className="mt-2 text-sm text-parchment/60">
           The bridge tool (next step) proves it&apos;s yours with an API key. Create one here —
           it&apos;s shown once, so copy it somewhere safe before you leave this page.
@@ -242,9 +275,9 @@ export function MetaLeadsGuide({
         ) : null}
       </Card>
 
-      {/* ── Step 3: the bridge ───────────────────────────────────────── */}
+      {/* ── Step 4: the bridge ───────────────────────────────────────── */}
       <Card>
-        <StepHeading n={3} title="Connect Facebook to your coworker (via Make.com — free)" />
+        <StepHeading n={4} title="Connect Facebook to your coworker (via Make.com — free)" />
         <p className="mt-2 text-sm text-parchment/60">
           Meta only hands leads to approved partners, so a small bridge forwards each new lead
           to your coworker the moment it&apos;s submitted. Make.com&apos;s free plan covers this
@@ -313,10 +346,10 @@ export function MetaLeadsGuide({
         </div>
       </Card>
 
-      {/* ── Step 4: the CRM-access gotcha ────────────────────────────── */}
+      {/* ── Step 5: the CRM-access gotcha ────────────────────────────── */}
       <Card>
         <div className="rounded-md border border-spark-orange/40 bg-spark-orange/5 p-3">
-          <StepHeading n={4} title="Don't skip: grant the bridge Lead Access in Facebook" />
+          <StepHeading n={5} title="Don't skip: grant the bridge Lead Access in Facebook" />
           <p className="mt-2 text-sm text-parchment/70">
             This is the #1 reason lead capture <em>silently</em> fails: test leads work, then real
             ad leads never arrive. In{" "}
@@ -329,9 +362,9 @@ export function MetaLeadsGuide({
         </div>
       </Card>
 
-      {/* ── Step 5: test it ──────────────────────────────────────────── */}
+      {/* ── Step 6: test it ──────────────────────────────────────────── */}
       <Card>
-        <StepHeading n={5} title="Send a test lead and watch it arrive" />
+        <StepHeading n={6} title="Send a test lead and watch it arrive" />
         <p className="mt-2 text-sm text-parchment/60">
           Use Meta&apos;s{" "}
           <a

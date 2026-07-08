@@ -30,11 +30,12 @@ export default async function MetaLeadsGuidePage() {
   const db = await createSupabaseServiceClient();
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, name")
     .eq("owner_email", ownerEmail)
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
+  const businessName = (businesses?.[0]?.name as string | null | undefined) ?? null;
 
   const [flows, apiKeys, recentLogs] = businessId
     ? await Promise.all([
@@ -87,6 +88,7 @@ export default async function MetaLeadsGuidePage() {
       ) : (
         <MetaLeadsGuide
           businessId={businessId}
+          businessName={businessName}
           endpointUrl={`${appUrl}/api/public/v1/flow-events`}
           hasApiKey={apiKeys.length > 0}
           webhookFlows={webhookFlows}
