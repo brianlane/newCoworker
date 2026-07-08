@@ -43,6 +43,9 @@ function makeRow() {
     private_key_pem: "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n",
     fingerprint_sha256: "SHA256:abc",
     ssh_username: "root",
+    provider: "hostinger",
+    region: "us",
+    host: null,
     created_at: "2026-02-01T00:00:00Z",
     rotated_at: null
   };

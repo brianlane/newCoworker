@@ -40,6 +40,9 @@ const keyRow: VpsSshKeyRow = {
   private_key_pem: "PEM",
   fingerprint_sha256: "SHA256:abc",
   ssh_username: "root",
+  provider: "hostinger",
+  region: "us",
+  host: null,
   created_at: "2026-07-01T00:00:00Z",
   rotated_at: null
 };

@@ -112,6 +112,22 @@ describe("migrateBusinessVpsSize — guards", () => {
     expect(deps.sendOpsEmail).not.toHaveBeenCalled();
   });
 
+  it("fails closed for non-hostinger tenants (BYOS/OVH boxes are not Hostinger-migratable)", async () => {
+    const deps = makeDeps({
+      getBusiness: vi.fn(async () =>
+        bizRow({ tier: "enterprise", vps_provider: "byos" } as never)
+      )
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.stage).toBe("guard");
+      expect(out.error).toContain("vps_provider=byos");
+      expect(out.error).toContain("Hostinger-only");
+    }
+    expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
+  });
+
   it("fails closed for residency tenants (box datastore would be stranded)", async () => {
     const deps = makeDeps({
       getBusiness: vi.fn(async () =>

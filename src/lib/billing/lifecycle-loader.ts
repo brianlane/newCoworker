@@ -15,7 +15,9 @@ import { getSubscription } from "@/lib/db/subscriptions";
 import { getBusiness } from "@/lib/db/businesses";
 import { getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
+import { getActiveVpsSshKeyForBusiness } from "@/lib/db/vps-ssh-keys";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
+import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 import { logger } from "@/lib/logger";
 import type { LifecycleContext } from "@/lib/billing/lifecycle";
 
@@ -38,18 +40,31 @@ export async function loadLifecycleContextForBusiness(
       ? await getCustomerProfileById(business.customer_profile_id)
       : null;
 
+  // Provider axis: non-hostinger boxes (BYOS / OVH) have no Hostinger VM
+  // id, no Hostinger IP lookup, and skip every Hostinger op in the planner.
+  const vpsProvider = resolveVpsProvider(business.vps_provider);
+  const hostingerManaged = providerUsesHostingerLifecycle(vpsProvider);
+
   // We store the Hostinger VM id as text on `businesses`; coerce to number
-  // for client calls. Null-safe on pre-lifecycle rows.
+  // for client calls. Null-safe on pre-lifecycle rows. Non-hostinger rows
+  // carry a non-numeric box id (OVH service name / byos sentinel), which
+  // this regex already rejects — the provider gate makes that explicit.
   const vmIdRaw = business.hostinger_vps_id;
   const virtualMachineId =
-    vmIdRaw && /^\d+$/.test(vmIdRaw) ? Number.parseInt(vmIdRaw, 10) : null;
+    hostingerManaged && vmIdRaw && /^\d+$/.test(vmIdRaw)
+      ? Number.parseInt(vmIdRaw, 10)
+      : null;
 
-  // We don't persist the public IP anywhere, so look it up from Hostinger
-  // once per lifecycle invocation. If the VM is already gone (e.g. grace-
-  // sweep runs after a manual hPanel deletion or billing lapse), the
-  // client returns 404 → we leave vpsHost null and the executor skips the
-  // SSH backup op. That's correct for post-destroy wipes; for active-sub
-  // cancels we should always have a VM to reach.
+  // We don't persist the public IP for Hostinger boxes, so look it up from
+  // Hostinger once per lifecycle invocation. If the VM is already gone
+  // (e.g. grace-sweep runs after a manual hPanel deletion or billing
+  // lapse), the client returns 404 → we leave vpsHost null and the
+  // executor skips the SSH backup op. That's correct for post-destroy
+  // wipes; for active-sub cancels we should always have a VM to reach.
+  //
+  // BYOS/OVH boxes persist their host on the active `vps_ssh_keys` row
+  // instead (there is no live provider IP-lookup path for them), so the
+  // SSH backup op still runs against customer-owned / Canadian boxes.
   let vpsHost: string | null = null;
   if (virtualMachineId !== null) {
     try {
@@ -67,6 +82,20 @@ export async function loadLifecycleContextForBusiness(
         virtualMachineId,
         error: err instanceof Error ? err.message : String(err)
       });
+    }
+  } else if (!hostingerManaged) {
+    try {
+      const sshKey = await getActiveVpsSshKeyForBusiness(businessId);
+      vpsHost = sshKey?.host ?? null;
+    } catch (err) {
+      logger.warn(
+        "loadLifecycleContextForBusiness: ssh-key host lookup failed; continuing without vpsHost",
+        {
+          businessId,
+          vpsProvider,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      );
     }
   }
 
@@ -92,6 +121,7 @@ export async function loadLifecycleContextForBusiness(
     profile,
     virtualMachineId,
     vpsSize: business.vps_size ?? null,
+    vpsProvider: business.vps_provider ?? null,
     vpsHost,
     didE164
   };

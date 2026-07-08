@@ -62,6 +62,18 @@ export type BusinessRow = {
    */
   vps_size?: "kvm1" | "kvm2" | "kvm4" | "kvm8" | null;
   /**
+   * Provider axis (default 'hostinger'). 'ovh' (platform-owned Canada box)
+   * and 'byos' (customer-owned, SSH handover) are enterprise-only, enforced
+   * in src/lib/vps/provider.ts. Missing/legacy rows resolve to 'hostinger'
+   * via resolveVpsProvider.
+   */
+  vps_provider?: "hostinger" | "ovh" | "byos" | null;
+  /**
+   * Physical region of the tenant box (default 'us'). 'ca' = Canadian data
+   * residency (OVH Beauharnois or a Canadian BYOS box).
+   */
+  vps_region?: "us" | "ca" | null;
+  /**
    * Enterprise-only data-residency rollout gate (default 'supabase').
    * 'dual' = both stores written during migration; 'vps' = the tenant's box
    * is the content source of truth. Written only via updateDataResidencyMode,

@@ -34,6 +34,7 @@
 
 import { logger } from "@/lib/logger";
 import { resolveDeployedVpsSize, type VpsSize } from "@/lib/vps/size";
+import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 import type { HostingerClient } from "@/lib/hostinger/client";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
@@ -124,6 +125,25 @@ export async function migrateBusinessVpsSize(
   // 2026): the orchestrator maps enterprise onto the standard box profile
   // and the size resolvers know the enterprise kvm8 default.
   const tier = biz.tier;
+
+  // Non-hostinger tenants FAIL CLOSED: this flow purchases/adopts a
+  // Hostinger replacement box and tears the old one down via the Hostinger
+  // API — neither applies to a customer-owned BYOS box or an OVH Canada
+  // box. Hardware changes for those tenants are provider-side operations
+  // (customer resizes their own box / OVH plan change) followed by a
+  // re-provision, never this migration.
+  const vpsProvider = resolveVpsProvider(
+    (biz as { vps_provider?: string }).vps_provider
+  );
+  if (!providerUsesHostingerLifecycle(vpsProvider)) {
+    return {
+      ok: false,
+      stage: "guard",
+      error:
+        `vps_provider=${vpsProvider}: hardware migration is Hostinger-only. Resize the box ` +
+        "provider-side (customer/OVH plan change), then re-run provisioning against it."
+    };
+  }
 
   // Residency tenants FAIL CLOSED: this flow backs up and restores
   // /opt/rowboat/{vault,memory} only — the box-local residency datastore

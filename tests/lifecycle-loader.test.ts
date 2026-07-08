@@ -5,17 +5,23 @@ const {
   getSubscriptionMock,
   getCustomerProfileByIdMock,
   getVirtualMachineMock,
-  getTelnyxVoiceRouteForBusinessMock
+  getTelnyxVoiceRouteForBusinessMock,
+  getActiveVpsSshKeyForBusinessMock
 } = vi.hoisted(() => ({
   getBusinessMock: vi.fn(),
   getSubscriptionMock: vi.fn(),
   getCustomerProfileByIdMock: vi.fn(),
   getVirtualMachineMock: vi.fn(),
-  getTelnyxVoiceRouteForBusinessMock: vi.fn()
+  getTelnyxVoiceRouteForBusinessMock: vi.fn(),
+  getActiveVpsSshKeyForBusinessMock: vi.fn()
 }));
 
 vi.mock("@/lib/db/telnyx-routes", () => ({
   getTelnyxVoiceRouteForBusiness: getTelnyxVoiceRouteForBusinessMock
+}));
+
+vi.mock("@/lib/db/vps-ssh-keys", () => ({
+  getActiveVpsSshKeyForBusiness: getActiveVpsSshKeyForBusinessMock
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
@@ -181,6 +187,77 @@ describe("loadLifecycleContextForBusiness", () => {
       ok: true,
       vpsHost: null,
       context: expect.objectContaining({ virtualMachineId: 42, vpsHost: null })
+    });
+  });
+
+  it("byos: skips the Hostinger lookup entirely and reads the host from the active SSH key row", async () => {
+    getBusinessMock.mockResolvedValueOnce({
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      customer_profile_id: null,
+      // Defensive: even a numeric-looking box id must not be treated as a
+      // Hostinger VM once the provider says otherwise.
+      hostinger_vps_id: "42",
+      vps_provider: "byos"
+    });
+    getActiveVpsSshKeyForBusinessMock.mockResolvedValueOnce({ host: "203.0.113.7" });
+
+    const res = await loadLifecycleContextForBusiness("biz-1");
+    expect(getVirtualMachineMock).not.toHaveBeenCalled();
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: "203.0.113.7",
+      context: expect.objectContaining({
+        virtualMachineId: null,
+        vpsProvider: "byos",
+        vpsHost: "203.0.113.7"
+      })
+    });
+  });
+
+  it("byos: tolerates a missing key row, a host-less row, and lookup failures (Error and non-Error)", async () => {
+    const byosBusiness = {
+      id: "biz-1",
+      owner_email: "owner@example.com",
+      customer_profile_id: null,
+      hostinger_vps_id: "byos-biz-1",
+      vps_provider: "ovh"
+    };
+
+    getBusinessMock.mockResolvedValueOnce(byosBusiness);
+    getActiveVpsSshKeyForBusinessMock.mockResolvedValueOnce(null);
+    const missingRow = await loadLifecycleContextForBusiness("biz-1");
+    expect(missingRow).toEqual({
+      ok: true,
+      vpsHost: null,
+      context: expect.objectContaining({ vpsHost: null, vpsProvider: "ovh" })
+    });
+
+    getBusinessMock.mockResolvedValueOnce(byosBusiness);
+    getActiveVpsSshKeyForBusinessMock.mockResolvedValueOnce({ host: null });
+    const hostlessRow = await loadLifecycleContextForBusiness("biz-1");
+    expect(hostlessRow).toEqual({
+      ok: true,
+      vpsHost: null,
+      context: expect.objectContaining({ vpsHost: null })
+    });
+
+    getBusinessMock.mockResolvedValueOnce(byosBusiness);
+    getActiveVpsSshKeyForBusinessMock.mockRejectedValueOnce(new Error("supabase down"));
+    const failed = await loadLifecycleContextForBusiness("biz-1");
+    expect(failed).toEqual({
+      ok: true,
+      vpsHost: null,
+      context: expect.objectContaining({ vpsHost: null })
+    });
+
+    getBusinessMock.mockResolvedValueOnce(byosBusiness);
+    getActiveVpsSshKeyForBusinessMock.mockRejectedValueOnce("string failure");
+    const failedNonError = await loadLifecycleContextForBusiness("biz-1");
+    expect(failedNonError).toEqual({
+      ok: true,
+      vpsHost: null,
+      context: expect.objectContaining({ vpsHost: null })
     });
   });
 
