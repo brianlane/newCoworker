@@ -524,6 +524,18 @@ describe("isExecutableDefinition", () => {
     expect(
       isExecutableDefinition({ ...valid, trigger: { channel: "webhook", conditions: [] } })
     ).toBe(true);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_created", conditions: [] }
+      })
+    ).toBe(true);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_start", leadMinutes: 30, conditions: [] }
+      })
+    ).toBe(true);
   });
   it("rejects malformed schedule / email triggers", () => {
     // schedule: neither mode, both modes, or a half-configured daily mode
@@ -559,6 +571,25 @@ describe("isExecutableDefinition", () => {
     // webhook: non-array conditions
     expect(
       isExecutableDefinition({ ...valid, trigger: { channel: "webhook", conditions: "x" } })
+    ).toBe(false);
+    // calendar: non-array conditions, unknown mode, event_start without a lead
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_created", conditions: "x" }
+      })
+    ).toBe(false);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_deleted", conditions: [] }
+      })
+    ).toBe(false);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_start", conditions: [] }
+      })
     ).toBe(false);
   });
   it("rejects non-array steps", () => {

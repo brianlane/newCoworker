@@ -93,8 +93,9 @@ type Supabase = SupabaseClient<any, any, any>;
 const MAX_ATTEMPTS = 4;
 const CLAIM_LIMIT = 3;
 const FETCH_TIMEOUT_MS = 20_000;
-// /api/internal/aiflow-email-poll declares maxDuration = 60; give the kick
-// headroom beyond that so the worker never aborts a still-running poll.
+// The /api/internal/aiflow-email-poll and aiflow-calendar-poll routes declare
+// maxDuration = 60; give each kick headroom beyond that so the worker never
+// aborts a still-running poll.
 const EMAIL_POLL_KICK_TIMEOUT_MS = 75_000;
 // telnyx-voice-originate dials Telnyx (POST /v2/calls) then reserves budget; a
 // few seconds is typical, so allow generous headroom before aborting a sweep.
@@ -255,25 +256,29 @@ serve(async (req: Request): Promise<Response> => {
   // claim escalates them to the following agent (status-driven, like reclaim).
   await supabase.rpc("escalate_overdue_agent_offers");
 
-  // Non-SMS trigger sources, both failure-isolated so a bad schedule or a
-  // mailbox outage never stalls run processing below. The email poll is
-  // started here but awaited after the run loop: a busy mailbox can take the
-  // route most of its 60s budget, and overlapping it with run execution keeps
-  // the tick from stretching by that long (kickEmailTriggerPoll never throws).
+  // Non-SMS trigger sources, all failure-isolated so a bad schedule or a
+  // mailbox/calendar outage never stalls run processing below. The email and
+  // calendar polls are started here but awaited after the run loop: a busy
+  // mailbox can take the route most of its 60s budget, and overlapping them
+  // with run execution keeps the tick from stretching by that long
+  // (kickTriggerPoll never throws).
   await enqueueDueScheduledRuns(supabase);
   // Scheduled outbound voice calls run on the call path (not the run engine),
   // so they get their own sweep. It calls telnyx-voice-originate with the shared
   // INTERNAL_CRON_SECRET bearer (the same secret this worker is authed with),
   // NOT the service-role key. Failure-isolated like the schedule sweep.
   await enqueueDueOutboundCalls(supabase, supabaseUrl, Deno.env.get("INTERNAL_CRON_SECRET") ?? "");
-  const emailPoll = kickEmailTriggerPoll();
+  const triggerPolls = Promise.all([
+    kickTriggerPoll("/api/internal/aiflow-email-poll"),
+    kickTriggerPoll("/api/internal/aiflow-calendar-poll")
+  ]);
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {
     p_limit: CLAIM_LIMIT
   });
   if (claimErr) {
     console.error("claim_ai_flow_runs", claimErr);
-    await emailPoll;
+    await triggerPolls;
     return new Response("Claim failed", { status: 500 });
   }
 
@@ -288,7 +293,7 @@ serve(async (req: Request): Promise<Response> => {
     processed += 1;
   }
 
-  await emailPoll;
+  await triggerPolls;
   return json({ ok: true, processed });
 });
 
@@ -4073,37 +4078,38 @@ async function enqueueDueOutboundCalls(
 }
 
 /**
- * Email triggers: the mailbox polling needs the app's Nango credentials, so
- * the actual work lives in the Next.js /api/internal/aiflow-email-poll route
- * (cron-secret authed, same contract as this worker's own auth); this just
- * kicks it once per tick. The route is a cheap no-op when no enabled flow has
- * an email trigger. Failures only log — mailbox trouble must never stall SMS
- * or scheduled runs.
+ * Email + calendar triggers: the mailbox/calendar polling needs the app's
+ * Nango credentials, so the actual work lives in the Next.js
+ * /api/internal/aiflow-email-poll and /api/internal/aiflow-calendar-poll
+ * routes (cron-secret authed, same contract as this worker's own auth); this
+ * just kicks one of them once per tick. The routes are cheap no-ops when no
+ * enabled flow uses their channel. Failures only log — mailbox/calendar
+ * trouble must never stall SMS or scheduled runs.
  */
-async function kickEmailTriggerPoll(): Promise<void> {
+async function kickTriggerPoll(routePath: string): Promise<void> {
   const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
   const secret = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
   if (!base || !secret) return;
   const ctl = new AbortController();
-  // The poll route legitimately runs up to its 60s maxDuration on a busy
-  // mailbox; aborting sooner can cut the work short on some hosts and logs
-  // spurious failures, so wait past that ceiling (the caller overlaps this
-  // wait with run processing rather than blocking on it).
+  // The poll routes legitimately run up to their 60s maxDuration on a busy
+  // mailbox/calendar; aborting sooner can cut the work short on some hosts
+  // and logs spurious failures, so wait past that ceiling (the caller
+  // overlaps this wait with run processing rather than blocking on it).
   const timer = setTimeout(() => ctl.abort(), EMAIL_POLL_KICK_TIMEOUT_MS);
   try {
-    const res = await fetch(`${base.replace(/\/$/, "")}/api/internal/aiflow-email-poll`, {
+    const res = await fetch(`${base.replace(/\/$/, "")}${routePath}`, {
       method: "POST",
       headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" },
       body: "{}",
       signal: ctl.signal
     });
     if (!res.ok) {
-      console.error("aiflow-email-poll", res.status, (await res.text()).slice(0, 200));
+      console.error(routePath, res.status, (await res.text()).slice(0, 200));
     } else {
       await res.body?.cancel();
     }
   } catch (e) {
-    console.error("kickEmailTriggerPoll", e);
+    console.error(`kickTriggerPoll ${routePath}`, e);
   } finally {
     clearTimeout(timer);
   }

@@ -106,8 +106,25 @@ export const HTTP_METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
 /** Variable identifiers (saveAs, field names, urlVar): snake/camel, bounded. */
 export const VAR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]{0,40}$/;
 
-/** Trigger-scope keys the engine always populates (see evaluateSmsTrigger). */
-export const TRIGGER_SCOPE_KEYS = ["url", "windowText", "from", "to", "participants"] as const;
+/**
+ * Trigger-scope keys templates may reference. url/windowText/from are set on
+ * every channel (see evaluateSmsTrigger); to/participants are SMS-only and
+ * event_id/event_title/starts_at/ends_at/calendar are calendar-only — the
+ * engine renders absent keys as "", so cross-channel references degrade
+ * instead of failing.
+ */
+export const TRIGGER_SCOPE_KEYS = [
+  "url",
+  "windowText",
+  "from",
+  "to",
+  "participants",
+  "event_id",
+  "event_title",
+  "starts_at",
+  "ends_at",
+  "calendar"
+] as const;
 
 /**
  * Top-level keys of the `{{now.*}}` scope the worker injects each run (relative
@@ -249,6 +266,40 @@ const webhookTriggerSchema = z.object({
 });
 
 /**
+ * Calendar-event trigger: the app polls the business's connected calendar
+ * (resolved like the calendar tools — Google first, Microsoft fallback; no
+ * connectionId stored) and fires when an event is created (`on:
+ * "event_created"`) or is about to start (`on: "event_start"`, `leadMinutes`
+ * before the start). `calendar` picks which calendar(s) to watch: the
+ * connected account's primary, the shared NewCoworker calendar, or both
+ * (default). Conditions run over the event text (title + description +
+ * location + attendees); `from_matches` tests the organizer email.
+ */
+const calendarTriggerSchema = z
+  .object({
+    channel: z.literal("calendar"),
+    calendar: z.enum(["primary", "shared", "both"]).optional(),
+    on: z.enum(["event_created", "event_start"]),
+    // min 1: the due window is [start - leadMinutes, start), so a zero lead
+    // would be an empty window that can never fire.
+    leadMinutes: z.number().int().min(1).max(1440).optional(),
+    conditions: z.array(conditionSchema).max(20)
+  })
+  .superRefine((t, ctx) => {
+    if (t.on === "event_start" && t.leadMinutes === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "event_start mode needs leadMinutes (how long before the event to run)"
+      });
+    } else if (t.on === "event_created" && t.leadMinutes !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "leadMinutes only applies to event_start mode"
+      });
+    }
+  });
+
+/**
  * Inbound-voice trigger: a call FROM `fromE164` to one of the business's voice
  * numbers fires this flow. Unlike every other channel this does NOT enqueue an
  * ai_flow_run; the Telnyx voice webhook (telnyx-voice-inbound) resolves the
@@ -308,6 +359,7 @@ const triggerSchema = z.discriminatedUnion("channel", [
   emailTriggerSchema,
   tenantEmailTriggerSchema,
   webhookTriggerSchema,
+  calendarTriggerSchema,
   voiceTriggerSchema
 ]);
 
@@ -719,6 +771,7 @@ export const TRIGGER_CHANNELS = [
   "email",
   "tenant_email",
   "webhook",
+  "calendar",
   "voice"
 ] as const;
 
@@ -1313,6 +1366,17 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
           ? "When any webhook event arrives"
           : `When a webhook event matches ${t.conditions.length} condition(s)`;
       break;
+    case "calendar": {
+      const what =
+        t.on === "event_start"
+          ? `${t.leadMinutes} min before a calendar event starts`
+          : "When a calendar event is created";
+      trigPart =
+        t.conditions.length === 0
+          ? what
+          : `${what} (matching ${t.conditions.length} condition(s))`;
+      break;
+    }
     case "voice":
       trigPart =
         t.direction === "outbound"

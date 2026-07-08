@@ -74,6 +74,7 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   email: "Inbound email (your connected inbox)",
   tenant_email: "Inbound email (AI coworker's mailbox)",
   webhook: "Webhook (Zapier, Make, or API)",
+  calendar: "Calendar event",
   voice: "Voice call routing"
 };
 
@@ -99,6 +100,12 @@ type EditorState = {
   scheduleDays: number[];
   scheduleEvery: number;
   emailConnectionId: string;
+  /** Calendar trigger: which calendar(s) to watch. */
+  calendarSource: "primary" | "shared" | "both";
+  /** Calendar trigger: fire on new events, or ahead of an event's start. */
+  calendarOn: "event_created" | "event_start";
+  /** Calendar trigger (event_start): minutes before the start to run. */
+  calendarLeadMinutes: number;
   /** Voice trigger: the E.164 caller id that fires inbound routing. */
   voiceFromE164: string;
   /** Voice trigger: a saved person whose live number matches the caller instead. */
@@ -134,6 +141,9 @@ function emptyEditor(): EditorState {
     scheduleDays: [],
     scheduleEvery: 60,
     emailConnectionId: "",
+    calendarSource: "both",
+    calendarOn: "event_created",
+    calendarLeadMinutes: 30,
     voiceFromE164: "",
     voiceFromRef: null,
     voiceDirection: "inbound",
@@ -154,6 +164,9 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "scheduleDays"
   | "scheduleEvery"
   | "emailConnectionId"
+  | "calendarSource"
+  | "calendarOn"
+  | "calendarLeadMinutes"
   | "voiceFromE164"
   | "voiceFromRef"
   | "voiceDirection"
@@ -169,6 +182,9 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     scheduleDays: [] as number[],
     scheduleEvery: 60,
     emailConnectionId: "",
+    calendarSource: "both" as const,
+    calendarOn: "event_created" as const,
+    calendarLeadMinutes: 30,
     voiceFromE164: "",
     voiceFromRef: null as PickerRef | null,
     voiceDirection: "inbound" as const,
@@ -203,6 +219,14 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
       return { ...base, conditions: trigger.conditions };
     case "webhook":
       return { ...base, conditions: trigger.conditions };
+    case "calendar":
+      return {
+        ...base,
+        conditions: trigger.conditions,
+        calendarSource: trigger.calendar ?? "both",
+        calendarOn: trigger.on,
+        calendarLeadMinutes: trigger.leadMinutes ?? 30
+      };
     case "voice": {
       const scheduled =
         trigger.direction === "outbound" &&
@@ -419,6 +443,14 @@ function editorTrigger(s: EditorState): FlowTrigger {
       return { channel: "tenant_email", conditions: sanitizeConditions(s.conditions) };
     case "webhook":
       return { channel: "webhook", conditions: sanitizeConditions(s.conditions) };
+    case "calendar":
+      return {
+        channel: "calendar",
+        calendar: s.calendarSource,
+        on: s.calendarOn,
+        ...(s.calendarOn === "event_start" ? { leadMinutes: s.calendarLeadMinutes } : {}),
+        conditions: sanitizeConditions(s.conditions)
+      };
     case "voice":
       if (s.voiceDirection !== "outbound") {
         // Exactly one caller source: a saved-person ref (live number) or a
@@ -1136,6 +1168,72 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
+          {editor.channel === "calendar" && (
+            <div className="space-y-2">
+              <div>
+                <label className={labelClass}>Run when</label>
+                <select
+                  className={inputClass}
+                  value={editor.calendarOn}
+                  onChange={(ev) =>
+                    setEditor({
+                      ...editor,
+                      calendarOn:
+                        ev.target.value === "event_start" ? "event_start" : "event_created"
+                    })
+                  }
+                >
+                  <option value="event_created">A new event is added to the calendar</option>
+                  <option value="event_start">An event is about to start</option>
+                </select>
+              </div>
+              {editor.calendarOn === "event_start" && (
+                <div>
+                  <label className={labelClass}>How long before the event (minutes, min 1)</label>
+                  <input
+                    type="number"
+                    min={1}
+                    className={inputClass}
+                    value={editor.calendarLeadMinutes}
+                    onChange={(ev) =>
+                      setEditor({
+                        ...editor,
+                        // The due window is [start - lead, start), so zero can
+                        // never fire; clamp instead of saving a dead flow.
+                        calendarLeadMinutes: Math.max(1, Number(ev.target.value) || 1)
+                      })
+                    }
+                  />
+                </div>
+              )}
+              <div>
+                <label className={labelClass}>Which calendar</label>
+                <select
+                  className={inputClass}
+                  value={editor.calendarSource}
+                  onChange={(ev) =>
+                    setEditor({
+                      ...editor,
+                      calendarSource:
+                        ev.target.value === "primary" || ev.target.value === "shared"
+                          ? ev.target.value
+                          : "both"
+                    })
+                  }
+                >
+                  <option value="both">Both: my calendar + the NewCoworker calendar</option>
+                  <option value="primary">My connected calendar</option>
+                  <option value="shared">The shared NewCoworker calendar</option>
+                </select>
+              </div>
+              <p className="text-[11px] text-parchment/40">
+                Uses the calendar account connected under Settings → Integrations (the same one
+                bookings go to). The shared NewCoworker calendar is where your AI coworker books
+                appointments; it&apos;s created with the first booking. Conditions below match the
+                event&apos;s title, description, location, and attendees.
+              </p>
+            </div>
+          )}
           {editor.channel === "voice" && (
             <div className="space-y-2">
               <div>
@@ -1290,7 +1388,8 @@ export function AiFlowsManager({
           {(editor.channel === "sms" ||
             editor.channel === "email" ||
             editor.channel === "tenant_email" ||
-            editor.channel === "webhook") &&
+            editor.channel === "webhook" ||
+            editor.channel === "calendar") &&
             editor.conditions.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
@@ -1373,7 +1472,8 @@ export function AiFlowsManager({
           {(editor.channel === "sms" ||
             editor.channel === "email" ||
             editor.channel === "tenant_email" ||
-            editor.channel === "webhook") && (
+            editor.channel === "webhook" ||
+            editor.channel === "calendar") && (
             <button
               onClick={() =>
                 setEditor({ ...editor, conditions: [...editor.conditions, { type: "contains", value: "" }] })

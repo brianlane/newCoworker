@@ -92,7 +92,7 @@ export function htmlToText(html: string): string {
 
 /** What an enqueued run's `context.trigger` looks like for these channels. */
 export type TriggerScope = {
-  channel: "manual" | "email" | "schedule" | "tenant_email" | "webhook";
+  channel: "manual" | "email" | "schedule" | "tenant_email" | "webhook" | "calendar";
   windowText: string;
   url: string | null;
   from: string;
@@ -189,6 +189,62 @@ export function flattenWebhookPayload(
   };
   walk(data, "", 0);
   return lines.join("\n").slice(0, maxChars);
+}
+
+/** A normalized calendar event (Google or Microsoft) the poller evaluates. */
+export type CalendarEventInput = {
+  /** Provider event id (occurrence id for recurring events; drives dedupe). */
+  id: string;
+  title: string;
+  description?: string;
+  location?: string;
+  organizerEmail?: string;
+  /** Attendee display strings ("Name <email>" or bare emails). */
+  attendees?: string[];
+  startIso?: string;
+  endIso?: string;
+  /** ISO creation timestamp (drives the event_created lookback filter). */
+  createdIso?: string;
+  /**
+   * All-day event: its "start" is a calendar-local date, not a moment in
+   * time, so event_start reminders skip it (event_created still fires).
+   */
+  allDay?: boolean;
+  /** Which watched calendar the event came from. */
+  calendar: "primary" | "shared";
+};
+
+/**
+ * Readable "key: value" text for a calendar event, so trigger conditions and
+ * the Gemini `extract_text` step see it the way they'd see an email body.
+ */
+export function calendarEventText(ev: CalendarEventInput): string {
+  const lines = [
+    `title: ${ev.title}`,
+    ev.startIso ? `starts: ${ev.startIso}` : "",
+    ev.endIso ? `ends: ${ev.endIso}` : "",
+    ev.location ? `location: ${ev.location}` : "",
+    ev.organizerEmail ? `organizer: ${ev.organizerEmail}` : "",
+    ...(ev.attendees ?? []).map((a) => `attendee: ${a}`),
+    ev.description ? `description: ${htmlToText(ev.description)}` : ""
+  ];
+  return lines.filter((l) => l.length > 0).join("\n");
+}
+
+/** Trigger scope for a calendar event that matched a flow's conditions. */
+export function calendarTriggerScope(ev: CalendarEventInput): TriggerScope {
+  const windowText = calendarEventText(ev).slice(0, EMAIL_WINDOW_TEXT_MAX);
+  return {
+    channel: "calendar",
+    windowText,
+    url: firstUrlInText(windowText),
+    from: ev.organizerEmail ?? "",
+    event_id: ev.id,
+    event_title: ev.title.slice(0, 300),
+    calendar: ev.calendar,
+    ...(ev.startIso ? { starts_at: ev.startIso } : {}),
+    ...(ev.endIso ? { ends_at: ev.endIso } : {})
+  };
 }
 
 export type WebhookEventInput = {
