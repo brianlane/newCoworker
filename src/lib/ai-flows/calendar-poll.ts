@@ -228,6 +228,14 @@ const GRAPH_EVENT_SELECT =
 const GRAPH_VIEW_SELECT =
   "id,subject,bodyPreview,location,organizer,attendees,start,end,isCancelled";
 
+/**
+ * Graph returns start/end in the event's stored zone unless told otherwise,
+ * and a zone-less "2026-07-08T14:00:00" would be misparsed as UTC by
+ * Date.parse. This header makes Graph convert every start/end to UTC, so
+ * graphTimeIso's Z-suffixing is always correct.
+ */
+const GRAPH_UTC_HEADERS = { Prefer: 'outlook.timezone="UTC"' };
+
 type CalendarFetch = { events: CalendarEventInput[]; overflowed: boolean };
 
 type FetchTarget = {
@@ -267,7 +275,8 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
     endpoint:
       `${base}?$filter=${encodeURIComponent(`createdDateTime ge ${sinceIso}`)}` +
       `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_EVENT_SELECT}`,
-    method: "GET"
+    method: "GET",
+    headers: GRAPH_UTC_HEADERS
   });
   if (!res) throw new Error("calendar_not_connected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
@@ -309,7 +318,8 @@ async function fetchUpcoming(
       `${base}?startDateTime=${encodeURIComponent(timeMin)}` +
       `&endDateTime=${encodeURIComponent(timeMax)}` +
       `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_VIEW_SELECT}`,
-    method: "GET"
+    method: "GET",
+    headers: GRAPH_UTC_HEADERS
   });
   if (!res) throw new Error("calendar_not_connected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])

@@ -590,8 +590,13 @@ describe("pollCalendarTriggers", () => {
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(1);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
-    expect(endpoint).toContain("/v1.0/me/calendar/events?$filter=");
+    const cfg = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      endpoint: string;
+      headers?: Record<string, string>;
+    };
+    expect(cfg.endpoint).toContain("/v1.0/me/calendar/events?$filter=");
+    // Graph must convert start/end to UTC or zone-less times misparse.
+    expect(cfg.headers).toEqual({ Prefer: 'outlook.timezone="UTC"' });
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         dedupeKey: "cal:m1",
@@ -615,10 +620,14 @@ describe("pollCalendarTriggers", () => {
       dbWith([flowRow("f1", startTrigger(30, { calendar: "shared" }))])
     );
     expect(res.enqueued).toBe(1);
-    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
-    expect(endpoint).toContain("/v1.0/me/calendars/ms-shared-1/calendarView?");
+    const cfg = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      endpoint: string;
+      headers?: Record<string, string>;
+    };
+    expect(cfg.endpoint).toContain("/v1.0/me/calendars/ms-shared-1/calendarView?");
     // calendarView rejects $select on createdDateTime; the view select must omit it.
-    expect(endpoint).not.toContain("createdDateTime");
+    expect(cfg.endpoint).not.toContain("createdDateTime");
+    expect(cfg.headers).toEqual({ Prefer: 'outlook.timezone="UTC"' });
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({ dedupeKey: `cal:m2:${startIso}` }),
       expect.anything()
