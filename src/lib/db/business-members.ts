@@ -201,8 +201,9 @@ export async function bindBusinessMemberUser(
     .from("business_members")
     .update({ user_id: userId, status: "active", accepted_at: new Date().toISOString() })
     .eq("status", "invited")
-    // The column is stored lowercased by inviteBusinessMember; eq on the
-    // normalized value stays index-friendly.
+    // The column is lowercase BY SCHEMA (CHECK email = lower(email)) and
+    // indexed as a plain column, so this equality predicate is an index
+    // lookup — not a scan — on every dashboard render.
     .eq("email", normalized)
     .select("id");
   if (error) throw new Error(`bindBusinessMemberUser: ${error.message}`);

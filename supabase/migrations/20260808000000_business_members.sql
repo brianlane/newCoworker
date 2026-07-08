@@ -17,7 +17,9 @@
 create table if not exists public.business_members (
   id uuid primary key default gen_random_uuid(),
   business_id uuid not null references public.businesses(id) on delete cascade,
-  email text not null check (char_length(email) between 3 and 320),
+  -- Stored LOWERCASED (enforced) so the plain-column indexes below serve the
+  -- app's `email = ?` lookups; the app normalizes before every write/read.
+  email text not null check (char_length(email) between 3 and 320 and email = lower(email)),
   -- Supabase auth user id; null until the invitee's first login.
   user_id uuid,
   role text not null check (role in ('manager', 'staff')),
@@ -39,12 +41,15 @@ create policy "Service role manages business_members"
 
 -- One membership per (business, email) regardless of status: a re-invite
 -- flips the existing revoked row back to invited instead of stacking rows.
+-- Plain columns (not lower(email) expressions) because the CHECK above
+-- guarantees lowercase storage and the app queries `email = ?` — an
+-- expression index would never match those predicates.
 create unique index if not exists business_members_business_email_idx
-  on public.business_members (business_id, lower(email));
+  on public.business_members (business_id, email);
 
--- Login binding scans by email across businesses.
+-- Login binding scans by email across businesses (runs on dashboard render).
 create index if not exists business_members_email_idx
-  on public.business_members (lower(email));
+  on public.business_members (email);
 
 create index if not exists business_members_user_idx
   on public.business_members (user_id)
