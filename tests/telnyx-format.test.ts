@@ -111,5 +111,19 @@ describe("normalizeDialableNumber", () => {
   it("propagates the base rejection for junk input", () => {
     expect(normalizeDialableNumber("not-a-number").ok).toBe(false);
     expect(normalizeDialableNumber("").ok).toBe(false);
+    expect(normalizeDialableNumber(null).ok).toBe(false);
+  });
+
+  it("rejects extension text instead of silently storing a wrong number", () => {
+    const r = normalizeDialableNumber("+1 (602) 555-1234 x99");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("extensions");
+    expect(normalizeDialableNumber("602-555-1234 ext 99").ok).toBe(false);
+  });
+
+  it("rejects a +1 number whose digits include a pasted extension", () => {
+    const r = normalizeDialableNumber("+1 (602) 555-1234 99");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain("10 digits");
   });
 });

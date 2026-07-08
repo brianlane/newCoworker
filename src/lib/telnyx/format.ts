@@ -93,18 +93,36 @@ export function normalizeContactNumber(
 /**
  * Like {@link normalizeContactNumber} but for numbers that must be dialable
  * (employee roster, SMS offer targets): the same forgiving parsing — bare
- * 10-digit US numbers get `+1` — except short codes are refused because they
- * can't receive calls or route_to_team offers.
+ * 10-digit US numbers get `+1` — with two extra refusals:
+ *  - short codes (can't receive calls or route_to_team offers), and
+ *  - extension text. `normalizeContactNumber` silently strips non-digits, so
+ *    `"+1 (602) 555-1234 x99"` would otherwise store `+1602555123499` and SMS
+ *    a wrong number. Any letters in the input are rejected outright, and a
+ *    `+1` result must be exactly 10 digits long (NANP is fixed-length, so a
+ *    digits-only trailing extension can't slip through either).
  */
 export function normalizeDialableNumber(
   raw: string | null | undefined
 ): NormalizedContactNumber {
-  const normalized = normalizeContactNumber(raw);
+  const trimmed = (raw ?? "").trim();
+  if (/[a-z]/i.test(trimmed)) {
+    return {
+      ok: false,
+      reason: "Enter digits only, without extensions — e.g. 602-555-1234"
+    };
+  }
+  const normalized = normalizeContactNumber(trimmed);
   if (!normalized.ok) return normalized;
   if (!E164_RE.test(normalized.value)) {
     return {
       ok: false,
       reason: "Enter a full phone number, e.g. 602-555-1234 or +442071234567"
+    };
+  }
+  if (normalized.value.startsWith("+1") && normalized.value.length !== 12) {
+    return {
+      ok: false,
+      reason: "US (+1) numbers must have exactly 10 digits after the country code"
     };
   }
   return normalized;
