@@ -14,6 +14,15 @@ interface SidebarItem {
   icon: LucideIcon;
 }
 
+export interface SidebarBrand {
+  /** Replaces the "New Coworker" wordmark. */
+  productName?: string;
+  /** https logo, replaces /logo.png. Validated upstream (brandingSchema). */
+  logoUrl?: string;
+  /** Accent for the active nav item; #hex validated upstream. */
+  accentColor?: string;
+}
+
 interface SidebarProps {
   items: SidebarItem[];
   userEmail?: string | null;
@@ -23,9 +32,22 @@ interface SidebarProps {
    * for that item.
    */
   renderTrailing?: (item: SidebarItem) => ReactNode;
+  /** White-label branding (enterprise); undefined renders platform branding. */
+  brand?: SidebarBrand | null;
 }
 
-export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
+/**
+ * Expand #rgb shorthand to #rrggbb, then append a hex alpha. Appending alpha
+ * to shorthand directly (e.g. "#0f0" + "26" = "#0f026") is not a valid CSS
+ * color; the schema allows both hex shapes so normalize first.
+ */
+function hexWithAlpha(hex: string, alphaHex: string): string {
+  const full =
+    hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
+  return `${full}${alphaHex}`;
+}
+
+export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProps) {
   const pathname = usePathname();
   // Mobile-only off-canvas state. At lg+ the drawer is always static/visible
   // (CSS), so this flag only matters below lg.
@@ -77,8 +99,23 @@ export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
         ].join(" ")}
       >
         <div className="flex items-center gap-3 border-b border-parchment/10 px-5 py-5">
-          <Image src="/logo.png" alt="New Coworker" width={32} height={32} className="rounded-full" />
-          <span className="text-sm font-semibold text-parchment">New Coworker</span>
+          {brand?.logoUrl ? (
+            // Tenant-hosted logo: a plain <img> because next/image requires
+            // per-domain allow-listing, which can't cover arbitrary tenant CDNs.
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={brand.logoUrl}
+              alt={brand.productName ?? "Logo"}
+              width={32}
+              height={32}
+              className="h-8 w-8 rounded-full object-cover"
+            />
+          ) : (
+            <Image src="/logo.png" alt="New Coworker" width={32} height={32} className="rounded-full" />
+          )}
+          <span className="text-sm font-semibold text-parchment">
+            {brand?.productName ?? "New Coworker"}
+          </span>
           {/* Close button (mobile only). */}
           <button
             type="button"
@@ -95,15 +132,27 @@ export function Sidebar({ items, userEmail, renderTrailing }: SidebarProps) {
             const Icon = item.icon;
             const active = activeItem?.href === item.href;
             const trailing = renderTrailing ? renderTrailing(item) : null;
+            // Accent override for the active item: inline style (the color is
+            // schema-validated #hex) since Tailwind tokens can't be tenant-set.
+            const accentStyle =
+              active && brand?.accentColor
+                ? {
+                    color: brand.accentColor,
+                    backgroundColor: hexWithAlpha(brand.accentColor, "26")
+                  }
+                : undefined;
             return (
               <Link
                 key={item.href}
                 href={item.href}
                 onClick={() => setOpen(false)}
+                style={accentStyle}
                 className={[
                   "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors",
                   active
-                    ? "bg-signal-teal/15 text-signal-teal"
+                    ? accentStyle
+                      ? ""
+                      : "bg-signal-teal/15 text-signal-teal"
                     : "text-parchment/60 hover:bg-parchment/8 hover:text-parchment"
                 ].join(" ")}
               >

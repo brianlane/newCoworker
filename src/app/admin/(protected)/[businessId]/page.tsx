@@ -35,6 +35,8 @@ import { ByosEnrollmentPanel } from "@/components/admin/ByosEnrollmentPanel";
 import { VpsProviderPanel } from "@/components/admin/VpsProviderPanel";
 import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
 import { EnterpriseBillingPanel } from "@/components/admin/EnterpriseBillingPanel";
+import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
+import { parseBranding } from "@/lib/plans/branding";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { byosBoxId } from "@/lib/provisioning/byos";
@@ -179,6 +181,13 @@ export default async function BusinessDetailPage({
             }))}
           />
         </Card>
+      )}
+
+      {business.tier === "enterprise" && (
+        <BrandingEditor
+          businessId={businessId}
+          initialBranding={parseBranding((business as { branding?: unknown }).branding)}
+        />
       )}
 
       {business.tier === "enterprise" && (

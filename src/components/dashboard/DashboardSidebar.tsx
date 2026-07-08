@@ -117,10 +117,13 @@ function useUnreadNotificationCount(businessId: string | null): number {
 
 export function DashboardSidebar({
   userEmail,
-  businessId
+  businessId,
+  brand
 }: {
   userEmail?: string | null;
   businessId?: string | null;
+  /** White-label branding (enterprise); null/undefined = platform branding. */
+  brand?: import("@/components/ui/Sidebar").SidebarBrand | null;
 }) {
   const unread = useUnreadNotificationCount(businessId ?? null);
 
@@ -128,6 +131,7 @@ export function DashboardSidebar({
     <Sidebar
       items={ownerNavItems}
       userEmail={userEmail}
+      brand={brand}
       renderTrailing={(item) => {
         if (item.href !== "/dashboard/notifications") return null;
         if (unread <= 0) return null;

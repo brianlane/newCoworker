@@ -13,6 +13,8 @@ import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForm
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
 import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
 import { TeamAccessManager } from "@/components/dashboard/TeamAccessManager";
+import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
+import { parseBranding } from "@/lib/plans/branding";
 import { listBusinessMembers } from "@/lib/db/business-members";
 import { listTeamMembers } from "@/lib/db/employees";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -39,7 +41,7 @@ export default async function SettingsPage() {
   const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name, tier, enterprise_limits, timezone")
+    .select("id, name, tier, enterprise_limits, timezone, branding")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
     .limit(1);
@@ -161,6 +163,13 @@ export default async function SettingsPage() {
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
+      )}
+
+      {business && isEnterprise && (
+        <BrandingEditor
+          businessId={business.id}
+          initialBranding={parseBranding((business as { branding?: unknown }).branding)}
+        />
       )}
 
       {business && isEnterprise && (
