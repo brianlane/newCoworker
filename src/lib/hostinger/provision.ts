@@ -36,6 +36,7 @@ import {
   type Action,
   type CatalogItem,
   type HostingerClient,
+  type PostInstallScript,
   type VirtualMachine,
   type VpsPurchaseRequest,
   type VpsSetupRequest
@@ -288,32 +289,75 @@ export async function provisionVpsForBusiness(
   //    orchestrator's SSH-bootstrap path runs the same content over SSH
   //    after the VPS reaches `running`. Both paths converge to the same
   //    final state because the script is idempotent.
+  //
+  //    Timeouts / network failures (`status: 0` on HostingerApiError) get
+  //    ONE retry and then the same degrade: the Jul 8 2026 Truly Insurance
+  //    signup died at 5% because Hostinger's API spent minutes answering
+  //    normally sub-second calls and this attach — an optimization with a
+  //    guaranteed SSH fallback — timed out and was treated as fatal. A
+  //    retry covers blips; the degrade covers sustained slowness. The
+  //    attach POST only creates a script resource (no money moves), so a
+  //    retry after an ambiguous timeout is safe — worst case is a
+  //    duplicate timestamped resource in the panel. Every OTHER status
+  //    (402/422/5xx…) still throws: those fire before the purchase and
+  //    usually indicate an account/token problem the operator must see.
   let postInstallScriptId: number | null = null;
   if (input.postInstallScript) {
     const scriptName =
       input.postInstallScriptName ??
       `newcoworker-${input.businessId}-${Date.now().toString(36)}`;
-    try {
-      const created = await client.createPostInstallScript(scriptName, input.postInstallScript);
-      postInstallScriptId = created.id;
-      onProgress?.("post_install_script_registered", {
-        postInstallScriptId,
-        scriptName
-      });
-    } catch (err) {
-      const status = errStatus(err);
-      if (status === 403) {
-        // Expected on brand-new accounts. Log + continue; SSH-bootstrap
-        // will pick up the slack downstream.
-        logger.warn(
-          "Hostinger post-install-scripts attach skipped (account not yet eligible — falling back to SSH-bootstrap)",
-          {
-            businessId: input.businessId,
-            scriptName,
-            status
-          }
+    let attempt = 0;
+    for (;;) {
+      attempt += 1;
+      try {
+        const created: PostInstallScript = await client.createPostInstallScript(
+          scriptName,
+          input.postInstallScript
         );
-      } else {
+        postInstallScriptId = created.id;
+        onProgress?.("post_install_script_registered", {
+          postInstallScriptId,
+          scriptName
+        });
+        break;
+      } catch (err) {
+        const status = errStatus(err);
+        if (status === 403) {
+          // Expected on brand-new accounts. Log + continue; SSH-bootstrap
+          // will pick up the slack downstream.
+          logger.warn(
+            "Hostinger post-install-scripts attach skipped (account not yet eligible — falling back to SSH-bootstrap)",
+            {
+              businessId: input.businessId,
+              scriptName,
+              status
+            }
+          );
+          break;
+        }
+        if (status === 0) {
+          // Timeout or network failure. Retry once, then degrade to
+          // "no script attached" — the SSH-bootstrap phase produces the
+          // same end state, so a slow Hostinger API must never kill the
+          // provision here.
+          if (attempt < 2) {
+            logger.warn("Hostinger post-install-scripts attach timed out — retrying once", {
+              businessId: input.businessId,
+              scriptName,
+              attempt
+            });
+            continue;
+          }
+          logger.warn(
+            "Hostinger post-install-scripts attach timed out twice — skipping (falling back to SSH-bootstrap)",
+            {
+              businessId: input.businessId,
+              scriptName,
+              error: errToMessage(err)
+            }
+          );
+          break;
+        }
         throw err;
       }
     }

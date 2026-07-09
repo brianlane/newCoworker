@@ -526,6 +526,116 @@ describe("provisionVpsForBusiness", () => {
     expect(phases).toContain("ssh_key_persisted");
   });
 
+  it("retries the post-install-script attach once on timeout and uses the second attempt's id", async () => {
+    // status 0 = HostingerClient's timeout/network wrapper. First attempt
+    // times out, second succeeds → the PIS still lands and purchase carries
+    // its id. (Root cause of the Jul 8 2026 Truly Insurance 5% failure —
+    // a single slow POST used to abort the whole provision.)
+    const pisStub = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new FakeHostingerApiError("/api/vps/v1/post-install-scripts", 0, null)
+      )
+      .mockResolvedValueOnce({ id: 9002, name: "pis-retry", content: "" });
+    const client = makeClientStub({
+      createPostInstallScript: pisStub,
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+    const phases: string[] = [];
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert },
+        onProgress: (p) => phases.push(p)
+      }
+    );
+
+    expect(pisStub).toHaveBeenCalledTimes(2);
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBe(9002);
+    expect(result.postInstallScriptId).toBe(9002);
+    expect(phases).toContain("post_install_script_registered");
+  });
+
+  it("degrades to no-PIS (SSH-bootstrap fallback) when the attach times out twice", async () => {
+    const timeoutErr = () =>
+      new FakeHostingerApiError("/api/vps/v1/post-install-scripts", 0, null);
+    const pisStub = vi
+      .fn()
+      .mockRejectedValueOnce(timeoutErr())
+      .mockRejectedValueOnce(timeoutErr());
+    const client = makeClientStub({
+      createPostInstallScript: pisStub,
+      getVirtualMachine: vi.fn().mockResolvedValueOnce({
+        id: 42,
+        state: "running",
+        ipv4: [{ id: 1, address: "1.2.3.4" }]
+      })
+    });
+    const dbInsert = vi.fn().mockResolvedValue({
+      id: "row",
+      business_id: "biz-1",
+      hostinger_vps_id: "42",
+      hostinger_public_key_id: 9,
+      public_key: fakeKeypair.publicKey,
+      private_key_pem: fakeKeypair.privateKeyPem,
+      fingerprint_sha256: fakeKeypair.fingerprintSha256,
+      ssh_username: "root",
+      created_at: "",
+      rotated_at: null
+    });
+    const phases: string[] = [];
+
+    const result = await provisionVpsForBusiness(
+      {
+        businessId: "biz-1",
+        tier: "starter",
+        postInstallScript: "#!/bin/bash\necho hi",
+        pollIntervalMs: 1
+      },
+      {
+        client: client as unknown as HostingerClient,
+        generateKeypair: vi.fn().mockResolvedValue(fakeKeypair),
+        sleep: vi.fn(),
+        db: { insertVpsSshKey: dbInsert },
+        onProgress: (p) => phases.push(p)
+      }
+    );
+
+    // Both attempts timed out → degrade exactly like the 403 path: no
+    // post_install_script_id on the setup payload, provision still
+    // completes, and the orchestrator's SSH-bootstrap pass does the work.
+    expect(pisStub).toHaveBeenCalledTimes(2);
+    expect(client.purchaseVirtualMachine.mock.calls[0][0].setup.post_install_script_id).toBeUndefined();
+    expect(result.postInstallScriptId).toBeNull();
+    expect(phases).not.toContain("post_install_script_registered");
+    expect(phases).toContain("ssh_key_persisted");
+  });
+
   it("re-throws non-403 errors from createPostInstallScript", async () => {
     const pisStub = vi
       .fn()
