@@ -92,12 +92,14 @@ export async function POST(request: Request) {
         if (tz && !existing.timezone) {
           await updateBusinessTimezone(existing.id, tz);
         }
-        // Same backfill contract for the signup-requested DID area code: a
-        // retry can carry a preference the original insert never persisted
-        // (row created by a pre-deploy version, or the first request raced
-        // the client write). Never clobber an existing value.
+        // Signup-requested DID area code: a retry can carry a preference the
+        // original insert never persisted, OR a value the user changed on a
+        // Step-1 back-navigation before completing checkout. This route only
+        // runs during onboarding (nothing else writes the column), so the
+        // latest VALID signup input wins; invalid/absent input leaves the
+        // stored value untouched.
         const retryAreaCode = normalizePreferredAreaCode(body.preferredAreaCode);
-        if (retryAreaCode && !existing.preferred_area_code) {
+        if (retryAreaCode && existing.preferred_area_code !== retryAreaCode) {
           await updateBusinessPreferredAreaCode(existing.id, retryAreaCode);
         }
         logger.info("business.create idempotent: returning existing row", {

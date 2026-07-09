@@ -295,7 +295,9 @@ describe("/api/business/create — Step 1 dropdown teamSize → integer mapping"
     expect(updateBusinessPreferredAreaCode).toHaveBeenCalledWith(BIZ, "519");
   });
 
-  it("never clobbers an existing preferred_area_code on retry", async () => {
+  it("updates preferred_area_code on retry when the user changed it (latest valid input wins)", async () => {
+    // Step-1 back-navigation after the row was written: the create call is
+    // re-hit with the new value and the existing-row path applies it.
     vi.mocked(getBusiness).mockResolvedValue({
       id: BIZ,
       name: "Acme Realty",
@@ -308,6 +310,23 @@ describe("/api/business/create — Step 1 dropdown teamSize → integer mapping"
     } as never);
 
     const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "519" })));
+    expect(res.status).toBe(200);
+    expect(updateBusinessPreferredAreaCode).toHaveBeenCalledWith(BIZ, "519");
+  });
+
+  it("skips the retry write when the stored value already matches", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Acme Realty",
+      owner_email: PENDING_EMAIL,
+      tier: "starter",
+      status: "offline",
+      hostinger_vps_id: null,
+      preferred_area_code: "519",
+      created_at: new Date().toISOString()
+    } as never);
+
+    const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "(519)" })));
     expect(res.status).toBe(200);
     expect(updateBusinessPreferredAreaCode).not.toHaveBeenCalled();
   });

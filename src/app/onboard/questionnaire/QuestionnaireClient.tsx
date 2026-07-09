@@ -565,6 +565,29 @@ function QuestionnaireForm() {
           persistedToDatabase: true
         };
         localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+      } else if (onboardingData.preferredAreaCode?.trim()) {
+        // The business row already exists (e.g. a Stripe-cancel return), so
+        // the create call above is skipped — but the user may have edited
+        // their preferred area code on Step 1 since the row was written.
+        // Re-hit the idempotent create route, whose existing-row path
+        // updates `preferred_area_code` from the latest valid input.
+        // Fire-and-forget like the website-ingest below: a failure (or a
+        // 409 on a legacy row) must never block checkout, and local state
+        // (onboardingToken etc.) stays untouched.
+        try {
+          void fetch("/api/business/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              businessId,
+              ownerEmail: onboardingData.ownerEmail,
+              name: onboardingData.businessName,
+              tier: onboardingData.tier,
+              preferredAreaCode: onboardingData.preferredAreaCode
+            })
+          });
+        } catch { /* non-blocking */ }
       }
 
       // Fire-and-forget website ingest while the user goes to Stripe.
