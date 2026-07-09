@@ -94,6 +94,17 @@ export function fingerprintIdentifier(e164: string | null, email: string | null)
     .digest("hex");
 }
 
+/**
+ * Escape LIKE/ILIKE metacharacters so an identifier is matched as a LITERAL
+ * (case-insensitively), never as a pattern. Without this, an email whose
+ * local part contains `_` or `%` (both legal in email addresses) would
+ * wildcard-match and erase OTHER people's rows — the exact opposite of a
+ * scoped privacy deletion.
+ */
+export function escapeLikeLiteral(value: string): string {
+  return value.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
 /* c8 ignore next 2 -- production default; tests inject dataApiFor */
 const defaultDataApiFor = (businessId: string): Pick<DataApiClient, "select" | "delete"> =>
   new DataApiClient(businessId);
@@ -108,6 +119,8 @@ export async function deleteEndUserData(
   deps: DeletionDeps = {}
 ): Promise<DeletionResult> {
   const { e164, email } = normalizeEndUserIdentifier(ident);
+  // ILIKE gives the case-insensitivity; escaping keeps the match LITERAL.
+  const emailPattern = email === null ? null : escapeLikeLiteral(email);
   const db = deps.client ?? (await createSupabaseServiceClient());
   const dataApiFor = deps.dataApiFor ?? defaultDataApiFor;
 
@@ -171,7 +184,7 @@ export async function deleteEndUserData(
         .from("contacts")
         .delete()
         .eq("business_id", businessId)
-        .ilike("email", email)
+        .ilike("email", emailPattern!)
         .select("id");
       if (error) throw new EndUserDeletionError(`contacts (email): ${error.message}`);
       central += count(data);
@@ -210,7 +223,7 @@ export async function deleteEndUserData(
           box += await boxDelete("contacts", [{ column: "id", op: "in", value: aliasIds }]);
         }
       }
-      if (email) box += await boxDelete("contacts", [{ column: "email", op: "ilike", value: email }]);
+      if (email) box += await boxDelete("contacts", [{ column: "email", op: "ilike", value: emailPattern! }]);
     }
     results.push({ table: "contacts", central, box });
   }
@@ -348,13 +361,13 @@ export async function deleteEndUserData(
         .from("email_log")
         .delete()
         .eq("business_id", businessId)
-        .ilike("to_email", email)
+        .ilike("to_email", emailPattern!)
         .select("id"),
       db
         .from("email_log")
         .delete()
         .eq("business_id", businessId)
-        .ilike("from_email", email)
+        .ilike("from_email", emailPattern!)
         .select("id")
     ]);
     if (to.error) throw new EndUserDeletionError(`email_log (to): ${to.error.message}`);
@@ -364,8 +377,8 @@ export async function deleteEndUserData(
     let box: number | null = null;
     if (api) {
       box =
-        (await boxDelete("email_log", [{ column: "to_email", op: "ilike", value: email }])) +
-        (await boxDelete("email_log", [{ column: "from_email", op: "ilike", value: email }]));
+        (await boxDelete("email_log", [{ column: "to_email", op: "ilike", value: emailPattern! }])) +
+        (await boxDelete("email_log", [{ column: "from_email", op: "ilike", value: emailPattern! }]));
     }
     results.push({ table: "email_log", central: central.sent + central.received, box });
   }

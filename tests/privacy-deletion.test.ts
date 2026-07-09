@@ -14,6 +14,7 @@ vi.mock("@/lib/logger", () => ({
 import {
   EndUserDeletionError,
   deleteEndUserData,
+  escapeLikeLiteral,
   fingerprintIdentifier,
   normalizeEndUserIdentifier
 } from "@/lib/privacy/deletion";
@@ -77,6 +78,11 @@ describe("normalizeEndUserIdentifier / fingerprintIdentifier", () => {
       e164: E164,
       email: "person@example.com"
     });
+  });
+
+  it("escapeLikeLiteral neutralizes ILIKE metacharacters", () => {
+    expect(escapeLikeLiteral("jo_hn%doe\\x@a.co")).toBe("jo\\_hn\\%doe\\\\x@a.co");
+    expect(escapeLikeLiteral("plain@a.co")).toBe("plain@a.co");
   });
 
   it("fingerprint is the sha256 of the normalized pair", () => {
@@ -270,6 +276,23 @@ describe("deleteEndUserData — residency (dual/vps) tenants", () => {
     expect(boxedTables).toEqual(["contacts", "email_log", "email_log"]);
     const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
     expect(byTable.email_log.central).toBe(0);
+  });
+
+  it("passes the ESCAPED literal to every ilike filter (no wildcard erasure)", async () => {
+    vi.mocked(residencyModeFor).mockResolvedValue("vps");
+    const apiDelete = vi.fn().mockResolvedValue({ ok: true, rows: [] });
+    await deleteEndUserData(
+      BIZ,
+      { email: "jo_hn%doe@example.com" },
+      { client: makeCentralDb() as never, dataApiFor: () => makeApi({ delete: apiDelete }) }
+    );
+    const emailFilters = apiDelete.mock.calls
+      .flatMap((c) => (c[0] as { filters: Array<{ op: string; value: unknown }> }).filters)
+      .filter((f) => f.op === "ilike");
+    expect(emailFilters.length).toBeGreaterThan(0);
+    for (const f of emailFilters) {
+      expect(f.value).toBe("jo\\_hn\\%doe@example.com");
+    }
   });
 
   it("skips the box turns pass when the person has no box transcripts", async () => {
