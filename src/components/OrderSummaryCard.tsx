@@ -110,6 +110,14 @@ export function OrderSummaryCard({
           continues month-to-month at {renewalPrice} unless you renew your contract.
         </p>
       )}
+      {isTermPlan && (
+        <p className="text-xs text-parchment/45">
+          30-day money-back guarantee: cancel within 30 days and we refund your term payment
+          minus one month of service at the monthly rate (
+          {formatPriceCents(getPeriodPricing(tier, "monthly").monthlyCents)}) and the carrier
+          registration fee.
+        </p>
+      )}
     </div>
   );
 }

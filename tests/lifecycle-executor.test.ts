@@ -97,13 +97,14 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
-function refundPlan(amountCents = 2500): LifecyclePlan {
+function refundPlan(amountCents = 2500, termCarveOutCents = 0): LifecyclePlan {
   return {
     stripeOps: [
       {
         type: "refund_latest_charge",
         stripeSubscriptionId: "sub_123",
-        reason: "thirty_day_money_back"
+        reason: "thirty_day_money_back",
+        termCarveOutCents
       }
     ],
     hostingerOps: [],
@@ -463,6 +464,77 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
       expect.objectContaining({ amountCents: 19898 })
     );
+  });
+
+  it("withholds the term carve-out (one month at the monthly rate) on term-plan refunds", async () => {
+    // Standard biennial: 24 × $99 = $2376 plan + $19.50 fee = $2395.50 paid.
+    // Refund = 239550 − 1950 (fee) − 19500 (one month at monthly rate) = 218100.
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_term" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_term",
+          amount_paid: 239550,
+          lines: {
+            data: [
+              { description: "1 × New Coworker Standard (at $2,376.00 / 24 months)", amount: 237600 },
+              { description: "Carrier registration (10DLC)", amount: 1950 }
+            ]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_term" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_term", latest_charge: "ch_term" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_term" }) }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(239550, 19500),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_term", amount: 218100 })
+    );
+    expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({ amountCents: 218100 })
+    );
+  });
+
+  it("skips the refund when the carve-outs meet or exceed the amount paid", async () => {
+    // Degenerate safety: a tiny invoice (e.g. heavily comped) where fee +
+    // term carve-out swallow everything must clamp to zero and skip, never
+    // attempt a negative Stripe refund.
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_tiny" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_tiny",
+          amount_paid: 5000,
+          lines: {
+            data: [{ description: "Carrier registration (10DLC)", amount: 1950 }]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_tiny" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_tiny", latest_charge: "ch_tiny" })
+      },
+      refunds: { create: vi.fn() }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(5000, 19500),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+    expect(recordSubscriptionRefundMock).not.toHaveBeenCalled();
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
   });
 
   it("skips the refund entirely when only the carrier fee was paid", async () => {
@@ -1127,7 +1199,8 @@ describe("executeLifecyclePlanFastPhase / executeLifecyclePlanSlowPhase", () => 
         {
           type: "refund_latest_charge",
           stripeSubscriptionId: "sub_fastslow",
-          reason: "thirty_day_money_back"
+          reason: "thirty_day_money_back",
+          termCarveOutCents: 0
         },
         {
           type: "cancel_subscription",
