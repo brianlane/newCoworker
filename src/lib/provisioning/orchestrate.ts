@@ -44,6 +44,11 @@ import {
 import { resolveResidencyBackupPassphraseForDeploy } from "@/lib/residency/backup-keys";
 import { assertResidencyForPlacement } from "@/lib/residency/enforce";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
+import {
+  parseComplianceModule,
+  renderComplianceModuleSection,
+  type ComplianceModule
+} from "@/lib/compliance/module";
 import { parseEnterpriseModels } from "@/lib/plans/enterprise-models";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
@@ -127,13 +132,22 @@ function resolveBoxTier(tier: ProvisioningInput["tier"]): "starter" | "standard"
  * gets a neutral guardrail. Onboarding later regenerates soul.md via
  * `compileSoulMd`, which applies the same per-type rule.
  */
-function loadSoulTemplate(businessType?: string | null): string {
+function loadSoulTemplate(
+  businessType?: string | null,
+  complianceModule?: ComplianceModule | null
+): string {
   const compliance = buildComplianceSystemPrompt(businessType);
+  // Enterprise custom compliance module (additive, marker-delimited) so a
+  // fresh provision bakes it in; later admin edits rewrite the same block
+  // through /api/admin/compliance-module + vault sync.
+  const customSection = complianceModule
+    ? `\n\n${renderComplianceModuleSection(complianceModule)}`
+    : "";
   try {
     const base = readFileSync(join(process.cwd(), "vps/templates/soul.md"), "utf-8").trimEnd();
-    return `${base}\n\n## Compliance\n${compliance}\n`;
+    return `${base}\n\n## Compliance\n${compliance}${customSection}\n`;
   } catch {
-    return `# soul.md\nYou are a professional AI coworker.\n\n## Compliance\n${compliance}\n`;
+    return `# soul.md\nYou are a professional AI coworker.\n\n## Compliance\n${compliance}${customSection}\n`;
   }
 }
 
@@ -1105,7 +1119,16 @@ async function runOrchestrator(
   const existingConfig = await getBusinessConfig(businessId);
   await upsertBusinessConfig({
     business_id: businessId,
-    soul_md: existingConfig?.soul_md ?? loadSoulTemplate(businessRow?.business_type),
+    soul_md:
+      existingConfig?.soul_md ??
+      loadSoulTemplate(
+        businessRow?.business_type,
+        businessRow?.tier === "enterprise"
+          ? parseComplianceModule(
+              (businessRow as { compliance_module?: unknown }).compliance_module
+            )
+          : null
+      ),
     identity_md: existingConfig?.identity_md ?? loadIdentityTemplate(),
     memory_md: existingConfig?.memory_md ?? "# memory.md\nLossless memory DAG initialized.",
     // Preserve the onboarding website crawl. Without this the upsert defaults

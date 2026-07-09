@@ -1,6 +1,10 @@
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { getBusinessRoleForEmail } from "@/lib/db/business-members";
 import { can } from "@/lib/authz/policy";
+import {
+  applyComplianceModuleToSoul,
+  parseComplianceModule
+} from "@/lib/compliance/module";
 import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -162,13 +166,41 @@ export async function POST(request: Request) {
     // `website_md` (absent from onboarding's payload) is preserved whether the
     // crawl finished before or after this save. Dashboard callers that want to
     // clear it send `websiteMd: ""` explicitly.
+    // Enterprise custom compliance module survives soul edits: the soul
+    // editors round-trip the marker block, but a save that deleted (or
+    // mangled) it must not silently strip the tenant's guardrails while
+    // businesses.compliance_module stays set. Re-apply the canonical block
+    // whenever a module exists — applyComplianceModuleToSoul strips any
+    // existing block first, so a normal round-trip save is a no-op.
+    let soulMd = body.soulMd;
+    const { data: moduleRow } = await db
+      .from("businesses")
+      .select("tier, compliance_module")
+      .eq("id", body.businessId)
+      .maybeSingle();
+    if (moduleRow?.tier === "enterprise") {
+      const complianceModule = parseComplianceModule(moduleRow.compliance_module);
+      if (complianceModule) {
+        soulMd = applyComplianceModuleToSoul(soulMd, complianceModule);
+        // The appended block can push a near-cap soul past the same limit
+        // the schema enforced on the raw input — refuse rather than persist
+        // an oversized document the next editor load would reject.
+        if (soulMd.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            `Soul plus the compliance module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters — shorten the soul text`
+          );
+        }
+      }
+    }
+
     const patch: {
       soul_md: string;
       identity_md: string;
       memory_md?: string;
       website_md?: string;
     } = {
-      soul_md: body.soulMd,
+      soul_md: soulMd,
       identity_md: body.identityMd
     };
     if (body.memoryMd !== undefined) patch.memory_md = body.memoryMd;

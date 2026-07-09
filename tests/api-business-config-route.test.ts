@@ -44,13 +44,15 @@ type SupabaseQueryStub = {
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
+  maybeSingle: ReturnType<typeof vi.fn>;
 };
 
 const supabaseStub: SupabaseQueryStub = {
   from: vi.fn(),
   select: vi.fn(),
   eq: vi.fn(),
-  single: vi.fn()
+  single: vi.fn(),
+  maybeSingle: vi.fn()
 };
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -95,11 +97,58 @@ beforeEach(() => {
     isAdmin: false
   } as never);
   supabaseStub.single.mockResolvedValue({ data: { id: BIZ }, error: null });
+  // Compliance-module lookup (tier + compliance_module): default = no module.
+  supabaseStub.maybeSingle.mockResolvedValue({ data: null, error: null });
   supabaseStub.eq.mockReturnValue(supabaseStub);
   supabaseStub.select.mockReturnValue(supabaseStub);
   supabaseStub.from.mockReturnValue(supabaseStub);
   vi.mocked(updateBusinessWebsiteUrl).mockResolvedValue(undefined as never);
   vi.mocked(patchBusinessConfig).mockResolvedValue(undefined as never);
+});
+
+describe("api/business/config — compliance module survives soul edits", () => {
+  it("re-applies the enterprise module block when a soul save dropped it", async () => {
+    supabaseStub.maybeSingle.mockResolvedValue({
+      data: {
+        tier: "enterprise",
+        compliance_module: {
+          customPrompt: "Never quote settlement amounts on any channel."
+        }
+      },
+      error: null
+    });
+
+    const res = await POST(jsonRequest(baseBody({ soulMd: "owner rewrote everything" })));
+    expect(res.status).toBe(200);
+    const patched = vi.mocked(patchBusinessConfig).mock.calls[0][1] as { soul_md: string };
+    expect(patched.soul_md).toContain("owner rewrote everything");
+    expect(patched.soul_md).toContain("CUSTOM_COMPLIANCE_MODULE_START");
+    expect(patched.soul_md).toContain("Never quote settlement amounts on any channel.");
+  });
+
+  it("refuses a soul save whose module block would exceed the size cap", async () => {
+    supabaseStub.maybeSingle.mockResolvedValue({
+      data: {
+        tier: "enterprise",
+        compliance_module: { customPrompt: "Never quote settlement amounts on any channel." }
+      },
+      error: null
+    });
+    const res = await POST(
+      jsonRequest(baseBody({ soulMd: "x".repeat(BUSINESS_CONFIG_SOUL_MD_MAX_CHARS - 10) }))
+    );
+    expect(res.status).toBe(400);
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+
+  it("leaves soul text untouched when no module is set", async () => {
+    const res = await POST(jsonRequest(baseBody()));
+    expect(res.status).toBe(200);
+    expect(patchBusinessConfig).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ soul_md: "soul" })
+    );
+  });
 });
 
 describe("api/business/config — websiteUrl persistence", () => {

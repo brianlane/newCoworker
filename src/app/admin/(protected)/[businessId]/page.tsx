@@ -40,6 +40,8 @@ import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
 import { parseBranding } from "@/lib/plans/branding";
 import { EnterpriseModelsEditor } from "@/components/admin/EnterpriseModelsEditor";
 import { parseEnterpriseModels } from "@/lib/plans/enterprise-models";
+import { ComplianceModuleEditor } from "@/components/admin/ComplianceModuleEditor";
+import { parseComplianceModule } from "@/lib/compliance/module";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { byosBoxId } from "@/lib/provisioning/byos";
@@ -191,6 +193,20 @@ export default async function BusinessDetailPage({
           businessId={businessId}
           initialBranding={parseBranding((business as { branding?: unknown }).branding)}
         />
+      )}
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Custom compliance
+          </h2>
+          <ComplianceModuleEditor
+            businessId={businessId}
+            initialModule={parseComplianceModule(
+              (business as { compliance_module?: unknown }).compliance_module
+            )}
+          />
+        </Card>
       )}
 
       {business.tier === "enterprise" && (
