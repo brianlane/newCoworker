@@ -21,11 +21,15 @@ import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/cli
 import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
 
-// Fleet-sized budget: one VM detail call per live tenant plus two list
-// calls. Even at 10× today's fleet this finishes in seconds; 60s covers
-// Hostinger's slow days (their API has been observed taking 30-60s per
-// call under load — the very incident class this cron guards).
-export const maxDuration = 60;
+// Vercel Pro ceiling (mirrors delete-client / migrate-size). The check does
+// one VM detail call per live tenant SEQUENTIALLY, and the HostingerClient's
+// per-request timeout is 30s — on Hostinger's slow days (30-60s responses
+// have been observed under load, the very incident class this cron guards)
+// a 60s budget could abort mid-fleet before later tenants were checked or
+// the findings email was sent. 300s covers ~10 worst-case tenants; the
+// Edge bridge/pg_cron may stop awaiting the response sooner, which is
+// harmless — the function runs to completion and the email sends anyway.
+export const maxDuration = 300;
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<Response> {
