@@ -35,9 +35,13 @@ if (process.argv.includes("--genkey")) {
 loadEnv();
 const APPLY = process.argv.includes("--apply");
 
-if (!process.env.SECRETS_ENCRYPTION_KEY) {
+// Probe the key by round-trip rather than truthiness: encryptSecret treats a
+// missing/whitespace-only key as "not configured" and passes plaintext
+// through, which would make --apply log rows as converted while writing them
+// back unchanged. A malformed key (wrong length) throws here, equally loud.
+if (!isEncryptedSecret(encryptSecret("configuration-probe"))) {
   console.error(
-    "SECRETS_ENCRYPTION_KEY is not set. Generate one with --genkey, add it to .env AND Vercel, then re-run."
+    "SECRETS_ENCRYPTION_KEY is not set (or blank). Generate one with --genkey, add it to .env AND Vercel, then re-run."
   );
   process.exit(1);
 }

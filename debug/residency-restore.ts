@@ -17,6 +17,7 @@
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
+import { decryptSecret } from "../src/lib/crypto/secret-encryption.ts";
 
 loadEnv();
 
@@ -74,19 +75,30 @@ fs.writeFileSync(encPath, Buffer.from(await blob.arrayBuffer()));
 
 const { data: keyRow, error: keyError } = await db
   .from("residency_backup_keys")
-  .select("passphrase")
+  .select("passphrase, custody")
   .eq("business_id", businessId)
   .maybeSingle();
 if (keyError || !keyRow) {
   console.error(`escrowed passphrase unavailable: ${keyError?.message ?? "no row"}`);
   process.exit(1);
 }
+const storedPassphrase = (keyRow as { passphrase: string | null; custody?: string | null })
+  .passphrase;
+if (storedPassphrase === null) {
+  console.error(
+    "passphrase is customer_held (platform escrow dropped) — the customer owns DR for these dumps"
+  );
+  process.exit(1);
+}
+// Post-G5 rows store the passphrase as an enc:v1: envelope; legacy plaintext
+// passes through unchanged.
+const passphrase = decryptSecret(storedPassphrase);
 
 const sqlGzPath = encPath.replace(/\.enc$/, "");
 const dec = spawnSync(
   "openssl",
   ["enc", "-d", "-aes-256-cbc", "-pbkdf2", "-pass", "env:RESIDENCY_BACKUP_PASSPHRASE", "-in", encPath, "-out", sqlGzPath],
-  { env: { ...process.env, RESIDENCY_BACKUP_PASSPHRASE: (keyRow as { passphrase: string }).passphrase } }
+  { env: { ...process.env, RESIDENCY_BACKUP_PASSPHRASE: passphrase } }
 );
 if (dec.status !== 0) {
   console.error(`decrypt failed: ${dec.stderr?.toString() ?? dec.status}`);
