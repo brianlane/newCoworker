@@ -260,18 +260,34 @@ export async function POST(request: Request) {
     // draft read/write failure falls back to the row.
     let draftPhone: string | null = null;
     if (body.draftToken) {
+      let candidate: string | null = null;
       try {
         const draft = await getOnboardingDraft(body.businessId, body.draftToken);
         const p = (draft?.payload as { phone?: unknown } | null)?.phone;
-        draftPhone = typeof p === "string" && p.trim() ? p : null;
-        if (draftPhone && feeBusiness && draftPhone !== feeBusiness.phone) {
-          await updateBusinessPhone(body.businessId, draftPhone);
-        }
+        candidate = typeof p === "string" && p.trim() ? p : null;
       } catch (err) {
         logger.warn("checkout: draft read for Canada-fee detection failed (using business row)", {
           businessId: body.businessId,
           error: err instanceof Error ? err.message : String(err)
         });
+      }
+      if (candidate && feeBusiness && candidate !== feeBusiness.phone) {
+        try {
+          await updateBusinessPhone(body.businessId, candidate);
+          draftPhone = candidate;
+        } catch (err) {
+          // Billing must classify from the same value provisioning will read.
+          // If the row couldn't be synced, keep classifying from the (stale)
+          // row rather than billing a Canadian fee against a US provisioning
+          // run (or vice versa).
+          logger.warn("checkout: business phone sync failed; classifying from the stored row", {
+            businessId: body.businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      } else if (candidate) {
+        // Same as the row (or no row exists): nothing to sync.
+        draftPhone = candidate;
       }
     }
     const canadian = isCanadianBusiness({

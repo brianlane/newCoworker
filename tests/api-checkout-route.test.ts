@@ -292,6 +292,81 @@ describe("api/checkout route", () => {
     expect(updateBusinessPhone).toHaveBeenCalledWith(businessId, "4164560696");
   });
 
+  it("classifies from the stored row when the phone write-back fails (billing matches provisioning)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "6025551234", // US row that provisioning will read
+      timezone: "America/Phoenix"
+    } as never);
+    vi.mocked(getOnboardingDraft).mockResolvedValue({
+      business_id: businessId,
+      draft_token: "33333333-3333-4333-8333-333333333333",
+      payload: { phone: "4164560696" } // Canadian edit that couldn't be persisted
+    } as never);
+    vi.mocked(updateBusinessPhone).mockRejectedValue(new Error("row locked"));
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        draftToken: "33333333-3333-4333-8333-333333333333"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    // No fee: provisioning would buy a US number from the stale row, so
+    // billing must not charge the Canadian surcharge.
+    const call = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+    expect(call && "canadaFee" in call).toBe(false);
+  });
+
+  it("uses the draft phone without a write when it matches the stored row", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "4164560696",
+      timezone: "America/Toronto"
+    } as never);
+    vi.mocked(getOnboardingDraft).mockResolvedValue({
+      business_id: businessId,
+      draft_token: "33333333-3333-4333-8333-333333333333",
+      payload: { phone: "4164560696" }
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        draftToken: "33333333-3333-4333-8333-333333333333"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(updateBusinessPhone).not.toHaveBeenCalled();
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
+      })
+    );
+  });
+
   it("falls back to the business row when the draft read fails (never blocks checkout)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifySignupIdentity).mockResolvedValue(true);
