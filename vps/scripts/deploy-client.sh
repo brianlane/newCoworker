@@ -407,6 +407,26 @@ log "Rowboat .env written."
 report_progress 55 "env_written" "Rowboat .env written"
 
 # ------------------------------------------------------------------
+# 2a'. Install/refresh the heartbeat monitor (cron target)
+#
+# bootstrap.sh schedules `/opt/newcoworker/scripts/heartbeat.sh` via cron
+# on every box, but historically NOTHING installed the script itself —
+# bootstrap only copied a crontab file into that directory, so the cron
+# fired at a nonexistent path and the service monitor (and the posture
+# reporting added Jul 2026) never ran. Install it from the staged repo on
+# every deploy, mirroring keep-warm.sh below, so fleet redeploys also
+# roll out heartbeat updates.
+# ------------------------------------------------------------------
+mkdir -p /opt/newcoworker/scripts
+HEARTBEAT_SRC="${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}/vps/scripts/heartbeat.sh"
+if [[ -f "${HEARTBEAT_SRC}" ]]; then
+  install -m 0755 "${HEARTBEAT_SRC}" /opt/newcoworker/scripts/heartbeat.sh
+  log "heartbeat.sh installed/updated (service monitor + posture reporting)"
+else
+  log "WARN: ${HEARTBEAT_SRC} missing; heartbeat monitor not installed this deploy"
+fi
+
+# ------------------------------------------------------------------
 # 2b. Install ollama-keep-warm timer
 #
 # /dashboard/chat's first message cold-starts Ollama (20-40s on KVM 2),
