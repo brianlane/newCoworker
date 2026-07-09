@@ -63,7 +63,7 @@ const features: Feature[] = [
   {
     title: "Automated Workflows",
     description:
-      "Set up AiFlows that reply to texts and emails, follow up with leads, route to your team, and run browser tasks in real time.",
+      "AiFlows capture leads from Meta (Facebook & Instagram) ads and text them back in seconds, follow up on schedule, route to your team, and run browser tasks.",
     Icon: Workflow
   },
   {

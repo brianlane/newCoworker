@@ -6,7 +6,6 @@ import {
   BookOpenCheck,
   Brain,
   CalendarCheck,
-  Clock,
   Globe,
   LayoutDashboard,
   Mail,
@@ -38,12 +37,12 @@ import { TIER_LIMITS } from "@/lib/plans/limits";
 export const metadata: Metadata = {
   title: "Features",
   description:
-    "Everything your AI coworker does: 24/7 call answering, appointment booking, SMS & RCS messaging, AI call summaries, analytics, automated workflows, and 8,000+ integrations.",
+    "Everything your AI coworker does: 24/7 call answering, appointment booking, SMS & RCS messaging, instant Meta lead capture, AI call summaries, analytics, automated workflows, and 8,000+ integrations.",
   alternates: { canonical: "/features" },
   openGraph: {
     title: "Features | New Coworker",
     description:
-      "24/7 call answering, appointment booking, SMS & RCS, AI summaries, analytics, workflows, and 8,000+ integrations.",
+      "24/7 call answering, appointment booking, SMS & RCS, Meta lead capture, AI summaries, analytics, workflows, and 8,000+ integrations.",
     url: "/features"
   }
 };
@@ -191,12 +190,18 @@ const groups: FeatureGroup[] = [
     eyebrow: "Automation",
     title: "Workflows that run your follow-up for you",
     subtitle:
-      "AiFlows connect triggers to actions across calls, texts, and email, plus real browser skills for everything else.",
+      "AiFlows connect triggers to actions across calls, texts, email, and ad leads, plus real browser skills for everything else.",
     features: [
+      {
+        title: "Instant Meta Lead Capture",
+        description:
+          "Facebook and Instagram lead ads flow straight to your coworker: the lead is texted back within seconds, filed as a customer, and you get the summary.",
+        Icon: Zap
+      },
       {
         title: "AiFlows",
         description:
-          "Automated workflows that reply to texts and emails, follow up with leads on schedule, and route work to your team.",
+          "Automated workflows that reply to texts and emails, follow up with leads on schedule (daily digests, weekly check-ins, or the moment a trigger fires), and route work to your team.",
         Icon: Workflow
       },
       {
@@ -222,12 +227,6 @@ const groups: FeatureGroup[] = [
         description:
           "Choose exactly which events reach you (by SMS, email, or dashboard) and when.",
         Icon: Bell
-      },
-      {
-        title: "Scheduled Anything",
-        description:
-          "Flows run on your schedule: daily digests, weekly check-ins, or the moment a trigger fires.",
-        Icon: Clock
       }
     ]
   },
