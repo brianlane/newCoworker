@@ -6,6 +6,7 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlow, listAiFlowRuns } from "@/lib/ai-flows/db";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
+import { statsByStepIdFromRunSteps, type StepStats } from "@/lib/ai-flows/tree";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
@@ -42,6 +43,28 @@ export default async function AiFlowViewPage({ params }: Props) {
     businessId && flow
       ? (await listAiFlowRuns(businessId, { flowId, limit: 1 })).length > 0
       : false;
+
+  // Per-node run stats for the canvas overlay: aggregate the recorded step
+  // outcomes of the (up to) 100 most recent runs. Best-effort — the view
+  // renders without the overlay when the queries return nothing.
+  let statsByStepId: Record<string, StepStats> | undefined;
+  if (businessId && flow && hasRuns) {
+    const recentRuns = await listAiFlowRuns(businessId, { flowId, limit: 100 });
+    const runIds = recentRuns.map((r) => r.id);
+    if (runIds.length > 0) {
+      const { data: stepRows } = await db
+        .from("ai_flow_run_steps")
+        .select("step_index,status")
+        .eq("business_id", businessId)
+        .in("run_id", runIds);
+      if (stepRows && stepRows.length > 0) {
+        statsByStepId = statsByStepIdFromRunSteps(
+          flow.definition.steps,
+          stepRows as Array<{ step_index: number; status: string }>
+        );
+      }
+    }
+  }
 
   // The AI mailbox is the sender for any send_email step without a connected
   // owner mailbox, so show the real address rather than a generic label. Legacy
@@ -104,7 +127,11 @@ export default async function AiFlowViewPage({ params }: Props) {
 
       {flow ? (
         <Card>
-          <AiFlowView definition={flow.definition} coworkerEmail={coworkerEmail} />
+          <AiFlowView
+            definition={flow.definition}
+            coworkerEmail={coworkerEmail}
+            statsByStepId={statsByStepId}
+          />
         </Card>
       ) : (
         <Card>

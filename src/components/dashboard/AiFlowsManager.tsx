@@ -8,16 +8,31 @@ import {
   BROWSE_ACTION_KINDS,
   ENGINE_PROVIDED_VARS,
   FLOW_STEP_TYPES,
+  MAX_BRANCH_ARMS,
   VOICE_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
   HTTP_METHODS,
   summarizeDefinition,
   type AiFlowDefinition,
+  type BranchStep,
   type FlowStep,
+  type FlowTimeWindow,
   type FlowTrigger,
   type StepCondition,
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
+import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import {
+  findStepById,
+  flattenForDisplay,
+  hasBranchStep,
+  insertStepAt,
+  moveStepById,
+  patchStepById,
+  removeStepById,
+  varsInScopeBefore,
+  type StepContainerRef
+} from "@/lib/ai-flows/tree";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
 import {
   STEP_TYPE_LABELS,
@@ -86,6 +101,11 @@ const VOICE_STEP_TYPE_SET = new Set<string>(VOICE_STEP_TYPES);
 const NON_VOICE_STEP_TYPES = FLOW_STEP_TYPES.filter(
   (t) => !VOICE_STEP_TYPE_SET.has(t) && t !== "branch"
 );
+// The visual canvas builder owns branch authoring, so its picker offers every
+// batch step INCLUDING branch.
+const VISUAL_BATCH_STEP_TYPES = FLOW_STEP_TYPES.filter((t) => !VOICE_STEP_TYPE_SET.has(t));
+/** localStorage key for the Visual | Classic editor preference. */
+const EDITOR_MODE_STORAGE_KEY = "aiflow-editor-mode";
 /** Inbound voice flows route a live caller; outbound flows place one call. */
 const INBOUND_VOICE_STEP_TYPES = VOICE_STEP_TYPES.filter((t) => t !== "outbound_call");
 const OUTBOUND_VOICE_STEP_TYPES = ["outbound_call"] as const;
@@ -128,6 +148,8 @@ type EditorState = {
    */
   extraTriggers: FlowTrigger[];
   editingTriggerIndex: number;
+  /** Flow-level business-hours gate on communication steps (null = always). */
+  timeWindow: FlowTimeWindow | null;
   steps: FlowStep[];
 };
 
@@ -164,6 +186,7 @@ function emptyEditor(): EditorState {
     voiceOutboundScheduled: false,
     extraTriggers: [],
     editingTriggerIndex: 0,
+    timeWindow: null,
     steps: []
   };
 }
@@ -303,6 +326,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
+    timeWindow: def.timeWindow ?? null,
     steps: def.steps
   };
 }
@@ -319,6 +343,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
+    timeWindow: def.timeWindow ?? null,
     steps: def.steps
   };
 }
@@ -561,6 +586,18 @@ function editorTrigger(s: EditorState): FlowTrigger {
  * save time, so the persisted definition is always valid.
  */
 function sanitizeStepForSave(step: FlowStep): FlowStep {
+  // branch: recurse so nested arm/else steps get the same save-time cleanup
+  // as trunk steps (ref-wins rules, blank-field drops, forEachLink stripping).
+  if (step.type === "branch") {
+    return {
+      ...step,
+      branches: step.branches.map((arm) => ({
+        ...arm,
+        steps: arm.steps.map(sanitizeStepForSave)
+      })),
+      else: step.else.map(sanitizeStepForSave)
+    };
+  }
   // ring_handoff / voice_transfer: the number source is EITHER a saved-contact
   // ref (live number) or a hardcoded E.164 — a chosen ref supersedes any stale
   // text, and a blank text field is dropped so the semantic "no number to
@@ -635,6 +672,7 @@ function toDefinition(s: EditorState): AiFlowDefinition {
     trigger: primary,
     ...(rest.length > 0 ? { triggers: rest } : {}),
     steps: s.steps.map(sanitizeStepForSave),
+    ...(s.timeWindow ? { timeWindow: s.timeWindow } : {}),
     options: {
       suppressDefaultReply: s.suppressDefaultReply,
       captureStepScreenshots: s.captureStepScreenshots
@@ -689,6 +727,30 @@ export function AiFlowsManager({
   // optional one-off callee override.
   const [callFor, setCallFor] = useState<string | null>(null);
   const [callTo, setCallTo] = useState("");
+  // Visual | Classic editor preference. Visual (the GHL-style canvas) is the
+  // default; the choice persists per browser. Hydration starts at the default
+  // and the effect below applies the stored preference (a brief flash beats an
+  // SSR/client mismatch).
+  const [editorMode, setEditorModeState] = useState<"visual" | "classic">("visual");
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(EDITOR_MODE_STORAGE_KEY) === "classic") {
+        setEditorModeState("classic");
+      }
+    } catch {
+      /* storage unavailable — keep the default */
+    }
+  }, []);
+  const setEditorMode = (mode: "visual" | "classic") => {
+    setEditorModeState(mode);
+    try {
+      localStorage.setItem(EDITOR_MODE_STORAGE_KEY, mode);
+    } catch {
+      /* preference just won't persist */
+    }
+  };
+  // The canvas-selected node: a step id, "trigger", or null (nothing open).
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
 
   // "Adapt with AI" hand-off: the library detail page stashes the adapted
   // definition in sessionStorage then navigates here with ?adapt=1. Load it
@@ -882,6 +944,41 @@ export function AiFlowsManager({
     });
   };
 
+  // ── Visual-canvas mutations: address steps by ID anywhere in the tree
+  // (trunk, branch arms, else paths) via the immutable helpers in
+  // src/lib/ai-flows/tree.ts. The classic form keeps flat-index editing above.
+  const patchNodeById = (id: string, patch: Record<string, unknown>) => {
+    setEditor((e) => (e ? { ...e, steps: patchStepById(e.steps, id, patch) } : e));
+  };
+  const insertNode = (container: StepContainerRef, index: number, type: FlowStep["type"]) => {
+    const step = newStep(type, examples);
+    setEditor((e) => (e ? { ...e, steps: insertStepAt(e.steps, container, index, step) } : e));
+    setSelectedNode(step.id);
+  };
+  const moveNodeById = (id: string, dir: -1 | 1) => {
+    setEditor((e) => (e ? { ...e, steps: moveStepById(e.steps, id, dir) } : e));
+  };
+  const duplicateNodeById = (id: string) => {
+    setEditor((e) => {
+      if (!e) return e;
+      const entry = flattenForDisplay(e.steps).find((x) => x.step.id === id);
+      if (!entry) return e;
+      return {
+        ...e,
+        steps: insertStepAt(
+          e.steps,
+          entry.container,
+          entry.indexInContainer + 1,
+          duplicateOf(entry.step)
+        )
+      };
+    });
+  };
+  const removeNodeById = (id: string) => {
+    setEditor((e) => (e ? { ...e, steps: removeStepById(e.steps, id) } : e));
+    setSelectedNode((cur) => (cur === id ? null : cur));
+  };
+
   const reload = async () => {
     const res = await fetch(`/api/aiflows?businessId=${encodeURIComponent(businessId)}`, {
       cache: "no-store"
@@ -915,6 +1012,7 @@ export function AiFlowsManager({
       }
       setEditor(null);
       setAiWarnings([]);
+      setSelectedNode(null);
       await reload();
     } finally {
       setBusy(false);
@@ -1056,6 +1154,7 @@ export function AiFlowsManager({
         ...triggerToEditorFields(def.trigger),
         extraTriggers: def.triggers ?? [],
         editingTriggerIndex: 0,
+        timeWindow: def.timeWindow ?? null,
         steps: def.steps
       }));
     } finally {
@@ -1064,22 +1163,60 @@ export function AiFlowsManager({
   };
 
   if (editor) {
+    // A flow with branch steps can't round-trip through the flat classic form,
+    // so it always edits visually regardless of the stored preference.
+    const flowHasBranch = hasBranchStep(editor.steps);
+    const mode: "visual" | "classic" = flowHasBranch ? "visual" : editorMode;
+    const selectedStep =
+      mode === "visual" && selectedNode && selectedNode !== "trigger"
+        ? findStepById(editor.steps, selectedNode)
+        : null;
+    const canvasAddable =
+      editor.channel === "voice"
+        ? editor.voiceDirection === "outbound"
+          ? OUTBOUND_VOICE_STEP_TYPES
+          : INBOUND_VOICE_STEP_TYPES
+        : VISUAL_BATCH_STEP_TYPES;
     return (
       <Card className="space-y-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-parchment">
             {editor.id ? "Edit AiFlow" : "New AiFlow"}
           </h2>
-          <button
-            onClick={() => {
-              setEditor(null);
-              // Salvage notes belong to the draft being abandoned.
-              setAiWarnings([]);
-            }}
-            className="text-sm text-parchment/50 hover:text-parchment"
-          >
-            Cancel
-          </button>
+          <div className="flex items-center gap-3">
+            <div className="flex rounded-md border border-parchment/15 p-0.5 text-xs">
+              {(["visual", "classic"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setEditorMode(m)}
+                  disabled={m === "classic" && flowHasBranch}
+                  title={
+                    m === "classic" && flowHasBranch
+                      ? "This flow uses branching — edit it in Visual."
+                      : undefined
+                  }
+                  className={`rounded px-2.5 py-1 font-medium transition-colors ${
+                    mode === m
+                      ? "bg-signal-teal/20 text-signal-teal"
+                      : "text-parchment/50 hover:text-parchment"
+                  } disabled:cursor-not-allowed disabled:opacity-40`}
+                >
+                  {m === "visual" ? "Visual" : "Classic"}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => {
+                setEditor(null);
+                // Salvage notes belong to the draft being abandoned.
+                setAiWarnings([]);
+                setSelectedNode(null);
+              }}
+              className="text-sm text-parchment/50 hover:text-parchment"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
 
         {error && (
@@ -1138,6 +1275,84 @@ export function AiFlowsManager({
           </div>
         )}
 
+        {mode === "visual" && (
+          <section className="space-y-3">
+            <p className="text-[11px] text-parchment/40">
+              Click the trigger or a step to configure it; use the + between steps to add one.
+              Tip: type something like {`{{vars.${examples.tipVar}}}`} in a message to reuse a
+              detail an earlier step found.
+            </p>
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+              <AiFlowCanvas
+                trigger={editorTrigger(editor)}
+                steps={editor.steps}
+                selectedId={selectedNode ?? undefined}
+                addableTypes={canvasAddable}
+                onSelectStep={(id) => setSelectedNode((cur) => (cur === id ? null : id))}
+                onSelectTrigger={() =>
+                  setSelectedNode((cur) => (cur === "trigger" ? null : "trigger"))
+                }
+                onInsertStep={insertNode}
+                onMoveStep={moveNodeById}
+                onDuplicateStep={duplicateNodeById}
+                onRemoveStep={removeNodeById}
+              />
+            </div>
+            {selectedStep && (
+              <div className="rounded-md border border-signal-teal/25 bg-deep-ink/20 p-3 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-parchment">
+                    {STEP_TYPE_LABELS[selectedStep.type]}
+                  </span>
+                  <button
+                    onClick={() => setSelectedNode(null)}
+                    className="text-xs text-parchment/50 hover:text-parchment"
+                  >
+                    Close
+                  </button>
+                </div>
+                <p className="text-[11px] text-parchment/40">
+                  {STEP_TYPE_HELP[selectedStep.type]}
+                </p>
+                {selectedStep.type === "branch" ? (
+                  <BranchFields
+                    step={selectedStep}
+                    earlierVars={[
+                      ...varsInScopeBefore(editor.steps, selectedStep.id),
+                      ...ENGINE_PROVIDED_VARS
+                    ]}
+                    patch={(p) => patchNodeById(selectedStep.id, p)}
+                    examples={examples}
+                  />
+                ) : (
+                  <StepFields
+                    step={selectedStep}
+                    index={0}
+                    patchStep={(_i, p) => patchNodeById(selectedStep.id, p)}
+                    emailConns={emailConns}
+                    employees={employees}
+                    people={pickerPeople}
+                    examples={examples}
+                  />
+                )}
+                {!VOICE_STEP_TYPE_SET.has(selectedStep.type) && (
+                  <WhenEditor
+                    step={selectedStep}
+                    index={0}
+                    earlierVars={[
+                      ...varsInScopeBefore(editor.steps, selectedStep.id),
+                      ...ENGINE_PROVIDED_VARS
+                    ]}
+                    patchStep={(_i, p) => patchNodeById(selectedStep.id, p)}
+                    examples={examples}
+                  />
+                )}
+              </div>
+            )}
+          </section>
+        )}
+
+        {(mode === "classic" || selectedNode === "trigger") && (
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">
             {editor.extraTriggers.length > 0 ? "Triggers" : "Trigger"}
@@ -1670,7 +1885,9 @@ export function AiFlowsManager({
             </button>
           )}
         </section>
+        )}
 
+        {mode === "classic" && (
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
           <p className="text-[11px] text-parchment/40">
@@ -1758,6 +1975,12 @@ export function AiFlowsManager({
             ))}
           </div>
         </section>
+        )}
+
+        <TimeWindowFields
+          value={editor.timeWindow}
+          onChange={(tw) => setEditor({ ...editor, timeWindow: tw })}
+        />
 
         <section className="space-y-2">
           {editor.channel === "sms" && (
@@ -3424,6 +3647,242 @@ function WhenEditor({
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Config panel for a branch step (visual builder only): the question, each
+ * path's label + condition, and add/remove path controls. The steps INSIDE a
+ * path are edited on the canvas itself, not here.
+ */
+function BranchFields({
+  step,
+  earlierVars,
+  patch,
+  examples
+}: {
+  step: BranchStep;
+  earlierVars: string[];
+  patch: (p: Record<string, unknown>) => void;
+  examples: AiFlowExampleCopy;
+}) {
+  const setArm = (armId: string, armPatch: Partial<BranchStep["branches"][number]>) =>
+    patch({
+      branches: step.branches.map((a) => (a.id === armId ? { ...a, ...armPatch } : a))
+    });
+  return (
+    <div className="space-y-2">
+      <Field
+        label="Question (the label shown on the canvas)"
+        value={step.question}
+        onChange={(v) => patch({ question: v })}
+      />
+      {step.branches.map((arm, ai) => (
+        <div
+          key={arm.id}
+          className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2"
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-semibold text-parchment/60">Path {ai + 1}</span>
+            {step.branches.length > 1 && (
+              <button
+                onClick={() => patch({ branches: step.branches.filter((a) => a.id !== arm.id) })}
+                aria-label="Remove path"
+                title={
+                  arm.steps.length > 0
+                    ? `Removes this path AND its ${arm.steps.length} step(s)`
+                    : "Remove this path"
+                }
+              >
+                <Trash2 className="h-4 w-4 text-parchment/40 hover:text-spark-orange" />
+              </button>
+            )}
+          </div>
+          <Field label="Label" value={arm.label} onChange={(v) => setArm(arm.id, { label: v })} />
+          <ArmConditionEditor
+            condition={arm.condition}
+            earlierVars={earlierVars}
+            examples={examples}
+            onChange={(c) => setArm(arm.id, { condition: c })}
+          />
+          {arm.steps.length > 0 && (
+            <p className="text-[11px] text-parchment/40">
+              {arm.steps.length} step(s) on this path — edit them on the canvas above.
+            </p>
+          )}
+        </div>
+      ))}
+      {step.branches.length < MAX_BRANCH_ARMS && (
+        <button
+          onClick={() =>
+            patch({
+              branches: [
+                ...step.branches,
+                {
+                  id: freshStepId(),
+                  label: `Path ${step.branches.length + 1}`,
+                  condition: { var: earlierVars[0] ?? examples.contactVar, notEquals: "none" },
+                  steps: []
+                }
+              ]
+            })
+          }
+          className="inline-flex items-center gap-1 text-sm text-signal-teal hover:underline"
+        >
+          <Plus className="h-3 w-3" /> Add a path
+        </button>
+      )}
+      <p className="text-[11px] text-parchment/40">
+        Paths are checked top to bottom — the first match wins; no match runs the “None
+        matched” path.
+      </p>
+    </div>
+  );
+}
+
+/** A branch arm's condition (always present, unlike a step's optional `when`). */
+function ArmConditionEditor({
+  condition,
+  earlierVars,
+  onChange,
+  examples
+}: {
+  condition: StepCondition;
+  earlierVars: string[];
+  onChange: (c: StepCondition) => void;
+  examples: AiFlowExampleCopy;
+}) {
+  const operator: WhenOperator =
+    condition.equals !== undefined
+      ? "equals"
+      : condition.notEquals !== undefined
+        ? "notEquals"
+        : "contains";
+  const value = condition.equals ?? condition.notEquals ?? condition.contains ?? "";
+  const build = (over: Partial<{ var: string; operator: WhenOperator; value: string }>) => {
+    const v = over.var ?? condition.var;
+    const op = over.operator ?? operator;
+    const val = over.value ?? value;
+    const next: StepCondition =
+      op === "equals"
+        ? { var: v, equals: val }
+        : op === "notEquals"
+          ? { var: v, notEquals: val }
+          : { var: v, contains: val };
+    if (condition.caseInsensitive !== undefined) next.caseInsensitive = condition.caseInsensitive;
+    return next;
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <select
+        className={`${inputClass} w-auto`}
+        value={condition.var}
+        onChange={(ev) => onChange(build({ var: ev.target.value }))}
+      >
+        {earlierVars.length === 0 && <option value="">(no earlier variables)</option>}
+        {!earlierVars.includes(condition.var) && condition.var !== "" && (
+          <option value={condition.var}>{condition.var}</option>
+        )}
+        {earlierVars.map((v) => (
+          <option key={v} value={v}>
+            {v}
+          </option>
+        ))}
+      </select>
+      <select
+        className={`${inputClass} w-auto`}
+        value={operator}
+        onChange={(ev) => onChange(build({ operator: ev.target.value as WhenOperator }))}
+      >
+        <option value="contains">contains</option>
+        <option value="equals">equals</option>
+        <option value="notEquals">does not equal</option>
+      </select>
+      <input
+        className={`${inputClass} flex-1`}
+        value={value}
+        placeholder={examples.whenValuePlaceholder}
+        onChange={(ev) => onChange(build({ value: ev.target.value }))}
+      />
+    </div>
+  );
+}
+
+const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** Flow-level business-hours window (definition.timeWindow), both editor modes. */
+function TimeWindowFields({
+  value,
+  onChange
+}: {
+  value: FlowTimeWindow | null;
+  onChange: (v: FlowTimeWindow | null) => void;
+}) {
+  return (
+    <section className="space-y-2">
+      <label className="flex items-center gap-2 text-sm text-parchment/70">
+        <input
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={(ev) =>
+            onChange(
+              ev.target.checked
+                ? { timezone: browserTimezone(), start: "09:00", end: "17:00" }
+                : null
+            )
+          }
+        />
+        Only contact people during business hours
+      </label>
+      {value && (
+        <div className="space-y-2 rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+          <p className="text-[11px] text-parchment/40">
+            Texts, emails, notifications, and team offers outside this window wait for the
+            next open slot. Reading and waiting steps still run any time.
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <Field
+              label="Opens (24h HH:MM)"
+              value={value.start}
+              onChange={(v) => onChange({ ...value, start: v })}
+            />
+            <Field
+              label="Closes (24h HH:MM)"
+              value={value.end}
+              onChange={(v) => onChange({ ...value, end: v })}
+            />
+            <Field
+              label="Time zone"
+              value={value.timezone}
+              onChange={(v) => onChange({ ...value, timezone: v })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Days (default: every day)</label>
+            <div className="flex flex-wrap gap-2">
+              {WEEKDAY_LABELS.map((d, di) => (
+                <label key={d} className="flex items-center gap-1 text-xs text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={(value.daysOfWeek ?? []).includes(di)}
+                    onChange={(ev) => {
+                      const days = ev.target.checked
+                        ? [...(value.daysOfWeek ?? []), di].sort()
+                        : (value.daysOfWeek ?? []).filter((x) => x !== di);
+                      onChange({
+                        ...value,
+                        daysOfWeek: days.length > 0 ? days : undefined
+                      });
+                    }}
+                  />
+                  {d}
+                </label>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 

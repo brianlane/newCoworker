@@ -11,6 +11,8 @@ import {
   STEP_TYPE_LABELS
 } from "@/components/dashboard/aiflow-labels";
 import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
+import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import type { StepStats } from "@/lib/ai-flows/tree";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
 const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
@@ -627,14 +629,39 @@ function StepView({
 /** Read-only rendering of an AiFlow definition (trigger, steps, options). */
 export function AiFlowView({
   definition,
-  coworkerEmail
+  coworkerEmail,
+  statsByStepId
 }: {
   definition: AiFlowDefinition;
   /** The business's AI mailbox address, shown as the sender for platform-path emails. */
   coworkerEmail?: string;
+  /** Per-node run counts for the canvas overlay (flow detail page only). */
+  statsByStepId?: Record<string, StepStats>;
 }) {
   return (
     <div className="space-y-4">
+      {/* The GHL-style flowchart view of the whole workflow; the detailed
+          per-step sections below remain as the full text reference. The canvas
+          heads with the PRIMARY trigger; extra (OR) triggers are listed in the
+          trigger sections beneath it. */}
+      <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+        <AiFlowCanvas
+          trigger={definition.trigger}
+          steps={definition.steps}
+          readOnly
+          statsByStepId={statsByStepId}
+        />
+      </div>
+      {definition.timeWindow && (
+        <p className="text-xs text-parchment/50">
+          Business hours: only contacts people {definition.timeWindow.start}–
+          {definition.timeWindow.end} ({definition.timeWindow.timezone}
+          {definition.timeWindow.daysOfWeek && definition.timeWindow.daysOfWeek.length > 0
+            ? `, ${definition.timeWindow.daysOfWeek.map((d) => DAY_NAMES[d]).join(" ")}`
+            : ""}
+          ); anything outside the window waits for the next open slot.
+        </p>
+      )}
       <TriggerView
         trigger={definition.trigger}
         heading={definition.triggers?.length ? "Trigger 1 (any one starts the flow)" : "Trigger"}
