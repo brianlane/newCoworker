@@ -613,6 +613,16 @@ fi
 log "Setting up heartbeat cron..."
 mkdir -p /opt/newcoworker/scripts
 cp /opt/rowboat/crontab /opt/newcoworker/scripts/ 2>/dev/null || true
+# Install the heartbeat script the cron line below targets. Historically
+# this was missing (only the crontab file was copied), so the monitor
+# silently never ran on fresh boxes until the first deploy-client run —
+# which ALSO didn't install it before Jul 2026. deploy-client.sh now
+# refreshes it on every deploy; this bootstrap copy covers the window
+# between first boot and the first deploy.
+if [[ -f "${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}/vps/scripts/heartbeat.sh" ]]; then
+  install -m 0755 "${NEWCOWORKER_REPO_PATH:-/opt/newcoworker-repo}/vps/scripts/heartbeat.sh" \
+    /opt/newcoworker/scripts/heartbeat.sh
+fi
 
 (crontab -l 2>/dev/null || echo "") | \
   grep -v heartbeat | \
