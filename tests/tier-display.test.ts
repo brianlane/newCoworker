@@ -52,9 +52,16 @@ describe("tier-display", () => {
       expect(STANDARD_FEATURES.some((f) => f.includes("8,000+"))).toBe(true);
     });
 
-    it("enterprise bullets are the custom/agency set", () => {
+    it("enterprise bullets are the shipped custom/agency set", () => {
       expect(ENTERPRISE_FEATURES[0]).toBe("Everything in Starter and Standard, plus:");
-      expect(ENTERPRISE_FEATURES).toContain("White-label dashboard");
+      expect(ENTERPRISE_FEATURES).toContain(
+        "White-label dashboard (your name, logo, colors)"
+      );
+      expect(ENTERPRISE_FEATURES).toContain("Team access with roles (managers & staff)");
+      expect(ENTERPRISE_FEATURES).toContain("Choice of professional voices");
+      // Honesty guard: cloning was descoped to the prebuilt voice picker —
+      // the pricing page must not promise it.
+      expect(ENTERPRISE_FEATURES.join(" ")).not.toContain("cloning");
     });
   });
 
