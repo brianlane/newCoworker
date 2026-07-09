@@ -87,9 +87,8 @@ function isNotRenewing(sub: BillingSubscription): boolean {
 export async function checkVpsBillingPosture(
   deps: BillingPostureDeps
 ): Promise<BillingPostureResult> {
-  const [businesses, inventory, subscriptions] = await Promise.all([
+  const [businesses, subscriptions] = await Promise.all([
     deps.listBusinesses(),
-    deps.listInventory(),
     deps.listBillingSubscriptions()
   ]);
   const subsById = new Map(subscriptions.map((sub) => [sub.id, sub]));
@@ -183,6 +182,15 @@ export async function checkVpsBillingPosture(
   }
 
   // ---- Direction 2: available pool boxes should not renew (report-only). ----
+  // The inventory is read HERE, after the (potentially minutes-long,
+  // sequential-Hostinger-calls) tenant pass, not at function start: a box
+  // adopted mid-run flips to `assigned` in vps_inventory, and a fresh read
+  // keeps this pass from emailing ops to disable renewal on a VM that now
+  // serves a paying tenant (Bugbot Medium: stale snapshot TOCTOU). The
+  // remaining millisecond-scale window is acceptable because this
+  // direction is report-only — the email asks for a manual hPanel review,
+  // it never flips billing itself.
+  const inventory = await deps.listInventory();
   const availableBoxes = inventory.filter((row) => row.state === "available");
   for (const row of availableBoxes) {
     const sub = row.hostinger_billing_subscription_id
