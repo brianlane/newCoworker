@@ -26,12 +26,12 @@ import {
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Connect New Coworker to 8,000+ apps through Zapier, plus native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
+    "Connect New Coworker to Meta (Facebook & Instagram) lead ads, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
   alternates: { canonical: "/integrations" },
   openGraph: {
     title: "Integrations | New Coworker",
     description:
-      "8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
+      "Meta lead ads, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
     url: "/integrations"
   }
 };
@@ -111,12 +111,53 @@ export default function IntegrationsPage() {
 
       <StatBand
         stats={[
+          { value: "Seconds", label: "From Meta ad lead submitted to lead texted back" },
           { value: "8,000+", label: "Apps reachable through one Zapier connection" },
           { value: "2 clicks", label: "To connect Google or Microsoft calendar & email" },
-          { value: "4 triggers", label: "Calls, texts, and email events pushed in real time" },
           { value: "REST", label: "Public API with per-business keys and webhooks" }
         ]}
       />
+
+      {/* Meta lead capture */}
+      <section className="mx-auto max-w-6xl px-6 pb-20">
+        <SectionHeading
+          eyebrow="Meta Lead Ads"
+          title="Facebook & Instagram leads, answered while they're still looking at your ad"
+          subtitle="Most businesses take hours to respond to an ad lead. Your coworker does it in seconds — automatically, every time, day or night."
+        />
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">1 · Capture</p>
+            <h3 className="mt-3 font-semibold text-parchment">A lead submits your Instant Form</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
+              Your Meta lead ads connect to your coworker through a simple bridge (a free Make.com
+              account, Zapier, or lead tools like Privyr). A guided in-dashboard setup walks you
+              through it in about 15 minutes — consent language included.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">2 · Act</p>
+            <h3 className="mt-3 font-semibold text-parchment">Your coworker responds in seconds</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
+              The lead gets a personal text from your business number while their interest is
+              hottest, and the two-way conversation is handled by the same coworker that answers
+              your phone.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">3 · Follow through</p>
+            <h3 className="mt-3 font-semibold text-parchment">Filed, routed, and remembered</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
+              Every lead is saved to your customer list with full context, offered to your team by
+              text when you want routing, and you get a summary the moment it happens.
+            </p>
+          </div>
+        </div>
+        <div className="mt-6 rounded-xl border border-claw-green/20 bg-claw-green/[0.05] p-4 text-sm text-parchment/60">
+          The same webhook trigger works for any lead source — Google lead forms, your website,
+          TikTok, or anything that can send a webhook — not just Meta.
+        </div>
+      </section>
 
       {/* Zapier */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
@@ -156,6 +197,16 @@ export default function IntegrationsPage() {
                   <p className="text-sm text-parchment/50">
                     Trigger a text from your business number when something happens anywhere else:
                     a new form fill, a paid invoice, a shipped order.
+                  </p>
+                </div>
+              </li>
+              <li className="flex items-start gap-3">
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-signal-teal" />
+                <div>
+                  <p className="text-sm font-semibold text-parchment">Send Lead to Coworker</p>
+                  <p className="text-sm text-parchment/50">
+                    Forward a lead from Facebook Lead Ads (or any trigger) and your coworker takes
+                    over: instant text-back, filing, routing, and follow-up.
                   </p>
                 </div>
               </li>
