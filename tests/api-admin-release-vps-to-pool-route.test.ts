@@ -12,9 +12,9 @@ vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn()
 }));
 vi.mock("@/lib/db/subscriptions", () => ({
+  cancelSubscriptionIfStripeless: vi.fn(),
   getSubscription: vi.fn(),
-  listBusinessIdsWithStripeLinkedSubscription: vi.fn(),
-  updateSubscription: vi.fn()
+  listBusinessIdsWithStripeLinkedSubscription: vi.fn()
 }));
 vi.mock("@/lib/db/vps-inventory", () => ({
   releaseVpsToPool: vi.fn()
@@ -34,9 +34,9 @@ import { POST } from "@/app/api/admin/vps/[businessId]/release-to-pool/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
 import {
+  cancelSubscriptionIfStripeless,
   getSubscription,
-  listBusinessIdsWithStripeLinkedSubscription,
-  updateSubscription
+  listBusinessIdsWithStripeLinkedSubscription
 } from "@/lib/db/subscriptions";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 
@@ -76,7 +76,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     vi.mocked(getBusiness).mockResolvedValue(baseBiz as never);
     vi.mocked(getSubscription).mockResolvedValue(null);
     vi.mocked(listBusinessIdsWithStripeLinkedSubscription).mockResolvedValue(new Set());
-    vi.mocked(updateSubscription).mockResolvedValue({} as never);
+    vi.mocked(cancelSubscriptionIfStripeless).mockResolvedValue(true);
     vi.mocked(releaseVpsToPool).mockResolvedValue(undefined);
     getVirtualMachineMock.mockResolvedValue({ id: 1806114, subscription_id: "hsub-vm" });
     disableAutoRenewalMock.mockResolvedValue(undefined);
@@ -106,7 +106,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
         notes: expect.stringContaining("released to pool by admin admin@example.com")
       })
     );
-    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(cancelSubscriptionIfStripeless).not.toHaveBeenCalled();
     expect(disableAutoRenewalMock).toHaveBeenCalledWith("hsub-vm");
   });
 
@@ -137,17 +137,27 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     expect(json.data).toEqual(
       expect.objectContaining({ subscriptionCanceled: true, hostingerAutoRenewDisabled: true })
     );
-    expect(updateSubscription).toHaveBeenCalledWith("sub-row-1", {
-      status: "canceled",
-      canceled_at: expect.stringMatching(/^\d{4}-/),
-      cancel_reason: "admin_force",
-      // Explicitly cleared: a stale deadline would put the row in the grace
-      // sweep's wipe query; deletion must stay with the adopt-time cascade.
-      grace_ends_at: null
-    });
+    // Compare-and-swap cancel: only lands while the row is still
+    // Stripe-less (grace_ends_at cleared inside the helper).
+    expect(cancelSubscriptionIfStripeless).toHaveBeenCalledWith("sub-row-1");
     // Billing id came from the subscription row — no VM detail call needed.
     expect(disableAutoRenewalMock).toHaveBeenCalledWith("hsub-pilot");
     expect(getVirtualMachineMock).not.toHaveBeenCalled();
+  });
+
+  it("reports subscriptionCanceled=false when the CAS loses (row became Stripe-linked mid-release)", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "active",
+      stripe_subscription_id: null,
+      hostinger_billing_subscription_id: "hsub-pilot"
+    } as never);
+    vi.mocked(cancelSubscriptionIfStripeless).mockResolvedValue(false);
+
+    const res = await POST(makeRequest(), makeCtx());
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data).toEqual(expect.objectContaining({ subscriptionCanceled: false }));
   });
 
   it("does not re-cancel an already-canceled subscription", async () => {
@@ -162,7 +172,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data).toEqual(expect.objectContaining({ subscriptionCanceled: false }));
-    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(cancelSubscriptionIfStripeless).not.toHaveBeenCalled();
     expect(releaseVpsToPool).toHaveBeenCalledWith(
       expect.objectContaining({ hostingerBillingSubscriptionId: "hsub-1" })
     );
@@ -179,7 +189,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(409);
     expect(releaseVpsToPool).not.toHaveBeenCalled();
-    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(cancelSubscriptionIfStripeless).not.toHaveBeenCalled();
   });
 
   it("409s when an OLDER row is still Stripe-linked even though the newest row is not (any-row guard)", async () => {
@@ -197,7 +207,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(409);
     expect(releaseVpsToPool).not.toHaveBeenCalled();
-    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(cancelSubscriptionIfStripeless).not.toHaveBeenCalled();
   });
 
   it("releases + cancels a pending subscription with NO Stripe linkage (abandoned checkout)", async () => {
@@ -211,10 +221,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(200);
     expect(releaseVpsToPool).toHaveBeenCalled();
-    expect(updateSubscription).toHaveBeenCalledWith(
-      "sub-row-2",
-      expect.objectContaining({ status: "canceled" })
-    );
+    expect(cancelSubscriptionIfStripeless).toHaveBeenCalledWith("sub-row-2");
   });
 
   it("tolerates a Hostinger auto-renew failure (release still succeeds, flag false)", async () => {

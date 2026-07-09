@@ -35,9 +35,9 @@ import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
 import {
+  cancelSubscriptionIfStripeless,
   getSubscription,
-  listBusinessIdsWithStripeLinkedSubscription,
-  updateSubscription
+  listBusinessIdsWithStripeLinkedSubscription
 } from "@/lib/db/subscriptions";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
@@ -105,20 +105,21 @@ export async function POST(
 
     // Billing cascade 1/2: settle the internal subscription row so the
     // account stops registering as "live" (dashboard, posture cron, admin
-    // list). No grace_ends_at on purpose — see module header.
+    // list). Compare-and-swap: the cancel only lands if the row is STILL
+    // Stripe-less at write time — a checkout webhook attaching a Stripe id
+    // between our guard read and this write must win, because cancelling a
+    // just-paid row would hide its Stripe linkage from the adopt-time
+    // delete guard (Bugbot High: linkage masked by admin cancel). No
+    // grace_ends_at on purpose — see module header.
     let subscriptionCanceled = false;
     if (subscription && subscription.status !== "canceled") {
-      await updateSubscription(subscription.id, {
-        status: "canceled",
-        canceled_at: new Date().toISOString(),
-        cancel_reason: "admin_force",
-        // Explicitly null: a leftover deadline from an earlier
-        // cancel/resubscribe cycle would put this row in the grace sweep's
-        // query and trigger a data wipe — deletion must stay with the
-        // adopt-time cascade (Bugbot Medium: stale grace deadline).
-        grace_ends_at: null
-      });
-      subscriptionCanceled = true;
+      subscriptionCanceled = await cancelSubscriptionIfStripeless(subscription.id);
+      if (!subscriptionCanceled) {
+        logger.warn(
+          "admin.release-vps-to-pool: subscription became Stripe-linked mid-release; NOT cancelled — reconcile before reuse",
+          { businessId, subscriptionId: subscription.id }
+        );
+      }
     }
 
     // Billing cascade 2/2: park the box's Hostinger billing (pool boxes
