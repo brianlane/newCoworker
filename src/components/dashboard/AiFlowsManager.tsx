@@ -878,6 +878,7 @@ export function AiFlowsManager({
         return;
       }
       setEditor(null);
+      setAiWarnings([]);
       await reload();
     } finally {
       setBusy(false);
@@ -1034,7 +1035,11 @@ export function AiFlowsManager({
             {editor.id ? "Edit AiFlow" : "New AiFlow"}
           </h2>
           <button
-            onClick={() => setEditor(null)}
+            onClick={() => {
+              setEditor(null);
+              // Salvage notes belong to the draft being abandoned.
+              setAiWarnings([]);
+            }}
             className="text-sm text-parchment/50 hover:text-parchment"
           >
             Cancel
@@ -1782,9 +1787,12 @@ export function AiFlowsManager({
           <span />
         )}
         <button
-          onClick={() => setEditor(emptyEditor())}
+          onClick={() => {
+            setAiWarnings([]);
+            setEditor(emptyEditor());
+          }}
           className="inline-flex items-center gap-1 rounded-md bg-signal-teal px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90"
-        >
+>
           <Plus className="h-4 w-4" /> New AiFlow
         </button>
       </div>
@@ -1860,7 +1868,13 @@ export function AiFlowsManager({
                 <button onClick={() => toggleEnabled(row)} className="text-xs hover:text-parchment">
                   {row.enabled ? "Disable" : "Enable"}
                 </button>
-                <button onClick={() => setEditor(editorFromRow(row))} aria-label="Edit">
+                <button
+                  onClick={() => {
+                    setAiWarnings([]);
+                    setEditor(editorFromRow(row));
+                  }}
+                  aria-label="Edit"
+                >
                   <Pencil className="h-4 w-4 hover:text-signal-teal" />
                 </button>
                 <button

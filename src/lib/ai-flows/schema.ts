@@ -1533,6 +1533,11 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
   const seenIds = new Set<string>();
   const steps: FlowStep[] = [];
   const rawSteps = Array.isArray(raw.steps) ? raw.steps.slice(0, 25) : [];
+  if (Array.isArray(raw.steps) && raw.steps.length > 25) {
+    warnings.push(
+      `Removed ${raw.steps.length - 25} step(s) past the 25-step limit (kept the first 25).`
+    );
+  }
   for (let i = 0; i < rawSteps.length; i++) {
     const s = rawSteps[i];
     if (!s || typeof s !== "object") {

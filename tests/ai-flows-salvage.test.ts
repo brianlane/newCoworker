@@ -165,6 +165,20 @@ describe("salvageFlowDefinition: step salvage (zod level)", () => {
     expect(res!.warnings.join(" ")).toContain("broken run-condition");
   });
 
+  it("warns when steps past the 25-step cap are dropped", () => {
+    const res = salvageFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: Array.from({ length: 28 }, (_, i) => ({
+        id: `n${i}`,
+        type: "notify_owner",
+        message: `m${i}`
+      }))
+    });
+    expect(res!.definition.steps).toHaveLength(25);
+    expect(res!.warnings.join(" ")).toContain("Removed 3 step(s) past the 25-step limit");
+  });
+
   it("adds a placeholder notify-me step when nothing survives", () => {
     const res = salvageFlowDefinition({ version: 1, trigger: { channel: "manual" }, steps: "x" });
     expect(res!.definition.steps).toHaveLength(1);
