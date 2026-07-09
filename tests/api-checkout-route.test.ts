@@ -23,6 +23,10 @@ vi.mock("@/lib/db/businesses", () => ({
   setBusinessCustomerProfile: vi.fn()
 }));
 
+vi.mock("@/lib/db/onboarding-drafts", () => ({
+  getOnboardingDraft: vi.fn()
+}));
+
 vi.mock("@/lib/db/customer-profiles", () => ({
   LIFETIME_SUBSCRIPTION_CAP: 3,
   upsertCustomerProfile: vi.fn(),
@@ -39,6 +43,7 @@ import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
 import { getBusiness, listBusinessIdsByOwnerEmail, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { upsertCustomerProfile, getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { verifyOnboardingToken } from "@/lib/onboarding/token";
 
@@ -65,6 +70,7 @@ describe("api/checkout route", () => {
     // having to opt into the gate explicitly. Tests that exercise the
     // gate override this in-place.
     vi.mocked(authUserExistsByEmail).mockResolvedValue(false);
+    vi.mocked(getOnboardingDraft).mockResolvedValue(null as never);
     vi.mocked(createCheckoutSession).mockResolvedValue({
       id: "cs_test_123",
       url: "https://checkout.stripe.test/session"
@@ -220,6 +226,83 @@ describe("api/checkout route", () => {
         ownerEmail: "owner@example.com",
         signupUserId,
         timezone: "America/Toronto"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
+      })
+    );
+  });
+
+  it("prefers the freshest draft phone over a stale business-row phone on checkout retry", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    // Row created with a US phone; the owner edited it to a Toronto number
+    // before retrying checkout — the draft (synced just before this call)
+    // carries the value the order summary previewed the fee with.
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "6025551234",
+      timezone: "America/Phoenix"
+    } as never);
+    vi.mocked(getOnboardingDraft).mockResolvedValue({
+      business_id: businessId,
+      draft_token: "33333333-3333-4333-8333-333333333333",
+      payload: { phone: "4164560696" }
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        draftToken: "33333333-3333-4333-8333-333333333333"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(getOnboardingDraft).toHaveBeenCalledWith(
+      businessId,
+      "33333333-3333-4333-8333-333333333333"
+    );
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
+      })
+    );
+  });
+
+  it("falls back to the business row when the draft read fails (never blocks checkout)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "4164560696",
+      timezone: "America/Toronto"
+    } as never);
+    vi.mocked(getOnboardingDraft).mockRejectedValue(new Error("draft table down"));
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        draftToken: "33333333-3333-4333-8333-333333333333"
       })
     });
 

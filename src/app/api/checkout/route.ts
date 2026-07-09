@@ -18,6 +18,7 @@ import {
   CANADA_MESSAGING_FEE_MONTHLY_CENTS,
   isCanadianBusiness
 } from "@/lib/plans/canadian-messaging";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -243,8 +244,28 @@ export async function POST(request: Request) {
     // and the CA-enabled messaging capability travel together. A missing
     // business row fails toward NOT charging.
     const feeBusiness = await getBusiness(body.businessId);
+    // Retry path: a Stripe-cancel return re-mints the session WITHOUT
+    // re-running /api/business/create, so the row's phone can be stale if
+    // the owner edited it on Step 1 before retrying. The questionnaire syncs
+    // the draft (token-verified) with the CURRENT form values immediately
+    // before calling this route, so the draft phone is the same value the
+    // order summary previewed the fee with — prefer it. Best-effort: any
+    // draft read failure falls back to the row.
+    let draftPhone: string | null = null;
+    if (body.draftToken) {
+      try {
+        const draft = await getOnboardingDraft(body.businessId, body.draftToken);
+        const p = (draft?.payload as { phone?: unknown } | null)?.phone;
+        draftPhone = typeof p === "string" && p.trim() ? p : null;
+      } catch (err) {
+        logger.warn("checkout: draft read for Canada-fee detection failed (using business row)", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
     const canadian = isCanadianBusiness({
-      phone: feeBusiness?.phone ?? null,
+      phone: draftPhone ?? feeBusiness?.phone ?? null,
       // Stored row timezone first; the caller-supplied browser timezone only
       // fills a null (older rows predating the timezone column), so the
       // Step 3 order-summary preview and the charge can't diverge. A client
