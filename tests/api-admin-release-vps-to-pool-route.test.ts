@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+const { getVirtualMachineMock, disableAutoRenewalMock } = vi.hoisted(() => ({
+  getVirtualMachineMock: vi.fn(),
+  disableAutoRenewalMock: vi.fn()
+}));
+
 vi.mock("@/lib/auth", () => ({
   requireAdmin: vi.fn()
 }));
@@ -7,16 +12,27 @@ vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn()
 }));
 vi.mock("@/lib/db/subscriptions", () => ({
-  getSubscription: vi.fn()
+  getSubscription: vi.fn(),
+  updateSubscription: vi.fn()
 }));
 vi.mock("@/lib/db/vps-inventory", () => ({
   releaseVpsToPool: vi.fn()
+}));
+vi.mock("@/lib/hostinger/client", () => ({
+  DEFAULT_HOSTINGER_BASE_URL: "https://developers.hostinger.com",
+  HostingerClient: class {
+    getVirtualMachine = getVirtualMachineMock;
+    disableBillingAutoRenewal = disableAutoRenewalMock;
+  }
+}));
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
 
 import { POST } from "@/app/api/admin/vps/[businessId]/release-to-pool/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
-import { getSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
@@ -54,7 +70,10 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     } as never);
     vi.mocked(getBusiness).mockResolvedValue(baseBiz as never);
     vi.mocked(getSubscription).mockResolvedValue(null);
+    vi.mocked(updateSubscription).mockResolvedValue({} as never);
     vi.mocked(releaseVpsToPool).mockResolvedValue(undefined);
+    getVirtualMachineMock.mockResolvedValue({ id: 1806114, subscription_id: "hsub-vm" });
+    disableAutoRenewalMock.mockResolvedValue(undefined);
   });
 
   it("releases the box to the pool with the pinned hardware plan and admin-stamped notes", async () => {
@@ -63,7 +82,15 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data).toEqual({ released: true, vmId: 1806114, plan: "kvm2" });
+    expect(json.data).toEqual({
+      released: true,
+      vmId: 1806114,
+      plan: "kvm2",
+      // No subscription row exists → nothing to cancel; billing id resolved
+      // from the VM detail and parked.
+      subscriptionCanceled: false,
+      hostingerAutoRenewDisabled: true
+    });
 
     expect(releaseVpsToPool).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -73,6 +100,8 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
         notes: expect.stringContaining("released to pool by admin admin@example.com")
       })
     );
+    expect(updateSubscription).not.toHaveBeenCalled();
+    expect(disableAutoRenewalMock).toHaveBeenCalledWith("hsub-vm");
   });
 
   it("derives the LEGACY deployed size (kvm8) for an unpinned standard tenant", async () => {
@@ -83,36 +112,70 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data).toEqual({ released: true, vmId: 1806114, plan: "kvm8" });
+    expect(json.data).toEqual(
+      expect.objectContaining({ released: true, vmId: 1806114, plan: "kvm8" })
+    );
   });
 
-  it("passes the subscription's Hostinger billing id through for canceled subscriptions", async () => {
+  it("releases a Stripe-LESS active subscription and cancels the internal row (Residency Pilot case)", async () => {
     vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "active",
+      stripe_subscription_id: null,
+      hostinger_billing_subscription_id: "hsub-pilot"
+    } as never);
+
+    const res = await POST(makeRequest(), makeCtx());
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data).toEqual(
+      expect.objectContaining({ subscriptionCanceled: true, hostingerAutoRenewDisabled: true })
+    );
+    expect(updateSubscription).toHaveBeenCalledWith("sub-row-1", {
       status: "canceled",
+      canceled_at: expect.stringMatching(/^\d{4}-/),
+      cancel_reason: "admin_force"
+    });
+    // Billing id came from the subscription row — no VM detail call needed.
+    expect(disableAutoRenewalMock).toHaveBeenCalledWith("hsub-pilot");
+    expect(getVirtualMachineMock).not.toHaveBeenCalled();
+  });
+
+  it("does not re-cancel an already-canceled subscription", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-1",
+      status: "canceled",
+      stripe_subscription_id: "sub_old",
       hostinger_billing_subscription_id: "hsub-1"
     } as never);
 
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data).toEqual(expect.objectContaining({ subscriptionCanceled: false }));
+    expect(updateSubscription).not.toHaveBeenCalled();
     expect(releaseVpsToPool).toHaveBeenCalledWith(
       expect.objectContaining({ hostingerBillingSubscriptionId: "hsub-1" })
     );
   });
 
-  it("409s while the subscription is active (would cascade-delete a paying tenant)", async () => {
+  it("409s while a Stripe subscription is linked and active", async () => {
     vi.mocked(getSubscription).mockResolvedValue({
       status: "active",
+      stripe_subscription_id: "sub_live",
       hostinger_billing_subscription_id: null
     } as never);
 
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(409);
     expect(releaseVpsToPool).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
   });
 
-  it("409s while the subscription is past_due", async () => {
+  it("409s while a Stripe subscription is linked and past_due", async () => {
     vi.mocked(getSubscription).mockResolvedValue({
       status: "past_due",
+      stripe_subscription_id: "sub_live",
       hostinger_billing_subscription_id: null
     } as never);
 
@@ -133,8 +196,9 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     expect(releaseVpsToPool).not.toHaveBeenCalled();
   });
 
-  it("releases for a pending subscription with NO Stripe linkage (abandoned checkout)", async () => {
+  it("releases + cancels a pending subscription with NO Stripe linkage (abandoned checkout)", async () => {
     vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-row-2",
       status: "pending",
       stripe_subscription_id: null,
       hostinger_billing_subscription_id: null
@@ -143,6 +207,29 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(200);
     expect(releaseVpsToPool).toHaveBeenCalled();
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "sub-row-2",
+      expect.objectContaining({ status: "canceled" })
+    );
+  });
+
+  it("tolerates a Hostinger auto-renew failure (release still succeeds, flag false)", async () => {
+    disableAutoRenewalMock.mockRejectedValue(new Error("hostinger 500"));
+
+    const res = await POST(makeRequest(), makeCtx());
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data).toEqual(expect.objectContaining({ hostingerAutoRenewDisabled: false }));
+  });
+
+  it("reports hostingerAutoRenewDisabled=false when no billing subscription resolves", async () => {
+    getVirtualMachineMock.mockResolvedValue({ id: 1806114 }); // no subscription_id
+
+    const res = await POST(makeRequest(), makeCtx());
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data).toEqual(expect.objectContaining({ hostingerAutoRenewDisabled: false }));
+    expect(disableAutoRenewalMock).not.toHaveBeenCalled();
   });
 
   it("400s for non-Hostinger providers (BYOS boxes are not pool stock)", async () => {

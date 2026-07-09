@@ -67,7 +67,10 @@ export function ReleaseVpsPoolButton({
           Make VPS <strong>{vpsId}</strong> available for new signups?{" "}
           <strong>{businessName}</strong> keeps running on it for now — but the moment a new
           account adopts the box it is wiped and reinstalled, and this account (all data + owner
-          login) is <strong>permanently deleted</strong>. This cannot be undone after reuse.
+          login) is <strong>permanently deleted</strong>. Releasing also cancels this
+          account&apos;s internal subscription and turns off the box&apos;s Hostinger
+          auto-renewal (it lapses at period end unless adopted). This cannot be undone after
+          reuse.
         </p>
         <div className="flex gap-2">
           <Button size="sm" variant="danger" onClick={handleRelease} loading={loading}>
