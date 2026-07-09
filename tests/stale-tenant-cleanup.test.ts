@@ -18,6 +18,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
   return {
     listByVpsId: vi.fn().mockResolvedValue([]),
     deleteBiz: vi.fn().mockResolvedValue(undefined),
+    // Default: the email owns nothing else after the row delete → auth user
+    // is removable.
+    listBusinessIdsForEmail: vi.fn().mockResolvedValue([]),
     findAuthUserId: vi.fn().mockResolvedValue(null),
     deleteAuthUser: vi.fn().mockResolvedValue(undefined),
     ...overrides
@@ -136,6 +139,39 @@ describe("cleanupStaleTenantsForVm", () => {
     expect(result.deletedBusinessIds).toEqual(["stale-biz"]);
   });
 
+  it("keeps the auth user when the owner email still owns other businesses (agency login)", async () => {
+    const deps = makeDeps({
+      listByVpsId: vi.fn().mockResolvedValue([biz({ id: "stale-biz" })]),
+      listBusinessIdsForEmail: vi.fn().mockResolvedValue(["other-live-biz"]),
+      findAuthUserId: vi.fn().mockResolvedValue("auth-user-1")
+    });
+
+    const result = await cleanupStaleTenantsForVm(
+      { vmId: 42, newBusinessId: "new-biz" },
+      deps
+    );
+
+    expect(result.deletedBusinessIds).toEqual(["stale-biz"]);
+    // The remaining-ownership check short-circuits before any auth lookup.
+    expect(deps.findAuthUserId).not.toHaveBeenCalled();
+    expect(deps.deleteAuthUser).not.toHaveBeenCalled();
+  });
+
+  it("tolerates a failing remaining-ownership check (row already deleted)", async () => {
+    const deps = makeDeps({
+      listByVpsId: vi.fn().mockResolvedValue([biz({ id: "stale-biz" })]),
+      listBusinessIdsForEmail: vi.fn().mockRejectedValue(new Error("replica down"))
+    });
+
+    const result = await cleanupStaleTenantsForVm(
+      { vmId: 42, newBusinessId: "new-biz" },
+      deps
+    );
+
+    expect(result.deletedBusinessIds).toEqual(["stale-biz"]);
+    expect(deps.deleteAuthUser).not.toHaveBeenCalled();
+  });
+
   it("logs and continues to the next business when a row delete fails (Error)", async () => {
     const deps = makeDeps({
       listByVpsId: vi.fn().mockResolvedValue([
@@ -145,7 +181,8 @@ describe("cleanupStaleTenantsForVm", () => {
       deleteBiz: vi
         .fn()
         .mockRejectedValueOnce(new Error("db down"))
-        .mockResolvedValueOnce(undefined)
+        .mockResolvedValueOnce(undefined),
+      findAuthUserId: vi.fn().mockResolvedValue("auth-user-1")
     });
 
     const result = await cleanupStaleTenantsForVm(
@@ -155,6 +192,9 @@ describe("cleanupStaleTenantsForVm", () => {
 
     expect(result.deletedBusinessIds).toEqual(["succeeds"]);
     expect(deps.deleteBiz).toHaveBeenCalledTimes(2);
+    // The login must survive while its business row does: the failed row's
+    // auth user is untouched, only the deleted row's user is removed.
+    expect(deps.deleteAuthUser).toHaveBeenCalledTimes(1);
   });
 
   it("stringifies a non-Error row-delete failure", async () => {
