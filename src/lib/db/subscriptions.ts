@@ -288,6 +288,67 @@ export async function listBusinessIdsWithLiveSubscription(
   return { stripeBacked, stripeless };
 }
 
+/**
+ * Which of `businessIds` have ANY subscription row that is Stripe-linked and
+ * not canceled — i.e. Stripe either IS billing (active/past_due) or MAY
+ * start billing any second (a paid checkout's `pending` row whose webhook
+ * is still activating). Any-row semantics like
+ * {@link listBusinessIdsWithLiveSubscription}, but deliberately wider: this
+ * is the "would deleting this account orphan Stripe billing?" predicate,
+ * shared by the release-to-pool guard and the adopt-time cascade's
+ * delete guard.
+ */
+export async function listBusinessIdsWithStripeLinkedSubscription(
+  businessIds: string[],
+  client?: SupabaseClient
+): Promise<Set<string>> {
+  if (businessIds.length === 0) return new Set();
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select("business_id")
+    .in("business_id", businessIds)
+    .not("stripe_subscription_id", "is", null)
+    .neq("status", "canceled");
+
+  if (error) throw new Error(`listBusinessIdsWithStripeLinkedSubscription: ${error.message}`);
+  return new Set(((data ?? []) as Array<{ business_id: string }>).map((r) => r.business_id));
+}
+
+/**
+ * Compare-and-swap cancel for the admin release-to-pool flow: flip the row
+ * to `canceled` ONLY IF it is still Stripe-less at write time. A checkout
+ * webhook can attach a `stripe_subscription_id` to this very row between
+ * the caller's guard read and this write — blindly cancelling then would
+ * mask the linkage from the adopt-time delete guard (which ignores
+ * canceled rows) and let the cascade delete an account Stripe is billing.
+ * Returns true when the row was cancelled, false when the CAS lost (row
+ * became Stripe-linked, or was already cancelled by a concurrent writer).
+ *
+ * `grace_ends_at` is cleared so the grace sweep never wipes the account —
+ * deletion stays with the adopt-time cascade.
+ */
+export async function cancelSubscriptionIfStripeless(
+  id: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .update({
+      status: "canceled",
+      canceled_at: new Date().toISOString(),
+      cancel_reason: "admin_force",
+      grace_ends_at: null
+    })
+    .eq("id", id)
+    .is("stripe_subscription_id", null)
+    .neq("status", "canceled")
+    .select("id");
+  if (error) throw new Error(`cancelSubscriptionIfStripeless: ${error.message}`);
+  return ((data ?? []) as Array<{ id: string }>).length > 0;
+}
+
 export async function updateSubscription(
   id: string,
   update: Partial<

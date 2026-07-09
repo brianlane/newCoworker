@@ -21,6 +21,8 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     // Default: the email owns nothing else after the row delete → auth user
     // is removable.
     listBusinessIdsForEmail: vi.fn().mockResolvedValue([]),
+    // Default: no stale business has resubscribed — nothing is Stripe-linked.
+    listStripeLinkedIds: vi.fn().mockResolvedValue(new Set<string>()),
     findAuthUserId: vi.fn().mockResolvedValue(null),
     deleteAuthUser: vi.fn().mockResolvedValue(undefined),
     ...overrides
@@ -62,6 +64,34 @@ describe("cleanupStaleTenantsForVm", () => {
 
     expect(result.deletedBusinessIds).toEqual([]);
     expect(deps.deleteBiz).not.toHaveBeenCalled();
+    // No stale rows → the Stripe-linkage guard lookup is skipped.
+    expect(deps.listStripeLinkedIds).not.toHaveBeenCalled();
+  });
+
+  it("skips (never deletes) a stale business that is Stripe-linked again after release", async () => {
+    // Admin released the box, the old owner completed (or is mid-webhook on)
+    // a NEW paid checkout before anyone adopted it. Deleting now would
+    // orphan Stripe billing — the guard skips that business and deletes
+    // only the genuinely dead one. The linkage predicate includes `pending`
+    // rows with a stripe_subscription_id, so the webhook-activation window
+    // is covered too.
+    const deps = makeDeps({
+      listByVpsId: vi.fn().mockResolvedValue([
+        biz({ id: "resubscribed" }),
+        biz({ id: "dead" })
+      ]),
+      listStripeLinkedIds: vi.fn().mockResolvedValue(new Set(["resubscribed"]))
+    });
+
+    const result = await cleanupStaleTenantsForVm(
+      { vmId: 1815606, newBusinessId: "new-biz" },
+      deps
+    );
+
+    expect(deps.listStripeLinkedIds).toHaveBeenCalledWith(["resubscribed", "dead"]);
+    expect(result.deletedBusinessIds).toEqual(["dead"]);
+    expect(deps.deleteBiz).toHaveBeenCalledTimes(1);
+    expect(deps.deleteBiz).toHaveBeenCalledWith("dead");
   });
 
   it("never deletes wiped businesses (lifecycle audit rows)", async () => {

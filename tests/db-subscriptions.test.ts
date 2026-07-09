@@ -48,6 +48,119 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 describe("db/subscriptions", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  describe("cancelSubscriptionIfStripeless", () => {
+    function casDb(result: { data: unknown; error: unknown }) {
+      // Chain: .update().eq().is().neq().select() — select resolves.
+      return {
+        ...mockDb(),
+        is: vi.fn().mockReturnThis(),
+        neq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue(result)
+      };
+    }
+
+    it("cancels and returns true when the row is still Stripe-less", async () => {
+      const db = casDb({ data: [{ id: "sub-1" }], error: null });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const { cancelSubscriptionIfStripeless } = await import("@/lib/db/subscriptions");
+      expect(await cancelSubscriptionIfStripeless("sub-1")).toBe(true);
+      expect(db.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "canceled",
+          cancel_reason: "admin_force",
+          grace_ends_at: null
+        })
+      );
+      // The compare half of the CAS: only Stripe-less, not-yet-canceled rows.
+      expect(db.is).toHaveBeenCalledWith("stripe_subscription_id", null);
+      expect(db.neq).toHaveBeenCalledWith("status", "canceled");
+    });
+
+    it("returns false when the CAS matches no row (became Stripe-linked or already canceled)", async () => {
+      const db = casDb({ data: [], error: null });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const { cancelSubscriptionIfStripeless } = await import("@/lib/db/subscriptions");
+      expect(await cancelSubscriptionIfStripeless("sub-1")).toBe(false);
+    });
+
+    it("treats null data as no-match and throws on DB error", async () => {
+      const { cancelSubscriptionIfStripeless } = await import("@/lib/db/subscriptions");
+
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+        casDb({ data: null, error: null }) as never
+      );
+      expect(await cancelSubscriptionIfStripeless("sub-1")).toBe(false);
+
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+        casDb({ data: null, error: { message: "replica down" } }) as never
+      );
+      await expect(cancelSubscriptionIfStripeless("sub-1")).rejects.toThrow(
+        "cancelSubscriptionIfStripeless: replica down"
+      );
+    });
+  });
+
+  describe("listBusinessIdsWithStripeLinkedSubscription", () => {
+    function stripeLinkedDb(result: { data: unknown; error: unknown }) {
+      // Chain: .select().in().not().neq() — the final neq resolves.
+      return {
+        ...mockDb(),
+        in: vi.fn().mockReturnThis(),
+        not: vi.fn().mockReturnThis(),
+        neq: vi.fn().mockResolvedValue(result)
+      };
+    }
+
+    it("returns businesses with any non-canceled Stripe-linked row", async () => {
+      const db = stripeLinkedDb({
+        data: [{ business_id: "live-1" }, { business_id: "live-1" }, { business_id: "mid-flight" }],
+        error: null
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const { listBusinessIdsWithStripeLinkedSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      const result = await listBusinessIdsWithStripeLinkedSubscription([
+        "live-1",
+        "mid-flight",
+        "released"
+      ]);
+      expect(result).toEqual(new Set(["live-1", "mid-flight"]));
+      expect(db.not).toHaveBeenCalledWith("stripe_subscription_id", "is", null);
+      expect(db.neq).toHaveBeenCalledWith("status", "canceled");
+    });
+
+    it("returns an empty set for empty input without touching the client", async () => {
+      const { listBusinessIdsWithStripeLinkedSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+      const result = await listBusinessIdsWithStripeLinkedSubscription([]);
+      expect(result).toEqual(new Set());
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+    });
+
+    it("treats null data as empty and throws on DB error", async () => {
+      const { listBusinessIdsWithStripeLinkedSubscription } = await import(
+        "@/lib/db/subscriptions"
+      );
+
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+        stripeLinkedDb({ data: null, error: null }) as never
+      );
+      expect(await listBusinessIdsWithStripeLinkedSubscription(["a"])).toEqual(new Set());
+
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+        stripeLinkedDb({ data: null, error: { message: "replica down" } }) as never
+      );
+      await expect(listBusinessIdsWithStripeLinkedSubscription(["a"])).rejects.toThrow(
+        "listBusinessIdsWithStripeLinkedSubscription: replica down"
+      );
+    });
+  });
+
   describe("listBusinessIdsWithLiveSubscription", () => {
     it("splits live businesses by Stripe linkage (any-row semantics)", async () => {
       // `in` is called twice (business_id filter, then status filter); the
