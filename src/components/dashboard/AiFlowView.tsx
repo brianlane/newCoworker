@@ -464,6 +464,27 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Saves link as" value={step.saveAs} mono />
         </>
       );
+    case "sleep":
+      return (
+        <>
+          {step.minutes !== undefined ? (
+            <Row label="Waits" value={`${step.minutes} minute(s)`} />
+          ) : (
+            <Row label="Waits until" value={`${step.untilTime ?? "?"} (${step.timezone ?? "?"})`} />
+          )}
+        </>
+      );
+    case "wait_for_reply":
+      return (
+        <>
+          <Row label="Waits for a text from" value={`{{vars.${step.phoneVar}}}`} mono />
+          <Row label="Saves the reply as" value={step.saveAs ?? "reply_text"} mono />
+          <Row
+            label="Gives up after"
+            value={`${step.timeoutMinutes ?? 1440} minute(s) (reply becomes "no_reply")`}
+          />
+        </>
+      );
     case "upsert_customer":
       return (
         <>

@@ -3,13 +3,23 @@ import {
   FLOW_COMPILE_SYSTEM_PROMPT,
   buildFlowAdaptUserText,
   buildFlowCompileUserText,
-  extractFlowJson
+  buildFlowRepairUserText,
+  extractFlowJson,
+  humanizeCompileIssues
 } from "@/lib/ai-flows/compile";
 
 describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
   it("documents the schema contract", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"version": 1');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("browse_extract");
+  });
+
+  it("teaches the wait steps and the no-reply branching pattern", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"sleep"');
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"wait_for_reply"');
+    // The pattern Truly asked for ("wait 5 hours, follow up if no response")
+    // must compile to wait_for_reply + a no_reply-guarded follow-up.
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"equals":"no_reply"');
   });
 
   it("offers every push trigger channel so the model never reaches for email+connectionId", () => {
@@ -57,6 +67,51 @@ describe("buildFlowAdaptUserText", () => {
   it("treats whitespace-only instructions as empty", () => {
     const text = buildFlowAdaptUserText({ sourceDefinition: {}, instructions: "   " });
     expect(text).not.toContain("Additional instructions:");
+  });
+});
+
+describe("buildFlowRepairUserText", () => {
+  it("carries the issues, the failing JSON, and the original description", () => {
+    const text = buildFlowRepairUserText({
+      description: "  wait then text  ",
+      candidateJson: '{"version":1}',
+      issues: ["steps.0.minutes: too big", 'Step "w" waits for a reply from {{vars.x}}']
+    });
+    expect(text).toContain("FAILED validation");
+    expect(text).toContain("- steps.0.minutes: too big");
+    expect(text).toContain('{"version":1}');
+    expect(text).toContain("wait then text");
+  });
+});
+
+describe("humanizeCompileIssues", () => {
+  it("maps connectionId failures to the coworker-mailbox guidance", () => {
+    const [msg] = humanizeCompileIssues([
+      "trigger.connectionId: Invalid input: expected string, received undefined"
+    ]);
+    expect(msg).toContain("AI coworker's own address");
+    expect(msg).toContain("needs no connection");
+  });
+  it("rewrites other trigger problems with a what-to-try hint", () => {
+    const [msg] = humanizeCompileIssues(["trigger.time: must be a 24h time like \"21:00\""]);
+    expect(msg).toContain("problem with the trigger");
+  });
+  it("adds the extraction tip to out-of-scope var references", () => {
+    const [msg] = humanizeCompileIssues([
+      'Step "s3" uses {{vars.lead_phone}} before any step produces it.'
+    ]);
+    expect(msg).toContain("read details");
+  });
+  it("turns zod step paths into 1-based plain words and passes the rest through", () => {
+    const [stepMsg, bareStepMsg, plain] = humanizeCompileIssues([
+      "steps.1.body: String must contain at least 1 character(s)",
+      "steps.0: browse_extract needs at least one of fields or extractLinks",
+      'Duplicate step id "s1".'
+    ]);
+    expect(stepMsg).toContain("Step 2");
+    expect(stepMsg).toContain("(body)");
+    expect(bareStepMsg).toBe("Step 1: browse_extract needs at least one of fields or extractLinks");
+    expect(plain).toBe('Duplicate step id "s1".');
   });
 });
 

@@ -2,6 +2,96 @@ import { describe, expect, it } from "vitest";
 import { planStep, type StepScope } from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
+describe("planStep: sleep", () => {
+  it("plans a relative wait with the re-entry marker, capping minutes at 30 days", () => {
+    const plan = planStep({ id: "z1", type: "sleep", minutes: 300 } as FlowStep, { vars: {} });
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "sleep", minutes: 300, marker: "__slept_z1" }
+    });
+    const capped = planStep({ id: "z1", type: "sleep", minutes: 999999 } as FlowStep, { vars: {} });
+    expect(capped.ok && capped.action.kind === "sleep" && capped.action.minutes).toBe(43200);
+  });
+  it("plans an until-time wait carrying the timezone", () => {
+    const plan = planStep(
+      { id: "z2", type: "sleep", untilTime: "08:30", timezone: "America/Toronto" } as FlowStep,
+      { vars: {} }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "sleep",
+        untilTime: "08:30",
+        timezone: "America/Toronto",
+        marker: "__slept_z2"
+      }
+    });
+  });
+  it("completes as a no-op on re-entry (the worker stamped the marker before parking)", () => {
+    const plan = planStep({ id: "z1", type: "sleep", minutes: 300 } as FlowStep, {
+      vars: { __slept_z1: "1" }
+    });
+    expect(plan).toEqual({ ok: true, action: { kind: "set_vars", vars: {} } });
+  });
+});
+
+describe("planStep: wait_for_reply", () => {
+  const step = {
+    id: "w1",
+    type: "wait_for_reply",
+    phoneVar: "lead_phone",
+    timeoutMinutes: 300
+  } as FlowStep;
+
+  it("parks on the normalized phone with the default saveAs and per-step marker", () => {
+    const plan = planStep(step, { vars: { lead_phone: "(647) 449-4244" } });
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "wait_for_reply",
+        from: "+16474494244",
+        saveAs: "reply_text",
+        marker: "__waited_w1",
+        timeoutMinutes: 300
+      }
+    });
+  });
+  it("defaults the timeout to 24h and caps it at 30 days", () => {
+    const noTimeout = planStep(
+      { id: "w2", type: "wait_for_reply", phoneVar: "p" } as FlowStep,
+      { vars: { p: "+16025551234" } }
+    );
+    expect(noTimeout.ok && noTimeout.action.kind === "wait_for_reply" && noTimeout.action.timeoutMinutes).toBe(1440);
+    const capped = planStep(
+      { id: "w3", type: "wait_for_reply", phoneVar: "p", timeoutMinutes: 999999 } as FlowStep,
+      { vars: { p: "+16025551234" } }
+    );
+    expect(capped.ok && capped.action.kind === "wait_for_reply" && capped.action.timeoutMinutes).toBe(43200);
+  });
+  it("completes only via ITS OWN marker — a stale saveAs from an earlier wait still parks", () => {
+    // Marker set (this step's resume/timeout ran) → no-op completion.
+    const resolved = planStep(step, {
+      vars: { lead_phone: "+16474494244", reply_text: "yes please", __waited_w1: "1" }
+    });
+    expect(resolved).toEqual({ ok: true, action: { kind: "set_vars", vars: {} } });
+    // saveAs set by an EARLIER wait but no marker for THIS step → park again
+    // (Bugbot 868c00ba: two waits sharing reply_text must both wait).
+    const stale = planStep(step, {
+      vars: { lead_phone: "+16474494244", reply_text: "earlier answer" }
+    });
+    expect(stale.ok && stale.action.kind).toBe("wait_for_reply");
+  });
+  it("resolves straight to the no-reply branch when the phone is unusable", () => {
+    for (const vars of [{}, { lead_phone: "none" }, { lead_phone: "12345" }]) {
+      const plan = planStep(step, { vars });
+      expect(plan).toEqual({
+        ok: true,
+        action: { kind: "set_vars", vars: { reply_text: "no_reply", __waited_w1: "1" } }
+      });
+    }
+  });
+});
+
 describe("planStep: voice steps are rejected by the async worker", () => {
   it.each<FlowStep>([
     { id: "r", type: "ring_handoff", toE164: "+16025245719" },

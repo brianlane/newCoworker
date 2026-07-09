@@ -49,9 +49,21 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s4","type":"approval_gate","prompt":"..."}',
   '  {"id":"s5","type":"notify_owner","message":"..."}',
   '  {"id":"s6","type":"http_call","label":"crm","method":"POST","path":"/x","bodyTemplate":"...","saveAs":"resp"}',
+  '  {"id":"s6a","type":"sleep","minutes":300}                                            // pause then continue (1-43200 min); OR {"untilTime":"08:30","timezone":"America/Toronto"} to wait until a local time of day — exactly one mode',
+  '  {"id":"s6b","type":"wait_for_reply","phoneVar":"lead_phone","saveAs":"reply_text","timeoutMinutes":300}   // park until that phone texts back; the reply lands in {{vars.reply_text}} ("no_reply" if they never replied)',
   '  {"id":"s7","type":"route_to_team","offerTemplate":"New lead {{vars.lead_name}}, reply 1 to claim or 2 to pass by {{offer.deadline}}","responseMinutes":10,"ownerFallbackTemplate":"No agent claimed {{vars.lead_name}}","claimedNotifyTemplate":"{{agent.name}} claimed {{vars.lead_name}}","agentName":"<optional: pin offers to this roster member>","offerWindow":{"timezone":"America/Phoenix","quietStart":"21:00","quietEnd":"08:30","graceMinutes":10},"attachScreenshot":true}',
   '  {"id":"s8","type":"browse_action","urlVar":"lead_url","actions":[{"kind":"click_text","target":"Leave an update"},{"kind":"fill_placeholder","target":"Add an update","valueTemplate":"{{vars.actions_taken}}"}],"screenshot":true,"rememberUrlKeyedByVar":"lead_phone"}',
   '  {"id":"s9","type":"recall_url","keyFromTrigger":"participants","saveAs":"lead_url"}   // recall a link a PRIOR run saved for this same person',
+  "",
+  'For "wait N hours and follow up if they don\'t respond" style requests, use',
+  "wait_for_reply (NOT sleep): send_sms the lead, then wait_for_reply on their",
+  'phone var with timeoutMinutes = the wait, then a follow-up send_sms guarded by',
+  '"when":{"var":"reply_text","equals":"no_reply"} (they never replied) and/or',
+  'another step guarded by "when":{"var":"reply_text","notEquals":"no_reply"}',
+  "(they did). While a wait_for_reply is parked, the lead's next text is captured",
+  "by the flow and the default AI conversational reply stays quiet for that",
+  "message. Use sleep only for unconditional pauses (e.g. wait until 08:30",
+  "before texting).",
   "",
   "Prefer extract_text over browse_extract when the triggering message ALREADY",
   "contains the lead details (name, phone, email, address in the SMS/email",
@@ -127,6 +139,62 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
 
 export function buildFlowCompileUserText(description: string): string {
   return `Automation description:\n${description.trim()}`;
+}
+
+/**
+ * Self-repair user text: the first candidate failed validation, so re-prompt
+ * with the exact issues and the failing JSON. One repair round only — if the
+ * model can't fix its own output with the errors in hand, surface the
+ * (humanized) failure to the user instead of burning tokens in a loop.
+ */
+export function buildFlowRepairUserText(input: {
+  description: string;
+  candidateJson: string;
+  issues: string[];
+}): string {
+  return [
+    "Your previous automation definition FAILED validation. Fix ONLY the",
+    "problems listed below and return the FULL corrected JSON definition",
+    "(same schema contract; output only the JSON object).",
+    "",
+    "Validation problems:",
+    ...input.issues.map((i) => `- ${i}`),
+    "",
+    "Your previous (invalid) definition:",
+    input.candidateJson,
+    "",
+    "Original automation description:",
+    input.description.trim()
+  ].join("\n");
+}
+
+/**
+ * Translate recurring validation failures into guidance a business owner can
+ * act on. Unmatched issues pass through as-is (they are already sentence-ish
+ * from validateDefinitionSemantics); zod path prefixes are stripped either way.
+ */
+export function humanizeCompileIssues(issues: string[]): string[] {
+  return issues.map((raw) => {
+    const issue = raw.trim();
+    if (/trigger\.connectionId/i.test(issue)) {
+      return (
+        "The email trigger needs one of your connected inboxes, which the AI can't pick for you. " +
+        'Tip: if the email arrives at your AI coworker\'s own address (forwarded lead alerts, Privyr, portals), choose the "AI coworker\'s mailbox" trigger instead — it needs no connection.'
+      );
+    }
+    if (/^trigger\./i.test(issue)) {
+      return `There's a problem with the trigger: ${issue.replace(/^trigger\./i, "")}. Try describing when the automation should start (a text, an email to the coworker's mailbox, a webhook, or a schedule).`;
+    }
+    if (/uses \{\{vars\.(\w+)\}\} before any step produces it/i.test(issue)) {
+      return `${issue} Tip: add an earlier "read details" step that extracts that value, or reorder the steps.`;
+    }
+    // steps.<n>.<field>: zod path — point at the step number in plain words.
+    const stepPath = /^steps\.(\d+)\.?(.*?): (.*)$/.exec(issue);
+    if (stepPath) {
+      return `Step ${Number(stepPath[1]) + 1}${stepPath[2] ? ` (${stepPath[2]})` : ""}: ${stepPath[3]}`;
+    }
+    return issue;
+  });
 }
 
 /**

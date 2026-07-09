@@ -19,10 +19,13 @@ import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import {
   FLOW_COMPILE_SYSTEM_PROMPT,
   buildFlowCompileUserText,
-  extractFlowJson
+  buildFlowRepairUserText,
+  extractFlowJson,
+  humanizeCompileIssues
 } from "@/lib/ai-flows/compile";
 import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
@@ -120,28 +123,95 @@ export async function POST(request: Request) {
       const definition = parseAiFlowDefinition(candidate);
       return successResponse({ definition });
     } catch (err) {
-      if (err instanceof AiFlowValidationError) {
-        void recordSystemLog({
-          businessId: body.businessId,
-          source: "app",
-          level: "warn",
-          event: "aiflow_compile_failed",
-          message: "AI produced an invalid automation",
-          payload: {
-            model,
-            reason: "schema",
-            issues: err.issues,
-            outputTokens: usage?.outputTokens ?? null
-          }
+      if (!(err instanceof AiFlowValidationError)) throw err;
+      // Self-repair: give the model ONE shot at fixing its own output with the
+      // exact validation issues in hand. Most failures (a missed field, a var
+      // referenced before it exists) are trivially fixable this way; a second
+      // failure surfaces humanized guidance instead of raw zod paths.
+      void recordSystemLog({
+        businessId: body.businessId,
+        source: "app",
+        level: "warn",
+        event: "aiflow_compile_failed",
+        message: "AI produced an invalid automation (attempting self-repair)",
+        payload: {
+          model,
+          reason: "schema",
+          issues: err.issues,
+          outputTokens: usage?.outputTokens ?? null
+        }
+      });
+      let repairIssues = err.issues;
+      try {
+        const repairText = buildFlowRepairUserText({
+          description: body.description,
+          candidateJson: JSON.stringify(candidate),
+          issues: err.issues
         });
+        const { text: repairedRaw, usage: repairUsage } = await geminiGenerateTextDetailed({
+          apiKey,
+          model,
+          systemInstruction: FLOW_COMPILE_SYSTEM_PROMPT,
+          userText: repairText,
+          temperature: 0,
+          maxOutputTokens: 32000,
+          responseMimeType: "application/json"
+        });
+        await meterGeminiSpendForBusiness({
+          businessId: body.businessId,
+          model,
+          surface: "aiflow_compile",
+          usage: repairUsage,
+          inputChars: FLOW_COMPILE_SYSTEM_PROMPT.length + repairText.length,
+          outputChars: repairedRaw.length
+        });
+        const repairedCandidate = extractFlowJson(repairedRaw);
+        if (repairedCandidate !== null) {
+          const definition = parseAiFlowDefinition(repairedCandidate);
+          return successResponse({ definition });
+        }
+      } catch (repairErr) {
+        if (repairErr instanceof AiFlowValidationError) {
+          repairIssues = repairErr.issues;
+        } else if (repairErr instanceof GeminiEmptyError) {
+          await meterGeminiSpendForBusiness({
+            businessId: body.businessId,
+            model,
+            surface: "aiflow_compile",
+            usage: repairErr.usage,
+            inputChars: FLOW_COMPILE_SYSTEM_PROMPT.length,
+            outputChars: 0
+          });
+        } else {
+          // Transient repair-call failure: fall through to the original issues.
+          logger.warn("aiflow compile self-repair call failed", {
+            businessId: body.businessId,
+            error: repairErr instanceof Error ? repairErr.message : String(repairErr)
+          });
+        }
       }
-      throw err;
+      void recordSystemLog({
+        businessId: body.businessId,
+        source: "app",
+        level: "warn",
+        event: "aiflow_compile_failed",
+        message: "AI produced an invalid automation (after self-repair)",
+        payload: { model, reason: "schema_after_repair", issues: repairIssues }
+      });
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `The AI draft needs a tweak before it can be used:\n${humanizeCompileIssues(repairIssues)
+          .map((i) => `• ${i}`)
+          .join("\n")}\nEdit your description (or build the flow manually) and try again.`
+      );
     }
   } catch (err) {
     if (err instanceof AiFlowValidationError) {
       return errorResponse(
         "VALIDATION_ERROR",
-        `AI produced an invalid automation: ${err.issues.join("; ")}`
+        `The AI draft needs a tweak before it can be used:\n${humanizeCompileIssues(err.issues)
+          .map((i) => `• ${i}`)
+          .join("\n")}`
       );
     }
     return handleRouteError(err);

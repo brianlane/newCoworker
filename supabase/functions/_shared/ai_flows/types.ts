@@ -612,6 +612,46 @@ export type FlowStep =
       saveAs?: string;
       when?: StepCondition;
     }
+  | {
+      id: string;
+      /**
+       * Pause the run, then continue with the NEXT step. Exactly one mode:
+       *   - minutes: relative wait (1..43200 = 30 days);
+       *   - untilTime ("HH:MM") + timezone: wait until the next occurrence of
+       *     that local wall-clock time.
+       * Implemented as an earliest_claim_at deferral (same machinery as SMS
+       * quiet hours): nothing is sent, no attempt is burned, and the worker
+       * re-claims the run when the time arrives. A context marker
+       * (`__slept_<id>`) makes the step a no-op on re-entry so it never
+       * re-defers.
+       */
+      type: "sleep";
+      minutes?: number;
+      untilTime?: string;
+      timezone?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * Park the run until the phone number held in `phoneVar` texts back (or
+       * `timeoutMinutes` elapses). The inbound webhook resumes the run with
+       * the reply text in {{vars.<saveAs>}} and SUPPRESSES the default AI
+       * conversational reply for that message — the flow owns the turn, like
+       * options.suppressDefaultReply. On timeout the sweep resumes with
+       * {{vars.<saveAs>}} = "no_reply" so later steps branch with
+       * `when: { var: saveAs, equals/notEquals "no_reply" }`. An unusable
+       * phone in phoneVar resolves immediately to "no_reply" — a lead-data
+       * gap is not a flow bug.
+       */
+      type: "wait_for_reply";
+      phoneVar: string;
+      /** Var that receives the reply text. Default "reply_text". */
+      saveAs?: string;
+      /** How long to wait before the no-reply branch. Default 1440 (24h), max 43200 (30 days). */
+      timeoutMinutes?: number;
+      when?: StepCondition;
+    }
   // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook
   // state machine, NOT the async ai-flow-worker). Only valid under a VoiceTrigger. ──
   | {

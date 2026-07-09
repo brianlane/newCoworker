@@ -51,7 +51,7 @@ import {
 } from "../_shared/ai_flows/engine.ts";
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
-import { planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
+import { MAX_WAIT_MINUTES, planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
 import { resolveContactRef } from "../_shared/ai_flows/contact_ref.ts";
 import {
   normalizeBrowseUrl,
@@ -71,7 +71,9 @@ import {
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   formatInTimeZone,
+  nextTimeOfDayMs,
   offerRespondByMs,
+  parseHHMM,
   smsQuietDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
@@ -255,6 +257,9 @@ serve(async (req: Request): Promise<Response> => {
   // Re-queue route_to_team runs whose agent offer deadline lapsed so the next
   // claim escalates them to the following agent (status-driven, like reclaim).
   await supabase.rpc("escalate_overdue_agent_offers");
+  // Re-queue wait_for_reply runs whose timeout lapsed with the no-reply
+  // sentinel ("" in the step's saveAs var) so the flow's no-reply branch runs.
+  await supabase.rpc("resume_overdue_reply_waits");
 
   // Non-SMS trigger sources, all failure-isolated so a bad schedule or a
   // mailbox/calendar outage never stalls run processing below. The email and
@@ -599,6 +604,55 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       return;
     }
+    if (outcome.kind === "pause_reply") {
+      const respondByIso = new Date(Date.now() + outcome.respondByMs).toISOString();
+      await recordStep(supabase, run, index, step, "pending", {
+        waiting_for: outcome.e164,
+        save_as: outcome.saveAs,
+        respond_by: respondByIso
+      });
+      // Persist the parked state; the inbound webhook matches the lead's next
+      // text to this run via context.waiting_reply.from and re-queues it with
+      // the reply in context.vars[saveAs]. The timeout sweep
+      // (resume_overdue_reply_waits) re-queues with the no_reply sentinel at
+      // respond_by_at. Attempt giveback like defer — waiting is not a failure.
+      await updateRun(supabase, run.id, {
+        status: "awaiting_reply",
+        current_step: index,
+        context: {
+          ...buildContext(scope, approval, routing),
+          waiting_reply: {
+            from: outcome.e164,
+            save_as: outcome.saveAs,
+            marker: outcome.marker,
+            step_index: index
+          }
+        },
+        respond_by_at: respondByIso,
+        claimed_at: null,
+        attempt_count: Math.max(0, run.attempt_count - 1)
+      });
+      await telemetryRecord(supabase, "ai_flow_run_awaiting_reply", {
+        run_id: run.id,
+        business_id: run.business_id,
+        step_index: index
+      });
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "info",
+        event: "ai_flow_run_awaiting_reply",
+        message: `Run parked: waiting for a reply from ${outcome.e164} (until ${respondByIso})`,
+        payload: {
+          run_id: run.id,
+          flow_id: run.flow_id,
+          step_index: index,
+          from: outcome.e164,
+          respond_by: respondByIso
+        }
+      });
+      return;
+    }
     if (outcome.kind === "defer") {
       const resumeIso = new Date(outcome.resumeAtMs).toISOString();
       await recordStep(supabase, run, index, step, "pending", {
@@ -708,7 +762,13 @@ type StepOutcome =
   // Quiet hours: this step (and the rest of the run) must wait until
   // resumeAtMs. executeRun re-queues the run with earliest_claim_at so the
   // claim RPC skips it until then — no attempt burned, nothing sent.
-  | { kind: "defer"; resumeAtMs: number; reason: string };
+  | { kind: "defer"; resumeAtMs: number; reason: string }
+  // wait_for_reply: park until `e164` texts back (the inbound webhook writes
+  // the reply into context.vars[saveAs] and re-queues) or respond_by_at lapses
+  // (resume_overdue_reply_waits writes the no_reply sentinel and re-queues).
+  // Both paths also stamp vars[marker] so the step completes on re-entry —
+  // per step, so a later wait sharing the same saveAs still parks.
+  | { kind: "pause_reply"; e164: string; respondByMs: number; saveAs: string; marker: string };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -763,7 +823,48 @@ async function runStep(
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
       return upsertCustomerStep(supabase, run, action);
+    case "sleep":
+      return sleepStep(scope, action);
+    case "wait_for_reply":
+      return {
+        kind: "pause_reply",
+        e164: action.from,
+        respondByMs: action.timeoutMinutes * 60_000,
+        saveAs: action.saveAs,
+        marker: action.marker
+      };
   }
+}
+
+/**
+ * Pause-then-continue: compute the resume instant, stamp the re-entry marker
+ * (persisted with the deferred context so the step is a no-op after the
+ * wait), and defer the run via earliest_claim_at. Fails OPEN on a bad
+ * timezone (skip the wait, note why) — a config typo must not brick the run.
+ */
+function sleepStep(
+  scope: Scope,
+  action: Extract<StepAction, { kind: "sleep" }>
+): StepOutcome {
+  const nowMs = Date.now();
+  let resumeAtMs: number | null = null;
+  if (action.minutes !== undefined) {
+    resumeAtMs = nowMs + action.minutes * 60_000;
+  } else if (action.untilTime && action.timezone) {
+    const target = parseHHMM(action.untilTime);
+    resumeAtMs = target === null ? null : nextTimeOfDayMs(nowMs, action.timezone, target);
+  }
+  if (resumeAtMs === null) {
+    return {
+      kind: "ok",
+      skipped: true,
+      result: { skipped: "sleep_invalid_config", untilTime: action.untilTime, timezone: action.timezone }
+    };
+  }
+  // Bound the wait (the planner caps minutes; untilTime is < 24h by nature).
+  resumeAtMs = Math.min(resumeAtMs, nowMs + MAX_WAIT_MINUTES * 60_000);
+  scope.vars[action.marker] = "1";
+  return { kind: "defer", resumeAtMs, reason: "sleep" };
 }
 
 /**
