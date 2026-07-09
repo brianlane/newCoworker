@@ -27,6 +27,7 @@ import { getTierLimits } from "@/lib/plans/limits";
 import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
 import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
+import { PrivacyPanel } from "@/components/admin/PrivacyPanel";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
@@ -282,6 +283,19 @@ export default async function BusinessDetailPage({
           />
         </Card>
       )}
+
+      {/* Privacy / data lifecycle (all tiers — retention + erasure are
+          compliance levers, not enterprise features) */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Privacy / data lifecycle
+        </h2>
+        <PrivacyPanel
+          key={`${businessId}:${business.data_retention_days ?? "none"}`}
+          businessId={businessId}
+          initialRetentionDays={business.data_retention_days ?? null}
+        />
+      </Card>
 
       {/* Subscription */}
       <Card>

@@ -105,6 +105,13 @@ export type BusinessRow = {
    */
   data_residency_mode?: DataResidencyMode;
   /**
+   * Content-history retention window in days (min 30, DB check enforced).
+   * Null = keep forever (default). Swept daily by data-retention-sweep →
+   * pruneExpiredContent; contacts are exempt (the deletion tool handles
+   * full per-person erasure).
+   */
+  data_retention_days?: number | null;
+  /**
    * Highest white-glove onboarding package purchased (Phase C5). Recorded by
    * the Stripe webhook; catalog in src/lib/plans/white-glove.ts.
    */
@@ -502,6 +509,52 @@ async function assertOnboxDestinationAllowed(
   if (!residencyAllowedForTier(business.tier)) {
     throw new ResidencyValidationError(RESIDENCY_TIER_MESSAGE);
   }
+}
+
+/** Floor for the retention window — mirrors the DB check constraint. */
+export const MIN_DATA_RETENTION_DAYS = 30;
+
+/**
+ * Set (or clear, with null) a tenant's content-history retention window.
+ * Admin-only lever (route enforces requireAdmin); the 30-day floor exists
+ * so retention can't undercut the billing grace window or delete context
+ * the engine still legitimately surfaces.
+ */
+export async function updateDataRetentionDays(
+  id: string,
+  retentionDays: number | null,
+  client?: SupabaseClient
+): Promise<void> {
+  if (
+    retentionDays !== null &&
+    (!Number.isInteger(retentionDays) || retentionDays < MIN_DATA_RETENTION_DAYS)
+  ) {
+    throw new Error(
+      `updateDataRetentionDays: retentionDays must be null or an integer >= ${MIN_DATA_RETENTION_DAYS}`
+    );
+  }
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ data_retention_days: retentionDays })
+    .eq("id", id);
+  if (error) throw new Error(`updateDataRetentionDays: ${error.message}`);
+}
+
+/**
+ * Businesses with a retention window configured — the data-retention-sweep's
+ * work list.
+ */
+export async function listBusinessesWithRetention(
+  client?: SupabaseClient
+): Promise<Array<{ id: string; data_retention_days: number }>> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select("id, data_retention_days")
+    .not("data_retention_days", "is", null);
+  if (error) throw new Error(`listBusinessesWithRetention: ${error.message}`);
+  return (data ?? []) as Array<{ id: string; data_retention_days: number }>;
 }
 
 export async function updateBusinessOwnerEmail(
