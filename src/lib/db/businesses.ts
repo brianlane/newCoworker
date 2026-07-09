@@ -524,6 +524,21 @@ export async function updateBusinessName(
   if (error) throw new Error(`updateBusinessName: ${error.message}`);
 }
 
+/**
+ * Refresh the owner phone (e.g. the checkout retry path syncing a Step 1
+ * edit from the token-verified onboarding draft, so fee detection and
+ * provisioning read the same value).
+ */
+export async function updateBusinessPhone(
+  id: string,
+  phone: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ phone }).eq("id", id);
+  if (error) throw new Error(`updateBusinessPhone: ${error.message}`);
+}
+
 export async function updateBusinessTimezone(
   id: string,
   timezone: string | null,

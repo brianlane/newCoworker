@@ -40,6 +40,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
+import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -1295,6 +1296,28 @@ async function runOrchestrator(
         // production regression at first call.
         assertPlatformTelnyxDefaults(platformDefaults);
 
+        // Canadian tenants ride the CA-enabled messaging profile (Canadian
+        // carriers must be whitelisted on the profile or every outbound SMS
+        // fails with Telnyx 40309 — the Truly Insurance incident). The same
+        // detection gates the labeled Canadian messaging surcharge at
+        // checkout, so capability and fee travel together.
+        const canadianTenant = isCanadianBusiness({
+          phone: businessRow?.phone ?? null,
+          timezone: businessRow?.timezone ?? null
+        });
+        const caMessagingProfileId = (process.env.TELNYX_MESSAGING_PROFILE_ID_CA ?? "").trim();
+        if (canadianTenant && caMessagingProfileId) {
+          platformDefaults.messagingProfileId = caMessagingProfileId;
+        } else if (canadianTenant) {
+          // Fee may already be charged at checkout — surface the config gap
+          // loudly instead of silently provisioning a tenant whose texts to
+          // their own country will bounce.
+          logger.warn(
+            "Canadian tenant provisioned WITHOUT TELNYX_MESSAGING_PROFILE_ID_CA; outbound SMS to CA will fail until the profile is fixed",
+            { businessId }
+          );
+        }
+
         // Ordered search cascade (see did-search-plan.ts): the area code
         // the owner explicitly REQUESTED at signup, then the NPA derived
         // from their own phone, then the platform default, then any number
@@ -1308,9 +1331,14 @@ async function runOrchestrator(
         const searchPlan = buildDidSearchPlan({
           preferredAreaCode: normalizePreferredAreaCode(businessRow?.preferred_area_code),
           ownerAreaCode: extractNanpAreaCode(businessRow?.phone),
-          defaultCountry: process.env.TELNYX_DEFAULT_COUNTRY ?? "US",
-          defaultAreaCode: process.env.TELNYX_DEFAULT_AREA_CODE,
-          defaultState: process.env.TELNYX_DEFAULT_STATE
+          // A timezone-classified Canadian tenant (non-NANP phone → no NPA
+          // tiers) must still land on a Canadian number: the default-country
+          // tiers become CA and the US-centric env area/state filters are
+          // dropped (a "US area 212" filter under country CA zeroes out
+          // inventory).
+          defaultCountry: canadianTenant ? "CA" : process.env.TELNYX_DEFAULT_COUNTRY ?? "US",
+          defaultAreaCode: canadianTenant ? undefined : process.env.TELNYX_DEFAULT_AREA_CODE,
+          defaultState: canadianTenant ? undefined : process.env.TELNYX_DEFAULT_STATE
         });
 
         let toE164: string | null = null;

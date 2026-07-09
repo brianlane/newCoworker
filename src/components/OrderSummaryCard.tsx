@@ -1,5 +1,14 @@
-import { getPeriodPricing, type BillingPeriod, type PlanTier } from "@/lib/plans/tier";
+import {
+  getCommitmentMonths,
+  getPeriodPricing,
+  type BillingPeriod,
+  type PlanTier
+} from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import {
+  CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+  CANADA_MESSAGING_FEE_NAME
+} from "@/lib/plans/canadian-messaging";
 import {
   calculateCommitmentTotal,
   formatCommitmentTotal,
@@ -15,6 +24,13 @@ type OrderSummaryCardProps = {
   period: BillingPeriod;
   businessName?: string;
   preferFirstMonthLabel?: boolean;
+  /**
+   * Canadian signup: shows the labeled monthly messaging surcharge line and
+   * folds it into "due today" (billed at the plan's cadence — × term months
+   * on prepaid plans). Must mirror what /api/checkout actually charges, so
+   * pass isCanadianBusiness() over the same phone/timezone the draft holds.
+   */
+  canadianFee?: boolean;
 };
 
 function formatPlanLabel(tier: PlanTier): string {
@@ -31,7 +47,8 @@ export function OrderSummaryCard({
   tier,
   period,
   businessName,
-  preferFirstMonthLabel = false
+  preferFirstMonthLabel = false,
+  canadianFee = false
 }: OrderSummaryCardProps) {
   const hasIntroDiscount = hasFirstCycleDiscount(tier, period);
   const firstCyclePrice = getMonthlyRateDisplay(tier, period);
@@ -47,7 +64,14 @@ export function OrderSummaryCard({
   const planDueTodayCents = isTermPlan
     ? calculateCommitmentTotal(tier, period)
     : getPeriodPricing(tier, period).monthlyCents;
-  const totalDueToday = formatPriceCents(planDueTodayCents + CARRIER_REGISTRATION_FEE_CENTS);
+  // Canadian signups: $4.99/mo surcharge billed at the plan's cadence, so a
+  // term plan pays it upfront for the whole term (like the plan itself).
+  const canadaFeeDueTodayCents = canadianFee
+    ? CANADA_MESSAGING_FEE_MONTHLY_CENTS * getCommitmentMonths(period)
+    : 0;
+  const totalDueToday = formatPriceCents(
+    planDueTodayCents + CARRIER_REGISTRATION_FEE_CENTS + canadaFeeDueTodayCents
+  );
   const monthlyLabel = isTermPlan
     ? "Effective monthly rate"
     : preferFirstMonthLabel && hasIntroDiscount
@@ -96,6 +120,16 @@ export function OrderSummaryCard({
         <span>Carrier registration (10DLC, one-time)</span>
         <span>{formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)}</span>
       </div>
+      {canadianFee && (
+        <div className="flex justify-between text-parchment/70">
+          <span>
+            {CANADA_MESSAGING_FEE_NAME} (
+            {formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS)}/mo
+            {isTermPlan ? ` × ${getCommitmentMonths(period)} months` : ""})
+          </span>
+          <span>{formatPriceCents(canadaFeeDueTodayCents)}</span>
+        </div>
+      )}
       <div className="flex justify-between text-parchment font-semibold pt-1 border-t border-parchment/10">
         <span>Total due today</span>
         <span>{totalDueToday}</span>
@@ -104,6 +138,12 @@ export function OrderSummaryCard({
         The carrier registration fee covers your business&apos;s one-time SMS carrier
         (10DLC) registration and is non-refundable.
       </p>
+      {canadianFee && (
+        <p className="text-xs text-parchment/45">
+          The {CANADA_MESSAGING_FEE_NAME.toLowerCase()} covers the per-message fees Canadian
+          mobile carriers charge for business texting, and renews with your plan.
+        </p>
+      )}
       {isTermPlan && (
         <p className="text-xs text-parchment/45">
           The full {formatBillingPeriod(period)} term is billed today. After the term, service

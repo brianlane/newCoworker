@@ -5,6 +5,7 @@ const {
   supabaseFromMock,
   loadLifecycleContextMock,
   createCheckoutSessionMock,
+  stripeSubscriptionRetrieveMock,
   upsertCustomerProfileMock,
   getCustomerProfileByIdMock,
   setBusinessCustomerProfileMock,
@@ -16,6 +17,7 @@ const {
   supabaseFromMock: vi.fn(),
   loadLifecycleContextMock: vi.fn(),
   createCheckoutSessionMock: vi.fn(),
+  stripeSubscriptionRetrieveMock: vi.fn(),
   upsertCustomerProfileMock: vi.fn(),
   getCustomerProfileByIdMock: vi.fn(),
   setBusinessCustomerProfileMock: vi.fn(),
@@ -48,6 +50,7 @@ vi.mock("@/lib/billing/lifecycle-loader", () => ({
 
 vi.mock("@/lib/stripe/client", () => ({
   createCheckoutSession: createCheckoutSessionMock,
+  getStripe: () => ({ subscriptions: { retrieve: stripeSubscriptionRetrieveMock } }),
   resolvePriceId: vi.fn((tier: string, period: string) => `price_${tier}_${period}`)
 }));
 
@@ -137,6 +140,8 @@ describe("/api/billing/change-plan", () => {
       context: makeContext()
     });
     createCheckoutSessionMock.mockResolvedValue({ url: "https://stripe.example/checkout" });
+    // Default old Stripe sub carries no Canada-fee flag (US / grandfathered).
+    stripeSubscriptionRetrieveMock.mockResolvedValue({ metadata: {} });
     upsertCustomerProfileMock.mockResolvedValue("prof_upserted");
     getCustomerProfileByIdMock.mockResolvedValue({
       id: "prof_upserted",
@@ -321,6 +326,67 @@ describe("/api/billing/change-plan", () => {
         })
       })
     );
+    // Old sub without the Canada flag (US or grandfathered pre-fee Canadian):
+    // no surcharge on the replacement sub.
+    const call = createCheckoutSessionMock.mock.calls.at(-1)?.[0];
+    expect("canadaFee" in call).toBe(false);
+    expect("canadianMessagingFee" in call.metadata).toBe(false);
+  });
+
+  describe("Canadian messaging surcharge carry-forward", () => {
+    function ctxWithStripeSub() {
+      return makeContext({
+        subscription: {
+          id: "sub_1",
+          business_id: "biz_1",
+          status: "active",
+          tier: "starter",
+          billing_period: "monthly",
+          customer_profile_id: "prof_1",
+          cancel_at_period_end: false,
+          stripe_subscription_id: "stripe_sub_ca"
+        }
+      });
+    }
+
+    it("carries the fee onto the new plan when the old Stripe sub is flagged", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: ctxWithStripeSub()
+      });
+      stripeSubscriptionRetrieveMock.mockResolvedValue({
+        metadata: { canadianMessagingFee: "1" }
+      });
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      expect(stripeSubscriptionRetrieveMock).toHaveBeenCalledWith("stripe_sub_ca");
+      expect(createCheckoutSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          canadaFee: { monthlyCents: 499, billingPeriod: "annual" },
+          metadata: expect.objectContaining({ canadianMessagingFee: "1" })
+        })
+      );
+    });
+
+    it("fails toward NOT charging when the old sub metadata can't be read", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: ctxWithStripeSub()
+      });
+      stripeSubscriptionRetrieveMock.mockRejectedValue(new Error("stripe down"));
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      const call = createCheckoutSessionMock.mock.calls.at(-1)?.[0];
+      expect("canadaFee" in call).toBe(false);
+      expect(loggerWarnMock).toHaveBeenCalledWith(
+        expect.stringContaining("Canada fee"),
+        expect.anything()
+      );
+    });
   });
 
   describe("null-profile upsert path", () => {

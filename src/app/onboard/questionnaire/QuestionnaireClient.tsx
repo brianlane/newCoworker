@@ -8,6 +8,7 @@ import { RichSelect } from "@/components/ui/RichSelect";
 import { Button } from "@/components/ui/Button";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
+import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
 import {
   DRAFT_STORAGE_KEY,
   ONBOARD_STORAGE_KEY,
@@ -667,7 +668,12 @@ function QuestionnaireForm() {
           billingPeriod: onboardingData.billingPeriod ?? "biennial",
           ownerEmail: onboardingData.ownerEmail,
           onboardingToken: onboardingData.onboardingToken,
-          draftToken: onboardingData.draftToken
+          draftToken: onboardingData.draftToken,
+          // Same browser timezone the order summary's Canada-fee preview
+          // used, so the server's fallback detection (only consulted when
+          // the phone isn't NANP and the stored row predates timezones)
+          // can never disagree with what the summary displayed.
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         })
       });
       const checkoutJson = await checkoutRes.json().catch(() => null);
@@ -1133,6 +1139,14 @@ function QuestionnaireForm() {
                     tier={tier}
                     period={period}
                     businessName={form.businessName}
+                    // Mirrors the server-side detection in /api/checkout: the
+                    // phone from Step 1 (authoritative) with the browser
+                    // timezone fallback, so the summary shows exactly what
+                    // Stripe will charge.
+                    canadianFee={isCanadianBusiness({
+                      phone: form.phone,
+                      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    })}
                   />
 
                   <p className="text-xs text-parchment/40 text-center">

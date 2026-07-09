@@ -1417,6 +1417,120 @@ describe("provisioning/orchestrate", () => {
       );
     });
 
+    it("buys a Canadian number on the CA messaging profile for a Canadian tenant", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_MESSAGING_PROFILE_ID_CA = "mock_prof_ca";
+      const biz = { business_type: "insurance", phone: "(416) 456-0696" } as never; // Toronto
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+14165550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-ca", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Number purchased in Canada, biased to the owner's area code, and
+          // wired to the CA-whitelisted messaging profile so outbound SMS to
+          // Canadian leads doesn't 40309 (the Truly Insurance incident).
+          search: expect.objectContaining({ countryCode: "CA", areaCode: "416" }),
+          platformDefaults: expect.objectContaining({ messagingProfileId: "mock_prof_ca" })
+        })
+      );
+      delete process.env.TELNYX_MESSAGING_PROFILE_ID_CA;
+    });
+
+    it("searches ANY Canadian number for a timezone-classified Canadian tenant (US env defaults never applied)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "212";
+      process.env.TELNYX_DEFAULT_STATE = "NY";
+      // Non-NANP phone → no derivable area code; Canadian by timezone. The
+      // primary search must not be "US area 212 in country CA", which would
+      // zero out inventory and (with no localAreaCode) never retry.
+      const biz = {
+        business_type: "insurance",
+        phone: "+447911123456",
+        timezone: "America/Toronto"
+      } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16475550101" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-ca-tz", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: { countryCode: "CA", areaCode: undefined, administrativeArea: undefined }
+        })
+      );
+    });
+
+    it("still provisions a Canadian tenant when TELNYX_MESSAGING_PROFILE_ID_CA is unset (loud warn, default profile)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      delete process.env.TELNYX_MESSAGING_PROFILE_ID_CA;
+      const biz = { business_type: "insurance", phone: "6474494244" } as never; // Toronto
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16475550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-ca-noenv", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.objectContaining({ countryCode: "CA" }),
+          platformDefaults: expect.objectContaining({ messagingProfileId: "mock_prof" })
+        })
+      );
+    });
+
+    it("broadens a Canadian no-inventory retry to any CA number (never the US env defaults)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_MESSAGING_PROFILE_ID_CA = "mock_prof_ca";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "212";
+      process.env.TELNYX_DEFAULT_STATE = "NY";
+      const biz = { business_type: "insurance", phone: "(519) 800-6401" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const { OrderAndAssignError } = await import("@/lib/telnyx/assign-did");
+      const didProvisioner = vi
+        .fn()
+        .mockRejectedValueOnce(new OrderAndAssignError("no_numbers_available", "none local"))
+        .mockResolvedValueOnce({ toE164: "+14375550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-ca-retry", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledTimes(2);
+      expect(didProvisioner.mock.calls[0][0].search).toMatchObject({
+        countryCode: "CA",
+        areaCode: "519"
+      });
+      // Retry must not reuse the US-centric 212/NY defaults against a CA
+      // country search — broaden to any Canadian number.
+      expect(didProvisioner.mock.calls[1][0].search.countryCode).toBe("CA");
+      expect(didProvisioner.mock.calls[1][0].search.areaCode).toBeUndefined();
+      expect(didProvisioner.mock.calls[1][0].search.administrativeArea).toBeUndefined();
+      delete process.env.TELNYX_MESSAGING_PROFILE_ID_CA;
+    });
+
     it("falls back to TELNYX_DEFAULT_AREA_CODE when the owner phone is not a NANP number", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
@@ -1546,9 +1660,13 @@ describe("provisioning/orchestrate", () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
       process.env.TELNYX_DEFAULT_STATE = "NY";
+      // US owner phone (602 = Phoenix): the tenant is NOT Canadian, so the
+      // default-country tiers stay US — but the REQUESTED 519 tier is still
+      // CA-scoped by its NPA. (A Canadian-phone tenant never falls back to
+      // US tiers at all — see the Canadian cascade tests above.)
       const biz = {
         business_type: "insurance_agency",
-        phone: "(416) 456-0696", // 416 = Toronto → owner tier is CA-scoped
+        phone: "(602) 555-0100",
         preferred_area_code: "519"
       } as never;
       vi.mocked(getBusiness).mockResolvedValueOnce(biz);
@@ -1557,7 +1675,7 @@ describe("provisioning/orchestrate", () => {
       const didProvisioner = vi
         .fn()
         .mockRejectedValueOnce(soldOut()) // requested 519
-        .mockRejectedValueOnce(soldOut()) // owner 416
+        .mockRejectedValueOnce(soldOut()) // owner 602
         .mockRejectedValueOnce(soldOut()) // platform default 212
         .mockResolvedValueOnce({ toE164: "+15550001111" }); // any US
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
@@ -1576,8 +1694,8 @@ describe("provisioning/orchestrate", () => {
         administrativeArea: undefined
       });
       expect(didProvisioner.mock.calls[1][0].search).toEqual({
-        countryCode: "CA",
-        areaCode: "416",
+        countryCode: "US",
+        areaCode: "602",
         administrativeArea: undefined
       });
       expect(didProvisioner.mock.calls[2][0].search).toEqual({

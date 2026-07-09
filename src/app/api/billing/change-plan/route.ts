@@ -28,8 +28,10 @@ import { isCommitmentElapsed, updateSubscription } from "@/lib/db/subscriptions"
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   createCheckoutSession,
+  getStripe,
   resolvePriceId
 } from "@/lib/stripe/client";
+import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
@@ -182,6 +184,26 @@ export async function POST(request: Request) {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const priceId = resolvePriceId(payload.tier, payload.billingPeriod);
 
+    // The Canadian messaging surcharge follows the subscription it was born
+    // on: carry it onto the replacement sub ONLY when the current Stripe sub
+    // carries the flag (stamped by the signup checkout). Grandfathered
+    // pre-fee tenants — and US tenants — never gain it here. A metadata read
+    // failure fails toward NOT charging.
+    let carryCanadaFee = false;
+    if (subscription.stripe_subscription_id) {
+      try {
+        const stripeSub = await getStripe().subscriptions.retrieve(
+          subscription.stripe_subscription_id
+        );
+        carryCanadaFee = stripeSub.metadata?.canadianMessagingFee === "1";
+      } catch (err) {
+        logger.warn("change-plan: could not read old sub metadata for Canada fee (skipping fee)", {
+          businessId: business.id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+
     // Intentionally do NOT apply the intro-discount coupon on upgrade/
     // downgrade — first-cycle discounts are for brand-new customers only,
     // and granting them on change-plan would let users oscillate plans to
@@ -191,6 +213,14 @@ export async function POST(request: Request) {
       successUrl: `${appUrl}/dashboard/billing?planChanged=1`,
       cancelUrl: `${appUrl}/dashboard/billing`,
       customerEmail: user.email ?? undefined,
+      ...(carryCanadaFee
+        ? {
+            canadaFee: {
+              monthlyCents: CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+              billingPeriod: payload.billingPeriod
+            }
+          }
+        : {}),
       metadata: {
         businessId: business.id,
         tier: payload.tier,
@@ -201,6 +231,7 @@ export async function POST(request: Request) {
         // The webhook orchestrator re-verifies this against the old sub row
         // before skipping the lifetime-count increment.
         ...(recontractEligible ? { recontract: "1" } : {}),
+        ...(carryCanadaFee ? { canadianMessagingFee: "1" } : {}),
         ...(changePlanProfileId ? { customerProfileId: changePlanProfileId } : {})
       }
     });

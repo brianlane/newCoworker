@@ -3,7 +3,12 @@ import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } f
 import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
-import { getBusiness, listBusinessIdsByOwnerEmail, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  getBusiness,
+  listBusinessIdsByOwnerEmail,
+  setBusinessCustomerProfile,
+  updateBusinessPhone
+} from "@/lib/db/businesses";
 import {
   LIFETIME_SUBSCRIPTION_CAP,
   upsertCustomerProfile,
@@ -14,6 +19,11 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import {
+  CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+  isCanadianBusiness
+} from "@/lib/plans/canadian-messaging";
+import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -22,7 +32,14 @@ const schema = z.object({
   ownerEmail: z.string().email().optional(),
   onboardingToken: z.string().min(1).optional(),
   signupUserId: z.string().uuid().optional(),
-  draftToken: z.string().uuid().optional()
+  draftToken: z.string().uuid().optional(),
+  /**
+   * Browser IANA timezone, used ONLY as the fallback signal for the
+   * Canadian-surcharge detection when the business row has no stored
+   * timezone (the phone is always authoritative when NANP). Keeps the
+   * order-summary preview and the actual charge in lockstep.
+   */
+  timezone: z.string().min(1).max(60).optional()
 });
 
 /**
@@ -224,6 +241,63 @@ export async function POST(request: Request) {
     const priceId = resolvePriceId(body.tier, body.billingPeriod);
     const discountCouponId = resolveIntroDiscountCouponId(body.tier, body.billingPeriod);
     const commitmentMonths = getCommitmentMonths(body.billingPeriod);
+
+    // Canadian signups pay the labeled monthly messaging surcharge (Canadian
+    // carriers charge per-message pass-through fees US traffic doesn't).
+    // Detection uses the phone + timezone the owner entered at onboarding —
+    // the same phone that biases their coworker number purchase, so the fee
+    // and the CA-enabled messaging capability travel together. A missing
+    // business row fails toward NOT charging.
+    const feeBusiness = await getBusiness(body.businessId);
+    // Retry path: a Stripe-cancel return re-mints the session WITHOUT
+    // re-running /api/business/create, so the row's phone can be stale if
+    // the owner edited it on Step 1 before retrying. The questionnaire syncs
+    // the draft (token-verified) with the CURRENT form values immediately
+    // before calling this route, so the draft phone is the same value the
+    // order summary previewed the fee with — prefer it AND write it back to
+    // the row, so provisioning (which classifies from the row) buys the
+    // number in the same country the fee was billed for. Best-effort: any
+    // draft read/write failure falls back to the row.
+    let draftPhone: string | null = null;
+    if (body.draftToken) {
+      let candidate: string | null = null;
+      try {
+        const draft = await getOnboardingDraft(body.businessId, body.draftToken);
+        const p = (draft?.payload as { phone?: unknown } | null)?.phone;
+        candidate = typeof p === "string" && p.trim() ? p : null;
+      } catch (err) {
+        logger.warn("checkout: draft read for Canada-fee detection failed (using business row)", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      if (candidate && feeBusiness && candidate !== feeBusiness.phone) {
+        try {
+          await updateBusinessPhone(body.businessId, candidate);
+          draftPhone = candidate;
+        } catch (err) {
+          // Billing must classify from the same value provisioning will read.
+          // If the row couldn't be synced, keep classifying from the (stale)
+          // row rather than billing a Canadian fee against a US provisioning
+          // run (or vice versa).
+          logger.warn("checkout: business phone sync failed; classifying from the stored row", {
+            businessId: body.businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      } else if (candidate) {
+        // Same as the row (or no row exists): nothing to sync.
+        draftPhone = candidate;
+      }
+    }
+    const canadian = isCanadianBusiness({
+      phone: draftPhone ?? feeBusiness?.phone ?? null,
+      // Stored row timezone first; the caller-supplied browser timezone only
+      // fills a null (older rows predating the timezone column), so the
+      // Step 3 order-summary preview and the charge can't diverge. A client
+      // omitting it can only fail toward NOT being charged.
+      timezone: feeBusiness?.timezone ?? body.timezone ?? null
+    });
     const now = new Date();
     const originalDay = now.getDate();
     const renewalAt = new Date(now);
@@ -277,11 +351,23 @@ export async function POST(request: Request) {
       // through as a one-time line item. Plan changes and reactivations
       // (separate routes) keep the existing campaign and never re-charge it.
       oneTimeCarrierFeeCents: CARRIER_REGISTRATION_FEE_CENTS,
+      ...(canadian
+        ? {
+            canadaFee: {
+              monthlyCents: CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+              billingPeriod: body.billingPeriod
+            }
+          }
+        : {}),
       metadata: {
         businessId: body.businessId,
         tier: body.tier,
         billingPeriod: body.billingPeriod,
         userId: metadataUserId,
+        // Rides subscription_data.metadata so change-plan can tell whether
+        // the sub it is replacing carried the surcharge (grandfathered
+        // pre-fee tenants never get it added on a later plan change).
+        ...(canadian ? { canadianMessagingFee: "1" } : {}),
         ...(customerProfileId ? { customerProfileId } : {})
       }
     });

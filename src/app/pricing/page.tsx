@@ -14,6 +14,7 @@ import { TIER_LIMITS } from "@/lib/plans/limits";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 
 export const metadata: Metadata = {
@@ -89,6 +90,7 @@ function buildPricingFaq(): FaqItem[] {
   // Same env-driven address the footer uses, so the two can't diverge.
   const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
+  const canadaFeeMonthly = formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS);
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);
   const standardRenewal = formatPricePerMonth(getPeriodPricing("standard", "biennial").renewalMonthlyCents);
 
@@ -132,6 +134,19 @@ function buildPricingFaq(): FaqItem[] {
           one-time carrier registration fee is excluded, because carriers do not refund it.
           On 12/24-month plans the refund deducts one month of service at the monthly rate,
           so the time you used is billed as if uncommitted.
+        </>
+      )
+    },
+    {
+      question: `What is the ${canadaFeeMonthly}/mo Canadian messaging surcharge?`,
+      answer: (
+        <>
+          Canadian mobile carriers (Bell, Rogers, Telus, and others) charge per-message fees for
+          business texting that US carriers structure differently. Canadian-based businesses pay
+          a flat {canadaFeeMonthly}/mo surcharge that covers these carrier pass-through fees, so
+          your coworker can text your Canadian customers with no per-message surprises. It
+          appears as its own line item at checkout and renews with your plan; US-based businesses
+          never pay it.
         </>
       )
     },

@@ -209,6 +209,75 @@ describe("stripe/client", () => {
     );
   });
 
+  it("createCheckoutSession adds a recurring Canada-fee line at the plan's cadence", async () => {
+    // Monthly plan: $4.99 every month.
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
+    });
+    expect(mockSessionCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        line_items: [
+          { price: "price_mock_starter", quantity: 1 },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Canadian messaging surcharge" },
+              unit_amount: 499,
+              recurring: { interval: "month", interval_count: 1 }
+            },
+            quantity: 1
+          }
+        ]
+      })
+    );
+
+    // Biennial plan: ×24 upfront on the same 24-month interval as the plan
+    // (Stripe requires all subscription items to share the interval).
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      oneTimeCarrierFeeCents: 1950,
+      canadaFee: { monthlyCents: 499, billingPeriod: "biennial" }
+    });
+    expect(mockSessionCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        line_items: [
+          { price: "price_mock_starter", quantity: 1 },
+          expect.objectContaining({
+            price_data: expect.objectContaining({ unit_amount: 1950 })
+          }),
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Canadian messaging surcharge" },
+              unit_amount: 499 * 24,
+              recurring: { interval: "month", interval_count: 24 }
+            },
+            quantity: 1
+          }
+        ]
+      })
+    );
+  });
+
+  it("createCheckoutSession omits the Canada fee when monthlyCents is zero", async () => {
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      canadaFee: { monthlyCents: 0, billingPeriod: "monthly" }
+    });
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [{ price: "price_mock_starter", quantity: 1 }]
+      })
+    );
+  });
+
   it("createCheckoutSession omits the carrier fee line item when oneTimeCarrierFeeCents is zero", async () => {
     await createCheckoutSession({
       priceId: "price_mock_starter",
@@ -372,6 +441,62 @@ describe("stripe/client", () => {
     expect(mockScheduleUpdate).not.toHaveBeenCalled();
   });
 
+  it("ensureCommitmentSchedule rewrites an existing schedule that has no future phase at all", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: "sub_sched_existing",
+      items: { data: [{ price: { id: "price_standard_24mo" }, quantity: 1 }] }
+    });
+    // Default mockScheduleRetrieve has phases: [] — no future phase to match.
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_nophase",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+    expect(result).toBe("sub_sched_existing");
+    expect(mockScheduleUpdate).toHaveBeenCalled();
+  });
+
+  it("ensureCommitmentSchedule repairs an existing schedule whose renewal phase is missing add-on items", async () => {
+    // Renewal plan price already matches, but the sub now carries a second
+    // item (the Canada fee) the schedule predates — must rewrite, not
+    // early-return, or the fee drops at rollover.
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: "sub_sched_existing",
+      items: {
+        data: [
+          { price: { id: "price_standard_24mo" }, quantity: 1 },
+          {
+            price: {
+              id: "price_ca_fee_24mo",
+              currency: "usd",
+              unit_amount: 499 * 24,
+              product: "prod_ca_fee",
+              recurring: { interval: "month", interval_count: 24 }
+            },
+            quantity: 1
+          }
+        ]
+      }
+    });
+    mockScheduleRetrieve.mockResolvedValueOnce({
+      id: "sub_sched_existing",
+      current_phase: { start_date: 1700000000, end_date: 1702592000 },
+      phases: [{}, { items: [{ price: { id: "price_standard_24mo_renewal" } }] }]
+    });
+
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_repair",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+
+    expect(result).toBe("sub_sched_existing");
+    expect(mockScheduleUpdate).toHaveBeenCalled();
+    const update = mockScheduleUpdate.mock.calls.at(-1)?.[1];
+    expect(update.phases[0].items).toHaveLength(2);
+    expect(update.phases[1].items).toHaveLength(2);
+  });
+
   it("ensureCommitmentSchedule updates an existing schedule when future price is a different string id", async () => {
     mockSubscriptionRetrieve.mockResolvedValueOnce({
       schedule: "sub_sched_existing",
@@ -418,6 +543,188 @@ describe("stripe/client", () => {
         ]
       })
     );
+  });
+
+  it("ensureCommitmentSchedule carries add-on items through both phases (term add-on converted to monthly for the renewal)", async () => {
+    // A biennial sub with the Canada fee as a second item: 24-month-cadence
+    // price at $119.76. Phase 1 must keep it by price id; phase 2 (monthly
+    // renewal) must convert it to a $4.99 monthly price on the same product.
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: null,
+      items: {
+        data: [
+          { price: { id: "price_standard_24mo" }, quantity: 1 },
+          {
+            price: {
+              id: "price_ca_fee_24mo",
+              currency: "usd",
+              unit_amount: 499 * 24,
+              product: "prod_ca_fee",
+              recurring: { interval: "month", interval_count: 24 }
+            },
+            quantity: 1
+          }
+        ]
+      }
+    });
+
+    await ensureCommitmentSchedule({
+      subscriptionId: "sub_ca",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+
+    expect(mockScheduleUpdate).toHaveBeenCalledWith(
+      "sub_sched_123",
+      expect.objectContaining({
+        phases: [
+          expect.objectContaining({
+            items: [
+              { price: "price_standard_24mo", quantity: 1 },
+              { price: "price_ca_fee_24mo", quantity: 1 }
+            ]
+          }),
+          expect.objectContaining({
+            items: [
+              { price: "price_standard_24mo_renewal", quantity: 1 },
+              {
+                price_data: {
+                  currency: "usd",
+                  product: "prod_ca_fee",
+                  unit_amount: 499,
+                  recurring: { interval: "month", interval_count: 1 }
+                },
+                quantity: 1
+              }
+            ]
+          })
+        ]
+      })
+    );
+  });
+
+  it("ensureCommitmentSchedule keeps a monthly-cadence add-on by price id in the renewal phase", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: null,
+      items: {
+        data: [
+          { price: { id: "price_standard_12mo" }, quantity: 1 },
+          {
+            price: {
+              id: "price_addon_monthly",
+              currency: "usd",
+              unit_amount: 499,
+              product: { id: "prod_addon" },
+              recurring: { interval: "month", interval_count: 1 }
+            },
+            quantity: 1
+          }
+        ]
+      }
+    });
+
+    await ensureCommitmentSchedule({
+      subscriptionId: "sub_mo_addon",
+      tier: "standard",
+      billingPeriod: "annual"
+    });
+
+    const update = mockScheduleUpdate.mock.calls.at(-1)?.[1];
+    expect(update.phases[1].items).toEqual([
+      { price: "price_standard_12mo_renewal", quantity: 1 },
+      { price: "price_addon_monthly", quantity: 1 }
+    ]);
+  });
+
+  it("ensureCommitmentSchedule converts a yearly-cadence add-on using 12×interval months", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: null,
+      items: {
+        data: [
+          { price: { id: "price_standard_12mo" }, quantity: 1 },
+          {
+            price: {
+              id: "price_addon_yearly",
+              currency: "usd",
+              unit_amount: 1200,
+              product: { id: "prod_addon_yr" },
+              recurring: { interval: "year", interval_count: 1 }
+            },
+            quantity: undefined
+          }
+        ]
+      }
+    });
+
+    await ensureCommitmentSchedule({
+      subscriptionId: "sub_yr_addon",
+      tier: "standard",
+      billingPeriod: "annual"
+    });
+
+    const update = mockScheduleUpdate.mock.calls.at(-1)?.[1];
+    expect(update.phases[1].items[1]).toEqual({
+      price_data: {
+        currency: "usd",
+        product: "prod_addon_yr",
+        unit_amount: 100,
+        recurring: { interval: "month", interval_count: 1 }
+      },
+      quantity: 1
+    });
+  });
+
+  it("ensureCommitmentSchedule tolerates add-on prices missing interval_count / unit_amount", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: null,
+      items: {
+        data: [
+          { price: { id: "price_standard_12mo" }, quantity: 1 },
+          {
+            // Yearly with no interval_count and no unit_amount (defensive:
+            // Stripe types allow both to be absent/null).
+            price: {
+              id: "price_addon_odd",
+              currency: "usd",
+              unit_amount: null,
+              product: "prod_odd",
+              recurring: { interval: "year" }
+            },
+            quantity: 1
+          },
+          {
+            // Monthly with no interval_count — treated as interval_count 1
+            // and kept by price id.
+            price: {
+              id: "price_addon_month_nocount",
+              currency: "usd",
+              unit_amount: 499,
+              product: "prod_mo",
+              recurring: { interval: "month" }
+            },
+            quantity: 1
+          }
+        ]
+      }
+    });
+
+    await ensureCommitmentSchedule({
+      subscriptionId: "sub_odd_addon",
+      tier: "standard",
+      billingPeriod: "annual"
+    });
+
+    const update = mockScheduleUpdate.mock.calls.at(-1)?.[1];
+    expect(update.phases[1].items[1]).toEqual({
+      price_data: {
+        currency: "usd",
+        product: "prod_odd",
+        unit_amount: 0,
+        recurring: { interval: "month", interval_count: 1 }
+      },
+      quantity: 1
+    });
+    expect(update.phases[1].items[2]).toEqual({ price: "price_addon_month_nocount", quantity: 1 });
   });
 
   it("ensureCommitmentSchedule throws when the subscription has no items", async () => {

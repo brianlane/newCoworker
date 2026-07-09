@@ -12,6 +12,7 @@ import {
   updateBusinessName,
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
+  updateBusinessPhone,
   updateBusinessStatus,
   updateBusinessBranding,
   updateBusinessTimezone,
@@ -693,6 +694,19 @@ describe("db/businesses", () => {
     expect(isValidIanaTimezone("UTC")).toBe(true);
     expect(isValidIanaTimezone("Not/AZone")).toBe(false);
     expect(isValidIanaTimezone("")).toBe(false);
+  });
+
+  it("updateBusinessPhone writes the phone and throws on Supabase errors", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessPhone("uuid-biz-1", "4164560696");
+    expect(db.update).toHaveBeenCalledWith({ phone: "4164560696" });
+
+    const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    await expect(updateBusinessPhone("uuid-biz-1", "6025551234", failing as never)).rejects.toThrow(
+      "updateBusinessPhone"
+    );
   });
 
   it("updateBusinessTimezone writes the zone and supports clearing with null", async () => {
