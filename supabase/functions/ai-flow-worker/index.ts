@@ -3456,8 +3456,12 @@ function leadContactPhone(scope: Scope): string | null {
 /**
  * The roster member who OWNS this lead's contact (contacts.owner_employee_id),
  * resolved to {name, phone}, or null (no phone / no contact / unowned /
- * owner inactive). Alias-aware like getCustomerMemory. Best-effort: a lookup
- * error logs and returns null — ownership preference must never stall routing.
+ * owner inactive / owner unavailable). Alias-aware like getCustomerMemory.
+ * Applies the SAME working-info rules as pickNextAgent — time off covering
+ * today and out-of-schedule members are hard skips — so ownership preference
+ * never routes around an owner's time off; the normal cascade takes over.
+ * Best-effort: a lookup error logs and returns null — ownership preference
+ * must never stall routing.
  */
 async function contactOwnerAgent(
   supabase: Supabase,
@@ -3477,12 +3481,50 @@ async function contactOwnerAgent(
     if (!ownerId) return null;
     const { data: member } = await supabase
       .from("ai_flow_team_members")
-      .select("name, phone_e164, active")
+      .select("id, name, phone_e164, active, weekly_schedule, preferred_windows")
       .eq("business_id", businessId)
       .eq("id", ownerId)
       .maybeSingle();
-    const m = member as { name?: string; phone_e164?: string; active?: boolean } | null;
-    if (!m?.active || !m.phone_e164?.trim()) return null;
+    const m = member as {
+      id?: string;
+      name?: string;
+      phone_e164?: string;
+      active?: boolean;
+      weekly_schedule?: unknown;
+      preferred_windows?: unknown;
+    } | null;
+    if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
+    // Availability (business-local): the owner on time off today or outside
+    // their weekly schedule is skipped, same as in pickNextAgent.
+    const [tzRes, offRes] = await Promise.all([
+      supabase.from("businesses").select("timezone").eq("id", businessId).maybeSingle(),
+      supabase
+        .from("employee_time_off")
+        .select("member_id, starts_on, ends_on")
+        .eq("business_id", businessId)
+        .eq("member_id", m.id)
+    ]);
+    const tz = (tzRes.data as { timezone?: string | null } | null)?.timezone ?? null;
+    const clock = localClock(new Date(), tz);
+    const offIds = new Set(
+      ((offRes.data ?? []) as { member_id: string; starts_on: string; ends_on: string }[])
+        .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
+        .map((t) => t.member_id)
+    );
+    const available = filterRosterByAvailability(
+      [
+        {
+          id: m.id,
+          name: m.name ?? "",
+          phone_e164: m.phone_e164.trim(),
+          weekly_schedule: m.weekly_schedule,
+          preferred_windows: m.preferred_windows
+        }
+      ],
+      offIds,
+      clock
+    );
+    if (available.length === 0) return null;
     return { name: m.name ?? "", phone: m.phone_e164.trim() };
   } catch (e) {
     console.error("contactOwnerAgent", e);
