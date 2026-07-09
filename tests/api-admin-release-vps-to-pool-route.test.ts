@@ -121,6 +121,30 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     expect(releaseVpsToPool).not.toHaveBeenCalled();
   });
 
+  it("409s for a pending subscription with Stripe linkage (paid checkout mid-flight)", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      status: "pending",
+      stripe_subscription_id: "sub_mid_flight",
+      hostinger_billing_subscription_id: null
+    } as never);
+
+    const res = await POST(makeRequest(), makeCtx());
+    expect(res.status).toBe(409);
+    expect(releaseVpsToPool).not.toHaveBeenCalled();
+  });
+
+  it("releases for a pending subscription with NO Stripe linkage (abandoned checkout)", async () => {
+    vi.mocked(getSubscription).mockResolvedValue({
+      status: "pending",
+      stripe_subscription_id: null,
+      hostinger_billing_subscription_id: null
+    } as never);
+
+    const res = await POST(makeRequest(), makeCtx());
+    expect(res.status).toBe(200);
+    expect(releaseVpsToPool).toHaveBeenCalled();
+  });
+
   it("400s for non-Hostinger providers (BYOS boxes are not pool stock)", async () => {
     vi.mocked(getBusiness).mockResolvedValue({ ...baseBiz, vps_provider: "byos" } as never);
 

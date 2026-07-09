@@ -51,12 +51,26 @@ export async function POST(
       return errorResponse("VALIDATION_ERROR", "Business has no Hostinger VPS to release");
     }
 
+    // Billing guard: the adopt-time cascade hard-deletes the account WITHOUT
+    // touching Stripe, so nothing with live Stripe linkage may be released.
+    //   - active / past_due: still billing — force-cancel first.
+    //   - pending WITH a stripe_subscription_id: a paid checkout is mid-flight
+    //     (webhook still activating); releasing now would race it.
+    //   - pending without Stripe linkage (abandoned checkout) and canceled
+    //     (Stripe subscription already torn down by the cancel flow's fast
+    //     phase; the grace window only retains data) are safe to release.
     const subscription = await getSubscription(businessId);
-    if (subscription && (subscription.status === "active" || subscription.status === "past_due")) {
+    const stillBilling =
+      subscription &&
+      (subscription.status === "active" ||
+        subscription.status === "past_due" ||
+        (subscription.status === "pending" && subscription.stripe_subscription_id !== null));
+    if (stillBilling) {
       return errorResponse(
         "CONFLICT",
-        "Subscription is still billing. Cancel it first (or use Force-cancel & wipe) — " +
-          "releasing the box would cascade-delete this account on reuse while Stripe keeps charging.",
+        "Subscription still has live Stripe billing (active, past_due, or a paid checkout " +
+          "mid-flight). Cancel it first (or use Force-cancel & wipe) — releasing the box would " +
+          "cascade-delete this account on reuse while Stripe keeps charging.",
         409
       );
     }
