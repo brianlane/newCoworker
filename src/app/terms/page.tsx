@@ -118,6 +118,14 @@ export default function TermsPage() {
           refund requests, or material violation of these Terms. Except as required by law or expressly stated
           in writing, fees are otherwise non-refundable.
         </p>
+        <p>
+          Enterprise deployments provisioned on Canadian-region infrastructure or on customer-supplied
+          servers (data-residency and bring-your-own-server placements) are not covered by the 30-day
+          money-back guarantee. The underlying Canadian infrastructure is non-refundable to us by the
+          hosting provider, and these deployments are provisioned specifically for your organization.
+          Any refund, credit, or early-termination rights for such deployments are exclusively those set
+          out in your enterprise agreement or order form.
+        </p>
       </LegalSection>
 
       <LegalSection title="10. Suspension and Termination">
