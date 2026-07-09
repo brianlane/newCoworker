@@ -36,6 +36,7 @@
  */
 
 import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
+import { sshExecPinned } from "@/lib/hostinger/ssh-pinned";
 import { getActiveVpsSshKeyForBusiness, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getBusiness, type BusinessRow } from "@/lib/db/businesses";
@@ -353,7 +354,9 @@ export async function syncVaultToVps(
 
   let result: SshExecResult;
   try {
-    result = await exec({
+    // Host-key pinning (G7): strict against the row's recorded fingerprint,
+    // TOFU-capture if none yet.
+    result = await sshExecPinned(key, {
       host: publicIp,
       port: 22,
       username: key.ssh_username,
@@ -365,7 +368,7 @@ export async function syncVaultToVps(
       // generous on the cold path; we still want a hard upper bound
       // so a hung VPS doesn't pin the orchestrator forever.
       timeoutMs: 60_000
-    });
+    }, { exec });
   } catch (err) {
     return {
       ok: false,

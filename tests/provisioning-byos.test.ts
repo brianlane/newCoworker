@@ -8,7 +8,8 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
   getActiveVpsSshKey: vi.fn(),
   insertVpsSshKey: vi.fn(),
-  updateVpsSshKeyPlacement: vi.fn()
+  updateVpsSshKeyPlacement: vi.fn(),
+  updateVpsSshKeyHostKeyFingerprint: vi.fn()
 }));
 
 vi.mock("@/lib/hostinger/keypair", () => ({

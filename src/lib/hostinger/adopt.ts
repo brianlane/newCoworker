@@ -47,6 +47,7 @@ import {
   insertVpsSshKey,
   reassignVpsSshKeyBusiness,
   rotateVpsSshKey,
+  updateVpsSshKeyHostKeyFingerprint,
   type VpsSshKeyRow
 } from "@/lib/db/vps-ssh-keys";
 import {
@@ -82,6 +83,7 @@ export type AdoptVpsDeps = {
     getActiveVpsSshKey?: typeof getActiveVpsSshKey;
     reassignVpsSshKeyBusiness?: typeof reassignVpsSshKeyBusiness;
     rotateVpsSshKey?: typeof rotateVpsSshKey;
+    updateVpsSshKeyHostKeyFingerprint?: typeof updateVpsSshKeyHostKeyFingerprint;
   };
   /**
    * SSH auth probe: true when the key authenticates on the host. Production
@@ -147,11 +149,13 @@ export async function adoptVpsForBusiness(
     /* c8 ignore next -- production default; tests inject a fake probe */
     pisQuiescentProbe = defaultPisQuiescentProbe
   } = deps;
-  /* c8 ignore next 4 -- production defaults; tests inject db overrides */
+  /* c8 ignore next 6 -- production defaults; tests inject db overrides */
   const dbInsert = deps.db?.insertVpsSshKey ?? insertVpsSshKey;
   const dbGetKey = deps.db?.getActiveVpsSshKey ?? getActiveVpsSshKey;
   const dbReassign = deps.db?.reassignVpsSshKeyBusiness ?? reassignVpsSshKeyBusiness;
   const dbRotate = deps.db?.rotateVpsSshKey ?? rotateVpsSshKey;
+  const dbClearHostKeyPin =
+    deps.db?.updateVpsSshKeyHostKeyFingerprint ?? updateVpsSshKeyHostKeyFingerprint;
 
   const vmId = input.virtualMachineId;
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
@@ -307,6 +311,14 @@ export async function adoptVpsForBusiness(
     publicIp = preIp;
   } else {
     publicIp = await recreateOnce();
+    // Recreate re-images the disk, which regenerates SSH host keys — a pin
+    // captured from the previous image on a REUSED key row would hard-fail
+    // every strict connection afterwards (G7). Clear it so the
+    // orchestrator's bootstrap re-captures on first connect.
+    if (sshKeyRow.host_key_fingerprint) {
+      await dbClearHostKeyPin(sshKeyRow.id, null);
+      sshKeyRow = { ...sshKeyRow, host_key_fingerprint: null };
+    }
     if (!(await sshAuthOk(publicIp))) {
       logger.warn("adoptVps: key did not attach on first recreate — retrying once", {
         virtualMachineId: vmId

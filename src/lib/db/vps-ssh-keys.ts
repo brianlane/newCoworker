@@ -58,6 +58,12 @@ export type VpsSshKeyRow = {
    * Null for hostinger rows — their IP is resolved live from the API.
    */
   host: string | null;
+  /**
+   * `SHA256:…` fingerprint of the box's SSH host key, captured on first
+   * connect and verified strictly afterwards (G7 pinning — see
+   * src/lib/hostinger/ssh-pinned.ts). Null = not yet captured.
+   */
+  host_key_fingerprint?: string | null;
   created_at: string;
   rotated_at: string | null;
 };
@@ -192,6 +198,9 @@ export async function reassignVpsSshKeyBusiness(
  * used by the BYOS re-prepare path when the operator corrects the address
  * or the region. Both fields are written together so the row can never
  * describe a Canadian tenant on a key still labeled 'us' (or vice versa).
+ * The host-key pin is CLEARED alongside: a corrected address points at a
+ * different machine (different host key), so a stale pin would hard-fail
+ * every strict connection to the new box.
  */
 export async function updateVpsSshKeyPlacement(
   id: string,
@@ -201,9 +210,28 @@ export async function updateVpsSshKeyPlacement(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
     .from("vps_ssh_keys")
-    .update({ host: placement.host, region: placement.region })
+    .update({ host: placement.host, region: placement.region, host_key_fingerprint: null })
     .eq("id", id);
   if (error) throw new Error(`updateVpsSshKeyPlacement: ${error.message}`);
+}
+
+/**
+ * Record (or clear, with null) the box's SSH host-key fingerprint. Set on
+ * the first successful connection after a (re)provision; cleared by flows
+ * that re-image a box under an existing row (adopt/recreate, BYOS host
+ * changes) because re-imaging regenerates host keys.
+ */
+export async function updateVpsSshKeyHostKeyFingerprint(
+  id: string,
+  fingerprintSha256: string | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("vps_ssh_keys")
+    .update({ host_key_fingerprint: fingerprintSha256 })
+    .eq("id", id);
+  if (error) throw new Error(`updateVpsSshKeyHostKeyFingerprint: ${error.message}`);
 }
 
 /**

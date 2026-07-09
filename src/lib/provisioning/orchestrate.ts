@@ -18,6 +18,7 @@ import {
 } from "@/lib/provisioning/reconcile-orphans";
 import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
 import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
+import { sshExecPinned, type HostKeyPinnable } from "@/lib/hostinger/ssh-pinned";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
 import {
@@ -195,16 +196,29 @@ export type RemoteExecutor = (args: {
   username: string;
   privateKeyPem: string;
   command: string;
+  /**
+   * Tenant key row for host-key pinning (G7). When present, the production
+   * executor verifies strictly against the row's recorded fingerprint (or
+   * captures it on first connect). Injected test executors may ignore it.
+   */
+  sshKeyRow?: HostKeyPinnable;
 }) => Promise<SshExecResult>;
 
 /* c8 ignore start -- production-only default; tests inject remoteExec */
 const defaultRemoteExecutor: RemoteExecutor = (args) =>
-  sshExec({
-    host: args.host,
-    username: args.username,
-    privateKeyPem: args.privateKeyPem,
-    command: args.command
-  });
+  args.sshKeyRow
+    ? sshExecPinned(args.sshKeyRow, {
+        host: args.host,
+        username: args.username,
+        privateKeyPem: args.privateKeyPem,
+        command: args.command
+      })
+    : sshExec({
+        host: args.host,
+        username: args.username,
+        privateKeyPem: args.privateKeyPem,
+        command: args.command
+      });
 /* c8 ignore stop */
 
 /**
@@ -266,6 +280,8 @@ async function runRemoteBootstrapInternal(input: {
   tier: "starter" | "standard";
   vpsSize: VpsSize;
   remoteExec: RemoteExecutor;
+  /** Key row for host-key pinning (captured on this first connect). */
+  sshKeyRow?: HostKeyPinnable;
   sleep?: (ms: number) => Promise<void>;
 }): Promise<SshExecResult> {
   const script = buildDefaultPostInstallScript({ tier: input.tier, vpsSize: input.vpsSize });
@@ -277,7 +293,8 @@ async function runRemoteBootstrapInternal(input: {
         host: input.host,
         username: input.username,
         privateKeyPem: input.privateKeyPem,
-        command: cmd
+        command: cmd,
+        sshKeyRow: input.sshKeyRow
       }),
     input.sleep ? { sleep: input.sleep } : undefined
   );
@@ -1075,6 +1092,10 @@ async function runOrchestrator(
     tier: narrowTier,
     vpsSize,
     remoteExec,
+    // Host-key pinning (G7): this first connection captures the box's
+    // fingerprint onto the key row; the deploy call below then verifies
+    // strictly against it.
+    sshKeyRow: provisioned.sshKey,
     sleep: deps?.sleep
   });
 
@@ -1606,7 +1627,10 @@ async function runOrchestrator(
       host: provisioned.publicIp,
       username: provisioned.sshUsername,
       privateKeyPem: provisioned.sshKey.private_key_pem,
-      command: `${envVars} /opt/deploy-client.sh`
+      command: `${envVars} /opt/deploy-client.sh`,
+      // Verifies strictly against the fingerprint the bootstrap connect
+      // captured above (sshExecPinned updates the row object in place).
+      sshKeyRow: provisioned.sshKey
     });
     if (result.exitCode !== 0) {
       logger.error("deploy-client.sh failed", {
