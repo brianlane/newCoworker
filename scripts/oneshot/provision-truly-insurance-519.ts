@@ -43,8 +43,16 @@ console.log("[oneshot] business:", {
 });
 console.log("[oneshot] DID search override:", DID_SEARCH);
 
-if (business.status === "online" && business.hostinger_vps_id) {
-  console.error("[oneshot] business already online with a VPS — refusing to re-provision");
+// Refuse when the business is online OR already has a VPS reference. A
+// failed provision that got past bootstrap leaves `hostinger_vps_id` set
+// with status still `offline` — re-running the purchase path there would
+// buy a second box. Re-provisioning onto an existing box is the admin
+// /api/provisioning route's job, not this one-shot's.
+if (business.status === "online" || business.hostinger_vps_id) {
+  console.error(
+    `[oneshot] refusing to provision: status=${business.status}, ` +
+      `hostinger_vps_id=${business.hostinger_vps_id ?? "null"} — use the admin re-provision flow instead`
+  );
   process.exit(1);
 }
 
