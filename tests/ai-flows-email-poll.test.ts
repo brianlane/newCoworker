@@ -144,6 +144,43 @@ describe("gmailBodyText", () => {
     expect(gmailBodyText(undefined)).toBe("");
     expect(gmailBodyText({ mimeType: "multipart/mixed", parts: [] })).toBe("");
   });
+
+  it("re-derives from the html part when text/plain is stripped template junk", () => {
+    const junkPlain = "*|MC:SUBJECT|*\n\np{\n margin:10px 0;\n}\nUse code 549829.";
+    const payload = {
+      mimeType: "multipart/alternative",
+      parts: [
+        { mimeType: "text/plain", body: { data: b64url(junkPlain) } },
+        {
+          mimeType: "text/html",
+          body: {
+            data: b64url(
+              "<head><title>*|MC:SUBJECT|*</title><style>p{margin:10px 0}</style></head><body><p>Use code 549829.</p></body>"
+            )
+          }
+        }
+      ]
+    };
+    expect(gmailBodyText(payload)).toBe("Use code 549829.");
+  });
+
+  it("keeps a junk-looking text/plain when there is no html alternative", () => {
+    const junkPlain = "*|MC:SUBJECT|* only text";
+    const payload = { mimeType: "text/plain", body: { data: b64url(junkPlain) } };
+    expect(gmailBodyText(payload)).toBe(junkPlain);
+  });
+
+  it("falls back to the plain part when the html part collapses to nothing", () => {
+    const junkPlain = "*|MC:SUBJECT|* fallback text";
+    const payload = {
+      mimeType: "multipart/alternative",
+      parts: [
+        { mimeType: "text/plain", body: { data: b64url(junkPlain) } },
+        { mimeType: "text/html", body: { data: b64url("<style>p{a:b}</style>") } }
+      ]
+    };
+    expect(gmailBodyText(payload)).toBe(junkPlain);
+  });
 });
 
 describe("pollEmailTriggers", () => {
