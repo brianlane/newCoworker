@@ -68,7 +68,7 @@ export function AiFlowLibraryActions({
       });
       const json = (await res.json()) as {
         ok: boolean;
-        data?: { definition: unknown };
+        data?: { definition: unknown; warnings?: string[] };
         error?: { message: string };
       };
       if (!json.ok || !json.data) {
@@ -82,6 +82,12 @@ export function AiFlowLibraryActions({
       let stored = false;
       try {
         sessionStorage.setItem("aiflow_adapt_draft", JSON.stringify(json.data.definition));
+        // Best-effort salvage notes ride along for the builder's review panel.
+        if (json.data.warnings && json.data.warnings.length > 0) {
+          sessionStorage.setItem("aiflow_adapt_warnings", JSON.stringify(json.data.warnings));
+        } else {
+          sessionStorage.removeItem("aiflow_adapt_warnings");
+        }
         stored = true;
       } catch {
         stored = false;

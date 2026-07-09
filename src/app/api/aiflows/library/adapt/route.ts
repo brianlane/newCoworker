@@ -25,7 +25,11 @@ import {
   buildFlowAdaptUserText,
   extractFlowJson
 } from "@/lib/ai-flows/compile";
-import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import {
+  AiFlowValidationError,
+  parseAiFlowDefinition,
+  salvageFlowDefinition
+} from "@/lib/ai-flows/schema";
 import { getAiFlowLibraryEntry } from "@/lib/ai-flows/library";
 
 export const runtime = "nodejs";
@@ -118,8 +122,23 @@ export async function POST(request: Request) {
     if (candidate === null) {
       return errorResponse("VALIDATION_ERROR", "AI did not return a usable automation");
     }
-    const definition = parseAiFlowDefinition(candidate);
-    return successResponse({ definition });
+    try {
+      const definition = parseAiFlowDefinition(candidate);
+      return successResponse({ definition });
+    } catch (err) {
+      if (!(err instanceof AiFlowValidationError)) throw err;
+      // Best effort: keep every valid part of the adapted draft, repair or
+      // remove the rest, and let the owner review it in the editor (adapted
+      // drafts load disabled) instead of failing the whole adapt.
+      const salvaged = salvageFlowDefinition(candidate);
+      if (salvaged) {
+        return successResponse({
+          definition: salvaged.definition,
+          warnings: salvaged.warnings
+        });
+      }
+      throw err;
+    }
   } catch (err) {
     if (err instanceof AiFlowValidationError) {
       return errorResponse(

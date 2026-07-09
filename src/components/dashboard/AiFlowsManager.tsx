@@ -637,6 +637,8 @@ export function AiFlowsManager({
   const [error, setError] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  // Best-effort salvage notes from the last AI generate (shown until the next).
+  const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [emailConns, setEmailConns] = useState<EmailConnectionOption[]>([]);
   const [employees, setEmployees] = useState<EmployeeEmailOption[]>([]);
   // Saved-person options for the dynamic-number pickers (live-resolved refs).
@@ -666,6 +668,19 @@ export function AiFlowsManager({
         // Only drop the stash once the (paid) draft parsed and validated, so a
         // malformed payload can still be retried from storage on reload.
         sessionStorage.removeItem("aiflow_adapt_draft");
+        // Best-effort salvage notes from the adapt call, if any.
+        try {
+          const warnRaw = sessionStorage.getItem("aiflow_adapt_warnings");
+          if (warnRaw) {
+            sessionStorage.removeItem("aiflow_adapt_warnings");
+            const warns = JSON.parse(warnRaw) as unknown;
+            if (Array.isArray(warns)) {
+              setAiWarnings(warns.filter((w): w is string => typeof w === "string"));
+            }
+          }
+        } catch {
+          /* warnings are advisory — never block the draft on them */
+        }
         setEditor(editorFromDefinition(def, "Adapted automation"));
       }
     } catch {
@@ -972,6 +987,7 @@ export function AiFlowsManager({
     if (!aiPrompt.trim()) return;
     setAiBusy(true);
     setError(null);
+    setAiWarnings([]);
     try {
       const res = await fetch(`/api/aiflows/compile`, {
         method: "POST",
@@ -980,13 +996,16 @@ export function AiFlowsManager({
       });
       const json = (await res.json()) as {
         ok: boolean;
-        data?: { definition: AiFlowDefinition };
+        data?: { definition: AiFlowDefinition; warnings?: string[] };
         error?: { message: string };
       };
       if (!json.ok || !json.data) {
         setError(json.error?.message ?? "AI generation failed");
         return;
       }
+      // Best-effort salvage warnings: the draft loaded, but parts were
+      // repaired/removed — tell the owner exactly what to double-check.
+      setAiWarnings(json.data.warnings ?? []);
       const def = json.data.definition;
       setEditor((e) => ({
         id: e?.id ?? null,
@@ -1023,6 +1042,19 @@ export function AiFlowsManager({
           <p className="rounded-md border border-spark-orange/40 bg-spark-orange/5 px-3 py-2 text-sm text-spark-orange">
             {error}
           </p>
+        )}
+
+        {aiWarnings.length > 0 && (
+          <div className="rounded-md border border-amber-300/40 bg-amber-300/5 px-3 py-2 text-sm text-amber-200">
+            <p className="font-medium">
+              Loaded a best-effort draft — a few things need your eyes:
+            </p>
+            <ul className="mt-1 list-disc pl-5 text-xs space-y-0.5">
+              {aiWarnings.map((w, i) => (
+                <li key={i}>{w}</li>
+              ))}
+            </ul>
+          </div>
         )}
 
         <div>

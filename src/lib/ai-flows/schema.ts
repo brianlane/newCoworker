@@ -1410,6 +1410,230 @@ export function parseAiFlowDefinition(input: unknown): AiFlowDefinition {
   return parsed.data;
 }
 
+// ── Best-effort salvage (AI-assist authoring) ────────────────────────────────
+
+/** What salvageFlowDefinition returns: a VALID definition + what was changed. */
+export type SalvagedFlow = { definition: AiFlowDefinition; warnings: string[] };
+
+const STEP_ISSUE_RE = /Step "([^"]+)"/;
+
+/**
+ * Targeted mend for a step-scoped semantic issue: strip the one broken knob
+ * and keep the step where that is safe, or return null to have the step
+ * dropped. The mends only ever REMOVE configuration — a mended step does
+ * strictly less than the AI asked for, never something different.
+ */
+function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean {
+  // A screenshot attachment with no earlier capture (or an unsupported
+  // sender): the send itself is still what the owner wants — just without
+  // the attachment.
+  if (/attaches a screenshot/.test(issue)) {
+    delete step.attachScreenshot;
+    return true;
+  }
+  // sleep with both modes: keep the relative wait (self-contained; untilTime
+  // also needs its timezone to be trustworthy).
+  if (/sets both minutes and untilTime/.test(issue)) {
+    delete step.untilTime;
+    delete step.timezone;
+    return true;
+  }
+  // Double pin: agentName is the AI-authorable one; refs come from the editor.
+  if (/pins to both agentName and agentRef/.test(issue)) {
+    delete step.agentRef;
+    return true;
+  }
+  // Half a keep-for-owner rule: drop the half-configured pair.
+  if (/ownerDirectWhen and ownerDirectTemplate together/.test(issue)) {
+    delete step.ownerDirectWhen;
+    delete step.ownerDirectTemplate;
+    return true;
+  }
+  // Multiple SMS recipients: keep the strongest single source.
+  if (/sets more than one recipient/.test(issue)) {
+    if (step.to) {
+      delete step.toAgentName;
+      delete step.toRef;
+      delete step.replyToGroup;
+    } else if (step.toAgentName) {
+      delete step.toRef;
+      delete step.replyToGroup;
+    } else {
+      delete step.toRef;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Best-effort salvage of an AI-authored definition that failed validation.
+ *
+ * Instead of bouncing the owner with an error, keep everything that IS valid
+ * and mechanically repair or remove what is not, returning a definition that
+ * passes `parseAiFlowDefinition` plus a plain-English list of what changed.
+ * The result loads into the builder (new AI drafts start DISABLED there), so
+ * the owner reviews the salvaged flow rather than retyping their description.
+ *
+ * Salvage only ever SUBTRACTS: invalid steps/triggers/knobs are removed, and
+ * an ununderstandable trigger falls back to Run-now — nothing is invented
+ * beyond the placeholder step required when no step survives.
+ *
+ * Returns null when there is nothing usable at all (not an object, or the
+ * salvage loop can't converge) — the caller then surfaces the plain error.
+ */
+export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  const raw = candidate as Record<string, unknown>;
+  const warnings: string[] = [];
+
+  // Trigger: keep it when valid; otherwise fall back to Run-now.
+  let trigger: FlowTrigger;
+  const trigParse = triggerSchema.safeParse(raw.trigger);
+  if (trigParse.success) {
+    trigger = trigParse.data;
+  } else {
+    trigger = { channel: "manual" };
+    warnings.push(
+      'The trigger could not be understood, so this flow starts from the Run-now button for now — pick the right "Starts when" in the editor.'
+    );
+  }
+
+  // Extra triggers (OR set): keep the valid non-voice ones, up to the cap.
+  let triggers: FlowTrigger[] | undefined;
+  if (Array.isArray(raw.triggers)) {
+    const kept: FlowTrigger[] = [];
+    let dropped = 0;
+    for (const t of raw.triggers) {
+      const p = triggerSchema.safeParse(t);
+      if (p.success && p.data.channel !== "voice" && kept.length < 4) kept.push(p.data);
+      else dropped += 1;
+    }
+    if (dropped > 0) warnings.push(`Removed ${dropped} additional trigger(s) that couldn't be used.`);
+    if (kept.length > 0) triggers = kept;
+  }
+
+  // Pre-mend from_matches conditions across the trigger set: the exactly-one
+  // sender rule is semantic (zod passes both-or-neither), and a malformed
+  // condition would otherwise force the manual-trigger fallback below.
+  for (const trig of [trigger, ...(triggers ?? [])]) {
+    const conds = (trig as { conditions?: TriggerCondition[] }).conditions;
+    if (!Array.isArray(conds)) continue;
+    const kept = conds.filter(
+      (c) => c.type !== "from_matches" || (!c.value !== !c.ref)
+    );
+    if (kept.length !== conds.length) {
+      warnings.push('Removed a "from matches" condition that had no usable sender.');
+      (trig as { conditions?: TriggerCondition[] }).conditions = kept;
+    }
+  }
+
+  // Steps: mint/dedupe ids, then keep each step that parses (retrying once
+  // without its `when` guard — a malformed guard is a common single fault).
+  const seenIds = new Set<string>();
+  const steps: FlowStep[] = [];
+  const rawSteps = Array.isArray(raw.steps) ? raw.steps.slice(0, 25) : [];
+  for (let i = 0; i < rawSteps.length; i++) {
+    const s = rawSteps[i];
+    if (!s || typeof s !== "object") {
+      warnings.push(`Removed step ${i + 1}: it wasn't a usable step at all.`);
+      continue;
+    }
+    const step = { ...(s as Record<string, unknown>) };
+    let id = typeof step.id === "string" && step.id.trim() ? step.id.trim().slice(0, 60) : `s${i + 1}`;
+    while (seenIds.has(id)) id = `${id.slice(0, 55)}_${i + 1}`;
+    step.id = id;
+    let parsed = stepSchema.safeParse(step);
+    if (!parsed.success && step.when !== undefined) {
+      const { when: _when, ...rest } = step;
+      parsed = stepSchema.safeParse(rest);
+      if (parsed.success) {
+        warnings.push(`Removed a broken run-condition from step ${i + 1} ("${String(step.type)}").`);
+      }
+    }
+    if (!parsed.success) {
+      warnings.push(
+        `Removed step ${i + 1}${typeof step.type === "string" ? ` ("${step.type}")` : ""}: it was missing required details.`
+      );
+      continue;
+    }
+    seenIds.add(id);
+    steps.push(parsed.data);
+  }
+
+  const options =
+    raw.options && typeof raw.options === "object" && !Array.isArray(raw.options)
+      ? {
+          suppressDefaultReply:
+            (raw.options as Record<string, unknown>).suppressDefaultReply === true || undefined,
+          captureStepScreenshots:
+            (raw.options as Record<string, unknown>).captureStepScreenshots === true || undefined
+        }
+      : undefined;
+
+  // Semantic repair loop: mend or remove the step each issue names; a
+  // non-step (trigger/voice-shape) issue forces the Run-now fallback once.
+  let triggerReset = trigParse.success === false;
+  for (let guard = 0; guard < 60; guard++) {
+    if (steps.length === 0) {
+      steps.push({
+        id: "s1",
+        type: "notify_owner",
+        message:
+          "Your automation ran. (The AI draft needed manual attention — open this flow in the editor to finish it.)"
+      });
+      warnings.push(
+        "No usable steps survived, so a simple notify-me step was added as a starting point."
+      );
+    }
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger,
+      ...(triggers && triggers.length > 0 ? { triggers } : {}),
+      steps,
+      ...(options ? { options } : {})
+    };
+    const issues = validateDefinitionSemantics(def);
+    if (issues.length === 0) {
+      // Belt-and-braces zod re-parse: strips any keys the mends left behind
+      // so the result is exactly what parseAiFlowDefinition would accept.
+      const finalParse = aiFlowDefinitionSchema.safeParse(def);
+      /* c8 ignore next -- zod + semantics both passed above; defensive only */
+      if (!finalParse.success) return null;
+      return { definition: finalParse.data, warnings };
+    }
+    const issue = issues[0];
+    const stepMatch = STEP_ISSUE_RE.exec(issue);
+    if (stepMatch) {
+      const idx = steps.findIndex((s) => s.id === stepMatch[1]);
+      /* c8 ignore next 2 -- semantics always name a present step; defensive only */
+      if (idx === -1) return null;
+      const mutable = steps[idx] as unknown as Record<string, unknown>;
+      if (mendStepForIssue(mutable, issue)) {
+        warnings.push(`Adjusted step ${idx + 1} ("${steps[idx].type}"): ${issue}`);
+      } else {
+        warnings.push(`Removed step ${idx + 1} ("${steps[idx].type}"): ${issue}`);
+        steps.splice(idx, 1);
+      }
+      continue;
+    }
+    // Trigger-level / voice-shape issue: fall back to Run-now once (which also
+    // invalidates any voice steps — the loop then removes them) — then give up.
+    // (Under a manual trigger no non-step issues remain, so the second-reset
+    // bail is defensive.)
+    /* c8 ignore next */
+    if (triggerReset) return null;
+    triggerReset = true;
+    trigger = { channel: "manual" };
+    triggers = undefined;
+    warnings.push(
+      `The trigger setup couldn't be repaired (${issue}) — the flow starts from the Run-now button for now.`
+    );
+  }
+  /* c8 ignore next 2 -- the loop always converges (every pass removes something) */
+  return null;
+}
+
 /** A short, human summary of a definition for list/run UIs. */
 export function summarizeDefinition(def: AiFlowDefinition): string {
   const t = def.trigger;
