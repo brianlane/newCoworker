@@ -109,6 +109,20 @@ need region-pinned models — roadmap, not committed).
   (`src/lib/provisioning/byos-wipe.ts`); OVH boxes lapse via
   delete-at-expiration.
 
+## Refunds (disclose in every Canadian/BYOS deal)
+
+These placements are **excluded from the standard 30-day money-back
+guarantee** (Terms of Service §9, enforced in `/api/billing/cancel`):
+OVHcloud US bills the underlying Canadian boxes month-to-month with **no
+refunds** ("all Fees are non-cancelable and non-refundable"; cancellation
+takes effect at the end of the current term), and BYOS enrollment work is
+performed specifically for the customer. Any refund, credit, or
+early-termination right must come from the enterprise agreement / order
+form. Support retains an admin-only escape hatch
+(`/api/admin/force-refund`) for genuine edge cases. Never purchase OVH
+boxes on 12/24-month commitments unless the deal prepays them — OVH term
+commitments can only be exited by paying the full remaining balance.
+
 ## Contract artifacts (per deal)
 
 - **DPA + subprocessor list**: use the table above; commit to notice of

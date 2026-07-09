@@ -198,6 +198,37 @@ describe("/api/billing/cancel", () => {
     expect(res.status).toBe(404);
   });
 
+  it("refund mode is refused for Canadian/BYOS placements (Terms §9 exclusion)", async () => {
+    // OVH (Canada) and BYOS tenants are excluded from the self-serve
+    // 30-day guarantee — the underlying OVH box is non-refundable to the
+    // platform. period_end cancellation stays available.
+    for (const vpsProvider of ["ovh", "byos"]) {
+      loadLifecycleContextMock.mockResolvedValueOnce({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: { ...makeContext(), vpsProvider }
+      });
+      const res = await POST(req({ mode: "refund" }));
+      const body = await res.json();
+      expect(res.status).toBe(409);
+      expect(body.error.message).toBe("refund_not_available_for_placement");
+    }
+    expect(planLifecycleActionMock).not.toHaveBeenCalled();
+
+    // period_end for the same placement still works.
+    loadLifecycleContextMock.mockResolvedValueOnce({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: { ...makeContext(), vpsProvider: "ovh" }
+    });
+    planLifecycleActionMock.mockReturnValueOnce({
+      ok: true,
+      plan: periodEndPlan()
+    } satisfies LifecyclePlanResult);
+    const periodEnd = await POST(req({ mode: "period_end" }));
+    expect(periodEnd.status).toBe(200);
+  });
+
   it("surfaces planner rejections as 409 with the typed reason", async () => {
     planLifecycleActionMock.mockReturnValueOnce({
       ok: false,

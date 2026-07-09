@@ -80,6 +80,20 @@ export async function POST(request: Request) {
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
     }
 
+    // Placement gate (Terms §9): enterprise deployments on Canadian-region
+    // or customer-supplied boxes (vps_provider ovh/byos) are excluded from
+    // the self-serve 30-day money-back guarantee — the underlying OVH
+    // infrastructure is non-refundable to the platform, and these
+    // placements are governed by the enterprise agreement. Support can
+    // still honor edge cases via /api/admin/force-refund, which is
+    // deliberately not gated on placement.
+    if (payload.mode === "refund") {
+      const { resolveVpsProvider } = await import("@/lib/vps/provider");
+      if (resolveVpsProvider(ctxRes.context.vpsProvider) !== "hostinger") {
+        return errorResponse("CONFLICT", "refund_not_available_for_placement", 409);
+      }
+    }
+
     const action =
       payload.mode === "refund"
         ? ({ type: "cancelWithRefund" } as const)
