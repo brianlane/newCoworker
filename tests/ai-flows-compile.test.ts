@@ -14,6 +14,63 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("browse_extract");
   });
 
+  it("covers EVERY step type the schema supports (the generator must be able to author any flow)", () => {
+    // Non-voice steps appear as JSON examples; voice steps in their own block.
+    for (const type of [
+      "extract_url",
+      "browse_extract",
+      "extract_text",
+      "email_extract",
+      "send_sms",
+      "send_email",
+      "approval_gate",
+      "notify_owner",
+      "http_call",
+      "sleep",
+      "wait_for_reply",
+      "route_to_team",
+      "browse_action",
+      "recall_url",
+      "upsert_customer",
+      "ring_handoff",
+      "voice_ai_intake",
+      "voice_transfer",
+      "outbound_call"
+    ]) {
+      expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain(`"type":"${type}"`);
+    }
+  });
+
+  it("covers every trigger channel including voice (inbound + outbound)", () => {
+    for (const channel of [
+      "sms",
+      "manual",
+      "schedule",
+      "tenant_email",
+      "email",
+      "webhook",
+      "calendar",
+      "voice"
+    ]) {
+      expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain(`"channel":"${channel}"`);
+    }
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"direction":"outbound"');
+  });
+
+  it("documents the route_to_team knobs (keep-for-owner, firstToClaim, preferContactOwner)", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("ownerDirectWhen");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("ownerDirectTemplate");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"firstToClaim":false');
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"preferContactOwner":true');
+  });
+
+  it("teaches the browse extras and forbids inventing saved-person refs", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("extractLinks");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("skipWhenText");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("integrationLabel");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("can NOT be authored");
+  });
+
   it("teaches the wait steps and the no-reply branching pattern", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"sleep"');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"wait_for_reply"');

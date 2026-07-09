@@ -23,7 +23,11 @@ import {
   extractFlowJson,
   humanizeCompileIssues
 } from "@/lib/ai-flows/compile";
-import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import {
+  AiFlowValidationError,
+  parseAiFlowDefinition,
+  salvageFlowDefinition
+} from "@/lib/ai-flows/schema";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
@@ -142,6 +146,9 @@ export async function POST(request: Request) {
         }
       });
       let repairIssues = err.issues;
+      // The best candidate JSON we have for the salvage fallback below: the
+      // self-repair output supersedes the original when it at least parsed.
+      let lastCandidate: unknown = candidate;
       try {
         const repairText = buildFlowRepairUserText({
           description: body.description,
@@ -167,6 +174,7 @@ export async function POST(request: Request) {
         });
         const repairedCandidate = extractFlowJson(repairedRaw);
         if (repairedCandidate !== null) {
+          lastCandidate = repairedCandidate;
           const definition = parseAiFlowDefinition(repairedCandidate);
           return successResponse({ definition });
         }
@@ -190,12 +198,36 @@ export async function POST(request: Request) {
           });
         }
       }
+      // Best effort: rather than bouncing the owner with an error, keep every
+      // valid part of the draft and mechanically repair/remove the rest. The
+      // result loads into the builder DISABLED for review, with warnings
+      // explaining exactly what was changed.
+      const salvaged = salvageFlowDefinition(lastCandidate);
+      if (salvaged) {
+        void recordSystemLog({
+          businessId: body.businessId,
+          source: "app",
+          level: "warn",
+          event: "aiflow_compile_salvaged",
+          message: "AI draft failed validation; returned a best-effort salvage",
+          payload: {
+            model,
+            reason: "schema_after_repair",
+            issues: repairIssues,
+            salvage_warnings: salvaged.warnings
+          }
+        });
+        return successResponse({
+          definition: salvaged.definition,
+          warnings: salvaged.warnings
+        });
+      }
       void recordSystemLog({
         businessId: body.businessId,
         source: "app",
         level: "warn",
         event: "aiflow_compile_failed",
-        message: "AI produced an invalid automation (after self-repair)",
+        message: "AI produced an invalid automation (after self-repair and salvage)",
         payload: { model, reason: "schema_after_repair", issues: repairIssues }
       });
       return errorResponse(
