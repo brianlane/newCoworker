@@ -74,6 +74,8 @@ export const CALENDAR_START_HORIZON_BUFFER_MINUTES = 5;
 type CalendarSource = "primary" | "shared";
 
 type CalendarFlow = {
+  /** Unique per (flow, trigger index) — one flow can carry several calendar triggers. */
+  key: string;
   id: string;
   business_id: string;
   /** Which calendar(s) the flow watches ("both" expands to primary+shared). */
@@ -342,34 +344,39 @@ async function fetchUpcoming(
 function calendarFlowsFrom(
   rows: Array<{ id: string; business_id: string; definition: unknown }>
 ): CalendarFlow[] {
+  type RawTrigger = {
+    channel?: string;
+    calendar?: unknown;
+    on?: unknown;
+    leadMinutes?: unknown;
+    conditions?: unknown;
+  };
   const out: CalendarFlow[] = [];
   for (const row of rows) {
-    const def = row.definition as
-      | {
-          trigger?: {
-            channel?: string;
-            calendar?: unknown;
-            on?: unknown;
-            leadMinutes?: unknown;
-            conditions?: unknown;
-          };
-        }
-      | null;
-    const trig = def?.trigger;
-    if (trig?.channel !== "calendar") continue;
-    if (trig.on !== "event_created" && trig.on !== "event_start") continue;
-    const leadMinutes = typeof trig.leadMinutes === "number" ? trig.leadMinutes : 0;
-    if (trig.on === "event_start" && typeof trig.leadMinutes !== "number") continue;
-    const calendar =
-      trig.calendar === "primary" || trig.calendar === "shared" ? trig.calendar : "both";
-    out.push({
-      id: row.id,
-      business_id: row.business_id,
-      sources: calendar === "both" ? ["primary", "shared"] : [calendar],
-      on: trig.on,
-      leadMinutes,
-      conditions: Array.isArray(trig.conditions) ? (trig.conditions as TriggerCondition[]) : []
-    });
+    const def = row.definition as { trigger?: RawTrigger; triggers?: RawTrigger[] } | null;
+    // One entry per calendar trigger in the flow's set (OR semantics). The
+    // entry `key` stays unique per trigger so the per-poll ref cache never
+    // mixes two triggers' saved-contact values; the run dedupe key (flow id +
+    // event + mode) still collapses same-event matches into one run.
+    const triggers = [def?.trigger, ...(def?.triggers ?? [])];
+    for (let ti = 0; ti < triggers.length; ti++) {
+      const trig = triggers[ti];
+      if (trig?.channel !== "calendar") continue;
+      if (trig.on !== "event_created" && trig.on !== "event_start") continue;
+      const leadMinutes = typeof trig.leadMinutes === "number" ? trig.leadMinutes : 0;
+      if (trig.on === "event_start" && typeof trig.leadMinutes !== "number") continue;
+      const calendar =
+        trig.calendar === "primary" || trig.calendar === "shared" ? trig.calendar : "both";
+      out.push({
+        key: `${row.id}:${ti}`,
+        id: row.id,
+        business_id: row.business_id,
+        sources: calendar === "both" ? ["primary", "shared"] : [calendar],
+        on: trig.on,
+        leadMinutes,
+        conditions: Array.isArray(trig.conditions) ? (trig.conditions as TriggerCondition[]) : []
+      });
+    }
   }
   return out;
 }
@@ -385,7 +392,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
       .from("ai_flows")
       .select("id, business_id, definition")
       .eq("enabled", true)
-      .eq("definition->trigger->>channel", "calendar")
+      .or("definition->trigger->>channel.eq.calendar,definition->triggers.not.is.null")
       .order("id", { ascending: true })
       .range(offset, offset + CALENDAR_POLL_FLOW_PAGE - 1);
     if (error) {
@@ -518,7 +525,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           // Cast: the full supabase-js builder type recurses too deep for TS
           // to check structurally against the resolver's minimal chain type.
           refValuesByFlow.set(
-            flow.id,
+            flow.key,
             await resolveFromMatchesRefValues(
               db as unknown as ContactRefSupabase,
               businessId,
@@ -527,7 +534,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           );
         } catch (e) {
           console.error("calendar from_matches ref resolution", e);
-          refValuesByFlow.set(flow.id, undefined);
+          refValuesByFlow.set(flow.key, undefined);
         }
       }
 
@@ -545,7 +552,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
                 flow.conditions,
                 scope.windowText,
                 scope.from,
-                refValuesByFlow.get(flow.id)
+                refValuesByFlow.get(flow.key)
               )
             )
               continue;

@@ -37,6 +37,7 @@ import {
   extractLinkByText,
   extractPhones,
   filterRosterByAvailability,
+  flowTriggers,
   htmlToText,
   isE164,
   isExecutableDefinition,
@@ -3927,11 +3928,13 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
     const PAGE = 200;
     const rows: { id: string; business_id: string; definition: unknown }[] = [];
     for (let offset = 0; ; offset += PAGE) {
+      // Primary schedule trigger OR any flow carrying an additional-triggers
+      // array (rare; the code below picks out its schedule members).
       const { data, error } = await supabase
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
-        .eq("definition->trigger->>channel", "schedule")
+        .or("definition->trigger->>channel.eq.schedule,definition->triggers.not.is.null")
         .order("id", { ascending: true })
         .range(offset, offset + PAGE - 1);
       if (error) {
@@ -3949,45 +3952,52 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
     const nowMs = Date.now();
     for (const row of rows) {
       if (!isExecutableDefinition(row.definition)) continue;
-      const trig = row.definition.trigger;
-      if (trig.channel !== "schedule") continue;
-      const due = scheduleDue(nowMs, trig);
-      if (!due) continue;
-      const { error: insErr } = await supabase.from("ai_flow_runs").insert({
-        flow_id: row.id,
-        business_id: row.business_id,
-        status: "queued",
-        context: {
-          trigger: {
-            channel: "schedule",
-            scheduled_for: due.scheduledForIso,
-            url: null,
-            windowText: "",
-            from: ""
-          }
-        },
-        current_step: 0,
-        dedupe_key: `sched:${due.key}`
-      });
-      // 23505 = this occurrence is already enqueued (earlier tick) — expected.
-      if (insErr && (insErr as { code?: string }).code !== "23505") {
-        console.error("schedule enqueue", insErr);
-        continue;
-      }
-      if (!insErr) {
-        await telemetryRecord(supabase, "ai_flow_run_enqueued_schedule", {
-          business_id: row.business_id,
+      const triggers = flowTriggers(row.definition);
+      for (let ti = 0; ti < triggers.length; ti++) {
+        const trig = triggers[ti];
+        if (trig.channel !== "schedule") continue;
+        const due = scheduleDue(nowMs, trig);
+        if (!due) continue;
+        // Extra triggers suffix their index into the dedupe key so two
+        // schedules in one flow due the same minute both enqueue; the primary
+        // keeps the legacy key so pre-multi-trigger occurrences stay deduped.
+        const dedupeKey = ti === 0 ? `sched:${due.key}` : `sched:${due.key}:t${ti}`;
+        const { error: insErr } = await supabase.from("ai_flow_runs").insert({
           flow_id: row.id,
-          scheduled_for: due.scheduledForIso
+          business_id: row.business_id,
+          status: "queued",
+          context: {
+            trigger: {
+              channel: "schedule",
+              scheduled_for: due.scheduledForIso,
+              url: null,
+              windowText: "",
+              from: ""
+            }
+          },
+          current_step: 0,
+          dedupe_key: dedupeKey
         });
-        await systemLog(supabase, {
-          businessId: row.business_id,
-          source: "aiflow",
-          level: "info",
-          event: "ai_flow_run_enqueued_schedule",
-          message: `Scheduled run enqueued (${due.scheduledForIso})`,
-          payload: { flow_id: row.id, dedupe_key: `sched:${due.key}` }
-        });
+        // 23505 = this occurrence is already enqueued (earlier tick) — expected.
+        if (insErr && (insErr as { code?: string }).code !== "23505") {
+          console.error("schedule enqueue", insErr);
+          continue;
+        }
+        if (!insErr) {
+          await telemetryRecord(supabase, "ai_flow_run_enqueued_schedule", {
+            business_id: row.business_id,
+            flow_id: row.id,
+            scheduled_for: due.scheduledForIso
+          });
+          await systemLog(supabase, {
+            businessId: row.business_id,
+            source: "aiflow",
+            level: "info",
+            event: "ai_flow_run_enqueued_schedule",
+            message: `Scheduled run enqueued (${due.scheduledForIso})`,
+            payload: { flow_id: row.id, dedupe_key: dedupeKey }
+          });
+        }
       }
     }
   } catch (e) {

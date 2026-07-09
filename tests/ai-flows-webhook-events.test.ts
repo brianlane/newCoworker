@@ -21,12 +21,10 @@ import { processWebhookFlowEvent, webhookEventKey } from "@/lib/ai-flows/webhook
 function flowsDb(result: { data: unknown; error: unknown }) {
   const builder: Record<string, unknown> = {};
   builder.select = vi.fn(() => builder);
-  // loadWebhookFlows chains .eq().eq().eq(); the third (terminal) eq is awaited.
-  let eqCalls = 0;
-  builder.eq = vi.fn(() => {
-    eqCalls += 1;
-    return eqCalls >= 3 ? Promise.resolve(result) : builder;
-  });
+  builder.eq = vi.fn(() => builder);
+  // loadWebhookFlows chains .select().eq().eq().or(); the .or (which admits
+  // flows whose EXTRA triggers include a webhook) is the awaited terminal.
+  builder.or = vi.fn(() => Promise.resolve(result));
   return { from: vi.fn(() => builder) };
 }
 
@@ -107,6 +105,43 @@ describe("processWebhookFlowEvent", () => {
           flow_ids: ["flow-match", "flow-anymatch"]
         })
       }),
+      db
+    );
+  });
+
+  it("fires flows whose webhook trigger lives in the EXTRA triggers array (multi-trigger OR)", async () => {
+    const db = flowsDb({
+      data: [
+        {
+          // Primary is SMS; the webhook trigger is one of the extras — must fire.
+          id: "flow-multi",
+          definition: {
+            trigger: { channel: "sms", conditions: [] },
+            triggers: [
+              { channel: "webhook", conditions: [{ type: "contains", value: "nope" }] },
+              { channel: "webhook", conditions: [{ type: "has_url" }] }
+            ]
+          }
+        },
+        {
+          // Broad .or() fetch also returns flows with extras but NO webhook
+          // trigger anywhere — they must be skipped, not crash.
+          id: "flow-no-webhook",
+          definition: {
+            trigger: { channel: "sms", conditions: [] },
+            triggers: [{ channel: "manual" }]
+          }
+        }
+      ],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
+
+    const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
+    expect(res).toEqual({ enqueued: 1, flowsEvaluated: 1, flowsMatched: 1 });
+    expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "flow-multi" }),
       db
     );
   });

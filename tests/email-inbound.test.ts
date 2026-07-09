@@ -38,12 +38,10 @@ import { processInboundTenantEmail } from "@/lib/email/inbound";
 function flowsDb(result: { data: unknown; error: unknown }) {
   const builder: Record<string, unknown> = {};
   builder.select = vi.fn(() => builder);
-  // loadTenantEmailFlows chains .eq().eq().eq(); the third (terminal) eq is awaited.
-  let eqCalls = 0;
-  builder.eq = vi.fn(() => {
-    eqCalls += 1;
-    return eqCalls >= 3 ? Promise.resolve(result) : builder;
-  });
+  builder.eq = vi.fn(() => builder);
+  // loadTenantEmailFlows chains .select().eq().eq().or(); the .or (which
+  // admits flows whose EXTRA triggers include tenant_email) is the terminal.
+  builder.or = vi.fn(() => Promise.resolve(result));
   return { from: vi.fn(() => builder) };
 }
 
@@ -162,6 +160,40 @@ describe("processInboundTenantEmail", () => {
         runId: "run-1",
         providerMessageId: "<msg-1@example.com>"
       }),
+      db
+    );
+  });
+
+  it("fires flows whose tenant_email trigger lives in the EXTRA triggers array (multi-trigger OR)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [
+        {
+          // Primary is SMS; tenant_email is one of the extras — must fire once.
+          id: "flow-multi",
+          definition: {
+            trigger: { channel: "sms", conditions: [] },
+            triggers: [
+              { channel: "tenant_email", conditions: [{ type: "contains", value: "zzz" }] },
+              { channel: "tenant_email", conditions: [{ type: "has_url" }] }
+            ]
+          }
+        },
+        {
+          // Extras with no tenant_email trigger anywhere → skipped.
+          id: "flow-no-email",
+          definition: { trigger: { channel: "sms", conditions: [] }, triggers: [{ channel: "manual" }] }
+        }
+      ],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-1" });
+
+    const res = await processInboundTenantEmail(PAYLOAD, db as never);
+    expect(res).toEqual({ matched: true, businessId: "biz-1", enqueued: 1 });
+    expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "flow-multi" }),
       db
     );
   });

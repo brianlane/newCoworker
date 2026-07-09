@@ -87,10 +87,10 @@ function conditionLabel(c: TriggerCondition): string {
   }
 }
 
-function TriggerView({ trigger }: { trigger: FlowTrigger }) {
+function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; heading?: string }) {
   return (
     <section className={sectionClass}>
-      <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Trigger</h3>
+      <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">{heading}</h3>
       <Row label="Starts when" value={CHANNEL_LABELS[trigger.channel]} />
       {trigger.channel === "sms" && (
         <>
@@ -594,7 +594,13 @@ export function AiFlowView({
 }) {
   return (
     <div className="space-y-4">
-      <TriggerView trigger={definition.trigger} />
+      <TriggerView
+        trigger={definition.trigger}
+        heading={definition.triggers?.length ? "Trigger 1 (any one starts the flow)" : "Trigger"}
+      />
+      {(definition.triggers ?? []).map((t, i) => (
+        <TriggerView key={i} trigger={t} heading={`Trigger ${i + 2} (or)`} />
+      ))}
       <section className="space-y-3">
         <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
         {definition.steps.map((step, i) => (

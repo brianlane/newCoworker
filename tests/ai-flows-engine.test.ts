@@ -12,6 +12,7 @@ import {
   firstUrlInText,
   hasUnresolvedPlaceholders,
   htmlToText,
+  flowTriggers,
   isExecutableDefinition,
   isWithinWeeklyWindows,
   localClock,
@@ -500,6 +501,30 @@ describe("isExecutableDefinition", () => {
     expect(
       isExecutableDefinition({ ...valid, trigger: { channel: "sms", conditions: "x" } })
     ).toBe(false);
+  });
+  it("validates the additional-triggers array (each member a valid trigger; no voice)", () => {
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        triggers: [{ channel: "webhook", conditions: [] }, { channel: "manual" }]
+      })
+    ).toBe(true);
+    // Non-array / invalid member / voice member → not executable.
+    expect(isExecutableDefinition({ ...valid, triggers: "x" })).toBe(false);
+    expect(
+      isExecutableDefinition({ ...valid, triggers: [{ channel: "sms", conditions: "x" }] })
+    ).toBe(false);
+    expect(
+      isExecutableDefinition({ ...valid, triggers: [{ channel: "voice", fromE164: "+1" }] })
+    ).toBe(false);
+  });
+  it("flowTriggers returns the ordered set (primary first)", () => {
+    expect(flowTriggers(valid)).toEqual([valid.trigger]);
+    const multi = {
+      ...valid,
+      triggers: [{ channel: "manual" } as const]
+    };
+    expect(flowTriggers(multi)).toEqual([valid.trigger, { channel: "manual" }]);
   });
   it("accepts the non-SMS trigger channels", () => {
     expect(isExecutableDefinition({ ...valid, trigger: { channel: "manual" } })).toBe(true);

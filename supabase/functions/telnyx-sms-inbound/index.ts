@@ -26,7 +26,11 @@ import {
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
-import { evaluateSmsTrigger, isExecutableDefinition } from "../_shared/ai_flows/engine.ts";
+import {
+  evaluateSmsTrigger,
+  flowTriggers,
+  isExecutableDefinition
+} from "../_shared/ai_flows/engine.ts";
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
 import { parseRouting } from "../_shared/ai_flows/routing.ts";
@@ -99,9 +103,14 @@ async function evaluateAiFlows(
   // read serves them all; each flow still filters to its own window in-engine.
   let maxWindow = 10;
   for (const f of flows) {
-    const cw = (f.definition as { trigger?: { correlationWindowMinutes?: number } })?.trigger
-      ?.correlationWindowMinutes;
-    if (typeof cw === "number" && cw > maxWindow) maxWindow = cw;
+    const d = f.definition as {
+      trigger?: { correlationWindowMinutes?: number };
+      triggers?: Array<{ correlationWindowMinutes?: number }>;
+    };
+    for (const t of [d?.trigger, ...(d?.triggers ?? [])]) {
+      const cw = t?.correlationWindowMinutes;
+      if (typeof cw === "number" && cw > maxWindow) maxWindow = cw;
+    }
   }
 
   const messages: CorrelationMessage[] = [];
@@ -141,24 +150,28 @@ async function evaluateAiFlows(
   for (const f of flows) {
     if (!isExecutableDefinition(f.definition)) continue;
     const def = f.definition;
-    // Only SMS-triggered flows react to an inbound text; manual / schedule /
-    // email flows are started elsewhere (Run-now route, worker cron sweep,
-    // mailbox poller).
-    if (def.trigger.channel !== "sms") continue;
-    // Pre-resolve any from_matches saved-contact refs to live identity values
-    // for the pure evaluator. A resolution failure fails CLOSED for this flow
-    // only (no entry ⇒ the ref condition can't match) — never breaks the
-    // inbound path or the other flows.
-    let refValues: Map<string, string[]> | undefined;
-    try {
-      refValues = await resolveFromMatchesRefValues(supabase, businessId, def.trigger.conditions);
-    } catch (e) {
-      console.error("ai_flows from_matches ref resolution", e);
-      refValues = undefined;
-    }
-    const res = evaluateSmsTrigger(def.trigger, { messages, nowMs: current.nowMs }, refValues);
-    if (res.matched) {
-      matched.push({ id: f.id, def, url: res.url, windowText: res.windowText });
+    // Only SMS triggers react to an inbound text; the flow's other triggers
+    // (manual / schedule / email / webhook) are started elsewhere (Run-now
+    // route, worker cron sweep, mailbox poller, public flow-events API).
+    // OR semantics across the set: the first matching SMS trigger wins.
+    for (const trigger of flowTriggers(def)) {
+      if (trigger.channel !== "sms") continue;
+      // Pre-resolve any from_matches saved-contact refs to live identity values
+      // for the pure evaluator. A resolution failure fails CLOSED for this flow
+      // only (no entry ⇒ the ref condition can't match) — never breaks the
+      // inbound path or the other flows.
+      let refValues: Map<string, string[]> | undefined;
+      try {
+        refValues = await resolveFromMatchesRefValues(supabase, businessId, trigger.conditions);
+      } catch (e) {
+        console.error("ai_flows from_matches ref resolution", e);
+        refValues = undefined;
+      }
+      const res = evaluateSmsTrigger(trigger, { messages, nowMs: current.nowMs }, refValues);
+      if (res.matched) {
+        matched.push({ id: f.id, def, url: res.url, windowText: res.windowText });
+        break;
+      }
     }
   }
   const suppress = matched.some((m) => m.def.options?.suppressDefaultReply === true);

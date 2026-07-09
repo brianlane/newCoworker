@@ -114,6 +114,15 @@ type EditorState = {
   voiceDirection: "inbound" | "outbound";
   /** Outbound voice only: auto-dial on the schedule fields above (else manual). */
   voiceOutboundScheduled: boolean;
+  /**
+   * Multi-trigger (OR) support: the OTHER triggers in the flow's set, as
+   * stored FlowTrigger objects — the per-channel fields above always hold the
+   * ONE trigger currently being edited. `editingTriggerIndex` is that
+   * trigger's position within the full ordered set (composed at save/switch
+   * time by inserting the edited trigger back among these).
+   */
+  extraTriggers: FlowTrigger[];
+  editingTriggerIndex: number;
   steps: FlowStep[];
 };
 
@@ -148,7 +157,31 @@ function emptyEditor(): EditorState {
     voiceFromRef: null,
     voiceDirection: "inbound",
     voiceOutboundScheduled: false,
+    extraTriggers: [],
+    editingTriggerIndex: 0,
     steps: []
+  };
+}
+
+/** The flow's full ordered trigger set with the edited trigger re-inserted. */
+function composeTriggerSet(s: EditorState): FlowTrigger[] {
+  const full = [...s.extraTriggers];
+  const at = Math.min(Math.max(0, s.editingTriggerIndex), full.length);
+  full.splice(at, 0, editorTrigger(s));
+  return full;
+}
+
+/** Switch which trigger of the set the per-channel fields edit. */
+function selectTriggerForEdit(s: EditorState, index: number): EditorState {
+  const full = composeTriggerSet(s);
+  const clamped = Math.min(Math.max(0, index), full.length - 1);
+  const chosen = full[clamped];
+  const rest = full.filter((_, i) => i !== clamped);
+  return {
+    ...s,
+    ...triggerToEditorFields(chosen),
+    extraTriggers: rest,
+    editingTriggerIndex: clamped
   };
 }
 
@@ -263,6 +296,8 @@ function editorFromRow(row: AiFlowRow): EditorState {
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     ...triggerToEditorFields(def.trigger),
+    extraTriggers: def.triggers ?? [],
+    editingTriggerIndex: 0,
     steps: def.steps
   };
 }
@@ -277,6 +312,8 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     ...triggerToEditorFields(def.trigger),
+    extraTriggers: def.triggers ?? [],
+    editingTriggerIndex: 0,
     steps: def.steps
   };
 }
@@ -556,9 +593,11 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
 }
 
 function toDefinition(s: EditorState): AiFlowDefinition {
+  const [primary, ...rest] = composeTriggerSet(s);
   return {
     version: 1,
-    trigger: editorTrigger(s),
+    trigger: primary,
+    ...(rest.length > 0 ? { triggers: rest } : {}),
     steps: s.steps.map(sanitizeStepForSave),
     options: {
       suppressDefaultReply: s.suppressDefaultReply,
@@ -956,6 +995,8 @@ export function AiFlowsManager({
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
         captureStepScreenshots: e?.captureStepScreenshots ?? def.options?.captureStepScreenshots ?? false,
         ...triggerToEditorFields(def.trigger),
+        extraTriggers: def.triggers ?? [],
+        editingTriggerIndex: 0,
         steps: def.steps
       }));
     } finally {
@@ -1022,10 +1063,70 @@ export function AiFlowsManager({
         )}
 
         <section className="space-y-3">
-          <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Trigger</h3>
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">
+            {editor.extraTriggers.length > 0 ? "Triggers" : "Trigger"}
+          </h3>
           <p className="text-[11px] text-parchment/40">
-            The trigger is what kicks off this workflow; pick how it should start below.
+            {editor.extraTriggers.length > 0
+              ? "This workflow starts when ANY of these triggers fires. Click one to edit it."
+              : "The trigger is what kicks off this workflow; pick how it should start below."}
           </p>
+          {(editor.extraTriggers.length > 0 || editor.channel !== "voice") && (
+            <div className="flex flex-wrap items-center gap-2">
+              {composeTriggerSet(editor).map((t, i) => (
+                <span
+                  key={i}
+                  className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs ${
+                    i === editor.editingTriggerIndex
+                      ? "border-signal-teal/60 bg-signal-teal/10 text-parchment"
+                      : "border-parchment/15 text-parchment/60"
+                  }`}
+                >
+                  <button onClick={() => setEditor(selectTriggerForEdit(editor, i))}>
+                    {CHANNEL_LABELS[t.channel]}
+                  </button>
+                  {composeTriggerSet(editor).length > 1 && (
+                    <button
+                      onClick={() => {
+                        const full = composeTriggerSet(editor);
+                        full.splice(i, 1);
+                        const next: EditorState = {
+                          ...editor,
+                          ...triggerToEditorFields(full[0]),
+                          extraTriggers: full.slice(1),
+                          editingTriggerIndex: 0
+                        };
+                        setEditor(next);
+                      }}
+                      className="text-parchment/40 hover:text-spark-orange"
+                      aria-label="Remove this trigger"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </span>
+              ))}
+              {composeTriggerSet(editor).length < 5 && editor.channel !== "voice" && (
+                <button
+                  onClick={() => {
+                    // Append a fresh manual trigger and select it for editing.
+                    const full = composeTriggerSet(editor);
+                    full.push({ channel: "manual" });
+                    const next: EditorState = {
+                      ...editor,
+                      ...triggerToEditorFields(full[full.length - 1]),
+                      extraTriggers: full.slice(0, -1),
+                      editingTriggerIndex: full.length - 1
+                    };
+                    setEditor(next);
+                  }}
+                  className="text-xs text-signal-teal hover:underline"
+                >
+                  + Add another trigger
+                </button>
+              )}
+            </div>
+          )}
           <div>
             <label className={labelClass}>Starts when</label>
             <select
@@ -1035,11 +1136,15 @@ export function AiFlowsManager({
                 setEditor({ ...editor, channel: ev.target.value as FlowTrigger["channel"] })
               }
             >
-              {(Object.keys(CHANNEL_LABELS) as FlowTrigger["channel"][]).map((c) => (
-                <option key={c} value={c}>
-                  {CHANNEL_LABELS[c]}
-                </option>
-              ))}
+              {(Object.keys(CHANNEL_LABELS) as FlowTrigger["channel"][])
+                // Voice runs on the live call path and stays single-trigger,
+                // so it can't be one of several triggers.
+                .filter((c) => c !== "voice" || editor.extraTriggers.length === 0)
+                .map((c) => (
+                  <option key={c} value={c}>
+                    {CHANNEL_LABELS[c]}
+                  </option>
+                ))}
             </select>
           </div>
           {editor.channel === "manual" && (
