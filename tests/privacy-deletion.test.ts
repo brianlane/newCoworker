@@ -197,6 +197,65 @@ describe("deleteEndUserData — residency (dual/vps) tenants", () => {
     expect(byTable.voice_call_transcripts.box).toBe(1);
   });
 
+  it("erases box contacts matched only by alias_e164s (paged client-side scan)", async () => {
+    vi.mocked(residencyModeFor).mockResolvedValue("vps");
+    const db = makeCentralDb();
+    // Page 1 is exactly the page size (forces a second fetch); the alias
+    // match sits on page 2. Rows without an alias array exercise the
+    // defensive Array.isArray branch.
+    const page1 = Array.from({ length: 500 }, (_, i) => ({
+      id: `c-${i}`,
+      alias_e164s: ["+19998887777"]
+    }));
+    const page2 = [
+      { id: "c-alias", alias_e164s: ["+12223334444", E164] },
+      { id: "c-no-arr" }
+    ];
+    const apiSelect = vi.fn(async (req: { table: string; offset?: number }) => {
+      if (req.table === "contacts") {
+        return { ok: true, rows: req.offset === 0 ? page1 : page2 };
+      }
+      return { ok: true, rows: [] }; // transcripts select
+    });
+    const apiDelete = vi.fn().mockResolvedValue({ ok: true, rows: [{ id: "x" }] });
+    await deleteEndUserData(
+      BIZ,
+      { e164: E164 },
+      { client: db as never, dataApiFor: () => makeApi({ select: apiSelect, delete: apiDelete }) }
+    );
+    expect(apiSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ table: "contacts", offset: 0, limit: 500 })
+    );
+    expect(apiSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ table: "contacts", offset: 500, limit: 500 })
+    );
+    expect(apiDelete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        table: "contacts",
+        filters: expect.arrayContaining([{ column: "id", op: "in", value: ["c-alias"] }])
+      })
+    );
+  });
+
+  it("fails loudly when the box contacts alias scan reports ok:false", async () => {
+    vi.mocked(residencyModeFor).mockResolvedValue("vps");
+    const apiSelect = vi.fn(async (req: { table: string }) =>
+      req.table === "contacts"
+        ? { ok: false, error: "internal", message: "scan sad" }
+        : { ok: true, rows: [] }
+    );
+    await expect(
+      deleteEndUserData(
+        BIZ,
+        { e164: E164 },
+        {
+          client: makeCentralDb() as never,
+          dataApiFor: () => makeApi({ select: apiSelect })
+        }
+      )
+    ).rejects.toThrow(/box select on contacts failed: scan sad/);
+  });
+
   it("email-only residency request boxes only the email passes", async () => {
     vi.mocked(residencyModeFor).mockResolvedValue("vps");
     // Null data payloads (e.g. PostgREST returning no body) count as 0.
@@ -247,7 +306,7 @@ describe("deleteEndUserData — residency (dual/vps) tenants", () => {
       )
     ).rejects.toThrow(/box delete on contacts failed: sad/);
 
-    // Box transcript select fails.
+    // Box transcript select fails (the contacts alias scan succeeds first).
     await expect(
       deleteEndUserData(
         BIZ,
@@ -256,9 +315,11 @@ describe("deleteEndUserData — residency (dual/vps) tenants", () => {
           client: makeCentralDb() as never,
           dataApiFor: () =>
             makeApi({
-              select: vi
-                .fn()
-                .mockResolvedValue({ ok: false, error: "internal", message: "sel sad" })
+              select: vi.fn(async (req: { table: string }) =>
+                req.table === "voice_call_transcripts"
+                  ? { ok: false, error: "internal", message: "sel sad" }
+                  : { ok: true, rows: [] }
+              )
             })
         }
       )

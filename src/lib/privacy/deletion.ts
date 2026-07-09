@@ -179,7 +179,37 @@ export async function deleteEndUserData(
     let box: number | null = null;
     if (api) {
       box = 0;
-      if (e164) box += await boxDelete("contacts", [{ column: "customer_e164", op: "eq", value: e164 }]);
+      if (e164) {
+        box += await boxDelete("contacts", [{ column: "customer_e164", op: "eq", value: e164 }]);
+        // Alias matches: the data-api filter grammar has no array-contains
+        // op, and the journaled central delete can't cover a RETRY (central
+        // row already gone, box copy still keyed by alias). Page the box's
+        // contacts and match alias_e164s client-side — collect ids first,
+        // delete after, so deletions never disturb the pagination.
+        const aliasIds: string[] = [];
+        const PAGE = 500;
+        for (let offset = 0; ; offset += PAGE) {
+          const page = await api.select({
+            table: "contacts",
+            columns: ["id", "alias_e164s"],
+            filters: [{ column: "business_id", op: "eq", value: businessId }],
+            order: [{ column: "id", ascending: true }],
+            limit: PAGE,
+            offset
+          });
+          if (!page.ok) {
+            throw new EndUserDeletionError(`box select on contacts failed: ${page.message}`);
+          }
+          for (const row of page.rows as Array<{ id: unknown; alias_e164s?: unknown }>) {
+            const aliases = Array.isArray(row.alias_e164s) ? row.alias_e164s : [];
+            if (aliases.includes(e164)) aliasIds.push(String(row.id));
+          }
+          if (page.rows.length < PAGE) break;
+        }
+        if (aliasIds.length > 0) {
+          box += await boxDelete("contacts", [{ column: "id", op: "in", value: aliasIds }]);
+        }
+      }
       if (email) box += await boxDelete("contacts", [{ column: "email", op: "ilike", value: email }]);
     }
     results.push({ table: "contacts", central, box });
