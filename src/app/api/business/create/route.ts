@@ -3,6 +3,7 @@ import {
   createBusiness,
   getBusiness,
   isValidIanaTimezone,
+  updateBusinessPreferredAreaCode,
   updateBusinessTimezone
 } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -90,6 +91,14 @@ export async function POST(request: Request) {
           body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : null;
         if (tz && !existing.timezone) {
           await updateBusinessTimezone(existing.id, tz);
+        }
+        // Same backfill contract for the signup-requested DID area code: a
+        // retry can carry a preference the original insert never persisted
+        // (row created by a pre-deploy version, or the first request raced
+        // the client write). Never clobber an existing value.
+        const retryAreaCode = normalizePreferredAreaCode(body.preferredAreaCode);
+        if (retryAreaCode && !existing.preferred_area_code) {
+          await updateBusinessPreferredAreaCode(existing.id, retryAreaCode);
         }
         logger.info("business.create idempotent: returning existing row", {
           businessId: body.businessId,

@@ -245,6 +245,24 @@ export async function listBusinessIdsByOwnerEmail(
   return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
 }
 
+/**
+ * Backfill the signup-requested DID area code on an existing row (the
+ * idempotent business.create retry path — mirrors the timezone backfill).
+ * Callers pass a value already normalized by `normalizePreferredAreaCode`.
+ */
+export async function updateBusinessPreferredAreaCode(
+  id: string,
+  preferredAreaCode: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ preferred_area_code: preferredAreaCode })
+    .eq("id", id);
+  if (error) throw new Error(`updateBusinessPreferredAreaCode: ${error.message}`);
+}
+
 export async function deleteBusiness(id: string, client?: SupabaseClient): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").delete().eq("id", id);

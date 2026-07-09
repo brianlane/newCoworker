@@ -6,7 +6,10 @@ vi.mock("@/lib/auth", () => ({
 }));
 vi.mock("@/lib/db/businesses", () => ({
   createBusiness: vi.fn(),
-  getBusiness: vi.fn()
+  getBusiness: vi.fn(),
+  updateBusinessPreferredAreaCode: vi.fn(),
+  updateBusinessTimezone: vi.fn(),
+  isValidIanaTimezone: vi.fn().mockReturnValue(false)
 }));
 vi.mock("@/lib/onboarding/token", () => ({
   createOnboardingToken: vi.fn(),
@@ -18,7 +21,11 @@ vi.mock("@/lib/logger", () => ({
 
 import { POST } from "@/app/api/business/create/route";
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
-import { createBusiness, getBusiness } from "@/lib/db/businesses";
+import {
+  createBusiness,
+  getBusiness,
+  updateBusinessPreferredAreaCode
+} from "@/lib/db/businesses";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -269,6 +276,58 @@ describe("/api/business/create — Step 1 dropdown teamSize → integer mapping"
       );
     });
   }
+
+  it("backfills preferred_area_code on the idempotent retry path when the row lacks one", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Acme Realty",
+      owner_email: PENDING_EMAIL,
+      tier: "starter",
+      status: "offline",
+      hostinger_vps_id: null,
+      preferred_area_code: null,
+      created_at: new Date().toISOString()
+    } as never);
+
+    const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "(519)" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).not.toHaveBeenCalled();
+    expect(updateBusinessPreferredAreaCode).toHaveBeenCalledWith(BIZ, "519");
+  });
+
+  it("never clobbers an existing preferred_area_code on retry", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Acme Realty",
+      owner_email: PENDING_EMAIL,
+      tier: "starter",
+      status: "offline",
+      hostinger_vps_id: null,
+      preferred_area_code: "602",
+      created_at: new Date().toISOString()
+    } as never);
+
+    const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "519" })));
+    expect(res.status).toBe(200);
+    expect(updateBusinessPreferredAreaCode).not.toHaveBeenCalled();
+  });
+
+  it("skips the retry backfill when the retry body has no valid area code", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Acme Realty",
+      owner_email: PENDING_EMAIL,
+      tier: "starter",
+      status: "offline",
+      hostinger_vps_id: null,
+      preferred_area_code: null,
+      created_at: new Date().toISOString()
+    } as never);
+
+    const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "1x" })));
+    expect(res.status).toBe(200);
+    expect(updateBusinessPreferredAreaCode).not.toHaveBeenCalled();
+  });
 
   it("normalizes a decorated preferredAreaCode before insert", async () => {
     const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "(519)" })));
