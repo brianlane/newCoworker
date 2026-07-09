@@ -28,6 +28,7 @@ import {
   emailTriggerScope,
   evaluateTriggerConditions,
   htmlToText,
+  looksLikeStrippedTemplate,
   type InboundEmailMessage
 } from "@/lib/ai-flows/trigger-eval";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -111,7 +112,10 @@ function b64UrlDecode(data: string): string {
 
 /**
  * Pull readable text out of a Gmail `payload` part tree: prefer the first
- * text/plain part, fall back to text/html (stripped). Pure + exported for
+ * text/plain part — UNLESS it is itself tag-stripped template source (some
+ * senders flatten their HTML naively, leaving stylesheets and `*|MC:...|*`
+ * merge tags in the "text"; same detection as the tenant-mailbox worker) —
+ * falling back to the text/html part collapsed properly. Pure + exported for
  * tests.
  */
 export function gmailBodyText(payload: GmailPart | undefined): string {
@@ -123,10 +127,11 @@ export function gmailBodyText(payload: GmailPart | undefined): string {
   };
   walk(payload);
   const plain = flat.find((p) => p.mimeType === "text/plain" && p.body?.data);
-  if (plain) return b64UrlDecode(plain.body!.data!);
   const html = flat.find((p) => p.mimeType === "text/html" && p.body?.data);
-  if (html) return htmlToText(b64UrlDecode(html.body!.data!));
-  return "";
+  const plainText = plain ? b64UrlDecode(plain.body!.data!) : "";
+  if (plainText.trim() && !(html && looksLikeStrippedTemplate(plainText))) return plainText;
+  if (html) return htmlToText(b64UrlDecode(html.body!.data!)) || plainText;
+  return plainText;
 }
 
 type GmailHeader = { name?: string; value?: string };

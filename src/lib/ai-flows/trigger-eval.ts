@@ -70,14 +70,24 @@ export function evaluateTriggerConditions(
 }
 
 /**
- * Collapse an HTML email body to readable text (mirror of the engine's
- * htmlToText): strip script/style/tags, decode common entities, squeeze
- * whitespace. Plain-text bodies pass through nearly untouched.
+ * Collapse an HTML email body to readable text. Twin of the Cloudflare email
+ * worker's `cloudflare/email-worker/src/html-text.ts` (keep in sync): drops
+ * the CONTENTS of comments/head/script/style/title too — a naive tag strip
+ * leaks whole stylesheets and unrendered `*|MC:SUBJECT|*` merge tags into the
+ * "text" — keeps http(s) link destinations as `label (url)` so buttons stay
+ * actionable, decodes common entities, and squeezes whitespace.
  */
 export function htmlToText(html: string): string {
   return html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<head\b[^>]*>[\s\S]*?<\/head\b[^>]*>/gi, " ")
     .replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style\b[^>]*>/gi, " ")
+    .replace(/<title\b[^>]*>[\s\S]*?<\/title\b[^>]*>/gi, " ")
+    .replace(
+      /<a\b[^>]*\bhref\s*=\s*["']?(https?:\/\/[^"'\s>]+)["']?[^>]*>([\s\S]*?)<\/a\b[^>]*>/gi,
+      (_m, href: string, label: string) => ` ${label} (${href}) `
+    )
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&lt;/gi, "<")
@@ -88,6 +98,20 @@ export function htmlToText(html: string): string {
     .replace(/&amp;/gi, "&")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+/**
+ * True when a message's "plain text" part is really tag-stripped template
+ * source rather than prose (twin of the email worker's copy — keep in sync).
+ * Some senders generate the text/plain alternative by naively flattening the
+ * HTML, leaving the stylesheet and unrendered merge tags in the "text".
+ * Signals: a Mailchimp-style merge tag anywhere, or 3+ CSS rule blocks.
+ * A false positive only means the text gets re-derived from the HTML part.
+ */
+export function looksLikeStrippedTemplate(text: string): boolean {
+  if (/\*\|[^|*\s][^|*]*\|\*/.test(text)) return true;
+  const cssBlocks = text.match(/\{[^{}]*:[^{}]*;[^{}]*\}/g);
+  return (cssBlocks?.length ?? 0) >= 3;
 }
 
 /** What an enqueued run's `context.trigger` looks like for these channels. */

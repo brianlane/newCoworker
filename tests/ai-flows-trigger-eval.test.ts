@@ -8,6 +8,7 @@ import {
   firstUrlInText,
   flattenWebhookPayload,
   htmlToText,
+  looksLikeStrippedTemplate,
   manualTriggerScope,
   safeRegexTest,
   tenantEmailTriggerScope,
@@ -93,6 +94,38 @@ describe("htmlToText", () => {
     const html =
       "<html><style>p{}</style><script>x()</script><p>Hi&nbsp;there &amp;lt; you</p></html>";
     expect(htmlToText(html)).toBe("Hi there &lt; you");
+  });
+
+  it("drops head/title/comment CONTENTS (no CSS or merge-tag leakage)", () => {
+    const html =
+      "<!--[if mso]><style>.m{color:red}</style><![endif]-->" +
+      "<head><title>*|MC:SUBJECT|*</title><style>p{margin:10px 0;}</style></head>" +
+      "<body><p>Real text</p></body>";
+    expect(htmlToText(html)).toBe("Real text");
+  });
+
+  it("keeps http(s) link destinations as 'label (url)'", () => {
+    expect(htmlToText('<a href="https://x.com/go?a=1">Accept</a>')).toBe(
+      "Accept (https://x.com/go?a=1)"
+    );
+    // Non-http hrefs stay dropped.
+    expect(htmlToText('<a href="mailto:a@b.com">mail</a>')).toBe("mail");
+  });
+});
+
+describe("looksLikeStrippedTemplate", () => {
+  it("flags an unrendered merge tag or 3+ CSS blocks", () => {
+    expect(looksLikeStrippedTemplate("*|MC:SUBJECT|* hello")).toBe(true);
+    expect(
+      looksLikeStrippedTemplate(
+        "p{ margin:0; x:1; }\ntable{ a:b; c:d; }\nimg{ e:f; g:h; }\nUse code 1234."
+      )
+    ).toBe(true);
+  });
+
+  it("does not flag prose or a couple of incidental braces", () => {
+    expect(looksLikeStrippedTemplate("Hi, your appointment is Friday 2pm.")).toBe(false);
+    expect(looksLikeStrippedTemplate("config { a:1; b:2; } and { c:3; d:4; }")).toBe(false);
   });
 });
 
