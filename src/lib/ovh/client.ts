@@ -1,8 +1,15 @@
 /**
- * Typed client for the OVHcloud APIv6 (`ovh-ca` endpoint — the Canadian
- * control plane that owns the Beauharnois/BHS data center).
+ * Typed client for the OVHcloud APIv6.
  *
- * Docs: https://ca.api.ovh.com/console/
+ * Default endpoint is `ovh-us` (`api.us.ovhcloud.com`) — the platform's
+ * business entity is US, and the OVHcloud US catalog sells the `-ca`
+ * suffixed VPS plan codes whose `vps_datacenter` list includes Beauharnois
+ * (BHS), so Canadian-residency boxes are purchased through the US account
+ * (verified against the live catalog, Jul 2026). Point `OVH_API_BASE_URL`
+ * at another control plane (e.g. `https://ca.api.ovh.com/1.0`) only if the
+ * account ever moves entities — the signing scheme is identical everywhere.
+ *
+ * Docs: https://api.us.ovhcloud.com/console/
  * Auth: OVH's application-key scheme — every request carries
  *   X-Ovh-Application (app key), X-Ovh-Consumer (consumer key),
  *   X-Ovh-Timestamp, and X-Ovh-Signature where the signature is
@@ -24,8 +31,8 @@ import { createHash } from "node:crypto";
 
 type FetchLike = typeof fetch;
 
-/** Canadian control plane — the only endpoint that sells BHS resources. */
-export const DEFAULT_OVH_BASE_URL = "https://ca.api.ovh.com/1.0";
+/** OVHcloud US control plane — sells BHS boxes via the `-ca` plan codes. */
+export const DEFAULT_OVH_BASE_URL = "https://api.us.ovhcloud.com/1.0";
 
 export type OvhClientOptions = {
   baseUrl?: string;
@@ -145,13 +152,13 @@ export class OvhClient {
    * endpoint, but we sign anyway — harmless, and keeps the plumbing single-
    * path. Used by the plan-code mapping audit (debug/ovh-catalog.ts).
    */
-  async getPublicVpsCatalog(ovhSubsidiary = "CA"): Promise<unknown> {
+  async getPublicVpsCatalog(ovhSubsidiary = "US"): Promise<unknown> {
     return this.request("GET", `/order/catalog/public/vps?ovhSubsidiary=${encodeURIComponent(ovhSubsidiary)}`);
   }
 
   // -------------------- order cart (purchase) --------------------
 
-  async createCart(ovhSubsidiary = "CA"): Promise<OvhOrderCart> {
+  async createCart(ovhSubsidiary = "US"): Promise<OvhOrderCart> {
     return this.request("POST", "/order/cart", { ovhSubsidiary });
   }
 

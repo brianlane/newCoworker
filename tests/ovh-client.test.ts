@@ -206,7 +206,7 @@ describe("OvhClient endpoints", () => {
   it("reads vps state, ips, images (id → detail), tasks, and the public catalog", async () => {
     const fetchImpl = makeFetch({
       routes: {
-        "GET /order/catalog/public/vps?ovhSubsidiary=CA": { body: { plans: [] } },
+        "GET /order/catalog/public/vps?ovhSubsidiary=US": { body: { plans: [] } },
         "GET /vps/vps-a": { body: { name: "vps-a", state: "running" } },
         "GET /vps/vps-a/ips": { body: ["203.0.113.9", "2607:5300::1"] },
         "GET /vps/vps-a/images/available": { body: ["img-1"] },
@@ -393,7 +393,7 @@ describe("OvhClient error handling", () => {
     expect(err.message).toBe("OVH API /vps/vps-x HTTP 500");
   });
 
-  it("defaults the base URL to the ovh-ca endpoint and the clock to Date.now", async () => {
+  it("defaults the base URL to the ovh-us endpoint and the clock to Date.now", async () => {
     const fetchImpl = makeFetch({ routes: {} });
     const client = new OvhClient({
       applicationKey: "a",
@@ -403,7 +403,7 @@ describe("OvhClient error handling", () => {
       // `now` deliberately omitted — the default Date.now clock is used for
       // the signature below.
     });
-    expect(DEFAULT_OVH_BASE_URL).toContain("ca.api.ovh.com");
+    expect(DEFAULT_OVH_BASE_URL).toContain("api.us.ovhcloud.com");
     // Private field access via cast — asserting the trailing-slash strip +
     // default in one place without exporting internals.
     expect((client as unknown as { baseUrl: string }).baseUrl).toBe(DEFAULT_OVH_BASE_URL);

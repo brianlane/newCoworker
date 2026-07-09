@@ -95,7 +95,8 @@ describe("provisionOvhVpsForBusiness", () => {
       duration: "P1M",
       pricingMode: "default"
     });
-    expect(client.configureCartItem).toHaveBeenCalledWith("cart-1", 7, "vps_datacenter", "bhs");
+    expect(client.createCart).toHaveBeenCalledWith("US");
+    expect(client.configureCartItem).toHaveBeenCalledWith("cart-1", 7, "vps_datacenter", "BHS");
     expect(client.configureCartItem).toHaveBeenCalledWith("cart-1", 7, "vps_os", "Ubuntu 24.04");
 
     // Deterministic key attach: rebuild carries the trimmed public key.

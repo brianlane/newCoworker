@@ -31,7 +31,8 @@ import {
   OVH_DEFAULT_DURATION,
   OVH_DEFAULT_PRICING_MODE,
   OVH_UBUNTU_IMAGE_MATCH,
-  ovhPlanCodeForSize
+  ovhPlanCodeForSize,
+  ovhSubsidiary
 } from "./plans";
 import { generateSshKeypair, type SshKeypair } from "@/lib/hostinger/keypair";
 import { insertVpsSshKey } from "@/lib/db/vps-ssh-keys";
@@ -94,9 +95,10 @@ export async function provisionOvhVpsForBusiness(
   // 2. Pre-checkout snapshot — the delivered service name is found by diff.
   const before = new Set(await client.listVps());
 
-  // 3. Order-cart purchase.
+  // 3. Order-cart purchase. Subsidiary matches the account entity (US —
+  // the OVHcloud US catalog sells the BHS-capable `-ca` plan codes).
   const planCode = ovhPlanCodeForSize(input.vpsSize, env);
-  const cart = await client.createCart("CA");
+  const cart = await client.createCart(ovhSubsidiary(env));
   await client.assignCart(cart.cartId);
   const item = await client.addVpsToCart(cart.cartId, {
     planCode,
