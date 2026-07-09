@@ -43,11 +43,17 @@ describe("planStep: wait_for_reply", () => {
     timeoutMinutes: 300
   } as FlowStep;
 
-  it("parks on the normalized phone with the default saveAs", () => {
+  it("parks on the normalized phone with the default saveAs and per-step marker", () => {
     const plan = planStep(step, { vars: { lead_phone: "(647) 449-4244" } });
     expect(plan).toEqual({
       ok: true,
-      action: { kind: "wait_for_reply", from: "+16474494244", saveAs: "reply_text", timeoutMinutes: 300 }
+      action: {
+        kind: "wait_for_reply",
+        from: "+16474494244",
+        saveAs: "reply_text",
+        marker: "__waited_w1",
+        timeoutMinutes: 300
+      }
     });
   });
   it("defaults the timeout to 24h and caps it at 30 days", () => {
@@ -62,22 +68,25 @@ describe("planStep: wait_for_reply", () => {
     );
     expect(capped.ok && capped.action.kind === "wait_for_reply" && capped.action.timeoutMinutes).toBe(43200);
   });
-  it("completes when the reply var is already set (resume/timeout wrote it)", () => {
-    const replied = planStep(step, { vars: { lead_phone: "+16474494244", reply_text: "yes please" } });
-    expect(replied).toEqual({ ok: true, action: { kind: "set_vars", vars: {} } });
-    // A custom saveAs is honored for the resolved check too.
-    const custom = planStep(
-      { id: "w4", type: "wait_for_reply", phoneVar: "lead_phone", saveAs: "answer" } as FlowStep,
-      { vars: { lead_phone: "+16474494244", answer: "" } }
-    );
-    expect(custom).toEqual({ ok: true, action: { kind: "set_vars", vars: {} } });
+  it("completes only via ITS OWN marker — a stale saveAs from an earlier wait still parks", () => {
+    // Marker set (this step's resume/timeout ran) → no-op completion.
+    const resolved = planStep(step, {
+      vars: { lead_phone: "+16474494244", reply_text: "yes please", __waited_w1: "1" }
+    });
+    expect(resolved).toEqual({ ok: true, action: { kind: "set_vars", vars: {} } });
+    // saveAs set by an EARLIER wait but no marker for THIS step → park again
+    // (Bugbot 868c00ba: two waits sharing reply_text must both wait).
+    const stale = planStep(step, {
+      vars: { lead_phone: "+16474494244", reply_text: "earlier answer" }
+    });
+    expect(stale.ok && stale.action.kind).toBe("wait_for_reply");
   });
   it("resolves straight to the no-reply branch when the phone is unusable", () => {
     for (const vars of [{}, { lead_phone: "none" }, { lead_phone: "12345" }]) {
       const plan = planStep(step, { vars });
       expect(plan).toEqual({
         ok: true,
-        action: { kind: "set_vars", vars: { reply_text: "no_reply" } }
+        action: { kind: "set_vars", vars: { reply_text: "no_reply", __waited_w1: "1" } }
       });
     }
   });

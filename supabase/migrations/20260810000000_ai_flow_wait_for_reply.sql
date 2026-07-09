@@ -65,9 +65,16 @@ begin
       respond_by_at = null,
       context = jsonb_set(
         jsonb_set(
-          context,
-          array['vars', coalesce(context -> 'waiting_reply' ->> 'save_as', 'reply_text')],
-          to_jsonb('no_reply'::text),
+          jsonb_set(
+            context,
+            array['vars', coalesce(context -> 'waiting_reply' ->> 'save_as', 'reply_text')],
+            to_jsonb('no_reply'::text),
+            true
+          ),
+          -- Per-step resolution marker: the wait step completes on re-entry
+          -- without a later wait on the same saveAs var being satisfied too.
+          array['vars', coalesce(context -> 'waiting_reply' ->> 'marker', '__waited_unknown')],
+          to_jsonb('1'::text),
           true
         ),
         '{waiting_reply,result}',
@@ -82,7 +89,11 @@ begin
 end;
 $$;
 
+-- Worker-only surface: the ai-flow-worker calls this with the service-role
+-- key each tick. Revoke the default PUBLIC grant and grant service_role
+-- explicitly so the lockdown posture can't strand the sweep.
 revoke execute on function public.resume_overdue_reply_waits() from public, anon, authenticated;
+grant execute on function public.resume_overdue_reply_waits() to service_role;
 
 comment on function public.resume_overdue_reply_waits is
   'Re-queue wait_for_reply runs whose timeout (respond_by_at) lapsed, writing the no_reply sentinel into context.vars[save_as] so the flow''s no-reply branch runs. Called every ai-flow-worker tick alongside escalate_overdue_agent_offers.';

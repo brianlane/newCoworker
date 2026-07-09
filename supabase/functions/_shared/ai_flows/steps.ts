@@ -87,12 +87,16 @@ export type StepAction =
       /**
        * Park the run until `from` texts back or the timeout lapses. The
        * planner resolves the phone; the worker persists the awaiting_reply
-       * state. `saveAs` already resolved (run resumed) → the planner returns
-       * set_vars {} instead, so this action always means "park now".
+       * state. `marker` is the per-STEP resolution flag (stamped by the
+       * resume/timeout paths alongside `saveAs`) — resolution is tracked per
+       * step, not per saveAs var, so two waits sharing a var both park.
+       * A marker already set → the planner returns set_vars {} instead, so
+       * this action always means "park now".
        */
       kind: "wait_for_reply";
       from: string;
       saveAs: string;
+      marker: string;
       timeoutMinutes: number;
     }
   | {
@@ -666,9 +670,12 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     }
     case "wait_for_reply": {
       const saveAs = step.saveAs ?? "reply_text";
-      // Resolved already (the inbound webhook or the timeout sweep wrote the
-      // var and re-queued the run): complete the step so the run moves on.
-      if (scope.vars?.[saveAs] !== undefined) {
+      // Resolution is tracked PER STEP (not per saveAs var): a later wait
+      // reusing the same var must still park, so an earlier wait's reply can
+      // never satisfy this one. The resume/timeout paths stamp this marker
+      // alongside the saveAs var.
+      const marker = `__waited_${step.id}`;
+      if (scope.vars?.[marker] !== undefined) {
         return { ok: true, action: { kind: "set_vars", vars: {} } };
       }
       const raw = scope.vars?.[step.phoneVar];
@@ -678,13 +685,19 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         // A lead-data gap, not a flow bug: resolve straight to the no-reply
         // branch instead of parking a run that can never be resumed.
         // NO_REPLY_SENTINEL (not ""): when-conditions require non-empty values.
-        return { ok: true, action: { kind: "set_vars", vars: { [saveAs]: NO_REPLY_SENTINEL } } };
+        return {
+          ok: true,
+          action: { kind: "set_vars", vars: { [saveAs]: NO_REPLY_SENTINEL, [marker]: "1" } }
+        };
       }
       const timeoutMinutes = Math.min(
         Math.max(1, Math.round(step.timeoutMinutes ?? 1440)),
         MAX_WAIT_MINUTES
       );
-      return { ok: true, action: { kind: "wait_for_reply", from: e164, saveAs, timeoutMinutes } };
+      return {
+        ok: true,
+        action: { kind: "wait_for_reply", from: e164, saveAs, marker, timeoutMinutes }
+      };
     }
     case "upsert_customer": {
       const raw = scope.vars?.[step.phoneVar];

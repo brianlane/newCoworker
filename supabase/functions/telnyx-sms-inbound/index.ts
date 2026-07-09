@@ -258,14 +258,16 @@ async function evaluateAndEnqueueAiFlows(
 }
 
 /**
- * wait_for_reply resume: match this sender to the newest run parked waiting
- * on their number (status='awaiting_reply', context.waiting_reply.from), write
- * the reply text into context.vars[save_as], stamp waiting_reply.result, and
+ * wait_for_reply resume: match this sender to EVERY run parked waiting on
+ * their number (status='awaiting_reply', context.waiting_reply.from) — one
+ * lead can legitimately have several flows waiting, and their single text
+ * answers all of them. Each run gets the reply written into
+ * context.vars[save_as], the per-step resolution marker stamped, and a
  * re-queue. Revision-gated like the offer-reply resumes so a concurrent
- * timeout sweep can't be clobbered — losing the race means the no-reply
- * branch already ran, and this message flows down the normal customer path.
- * Returns true only when a run was actually resumed (the caller then
- * suppresses the default Coworker reply — the flow owns this turn).
+ * timeout sweep can't be clobbered — losing a race means that run's
+ * no-reply branch already ran. Returns true when at least one run resumed
+ * (the caller then suppresses the default Coworker reply AND skips trigger
+ * evaluation — the flow owns this turn).
  */
 async function resumeAwaitingReplyRun(
   supabase: SupabaseClient,
@@ -282,50 +284,64 @@ async function resumeAwaitingReplyRun(
       .eq("status", "awaiting_reply")
       .eq("context->waiting_reply->>from", from)
       .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (!data) return false;
-    const run = data as { id: string; context: Record<string, unknown> | null; revision: number };
-    const waiting =
-      (run.context?.waiting_reply as { save_as?: unknown } | undefined) ?? {};
-    const saveAs =
-      typeof waiting.save_as === "string" && waiting.save_as.trim()
-        ? waiting.save_as
-        : "reply_text";
-    const prevVars =
-      run.context?.vars && typeof run.context.vars === "object"
-        ? (run.context.vars as Record<string, unknown>)
-        : {};
-    const nextContext = {
-      ...(run.context ?? {}),
-      vars: { ...prevVars, [saveAs]: bodyText.slice(0, 4000) },
-      waiting_reply: { ...(run.context?.waiting_reply as Record<string, unknown>), result: "reply" }
-    };
-    const { data: resumed, error } = await supabase
-      .from("ai_flow_runs")
-      .update({
-        status: "queued",
-        respond_by_at: null,
-        claimed_at: null,
-        context: nextContext,
-        updated_at: new Date().toISOString()
-      })
-      .eq("id", run.id)
-      .eq("revision", run.revision)
-      .eq("status", "awaiting_reply")
-      .select("id");
-    if (error) {
-      console.error("ai_flow_runs wait_for_reply resume", error);
-      return false;
+      .limit(10);
+    const rows = (data ?? []) as Array<{
+      id: string;
+      context: Record<string, unknown> | null;
+      revision: number;
+    }>;
+    if (rows.length === 0) return false;
+
+    let resumedAny = false;
+    for (const run of rows) {
+      const waiting =
+        (run.context?.waiting_reply as { save_as?: unknown; marker?: unknown } | undefined) ?? {};
+      const saveAs =
+        typeof waiting.save_as === "string" && waiting.save_as.trim()
+          ? waiting.save_as
+          : "reply_text";
+      const prevVars =
+        run.context?.vars && typeof run.context.vars === "object"
+          ? (run.context.vars as Record<string, unknown>)
+          : {};
+      const markerVars =
+        typeof waiting.marker === "string" && waiting.marker.trim()
+          ? { [waiting.marker]: "1" }
+          : {};
+      const nextContext = {
+        ...(run.context ?? {}),
+        vars: { ...prevVars, [saveAs]: bodyText.slice(0, 4000), ...markerVars },
+        waiting_reply: {
+          ...(run.context?.waiting_reply as Record<string, unknown>),
+          result: "reply"
+        }
+      };
+      const { data: resumed, error } = await supabase
+        .from("ai_flow_runs")
+        .update({
+          status: "queued",
+          respond_by_at: null,
+          claimed_at: null,
+          context: nextContext,
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", run.id)
+        .eq("revision", run.revision)
+        .eq("status", "awaiting_reply")
+        .select("id");
+      if (error) {
+        console.error("ai_flow_runs wait_for_reply resume", error);
+        continue;
+      }
+      if ((resumed ?? []).length > 0) {
+        resumedAny = true;
+        await telemetryRecord(supabase, "ai_flow_run_reply_resumed", {
+          business_id: businessId,
+          run_id: run.id
+        });
+      }
     }
-    const ok = (resumed ?? []).length > 0;
-    if (ok) {
-      await telemetryRecord(supabase, "ai_flow_run_reply_resumed", {
-        business_id: businessId,
-        run_id: run.id
-      });
-    }
-    return ok;
+    return resumedAny;
   } catch (e) {
     // Never let the resume path break inbound SMS processing.
     console.error("resumeAwaitingReplyRun", e);
@@ -2695,14 +2711,19 @@ serve(async (req: Request) => {
     );
 
     // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
-    // default Coworker reply when an automation is actually queued to handle it.
-    const { suppressingRunQueued } = await evaluateAndEnqueueAiFlows(supabase, businessId, {
-      from,
-      to,
-      eventId,
-      bodyText: inboundSmsBody(payload),
-      participants: normalizedParticipants(payload)
-    });
+    // default Coworker reply when an automation is actually queued to handle
+    // it. Skipped entirely when a parked wait_for_reply consumed this message:
+    // the reply belongs to the waiting flow's turn, and letting it ALSO start
+    // fresh runs (e.g. a match-every-SMS flow) would double-process the lead.
+    const { suppressingRunQueued } = waitReplyResumed
+      ? { suppressingRunQueued: false }
+      : await evaluateAndEnqueueAiFlows(supabase, businessId, {
+          from,
+          to,
+          eventId,
+          bodyText: inboundSmsBody(payload),
+          participants: normalizedParticipants(payload)
+        });
 
     const { error } = await supabase.from("sms_inbound_jobs").insert({
       business_id: businessId,

@@ -621,7 +621,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         current_step: index,
         context: {
           ...buildContext(scope, approval, routing),
-          waiting_reply: { from: outcome.e164, save_as: outcome.saveAs, step_index: index }
+          waiting_reply: {
+            from: outcome.e164,
+            save_as: outcome.saveAs,
+            marker: outcome.marker,
+            step_index: index
+          }
         },
         respond_by_at: respondByIso,
         claimed_at: null,
@@ -761,8 +766,9 @@ type StepOutcome =
   // wait_for_reply: park until `e164` texts back (the inbound webhook writes
   // the reply into context.vars[saveAs] and re-queues) or respond_by_at lapses
   // (resume_overdue_reply_waits writes the no_reply sentinel and re-queues).
-  // The step re-runs on resume and completes because the var is now set.
-  | { kind: "pause_reply"; e164: string; respondByMs: number; saveAs: string };
+  // Both paths also stamp vars[marker] so the step completes on re-entry —
+  // per step, so a later wait sharing the same saveAs still parks.
+  | { kind: "pause_reply"; e164: string; respondByMs: number; saveAs: string; marker: string };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -824,7 +830,8 @@ async function runStep(
         kind: "pause_reply",
         e164: action.from,
         respondByMs: action.timeoutMinutes * 60_000,
-        saveAs: action.saveAs
+        saveAs: action.saveAs,
+        marker: action.marker
       };
   }
 }
