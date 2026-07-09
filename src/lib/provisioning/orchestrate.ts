@@ -836,11 +836,16 @@ async function acquireVps(args: {
         if (sizeMatch && !skipPoolAdopt) {
           const adopted = await tryAdoptFromPool({ businessId, tier, vpsSize, vpsPool, vpsAdopter });
           if (adopted) {
+            // Note: the claim takes the OLDEST available box of this size,
+            // which is not necessarily one of the just-reconciled orphans —
+            // either way the signup lands on an already-owned box instead
+            // of failing, and the orphan stays pooled for the next one.
             logger.warn(
-              "Hostinger purchase failed but left a paid VM behind — adopted the reconciled orphan instead",
+              "Hostinger purchase failed but a paid VM was reconciled into the pool — adopted a pooled box instead",
               {
                 businessId,
-                virtualMachineId: adopted.virtualMachineId,
+                adoptedVirtualMachineId: adopted.virtualMachineId,
+                reconciledVmIds: pooled.map((orphan) => orphan.vmId),
                 // isHostingerPurchaseFailure() gated this block, so `err`
                 // is always an Error here.
                 purchaseError: (err as Error).message

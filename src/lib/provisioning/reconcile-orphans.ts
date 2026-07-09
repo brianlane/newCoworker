@@ -15,6 +15,14 @@
  *
  *   - was created recently (default: within the last 30 minutes — old strays
  *     like retired experiments must never get auto-pooled), AND
+ *   - carries the fail-but-charge signature: Hostinger `state === "initial"`
+ *     with NO template applied. When the purchase call fails, the embedded
+ *     setup payload is never applied, so the box sits in `initial` with
+ *     `template: null` (observed on VMs 1806114 and 1815606). A healthy
+ *     concurrent purchase's box has its template from the setup payload and
+ *     moves to installing/running — and a `running` tenant box whose
+ *     post-purchase pool bookkeeping failed (bookkeeping is best-effort)
+ *     must NEVER be pooled out from under its business, AND
  *   - has a recognizable KVM plan (kvm1/kvm2/kvm4/kvm8), AND
  *   - is not already tracked in `vps_inventory` (any state — a `retired` row
  *     means the box was deliberately pulled and must stay out).
@@ -78,6 +86,12 @@ export async function reconcileOrphanedPurchases(args: {
   const reconciled: ReconciledOrphan[] = [];
   for (const vm of vms) {
     if (knownVmIds.has(vm.id)) continue;
+    // Fail-but-charge signature gate (see module header): only a box that
+    // was never set up — `initial` with no template — is safe to pool. A
+    // running/installing box may belong to a live tenant or a concurrent
+    // in-flight provision; stealing it into the pool would let another
+    // signup recreate it.
+    if (vm.state !== "initial" || vm.template) continue;
     const createdAtMs = vm.created_at ? Date.parse(vm.created_at) : NaN;
     if (!Number.isFinite(createdAtMs) || nowMs - createdAtMs > maxAgeMs) continue;
     const plan = normalizeHostingerPlan(vm.plan);
