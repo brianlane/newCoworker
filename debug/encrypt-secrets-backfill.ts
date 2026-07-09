@@ -68,15 +68,22 @@ let failures = 0;
       converted += 1;
       continue;
     }
-    const { error: writeErr } = await db
+    const { data: written, error: writeErr } = await db
       .from("vps_ssh_keys")
       .update({ private_key_pem: encryptSecret(row.private_key_pem) })
       .eq("id", row.id)
       // Guard against racing a concurrent write: only convert the exact
       // plaintext we read.
-      .eq("private_key_pem", row.private_key_pem);
+      .eq("private_key_pem", row.private_key_pem)
+      .select("id");
     if (writeErr) {
       console.error(`vps_ssh_keys ${row.id}: ${writeErr.message}`);
+      failures += 1;
+    } else if (!Array.isArray(written) || written.length === 0) {
+      // The guard matched zero rows — a concurrent write changed the value
+      // between our read and update. Count it as a failure so the operator
+      // re-runs (the re-run re-reads the new value and converges).
+      console.error(`vps_ssh_keys ${row.id}: value changed concurrently — re-run to convert`);
       failures += 1;
     } else {
       console.log(`vps_ssh_keys ${row.id}: encrypted`);
@@ -108,13 +115,19 @@ let failures = 0;
       converted += 1;
       continue;
     }
-    const { error: writeErr } = await db
+    const { data: written, error: writeErr } = await db
       .from("residency_backup_keys")
       .update({ passphrase: encryptSecret(row.passphrase) })
       .eq("business_id", row.business_id)
-      .eq("passphrase", row.passphrase);
+      .eq("passphrase", row.passphrase)
+      .select("business_id");
     if (writeErr) {
       console.error(`residency_backup_keys ${row.business_id}: ${writeErr.message}`);
+      failures += 1;
+    } else if (!Array.isArray(written) || written.length === 0) {
+      console.error(
+        `residency_backup_keys ${row.business_id}: value changed concurrently — re-run to convert`
+      );
       failures += 1;
     } else {
       console.log(`residency_backup_keys ${row.business_id}: encrypted`);
