@@ -15,7 +15,7 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { listBusinesses } from "@/lib/db/businesses";
-import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
+import { listBusinessIdsWithLiveSubscription } from "@/lib/db/subscriptions";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
@@ -45,7 +45,7 @@ export async function POST(request: Request): Promise<Response> {
 
     const result = await checkVpsBillingPosture({
       listBusinesses,
-      listSubscriptionsByBusinessIds,
+      listBusinessIdsWithLiveSubscription,
       listInventory: listVpsInventory,
       getVirtualMachine: (vmId) => hostinger.getVirtualMachine(vmId),
       listBillingSubscriptions: () => hostinger.listBillingSubscriptions(),

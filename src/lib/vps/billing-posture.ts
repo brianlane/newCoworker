@@ -35,7 +35,6 @@
 
 import { logger } from "@/lib/logger";
 import type { BusinessRow } from "@/lib/db/businesses";
-import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
@@ -61,10 +60,13 @@ export type BillingPostureResult = {
 
 export type BillingPostureDeps = {
   listBusinesses: () => Promise<BusinessRow[]>;
-  /** NewCoworker subscriptions for the candidate businesses (live-tenant gate). */
-  listSubscriptionsByBusinessIds: (
-    businessIds: string[]
-  ) => Promise<Map<string, SubscriptionRow>>;
+  /**
+   * Which of the candidate businesses have ANY active/past_due NewCoworker
+   * subscription (the live-tenant gate). Any-row semantics, NOT
+   * newest-row-wins: a newer pending row (resubscribe checkout in flight)
+   * must not shadow an older active one and exclude a paying tenant.
+   */
+  listBusinessIdsWithLiveSubscription: (businessIds: string[]) => Promise<Set<string>>;
   listInventory: () => Promise<VpsInventoryRow[]>;
   getVirtualMachine: (vmId: number) => Promise<VirtualMachine>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
@@ -105,14 +107,13 @@ export async function checkVpsBillingPosture(
   // until the wipe, and the lifecycle just disabled that box's renewal ON
   // PURPOSE — healing it would re-charge the platform for a box whose
   // tenant already left (Bugbot High on this PR). Pending (never paid) and
-  // subscription-less (smoke/test) rows are equally out of scope.
-  const tenantSubs = await deps.listSubscriptionsByBusinessIds(
+  // subscription-less (smoke/test) rows are equally out of scope. The
+  // helper uses any-row semantics so a newer pending row can't shadow an
+  // older active subscription (second Bugbot High).
+  const liveBusinessIds = await deps.listBusinessIdsWithLiveSubscription(
     candidates.map((entry) => entry.business.id)
   );
-  const tenants = candidates.filter((entry) => {
-    const sub = tenantSubs.get(entry.business.id);
-    return sub !== undefined && (sub.status === "active" || sub.status === "past_due");
-  });
+  const tenants = candidates.filter((entry) => liveBusinessIds.has(entry.business.id));
 
   for (const { business, vmId } of tenants) {
     let vm: VirtualMachine;

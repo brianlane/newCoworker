@@ -34,13 +34,12 @@ function poolRow(overrides: Partial<VpsInventoryRow> & { vm_id: number }): VpsIn
 function makeDeps(overrides: Record<string, unknown> = {}) {
   return {
     listBusinesses: vi.fn().mockResolvedValue([]),
-    // Default: every candidate business has a live (active) NewCoworker
-    // subscription, so the tenant gate passes unless a test narrows it.
-    listSubscriptionsByBusinessIds: vi
+    // Default: every candidate business has a live (active/past_due)
+    // NewCoworker subscription, so the tenant gate passes unless a test
+    // narrows it.
+    listBusinessIdsWithLiveSubscription: vi
       .fn()
-      .mockImplementation(async (ids: string[]) =>
-        new Map(ids.map((id) => [id, { business_id: id, status: "active" }]))
-      ),
+      .mockImplementation(async (ids: string[]) => new Set(ids)),
     listInventory: vi.fn().mockResolvedValue([]),
     getVirtualMachine: vi
       .fn()
@@ -235,13 +234,11 @@ describe("checkVpsBillingPosture — tenant direction", () => {
         biz({ id: "no-sub", hostinger_vps_id: "333" }),
         biz({ id: "live", hostinger_vps_id: "444" })
       ]),
-      listSubscriptionsByBusinessIds: vi.fn().mockResolvedValue(
-        new Map([
-          ["grace", { business_id: "grace", status: "canceled" }],
-          ["pending", { business_id: "pending", status: "pending" }],
-          ["live", { business_id: "live", status: "past_due" }]
-        ])
-      ),
+      // Any-row live gate: only "live" has an active/past_due subscription
+      // (grace = canceled, pending = never paid, no-sub = smoke row). The
+      // helper's any-row semantics also mean a paying tenant with a newer
+      // pending resubscribe row still lands in this set.
+      listBusinessIdsWithLiveSubscription: vi.fn().mockResolvedValue(new Set(["live"])),
       getVirtualMachine: vi
         .fn()
         .mockResolvedValue({ id: 444, state: "running", subscription_id: "hsub-live" }),

@@ -7,7 +7,7 @@ vi.mock("@/lib/db/businesses", () => ({
   listBusinesses: vi.fn()
 }));
 vi.mock("@/lib/db/subscriptions", () => ({
-  listSubscriptionsByBusinessIds: vi.fn()
+  listBusinessIdsWithLiveSubscription: vi.fn()
 }));
 vi.mock("@/lib/db/vps-inventory", () => ({
   listVpsInventory: vi.fn()
