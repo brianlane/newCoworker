@@ -60,6 +60,7 @@ interface FormData {
   businessType: string;
   ownerName: string;
   phone: string;
+  preferredAreaCode: string;
   websiteUrl: string;
   serviceArea: string;
   typicalInquiry: string;
@@ -73,6 +74,7 @@ const EMPTY_FORM: FormData = {
   businessType: DEFAULT_BUSINESS_TYPE,
   ownerName: "",
   phone: "",
+  preferredAreaCode: "",
   websiteUrl: "",
   serviceArea: "",
   typicalInquiry: "",
@@ -100,6 +102,8 @@ function toFormData(data: Partial<OnboardingData>): Partial<FormData> {
     businessType: typeof data.businessType === "string" ? data.businessType : EMPTY_FORM.businessType,
     ownerName: typeof data.ownerName === "string" ? data.ownerName : EMPTY_FORM.ownerName,
     phone: typeof data.phone === "string" ? data.phone : EMPTY_FORM.phone,
+    preferredAreaCode:
+      typeof data.preferredAreaCode === "string" ? data.preferredAreaCode : EMPTY_FORM.preferredAreaCode,
     websiteUrl: typeof data.websiteUrl === "string" ? data.websiteUrl : EMPTY_FORM.websiteUrl,
     serviceArea: typeof data.serviceArea === "string" ? data.serviceArea : EMPTY_FORM.serviceArea,
     typicalInquiry: typeof data.typicalInquiry === "string" ? data.typicalInquiry : EMPTY_FORM.typicalInquiry,
@@ -541,6 +545,7 @@ function QuestionnaireForm() {
             businessType: onboardingData.businessType,
             ownerName: onboardingData.ownerName,
             phone: onboardingData.phone,
+            preferredAreaCode: onboardingData.preferredAreaCode,
             websiteUrl: onboardingData.websiteUrl,
             serviceArea: onboardingData.serviceArea,
             typicalInquiry: onboardingData.typicalInquiry,
@@ -561,6 +566,29 @@ function QuestionnaireForm() {
           persistedToDatabase: true
         };
         localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
+      } else if (onboardingData.preferredAreaCode?.trim()) {
+        // The business row already exists (e.g. a Stripe-cancel return), so
+        // the create call above is skipped — but the user may have edited
+        // their preferred area code on Step 1 since the row was written.
+        // Re-hit the idempotent create route, whose existing-row path
+        // updates `preferred_area_code` from the latest valid input.
+        // Fire-and-forget like the website-ingest below: a failure (or a
+        // 409 on a legacy row) must never block checkout, and local state
+        // (onboardingToken etc.) stays untouched.
+        try {
+          void fetch("/api/business/create", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body: JSON.stringify({
+              businessId,
+              ownerEmail: onboardingData.ownerEmail,
+              name: onboardingData.businessName,
+              tier: onboardingData.tier,
+              preferredAreaCode: onboardingData.preferredAreaCode
+            })
+          });
+        } catch { /* non-blocking */ }
       }
 
       // Fire-and-forget website ingest while the user goes to Stripe.
@@ -854,6 +882,20 @@ function QuestionnaireForm() {
                 placeholder="+1 (555) 000-0000"
               />
               <Input
+                label="Preferred Area Code for your AI Coworker (optional)"
+                type="tel"
+                inputMode="numeric"
+                maxLength={5}
+                value={form.preferredAreaCode}
+                onChange={(e) => update("preferredAreaCode", e.target.value)}
+                placeholder="519"
+              />
+              <p className="-mt-2 text-[11px] text-parchment/45">
+                We&apos;ll try to get your coworker a phone number in this area code. If none are
+                available we&apos;ll match your own phone&apos;s area code, then fall back to a
+                nearby one.
+              </p>
+              <Input
                 label="Business Website (optional)"
                 type="url"
                 value={form.websiteUrl}
@@ -1108,8 +1150,9 @@ function QuestionnaireForm() {
                   />
 
                   <p className="text-xs text-parchment/40 text-center">
-                    30-day money-back guarantee · Cancel within 30 days for a full refund
-                    (excluding the one-time carrier registration fee)
+                    30-day money-back guarantee · Cancel within 30 days for a refund
+                    (excluding the one-time carrier registration fee; 12/24-month plans
+                    deduct one month at the monthly rate)
                   </p>
 
                   <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">

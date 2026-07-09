@@ -61,6 +61,13 @@ export type BusinessRow = {
    */
   phone?: string | null;
   /**
+   * Optional 3-digit NANP area code the owner requested at signup for their
+   * AI coworker's number. Highest-priority hint for the auto-purchase DID
+   * search cascade (requested → owner-phone-derived → platform default);
+   * null = no explicit preference. DB check enforces `^[2-9][0-9]{2}$`.
+   */
+  preferred_area_code?: string | null;
+  /**
    * IANA timezone (e.g. "America/Phoenix") used for AI date/time context
    * and calendar tool defaults. Null = UTC fallback. Captured from the
    * owner's browser at onboarding; editable in Settings.
@@ -133,6 +140,8 @@ export async function createBusiness(
     businessType?: string;
     ownerName?: string;
     phone?: string;
+    /** Normalized 3-digit NPA or omitted — callers validate via `normalizePreferredAreaCode`. */
+    preferredAreaCode?: string | null;
     websiteUrl?: string;
     serviceArea?: string;
     typicalInquiry?: string;
@@ -160,6 +169,7 @@ export async function createBusiness(
       business_type: data.businessType ?? null,
       owner_name: data.ownerName ?? null,
       phone: data.phone ?? null,
+      preferred_area_code: data.preferredAreaCode ?? null,
       website_url: data.websiteUrl ?? null,
       service_area: data.serviceArea ?? null,
       typical_inquiry: data.typicalInquiry ?? null,
@@ -233,6 +243,24 @@ export async function listBusinessIdsByOwnerEmail(
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listBusinessIdsByOwnerEmail: ${error.message}`);
   return ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+}
+
+/**
+ * Backfill the signup-requested DID area code on an existing row (the
+ * idempotent business.create retry path — mirrors the timezone backfill).
+ * Callers pass a value already normalized by `normalizePreferredAreaCode`.
+ */
+export async function updateBusinessPreferredAreaCode(
+  id: string,
+  preferredAreaCode: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ preferred_area_code: preferredAreaCode })
+    .eq("id", id);
+  if (error) throw new Error(`updateBusinessPreferredAreaCode: ${error.message}`);
 }
 
 export async function deleteBusiness(id: string, client?: SupabaseClient): Promise<void> {

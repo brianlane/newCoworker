@@ -376,17 +376,25 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
           );
           return sum + Math.max((line.amount ?? 0) - discounted, 0);
         }, 0);
-      const refundCents = Math.min(Math.max(amountPaidCents - carrierFeeCents, 0), amountPaidCents);
-      if (carrierFeeCents > 0) {
-        logger.info("refund_latest_charge: carving out non-refundable carrier registration fee", {
+      // Term-plan policy (Jul 2026): the planner additionally withholds one
+      // month at the tier's monthly-intro rate on annual/biennial refunds —
+      // see `termRefundCarveOutCents` in lifecycle.ts. Zero for monthly.
+      const termCarveOutCents = op.termCarveOutCents;
+      const refundCents = Math.min(
+        Math.max(amountPaidCents - carrierFeeCents - termCarveOutCents, 0),
+        amountPaidCents
+      );
+      if (carrierFeeCents > 0 || termCarveOutCents > 0) {
+        logger.info("refund_latest_charge: carving out non-refundable amounts", {
           stripeSubscriptionId: op.stripeSubscriptionId,
           invoiceId: latestInvoiceId,
           carrierFeeCents,
+          termCarveOutCents,
           refundCents
         });
       }
       if (refundCents <= 0) {
-        logger.info("refund_latest_charge: nothing refundable after carrier-fee carve-out", {
+        logger.info("refund_latest_charge: nothing refundable after carve-outs", {
           stripeSubscriptionId: op.stripeSubscriptionId,
           invoiceId: latestInvoiceId
         });

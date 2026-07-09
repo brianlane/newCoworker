@@ -56,6 +56,8 @@ export type OnboardingData = {
   businessType: string;
   ownerName: string;
   phone: string;
+  /** Optional signup-chosen area code for the AI coworker's number. */
+  preferredAreaCode?: string;
   websiteUrl?: string;
   serviceArea: string;
   typicalInquiry: string;

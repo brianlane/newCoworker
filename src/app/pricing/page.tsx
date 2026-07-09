@@ -132,6 +132,8 @@ function buildPricingFaq(): FaqItem[] {
         <>
           Yes. Every plan has a 30-day money-back window from the initial purchase date. The
           one-time carrier registration fee is excluded, because carriers do not refund it.
+          On 12/24-month plans the refund deducts one month of service at the monthly rate,
+          so the time you used is billed as if uncommitted.
         </>
       )
     },
