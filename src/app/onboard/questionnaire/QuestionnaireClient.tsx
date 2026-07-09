@@ -640,7 +640,12 @@ function QuestionnaireForm() {
           billingPeriod: onboardingData.billingPeriod ?? "biennial",
           ownerEmail: onboardingData.ownerEmail,
           onboardingToken: onboardingData.onboardingToken,
-          draftToken: onboardingData.draftToken
+          draftToken: onboardingData.draftToken,
+          // Same browser timezone the order summary's Canada-fee preview
+          // used, so the server's fallback detection (only consulted when
+          // the phone isn't NANP and the stored row predates timezones)
+          // can never disagree with what the summary displayed.
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
         })
       });
       const checkoutJson = await checkoutRes.json().catch(() => null);

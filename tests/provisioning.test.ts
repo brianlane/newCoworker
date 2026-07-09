@@ -1444,6 +1444,36 @@ describe("provisioning/orchestrate", () => {
       delete process.env.TELNYX_MESSAGING_PROFILE_ID_CA;
     });
 
+    it("searches ANY Canadian number for a timezone-classified Canadian tenant (US env defaults never applied)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_DEFAULT_AREA_CODE = "212";
+      process.env.TELNYX_DEFAULT_STATE = "NY";
+      // Non-NANP phone → no derivable area code; Canadian by timezone. The
+      // primary search must not be "US area 212 in country CA", which would
+      // zero out inventory and (with no localAreaCode) never retry.
+      const biz = {
+        business_type: "insurance",
+        phone: "+447911123456",
+        timezone: "America/Toronto"
+      } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16475550101" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-ca-tz", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: { countryCode: "CA", areaCode: undefined, administrativeArea: undefined }
+        })
+      );
+    });
+
     it("still provisions a Canadian tenant when TELNYX_MESSAGING_PROFILE_ID_CA is unset (loud warn, default profile)", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       delete process.env.TELNYX_MESSAGING_PROFILE_ID_CA;

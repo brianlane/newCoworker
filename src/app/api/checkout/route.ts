@@ -26,7 +26,14 @@ const schema = z.object({
   ownerEmail: z.string().email().optional(),
   onboardingToken: z.string().min(1).optional(),
   signupUserId: z.string().uuid().optional(),
-  draftToken: z.string().uuid().optional()
+  draftToken: z.string().uuid().optional(),
+  /**
+   * Browser IANA timezone, used ONLY as the fallback signal for the
+   * Canadian-surcharge detection when the business row has no stored
+   * timezone (the phone is always authoritative when NANP). Keeps the
+   * order-summary preview and the actual charge in lockstep.
+   */
+  timezone: z.string().min(1).max(60).optional()
 });
 
 /**
@@ -238,7 +245,11 @@ export async function POST(request: Request) {
     const feeBusiness = await getBusiness(body.businessId);
     const canadian = isCanadianBusiness({
       phone: feeBusiness?.phone ?? null,
-      timezone: feeBusiness?.timezone ?? null
+      // Stored row timezone first; the caller-supplied browser timezone only
+      // fills a null (older rows predating the timezone column), so the
+      // Step 3 order-summary preview and the charge can't diverge. A client
+      // omitting it can only fail toward NOT being charged.
+      timezone: feeBusiness?.timezone ?? body.timezone ?? null
     });
     const now = new Date();
     const originalDay = now.getDate();

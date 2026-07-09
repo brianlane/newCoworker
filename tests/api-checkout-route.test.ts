@@ -197,6 +197,70 @@ describe("api/checkout route", () => {
     );
   });
 
+  it("uses the caller's browser timezone only when the stored row has none (summary/charge lockstep)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    // Non-NANP phone (no area-code signal) and a legacy row with no stored
+    // timezone: the body's browser timezone decides — same signal the Step 3
+    // order summary previewed with.
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "+447911123456",
+      timezone: null
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        timezone: "America/Toronto"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
+      })
+    );
+  });
+
+  it("prefers the stored row timezone over the caller-supplied one", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "+447911123456",
+      timezone: "America/Phoenix" // stored US timezone wins
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        timezone: "America/Toronto"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    const call = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+    expect(call && "canadaFee" in call).toBe(false);
+  });
+
   it("rejects unauthenticated checkout when signup identity fields are missing", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
 

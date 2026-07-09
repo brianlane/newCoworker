@@ -441,6 +441,62 @@ describe("stripe/client", () => {
     expect(mockScheduleUpdate).not.toHaveBeenCalled();
   });
 
+  it("ensureCommitmentSchedule rewrites an existing schedule that has no future phase at all", async () => {
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: "sub_sched_existing",
+      items: { data: [{ price: { id: "price_standard_24mo" }, quantity: 1 }] }
+    });
+    // Default mockScheduleRetrieve has phases: [] — no future phase to match.
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_nophase",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+    expect(result).toBe("sub_sched_existing");
+    expect(mockScheduleUpdate).toHaveBeenCalled();
+  });
+
+  it("ensureCommitmentSchedule repairs an existing schedule whose renewal phase is missing add-on items", async () => {
+    // Renewal plan price already matches, but the sub now carries a second
+    // item (the Canada fee) the schedule predates — must rewrite, not
+    // early-return, or the fee drops at rollover.
+    mockSubscriptionRetrieve.mockResolvedValueOnce({
+      schedule: "sub_sched_existing",
+      items: {
+        data: [
+          { price: { id: "price_standard_24mo" }, quantity: 1 },
+          {
+            price: {
+              id: "price_ca_fee_24mo",
+              currency: "usd",
+              unit_amount: 499 * 24,
+              product: "prod_ca_fee",
+              recurring: { interval: "month", interval_count: 24 }
+            },
+            quantity: 1
+          }
+        ]
+      }
+    });
+    mockScheduleRetrieve.mockResolvedValueOnce({
+      id: "sub_sched_existing",
+      current_phase: { start_date: 1700000000, end_date: 1702592000 },
+      phases: [{}, { items: [{ price: { id: "price_standard_24mo_renewal" } }] }]
+    });
+
+    const result = await ensureCommitmentSchedule({
+      subscriptionId: "sub_repair",
+      tier: "standard",
+      billingPeriod: "biennial"
+    });
+
+    expect(result).toBe("sub_sched_existing");
+    expect(mockScheduleUpdate).toHaveBeenCalled();
+    const update = mockScheduleUpdate.mock.calls.at(-1)?.[1];
+    expect(update.phases[0].items).toHaveLength(2);
+    expect(update.phases[1].items).toHaveLength(2);
+  });
+
   it("ensureCommitmentSchedule updates an existing schedule when future price is a different string id", async () => {
     mockSubscriptionRetrieve.mockResolvedValueOnce({
       schedule: "sub_sched_existing",

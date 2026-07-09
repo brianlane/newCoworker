@@ -118,9 +118,14 @@ export async function ensureCommitmentSchedule(params: {
   if (existingScheduleId) {
     schedule = await stripe.subscriptionSchedules.retrieve(existingScheduleId);
     const futurePhase = schedule.phases[1];
+    const futureItemCount = futurePhase?.items.length ?? 0;
     const futurePrice = futurePhase?.items[0]?.price;
     const futurePriceId = typeof futurePrice === "string" ? futurePrice : futurePrice?.id;
-    if (futurePriceId === renewalPriceId) {
+    // Idempotent only when the renewal phase matches the plan price AND
+    // carries every subscription item — a schedule built before an add-on
+    // (e.g. the Canadian messaging surcharge) existed must be repaired, or
+    // the add-on silently drops at term rollover.
+    if (futurePriceId === renewalPriceId && futureItemCount === subscription.items.data.length) {
       return schedule.id;
     }
   } else {

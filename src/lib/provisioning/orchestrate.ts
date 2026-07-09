@@ -1323,7 +1323,13 @@ async function runOrchestrator(
         // re-read failing and silently dropping a valid local area code). A
         // non-NANP / missing phone falls back to the platform default.
         const localAreaCode = extractNanpAreaCode(businessRow?.phone);
-        const primaryAreaCode = localAreaCode ?? process.env.TELNYX_DEFAULT_AREA_CODE;
+        // The env default area/state are US-centric platform defaults. A
+        // Canadian tenant with no derivable local area code (classified by
+        // timezone — e.g. a non-NANP owner phone) must search ANY Canadian
+        // number, not "US area 212 in country CA" which zeroes out inventory.
+        const primaryAreaCode = canadianTenant
+          ? localAreaCode ?? undefined
+          : localAreaCode ?? process.env.TELNYX_DEFAULT_AREA_CODE;
         const primarySearch = {
           countryCode,
           areaCode: primaryAreaCode,
@@ -1331,7 +1337,8 @@ async function runOrchestrator(
           // state filter — an area code already pins the locale, and a
           // contradictory `administrativeArea` (e.g. tenant in 602/AZ but
           // TELNYX_DEFAULT_STATE=NY) would zero out the search.
-          administrativeArea: localAreaCode ? undefined : process.env.TELNYX_DEFAULT_STATE
+          administrativeArea:
+            localAreaCode || canadianTenant ? undefined : process.env.TELNYX_DEFAULT_STATE
         };
 
         let toE164: string;
