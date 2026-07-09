@@ -70,6 +70,7 @@ import {
   telnyxWebhookClientIp,
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
+import { pauseLeadAutomationOnCall } from "../_shared/ai_flows/customer_called.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
@@ -207,6 +208,54 @@ async function sendMissedAiCallSms(
   } catch (err) {
     console.error(
       "voice-inbound: missed AI call SMS threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
+}
+
+/**
+ * Text the owner that a lead with active automation just phoned in, so the
+ * team knows the conversation moved to the phone channel (PRD "Customer
+ * Called" state). Same settings gate as the other owner notices (forward
+ * number + messaging profile configured); best-effort, never throws.
+ */
+async function notifyOwnerCustomerCalled(
+  supabase: MissedCallSupabase,
+  params: { apiKey: string; businessId: string; callerE164: string }
+): Promise<void> {
+  try {
+    const { data: settingsRow } = await supabase
+      .from("business_telnyx_settings")
+      .select(
+        "sms_fallback_enabled, forward_to_e164, telnyx_sms_from_e164, telnyx_messaging_profile_id"
+      )
+      .eq("business_id", params.businessId)
+      .maybeSingle();
+    const s = settingsRow as
+      | {
+          forward_to_e164?: string | null;
+          telnyx_sms_from_e164?: string | null;
+          telnyx_messaging_profile_id?: string | null;
+        }
+      | null;
+    if (!s?.forward_to_e164 || !s.telnyx_messaging_profile_id) return;
+    const text =
+      `[AiFlow] Lead ${params.callerE164} just called in while an automation was ` +
+      `waiting on them. Their follow-up texts are paused for 2 hours — the phone ` +
+      `conversation owns this lead now.`;
+    const res = await telnyxSendSms({
+      apiKey: params.apiKey,
+      messagingProfileId: s.telnyx_messaging_profile_id,
+      fromE164: s.telnyx_sms_from_e164 ?? undefined,
+      toE164: s.forward_to_e164,
+      text
+    });
+    if (!res.ok) {
+      console.error("customer-called owner SMS failed", res.status, res.body.slice(0, 200));
+    }
+  } catch (err) {
+    console.error(
+      "customer-called owner SMS threw",
       err instanceof Error ? err.message : String(err)
     );
   }
@@ -420,6 +469,50 @@ serve(async (req: Request) => {
   }
 
   const businessId = routeRow.business_id as string;
+
+  // "Customer Called" pause (Lead Management PRD): a lead who phones instead
+  // of texting must not keep receiving automated follow-ups mid-call. Resolve
+  // their parked wait_for_reply runs with the customer_called sentinel, defer
+  // their queued follow-ups, tag the contact, and (when configured) text the
+  // owner. Fully best-effort and quick (indexed lookups) — call routing below
+  // must never be delayed or broken by this.
+  if (fromE164Informational) {
+    try {
+      const paused = await pauseLeadAutomationOnCall(
+        supabase,
+        businessId,
+        fromE164Informational
+      );
+      if (paused.resumedWaits > 0 || paused.deferredRuns > 0) {
+        await telemetryRecord(supabase, "voice_customer_called_pause", {
+          business_id: businessId,
+          caller: fromE164Informational,
+          resumed_waits: paused.resumedWaits,
+          deferred_runs: paused.deferredRuns,
+          tagged: paused.tagged
+        });
+        await systemLog(supabase, {
+          businessId,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_customer_called",
+          message: `Lead ${fromE164Informational} called in; paused their SMS automation (flow owns the phone turn now)`,
+          payload: {
+            caller: fromE164Informational,
+            resumed_waits: paused.resumedWaits,
+            deferred_runs: paused.deferredRuns
+          }
+        });
+        await notifyOwnerCustomerCalled(supabase, {
+          apiKey,
+          businessId,
+          callerE164: fromE164Informational
+        });
+      }
+    } catch (e) {
+      console.error("customer-called pause failed (continuing call routing)", e);
+    }
+  }
 
   // ── Reusable voice-routing primitives ──────────────────────────────────────
   // Both the new AiFlow voice path and the legacy tables drive the SAME Telnyx
