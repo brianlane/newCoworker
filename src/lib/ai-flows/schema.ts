@@ -471,21 +471,6 @@ export const MAX_BRANCH_DEPTH = 3;
 export const MAX_TOTAL_STEPS = 50;
 
 /**
- * One arm of a `branch` step: a labeled condition plus the steps that run when
- * it is the FIRST matching arm. `steps` is a getter so the schema can
- * reference the (later-declared) step union recursively — zod resolves it
- * lazily at parse time.
- */
-const branchArmSchema = z.object({
-  id: stepId,
-  label: z.string().min(1).max(80),
-  condition: whenSchema,
-  get steps() {
-    return z.array(stepSchema).max(25);
-  }
-});
-
-/**
  * Flow-level time window: communication steps (send_sms / send_email /
  * notify_owner / route_to_team) only execute while the local time in
  * `timezone` is inside [start, end) on an allowed day; outside it the run
@@ -503,7 +488,13 @@ const flowTimeWindowSchema = z
     message: "the time window can't start and end at the same time"
   });
 
-const stepSchema = z.discriminatedUnion("type", [
+/**
+ * Every step type EXCEPT `branch`, as a plain members tuple. The branch step
+ * is appended separately below because it references the full step union
+ * recursively (its arms/else contain steps), which needs an explicitly-typed
+ * lazy indirection to keep TypeScript's inference non-circular.
+ */
+const nonBranchStepMembers = [
   z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName, when: whenSchema.optional() }),
   z
     .object({
@@ -653,22 +644,6 @@ const stepSchema = z.discriminatedUnion("type", [
     phoneVar: varName,
     saveAs: varName.optional(),
     timeoutMinutes: z.number().int().min(1).max(43200).optional(),
-    when: whenSchema.optional()
-  }),
-  // Multi-way branch (GHL-style If/Else): arms are evaluated top to bottom
-  // against run vars, the FIRST match wins, and no match runs the `else`
-  // steps. Nesting/total-step caps and arm-id uniqueness live in
-  // validateDefinitionSemantics (they need the whole tree). A `when` guard on
-  // the branch itself skips the WHOLE branch (choice never recorded, so every
-  // arm and the else are skipped as branch_not_taken).
-  z.object({
-    id: stepId,
-    type: z.literal("branch"),
-    question: z.string().min(1).max(200),
-    branches: z.array(branchArmSchema).min(1).max(MAX_BRANCH_ARMS),
-    get else() {
-      return z.array(stepSchema).max(25);
-    },
     when: whenSchema.optional()
   }),
   z.object({
@@ -824,6 +799,72 @@ const stepSchema = z.discriminatedUnion("type", [
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
     when: whenSchema.optional()
   })
+] as const;
+
+/** The non-branch step union — everything the flat (pre-branch) engine ran. */
+const nonBranchStepSchema = z.discriminatedUnion("type", [...nonBranchStepMembers]);
+
+export type StepCondition = z.infer<typeof whenSchema>;
+type NonBranchStep = z.infer<typeof nonBranchStepSchema>;
+
+/**
+ * Branch types are declared BY HAND (mirroring the runtime types in
+ * supabase/functions/_shared/ai_flows/types.ts) because they reference the
+ * full step union recursively — TypeScript cannot infer a type that circularly
+ * references itself through zod's generics, so the schema below is checked
+ * against these declarations via the annotated lazy indirection instead.
+ */
+export type BranchArm = {
+  /** Stable id (unique within the branch step) recorded as the chosen arm. */
+  id: string;
+  /** Display label, e.g. "Auto" / "Home" / "They replied". */
+  label: string;
+  /** Same shape as a per-step `when` guard, evaluated against run vars. */
+  condition: StepCondition;
+  steps: FlowStep[];
+};
+
+/**
+ * Multi-way branch (GHL-style If/Else): arms are evaluated top to bottom
+ * against run vars, the FIRST match wins, and no match runs the `else` steps.
+ * Nesting/total-step caps and arm-id uniqueness live in
+ * validateDefinitionSemantics (they need the whole tree). A `when` guard on
+ * the branch itself skips the WHOLE branch (choice never recorded, so every
+ * arm and the else are skipped as branch_not_taken).
+ */
+export type BranchStep = {
+  id: string;
+  type: "branch";
+  question: string;
+  branches: BranchArm[];
+  else: FlowStep[];
+  when?: StepCondition;
+};
+
+export type FlowStep = NonBranchStep | BranchStep;
+
+/** Lazy, explicitly-typed recursion point: a nested step list inside a branch. */
+const nestedStepListSchema: z.ZodType<FlowStep[]> = z.lazy(() => z.array(stepSchema).max(25));
+
+const branchArmSchema: z.ZodType<BranchArm> = z.object({
+  id: stepId,
+  label: z.string().min(1).max(80),
+  condition: whenSchema,
+  steps: nestedStepListSchema
+});
+
+const branchStepSchema = z.object({
+  id: stepId,
+  type: z.literal("branch"),
+  question: z.string().min(1).max(200),
+  branches: z.array(branchArmSchema).min(1).max(MAX_BRANCH_ARMS),
+  else: nestedStepListSchema,
+  when: whenSchema.optional()
+});
+
+const stepSchema: z.ZodType<FlowStep> = z.discriminatedUnion("type", [
+  ...nonBranchStepMembers,
+  branchStepSchema
 ]);
 
 export const aiFlowDefinitionSchema = z.object({
@@ -844,9 +885,6 @@ export const aiFlowDefinitionSchema = z.object({
 
 export type TriggerCondition = z.infer<typeof conditionSchema>;
 export type FlowTrigger = z.infer<typeof triggerSchema>;
-export type FlowStep = z.infer<typeof stepSchema>;
-export type StepCondition = z.infer<typeof whenSchema>;
-export type BranchArm = z.infer<typeof branchArmSchema>;
 export type FlowTimeWindow = z.infer<typeof flowTimeWindowSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 

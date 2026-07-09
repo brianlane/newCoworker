@@ -3122,36 +3122,45 @@ function StepFields({
       </div>
     );
   }
-  return (
-    <div className="space-y-2">
-      <Field label="Integration label" value={step.label} onChange={(v) => patchStep(index, { label: v })} />
-      <div>
-        <label className={labelClass}>Method</label>
-        <select
-          className={inputClass}
-          value={step.method ?? "POST"}
-          onChange={(ev) => patchStep(index, { method: ev.target.value })}
-        >
-          {HTTP_METHODS.map((m) => (
-            <option key={m} value={m}>
-              {m}
-            </option>
-          ))}
-        </select>
+  if (step.type === "http_call") {
+    return (
+      <div className="space-y-2">
+        <Field label="Integration label" value={step.label} onChange={(v) => patchStep(index, { label: v })} />
+        <div>
+          <label className={labelClass}>Method</label>
+          <select
+            className={inputClass}
+            value={step.method ?? "POST"}
+            onChange={(ev) => patchStep(index, { method: ev.target.value })}
+          >
+            {HTTP_METHODS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </div>
+        <Field label="Path" value={step.path ?? ""} onChange={(v) => patchStep(index, { path: v })} />
+        <Field
+          label="Body template"
+          value={step.bodyTemplate ?? ""}
+          onChange={(v) => patchStep(index, { bodyTemplate: v })}
+          textarea
+        />
+        <Field
+          label="Save response as"
+          value={step.saveAs ?? ""}
+          onChange={(v) => patchStep(index, { saveAs: v })}
+        />
       </div>
-      <Field label="Path" value={step.path ?? ""} onChange={(v) => patchStep(index, { path: v })} />
-      <Field
-        label="Body template"
-        value={step.bodyTemplate ?? ""}
-        onChange={(v) => patchStep(index, { bodyTemplate: v })}
-        textarea
-      />
-      <Field
-        label="Save response as"
-        value={step.saveAs ?? ""}
-        onChange={(v) => patchStep(index, { saveAs: v })}
-      />
-    </div>
+    );
+  }
+  // branch: paths + nested steps are authored in the visual canvas builder;
+  // the classic form shows the step header/help only.
+  return (
+    <p className="text-[11px] text-parchment/40">
+      This step splits the workflow into paths. Edit its paths in the visual builder.
+    </p>
   );
 }
 
