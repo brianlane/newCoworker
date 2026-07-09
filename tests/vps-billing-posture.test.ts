@@ -35,11 +35,14 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
   return {
     listBusinesses: vi.fn().mockResolvedValue([]),
     // Default: every candidate business has a live (active/past_due)
-    // NewCoworker subscription, so the tenant gate passes unless a test
-    // narrows it.
+    // STRIPE-BACKED NewCoworker subscription, so the auto-heal gate passes
+    // unless a test narrows it.
     listBusinessIdsWithLiveSubscription: vi
       .fn()
-      .mockImplementation(async (ids: string[]) => new Set(ids)),
+      .mockImplementation(async (ids: string[]) => ({
+        stripeBacked: new Set(ids),
+        stripeless: new Set<string>()
+      })),
     listInventory: vi.fn().mockResolvedValue([]),
     getVirtualMachine: vi
       .fn()
@@ -222,6 +225,94 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     );
   });
 
+  it("reports (never heals) a Stripe-less live tenant — the Residency Pilot regression", async () => {
+    // Jul 9 2026 production incident: the pilot's internal subscription is
+    // status=active but has NO Stripe payment behind it, and its box was
+    // deliberately parked non-renewing to lapse Aug 2. The first posture
+    // run auto-healed it. The gate now requires a Stripe payment before
+    // spending platform money; Stripe-less rows are surfaced report-only.
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([biz({ id: "pilot", hostinger_vps_id: "1800985" })]),
+      listBusinessIdsWithLiveSubscription: vi
+        .fn()
+        .mockResolvedValue({ stripeBacked: new Set(), stripeless: new Set(["pilot"]) }),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ id: 1800985, state: "running", subscription_id: "hsub-pilot" }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-pilot",
+          status: "non_renewing",
+          is_auto_renewed: false,
+          expires_at: "2026-08-02T20:54:21Z"
+        }
+      ])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.enableAutoRenewal).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "stripeless_tenant_auto_renew_off",
+        vmId: 1800985,
+        businessId: "pilot",
+        autoHealed: false,
+        expiresAt: "2026-08-02T20:54:21Z",
+        detail: expect.stringContaining("no Stripe payment behind its active subscription")
+      })
+    ]);
+  });
+
+  it("Stripe-less report falls back to next_billing_at and then null for the period end", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([
+        biz({ id: "p1", hostinger_vps_id: "101" }),
+        biz({ id: "p2", hostinger_vps_id: "102" })
+      ]),
+      listBusinessIdsWithLiveSubscription: vi
+        .fn()
+        .mockResolvedValue({ stripeBacked: new Set(), stripeless: new Set(["p1", "p2"]) }),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValueOnce({ id: 101, state: "running", subscription_id: "hsub-a" })
+        .mockResolvedValueOnce({ id: 102, state: "running", subscription_id: "hsub-b" }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-a",
+          status: "non_renewing",
+          is_auto_renewed: false,
+          next_billing_at: "2026-08-15T00:00:00Z"
+        },
+        { id: "hsub-b", status: "non_renewing", is_auto_renewed: false }
+      ])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(result.findings[0]).toEqual(
+      expect.objectContaining({ vmId: 101, expiresAt: "2026-08-15T00:00:00Z" })
+    );
+    expect(result.findings[1]).toEqual(expect.objectContaining({ vmId: 102, expiresAt: null }));
+  });
+
+  it("skips the Stripe-less report when the box is renewing fine", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([biz({ id: "pilot" })]),
+      listBusinessIdsWithLiveSubscription: vi
+        .fn()
+        .mockResolvedValue({ stripeBacked: new Set(), stripeless: new Set(["pilot"]) }),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-1", status: "active", is_auto_renewed: true }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(result.findings).toEqual([]);
+    expect(deps.enableAutoRenewal).not.toHaveBeenCalled();
+  });
+
   it("never re-enables renewal for canceled-in-grace, pending, or subscription-less businesses", async () => {
     // Bugbot High: a canceled business still points at its VM until the
     // wipe, and the cancel lifecycle disabled that box's renewal ON
@@ -234,11 +325,13 @@ describe("checkVpsBillingPosture — tenant direction", () => {
         biz({ id: "no-sub", hostinger_vps_id: "333" }),
         biz({ id: "live", hostinger_vps_id: "444" })
       ]),
-      // Any-row live gate: only "live" has an active/past_due subscription
-      // (grace = canceled, pending = never paid, no-sub = smoke row). The
-      // helper's any-row semantics also mean a paying tenant with a newer
-      // pending resubscribe row still lands in this set.
-      listBusinessIdsWithLiveSubscription: vi.fn().mockResolvedValue(new Set(["live"])),
+      // Any-row live gate: only "live" has a Stripe-backed active/past_due
+      // subscription (grace = canceled, pending = never paid, no-sub =
+      // smoke row). The helper's any-row semantics also mean a paying
+      // tenant with a newer pending resubscribe row still lands in this set.
+      listBusinessIdsWithLiveSubscription: vi
+        .fn()
+        .mockResolvedValue({ stripeBacked: new Set(["live"]), stripeless: new Set() }),
       getVirtualMachine: vi
         .fn()
         .mockResolvedValue({ id: 444, state: "running", subscription_id: "hsub-live" }),
