@@ -2695,6 +2695,18 @@ function StepFields({
           First to claim: teammates offered earlier can still grab a live offer with a
           bare &quot;1&quot; (an ETA reply never preempts the active window)
         </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.preferContactOwner === true}
+            onChange={(ev) =>
+              patchStep(index, { preferContactOwner: ev.target.checked ? true : undefined })
+            }
+          />
+          Offer the contact&apos;s owner first: when this lead already belongs to a teammate
+          (they claimed them before, or you assigned them on the contact page), they get the
+          offer before the normal rotation
+        </label>
       </div>
     );
   }

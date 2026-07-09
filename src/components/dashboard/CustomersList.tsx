@@ -25,6 +25,10 @@ export type CustomerListRow = {
   summary: string | null;
   totalInteractions: number;
   lastInteractionAt: string | null;
+  /** Free-form owner-defined labels on this contact. */
+  tags: string[];
+  /** Owning roster member's name (resolved server-side); null = unowned. */
+  ownerName: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -67,6 +71,17 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
     CUSTOMER_SORT_OPTIONS.map((o) => o.key)
   );
   const [query, setQuery] = useState("");
+  const [tagFilter, setTagFilter] = useState("");
+  const [ownerFilter, setOwnerFilter] = useState("");
+
+  // Filter option lists come from the loaded rows themselves, so they always
+  // reflect labels/owners that actually exist (case-insensitive tag identity).
+  const allTags = Array.from(
+    new Map(rows.flatMap((r) => r.tags).map((t) => [t.toLowerCase(), t])).values()
+  ).sort((a, b) => a.localeCompare(b));
+  const allOwners = Array.from(
+    new Set(rows.map((r) => r.ownerName).filter((n): n is string => Boolean(n)))
+  ).sort((a, b) => a.localeCompare(b));
 
   if (rows.length === 0) {
     return (
@@ -81,8 +96,11 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
     );
   }
 
-  const filtered = rows.filter((r) =>
-    matchesQuery(query, [r.name, r.e164, r.type, r.summary])
+  const filtered = rows.filter(
+    (r) =>
+      matchesQuery(query, [r.name, r.e164, r.type, r.summary, r.tags.join(" ")]) &&
+      (!tagFilter || r.tags.some((t) => t.toLowerCase() === tagFilter.toLowerCase())) &&
+      (!ownerFilter || r.ownerName === ownerFilter)
   );
   const sorted = sortRows(filtered, (r) => sortValue(r, sort.field), sort.dir);
 
@@ -95,13 +113,45 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
           placeholder="Search by name or number…"
           idPrefix="customer-search"
         />
-        <SortControl
-          options={CUSTOMER_SORT_OPTIONS}
-          field={sort.field}
-          dir={sort.dir}
-          onChange={setSort}
-          idPrefix="customer-sort"
-        />
+        <div className="flex flex-wrap items-center gap-2">
+          {allTags.length > 0 && (
+            <select
+              className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment"
+              value={tagFilter}
+              onChange={(ev) => setTagFilter(ev.target.value)}
+              aria-label="Filter by tag"
+            >
+              <option value="">All tags</option>
+              {allTags.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )}
+          {allOwners.length > 0 && (
+            <select
+              className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment"
+              value={ownerFilter}
+              onChange={(ev) => setOwnerFilter(ev.target.value)}
+              aria-label="Filter by owning employee"
+            >
+              <option value="">Owned by anyone</option>
+              {allOwners.map((n) => (
+                <option key={n} value={n}>
+                  Owned by {n}
+                </option>
+              ))}
+            </select>
+          )}
+          <SortControl
+            options={CUSTOMER_SORT_OPTIONS}
+            field={sort.field}
+            dir={sort.dir}
+            onChange={setSort}
+            idPrefix="customer-sort"
+          />
+        </div>
       </div>
       <Card padding="sm">
         {sorted.length === 0 && (
@@ -144,6 +194,22 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
                         pinned
                       </span>
                     )}
+                    {c.ownerName && (
+                      <span
+                        className="text-[10px] tracking-wide text-amber-300/80 bg-amber-300/10 rounded px-1.5 py-0.5"
+                        title="Owning employee"
+                      >
+                        {c.ownerName}&apos;s
+                      </span>
+                    )}
+                    {c.tags.map((t) => (
+                      <span
+                        key={t}
+                        className="text-[10px] tracking-wide text-signal-teal/80 bg-signal-teal/10 rounded px-1.5 py-0.5"
+                      >
+                        {t}
+                      </span>
+                    ))}
                   </div>
                   {c.summary?.trim() && (
                     <p className="text-xs text-parchment/60 mt-0.5 line-clamp-2">

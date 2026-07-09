@@ -17,13 +17,14 @@ import type {
   CustomerMemoryRow,
   SmsReplyMode
 } from "./types";
+import { normalizeContactTags } from "./types";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const ALL_COLUMNS =
   "id,business_id,customer_e164,type,name_source,sms_reply_mode,display_name,email,summary_md,pinned_md," +
   "interaction_count,total_interaction_count,last_interaction_at," +
-  "last_summarized_at,last_channel,alias_e164s,created_at,updated_at";
+  "last_summarized_at,last_channel,alias_e164s,tags,owner_employee_id,created_at,updated_at";
 
 export async function getCustomerMemory(
   businessId: string,
@@ -394,6 +395,10 @@ export type CustomerOwnerEdit = {
   type?: ContactType;
   /** Default-reply behavior for this contact's inbound SMS. */
   smsReplyMode?: SmsReplyMode;
+  /** Replace the tag set (normalized via normalizeContactTags before write). */
+  tags?: string[];
+  /** Assign/clear the owning roster member (null = release to unowned). */
+  ownerEmployeeId?: string | null;
   /**
    * Provenance to stamp on display_name. The dashboard owner-edit passes
    * 'manual' (the name should stick over the owner/employee overlay); the
@@ -420,7 +425,9 @@ export async function updateCustomerOwnerFields(
     ...("type" in edit && edit.type ? { type: edit.type } : {}),
     ...("smsReplyMode" in edit && edit.smsReplyMode
       ? { sms_reply_mode: edit.smsReplyMode }
-      : {})
+      : {}),
+    ...("tags" in edit && edit.tags ? { tags: normalizeContactTags(edit.tags) } : {}),
+    ...("ownerEmployeeId" in edit ? { owner_employee_id: edit.ownerEmployeeId ?? null } : {})
   };
   const { error } = await db
     .from("contacts")

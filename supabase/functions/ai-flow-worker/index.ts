@@ -3175,6 +3175,9 @@ async function routeToTeamStep(
       `lead ${lateClaim ? "claimed late (86) by" : "claimed by"} ${claimedName || claimedBy}` +
         (claimTimeframe ? ` (ETA: ${claimTimeframe})` : "")
     );
+    // Claim-driven ownership: the claimer becomes the contact's owner if the
+    // contact is currently unowned (never steals). Best-effort by design.
+    if (claimedBy) await assignContactOwnerOnClaim(supabase, run, scope, claimedBy);
     return {
       kind: "ok",
       result: { routed: lateClaim ? "late_claimed" : "claimed", claimed_by: claimedBy },
@@ -3255,8 +3258,22 @@ async function routeToTeamStep(
   }
 
   const leadPhone = leadPhoneE164(scope);
+  // Owner-first routing (preferContactOwner): a repeat lead whose contact
+  // already has an owning employee gets offered to "their" person first; the
+  // normal cascade follows if they pass or time out (they land in `tried`).
+  // A pinned agent (agentName/agentRef) wins over the preference, and a
+  // preferred owner already tried is a no-op — so this only shapes the FIRST
+  // offer and never loops.
+  let preferredAgent: RoutedAgent | null = null;
+  if (action.preferContactOwner && !pinnedAgentName) {
+    const owner = await contactOwnerAgent(supabase, run.business_id, scope);
+    if (owner && !tried.includes(owner.phone)) preferredAgent = owner;
+  }
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
-    const agent = await pickNextAgent(supabase, run, scope, tried, pinnedAgentName);
+    const preferredThisPass = preferredAgent;
+    const agent =
+      preferredAgent ?? (await pickNextAgent(supabase, run, scope, tried, pinnedAgentName));
+    preferredAgent = null;
     // No agent at all (none / parse fail / unconfigured / pinned agent missing):
     // roster is exhausted.
     if (!agent) break;
@@ -3315,6 +3332,12 @@ async function routeToTeamStep(
     const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
     if (alreadyPending > 0) {
       offerText = `${multiOfferHeadsUpLine(alreadyPending + 1)}\n${offerText}`;
+    }
+    if (preferredThisPass && agent.phone === preferredThisPass.phone) {
+      appendActionTaken(
+        scope,
+        `offered ${agent.name || agent.phone} first — they own this contact`
+      );
     }
     return {
       kind: "pause_agent",
@@ -3417,6 +3440,143 @@ function leadPhoneE164(scope: Scope): string | null {
   const raw = typeof scope.vars.lead_phone === "string" ? scope.vars.lead_phone.trim() : "";
   if (!raw) return null;
   return isE164(raw) ? raw : normalizeNanpToE164(raw);
+}
+
+/**
+ * The phone that identifies this lead's CONTACT row: vars.lead_phone when an
+ * extraction produced one, else the triggering sender (SMS-triggered flows).
+ * Used by contact-ownership routing (preferContactOwner + claim auto-assign).
+ */
+function leadContactPhone(scope: Scope): string | null {
+  const fromVars = leadPhoneE164(scope);
+  if (fromVars) return fromVars;
+  const from = typeof scope.trigger?.from === "string" ? scope.trigger.from.trim() : "";
+  return from && isE164(from) ? from : null;
+}
+
+/**
+ * The roster member who OWNS this lead's contact (contacts.owner_employee_id),
+ * resolved to {name, phone}, or null (no phone / no contact / unowned /
+ * owner inactive / owner unavailable). Alias-aware like getCustomerMemory.
+ * Applies the SAME working-info rules as pickNextAgent — time off covering
+ * today and out-of-schedule members are hard skips — so ownership preference
+ * never routes around an owner's time off; the normal cascade takes over.
+ * Best-effort: a lookup error logs and returns null — ownership preference
+ * must never stall routing.
+ */
+async function contactOwnerAgent(
+  supabase: Supabase,
+  businessId: string,
+  scope: Scope
+): Promise<RoutedAgent | null> {
+  const phone = leadContactPhone(scope);
+  if (!phone) return null;
+  try {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("owner_employee_id")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
+      .maybeSingle();
+    const ownerId = (contact as { owner_employee_id?: string | null } | null)?.owner_employee_id;
+    if (!ownerId) return null;
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("id, name, phone_e164, active, weekly_schedule, preferred_windows")
+      .eq("business_id", businessId)
+      .eq("id", ownerId)
+      .maybeSingle();
+    const m = member as {
+      id?: string;
+      name?: string;
+      phone_e164?: string;
+      active?: boolean;
+      weekly_schedule?: unknown;
+      preferred_windows?: unknown;
+    } | null;
+    if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
+    // Availability (business-local): the owner on time off today or outside
+    // their weekly schedule is skipped, same as in pickNextAgent.
+    const [tzRes, offRes] = await Promise.all([
+      supabase.from("businesses").select("timezone").eq("id", businessId).maybeSingle(),
+      supabase
+        .from("employee_time_off")
+        .select("member_id, starts_on, ends_on")
+        .eq("business_id", businessId)
+        .eq("member_id", m.id)
+    ]);
+    const tz = (tzRes.data as { timezone?: string | null } | null)?.timezone ?? null;
+    const clock = localClock(new Date(), tz);
+    const offIds = new Set(
+      ((offRes.data ?? []) as { member_id: string; starts_on: string; ends_on: string }[])
+        .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
+        .map((t) => t.member_id)
+    );
+    const available = filterRosterByAvailability(
+      [
+        {
+          id: m.id,
+          name: m.name ?? "",
+          phone_e164: m.phone_e164.trim(),
+          weekly_schedule: m.weekly_schedule,
+          preferred_windows: m.preferred_windows
+        }
+      ],
+      offIds,
+      clock
+    );
+    if (available.length === 0) return null;
+    return { name: m.name ?? "", phone: m.phone_e164.trim() };
+  } catch (e) {
+    console.error("contactOwnerAgent", e);
+    return null;
+  }
+}
+
+/**
+ * Claim-driven ownership: the teammate who claimed this lead becomes the
+ * contact's owner — but ONLY when the contact is currently unowned (ownership
+ * is never stolen by a later claim). Best-effort: a failure logs and moves on;
+ * the claim itself already succeeded.
+ */
+async function assignContactOwnerOnClaim(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  claimedByPhone: string
+): Promise<void> {
+  const leadPhone = leadContactPhone(scope);
+  if (!leadPhone || !claimedByPhone) return;
+  try {
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("id")
+      .eq("business_id", run.business_id)
+      .eq("phone_e164", claimedByPhone)
+      .maybeSingle();
+    const memberId = (member as { id?: string } | null)?.id;
+    if (!memberId) return;
+    const { data: updated, error } = await supabase
+      .from("contacts")
+      .update({ owner_employee_id: memberId, updated_at: new Date().toISOString() })
+      .eq("business_id", run.business_id)
+      .or(`customer_e164.eq.${leadPhone},alias_e164s.cs.{${leadPhone}}`)
+      .is("owner_employee_id", null)
+      .select("id");
+    if (error) {
+      console.error("assignContactOwnerOnClaim", error);
+      return;
+    }
+    if ((updated ?? []).length > 0) {
+      await telemetryRecord(supabase, "ai_flow_contact_owner_assigned", {
+        run_id: run.id,
+        business_id: run.business_id,
+        member_id: memberId
+      });
+    }
+  } catch (e) {
+    console.error("assignContactOwnerOnClaim", e);
+  }
 }
 
 /**

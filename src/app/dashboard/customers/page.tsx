@@ -19,6 +19,7 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/db";
+import { listTeamMembers } from "@/lib/db/employees";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { AddCustomerForm } from "@/components/dashboard/AddCustomerForm";
 import {
@@ -74,6 +75,10 @@ export default async function DashboardCustomersPage() {
   // contacts table now, so a single query is the whole directory — no separate
   // "other contacts" list and no cross-dedupe needed.
   const contacts = await listCustomerMemories(business.id, { limit: DEFAULT_LIST_LIMIT });
+  // Owner badges + the "owned by" filter show the roster member's NAME; one
+  // roster read covers every row (id → name).
+  const teamMembers = await listTeamMembers(business.id, db).catch(() => []);
+  const memberNameById = new Map(teamMembers.map((m) => [m.id, m.name]));
   // Owner/employee/manual-label names win over the stored display_name, so the
   // owner's own number reads "Brian Lane (owner)" instead of a bare number, and
   // roster members get their names + badges here too.
@@ -99,6 +104,8 @@ export default async function DashboardCustomersPage() {
       summary: c.summary_md,
       totalInteractions: c.total_interaction_count,
       lastInteractionAt: c.last_interaction_at,
+      tags: c.tags ?? [],
+      ownerName: (c.owner_employee_id && memberNameById.get(c.owner_employee_id)) || null,
       createdAt: c.created_at,
       updatedAt: c.updated_at
     };

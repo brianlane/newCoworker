@@ -513,6 +513,14 @@ export type FlowStep =
       ownerDirectWhen?: StepCondition;
       /** Owner SMS for the keep-for-owner branch. Required with ownerDirectWhen. */
       ownerDirectTemplate?: string;
+      /**
+       * Owner-first routing for repeat leads: when the lead's contact row
+       * (matched by the inbound phone) already has an owning employee
+       * (contacts.owner_employee_id, assigned by an earlier claim or manually),
+       * offer that member FIRST; the normal cascade follows if they pass or
+       * time out. Brand-new/unowned leads flow through claiming unchanged.
+       */
+      preferContactOwner?: boolean;
       when?: StepCondition;
     }
   | {

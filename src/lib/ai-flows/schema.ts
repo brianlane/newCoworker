@@ -646,6 +646,9 @@ const stepSchema = z.discriminatedUnion("type", [
     // fields are both-or-neither (validateDefinitionSemantics).
     ownerDirectWhen: whenSchema.optional(),
     ownerDirectTemplate: z.string().min(1).max(1600).optional(),
+    // Owner-first routing for repeat leads: when the lead's contact already
+    // has an owning employee, offer them first, then the normal cascade.
+    preferContactOwner: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({

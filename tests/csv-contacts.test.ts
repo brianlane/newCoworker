@@ -76,6 +76,7 @@ function contactRow(overrides: Record<string, unknown> = {}) {
     email: "jane@example.com",
     sms_reply_mode: "auto",
     pinned_md: "VIP, prefers texts",
+    tags: ["VIP", "spanish"],
     alias_e164s: ["+15550009999"],
     last_channel: "sms",
     last_interaction_at: "2026-06-01T00:00:00Z",
@@ -101,6 +102,7 @@ describe("exportContactsCsv", () => {
             display_name: null,
             email: null,
             pinned_md: null,
+            tags: null,
             alias_e164s: null,
             last_channel: null,
             last_interaction_at: null
@@ -118,6 +120,7 @@ describe("exportContactsCsv", () => {
     expect(parsed.rows[0]).toMatchObject({
       phone: "+15550001111",
       name: "Jane Doe",
+      tags: "VIP, spanish",
       aliases: "+15550009999",
       total_interactions: "7"
     });
@@ -125,6 +128,7 @@ describe("exportContactsCsv", () => {
       phone: "+15550002222",
       name: "",
       email: "",
+      tags: "",
       aliases: "",
       last_channel: ""
     });

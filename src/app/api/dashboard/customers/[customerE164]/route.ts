@@ -5,7 +5,8 @@
  *          → { memory, smsHistory, voiceTurnCount }
  *
  * PATCH  /api/dashboard/customers/:e164?businessId=<uuid>
- *          body: { displayName?, pinnedMd? }
+ *          body: { displayName?, pinnedMd?, email?, type?, smsReplyMode?,
+ *                  tags?, ownerEmployeeId? }
  *          → { ok: true }
  *
  * DELETE /api/dashboard/customers/:e164?businessId=<uuid>
@@ -30,7 +31,13 @@ import {
   setContactSmsReplyMode,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
-import { CONTACT_TYPES, SMS_REPLY_MODES } from "@/lib/customer-memory/types";
+import {
+  CONTACT_TYPES,
+  MAX_CONTACT_TAGS,
+  MAX_CONTACT_TAG_LENGTH,
+  SMS_REPLY_MODES
+} from "@/lib/customer-memory/types";
+import { getTeamMember } from "@/lib/db/employees";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +60,11 @@ const patchBodySchema = z
     pinnedMd: z.string().trim().max(2000).nullable().optional(),
     email: z.string().trim().email("Enter a valid email").max(254).nullable().optional(),
     type: z.enum(CONTACT_TYPES).optional(),
-    smsReplyMode: z.enum(SMS_REPLY_MODES).optional()
+    smsReplyMode: z.enum(SMS_REPLY_MODES).optional(),
+    // Replace-the-set semantics; normalized (trim/de-dup/cap) before write.
+    tags: z.array(z.string().max(MAX_CONTACT_TAG_LENGTH)).max(MAX_CONTACT_TAGS).optional(),
+    // Assign (uuid, validated against the roster below) or clear (null).
+    ownerEmployeeId: z.string().uuid().nullable().optional()
   })
   .refine(
     (b) =>
@@ -61,8 +72,13 @@ const patchBodySchema = z
       b.pinnedMd !== undefined ||
       b.email !== undefined ||
       b.type !== undefined ||
-      b.smsReplyMode !== undefined,
-    { message: "Provide at least one of displayName, pinnedMd, email, type, smsReplyMode" }
+      b.smsReplyMode !== undefined ||
+      b.tags !== undefined ||
+      b.ownerEmployeeId !== undefined,
+    {
+      message:
+        "Provide at least one of displayName, pinnedMd, email, type, smsReplyMode, tags, ownerEmployeeId"
+    }
   );
 
 async function decodePathParam(raw: string): Promise<string> {
@@ -118,6 +134,8 @@ export async function GET(
         lastInteractionAt: memory.last_interaction_at,
         lastSummarizedAt: memory.last_summarized_at,
         lastChannel: memory.last_channel,
+        tags: memory.tags,
+        ownerEmployeeId: memory.owner_employee_id,
         createdAt: memory.created_at,
         updatedAt: memory.updated_at
       },
@@ -167,10 +185,22 @@ export async function PATCH(
         body.displayName === undefined &&
         body.pinnedMd === undefined &&
         body.email === undefined &&
-        body.type === undefined;
+        body.type === undefined &&
+        body.tags === undefined &&
+        body.ownerEmployeeId === undefined;
       if (!onlyReplyMode) return errorResponse("NOT_FOUND", "Customer not found");
       await setContactSmsReplyMode(businessId, customerE164, body.smsReplyMode!);
       return successResponse({ ok: true });
+    }
+
+    // An assigned owner must be one of THIS business's roster members (active
+    // or not — deactivating someone shouldn't block re-labeling history, and
+    // routing already skips inactive members).
+    if (body.ownerEmployeeId) {
+      const member = await getTeamMember(businessId, body.ownerEmployeeId);
+      if (!member) {
+        return errorResponse("VALIDATION_ERROR", "That employee is not on this business's roster");
+      }
     }
 
     await updateCustomerOwnerFields(businessId, customerE164, {
@@ -188,7 +218,9 @@ export async function PATCH(
       ...(body.pinnedMd !== undefined ? { pinnedMd: body.pinnedMd } : {}),
       ...(body.email !== undefined ? { email: body.email } : {}),
       ...(body.type !== undefined ? { type: body.type } : {}),
-      ...(body.smsReplyMode !== undefined ? { smsReplyMode: body.smsReplyMode } : {})
+      ...(body.smsReplyMode !== undefined ? { smsReplyMode: body.smsReplyMode } : {}),
+      ...(body.tags !== undefined ? { tags: body.tags } : {}),
+      ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: body.ownerEmployeeId } : {})
     });
 
     return successResponse({ ok: true });
