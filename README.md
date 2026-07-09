@@ -177,6 +177,13 @@ these standards:
 - **Row Level Security is on by default** with deny-by-default policies. Secret
   tables (`vps_gateway_tokens`, `vps_ssh_keys`) run RLS with **no policies**, so
   only `service_role` (which bypasses RLS) can read them.
+- **App-layer encryption at rest for stored secrets**: `vps_ssh_keys.private_key_pem`
+  and `residency_backup_keys.passphrase` are wrapped in an AES-256-GCM envelope
+  keyed by `SECRETS_ENCRYPTION_KEY` ([src/lib/crypto/secret-encryption.ts](src/lib/crypto/secret-encryption.ts)) —
+  a DB dump or leaked service-role key alone no longer exposes them. Reads
+  fail closed on undecryptable rows; legacy plaintext passes through until
+  `debug/encrypt-secrets-backfill.ts --apply` converts it. Gateway tokens stay
+  plaintext BY DESIGN (the value itself is the symmetric HMAC secret on the box).
 - **Per-tenant gateway tokens** replace the old platform-wide shared secret for
   all VPS ↔ app authentication — see
   [Security: per-tenant gateway tokens](#security-per-tenant-gateway-tokens) for

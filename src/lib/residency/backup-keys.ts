@@ -7,10 +7,16 @@
  * (service-role-only, same posture as vps_gateway_tokens) so a dead box is
  * still restorable. Disclosed custody trade: a deal wanting zero central
  * escrow rotates the key out and owns DR themselves.
+ *
+ * At-rest posture: the stored passphrase is wrapped in the app-layer
+ * AES-256-GCM envelope (src/lib/crypto/secret-encryption.ts) once
+ * SECRETS_ENCRYPTION_KEY is configured; reads transparently decrypt and
+ * legacy plaintext rows pass through until the backfill converts them.
  */
 
 import { createHash, randomBytes } from "node:crypto";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-encryption";
 import {
   residencyAllowedForTier,
   RESIDENCY_TIER_MESSAGE,
@@ -63,13 +69,15 @@ export async function getOrCreateResidencyBackupKey(
     if (row.custody === "customer_held" || row.passphrase === null) {
       throw new CustomerHeldBackupKeyError(businessId);
     }
-    return row.passphrase;
+    // App-layer decryption (G5): post-rollout rows are AES-256-GCM
+    // ciphertext; legacy plaintext passes through.
+    return decryptSecret(row.passphrase);
   }
 
   const passphrase = generateBackupPassphrase();
   const { error: insertError } = await db
     .from("residency_backup_keys")
-    .insert({ business_id: businessId, passphrase });
+    .insert({ business_id: businessId, passphrase: encryptSecret(passphrase) });
   if (insertError) {
     // Lost a concurrent-mint race (unique PK): the winner's key is canon.
     const { data: winner, error: rereadError } = await db
@@ -89,7 +97,7 @@ export async function getOrCreateResidencyBackupKey(
     if (winnerRow.custody === "customer_held" || winnerRow.passphrase === null) {
       throw new CustomerHeldBackupKeyError(businessId);
     }
-    return winnerRow.passphrase;
+    return decryptSecret(winnerRow.passphrase);
   }
   return passphrase;
 }
@@ -161,7 +169,11 @@ async function dropToCustomerHeld(businessId: string, db: SupabaseClient): Promi
     .eq("business_id", businessId)
     .maybeSingle();
   if (error) throw new Error(`setResidencyBackupCustody(read): ${error.message}`);
-  const current = (data as { passphrase: string | null } | null)?.passphrase ?? null;
+  const stored = (data as { passphrase: string | null } | null)?.passphrase ?? null;
+  // Fingerprint the DECRYPTED value so the audit hash is stable across the
+  // plaintext→encrypted storage migration (a hash of ciphertext would
+  // change on every re-encryption and never match the key the box used).
+  const current = stored === null ? null : decryptSecret(stored);
   const fingerprint = current
     ? createHash("sha256").update(current).digest("hex")
     : null;
@@ -179,7 +191,7 @@ async function dropToCustomerHeld(businessId: string, db: SupabaseClient): Promi
 async function remintEscrowed(businessId: string, db: SupabaseClient): Promise<void> {
   const { error: upsertError } = await db.from("residency_backup_keys").upsert({
     business_id: businessId,
-    passphrase: generateBackupPassphrase(),
+    passphrase: encryptSecret(generateBackupPassphrase()),
     passphrase_sha256: null,
     custody: "escrowed",
     rotated_at: new Date().toISOString()

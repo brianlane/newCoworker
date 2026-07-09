@@ -4,7 +4,9 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
+import { afterEach } from "vitest";
+import { encryptSecret } from "@/lib/crypto/secret-encryption";
 import {
   CustomerHeldBackupKeyError,
   generateBackupPassphrase,
@@ -172,6 +174,68 @@ describe("resolveResidencyBackupPassphraseForDeploy", () => {
     await expect(
       resolveResidencyBackupPassphraseForDeploy(BIZ, readFail.db as never)
     ).rejects.toThrow(/db down/);
+  });
+});
+
+describe("app-layer encryption at rest (G5)", () => {
+  const KEY = randomBytes(32).toString("base64url");
+  const keyEnv = { SECRETS_ENCRYPTION_KEY: KEY };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.SECRETS_ENCRYPTION_KEY = KEY;
+  });
+  afterEach(() => {
+    delete process.env.SECRETS_ENCRYPTION_KEY;
+  });
+
+  it("mints ciphertext at rest but returns the plaintext passphrase", async () => {
+    const { db, insert } = makeDb({ reads: [{ data: null, error: null }] });
+    const passphrase = await getOrCreateResidencyBackupKey(BIZ, db as never);
+    expect(passphrase).toMatch(/^[A-Za-z0-9_-]+$/);
+    const insertArg = (insert.mock.calls[0] as unknown[])[0] as { passphrase: string };
+    expect(insertArg.passphrase).toMatch(/^enc:v1:/);
+    expect(insertArg.passphrase).not.toContain(passphrase);
+  });
+
+  it("reads decrypt stored ciphertext (primary read and race reread)", async () => {
+    const stored = encryptSecret("the-passphrase", keyEnv);
+    const primary = makeDb({
+      reads: [{ data: { passphrase: stored, custody: "escrowed" }, error: null }]
+    });
+    expect(await getOrCreateResidencyBackupKey(BIZ, primary.db as never)).toBe("the-passphrase");
+
+    const race = makeDb({
+      reads: [
+        { data: null, error: null },
+        { data: { passphrase: stored, custody: "escrowed" }, error: null }
+      ],
+      insertError: { message: "duplicate key value" }
+    });
+    expect(await getOrCreateResidencyBackupKey(BIZ, race.db as never)).toBe("the-passphrase");
+  });
+
+  it("customer_held fingerprint hashes the DECRYPTED passphrase (stable across the migration)", async () => {
+    const stored = encryptSecret("the-passphrase", keyEnv);
+    const { db, upsert } = makeDb({
+      reads: [
+        { data: { tier: "enterprise" }, error: null },
+        { data: { passphrase: stored }, error: null }
+      ]
+    });
+    await setResidencyBackupCustody(BIZ, "customer_held", db as never);
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        passphrase_sha256: createHash("sha256").update("the-passphrase").digest("hex")
+      })
+    );
+  });
+
+  it("re-escrow mints ciphertext at rest", async () => {
+    const { db, upsert } = makeDb({ reads: [{ data: null, error: null }] });
+    await setResidencyBackupCustody(BIZ, "escrowed", db as never);
+    const arg = (upsert.mock.calls[0] as unknown[])[0] as { passphrase: string };
+    expect(arg.passphrase).toMatch(/^enc:v1:/);
   });
 });
 
