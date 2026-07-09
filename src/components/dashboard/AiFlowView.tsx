@@ -491,6 +491,41 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           />
         </>
       );
+    case "branch":
+      return (
+        <div className="space-y-2">
+          <Row label="Question" value={step.question} />
+          {step.branches.map((arm) => (
+            <div
+              key={arm.id}
+              className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2"
+            >
+              <div className="text-xs font-semibold text-parchment/60">
+                {arm.label} — when {conditionText(arm.condition)}
+              </div>
+              {arm.steps.length === 0 ? (
+                <div className="text-xs text-parchment/40">No steps on this path.</div>
+              ) : (
+                arm.steps.map((s, i) => (
+                  <StepView key={s.id} step={s} index={i} coworkerEmail={coworkerEmail} />
+                ))
+              )}
+            </div>
+          ))}
+          <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
+            <div className="text-xs font-semibold text-parchment/60">None matched (else)</div>
+            {step.else.length === 0 ? (
+              <div className="text-xs text-parchment/40">
+                The workflow continues past the branch.
+              </div>
+            ) : (
+              step.else.map((s, i) => (
+                <StepView key={s.id} step={s} index={i} coworkerEmail={coworkerEmail} />
+              ))
+            )}
+          </div>
+        </div>
+      );
     case "upsert_customer":
       return (
         <>

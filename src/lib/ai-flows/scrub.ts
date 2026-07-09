@@ -58,6 +58,8 @@ const PROSE_KEYS: ReadonlySet<string> = new Set([
   "description",
   "emailSubject",
   "integrationLabel",
+  // A branch step's question is author prose (its arm labels blank via "label").
+  "question",
   // Trigger condition (`value`) and per-step gate (`equals`/`contains`/
   // `notEquals`) comparison literals — free text that can carry names/
   // addresses/locations.
@@ -155,38 +157,49 @@ export function scrubDefinition(
   }
 
   // `def` is a parsed AiFlowDefinition, so steps is always an array (preserved
-  // through the JSON clone + deep redaction above).
-  const steps = scrubbed.steps as Record<string, unknown>[];
-  for (const step of steps) {
-    switch (step.type) {
-      case "send_email":
-        // Sender mailbox is tenant-specific; default the copy back to the AI
-        // coworker's own mailbox by dropping the connection binding.
-        delete step.fromConnectionId;
-        break;
-      case "send_sms": {
-        const qh = step.quietHours as Record<string, unknown> | undefined;
-        if (qh) delete qh.emailFromConnectionId;
-        if (typeof step.toAgentName === "string") step.toAgentName = EMPLOYEE_NAME_PLACEHOLDER;
-        break;
+  // through the JSON clone + deep redaction above). Recurse into branch arms
+  // so a nested send/route/http step gets the same fixups as a trunk step.
+  const fixupSteps = (steps: Record<string, unknown>[]): void => {
+    for (const step of steps) {
+      switch (step.type) {
+        case "send_email":
+          // Sender mailbox is tenant-specific; default the copy back to the AI
+          // coworker's own mailbox by dropping the connection binding.
+          delete step.fromConnectionId;
+          break;
+        case "send_sms": {
+          const qh = step.quietHours as Record<string, unknown> | undefined;
+          if (qh) delete qh.emailFromConnectionId;
+          if (typeof step.toAgentName === "string") step.toAgentName = EMPLOYEE_NAME_PLACEHOLDER;
+          break;
+        }
+        case "route_to_team":
+          // Pinning to one named agent is tenant-specific; default to roster
+          // rotation by dropping the pin.
+          delete step.agentName;
+          break;
+        case "http_call":
+          // The endpoint `path` and `bodyTemplate` can embed webhook URLs, API
+          // keys, or bearer tokens — tenant secrets that must never reach the
+          // cross-tenant library. Drop them; the duplicating user re-enters their
+          // own endpoint in the editor.
+          delete step.path;
+          delete step.bodyTemplate;
+          break;
+        case "branch": {
+          // `def` is a parsed AiFlowDefinition, so arms/else are always arrays.
+          for (const arm of step.branches as Array<{ steps: Record<string, unknown>[] }>) {
+            fixupSteps(arm.steps);
+          }
+          fixupSteps(step.else as Record<string, unknown>[]);
+          break;
+        }
+        default:
+          break;
       }
-      case "route_to_team":
-        // Pinning to one named agent is tenant-specific; default to roster
-        // rotation by dropping the pin.
-        delete step.agentName;
-        break;
-      case "http_call":
-        // The endpoint `path` and `bodyTemplate` can embed webhook URLs, API
-        // keys, or bearer tokens — tenant secrets that must never reach the
-        // cross-tenant library. Drop them; the duplicating user re-enters their
-        // own endpoint in the editor.
-        delete step.path;
-        delete step.bodyTemplate;
-        break;
-      default:
-        break;
     }
-  }
+  };
+  fixupSteps(scrubbed.steps as Record<string, unknown>[]);
 
   return scrubbed;
 }

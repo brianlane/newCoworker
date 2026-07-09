@@ -75,8 +75,10 @@ import {
   nextTimeOfDayMs,
   offerRespondByMs,
   parseHHMM,
-  smsQuietDecision
+  smsQuietDecision,
+  timeWindowDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
+import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   geminiCostMicrosFromTokens,
@@ -84,7 +86,13 @@ import {
   resolveChatPeriodStart,
   type SpendSupabase
 } from "../_shared/chat_spend_cap.ts";
-import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
+import type {
+  AiFlowDefinition,
+  BrowseAuth,
+  ExtractField,
+  FlowStep,
+  FlowTimeWindow
+} from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
@@ -241,6 +249,10 @@ type Scope = {
   // — for the dashboard run "investigate" view. Default off so most flows pay no
   // extra capture latency/storage; turned on for flows being debugged.
   captureScreenshots?: boolean;
+  // Flow-level business-hours gate (definition.timeWindow): communication steps
+  // outside the window defer the run to the next open slot. Derived from the
+  // definition each claim; never persisted in run.context (buildContext omits it).
+  timeWindow?: FlowTimeWindow;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -407,7 +419,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   const scope: Scope = {
     vars: asRecord(run.context.vars),
     trigger: asRecord(run.context.trigger),
-    captureScreenshots: def.options?.captureStepScreenshots === true
+    captureScreenshots: def.options?.captureStepScreenshots === true,
+    ...(def.timeWindow ? { timeWindow: def.timeWindow } : {})
   };
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
@@ -442,9 +455,27 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // (claim/reject/timeout) stamped by the inbound webhook / escalation sweep.
   const routing = asRecord(run.context.routing);
 
+  // Branch arms are stored nested but the run state machine is a flat integer
+  // cursor, so execute over the deterministic flattened order (see
+  // _shared/ai_flows/branching.ts). For flows without branch steps this is
+  // exactly def.steps, index for index.
+  const flat = flattenSteps(def.steps);
+
   let index = run.current_step;
-  while (index < def.steps.length) {
-    const step = def.steps[index];
+  while (index < flat.length) {
+    const { step, branchPath } = flat[index];
+    // A step under an untaken (or not-yet-evaluated) branch arm never runs —
+    // recorded "skipped" like a when_unmet skip, so run history shows every
+    // path with the untaken ones greyed.
+    if (branchPath.length > 0 && !isOnActivePath(branchPath, scope.vars)) {
+      await recordStep(supabase, run, index, step, "skipped", { skipped: "branch_not_taken" });
+      index += 1;
+      await updateRun(supabase, run.id, {
+        current_step: index,
+        context: buildContext(scope, approval, routing)
+      });
+      continue;
+    }
     let outcome: StepOutcome;
     try {
       outcome = await runStep(supabase, run, step, index, scope, approval, routing);
@@ -482,8 +513,9 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // and cancel is always the LAST digit.
       const nowMs = Date.now();
       const gateOptions = buildApprovalGateOptions({
-        offerQuietBypass: def.steps
+        offerQuietBypass: flat
           .slice(index + 1)
+          .map((e) => e.step)
           .some(
             (s) =>
               s.type === "send_sms" &&
@@ -693,11 +725,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     if (outcome.endRun) {
       // Late claim: jump to the end so the run completes as done without
       // replaying the steps after route_to_team.
-      index = def.steps.length;
-    } else if (outcome.skipNextStep && index < def.steps.length) {
+      index = flat.length;
+    } else if (outcome.skipNextStep && index < flat.length) {
       // Approval gate decided "skip": the step the gate guards (the one
       // directly after it) is recorded as skipped without running.
-      await recordStep(supabase, run, index, def.steps[index], "skipped", {
+      await recordStep(supabase, run, index, flat[index].step, "skipped", {
         skipped: "approval_skipped"
       });
       index += 1;
@@ -736,6 +768,13 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
  * other engine-internal vars (e.g. the after-hours email markers).
  */
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+
+/**
+ * Step types gated by the flow-level time window (definition.timeWindow):
+ * everything that CONTACTS someone. Reads/waits/branches run any time — only
+ * the outward touch waits for business hours.
+ */
+const COMM_STEP_TYPES = new Set<string>(["send_sms", "send_email", "notify_owner", "route_to_team"]);
 
 type StepOutcome =
   // skipNextStep: set by an approval gate decided "skip" — the step directly
@@ -787,6 +826,17 @@ async function runStep(
   // as having started.
   if (step.when && !evaluateStepCondition(step.when, scope)) {
     return { kind: "ok", skipped: true, result: { skipped: "when_unmet", when: step.when } };
+  }
+  // Flow-level time window (definition.timeWindow): a communication step
+  // outside the window defers the whole run to the next open slot — the same
+  // earliest_claim_at mechanics as send_sms quiet hours, which still apply on
+  // top per step. Checked AFTER the `when` guard so a step that would skip
+  // anyway never parks the run, and before recording "running".
+  if (scope.timeWindow && COMM_STEP_TYPES.has(step.type)) {
+    const decision = timeWindowDecision(Date.now(), scope.timeWindow);
+    if (!decision.allowed) {
+      return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "flow_time_window" };
+    }
   }
   await recordStep(supabase, run, index, step, "running");
   const plan = planStep(step, scope);

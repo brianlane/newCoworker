@@ -157,6 +157,79 @@ export function smsQuietDecision(nowMs: number, cfg: SmsQuietHoursConfig): SmsQu
 }
 
 /**
+ * Local weekday (0=Sun..6=Sat) of an instant in an IANA zone, or null when the
+ * zone is invalid. Same Intl-only approach as zonedClock.
+ */
+export function zonedWeekday(ms: number, timeZone: string): number | null {
+  let name: string;
+  try {
+    name = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "short" }).format(new Date(ms));
+  } catch {
+    return null;
+  }
+  const idx = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(name);
+  /* c8 ignore next -- Intl always emits a known short weekday name for a valid zone */
+  return idx === -1 ? null : idx;
+}
+
+export type FlowTimeWindowConfig = {
+  timezone: string;
+  /** Window opens, 24h "HH:MM". */
+  start: string;
+  /** Window closes, 24h "HH:MM". */
+  end: string;
+  /** Days the window is open (0=Sun..6=Sat). Default: every day. */
+  daysOfWeek?: number[];
+};
+
+export type TimeWindowDecision = { allowed: true } | { allowed: false; resumeAtMs: number };
+
+/**
+ * Flow-level time window: may a communication step execute right now? Allowed
+ * iff the local time in cfg.timezone is inside [start, end) AND the current
+ * local day is in daysOfWeek (absent = every day). When blocked, resumeAtMs is
+ * the next instant the window opens (the next occurrence of `start` on an
+ * allowed day, scanning up to a week ahead in 24h hops — exact for
+ * fixed-offset zones and within an hour around a DST jump, fine for a
+ * business-hours line). Fails OPEN on bad config (invalid tz / malformed
+ * HH:MM / zero-length window / no allowed day), matching the other helpers in
+ * this module: a corrupt window must degrade to "no window", never strand a
+ * run.
+ */
+export function timeWindowDecision(nowMs: number, cfg: FlowTimeWindowConfig): TimeWindowDecision {
+  const start = parseHHMM(cfg.start);
+  const end = parseHHMM(cfg.end);
+  if (start === null || end === null || start === end) return { allowed: true };
+  const clock = zonedClock(nowMs, cfg.timezone);
+  const weekday = zonedWeekday(nowMs, cfg.timezone);
+  if (!clock || weekday === null) return { allowed: true };
+  const days =
+    cfg.daysOfWeek && cfg.daysOfWeek.length > 0
+      ? new Set(cfg.daysOfWeek.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))
+      : null;
+  if (days && days.size === 0) return { allowed: true };
+  const dayAllowed = (d: number) => days === null || days.has(d);
+  if (dayAllowed(weekday) && inDailyWindow(clock.minutesOfDay, start, end)) {
+    return { allowed: true };
+  }
+  // Next open instant: the next occurrence of `start`, then 24h hops until an
+  // allowed weekday (max 7). nextTimeOfDayMs never fails here — zonedClock
+  // already succeeded for this zone.
+  let resume = nextTimeOfDayMs(nowMs, cfg.timezone, start);
+  /* c8 ignore next -- zonedClock succeeded above, so the same zone can't fail here */
+  if (resume === null) return { allowed: true };
+  for (let i = 0; i < 8; i++) {
+    const d = zonedWeekday(resume, cfg.timezone);
+    /* c8 ignore next -- the zone was valid above; a weekday always resolves */
+    if (d === null) return { allowed: true };
+    if (dayAllowed(d)) return { allowed: false, resumeAtMs: resume };
+    resume += 24 * 60 * 60_000;
+  }
+  /* c8 ignore next 2 -- unreachable: 8 daily hops always hit one of <=7 allowed weekdays */
+  return { allowed: true };
+}
+
+/**
  * Human copy for an instant in the owner's zone, e.g. "8:40 AM on Jun 12" —
  * what `{{offer.deadline}}` renders to inside offer templates. Falls back to
  * the UTC ISO string when the zone is invalid.

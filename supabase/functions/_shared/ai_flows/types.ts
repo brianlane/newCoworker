@@ -280,6 +280,39 @@ export type RouteOfferWindow = {
 };
 
 /**
+ * One arm of a `branch` step: a labeled condition plus the steps that run when
+ * it is the FIRST arm whose condition matches. Arms are evaluated top to
+ * bottom; no match → the branch's `else` steps run.
+ */
+export type BranchArm = {
+  /** Stable id (unique within the branch step) recorded as the chosen arm. */
+  id: string;
+  /** Display label, e.g. "Auto" / "Home" / "They replied". */
+  label: string;
+  /** Same shape as a per-step `when` guard, evaluated against run vars. */
+  condition: StepCondition;
+  steps: FlowStep[];
+};
+
+/**
+ * Flow-level time window: communication steps (send_sms / send_email /
+ * notify_owner / route_to_team) may only execute while the local time in
+ * `timezone` is inside [start, end) on an allowed day; outside it the run
+ * defers via earliest_claim_at until the next open slot (identical mechanics
+ * to send_sms quiet hours, which still apply on top per step).
+ */
+export type FlowTimeWindow = {
+  /** IANA zone the window is defined in. */
+  timezone: string;
+  /** Window opens, 24h "HH:MM" (e.g. "09:00"). */
+  start: string;
+  /** Window closes, 24h "HH:MM" (e.g. "17:00"). */
+  end: string;
+  /** Days the window is open (0=Sun..6=Sat). Default: every day. */
+  daysOfWeek?: number[];
+};
+
+/**
  * A dynamic reference to a saved person whose phone number is resolved LIVE at
  * run time, instead of a hardcoded number. `source` selects the table:
  *   - "employee": ai_flow_team_members (roster) → {name, phone_e164}
@@ -623,6 +656,30 @@ export type FlowStep =
   | {
       id: string;
       /**
+       * Multi-way branch (GHL-style If/Else): arms are evaluated top to bottom
+       * against run vars and the FIRST match wins; no match → the `else` steps
+       * run. Executed by recording the chosen arm id into the engine var
+       * `__branch_<id>`; the flattened steps of untaken arms are then skipped
+       * (recorded "skipped" with reason branch_not_taken) exactly like a
+       * when_unmet skip. Nesting is capped at 3 levels at author time.
+       */
+      type: "branch";
+      /** Display label, e.g. "What insurance type?". */
+      question: string;
+      /** 1-4 arms, first match wins. */
+      branches: BranchArm[];
+      /** "None matched" path (may be empty). */
+      else: FlowStep[];
+      /**
+       * Optional guard on the WHOLE branch: unmet → the branch step skips, its
+       * choice var is never recorded, and every arm/else step skips as
+       * branch_not_taken.
+       */
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
        * Pause the run, then continue with the NEXT step. Exactly one mode:
        *   - minutes: relative wait (1..43200 = 30 days);
        *   - untilTime ("HH:MM") + timezone: wait until the next occurrence of
@@ -759,6 +816,8 @@ export type AiFlowDefinition = {
    */
   triggers?: FlowTrigger[];
   steps: FlowStep[];
+  /** Flow-level business-hours gate on communication steps. */
+  timeWindow?: FlowTimeWindow;
   options?: AiFlowOptions;
 };
 
