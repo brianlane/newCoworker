@@ -86,7 +86,10 @@ vi.mock("@/lib/db/vps-inventory", () => ({
   claimAvailableVps: vi.fn().mockResolvedValue(null),
   recordVpsAssigned: vi.fn().mockResolvedValue(undefined),
   releaseVpsToPool: vi.fn().mockResolvedValue(undefined),
-  retireVps: vi.fn().mockResolvedValue(undefined)
+  retireVps: vi.fn().mockResolvedValue(undefined),
+  // Consumed only by the default orphanReconciler closure (never invoked in
+  // tests — every reconciliation test injects its own reconciler).
+  listVpsInventory: vi.fn().mockResolvedValue([])
 }));
 
 vi.mock("@/lib/db/telnyx-routes", () => ({
@@ -2275,6 +2278,220 @@ describe("provisioning/orchestrate", () => {
 
       expect(result.vpsId).toBe("123");
       expect(vpsAdopter).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("fail-but-charge orphan reconciliation", () => {
+    function makePool(overrides: Record<string, unknown> = {}) {
+      return {
+        claim: vi.fn().mockResolvedValue(null),
+        record: vi.fn().mockResolvedValue(undefined),
+        release: vi.fn().mockResolvedValue(undefined),
+        retire: vi.fn().mockResolvedValue(undefined),
+        ...overrides
+      };
+    }
+
+    /**
+     * The exact failure shape from the Jul 8 2026 Truly Insurance signup:
+     * the PURCHASE endpoint threw 402 "Card payment could not be completed"
+     * while Hostinger charged the card and created VM 1815606 anyway.
+     */
+    class FakePurchaseError extends Error {
+      readonly endpoint = "/api/vps/v1/virtual-machines";
+      readonly status = 402;
+      readonly body = { message: "Card payment could not be completed" };
+      constructor() {
+        super("Hostinger API HTTP 402: Card payment could not be completed");
+        this.name = "HostingerApiError";
+      }
+    }
+
+    const orphanRow = {
+      vm_id: 1815606,
+      hostname: "srv1815606.hstgr.cloud",
+      plan: "kvm1",
+      state: "assigned",
+      hostinger_billing_subscription_id: "hsub-orphan",
+      assigned_business_id: "biz-orphan-adopt",
+      acquired_at: "2026-07-08T22:52:20Z",
+      assigned_at: "2026-07-08T22:57:37Z",
+      notes: null,
+      updated_at: "2026-07-08T22:57:37Z"
+    };
+
+    it("adopts the reconciled orphan when the purchase fails-but-charges (self-heal)", async () => {
+      // First claim (adopt-first, pool empty) misses; second claim (after
+      // reconciliation pooled the orphan) hits.
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(orphanRow)
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const vpsAdopter = vi.fn().mockResolvedValue({
+        ...makeVpsStub("1815606"),
+        hostingerBillingSubscriptionId: "hsub-orphan"
+      });
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1815606, plan: "kvm1" }]);
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-orphan-adopt", tier: "starter" },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("1815606");
+      expect(orphanReconciler).toHaveBeenCalledTimes(1);
+      expect(vpsAdopter).toHaveBeenCalledWith(
+        expect.objectContaining({ virtualMachineId: 1815606 })
+      );
+      // Only ONE purchase attempt — the whole point is not buying twice.
+      expect(vpsProvisioner).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows the original purchase error when the reconciler finds nothing", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi.fn().mockResolvedValue([]);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-none", tier: "starter" },
+          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+      expect(orphanReconciler).toHaveBeenCalledTimes(1);
+    });
+
+    it("rethrows when the reconciled orphan's size does not match the requested size", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      // Orphan is a kvm8; the starter provision needs kvm1 — no adopt.
+      const orphanReconciler = vi.fn().mockResolvedValue([{ vmId: 999, plan: "kvm8" }]);
+      const vpsAdopter = vi.fn();
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-mismatch", tier: "starter" },
+          { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+      expect(vpsAdopter).not.toHaveBeenCalled();
+    });
+
+    it("does NOT reconcile on non-purchase-endpoint Hostinger failures", async () => {
+      class FakePisError extends Error {
+        readonly endpoint = "/api/vps/v1/post-install-scripts";
+        readonly status = 500;
+        readonly body = null;
+        constructor() {
+          super("Hostinger API HTTP 500");
+          this.name = "HostingerApiError";
+        }
+      }
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePisError());
+      const orphanReconciler = vi.fn();
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-wrong-endpoint", tier: "starter" },
+          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 500/);
+      expect(orphanReconciler).not.toHaveBeenCalled();
+    });
+
+    it("does NOT reconcile on generic (non-Hostinger) purchase errors", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new Error("kapow"));
+      const orphanReconciler = vi.fn();
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-generic-err", tier: "starter" },
+          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow("kapow");
+      expect(orphanReconciler).not.toHaveBeenCalled();
+    });
+
+    it("skipPoolAdopt: pools the orphan (bookkeeping) but does not adopt it", async () => {
+      // Change-plan term alignment must land on a term-priced PURCHASE; the
+      // orphan still gets pooled so it isn't lost, but no adopt happens and
+      // the original error surfaces for the operator.
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi.fn().mockResolvedValue([{ vmId: 1815606, plan: "kvm1" }]);
+      const vpsAdopter = vi.fn();
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-skip", tier: "starter", skipPoolAdopt: true },
+          { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+      expect(orphanReconciler).toHaveBeenCalledTimes(1);
+      expect(vpsAdopter).not.toHaveBeenCalled();
+      expect(pool.claim).not.toHaveBeenCalled();
+    });
+
+    it("surfaces the original purchase error when the reconciler itself throws", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi.fn().mockRejectedValue(new Error("hostinger list also down"));
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-reconcile-fail", tier: "starter" },
+          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+    });
+
+    it("stringifies a non-Error reconciler rejection and surfaces the original error", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi.fn().mockRejectedValue("reconcile string boom");
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-reconcile-nonerr", tier: "starter" },
+          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+    });
+
+    it("rethrows when the post-reconcile adopt also fails (orphan retired, no loop)", async () => {
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(orphanRow)
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const vpsAdopter = vi.fn().mockRejectedValueOnce(new Error("setup 422"));
+      const orphanReconciler = vi.fn().mockResolvedValue([{ vmId: 1815606, plan: "kvm1" }]);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-adopt-fail", tier: "starter" },
+          { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+      // The bad orphan was retired, and crucially NO second purchase happened.
+      expect(pool.retire).toHaveBeenCalledWith(1815606, expect.stringContaining("setup 422"));
+      expect(vpsProvisioner).toHaveBeenCalledTimes(1);
+    });
+
+    it("disables reconciliation entirely when orphanReconciler is null", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-disabled", tier: "starter" },
+          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler: null, remoteExec: vi.fn() }
+        )
+      ).rejects.toThrow(/HTTP 402/);
     });
   });
 
