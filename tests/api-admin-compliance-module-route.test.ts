@@ -24,6 +24,7 @@ import { getBusiness, updateComplianceModule } from "@/lib/db/businesses";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
 import { COMPLIANCE_MODULE_START } from "@/lib/compliance/module";
+import { BUSINESS_CONFIG_SOUL_MD_MAX_CHARS } from "@/lib/vault/business-config-markdown-limits";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 const MODULE = {
@@ -94,6 +95,17 @@ describe("api/admin/compliance-module route", () => {
     expect(updateComplianceModule).toHaveBeenCalled();
     expect(patchBusinessConfig).not.toHaveBeenCalled();
     expect(scheduleVaultSync).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the module would push the soul past the size cap", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      // 10 chars of headroom — any module block overflows it.
+      soul_md: "x".repeat(BUSINESS_CONFIG_SOUL_MD_MAX_CHARS - 10)
+    } as never);
+    const res = await post({ businessId: BIZ_ID, complianceModule: MODULE });
+    expect(res.status).toBe(400);
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+    expect(updateComplianceModule).not.toHaveBeenCalled();
   });
 
   it("404s on missing businesses and validates payloads", async () => {

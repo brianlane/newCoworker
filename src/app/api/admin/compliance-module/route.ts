@@ -20,6 +20,7 @@ import {
   parseComplianceModule
 } from "@/lib/compliance/module";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { BUSINESS_CONFIG_SOUL_MD_MAX_CHARS } from "@/lib/vault/business-config-markdown-limits";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -55,6 +56,14 @@ export async function POST(request: Request) {
     const config = await getBusinessConfig(body.businessId);
     if (config) {
       const nextSoul = applyComplianceModuleToSoul(config.soul_md ?? "", normalized);
+      // Mirror /api/business/config's cap: the block must not push the
+      // stored soul past the limit the soul editor enforces.
+      if (nextSoul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          `The tenant's soul plus this module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters — shorten the module (or the soul)`
+        );
+      }
       await patchBusinessConfig(body.businessId, { soul_md: nextSoul });
     }
     await updateComplianceModule(body.businessId, normalized);

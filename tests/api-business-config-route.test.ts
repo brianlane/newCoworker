@@ -126,6 +126,21 @@ describe("api/business/config — compliance module survives soul edits", () => 
     expect(patched.soul_md).toContain("Never quote settlement amounts on any channel.");
   });
 
+  it("refuses a soul save whose module block would exceed the size cap", async () => {
+    supabaseStub.maybeSingle.mockResolvedValue({
+      data: {
+        tier: "enterprise",
+        compliance_module: { customPrompt: "Never quote settlement amounts on any channel." }
+      },
+      error: null
+    });
+    const res = await POST(
+      jsonRequest(baseBody({ soulMd: "x".repeat(BUSINESS_CONFIG_SOUL_MD_MAX_CHARS - 10) }))
+    );
+    expect(res.status).toBe(400);
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+
   it("leaves soul text untouched when no module is set", async () => {
     const res = await POST(jsonRequest(baseBody()));
     expect(res.status).toBe(200);

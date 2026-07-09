@@ -182,6 +182,15 @@ export async function POST(request: Request) {
       const complianceModule = parseComplianceModule(moduleRow.compliance_module);
       if (complianceModule) {
         soulMd = applyComplianceModuleToSoul(soulMd, complianceModule);
+        // The appended block can push a near-cap soul past the same limit
+        // the schema enforced on the raw input — refuse rather than persist
+        // an oversized document the next editor load would reject.
+        if (soulMd.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            `Soul plus the compliance module exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters — shorten the soul text`
+          );
+        }
       }
     }
 
