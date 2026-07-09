@@ -336,6 +336,22 @@ describe("salvageFlowDefinition: semantic repair loop", () => {
     expect(res!.warnings.join(" ")).toContain("couldn't be repaired");
   });
 
+  it("salvages a VALID voice trigger whose steps all failed (Bugbot a61cd2d8: no placeholder loop)", () => {
+    const res = salvageFlowDefinition({
+      version: 1,
+      // Fully valid inbound voice trigger — kept at the zod stage.
+      trigger: { channel: "voice", fromE164: "+16025551234" },
+      // No step survives zod, so the placeholder path runs under voice.
+      steps: [{ id: "v", type: "ring_handoff" }] // no toE164/toRef
+    });
+    expect(res).not.toBeNull();
+    expect(res!.definition.trigger).toEqual({ channel: "manual" });
+    expect(res!.definition.steps.map((s) => s.type)).toEqual(["notify_owner"]);
+    expect(res!.warnings.join(" ")).toContain("no usable call steps");
+    // The placeholder was injected exactly once, not once per loop pass.
+    expect(res!.warnings.filter((w) => w.includes("notify-me step was added"))).toHaveLength(1);
+  });
+
   it("always returns a definition that passes full validation", () => {
     const res = salvageFlowDefinition({
       version: 999,

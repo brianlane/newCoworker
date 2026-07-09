@@ -1576,6 +1576,17 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
   let triggerReset = trigParse.success === false;
   for (let guard = 0; guard < 60; guard++) {
     if (steps.length === 0) {
+      // A voice flow can only hold voice steps, so the notify-me placeholder
+      // below would be rejected (and re-injected) forever — a voice trigger
+      // with no surviving call steps falls back to Run-now first.
+      if (trigger.channel === "voice") {
+        trigger = { channel: "manual" };
+        triggers = undefined;
+        triggerReset = true;
+        warnings.push(
+          "The voice flow had no usable call steps left, so it starts from the Run-now button for now."
+        );
+      }
       steps.push({
         id: "s1",
         type: "notify_owner",
