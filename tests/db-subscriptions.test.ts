@@ -49,7 +49,7 @@ describe("db/subscriptions", () => {
   beforeEach(() => vi.clearAllMocks());
 
   describe("listBusinessIdsWithLiveSubscription", () => {
-    it("returns the set of businesses with ANY active/past_due row (any-row semantics)", async () => {
+    it("splits live businesses by Stripe linkage (any-row semantics)", async () => {
       // `in` is called twice (business_id filter, then status filter); the
       // second call resolves the query.
       const db = {
@@ -58,21 +58,35 @@ describe("db/subscriptions", () => {
           .fn()
           .mockReturnValueOnce({
             in: vi.fn().mockResolvedValue({
-              data: [{ business_id: "live-1" }, { business_id: "live-1" }, { business_id: "live-2" }],
+              data: [
+                { business_id: "paid-1", stripe_subscription_id: "sub_a" },
+                { business_id: "paid-1", stripe_subscription_id: "sub_a" },
+                { business_id: "pilot", stripe_subscription_id: null },
+                // A business with BOTH a stripeless and a Stripe-backed live
+                // row counts as stripeBacked, never both.
+                { business_id: "mixed", stripe_subscription_id: null },
+                { business_id: "mixed", stripe_subscription_id: "sub_b" }
+              ],
               error: null
             })
           })
       };
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
-      const result = await listBusinessIdsWithLiveSubscription(["live-1", "live-2", "grace-1"]);
-      expect(result).toEqual(new Set(["live-1", "live-2"]));
-      expect(db.in).toHaveBeenCalledWith("business_id", ["live-1", "live-2", "grace-1"]);
+      const result = await listBusinessIdsWithLiveSubscription([
+        "paid-1",
+        "pilot",
+        "mixed",
+        "grace-1"
+      ]);
+      expect(result.stripeBacked).toEqual(new Set(["paid-1", "mixed"]));
+      expect(result.stripeless).toEqual(new Set(["pilot"]));
+      expect(db.in).toHaveBeenCalledWith("business_id", ["paid-1", "pilot", "mixed", "grace-1"]);
     });
 
-    it("returns an empty set for empty input without touching the client", async () => {
+    it("returns empty sets for empty input without touching the client", async () => {
       const result = await listBusinessIdsWithLiveSubscription([]);
-      expect(result).toEqual(new Set());
+      expect(result).toEqual({ stripeBacked: new Set(), stripeless: new Set() });
       expect(createSupabaseServiceClient).not.toHaveBeenCalled();
     });
 
@@ -84,7 +98,10 @@ describe("db/subscriptions", () => {
         })
       };
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(dbNull as never);
-      expect(await listBusinessIdsWithLiveSubscription(["a"])).toEqual(new Set());
+      expect(await listBusinessIdsWithLiveSubscription(["a"])).toEqual({
+        stripeBacked: new Set(),
+        stripeless: new Set()
+      });
 
       const dbErr = {
         ...mockDb(),

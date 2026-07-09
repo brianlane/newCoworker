@@ -11,16 +11,19 @@
  * hosting a live tenant on a non-renewing subscription expiring Aug 2).
  *
  * Direction 1 (tenant safety, AUTO-HEALED): for every business with a LIVE
- * paying relationship — non-wiped AND a NewCoworker subscription in
- * `active`/`past_due` — resolve the VM's billing subscription; if auto-renew
- * is off, re-enable it right here and report the finding either way.
- * Healing is safe for exactly this population: the tenant is paying, so
- * renewing is always the correct state — and if they cancel later, the
- * cancel/wipe lifecycle disables auto-renew again as part of its plan
- * (verified: `disable_billing_auto_renewal` op). Businesses whose
- * subscription is `canceled` (grace window — lifecycle just parked the box
- * on purpose), `pending` (never paid), or missing (smoke/test rows) are
- * deliberately OUT of scope; their boxes surface via the pool direction
+ * PAYING relationship — non-wiped AND a NewCoworker subscription in
+ * `active`/`past_due` that is BACKED BY A STRIPE PAYMENT — resolve the VM's
+ * billing subscription; if auto-renew is off, re-enable it right here and
+ * report the finding either way. Healing is safe for exactly this
+ * population: the tenant is paying, so renewing is always the correct state
+ * — and if they cancel later, the cancel/wipe lifecycle disables auto-renew
+ * again as part of its plan (verified: `disable_billing_auto_renewal` op).
+ * Stripe-LESS live rows (internal pilots, admin-created enterprise
+ * accounts) are checked but surfaced REPORT-ONLY — an "active" flag with no
+ * payment behind it must never trigger automatic platform spend. Businesses
+ * whose subscription is `canceled` (grace window — lifecycle just parked
+ * the box on purpose), `pending` (never paid), or missing (smoke/test rows)
+ * are deliberately OUT of scope; their boxes surface via the pool direction
  * once released.
  *
  * Direction 2 (money leak, REPORT-ONLY): pool boxes in state `available`
@@ -40,7 +43,11 @@ import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 
 export type BillingPostureFinding = {
-  kind: "tenant_auto_renew_off" | "tenant_vm_unreachable" | "pool_box_auto_renew_on";
+  kind:
+    | "tenant_auto_renew_off"
+    | "tenant_vm_unreachable"
+    | "stripeless_tenant_auto_renew_off"
+    | "pool_box_auto_renew_on";
   vmId: number;
   businessId: string | null;
   businessName: string | null;
@@ -62,11 +69,14 @@ export type BillingPostureDeps = {
   listBusinesses: () => Promise<BusinessRow[]>;
   /**
    * Which of the candidate businesses have ANY active/past_due NewCoworker
-   * subscription (the live-tenant gate). Any-row semantics, NOT
-   * newest-row-wins: a newer pending row (resubscribe checkout in flight)
-   * must not shadow an older active one and exclude a paying tenant.
+   * subscription (the live-tenant gate), split by Stripe payment linkage.
+   * Any-row semantics, NOT newest-row-wins: a newer pending row (resubscribe
+   * checkout in flight) must not shadow an older active one and exclude a
+   * paying tenant.
    */
-  listBusinessIdsWithLiveSubscription: (businessIds: string[]) => Promise<Set<string>>;
+  listBusinessIdsWithLiveSubscription: (
+    businessIds: string[]
+  ) => Promise<{ stripeBacked: Set<string>; stripeless: Set<string> }>;
   listInventory: () => Promise<VpsInventoryRow[]>;
   getVirtualMachine: (vmId: number) => Promise<VirtualMachine>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
@@ -101,20 +111,30 @@ export async function checkVpsBillingPosture(
       (entry): entry is { business: BusinessRow; vmId: number } =>
         entry.vmId !== null && entry.business.status !== "wiped"
     );
-  // Live-tenant gate: only a paying relationship justifies re-enabling
-  // Hostinger billing. A canceled-in-grace business still points at its VM
-  // until the wipe, and the lifecycle just disabled that box's renewal ON
-  // PURPOSE — healing it would re-charge the platform for a box whose
-  // tenant already left (Bugbot High on this PR). Pending (never paid) and
-  // subscription-less (smoke/test) rows are equally out of scope. The
-  // helper uses any-row semantics so a newer pending row can't shadow an
-  // older active subscription (second Bugbot High).
+  // Live-tenant gate: only a REAL STRIPE PAYMENT justifies auto-spending
+  // platform money by re-enabling Hostinger billing. A canceled-in-grace
+  // business still points at its VM until the wipe, and the lifecycle just
+  // disabled that box's renewal ON PURPOSE — healing it would re-charge the
+  // platform for a box whose tenant already left (Bugbot High on this PR).
+  // Pending (never paid) and subscription-less (smoke/test) rows are
+  // equally out of scope. Stripe-LESS live rows (internal pilots like the
+  // Residency Pilot, admin-created enterprise accounts) are checked but
+  // NEVER auto-healed — an "active" flag someone typed into the DB is not
+  // a payment, and the Jul 9 run proved the failure mode: the pilot's box
+  // was deliberately parked non-renewing and the check flipped it back on.
+  // The helper uses any-row semantics so a newer pending row can't shadow
+  // an older active subscription (second Bugbot High).
   const liveBusinessIds = await deps.listBusinessIdsWithLiveSubscription(
     candidates.map((entry) => entry.business.id)
   );
-  const tenants = candidates.filter((entry) => liveBusinessIds.has(entry.business.id));
+  const tenants = candidates.filter(
+    (entry) =>
+      liveBusinessIds.stripeBacked.has(entry.business.id) ||
+      liveBusinessIds.stripeless.has(entry.business.id)
+  );
 
   for (const { business, vmId } of tenants) {
+    const stripeBacked = liveBusinessIds.stripeBacked.has(business.id);
     let vm: VirtualMachine;
     try {
       vm = await deps.getVirtualMachine(vmId);
@@ -148,6 +168,28 @@ export async function checkVpsBillingPosture(
       continue;
     }
     if (!isNotRenewing(sub)) continue;
+
+    // Report-only for Stripe-less live rows: nobody is paying, so the check
+    // must never spend platform money on their behalf. The ops email
+    // surfaces it for a human call (protect the box, or cancel the internal
+    // subscription so the row stops looking live).
+    if (!stripeBacked) {
+      findings.push({
+        kind: "stripeless_tenant_auto_renew_off",
+        vmId,
+        businessId: business.id,
+        businessName: business.name,
+        hostingerBillingSubscriptionId: sub.id,
+        expiresAt: sub.expires_at ?? sub.next_billing_at ?? null,
+        autoHealed: false,
+        detail:
+          `subscription ${sub.id} is ${sub.status} with auto-renew off, but this business has ` +
+          "no Stripe payment behind its active subscription (internal/admin-created) — " +
+          "auto-heal skipped; enable renewal in hPanel if the box must survive, or cancel " +
+          "the internal subscription to silence this finding"
+      });
+      continue;
+    }
 
     // `cancelled` has no renewal to re-enable; everything else we heal.
     let autoHealed = false;

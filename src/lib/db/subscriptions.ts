@@ -235,28 +235,57 @@ export async function listSubscriptionsByBusinessIds(
   return map;
 }
 
+export type LiveSubscriptionBusinessIds = {
+  /** Live (active/past_due) subscription BACKED BY A STRIPE PAYMENT. */
+  stripeBacked: Set<string>;
+  /**
+   * Live subscription with NO Stripe linkage — admin-created enterprise
+   * rows, internal pilots, skip-payment accounts. Nobody is being charged.
+   */
+  stripeless: Set<string>;
+};
+
 /**
  * Which of `businessIds` have ANY subscription in a live billing state
- * (`active` / `past_due`) — regardless of row age. Deliberately NOT
- * newest-row-wins like {@link listSubscriptionsByBusinessIds}: a newer
- * `pending` row (resubscribe checkout in flight) must not shadow an older
- * `active` one when the caller is deciding whether a tenant is paying.
- * Used by the VPS billing-posture cron's auto-heal gate.
+ * (`active` / `past_due`) — regardless of row age — split by whether a real
+ * Stripe payment backs it. Deliberately NOT newest-row-wins like
+ * {@link listSubscriptionsByBusinessIds}: a newer `pending` row (resubscribe
+ * checkout in flight) must not shadow an older `active` one when the caller
+ * is deciding whether a tenant is paying.
+ *
+ * The Stripe split exists for the VPS billing-posture cron: only a tenant
+ * with a REAL payment relationship justifies auto-spending platform money
+ * (re-enabling Hostinger renewal). A Stripe-less active row — the Residency
+ * Pilot's internal subscription, admin-created enterprise accounts — must
+ * never trigger an automatic billing change; those are surfaced report-only.
+ * A business with both kinds of rows counts as stripeBacked.
  */
 export async function listBusinessIdsWithLiveSubscription(
   businessIds: string[],
   client?: SupabaseClient
-): Promise<Set<string>> {
-  if (businessIds.length === 0) return new Set();
+): Promise<LiveSubscriptionBusinessIds> {
+  if (businessIds.length === 0) return { stripeBacked: new Set(), stripeless: new Set() };
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("subscriptions")
-    .select("business_id")
+    .select("business_id, stripe_subscription_id")
     .in("business_id", businessIds)
     .in("status", ["active", "past_due"]);
 
   if (error) throw new Error(`listBusinessIdsWithLiveSubscription: ${error.message}`);
-  return new Set(((data ?? []) as Array<{ business_id: string }>).map((r) => r.business_id));
+  const rows = (data ?? []) as Array<{
+    business_id: string;
+    stripe_subscription_id: string | null;
+  }>;
+  const stripeBacked = new Set(
+    rows.filter((r) => r.stripe_subscription_id !== null).map((r) => r.business_id)
+  );
+  const stripeless = new Set(
+    rows
+      .filter((r) => r.stripe_subscription_id === null && !stripeBacked.has(r.business_id))
+      .map((r) => r.business_id)
+  );
+  return { stripeBacked, stripeless };
 }
 
 export async function updateSubscription(
