@@ -640,6 +640,8 @@ describe("provisioning/orchestrate", () => {
     // empty-fallback branch.
     process.env.VOICE_TRANSCRIPTION_ENABLED = "true";
     process.env.VOICE_BRIDGE_SRC = "/opt/newcoworker-repo/vps/voice-bridge";
+    process.env.VOICE_NAME = "Puck";
+    process.env.SMS_CHAT_MODEL = "gemini-2.5-flash-lite";
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
     const remoteExec = vi.fn().mockResolvedValue(okExec());
     await orchestrateProvisioning(
@@ -652,6 +654,37 @@ describe("provisioning/orchestrate", () => {
     expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
     expectDeployHasEnv(cmd, "VOICE_TRANSCRIPTION_ENABLED", "true");
     expectDeployHasEnv(cmd, "VOICE_BRIDGE_SRC", "/opt/newcoworker-repo/vps/voice-bridge");
+    expectDeployHasEnv(cmd, "VOICE_NAME", "Puck");
+    expectDeployHasEnv(cmd, "SMS_CHAT_MODEL", "gemini-2.5-flash-lite");
+  });
+
+  it("per-tenant enterprise model overrides win over platform env", async () => {
+    process.env.GEMINI_LIVE_MODEL = "gemini-3.1-flash-live-preview";
+    process.env.OWNER_CHAT_MODEL = "gemini-2.5-flash-lite";
+    process.env.SMS_CHAT_MODEL = "gemini-2.5-flash-lite";
+    process.env.VOICE_NAME = "Puck";
+    // Once-scoped so the module-level default row keeps serving later tests.
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      enterprise_models: {
+        ownerChatModel: "gemini-3.1-pro",
+        smsChatModel: "gemini-3.1-flash",
+        geminiLiveModel: "gemini-3.2-flash-live-preview",
+        voiceName: "Aoede"
+      }
+    } as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-ent-models", tier: "enterprise" },
+      { vpsProvisioner, remoteExec }
+    );
+    const cmd = deployCallArg(remoteExec).command;
+    expectDeployHasEnv(cmd, "OWNER_CHAT_MODEL", "gemini-3.1-pro");
+    expectDeployHasEnv(cmd, "SMS_CHAT_MODEL", "gemini-3.1-flash");
+    expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.2-flash-live-preview");
+    expectDeployHasEnv(cmd, "VOICE_NAME", "Aoede");
   });
 
   it("deploy command includes Telnyx env and gateway token", async () => {

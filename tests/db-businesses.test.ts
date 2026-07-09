@@ -15,6 +15,7 @@ import {
   updateBusinessStatus,
   updateBusinessBranding,
   updateBusinessTimezone,
+  updateEnterpriseModels,
   updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
@@ -317,6 +318,22 @@ describe("db/businesses", () => {
 
     await expect(updateEnterpriseLimits("uuid-biz-1", { maxConcurrentCalls: 5 })).rejects.toThrow(
       "updateEnterpriseLimits"
+    );
+  });
+
+  it("updateEnterpriseModels writes/clears enterprise_models json, throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateEnterpriseModels("uuid-biz-1", { voiceName: "Puck" });
+    expect(db.update).toHaveBeenCalledWith({ enterprise_models: { voiceName: "Puck" } });
+
+    await updateEnterpriseModels("uuid-biz-1", null);
+    expect(db.update).toHaveBeenCalledWith({ enterprise_models: null });
+
+    const bad = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(bad as never);
+    await expect(updateEnterpriseModels("uuid-biz-1", null)).rejects.toThrow(
+      "updateEnterpriseModels"
     );
   });
 

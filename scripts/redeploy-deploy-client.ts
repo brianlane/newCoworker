@@ -63,6 +63,10 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveResidencyBackupPassphraseForDeploy } from "@/lib/residency/backup-keys";
 import { getBusiness } from "@/lib/db/businesses";
+import {
+  parseEnterpriseModels,
+  type EnterpriseModels
+} from "@/lib/plans/enterprise-models";
 import { cloudflareTunnelProvisionerFromEnv } from "@/lib/cloudflare/tunnel";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
@@ -97,7 +101,8 @@ function buildDeployEnvPrefix(
   dataResidencyEnabled: boolean,
   dataApiTokens: string,
   residencyBackupPassphrase: string,
-  residencyBackupDestination: string
+  residencyBackupDestination: string,
+  modelOverrides: EnterpriseModels | null
 ): string {
   const bashQuote = quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
@@ -129,11 +134,14 @@ function buildDeployEnvPrefix(
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
     ["BRIDGE_MEDIA_WSS_ORIGIN", bridgeMediaWssOrigin],
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
-    ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
+    ["GEMINI_LIVE_MODEL", modelOverrides?.geminiLiveModel ?? process.env.GEMINI_LIVE_MODEL ?? ""],
+    // Prebuilt Gemini Live voice (enterprise voice picker); blank = default.
+    ["VOICE_NAME", modelOverrides?.voiceName ?? process.env.VOICE_NAME ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     ["VOICE_TRANSCRIPTION_ENABLED", process.env.VOICE_TRANSCRIPTION_ENABLED ?? ""],
     ["GEMINI_ROWBOAT_MODEL", process.env.GEMINI_ROWBOAT_MODEL ?? ""],
-    ["OWNER_CHAT_MODEL", process.env.OWNER_CHAT_MODEL ?? ""],
+    ["OWNER_CHAT_MODEL", modelOverrides?.ownerChatModel ?? process.env.OWNER_CHAT_MODEL ?? ""],
+    ["SMS_CHAT_MODEL", modelOverrides?.smsChatModel ?? process.env.SMS_CHAT_MODEL ?? ""],
     ["APP_BASE_URL", process.env.APP_BASE_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? ""],
     ["VOICE_BRIDGE_SRC", process.env.VOICE_BRIDGE_SRC ?? ""],
     ["AIFLOW_RENDER_TOKEN", process.env.AIFLOW_RENDER_TOKEN ?? ""],
@@ -248,6 +256,16 @@ async function redeployOne(
   const dataResidencyEnabled =
     target.tier === "enterprise" &&
     (target.dataResidencyMode ?? "supabase") !== "supabase";
+  // Designated models + voice (enterprise): mirror the orchestrator so a
+  // fleet redeploy APPLIES saved per-tenant overrides — the admin UI
+  // promises "applies at next redeploy", and this path is the redeploy.
+  let modelOverrides: EnterpriseModels | null = null;
+  if (target.tier === "enterprise") {
+    const bizForModels = await getBusiness(target.businessId);
+    modelOverrides = parseEnterpriseModels(
+      (bizForModels as { enterprise_models?: unknown } | null)?.enterprise_models
+    );
+  }
   // Bearer list mirrors the orchestrator: every non-revoked token, with the
   // token this deploy stamps guaranteed present.
   let dataApiTokens = "";
@@ -299,7 +317,8 @@ async function redeployOne(
     dataResidencyEnabled,
     dataApiTokens,
     residencyBackupPassphrase,
-    residencyBackupDestination
+    residencyBackupDestination,
+    modelOverrides
   );
   const command = buildRedeployCommand(ref, envPrefix);
   try {

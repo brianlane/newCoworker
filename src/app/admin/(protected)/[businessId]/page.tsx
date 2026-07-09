@@ -37,6 +37,8 @@ import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glov
 import { EnterpriseBillingPanel } from "@/components/admin/EnterpriseBillingPanel";
 import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
 import { parseBranding } from "@/lib/plans/branding";
+import { EnterpriseModelsEditor } from "@/components/admin/EnterpriseModelsEditor";
+import { parseEnterpriseModels } from "@/lib/plans/enterprise-models";
 import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { byosBoxId } from "@/lib/provisioning/byos";
@@ -188,6 +190,20 @@ export default async function BusinessDetailPage({
           businessId={businessId}
           initialBranding={parseBranding((business as { branding?: unknown }).branding)}
         />
+      )}
+
+      {business.tier === "enterprise" && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Models &amp; voice
+          </h2>
+          <EnterpriseModelsEditor
+            businessId={businessId}
+            initialModels={parseEnterpriseModels(
+              (business as { enterprise_models?: unknown }).enterprise_models
+            )}
+          />
+        </Card>
       )}
 
       {business.tier === "enterprise" && (
