@@ -57,8 +57,44 @@ export type BrowseActionPlanned = {
   value: string;
 };
 
+/** Hard ceiling on any wait (sleep / wait_for_reply): 30 days, in minutes. */
+export const MAX_WAIT_MINUTES = 43200;
+
+/**
+ * What a wait_for_reply step's saveAs var holds when the lead never texted
+ * back (timeout, or no usable phone to wait on). A named sentinel — not "" —
+ * because when-conditions (equals/notEquals) require a non-empty value.
+ * Must match the SQL literal in resume_overdue_reply_waits().
+ */
+export const NO_REPLY_SENTINEL = "no_reply";
+
 export type StepAction =
   | { kind: "set_vars"; vars: Record<string, string> }
+  | {
+      /**
+       * Pause-then-continue. The WORKER computes the resume instant (it owns
+       * the clock/zone helpers) and defers the run via earliest_claim_at;
+       * `marker` is the context var it stamps so re-entry after the deferral
+       * completes instead of re-sleeping.
+       */
+      kind: "sleep";
+      minutes?: number;
+      untilTime?: string;
+      timezone?: string;
+      marker: string;
+    }
+  | {
+      /**
+       * Park the run until `from` texts back or the timeout lapses. The
+       * planner resolves the phone; the worker persists the awaiting_reply
+       * state. `saveAs` already resolved (run resumed) → the planner returns
+       * set_vars {} instead, so this action always means "park now".
+       */
+      kind: "wait_for_reply";
+      from: string;
+      saveAs: string;
+      timeoutMinutes: number;
+    }
   | {
       kind: "browse";
       url: string;
@@ -607,6 +643,48 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       for (const v of step.keyVars ?? []) add(scope.vars?.[v]);
       return { ok: true, action: { kind: "recall_url", keys, saveAs: step.saveAs } };
+    }
+    case "sleep": {
+      // Re-entry after the deferral: the worker stamped the marker before
+      // parking, so the step completes as a no-op instead of re-sleeping.
+      const marker = `__slept_${step.id}`;
+      if (scope.vars?.[marker]) {
+        return { ok: true, action: { kind: "set_vars", vars: {} } };
+      }
+      return {
+        ok: true,
+        action: {
+          kind: "sleep",
+          ...(step.minutes !== undefined
+            ? { minutes: Math.min(Math.max(1, Math.round(step.minutes)), MAX_WAIT_MINUTES) }
+            : {}),
+          ...(step.untilTime ? { untilTime: step.untilTime } : {}),
+          ...(step.timezone ? { timezone: step.timezone } : {}),
+          marker
+        }
+      };
+    }
+    case "wait_for_reply": {
+      const saveAs = step.saveAs ?? "reply_text";
+      // Resolved already (the inbound webhook or the timeout sweep wrote the
+      // var and re-queued the run): complete the step so the run moves on.
+      if (scope.vars?.[saveAs] !== undefined) {
+        return { ok: true, action: { kind: "set_vars", vars: {} } };
+      }
+      const raw = scope.vars?.[step.phoneVar];
+      const phone = typeof raw === "string" ? raw.trim() : "";
+      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      if (!e164) {
+        // A lead-data gap, not a flow bug: resolve straight to the no-reply
+        // branch instead of parking a run that can never be resumed.
+        // NO_REPLY_SENTINEL (not ""): when-conditions require non-empty values.
+        return { ok: true, action: { kind: "set_vars", vars: { [saveAs]: NO_REPLY_SENTINEL } } };
+      }
+      const timeoutMinutes = Math.min(
+        Math.max(1, Math.round(step.timeoutMinutes ?? 1440)),
+        MAX_WAIT_MINUTES
+      );
+      return { ok: true, action: { kind: "wait_for_reply", from: e164, saveAs, timeoutMinutes } };
     }
     case "upsert_customer": {
       const raw = scope.vars?.[step.phoneVar];

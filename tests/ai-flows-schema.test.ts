@@ -1106,6 +1106,78 @@ describe("trigger channels", () => {
     expect("connectionId" in def.trigger).toBe(false);
   });
 
+  it("validates sleep: exactly one wait mode", () => {
+    const steps = [{ id: "z", type: "sleep", minutes: 300 }];
+    expect(parseAiFlowDefinition({ version: 1, trigger: { channel: "manual" }, steps }).steps[0].type).toBe("sleep");
+    // untilTime + timezone is the other valid mode.
+    parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "z", type: "sleep", untilTime: "08:30", timezone: "America/Toronto" }]
+    });
+    // Both modes → reject; half a daily mode → reject; neither → reject.
+    for (const bad of [
+      { id: "z", type: "sleep", minutes: 5, untilTime: "08:30", timezone: "America/Toronto" },
+      { id: "z", type: "sleep", untilTime: "08:30" },
+      { id: "z", type: "sleep" }
+    ]) {
+      expect(() =>
+        parseAiFlowDefinition({ version: 1, trigger: { channel: "manual" }, steps: [bad] })
+      ).toThrow(AiFlowValidationError);
+    }
+  });
+
+  it("validates wait_for_reply: phoneVar must exist, saveAs feeds later when-branches", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] },
+      steps: [
+        { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }] },
+        { id: "s", type: "send_sms", to: "{{vars.lead_phone}}", body: "Hi!" },
+        { id: "w", type: "wait_for_reply", phoneVar: "lead_phone", timeoutMinutes: 300 },
+        {
+          id: "nudge",
+          type: "send_sms",
+          to: "{{vars.lead_phone}}",
+          body: "Just checking in!",
+          when: { var: "reply_text", equals: "no_reply" }
+        }
+      ]
+    });
+    expect(def.steps).toHaveLength(4);
+    // phoneVar no earlier step produces → semantic issue.
+    try {
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [{ id: "w", type: "wait_for_reply", phoneVar: "ghost_phone" }]
+      });
+      expect.unreachable("expected wait_for_reply phoneVar validation to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AiFlowValidationError);
+      expect((err as AiFlowValidationError).issues.join(" ")).toContain(
+        "waits for a reply from"
+      );
+    }
+    // A custom saveAs registers that var instead of reply_text.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "webhook", conditions: [] },
+        steps: [
+          { id: "e", type: "extract_text", fields: [{ name: "p" }] },
+          { id: "w", type: "wait_for_reply", phoneVar: "p", saveAs: "answer" },
+          {
+            id: "n",
+            type: "notify_owner",
+            message: "x",
+            when: { var: "reply_text", equals: "no_reply" }
+          }
+        ]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
   it("accepts a webhook trigger (push from the public API; conditions only)", () => {
     const def = parseAiFlowDefinition({
       version: 1,

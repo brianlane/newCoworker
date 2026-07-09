@@ -341,6 +341,10 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, keyFromTrigger: "participants", saveAs: "saved_url" };
     case "upsert_customer":
       return { id, type, phoneVar: "lead_phone", nameVar: "lead_name", emailVar: "lead_email" };
+    case "sleep":
+      return { id, type, minutes: 300 };
+    case "wait_for_reply":
+      return { id, type, phoneVar: examples.contactVar, saveAs: "reply_text", timeoutMinutes: 300 };
     case "ring_handoff":
       return { id, type, toE164: "", ringSeconds: 20 };
     case "voice_ai_intake":
@@ -378,6 +382,7 @@ function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   if (step.type === "recall_url") return [step.saveAs];
+  if (step.type === "wait_for_reply") return [step.saveAs ?? "reply_text"];
   return [];
 }
 
@@ -2822,6 +2827,95 @@ function StepFields({
           value={step.emailVar ?? ""}
           onChange={(v) => patchStep(index, { emailVar: v || undefined })}
         />
+      </div>
+    );
+  }
+  if (step.type === "sleep") {
+    const dailyMode = step.minutes === undefined;
+    return (
+      <div className="space-y-2">
+        <div>
+          <label className={labelClass}>Wait mode</label>
+          <select
+            className={inputClass}
+            value={dailyMode ? "until" : "minutes"}
+            onChange={(ev) =>
+              ev.target.value === "until"
+                ? patchStep(index, {
+                    minutes: undefined,
+                    untilTime: step.untilTime ?? "08:30",
+                    timezone: step.timezone ?? browserTimezone()
+                  })
+                : patchStep(index, { minutes: 300, untilTime: undefined, timezone: undefined })
+            }
+          >
+            <option value="minutes">Wait a set amount of time</option>
+            <option value="until">Wait until a time of day</option>
+          </select>
+        </div>
+        {dailyMode ? (
+          <div className="grid grid-cols-2 gap-2">
+            <Field
+              label="Continue at (24h HH:MM)"
+              value={step.untilTime ?? ""}
+              onChange={(v) => patchStep(index, { untilTime: v.trim() })}
+            />
+            <Field
+              label="Time zone"
+              value={step.timezone ?? ""}
+              onChange={(v) => patchStep(index, { timezone: v.trim() })}
+            />
+          </div>
+        ) : (
+          <Field
+            label="Minutes to wait (e.g. 300 = 5 hours; max 43200 = 30 days)"
+            value={String(step.minutes ?? 300)}
+            onChange={(v) => {
+              const n = Number(v);
+              patchStep(index, {
+                minutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+              });
+            }}
+          />
+        )}
+        <p className="text-[11px] text-parchment/40">
+          The workflow pauses here, then continues with the next step. Nothing is sent while
+          waiting.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "wait_for_reply") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Wait for a text back from (phone variable)"
+          value={step.phoneVar}
+          onChange={(v) => patchStep(index, { phoneVar: v })}
+          help="A variable an earlier step produced, e.g. lead_phone."
+        />
+        <Field
+          label="Save their reply as"
+          value={step.saveAs ?? "reply_text"}
+          onChange={(v) => patchStep(index, { saveAs: v.trim() ? v.trim() : undefined })}
+        />
+        <Field
+          label="Give up after (minutes, e.g. 300 = 5 hours)"
+          value={String(step.timeoutMinutes ?? 1440)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              timeoutMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+            });
+          }}
+        />
+        <p className="text-[11px] text-parchment/40">
+          While waiting, their next text is captured by this workflow (the AI&apos;s normal
+          conversational reply stays quiet for that message). If they don&apos;t reply in time,
+          the saved reply becomes &quot;no_reply&quot; — add a follow-up step with the condition
+          &quot;{step.saveAs ?? "reply_text"} equals no_reply&quot; to send a nudge, and another
+          with &quot;not equals no_reply&quot; for when they did reply.
+        </p>
       </div>
     );
   }

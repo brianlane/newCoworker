@@ -33,6 +33,8 @@ export const FLOW_STEP_TYPES = [
   "approval_gate",
   "notify_owner",
   "http_call",
+  "sleep",
+  "wait_for_reply",
   "route_to_team",
   "browse_action",
   "recall_url",
@@ -587,6 +589,31 @@ const stepSchema = z.discriminatedUnion("type", [
     saveAs: varName.optional(),
     when: whenSchema.optional()
   }),
+  // Pause the run then continue: relative minutes OR a next local wall-clock
+  // time. "Exactly one mode" is enforced in validateDefinitionSemantics (a
+  // discriminatedUnion member can't hold a superRefine). 43200 min = 30 days —
+  // generous, but bounded so a typo can't park a run for years.
+  z.object({
+    id: stepId,
+    type: z.literal("sleep"),
+    minutes: z.number().int().min(1).max(43200).optional(),
+    untilTime: hhmm.optional(),
+    timezone: timezone.optional(),
+    when: whenSchema.optional()
+  }),
+  // Park the run until the phone in phoneVar texts back (reply lands in
+  // {{vars.<saveAs>}}, default reply_text) or timeoutMinutes elapses
+  // ({{vars.<saveAs>}} = "no_reply" → the no-reply branch; a named sentinel
+  // because when-conditions require non-empty values). While parked, the
+  // lead's next inbound SMS is owned by the flow (default AI reply suppressed).
+  z.object({
+    id: stepId,
+    type: z.literal("wait_for_reply"),
+    phoneVar: varName,
+    saveAs: varName.optional(),
+    timeoutMinutes: z.number().int().min(1).max(43200).optional(),
+    when: whenSchema.optional()
+  }),
   z.object({
     id: stepId,
     type: z.literal("route_to_team"),
@@ -829,6 +856,9 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "extract_text":
     case "recall_url":
     case "upsert_customer":
+    // sleep / wait_for_reply carry only var NAMES and durations — no templates.
+    case "sleep":
+    case "wait_for_reply":
     // Voice steps carry no `{{vars.x}}` templates (phone numbers + a persona
     // string captured live), so there is nothing to scope-check here.
     case "ring_handoff":
@@ -1158,6 +1188,33 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
+    // sleep: exactly one wait mode — relative minutes OR untilTime (which
+    // needs its timezone). Half a daily mode or both modes would silently
+    // pick one at run time, so reject at author time instead.
+    if (step.type === "sleep") {
+      const relative = step.minutes !== undefined;
+      const daily = step.untilTime !== undefined || step.timezone !== undefined;
+      if (relative && daily) {
+        issues.push(`Step "${step.id}" sets both minutes and untilTime; use exactly one.`);
+      } else if (!relative && (step.untilTime === undefined || step.timezone === undefined)) {
+        issues.push(
+          `Step "${step.id}" needs a wait: set minutes, or untilTime together with timezone.`
+        );
+      }
+    }
+
+    // wait_for_reply watches the phone an EARLIER step produced (same scope
+    // rule as upsert_customer.phoneVar).
+    if (
+      step.type === "wait_for_reply" &&
+      !vars.has(step.phoneVar) &&
+      !ENGINE_VARS.has(step.phoneVar)
+    ) {
+      issues.push(
+        `Step "${step.id}" waits for a reply from {{vars.${step.phoneVar}}} which no earlier step produces.`
+      );
+    }
+
     // upsert_customer keys/fills the customer from vars an EARLIER step
     // produced (the phone is required; name/email are optional fills).
     if (step.type === "upsert_customer") {
@@ -1302,6 +1359,9 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs);
     } else if (step.type === "recall_url") {
       vars.add(step.saveAs);
+    } else if (step.type === "wait_for_reply") {
+      // The reply text ("" on timeout) becomes a var for later `when` branches.
+      vars.add(step.saveAs ?? "reply_text");
     }
   }
 
