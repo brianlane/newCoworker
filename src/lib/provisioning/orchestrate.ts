@@ -16,6 +16,7 @@ import {
   reconcileOrphanedPurchases,
   type ReconciledOrphan
 } from "@/lib/provisioning/reconcile-orphans";
+import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
 import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
@@ -721,6 +722,20 @@ async function tryAdoptFromPool(args: {
       });
     } catch (err) {
       logger.warn("vps pool bookkeeping failed after adopt (continuing)", {
+        businessId,
+        virtualMachineId: claimed.vm_id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    // Admin release-to-pool cascade: the adopt recreated the box, so any
+    // OTHER (non-wiped) business still pointing at this VM is a stale
+    // control surface over the NEW tenant's hardware — cascade-delete it
+    // (see stale-tenant-cleanup.ts). Best-effort: a cleanup failure logs
+    // loudly but must never abort a signup that already has its box.
+    try {
+      await cleanupStaleTenantsForVm({ vmId: claimed.vm_id, newBusinessId: businessId });
+    } catch (err) {
+      logger.error("stale-tenant cleanup after adopt failed (continuing)", {
         businessId,
         virtualMachineId: claimed.vm_id,
         error: err instanceof Error ? err.message : String(err)

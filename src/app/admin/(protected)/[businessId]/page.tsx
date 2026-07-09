@@ -30,6 +30,7 @@ import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
+import { ReleaseVpsPoolButton } from "@/components/admin/ReleaseVpsPoolButton";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
 import { ByosEnrollmentPanel } from "@/components/admin/ByosEnrollmentPanel";
 import { VpsProviderPanel } from "@/components/admin/VpsProviderPanel";
@@ -397,6 +398,21 @@ export default async function BusinessDetailPage({
               currentSize={resolveDeployedVpsSize(business.tier, business.vps_size)}
               pinned={business.vps_size != null}
             />
+          )}
+        {business.hostinger_vps_id &&
+          (business.vps_provider ?? "hostinger") === "hostinger" &&
+          business.status !== "wiped" && (
+            /* Return the box to the adopt pool without tearing the tenant
+               down now — the account is cascade-deleted when a new signup
+               adopts the box. The route fail-closes on active/past_due
+               subscriptions. */
+            <div className="mt-4">
+              <ReleaseVpsPoolButton
+                businessId={businessId}
+                businessName={business.name}
+                vpsId={business.hostinger_vps_id}
+              />
+            </div>
           )}
       </Card>
 

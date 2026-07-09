@@ -231,6 +231,43 @@ describe("db/businesses", () => {
     expect(result).toEqual([]);
   });
 
+  it("listBusinessesByHostingerVpsId returns every row pointing at the VM", async () => {
+    const db = {
+      ...mockDb(),
+      eq: vi.fn().mockResolvedValue({
+        data: [MOCK_BUSINESS, { ...MOCK_BUSINESS, id: "uuid-biz-2" }],
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const { listBusinessesByHostingerVpsId } = await import("@/lib/db/businesses");
+    const result = await listBusinessesByHostingerVpsId("1815606");
+
+    expect(result).toHaveLength(2);
+    expect(db.from).toHaveBeenCalledWith("businesses");
+    expect(db.eq).toHaveBeenCalledWith("hostinger_vps_id", "1815606");
+  });
+
+  it("listBusinessesByHostingerVpsId returns empty array when data is null", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ data: null, error: null }) };
+    const { listBusinessesByHostingerVpsId } = await import("@/lib/db/businesses");
+    // Provided-client path: the service-client factory must not be touched.
+    const result = await listBusinessesByHostingerVpsId("42", db as never);
+    expect(result).toEqual([]);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("listBusinessesByHostingerVpsId throws on DB error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ data: null, error: { message: "replica down" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const { listBusinessesByHostingerVpsId } = await import("@/lib/db/businesses");
+    await expect(listBusinessesByHostingerVpsId("42")).rejects.toThrow(
+      "listBusinessesByHostingerVpsId: replica down"
+    );
+  });
+
   it("updateBusinessStatus updates with vpsId", async () => {
     const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
