@@ -16,7 +16,7 @@
  * silently dropping the lead).
  */
 import PostalMime from "postal-mime";
-import { htmlToText } from "./html-text";
+import { htmlToText, looksLikeStrippedTemplate } from "./html-text";
 
 interface Env {
   APP_INBOUND_URL: string;
@@ -107,11 +107,17 @@ export default {
 
     const email = await PostalMime.parse(message.raw);
 
-    // Prefer the text/plain part; otherwise collapse the HTML part properly —
-    // htmlToText drops <style>/<script>/<title>/comment CONTENTS too, so
-    // template CSS and unrendered merge tags never masquerade as body text.
+    // Prefer the text/plain part — UNLESS it is itself tag-stripped template
+    // source (some senders build it by naively flattening the HTML, leaving
+    // stylesheets and `*|MC:SUBJECT|*` merge tags in the "text"). In that
+    // case, and when there is no text part at all, collapse the HTML part
+    // properly instead: htmlToText drops <style>/<script>/<title>/comment
+    // CONTENTS too, so template CSS never masquerades as body text.
+    const plain = (email.text ?? "").trim();
     const text =
-      email.text && email.text.trim().length > 0 ? email.text : htmlToText(email.html ?? "");
+      plain.length > 0 && !(email.html && looksLikeStrippedTemplate(plain))
+        ? email.text!
+        : htmlToText(email.html ?? "") || plain;
 
     const messageId =
       message.headers.get("message-id") ||

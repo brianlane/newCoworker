@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { htmlToText } from "../cloudflare/email-worker/src/html-text";
+import {
+  htmlToText,
+  looksLikeStrippedTemplate
+} from "../cloudflare/email-worker/src/html-text";
 
 describe("email worker htmlToText", () => {
   it("drops <style> contents instead of leaking CSS as body text (the Mailchimp bug)", () => {
@@ -47,5 +50,39 @@ describe("email worker htmlToText", () => {
 
   it("returns empty string for empty input", () => {
     expect(htmlToText("")).toBe("");
+  });
+});
+
+describe("looksLikeStrippedTemplate", () => {
+  it("flags an unrendered Mailchimp merge tag (the Privyr case)", () => {
+    expect(looksLikeStrippedTemplate("*|MC:SUBJECT|*\n\np{\n margin:10px 0;\n}")).toBe(true);
+  });
+
+  it("flags text containing several CSS rule blocks even without merge tags", () => {
+    const junk = [
+      "p{ margin:10px 0; padding:0; }",
+      "table{ border-collapse:collapse; mso-table-lspace:0pt; }",
+      "img{ -ms-interpolation-mode:bicubic; border:0; }",
+      "Use the code 549829 to verify."
+    ].join("\n");
+    expect(looksLikeStrippedTemplate(junk)).toBe(true);
+  });
+
+  it("does not flag normal prose", () => {
+    expect(
+      looksLikeStrippedTemplate(
+        "Hi team,\n\nYour appointment is confirmed for Friday at 2pm.\n\nThanks!"
+      )
+    ).toBe(false);
+  });
+
+  it("does not flag prose with a couple of incidental braces", () => {
+    expect(
+      looksLikeStrippedTemplate("The config is { retries: 3; timeout:10; } and { a:1; b:2; }.")
+    ).toBe(false);
+  });
+
+  it("does not flag markdown-style emphasis that resembles pipes/stars", () => {
+    expect(looksLikeStrippedTemplate("Totals: *|* is not a merge tag, nor is * | *")).toBe(false);
   });
 });
