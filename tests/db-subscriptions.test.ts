@@ -6,6 +6,7 @@ import {
   getSubscriptionByStripeSubscriptionId,
   isCheckoutBlockingSubscription,
   isCommitmentElapsed,
+  listBusinessIdsWithLiveSubscription,
   listSubscriptionsByBusinessIds,
   stripeSubscriptionPeriodCache,
   subscriptionPeriodCacheFromStripe,
@@ -46,6 +47,57 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 
 describe("db/subscriptions", () => {
   beforeEach(() => vi.clearAllMocks());
+
+  describe("listBusinessIdsWithLiveSubscription", () => {
+    it("returns the set of businesses with ANY active/past_due row (any-row semantics)", async () => {
+      // `in` is called twice (business_id filter, then status filter); the
+      // second call resolves the query.
+      const db = {
+        ...mockDb(),
+        in: vi
+          .fn()
+          .mockReturnValueOnce({
+            in: vi.fn().mockResolvedValue({
+              data: [{ business_id: "live-1" }, { business_id: "live-1" }, { business_id: "live-2" }],
+              error: null
+            })
+          })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const result = await listBusinessIdsWithLiveSubscription(["live-1", "live-2", "grace-1"]);
+      expect(result).toEqual(new Set(["live-1", "live-2"]));
+      expect(db.in).toHaveBeenCalledWith("business_id", ["live-1", "live-2", "grace-1"]);
+    });
+
+    it("returns an empty set for empty input without touching the client", async () => {
+      const result = await listBusinessIdsWithLiveSubscription([]);
+      expect(result).toEqual(new Set());
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+    });
+
+    it("treats null data as empty and throws on DB error", async () => {
+      const dbNull = {
+        ...mockDb(),
+        in: vi.fn().mockReturnValueOnce({
+          in: vi.fn().mockResolvedValue({ data: null, error: null })
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(dbNull as never);
+      expect(await listBusinessIdsWithLiveSubscription(["a"])).toEqual(new Set());
+
+      const dbErr = {
+        ...mockDb(),
+        in: vi.fn().mockReturnValueOnce({
+          in: vi.fn().mockResolvedValue({ data: null, error: { message: "replica down" } })
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(dbErr as never);
+      await expect(listBusinessIdsWithLiveSubscription(["a"])).rejects.toThrow(
+        "listBusinessIdsWithLiveSubscription: replica down"
+      );
+    });
+  });
 
   it("subscriptionPeriodCacheFromStripe maps Stripe epoch seconds to ISO cache fields", () => {
     const row = subscriptionPeriodCacheFromStripe({

@@ -235,6 +235,30 @@ export async function listSubscriptionsByBusinessIds(
   return map;
 }
 
+/**
+ * Which of `businessIds` have ANY subscription in a live billing state
+ * (`active` / `past_due`) — regardless of row age. Deliberately NOT
+ * newest-row-wins like {@link listSubscriptionsByBusinessIds}: a newer
+ * `pending` row (resubscribe checkout in flight) must not shadow an older
+ * `active` one when the caller is deciding whether a tenant is paying.
+ * Used by the VPS billing-posture cron's auto-heal gate.
+ */
+export async function listBusinessIdsWithLiveSubscription(
+  businessIds: string[],
+  client?: SupabaseClient
+): Promise<Set<string>> {
+  if (businessIds.length === 0) return new Set();
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select("business_id")
+    .in("business_id", businessIds)
+    .in("status", ["active", "past_due"]);
+
+  if (error) throw new Error(`listBusinessIdsWithLiveSubscription: ${error.message}`);
+  return new Set(((data ?? []) as Array<{ business_id: string }>).map((r) => r.business_id));
+}
+
 export async function updateSubscription(
   id: string,
   update: Partial<

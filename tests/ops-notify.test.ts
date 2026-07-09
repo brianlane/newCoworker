@@ -24,7 +24,8 @@ import {
   sendOpsPlanChangeEmail,
   sendOpsDidReleaseFailedEmail,
   sendOpsHardwareMigrationEmail,
-  sendOpsTermAlignmentEmail
+  sendOpsTermAlignmentEmail,
+  sendOpsBillingPostureEmail
 } from "@/lib/email/ops-notify";
 
 const input = {
@@ -441,6 +442,84 @@ describe("sendOpsHardwareMigrationEmail", () => {
         text: expect.stringContaining("srv1900001"),
         html: expect.stringContaining("/admin/biz-1")
       })
+    );
+  });
+});
+
+describe("sendOpsBillingPostureEmail", () => {
+  const postureInput = {
+    findings: [
+      {
+        kind: "tenant_auto_renew_off" as const,
+        vmId: 1800985,
+        businessId: "biz-1",
+        businessName: "Residency Pilot",
+        hostingerBillingSubscriptionId: "hsub-1",
+        expiresAt: "2026-08-02T00:00:00Z",
+        autoHealed: true,
+        detail: "subscription hsub-1 is non_renewing with auto-renew off — auto-renew re-enabled by posture check"
+      }
+    ],
+    checkedTenantVms: 3,
+    checkedPoolBoxes: 1
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the findings digest to the ops inbox", async () => {
+    await sendOpsBillingPostureEmail(postureInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("VPS billing posture"),
+      expect.objectContaining({ text: expect.stringContaining("VM 1800985") })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops billing-posture email sent",
+      expect.objectContaining({ findings: 1, toEmail: "team@newcoworker.com" })
+    );
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await sendOpsBillingPostureEmail(postureInput);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops billing-posture email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ findings: 1 })
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsBillingPostureEmail(postureInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsBillingPostureEmail(postureInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops billing-posture email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsBillingPostureEmail(postureInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops billing-posture email failed",
+      expect.objectContaining({ error: "smtp string failure" })
     );
   });
 });
