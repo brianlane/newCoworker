@@ -11,6 +11,9 @@ export default defineConfig({
     environment: "node",
     include: ["tests/**/*.test.ts"],
     exclude: ["tests/integration/**", "**/gemini-summarize-connectivity-live.test.ts"],
+    // Strip live credentials (sourced .env) from the unit-test process so no
+    // test can reach a real external service — see tests/setup-env.ts.
+    setupFiles: ["tests/setup-env.ts"],
     // v8 coverage instrumentation slows some orchestrator tests past the
     // default 5s; give every test a generous 15s budget.
     testTimeout: 15000,

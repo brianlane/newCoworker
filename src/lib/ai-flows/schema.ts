@@ -35,6 +35,7 @@ export const FLOW_STEP_TYPES = [
   "http_call",
   "sleep",
   "wait_for_reply",
+  "branch",
   "route_to_team",
   "browse_action",
   "recall_url",
@@ -462,7 +463,38 @@ const whenSchema = z
     { message: "set exactly one of equals/contains/notEquals" }
   );
 
-const stepSchema = z.discriminatedUnion("type", [
+/** Max named arms on one branch step (plus the implicit else path). */
+export const MAX_BRANCH_ARMS = 4;
+/** Max branch nesting depth (a branch at depth 3 may not contain another). */
+export const MAX_BRANCH_DEPTH = 3;
+/** Max steps a definition may hold in total (trunk + every arm + every else). */
+export const MAX_TOTAL_STEPS = 50;
+
+/**
+ * Flow-level time window: communication steps (send_sms / send_email /
+ * notify_owner / route_to_team) only execute while the local time in
+ * `timezone` is inside [start, end) on an allowed day; outside it the run
+ * defers to the next open slot (same earliest_claim_at machinery as send_sms
+ * quiet hours, which still apply on top per step).
+ */
+const flowTimeWindowSchema = z
+  .object({
+    timezone,
+    start: hhmm,
+    end: hhmm,
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional()
+  })
+  .refine((w) => w.start !== w.end, {
+    message: "the time window can't start and end at the same time"
+  });
+
+/**
+ * Every step type EXCEPT `branch`, as a plain members tuple. The branch step
+ * is appended separately below because it references the full step union
+ * recursively (its arms/else contain steps), which needs an explicitly-typed
+ * lazy indirection to keep TypeScript's inference non-circular.
+ */
+const nonBranchStepMembers = [
   z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName, when: whenSchema.optional() }),
   z
     .object({
@@ -646,6 +678,9 @@ const stepSchema = z.discriminatedUnion("type", [
     // fields are both-or-neither (validateDefinitionSemantics).
     ownerDirectWhen: whenSchema.optional(),
     ownerDirectTemplate: z.string().min(1).max(1600).optional(),
+    // Owner-first routing for repeat leads: when the lead's contact already
+    // has an owning employee, offer them first, then the normal cascade.
+    preferContactOwner: z.boolean().optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -767,6 +802,72 @@ const stepSchema = z.discriminatedUnion("type", [
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
     when: whenSchema.optional()
   })
+] as const;
+
+/** The non-branch step union — everything the flat (pre-branch) engine ran. */
+const nonBranchStepSchema = z.discriminatedUnion("type", [...nonBranchStepMembers]);
+
+export type StepCondition = z.infer<typeof whenSchema>;
+type NonBranchStep = z.infer<typeof nonBranchStepSchema>;
+
+/**
+ * Branch types are declared BY HAND (mirroring the runtime types in
+ * supabase/functions/_shared/ai_flows/types.ts) because they reference the
+ * full step union recursively — TypeScript cannot infer a type that circularly
+ * references itself through zod's generics, so the schema below is checked
+ * against these declarations via the annotated lazy indirection instead.
+ */
+export type BranchArm = {
+  /** Stable id (unique within the branch step) recorded as the chosen arm. */
+  id: string;
+  /** Display label, e.g. "Auto" / "Home" / "They replied". */
+  label: string;
+  /** Same shape as a per-step `when` guard, evaluated against run vars. */
+  condition: StepCondition;
+  steps: FlowStep[];
+};
+
+/**
+ * Multi-way branch (GHL-style If/Else): arms are evaluated top to bottom
+ * against run vars, the FIRST match wins, and no match runs the `else` steps.
+ * Nesting/total-step caps and arm-id uniqueness live in
+ * validateDefinitionSemantics (they need the whole tree). A `when` guard on
+ * the branch itself skips the WHOLE branch (choice never recorded, so every
+ * arm and the else are skipped as branch_not_taken).
+ */
+export type BranchStep = {
+  id: string;
+  type: "branch";
+  question: string;
+  branches: BranchArm[];
+  else: FlowStep[];
+  when?: StepCondition;
+};
+
+export type FlowStep = NonBranchStep | BranchStep;
+
+/** Lazy, explicitly-typed recursion point: a nested step list inside a branch. */
+const nestedStepListSchema: z.ZodType<FlowStep[]> = z.lazy(() => z.array(stepSchema).max(25));
+
+const branchArmSchema: z.ZodType<BranchArm> = z.object({
+  id: stepId,
+  label: z.string().min(1).max(80),
+  condition: whenSchema,
+  steps: nestedStepListSchema
+});
+
+const branchStepSchema = z.object({
+  id: stepId,
+  type: z.literal("branch"),
+  question: z.string().min(1).max(200),
+  branches: z.array(branchArmSchema).min(1).max(MAX_BRANCH_ARMS),
+  else: nestedStepListSchema,
+  when: whenSchema.optional()
+});
+
+const stepSchema: z.ZodType<FlowStep> = z.discriminatedUnion("type", [
+  ...nonBranchStepMembers,
+  branchStepSchema
 ]);
 
 export const aiFlowDefinitionSchema = z.object({
@@ -777,6 +878,7 @@ export const aiFlowDefinitionSchema = z.object({
   // excluded from the set (single-trigger; enforced in semantics).
   triggers: z.array(triggerSchema).max(4).optional(),
   steps: z.array(stepSchema).min(1).max(25),
+  timeWindow: flowTimeWindowSchema.optional(),
   options: z
     .object({
       suppressDefaultReply: z.boolean().optional(),
@@ -790,8 +892,7 @@ export const aiFlowDefinitionSchema = z.object({
 
 export type TriggerCondition = z.infer<typeof conditionSchema>;
 export type FlowTrigger = z.infer<typeof triggerSchema>;
-export type FlowStep = z.infer<typeof stepSchema>;
-export type StepCondition = z.infer<typeof whenSchema>;
+export type FlowTimeWindow = z.infer<typeof flowTimeWindowSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 /** The trigger channels the builder offers. */
@@ -863,6 +964,11 @@ function templateStringsForStep(step: FlowStep): string[] {
     // sleep / wait_for_reply carry only var NAMES and durations — no templates.
     case "sleep":
     case "wait_for_reply":
+    // branch: the question/labels are display copy and the conditions are
+    // var-name references (scope-checked in validateDefinitionSemantics), so
+    // there is nothing to template-check on the step itself. Nested arm steps
+    // are walked separately.
+    case "branch":
     // Voice steps carry no `{{vars.x}}` templates (phone numbers + a persona
     // string captured live), so there is nothing to scope-check here.
     case "ring_handoff":
@@ -1061,26 +1167,68 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     return issues;
   }
 
-  // A voice step under a non-voice trigger can never execute (the batch worker
-  // has no handler for it); reject it rather than silently no-op at run time.
-  for (const step of def.steps) {
+  const vars = new Set<string>();
+  // True once an earlier browse step (browse_extract or browse_action) has
+  // `screenshot: true`; the prerequisite for any later step's attachScreenshot.
+  let screenshotCaptured = false;
+  // Every step in the tree (trunk + every branch arm + every else), for the
+  // definition-wide total cap.
+  let totalSteps = 0;
+
+  // Walk one step, then (for a branch) its arms and else — the same
+  // depth-first order the worker flattens to, so "an EARLIER step" means the
+  // same thing at author time and run time. Var registration is deliberately
+  // PERMISSIVE across arms: a var produced inside one arm is legal for any
+  // later step (at run time an untaken arm's var resolves to "" and the
+  // consuming step degrades/skips, same as any missing extraction).
+  const visitStep = (step: FlowStep, depth: number): void => {
+    totalSteps += 1;
+    if (seenIds.has(step.id)) {
+      issues.push(`Duplicate step id "${step.id}".`);
+    }
+    seenIds.add(step.id);
+
+    // A voice step under a non-voice trigger can never execute (the batch
+    // worker has no handler for it); reject rather than silently no-op.
     if (VOICE_STEPS.has(step.type)) {
       issues.push(
         `Step "${step.id}" is a voice step ("${step.type}") but the trigger is "${def.trigger.channel}"; voice steps need a voice trigger.`
       );
     }
-  }
 
-  const vars = new Set<string>();
-  // True once an earlier browse step (browse_extract or browse_action) has
-  // `screenshot: true`; the prerequisite for any later step's attachScreenshot.
-  let screenshotCaptured = false;
-
-  for (const step of def.steps) {
-    if (seenIds.has(step.id)) {
-      issues.push(`Duplicate step id "${step.id}".`);
+    if (step.type === "branch") {
+      if (depth >= MAX_BRANCH_DEPTH) {
+        issues.push(
+          `Step "${step.id}" nests branches more than ${MAX_BRANCH_DEPTH} levels deep; flatten the flow instead.`
+        );
+      }
+      const armIds = new Set<string>();
+      for (const arm of step.branches) {
+        if (armIds.has(arm.id) || arm.id === "else") {
+          issues.push(
+            arm.id === "else"
+              ? `Step "${step.id}" names a branch "else", which is reserved for the none-matched path.`
+              : `Step "${step.id}" has two branches with the id "${arm.id}".`
+          );
+        }
+        armIds.add(arm.id);
+        // Same scope rule as a `when` guard: the arm condition may only test a
+        // var an EARLIER step produced.
+        if (!vars.has(arm.condition.var) && !ENGINE_VARS.has(arm.condition.var)) {
+          issues.push(
+            `Step "${step.id}" branch "${arm.label}" tests {{vars.${arm.condition.var}}} which no earlier step produces.`
+          );
+        }
+      }
+      if (step.when && !vars.has(step.when.var) && !ENGINE_VARS.has(step.when.var)) {
+        issues.push(
+          `Step "${step.id}" has a "when" condition on {{vars.${step.when.var}}} which no earlier step produces.`
+        );
+      }
+      for (const arm of step.branches) walkSteps(arm.steps, depth + 1);
+      walkSteps(step.else, depth + 1);
+      return;
     }
-    seenIds.add(step.id);
 
     for (const tpl of templateStringsForStep(step)) {
       for (const ref of collectTemplateRefs(tpl)) {
@@ -1382,6 +1530,18 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       // The reply text ("" on timeout) becomes a var for later `when` branches.
       vars.add(step.saveAs ?? "reply_text");
     }
+  };
+
+  const walkSteps = (steps: FlowStep[], depth: number): void => {
+    for (const step of steps) visitStep(step, depth);
+  };
+
+  walkSteps(def.steps, 0);
+
+  if (totalSteps > MAX_TOTAL_STEPS) {
+    issues.push(
+      `This flow has ${totalSteps} steps in total (including branch paths); the limit is ${MAX_TOTAL_STEPS}.`
+    );
   }
 
   return issues;
@@ -1405,6 +1565,246 @@ export function parseAiFlowDefinition(input: unknown): AiFlowDefinition {
     throw new AiFlowValidationError("Invalid AiFlow definition", semanticIssues);
   }
   return parsed.data;
+}
+
+// ── Best-effort salvage (AI-assist authoring) ────────────────────────────────
+
+/** What salvageFlowDefinition returns: a VALID definition + what was changed. */
+export type SalvagedFlow = { definition: AiFlowDefinition; warnings: string[] };
+
+const STEP_ISSUE_RE = /Step "([^"]+)"/;
+
+/**
+ * Targeted mend for a step-scoped semantic issue: strip the one broken knob
+ * and keep the step where that is safe, or return null to have the step
+ * dropped. The mends only ever REMOVE configuration — a mended step does
+ * strictly less than the AI asked for, never something different.
+ */
+function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean {
+  // A screenshot attachment with no earlier capture (or an unsupported
+  // sender): the send itself is still what the owner wants — just without
+  // the attachment.
+  if (/attaches a screenshot/.test(issue)) {
+    delete step.attachScreenshot;
+    return true;
+  }
+  // sleep with both modes: keep the relative wait (self-contained; untilTime
+  // also needs its timezone to be trustworthy).
+  if (/sets both minutes and untilTime/.test(issue)) {
+    delete step.untilTime;
+    delete step.timezone;
+    return true;
+  }
+  // Double pin: agentName is the AI-authorable one; refs come from the editor.
+  if (/pins to both agentName and agentRef/.test(issue)) {
+    delete step.agentRef;
+    return true;
+  }
+  // Half a keep-for-owner rule: drop the half-configured pair.
+  if (/ownerDirectWhen and ownerDirectTemplate together/.test(issue)) {
+    delete step.ownerDirectWhen;
+    delete step.ownerDirectTemplate;
+    return true;
+  }
+  // Multiple SMS recipients: keep the strongest single source.
+  if (/sets more than one recipient/.test(issue)) {
+    if (step.to) {
+      delete step.toAgentName;
+      delete step.toRef;
+      delete step.replyToGroup;
+    } else if (step.toAgentName) {
+      delete step.toRef;
+      delete step.replyToGroup;
+    } else {
+      delete step.toRef;
+    }
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Best-effort salvage of an AI-authored definition that failed validation.
+ *
+ * Instead of bouncing the owner with an error, keep everything that IS valid
+ * and mechanically repair or remove what is not, returning a definition that
+ * passes `parseAiFlowDefinition` plus a plain-English list of what changed.
+ * The result loads into the builder (new AI drafts start DISABLED there), so
+ * the owner reviews the salvaged flow rather than retyping their description.
+ *
+ * Salvage only ever SUBTRACTS: invalid steps/triggers/knobs are removed, and
+ * an ununderstandable trigger falls back to Run-now — nothing is invented
+ * beyond the placeholder step required when no step survives.
+ *
+ * Returns null when there is nothing usable at all (not an object, or the
+ * salvage loop can't converge) — the caller then surfaces the plain error.
+ */
+export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  const raw = candidate as Record<string, unknown>;
+  const warnings: string[] = [];
+
+  // Trigger: keep it when valid; otherwise fall back to Run-now.
+  let trigger: FlowTrigger;
+  const trigParse = triggerSchema.safeParse(raw.trigger);
+  if (trigParse.success) {
+    trigger = trigParse.data;
+  } else {
+    trigger = { channel: "manual" };
+    warnings.push(
+      'The trigger could not be understood, so this flow starts from the Run-now button for now — pick the right "Starts when" in the editor.'
+    );
+  }
+
+  // Extra triggers (OR set): keep the valid non-voice ones, up to the cap.
+  let triggers: FlowTrigger[] | undefined;
+  if (Array.isArray(raw.triggers)) {
+    const kept: FlowTrigger[] = [];
+    let dropped = 0;
+    for (const t of raw.triggers) {
+      const p = triggerSchema.safeParse(t);
+      if (p.success && p.data.channel !== "voice" && kept.length < 4) kept.push(p.data);
+      else dropped += 1;
+    }
+    if (dropped > 0) warnings.push(`Removed ${dropped} additional trigger(s) that couldn't be used.`);
+    if (kept.length > 0) triggers = kept;
+  }
+
+  // Pre-mend from_matches conditions across the trigger set: the exactly-one
+  // sender rule is semantic (zod passes both-or-neither), and a malformed
+  // condition would otherwise force the manual-trigger fallback below.
+  for (const trig of [trigger, ...(triggers ?? [])]) {
+    const conds = (trig as { conditions?: TriggerCondition[] }).conditions;
+    if (!Array.isArray(conds)) continue;
+    const kept = conds.filter(
+      (c) => c.type !== "from_matches" || (!c.value !== !c.ref)
+    );
+    if (kept.length !== conds.length) {
+      warnings.push('Removed a "from matches" condition that had no usable sender.');
+      (trig as { conditions?: TriggerCondition[] }).conditions = kept;
+    }
+  }
+
+  // Steps: mint/dedupe ids, then keep each step that parses (retrying once
+  // without its `when` guard — a malformed guard is a common single fault).
+  const seenIds = new Set<string>();
+  const steps: FlowStep[] = [];
+  const rawSteps = Array.isArray(raw.steps) ? raw.steps.slice(0, 25) : [];
+  if (Array.isArray(raw.steps) && raw.steps.length > 25) {
+    warnings.push(
+      `Removed ${raw.steps.length - 25} step(s) past the 25-step limit (kept the first 25).`
+    );
+  }
+  for (let i = 0; i < rawSteps.length; i++) {
+    const s = rawSteps[i];
+    if (!s || typeof s !== "object") {
+      warnings.push(`Removed step ${i + 1}: it wasn't a usable step at all.`);
+      continue;
+    }
+    const step = { ...(s as Record<string, unknown>) };
+    let id = typeof step.id === "string" && step.id.trim() ? step.id.trim().slice(0, 60) : `s${i + 1}`;
+    while (seenIds.has(id)) id = `${id.slice(0, 55)}_${i + 1}`;
+    step.id = id;
+    let parsed = stepSchema.safeParse(step);
+    if (!parsed.success && step.when !== undefined) {
+      const { when: _when, ...rest } = step;
+      parsed = stepSchema.safeParse(rest);
+      if (parsed.success) {
+        warnings.push(`Removed a broken run-condition from step ${i + 1} ("${String(step.type)}").`);
+      }
+    }
+    if (!parsed.success) {
+      warnings.push(
+        `Removed step ${i + 1}${typeof step.type === "string" ? ` ("${step.type}")` : ""}: it was missing required details.`
+      );
+      continue;
+    }
+    seenIds.add(id);
+    steps.push(parsed.data);
+  }
+
+  const options =
+    raw.options && typeof raw.options === "object" && !Array.isArray(raw.options)
+      ? {
+          suppressDefaultReply:
+            (raw.options as Record<string, unknown>).suppressDefaultReply === true || undefined,
+          captureStepScreenshots:
+            (raw.options as Record<string, unknown>).captureStepScreenshots === true || undefined
+        }
+      : undefined;
+
+  // Semantic repair loop: mend or remove the step each issue names; a
+  // non-step (trigger/voice-shape) issue forces the Run-now fallback once.
+  let triggerReset = trigParse.success === false;
+  for (let guard = 0; guard < 60; guard++) {
+    if (steps.length === 0) {
+      // A voice flow can only hold voice steps, so the notify-me placeholder
+      // below would be rejected (and re-injected) forever — a voice trigger
+      // with no surviving call steps falls back to Run-now first.
+      if (trigger.channel === "voice") {
+        trigger = { channel: "manual" };
+        triggers = undefined;
+        triggerReset = true;
+        warnings.push(
+          "The voice flow had no usable call steps left, so it starts from the Run-now button for now."
+        );
+      }
+      steps.push({
+        id: "s1",
+        type: "notify_owner",
+        message:
+          "Your automation ran. (The AI draft needed manual attention — open this flow in the editor to finish it.)"
+      });
+      warnings.push(
+        "No usable steps survived, so a simple notify-me step was added as a starting point."
+      );
+    }
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger,
+      ...(triggers && triggers.length > 0 ? { triggers } : {}),
+      steps,
+      ...(options ? { options } : {})
+    };
+    const issues = validateDefinitionSemantics(def);
+    if (issues.length === 0) {
+      // Belt-and-braces zod re-parse: strips any keys the mends left behind
+      // so the result is exactly what parseAiFlowDefinition would accept.
+      const finalParse = aiFlowDefinitionSchema.safeParse(def);
+      /* c8 ignore next -- zod + semantics both passed above; defensive only */
+      if (!finalParse.success) return null;
+      return { definition: finalParse.data, warnings };
+    }
+    const issue = issues[0];
+    const stepMatch = STEP_ISSUE_RE.exec(issue);
+    if (stepMatch) {
+      const idx = steps.findIndex((s) => s.id === stepMatch[1]);
+      /* c8 ignore next 2 -- semantics always name a present step; defensive only */
+      if (idx === -1) return null;
+      const mutable = steps[idx] as unknown as Record<string, unknown>;
+      if (mendStepForIssue(mutable, issue)) {
+        warnings.push(`Adjusted step ${idx + 1} ("${steps[idx].type}"): ${issue}`);
+      } else {
+        warnings.push(`Removed step ${idx + 1} ("${steps[idx].type}"): ${issue}`);
+        steps.splice(idx, 1);
+      }
+      continue;
+    }
+    // Trigger-level / voice-shape issue: fall back to Run-now once (which also
+    // invalidates any voice steps — the loop then removes them) — then give up.
+    // (Under a manual trigger no non-step issues remain, so the second-reset
+    // bail is defensive.)
+    /* c8 ignore next */
+    if (triggerReset) return null;
+    triggerReset = true;
+    trigger = { channel: "manual" };
+    triggers = undefined;
+    warnings.push(
+      `The trigger setup couldn't be repaired (${issue}) — the flow starts from the Run-now button for now.`
+    );
+  }
+  /* c8 ignore next 2 -- the loop always converges (every pass removes something) */
+  return null;
 }
 
 /** A short, human summary of a definition for list/run UIs. */

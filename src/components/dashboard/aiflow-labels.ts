@@ -29,6 +29,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   approval_gate: "Ask me to approve first",
   notify_owner: "Notify me",
   http_call: "Call another service (API)",
+  branch: "Branch (if / else paths)",
   sleep: "Wait before continuing",
   wait_for_reply: "Wait for their reply",
   route_to_team: "Hand off to team/employees",
@@ -58,6 +59,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Pauses the workflow (for a number of minutes, or until a time of day) and then continues with the next step. Nothing is sent while waiting.",
   wait_for_reply:
     "Pauses until the person texts back (or the wait times out). Their reply is saved so later steps can branch on it - if they don't reply in time, the saved reply is empty, which lets you send a follow-up nudge.",
+  branch:
+    "Splits the workflow into paths: each path has a condition (checked top to bottom, first match wins) and its own steps; no match runs the \"none matched\" path.",
   route_to_team: "Offers the lead to a teammate to claim, and falls back to you if no one does.",
   browse_action: "Clicks buttons or types into fields on a web page on your behalf.",
   recall_url:

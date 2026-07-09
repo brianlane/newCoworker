@@ -20,6 +20,10 @@ vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(() => ({ success: true, limit: 60, remaining: 59, reset: 0 }))
 }));
 
+vi.mock("@/lib/db/employees", () => ({
+  getTeamMember: vi.fn()
+}));
+
 import { GET as LIST_GET } from "@/app/api/dashboard/customers/route";
 import {
   GET as DETAIL_GET,
@@ -36,6 +40,7 @@ import {
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
 import { rateLimit } from "@/lib/rate-limit";
+import { getTeamMember } from "@/lib/db/employees";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CUSTOMER = "+15551234567";
@@ -324,6 +329,69 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(res.status).toBe(200);
     expect(setContactSmsReplyMode).toHaveBeenCalledWith(BIZ, CUSTOMER, "forward_owner");
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+  });
+
+  it("forwards tag edits (replace-the-set) for an existing contact", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ tags: ["VIP", "spanish"] }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      tags: ["VIP", "spanish"]
+    });
+  });
+
+  it("assigns an owner only after validating them against the business roster", async () => {
+    const MEMBER = "22222222-2222-4222-8222-222222222222";
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    // Not on the roster → 400, nothing written.
+    vi.mocked(getTeamMember).mockResolvedValueOnce(null);
+    const rejected = await DETAIL_PATCH(
+      patchReq({ ownerEmployeeId: MEMBER }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(rejected.status).toBe(400);
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+    // On the roster → forwarded.
+    vi.mocked(getTeamMember).mockResolvedValueOnce({ id: MEMBER, name: "Dave" } as never);
+    const ok = await DETAIL_PATCH(
+      patchReq({ ownerEmployeeId: MEMBER }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(ok.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      ownerEmployeeId: MEMBER
+    });
+  });
+
+  it("clears the owner (null) without a roster lookup", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ ownerEmployeeId: null }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(getTeamMember).not.toHaveBeenCalled();
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      ownerEmployeeId: null
+    });
   });
 
   it("still 404s when the row is missing and the patch includes OTHER fields alongside smsReplyMode", async () => {

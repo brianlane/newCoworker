@@ -184,6 +184,22 @@ these standards:
   fail closed on undecryptable rows; legacy plaintext passes through until
   `debug/encrypt-secrets-backfill.ts --apply` converts it. Gateway tokens stay
   plaintext BY DESIGN (the value itself is the symmetric HMAC secret on the box).
+- **"RLS enabled, no policies" is the deny-all design, not an oversight.** The
+  Supabase advisor reports INFO-level `rls_enabled_no_policy` findings for a
+  set of service-role-only tables (secret stores like `vps_ssh_keys`,
+  `vps_gateway_tokens`, `residency_backup_keys`, `api_keys`; tenant content
+  like `voice_call_transcripts`, `email_log`, `sms_outbound_log`,
+  `customer_profiles`; and operational tables like `vps_inventory`,
+  `data_backups`, `webhook_subscriptions`). These tables are **never** read
+  through the anon/authenticated PostgREST path — every access goes through
+  the Next.js server (service role) after its own auth checks. RLS enabled +
+  zero policies means anon/authenticated roles get an unconditional deny at
+  the database layer; adding policies would only widen access. Auditors
+  should read those INFO findings as confirmation the lockdown is active.
+- **Extensions live outside `public`** (`citext`, `pg_net` → `extensions`
+  schema, advisor 0014) so extension objects can't be shadowed by or confused
+  with application objects; pg_net's callable surface stays in its own `net`
+  schema by design.
 - **Per-tenant gateway tokens** replace the old platform-wide shared secret for
   all VPS ↔ app authentication — see
   [Security: per-tenant gateway tokens](#security-per-tenant-gateway-tokens) for

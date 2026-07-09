@@ -12,8 +12,24 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+// The route dispatches a real verification email on the happy path. Without
+// this mock the suite calls the live Resend SDK — and when the test process
+// inherits a real RESEND_API_KEY (e.g. a shell that sourced .env), it sends
+// actual emails to the Stripe-fixture address paid@example.com.
+vi.mock("@/lib/email/client", () => ({
+  sendOwnerEmail: vi.fn().mockResolvedValue("email-id")
+}));
+
+// Token minting needs an HMAC secret from env (EMAIL_VERIFICATION_TOKEN_SECRET
+// or SUPABASE_SERVICE_ROLE_KEY); mock it so the dispatch path is exercised
+// deterministically regardless of the host environment.
+vi.mock("@/lib/email/verification-token", () => ({
+  createEmailVerificationToken: vi.fn(() => "test-verification-token")
+}));
+
 import { POST } from "@/app/api/onboard/set-password/route";
 import { findAuthUserIdByEmail } from "@/lib/auth";
+import { sendOwnerEmail } from "@/lib/email/client";
 import { getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -106,6 +122,38 @@ describe("api/onboard/set-password route", () => {
     // findAuthUserIdByEmail is only consulted on the duplicate-email
     // failure path, never on the happy path.
     expect(vi.mocked(findAuthUserIdByEmail)).not.toHaveBeenCalled();
+    // The post-mint verification email goes to the Stripe session's
+    // verified email — through the (mocked) email client, never the
+    // live Resend SDK.
+    expect(vi.mocked(sendOwnerEmail)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(sendOwnerEmail)).toHaveBeenCalledWith(
+      expect.any(String),
+      VALID_EMAIL,
+      "Confirm your NewCoworker email",
+      expect.objectContaining({
+        text: expect.stringContaining("test-verification-token"),
+        html: expect.any(String)
+      })
+    );
+  });
+
+  it("still returns 200 when the verification email send fails (log-and-continue contract)", async () => {
+    const { client } = fakeServiceClient({
+      createUser: vi
+        .fn()
+        .mockResolvedValue({ data: { user: { id: "user-new" } }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(sendOwnerEmail).mockRejectedValueOnce(new Error("resend down"));
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.data.ownerEmail).toBe(VALID_EMAIL);
   });
 
   it("does NOT tag user_metadata.checkout_session_id (provenance-tag mechanism removed with the create-only refactor)", async () => {

@@ -9,6 +9,7 @@
  * dispatcher that switches on `action.kind`.
  */
 import { firstUrlInText, isE164, normalizeNanpToE164, renderTemplate } from "./engine.ts";
+import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import type {
   BrowseAuth,
   ContactRef,
@@ -206,6 +207,8 @@ export type StepAction =
       ownerDirectWhen?: StepCondition;
       /** Passed UNRENDERED like the other route templates (worker renders it). */
       ownerDirectTemplate?: string;
+      /** Offer the lead's owning employee (contacts.owner_employee_id) first. */
+      preferContactOwner?: boolean;
     }
   | {
       kind: "browse_action";
@@ -562,6 +565,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           attachScreenshot: step.attachScreenshot === true,
           // Only an explicit opt-out is carried; undefined means ON.
           ...(step.firstToClaim === false ? { firstToClaim: false } : {}),
+          ...(step.preferContactOwner === true ? { preferContactOwner: true } : {}),
           ...(ownerDirect
             ? {
                 ownerDirectWhen: step.ownerDirectWhen,
@@ -697,6 +701,24 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       return {
         ok: true,
         action: { kind: "wait_for_reply", from: e164, saveAs, marker, timeoutMinutes }
+      };
+    }
+    case "branch": {
+      // Evaluate the arms top to bottom (first match wins, else on no match)
+      // and record the choice as an engine var. The worker's flat loop then
+      // skips every step on an untaken arm via isOnActivePath — the branch
+      // step itself is just this one var write.
+      const chosen = chooseBranchArm(step, scope);
+      const label =
+        chosen === "else"
+          ? "none matched"
+          : (step.branches.find((a) => a.id === chosen)?.label ?? chosen);
+      return {
+        ok: true,
+        action: {
+          kind: "set_vars",
+          vars: { [branchChoiceVar(step.id)]: chosen, [`__branch_label_${step.id}`]: label }
+        }
       };
     }
     case "upsert_customer": {

@@ -3,7 +3,12 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
-import { CONTACT_TYPES, type ContactType } from "@/lib/customer-memory/types";
+import {
+  CONTACT_TYPES,
+  MAX_CONTACT_TAGS,
+  MAX_CONTACT_TAG_LENGTH,
+  type ContactType
+} from "@/lib/customer-memory/types";
 
 type Props = {
   businessId: string;
@@ -12,6 +17,10 @@ type Props = {
   initialPinnedMd: string | null;
   initialEmail: string | null;
   initialType: ContactType;
+  initialTags: string[];
+  initialOwnerEmployeeId: string | null;
+  /** Roster for the owner picker (id + name; inactive members included). */
+  teamMembers: { id: string; name: string }[];
 };
 
 const PINNED_MAX = 2000;
@@ -24,6 +33,9 @@ export function CustomerProfileEditor(props: Props) {
   const [pinnedMd, setPinnedMd] = useState(props.initialPinnedMd ?? "");
   const [email, setEmail] = useState(props.initialEmail ?? "");
   const [type, setType] = useState<ContactType>(props.initialType);
+  const [tags, setTags] = useState<string[]>(props.initialTags);
+  const [tagDraft, setTagDraft] = useState("");
+  const [ownerId, setOwnerId] = useState<string>(props.initialOwnerEmployeeId ?? "");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -33,7 +45,18 @@ export function CustomerProfileEditor(props: Props) {
   const pinnedChanged = (props.initialPinnedMd ?? "") !== pinnedMd;
   const emailChanged = (props.initialEmail ?? "") !== email;
   const typeChanged = props.initialType !== type;
-  const dirty = nameChanged || pinnedChanged || emailChanged || typeChanged;
+  const tagsChanged = props.initialTags.join("\u0000") !== tags.join("\u0000");
+  const ownerChanged = (props.initialOwnerEmployeeId ?? "") !== ownerId;
+  const dirty =
+    nameChanged || pinnedChanged || emailChanged || typeChanged || tagsChanged || ownerChanged;
+
+  function addTag() {
+    const tag = tagDraft.trim().slice(0, MAX_CONTACT_TAG_LENGTH);
+    setTagDraft("");
+    if (!tag || tags.length >= MAX_CONTACT_TAGS) return;
+    if (tags.some((t) => t.toLowerCase() === tag.toLowerCase())) return;
+    setTags([...tags, tag]);
+  }
 
   async function save() {
     setSaving(true);
@@ -44,11 +67,13 @@ export function CustomerProfileEditor(props: Props) {
       // (possibly legacy-invalid) email alongside a name/pinned edit would let
       // server-side .email() validation reject the whole save, blocking edits to
       // unrelated fields.
-      const body: Record<string, string | null> = {};
+      const body: Record<string, unknown> = {};
       if (nameChanged) body.displayName = displayName.trim() === "" ? null : displayName.trim();
       if (pinnedChanged) body.pinnedMd = pinnedMd.trim() === "" ? null : pinnedMd.trim();
       if (emailChanged) body.email = email.trim() === "" ? null : email.trim();
       if (typeChanged) body.type = type;
+      if (tagsChanged) body.tags = tags;
+      if (ownerChanged) body.ownerEmployeeId = ownerId || null;
       const res = await fetch(
         `/api/dashboard/customers/${encodeURIComponent(
           props.customerE164
@@ -136,6 +161,64 @@ export function CustomerProfileEditor(props: Props) {
         {CONTACT_TYPES.map((t) => (
           <option key={t} value={t}>
             {t}
+          </option>
+        ))}
+      </select>
+
+      <label className="block text-xs text-parchment/70 mb-1 mt-4">
+        Tags
+        <span className="ml-1 text-parchment/40">
+          (your own labels — anything goes; up to {MAX_CONTACT_TAGS})
+        </span>
+      </label>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {tags.map((t) => (
+          <span
+            key={t}
+            className="inline-flex items-center gap-1 rounded-full bg-signal-teal/10 px-2 py-0.5 text-xs text-signal-teal/90"
+          >
+            {t}
+            <button
+              type="button"
+              onClick={() => setTags(tags.filter((x) => x !== t))}
+              className="text-signal-teal/60 hover:text-red-300"
+              aria-label={`Remove tag ${t}`}
+            >
+              ×
+            </button>
+          </span>
+        ))}
+        <input
+          type="text"
+          value={tagDraft}
+          onChange={(e) => setTagDraft(e.target.value.slice(0, MAX_CONTACT_TAG_LENGTH))}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === ",") {
+              e.preventDefault();
+              addTag();
+            }
+          }}
+          onBlur={addTag}
+          placeholder={tags.length === 0 ? "e.g. VIP, spanish, roof-2026" : "+ tag"}
+          className="w-40 bg-deep-ink/60 border border-parchment/15 rounded-lg px-2 py-1 text-xs text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
+        />
+      </div>
+
+      <label className="block text-xs text-parchment/70 mb-1 mt-4">
+        Owned by
+        <span className="ml-1 text-parchment/40">
+          (the teammate responsible for this contact; auto-set when someone claims their lead)
+        </span>
+      </label>
+      <select
+        value={ownerId}
+        onChange={(e) => setOwnerId(e.target.value)}
+        className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment focus:outline-none focus:border-claw-green/60"
+      >
+        <option value="">Nobody (unowned)</option>
+        {props.teamMembers.map((m) => (
+          <option key={m.id} value={m.id}>
+            {m.name}
           </option>
         ))}
       </select>

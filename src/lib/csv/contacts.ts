@@ -52,6 +52,7 @@ export const CONTACTS_EXPORT_HEADERS = [
   "email",
   "sms_reply_mode",
   "pinned_notes",
+  "tags",
   "aliases",
   "last_channel",
   "last_interaction_at",
@@ -60,7 +61,7 @@ export const CONTACTS_EXPORT_HEADERS = [
 ] as const;
 
 const CONTACT_COLUMNS =
-  "id,customer_e164,display_name,type,email,sms_reply_mode,pinned_md," +
+  "id,customer_e164,display_name,type,email,sms_reply_mode,pinned_md,tags," +
   "alias_e164s,last_channel,last_interaction_at,total_interaction_count,created_at";
 
 type ExportRow = Pick<
@@ -72,6 +73,7 @@ type ExportRow = Pick<
   | "email"
   | "sms_reply_mode"
   | "pinned_md"
+  | "tags"
   | "alias_e164s"
   | "last_channel"
   | "last_interaction_at"
@@ -109,6 +111,7 @@ export async function exportContactsCsv(
       r.email ?? "",
       r.sms_reply_mode,
       r.pinned_md ?? "",
+      (r.tags ?? []).join(", "),
       (r.alias_e164s ?? []).join(" "),
       r.last_channel ?? "",
       r.last_interaction_at ?? "",

@@ -75,8 +75,10 @@ import {
   nextTimeOfDayMs,
   offerRespondByMs,
   parseHHMM,
-  smsQuietDecision
+  smsQuietDecision,
+  timeWindowDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
+import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   geminiCostMicrosFromTokens,
@@ -84,7 +86,13 @@ import {
   resolveChatPeriodStart,
   type SpendSupabase
 } from "../_shared/chat_spend_cap.ts";
-import type { AiFlowDefinition, BrowseAuth, ExtractField, FlowStep } from "../_shared/ai_flows/types.ts";
+import type {
+  AiFlowDefinition,
+  BrowseAuth,
+  ExtractField,
+  FlowStep,
+  FlowTimeWindow
+} from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
@@ -241,6 +249,10 @@ type Scope = {
   // — for the dashboard run "investigate" view. Default off so most flows pay no
   // extra capture latency/storage; turned on for flows being debugged.
   captureScreenshots?: boolean;
+  // Flow-level business-hours gate (definition.timeWindow): communication steps
+  // outside the window defer the run to the next open slot. Derived from the
+  // definition each claim; never persisted in run.context (buildContext omits it).
+  timeWindow?: FlowTimeWindow;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -407,7 +419,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   const scope: Scope = {
     vars: asRecord(run.context.vars),
     trigger: asRecord(run.context.trigger),
-    captureScreenshots: def.options?.captureStepScreenshots === true
+    captureScreenshots: def.options?.captureStepScreenshots === true,
+    ...(def.timeWindow ? { timeWindow: def.timeWindow } : {})
   };
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
@@ -442,9 +455,27 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // (claim/reject/timeout) stamped by the inbound webhook / escalation sweep.
   const routing = asRecord(run.context.routing);
 
+  // Branch arms are stored nested but the run state machine is a flat integer
+  // cursor, so execute over the deterministic flattened order (see
+  // _shared/ai_flows/branching.ts). For flows without branch steps this is
+  // exactly def.steps, index for index.
+  const flat = flattenSteps(def.steps);
+
   let index = run.current_step;
-  while (index < def.steps.length) {
-    const step = def.steps[index];
+  while (index < flat.length) {
+    const { step, branchPath } = flat[index];
+    // A step under an untaken (or not-yet-evaluated) branch arm never runs —
+    // recorded "skipped" like a when_unmet skip, so run history shows every
+    // path with the untaken ones greyed.
+    if (branchPath.length > 0 && !isOnActivePath(branchPath, scope.vars)) {
+      await recordStep(supabase, run, index, step, "skipped", { skipped: "branch_not_taken" });
+      index += 1;
+      await updateRun(supabase, run.id, {
+        current_step: index,
+        context: buildContext(scope, approval, routing)
+      });
+      continue;
+    }
     let outcome: StepOutcome;
     try {
       outcome = await runStep(supabase, run, step, index, scope, approval, routing);
@@ -482,8 +513,9 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // and cancel is always the LAST digit.
       const nowMs = Date.now();
       const gateOptions = buildApprovalGateOptions({
-        offerQuietBypass: def.steps
+        offerQuietBypass: flat
           .slice(index + 1)
+          .map((e) => e.step)
           .some(
             (s) =>
               s.type === "send_sms" &&
@@ -693,11 +725,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     if (outcome.endRun) {
       // Late claim: jump to the end so the run completes as done without
       // replaying the steps after route_to_team.
-      index = def.steps.length;
-    } else if (outcome.skipNextStep && index < def.steps.length) {
+      index = flat.length;
+    } else if (outcome.skipNextStep && index < flat.length) {
       // Approval gate decided "skip": the step the gate guards (the one
       // directly after it) is recorded as skipped without running.
-      await recordStep(supabase, run, index, def.steps[index], "skipped", {
+      await recordStep(supabase, run, index, flat[index].step, "skipped", {
         skipped: "approval_skipped"
       });
       index += 1;
@@ -736,6 +768,13 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
  * other engine-internal vars (e.g. the after-hours email markers).
  */
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+
+/**
+ * Step types gated by the flow-level time window (definition.timeWindow):
+ * everything that CONTACTS someone. Reads/waits/branches run any time — only
+ * the outward touch waits for business hours.
+ */
+const COMM_STEP_TYPES = new Set<string>(["send_sms", "send_email", "notify_owner", "route_to_team"]);
 
 type StepOutcome =
   // skipNextStep: set by an approval gate decided "skip" — the step directly
@@ -787,6 +826,17 @@ async function runStep(
   // as having started.
   if (step.when && !evaluateStepCondition(step.when, scope)) {
     return { kind: "ok", skipped: true, result: { skipped: "when_unmet", when: step.when } };
+  }
+  // Flow-level time window (definition.timeWindow): a communication step
+  // outside the window defers the whole run to the next open slot — the same
+  // earliest_claim_at mechanics as send_sms quiet hours, which still apply on
+  // top per step. Checked AFTER the `when` guard so a step that would skip
+  // anyway never parks the run, and before recording "running".
+  if (scope.timeWindow && COMM_STEP_TYPES.has(step.type)) {
+    const decision = timeWindowDecision(Date.now(), scope.timeWindow);
+    if (!decision.allowed) {
+      return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "flow_time_window" };
+    }
   }
   await recordStep(supabase, run, index, step, "running");
   const plan = planStep(step, scope);
@@ -3175,6 +3225,9 @@ async function routeToTeamStep(
       `lead ${lateClaim ? "claimed late (86) by" : "claimed by"} ${claimedName || claimedBy}` +
         (claimTimeframe ? ` (ETA: ${claimTimeframe})` : "")
     );
+    // Claim-driven ownership: the claimer becomes the contact's owner if the
+    // contact is currently unowned (never steals). Best-effort by design.
+    if (claimedBy) await assignContactOwnerOnClaim(supabase, run, scope, claimedBy);
     return {
       kind: "ok",
       result: { routed: lateClaim ? "late_claimed" : "claimed", claimed_by: claimedBy },
@@ -3255,8 +3308,22 @@ async function routeToTeamStep(
   }
 
   const leadPhone = leadPhoneE164(scope);
+  // Owner-first routing (preferContactOwner): a repeat lead whose contact
+  // already has an owning employee gets offered to "their" person first; the
+  // normal cascade follows if they pass or time out (they land in `tried`).
+  // A pinned agent (agentName/agentRef) wins over the preference, and a
+  // preferred owner already tried is a no-op — so this only shapes the FIRST
+  // offer and never loops.
+  let preferredAgent: RoutedAgent | null = null;
+  if (action.preferContactOwner && !pinnedAgentName) {
+    const owner = await contactOwnerAgent(supabase, run.business_id, scope);
+    if (owner && !tried.includes(owner.phone)) preferredAgent = owner;
+  }
   for (let i = 0; i < ROUTE_MAX_LOOKUPS; i++) {
-    const agent = await pickNextAgent(supabase, run, scope, tried, pinnedAgentName);
+    const preferredThisPass = preferredAgent;
+    const agent =
+      preferredAgent ?? (await pickNextAgent(supabase, run, scope, tried, pinnedAgentName));
+    preferredAgent = null;
     // No agent at all (none / parse fail / unconfigured / pinned agent missing):
     // roster is exhausted.
     if (!agent) break;
@@ -3315,6 +3382,12 @@ async function routeToTeamStep(
     const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
     if (alreadyPending > 0) {
       offerText = `${multiOfferHeadsUpLine(alreadyPending + 1)}\n${offerText}`;
+    }
+    if (preferredThisPass && agent.phone === preferredThisPass.phone) {
+      appendActionTaken(
+        scope,
+        `offered ${agent.name || agent.phone} first — they own this contact`
+      );
     }
     return {
       kind: "pause_agent",
@@ -3417,6 +3490,143 @@ function leadPhoneE164(scope: Scope): string | null {
   const raw = typeof scope.vars.lead_phone === "string" ? scope.vars.lead_phone.trim() : "";
   if (!raw) return null;
   return isE164(raw) ? raw : normalizeNanpToE164(raw);
+}
+
+/**
+ * The phone that identifies this lead's CONTACT row: vars.lead_phone when an
+ * extraction produced one, else the triggering sender (SMS-triggered flows).
+ * Used by contact-ownership routing (preferContactOwner + claim auto-assign).
+ */
+function leadContactPhone(scope: Scope): string | null {
+  const fromVars = leadPhoneE164(scope);
+  if (fromVars) return fromVars;
+  const from = typeof scope.trigger?.from === "string" ? scope.trigger.from.trim() : "";
+  return from && isE164(from) ? from : null;
+}
+
+/**
+ * The roster member who OWNS this lead's contact (contacts.owner_employee_id),
+ * resolved to {name, phone}, or null (no phone / no contact / unowned /
+ * owner inactive / owner unavailable). Alias-aware like getCustomerMemory.
+ * Applies the SAME working-info rules as pickNextAgent — time off covering
+ * today and out-of-schedule members are hard skips — so ownership preference
+ * never routes around an owner's time off; the normal cascade takes over.
+ * Best-effort: a lookup error logs and returns null — ownership preference
+ * must never stall routing.
+ */
+async function contactOwnerAgent(
+  supabase: Supabase,
+  businessId: string,
+  scope: Scope
+): Promise<RoutedAgent | null> {
+  const phone = leadContactPhone(scope);
+  if (!phone) return null;
+  try {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("owner_employee_id")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
+      .maybeSingle();
+    const ownerId = (contact as { owner_employee_id?: string | null } | null)?.owner_employee_id;
+    if (!ownerId) return null;
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("id, name, phone_e164, active, weekly_schedule, preferred_windows")
+      .eq("business_id", businessId)
+      .eq("id", ownerId)
+      .maybeSingle();
+    const m = member as {
+      id?: string;
+      name?: string;
+      phone_e164?: string;
+      active?: boolean;
+      weekly_schedule?: unknown;
+      preferred_windows?: unknown;
+    } | null;
+    if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
+    // Availability (business-local): the owner on time off today or outside
+    // their weekly schedule is skipped, same as in pickNextAgent.
+    const [tzRes, offRes] = await Promise.all([
+      supabase.from("businesses").select("timezone").eq("id", businessId).maybeSingle(),
+      supabase
+        .from("employee_time_off")
+        .select("member_id, starts_on, ends_on")
+        .eq("business_id", businessId)
+        .eq("member_id", m.id)
+    ]);
+    const tz = (tzRes.data as { timezone?: string | null } | null)?.timezone ?? null;
+    const clock = localClock(new Date(), tz);
+    const offIds = new Set(
+      ((offRes.data ?? []) as { member_id: string; starts_on: string; ends_on: string }[])
+        .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
+        .map((t) => t.member_id)
+    );
+    const available = filterRosterByAvailability(
+      [
+        {
+          id: m.id,
+          name: m.name ?? "",
+          phone_e164: m.phone_e164.trim(),
+          weekly_schedule: m.weekly_schedule,
+          preferred_windows: m.preferred_windows
+        }
+      ],
+      offIds,
+      clock
+    );
+    if (available.length === 0) return null;
+    return { name: m.name ?? "", phone: m.phone_e164.trim() };
+  } catch (e) {
+    console.error("contactOwnerAgent", e);
+    return null;
+  }
+}
+
+/**
+ * Claim-driven ownership: the teammate who claimed this lead becomes the
+ * contact's owner — but ONLY when the contact is currently unowned (ownership
+ * is never stolen by a later claim). Best-effort: a failure logs and moves on;
+ * the claim itself already succeeded.
+ */
+async function assignContactOwnerOnClaim(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  claimedByPhone: string
+): Promise<void> {
+  const leadPhone = leadContactPhone(scope);
+  if (!leadPhone || !claimedByPhone) return;
+  try {
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("id")
+      .eq("business_id", run.business_id)
+      .eq("phone_e164", claimedByPhone)
+      .maybeSingle();
+    const memberId = (member as { id?: string } | null)?.id;
+    if (!memberId) return;
+    const { data: updated, error } = await supabase
+      .from("contacts")
+      .update({ owner_employee_id: memberId, updated_at: new Date().toISOString() })
+      .eq("business_id", run.business_id)
+      .or(`customer_e164.eq.${leadPhone},alias_e164s.cs.{${leadPhone}}`)
+      .is("owner_employee_id", null)
+      .select("id");
+    if (error) {
+      console.error("assignContactOwnerOnClaim", error);
+      return;
+    }
+    if ((updated ?? []).length > 0) {
+      await telemetryRecord(supabase, "ai_flow_contact_owner_assigned", {
+        run_id: run.id,
+        business_id: run.business_id,
+        member_id: memberId
+      });
+    }
+  } catch (e) {
+    console.error("assignContactOwnerOnClaim", e);
+  }
 }
 
 /**

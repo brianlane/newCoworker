@@ -222,6 +222,63 @@ describe("scrubDefinition strips prose across all step/condition shapes", () => 
   });
 });
 
+describe("scrubDefinition recurses into branch arms", () => {
+  it("applies the structural fixups to steps nested inside branches", () => {
+    const def = {
+      version: 1 as const,
+      trigger: { channel: "sms" as const, conditions: [] },
+      steps: [
+        { id: "x", type: "extract_text" as const, fields: [{ name: "kind" }] },
+        {
+          id: "br",
+          type: "branch" as const,
+          question: "Which kind of lead is this for Amy?",
+          branches: [
+            {
+              id: "arm1",
+              label: "Buyer",
+              condition: { var: "kind", equals: "buyer" },
+              steps: [
+                {
+                  id: "e1",
+                  type: "send_email" as const,
+                  to: "{{owner_email}}",
+                  subject: "s",
+                  body: "b",
+                  fromConnectionId: "22222222-2222-2222-2222-222222222222"
+                }
+              ]
+            }
+          ],
+          else: [
+            {
+              id: "h1",
+              type: "http_call" as const,
+              label: "crm",
+              path: "https://hooks.example.com/secret-token",
+              bodyTemplate: "{\"k\":\"secret\"}"
+            }
+          ]
+        }
+      ]
+    };
+    const scrubbed = scrubDefinition(def as unknown as AiFlowDefinition);
+    const steps = scrubbed.steps as Record<string, unknown>[];
+    const branch = steps[1] as {
+      question: string;
+      branches: Array<{ steps: Record<string, unknown>[] }>;
+      else: Record<string, unknown>[];
+    };
+    // The question is author prose → blanked.
+    expect(branch.question).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    // Nested arm step: tenant mailbox binding dropped.
+    expect(branch.branches[0].steps[0].fromConnectionId).toBeUndefined();
+    // Nested else step: endpoint secrets dropped.
+    expect(branch.else[0].path).toBeUndefined();
+    expect(branch.else[0].bodyTemplate).toBeUndefined();
+  });
+});
+
 describe("containsLikelyPii", () => {
   it("flags a literal email or phone", () => {
     expect(containsLikelyPii({ a: "reach me at amy@amylaidlaw.com" })).toBe(true);

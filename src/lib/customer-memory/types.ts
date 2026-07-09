@@ -77,6 +77,32 @@ export type CustomerMemoryRow = {
   last_channel: CustomerMemoryChannel | null;
   /** E.164 numbers merged into this profile (merge_customer_memories). */
   alias_e164s: string[];
+  /** Free-form owner-defined labels (max MAX_CONTACT_TAGS). Never null (DB default {}). */
+  tags: string[];
+  /** Roster member (ai_flow_team_members.id) who owns this contact; null = unowned. */
+  owner_employee_id: string | null;
   created_at: string;
   updated_at: string;
 };
+
+/** Tag caps (mirrored by the contacts_tags_cap_chk DB constraint). */
+export const MAX_CONTACT_TAGS = 25;
+export const MAX_CONTACT_TAG_LENGTH = 40;
+
+/**
+ * Normalize a tag list the way every write path must: trim, drop empties,
+ * clamp length, de-dup case-insensitively (first spelling wins), cap count.
+ */
+export function normalizeContactTags(raw: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const t of raw) {
+    const tag = t.trim().slice(0, MAX_CONTACT_TAG_LENGTH);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    out.push(tag);
+    if (out.length >= MAX_CONTACT_TAGS) break;
+  }
+  return out;
+}
