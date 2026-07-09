@@ -288,6 +288,33 @@ export async function listBusinessIdsWithLiveSubscription(
   return { stripeBacked, stripeless };
 }
 
+/**
+ * Which of `businessIds` have ANY subscription row that is Stripe-linked and
+ * not canceled — i.e. Stripe either IS billing (active/past_due) or MAY
+ * start billing any second (a paid checkout's `pending` row whose webhook
+ * is still activating). Any-row semantics like
+ * {@link listBusinessIdsWithLiveSubscription}, but deliberately wider: this
+ * is the "would deleting this account orphan Stripe billing?" predicate,
+ * shared by the release-to-pool guard and the adopt-time cascade's
+ * delete guard.
+ */
+export async function listBusinessIdsWithStripeLinkedSubscription(
+  businessIds: string[],
+  client?: SupabaseClient
+): Promise<Set<string>> {
+  if (businessIds.length === 0) return new Set();
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select("business_id")
+    .in("business_id", businessIds)
+    .not("stripe_subscription_id", "is", null)
+    .neq("status", "canceled");
+
+  if (error) throw new Error(`listBusinessIdsWithStripeLinkedSubscription: ${error.message}`);
+  return new Set(((data ?? []) as Array<{ business_id: string }>).map((r) => r.business_id));
+}
+
 export async function updateSubscription(
   id: string,
   update: Partial<

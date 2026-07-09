@@ -38,7 +38,7 @@ import {
   listBusinessIdsByOwnerEmail,
   type BusinessRow
 } from "@/lib/db/businesses";
-import { listBusinessIdsWithLiveSubscription } from "@/lib/db/subscriptions";
+import { listBusinessIdsWithStripeLinkedSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export type StaleTenantCleanupDeps = {
@@ -47,11 +47,13 @@ export type StaleTenantCleanupDeps = {
   /** Every business id an owner email still owns (multi-business agencies). */
   listBusinessIdsForEmail?: typeof listBusinessIdsByOwnerEmail;
   /**
-   * Live-subscription lookup (Stripe split) used as a delete-time guard: a
-   * business whose subscription became Stripe-live again AFTER its box was
-   * released (owner resubscribed through checkout) must never be deleted.
+   * Stripe-linkage lookup used as a delete-time guard: a business whose
+   * subscription became Stripe-linked again AFTER its box was released
+   * (owner resubscribed through checkout — including a paid checkout whose
+   * webhook is still activating, i.e. `pending` with a
+   * stripe_subscription_id) must never be deleted.
    */
-  listLiveSubscriptionIds?: typeof listBusinessIdsWithLiveSubscription;
+  listStripeLinkedIds?: typeof listBusinessIdsWithStripeLinkedSubscription;
   /** Resolve an owner email to a Supabase auth user id (null = none). */
   findAuthUserId?: (email: string) => Promise<string | null>;
   /** Delete a Supabase auth user by id. */
@@ -93,8 +95,8 @@ export async function cleanupStaleTenantsForVm(
   const listByVpsId = deps.listByVpsId ?? listBusinessesByHostingerVpsId;
   const deleteBiz = deps.deleteBiz ?? deleteBusiness;
   const listBusinessIdsForEmail = deps.listBusinessIdsForEmail ?? listBusinessIdsByOwnerEmail;
-  const listLiveSubscriptionIds =
-    deps.listLiveSubscriptionIds ?? listBusinessIdsWithLiveSubscription;
+  const listStripeLinkedIds =
+    deps.listStripeLinkedIds ?? listBusinessIdsWithStripeLinkedSubscription;
   const findAuthUserId = deps.findAuthUserId ?? defaultFindAuthUserId;
   const deleteAuthUser = deps.deleteAuthUser ?? defaultDeleteAuthUser;
   /* c8 ignore stop */
@@ -106,19 +108,20 @@ export async function cleanupStaleTenantsForVm(
   // Delete-time billing guard: between an admin release and this adopt, the
   // old owner can resubscribe through checkout (the released row is
   // canceled-no-grace, which deliberately doesn't block a returning
-  // customer). If a stale business's subscription is Stripe-live RIGHT NOW,
-  // deleting it would orphan an actively-billing Stripe subscription — skip
-  // it and scream instead; the operator has to reconcile (the paying tenant
-  // needs a box: it either keeps this one via re-provision or gets a new
-  // one).
-  const liveNow =
+  // customer). If a stale business's subscription is Stripe-LINKED right
+  // now — active/past_due billing OR a paid checkout whose webhook is still
+  // activating (`pending` with a stripe_subscription_id) — deleting it
+  // would orphan Stripe billing. Skip it and scream instead; the operator
+  // has to reconcile (the paying tenant needs a box: it either keeps this
+  // one via re-provision or gets a new one).
+  const stripeLinkedNow =
     stale.length > 0
-      ? await listLiveSubscriptionIds(stale.map((business) => business.id))
-      : { stripeBacked: new Set<string>(), stripeless: new Set<string>() };
+      ? await listStripeLinkedIds(stale.map((business) => business.id))
+      : new Set<string>();
 
   const deletedBusinessIds: string[] = [];
   for (const business of stale) {
-    if (liveNow.stripeBacked.has(business.id)) {
+    if (stripeLinkedNow.has(business.id)) {
       logger.error(
         "stale-tenant cleanup: SKIPPED delete — business resubscribed via Stripe after its box was released; reconcile manually",
         {
