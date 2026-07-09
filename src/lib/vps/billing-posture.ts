@@ -10,12 +10,18 @@
  * Jul 8 2026 fleet audit found exactly this state in production (srv1800985
  * hosting a live tenant on a non-renewing subscription expiring Aug 2).
  *
- * Direction 1 (tenant safety, AUTO-HEALED): for every non-wiped business on
- * a Hostinger box, resolve the VM's billing subscription; if auto-renew is
- * off, re-enable it right here and report the finding either way. Healing is
- * safe: the tenant is live, so renewing is always the correct state — and if
- * the tenant cancels later, the cancel/wipe lifecycle disables auto-renew
- * again as part of its plan (verified: `disable_billing_auto_renewal` op).
+ * Direction 1 (tenant safety, AUTO-HEALED): for every business with a LIVE
+ * paying relationship — non-wiped AND a NewCoworker subscription in
+ * `active`/`past_due` — resolve the VM's billing subscription; if auto-renew
+ * is off, re-enable it right here and report the finding either way.
+ * Healing is safe for exactly this population: the tenant is paying, so
+ * renewing is always the correct state — and if they cancel later, the
+ * cancel/wipe lifecycle disables auto-renew again as part of its plan
+ * (verified: `disable_billing_auto_renewal` op). Businesses whose
+ * subscription is `canceled` (grace window — lifecycle just parked the box
+ * on purpose), `pending` (never paid), or missing (smoke/test rows) are
+ * deliberately OUT of scope; their boxes surface via the pool direction
+ * once released.
  *
  * Direction 2 (money leak, REPORT-ONLY): pool boxes in state `available`
  * whose subscription is still auto-renewing cost money while serving nobody.
@@ -29,6 +35,7 @@
 
 import { logger } from "@/lib/logger";
 import type { BusinessRow } from "@/lib/db/businesses";
+import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
@@ -54,6 +61,10 @@ export type BillingPostureResult = {
 
 export type BillingPostureDeps = {
   listBusinesses: () => Promise<BusinessRow[]>;
+  /** NewCoworker subscriptions for the candidate businesses (live-tenant gate). */
+  listSubscriptionsByBusinessIds: (
+    businessIds: string[]
+  ) => Promise<Map<string, SubscriptionRow>>;
   listInventory: () => Promise<VpsInventoryRow[]>;
   getVirtualMachine: (vmId: number) => Promise<VirtualMachine>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
@@ -83,12 +94,25 @@ export async function checkVpsBillingPosture(
   const findings: BillingPostureFinding[] = [];
 
   // ---- Direction 1: live tenants must renew (auto-heal). ----
-  const tenants = businesses
+  const candidates = businesses
     .map((business) => ({ business, vmId: tenantVmId(business) }))
     .filter(
       (entry): entry is { business: BusinessRow; vmId: number } =>
         entry.vmId !== null && entry.business.status !== "wiped"
     );
+  // Live-tenant gate: only a paying relationship justifies re-enabling
+  // Hostinger billing. A canceled-in-grace business still points at its VM
+  // until the wipe, and the lifecycle just disabled that box's renewal ON
+  // PURPOSE — healing it would re-charge the platform for a box whose
+  // tenant already left (Bugbot High on this PR). Pending (never paid) and
+  // subscription-less (smoke/test) rows are equally out of scope.
+  const tenantSubs = await deps.listSubscriptionsByBusinessIds(
+    candidates.map((entry) => entry.business.id)
+  );
+  const tenants = candidates.filter((entry) => {
+    const sub = tenantSubs.get(entry.business.id);
+    return sub !== undefined && (sub.status === "active" || sub.status === "past_due");
+  });
 
   for (const { business, vmId } of tenants) {
     let vm: VirtualMachine;

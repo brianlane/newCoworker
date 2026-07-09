@@ -34,6 +34,13 @@ function poolRow(overrides: Partial<VpsInventoryRow> & { vm_id: number }): VpsIn
 function makeDeps(overrides: Record<string, unknown> = {}) {
   return {
     listBusinesses: vi.fn().mockResolvedValue([]),
+    // Default: every candidate business has a live (active) NewCoworker
+    // subscription, so the tenant gate passes unless a test narrows it.
+    listSubscriptionsByBusinessIds: vi
+      .fn()
+      .mockImplementation(async (ids: string[]) =>
+        new Map(ids.map((id) => [id, { business_id: id, status: "active" }]))
+      ),
     listInventory: vi.fn().mockResolvedValue([]),
     getVirtualMachine: vi
       .fn()
@@ -214,6 +221,45 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     expect(result.findings[1]).toEqual(
       expect.objectContaining({ hostingerBillingSubscriptionId: "hsub-unknown" })
     );
+  });
+
+  it("never re-enables renewal for canceled-in-grace, pending, or subscription-less businesses", async () => {
+    // Bugbot High: a canceled business still points at its VM until the
+    // wipe, and the cancel lifecycle disabled that box's renewal ON
+    // PURPOSE. Pending (never paid) and subscription-less (smoke/test)
+    // rows are equally not "live tenants". None may be healed.
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([
+        biz({ id: "grace" }),
+        biz({ id: "pending", hostinger_vps_id: "222" }),
+        biz({ id: "no-sub", hostinger_vps_id: "333" }),
+        biz({ id: "live", hostinger_vps_id: "444" })
+      ]),
+      listSubscriptionsByBusinessIds: vi.fn().mockResolvedValue(
+        new Map([
+          ["grace", { business_id: "grace", status: "canceled" }],
+          ["pending", { business_id: "pending", status: "pending" }],
+          ["live", { business_id: "live", status: "past_due" }]
+        ])
+      ),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ id: 444, state: "running", subscription_id: "hsub-live" }),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-live", status: "non_renewing", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    // Only the live (past_due counts — still a billing relationship) tenant
+    // was checked and healed; the VM detail endpoint was never called for
+    // the grace/pending/no-sub rows.
+    expect(result.checkedTenantVms).toBe(1);
+    expect(deps.getVirtualMachine).toHaveBeenCalledTimes(1);
+    expect(deps.getVirtualMachine).toHaveBeenCalledWith(444);
+    expect(deps.enableAutoRenewal).toHaveBeenCalledTimes(1);
+    expect(deps.enableAutoRenewal).toHaveBeenCalledWith("hsub-live");
   });
 
   it("skips wiped businesses, non-Hostinger providers, and businesses without a numeric VM id", async () => {
