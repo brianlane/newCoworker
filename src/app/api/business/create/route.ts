@@ -3,9 +3,11 @@ import {
   createBusiness,
   getBusiness,
   isValidIanaTimezone,
+  updateBusinessPreferredAreaCode,
   updateBusinessTimezone
 } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { normalizePreferredAreaCode } from "@/lib/telnyx/did-search-plan";
 import { teamSizeBucketToInt } from "@/lib/onboarding/intakeOptions";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { logger } from "@/lib/logger";
@@ -20,6 +22,13 @@ const schema = z.object({
   businessType: z.string().optional(),
   ownerName: z.string().optional(),
   phone: z.string().optional(),
+  /**
+   * Optional signup-chosen area code for the AI coworker's number. Free-form
+   * (users type "(519)" etc.) — normalized below; anything that doesn't
+   * reduce to a valid 3-digit NPA is silently dropped rather than failing
+   * business creation.
+   */
+  preferredAreaCode: z.string().max(20).optional(),
   websiteUrl: z.string().optional(),
   serviceArea: z.string().optional(),
   typicalInquiry: z.string().optional(),
@@ -83,6 +92,16 @@ export async function POST(request: Request) {
         if (tz && !existing.timezone) {
           await updateBusinessTimezone(existing.id, tz);
         }
+        // Signup-requested DID area code: a retry can carry a preference the
+        // original insert never persisted, OR a value the user changed on a
+        // Step-1 back-navigation before completing checkout. This route only
+        // runs during onboarding (nothing else writes the column), so the
+        // latest VALID signup input wins; invalid/absent input leaves the
+        // stored value untouched.
+        const retryAreaCode = normalizePreferredAreaCode(body.preferredAreaCode);
+        if (retryAreaCode && existing.preferred_area_code !== retryAreaCode) {
+          await updateBusinessPreferredAreaCode(existing.id, retryAreaCode);
+        }
         logger.info("business.create idempotent: returning existing row", {
           businessId: body.businessId,
           anonymous: !user
@@ -107,6 +126,7 @@ export async function POST(request: Request) {
       businessType: body.businessType,
       ownerName: body.ownerName,
       phone: body.phone,
+      preferredAreaCode: normalizePreferredAreaCode(body.preferredAreaCode),
       websiteUrl: body.websiteUrl,
       serviceArea: body.serviceArea,
       typicalInquiry: body.typicalInquiry,

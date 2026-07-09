@@ -27,6 +27,11 @@ import {
   type PlatformTelnyxDefaults
 } from "@/lib/telnyx/assign-did";
 import {
+  buildDidSearchPlan,
+  normalizePreferredAreaCode,
+  type DidSearchSpec
+} from "@/lib/telnyx/did-search-plan";
+import {
   assertPlatformTelnyxDefaults,
   readPlatformTelnyxDefaults
 } from "@/lib/telnyx/platform-defaults";
@@ -1290,85 +1295,80 @@ async function runOrchestrator(
         // production regression at first call.
         assertPlatformTelnyxDefaults(platformDefaults);
 
-        const countryCode = process.env.TELNYX_DEFAULT_COUNTRY ?? "US";
-        // Bias the number search toward the owner's local area code, derived
-        // from the phone they entered during onboarding, so a new tenant gets
-        // a number that looks local to them. We reuse the `businessRow` already
-        // loaded above (no second DB round-trip — and no risk of a transient
-        // re-read failing and silently dropping a valid local area code). A
-        // non-NANP / missing phone falls back to the platform default.
-        const localAreaCode = extractNanpAreaCode(businessRow?.phone);
-        const primaryAreaCode = localAreaCode ?? process.env.TELNYX_DEFAULT_AREA_CODE;
-        const primarySearch = {
-          countryCode,
-          areaCode: primaryAreaCode,
-          // When we have a concrete local area code, drop the env-default
-          // state filter — an area code already pins the locale, and a
-          // contradictory `administrativeArea` (e.g. tenant in 602/AZ but
-          // TELNYX_DEFAULT_STATE=NY) would zero out the search.
-          administrativeArea: localAreaCode ? undefined : process.env.TELNYX_DEFAULT_STATE
-        };
+        // Ordered search cascade (see did-search-plan.ts): the area code
+        // the owner explicitly REQUESTED at signup, then the NPA derived
+        // from their own phone, then the platform default, then any number
+        // in the default country. `businessRow` was already loaded above —
+        // no second DB round-trip, no risk of a transient re-read silently
+        // dropping a valid preference. Each spec carries its own country:
+        // the NANP spans US + Canada and Telnyx files inventory per
+        // country (a 519/Ontario search under `US` returns nothing — the
+        // Jul 8 2026 Truly Insurance signup needed a manual CA-scoped
+        // order for exactly this reason).
+        const searchPlan = buildDidSearchPlan({
+          preferredAreaCode: normalizePreferredAreaCode(businessRow?.preferred_area_code),
+          ownerAreaCode: extractNanpAreaCode(businessRow?.phone),
+          defaultCountry: process.env.TELNYX_DEFAULT_COUNTRY ?? "US",
+          defaultAreaCode: process.env.TELNYX_DEFAULT_AREA_CODE,
+          defaultState: process.env.TELNYX_DEFAULT_STATE
+        });
 
-        let toE164: string;
-        let usedFallbackAreaCode = false;
-        try {
-          ({ toE164 } = await didProvisioner({
-            businessId,
-            platformDefaults,
-            search: primarySearch
-          }));
-        } catch (orderErr) {
-          // No number available in the owner's local area code: retry once
-          // with the platform default area code (or any US number when no
-          // default is set). Only retry when we actually narrowed to a
-          // derived local area code — otherwise the primary search already
-          // used the fallback criteria and a retry would be identical.
-          if (
-            orderErr instanceof OrderAndAssignError &&
-            orderErr.reason === "no_numbers_available" &&
-            localAreaCode
-          ) {
-            usedFallbackAreaCode = true;
-            // Make sure the retry actually broadens inventory. If the platform
-            // default area code is the same NPA we just failed on, reusing it
-            // (and re-adding the env state filter the primary search dropped)
-            // would re-run an identical/narrower search. In that case drop the
-            // area-code + state filters so Telnyx can return any available US
-            // number instead.
-            let fallbackAreaCode = process.env.TELNYX_DEFAULT_AREA_CODE;
-            if (fallbackAreaCode === localAreaCode) {
-              fallbackAreaCode = undefined;
-            }
-            logger.warn("No DID available in local area code; retrying with default", {
-              businessId,
-              localAreaCode,
-              fallbackAreaCode
-            });
+        let toE164: string | null = null;
+        let usedSpec: DidSearchSpec | null = null;
+        for (let i = 0; i < searchPlan.length; i += 1) {
+          const spec = searchPlan[i];
+          try {
             ({ toE164 } = await didProvisioner({
               businessId,
               platformDefaults,
               search: {
-                countryCode,
-                areaCode: fallbackAreaCode,
-                administrativeArea: fallbackAreaCode ? process.env.TELNYX_DEFAULT_STATE : undefined
+                countryCode: spec.countryCode,
+                areaCode: spec.areaCode,
+                administrativeArea: spec.administrativeArea
               }
             }));
-          } else {
+            usedSpec = spec;
+            break;
+          } catch (orderErr) {
+            // Sold-out inventory moves to the next tier; anything else
+            // (order failure, Telnyx 5xx, config problems) aborts the DID
+            // phase as before. The final `any` spec has no narrower to go,
+            // so its no-inventory failure surfaces too.
+            if (
+              orderErr instanceof OrderAndAssignError &&
+              orderErr.reason === "no_numbers_available" &&
+              i < searchPlan.length - 1
+            ) {
+              logger.warn("No DID inventory for search tier; trying next", {
+                businessId,
+                source: spec.source,
+                countryCode: spec.countryCode,
+                areaCode: spec.areaCode
+              });
+              continue;
+            }
             throw orderErr;
           }
+        }
+        /* c8 ignore next 4 -- unreachable: the loop either breaks with both set or throws */
+        if (toE164 === null || usedSpec === null) {
+          throw new Error("DID search cascade ended without a number or an error");
         }
 
         await recordProvisioningProgress({
           businessId,
           phase: "did_assigned",
           percent: 38,
-          // Only claim a local number when we actually bought one in the
-          // owner's area code — after a fallback retry the number came from
-          // TELNYX_DEFAULT_AREA_CODE, so don't imply it's local.
+          // Only claim a requested/local number when that tier actually
+          // produced the purchase — after a fallback the number came from
+          // the platform default (or any-country) tier, so don't imply
+          // locality.
           message:
-            localAreaCode && !usedFallbackAreaCode
-              ? `Per-tenant DID assigned (${toE164}); local area code ${localAreaCode}`
-              : `Per-tenant DID assigned (${toE164})`,
+            usedSpec.source === "requested"
+              ? `Per-tenant DID assigned (${toE164}); requested area code ${usedSpec.areaCode}`
+              : usedSpec.source === "owner_local"
+                ? `Per-tenant DID assigned (${toE164}); local area code ${usedSpec.areaCode}`
+                : `Per-tenant DID assigned (${toE164})`,
           source: "orchestrator"
         });
 

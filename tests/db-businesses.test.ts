@@ -76,12 +76,16 @@ describe("db/businesses", () => {
       id: "uuid-biz-1",
       name: "Sunrise Realty",
       ownerEmail: "owner@test.com",
-      tier: "starter"
+      tier: "starter",
+      preferredAreaCode: "519"
     });
 
     expect(result.name).toBe("Sunrise Realty");
     expect(db.from).toHaveBeenCalledWith("businesses");
     expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ preferred_area_code: "519" })
+    );
     // A prospect who paid a white-glove offer pre-signup gets it attached to
     // the new business automatically.
     expect(attachProspectWhiteGloveOffersToBusiness).toHaveBeenCalledWith(
@@ -230,6 +234,25 @@ describe("db/businesses", () => {
     // So null data with null error returns []
     const result = await listBusinesses(db as never);
     expect(result).toEqual([]);
+  });
+
+  it("updateBusinessPreferredAreaCode updates the row", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const { updateBusinessPreferredAreaCode } = await import("@/lib/db/businesses");
+    await updateBusinessPreferredAreaCode("uuid-biz-1", "519");
+    expect(db.update).toHaveBeenCalledWith({ preferred_area_code: "519" });
+  });
+
+  it("updateBusinessPreferredAreaCode throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const { updateBusinessPreferredAreaCode } = await import("@/lib/db/businesses");
+    await expect(updateBusinessPreferredAreaCode("x", "519")).rejects.toThrow(
+      "updateBusinessPreferredAreaCode: fail"
+    );
   });
 
   it("listBusinessesByHostingerVpsId returns every row pointing at the VM", async () => {
