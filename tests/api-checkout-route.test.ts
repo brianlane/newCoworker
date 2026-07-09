@@ -20,7 +20,8 @@ vi.mock("@/lib/db/subscriptions", () => ({
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn(),
   listBusinessIdsByOwnerEmail: vi.fn(),
-  setBusinessCustomerProfile: vi.fn()
+  setBusinessCustomerProfile: vi.fn(),
+  updateBusinessPhone: vi.fn()
 }));
 
 vi.mock("@/lib/db/onboarding-drafts", () => ({
@@ -42,7 +43,12 @@ import { POST } from "@/app/api/checkout/route";
 import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
-import { getBusiness, listBusinessIdsByOwnerEmail, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  getBusiness,
+  listBusinessIdsByOwnerEmail,
+  setBusinessCustomerProfile,
+  updateBusinessPhone
+} from "@/lib/db/businesses";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { upsertCustomerProfile, getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { verifyOnboardingToken } from "@/lib/onboarding/token";
@@ -280,6 +286,10 @@ describe("api/checkout route", () => {
         canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
       })
     );
+    // The fresher phone is written back to the row so PROVISIONING (which
+    // classifies from the row) buys the number in the same country the fee
+    // was billed for.
+    expect(updateBusinessPhone).toHaveBeenCalledWith(businessId, "4164560696");
   });
 
   it("falls back to the business row when the draft read fails (never blocks checkout)", async () => {

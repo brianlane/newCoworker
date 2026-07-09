@@ -3,7 +3,12 @@ import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } f
 import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
-import { getBusiness, listBusinessIdsByOwnerEmail, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import {
+  getBusiness,
+  listBusinessIdsByOwnerEmail,
+  setBusinessCustomerProfile,
+  updateBusinessPhone
+} from "@/lib/db/businesses";
 import {
   LIFETIME_SUBSCRIPTION_CAP,
   upsertCustomerProfile,
@@ -249,14 +254,19 @@ export async function POST(request: Request) {
     // the owner edited it on Step 1 before retrying. The questionnaire syncs
     // the draft (token-verified) with the CURRENT form values immediately
     // before calling this route, so the draft phone is the same value the
-    // order summary previewed the fee with — prefer it. Best-effort: any
-    // draft read failure falls back to the row.
+    // order summary previewed the fee with — prefer it AND write it back to
+    // the row, so provisioning (which classifies from the row) buys the
+    // number in the same country the fee was billed for. Best-effort: any
+    // draft read/write failure falls back to the row.
     let draftPhone: string | null = null;
     if (body.draftToken) {
       try {
         const draft = await getOnboardingDraft(body.businessId, body.draftToken);
         const p = (draft?.payload as { phone?: unknown } | null)?.phone;
         draftPhone = typeof p === "string" && p.trim() ? p : null;
+        if (draftPhone && feeBusiness && draftPhone !== feeBusiness.phone) {
+          await updateBusinessPhone(body.businessId, draftPhone);
+        }
       } catch (err) {
         logger.warn("checkout: draft read for Canada-fee detection failed (using business row)", {
           businessId: body.businessId,
