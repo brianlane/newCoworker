@@ -45,15 +45,20 @@ export async function POST(request: Request) {
       );
     }
 
-    await updateComplianceModule(body.businessId, normalized);
-
-    // Push the change into the live prompt: rewrite the marker block in
-    // soul_md and re-seed the box's vault. Skipped when the tenant has no
-    // config yet (pre-provision) — the orchestrator bakes the module in.
+    // Ordering: rewrite the LIVE prompt (soul_md) BEFORE persisting the
+    // jsonb column. A soul-patch failure then fails the whole request with
+    // the column untouched (no silent drift where the column claims a
+    // module the live prompt doesn't have); if the column write fails after
+    // the soul patch, the live prompt is already correct and the admin's
+    // retry converges the column. Skipped when the tenant has no config yet
+    // (pre-provision) — the orchestrator bakes the module in at deploy.
     const config = await getBusinessConfig(body.businessId);
     if (config) {
       const nextSoul = applyComplianceModuleToSoul(config.soul_md ?? "", normalized);
       await patchBusinessConfig(body.businessId, { soul_md: nextSoul });
+    }
+    await updateComplianceModule(body.businessId, normalized);
+    if (config) {
       scheduleVaultSync(body.businessId);
     }
 

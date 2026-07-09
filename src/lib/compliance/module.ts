@@ -19,13 +19,34 @@ export const COMPLIANCE_PROMPT_MAX = 2000;
 export const COMPLIANCE_TERM_MAX = 50;
 export const COMPLIANCE_TERMS_MAX_COUNT = 50;
 
+/**
+ * Tenant text may not contain HTML-comment syntax: the module is delivered
+ * as a marker-delimited (`<!-- ... -->`) block inside soul.md, and a crafted
+ * value embedding the end marker could truncate the block early, leaving
+ * orphaned markers or duplicate sections on later saves.
+ */
+const noMarkerSyntax = (value: string) => !value.includes("<!--") && !value.includes("-->");
+const MARKER_MESSAGE = "HTML comment syntax (<!-- -->) is not allowed";
+
 export const complianceModuleSchema = z
   .object({
     /** Tenant guardrail text, appended inside the fixed additive wrapper. */
-    customPrompt: z.string().trim().min(10).max(COMPLIANCE_PROMPT_MAX),
+    customPrompt: z
+      .string()
+      .trim()
+      .min(10)
+      .max(COMPLIANCE_PROMPT_MAX)
+      .refine(noMarkerSyntax, { message: MARKER_MESSAGE }),
     /** Terms the agent must never discuss (case-insensitive substrings). */
     forbiddenTerms: z
-      .array(z.string().trim().min(2).max(COMPLIANCE_TERM_MAX))
+      .array(
+        z
+          .string()
+          .trim()
+          .min(2)
+          .max(COMPLIANCE_TERM_MAX)
+          .refine(noMarkerSyntax, { message: MARKER_MESSAGE })
+      )
       .min(1)
       .max(COMPLIANCE_TERMS_MAX_COUNT)
   })
