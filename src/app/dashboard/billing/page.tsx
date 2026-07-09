@@ -50,7 +50,7 @@ import { PlanCard } from "@/components/billing/PlanCard";
 import {
   getWhiteGloveBookingUrl,
   getWhiteGlovePackage,
-  hasPrioritySupport,
+  hasPrioritySupportForTier,
   listWhiteGlovePackages
 } from "@/lib/plans/white-glove";
 
@@ -202,7 +202,13 @@ export default async function BillingPage(props: {
   );
   const prioritySupportUntilIso =
     (business as { priority_support_until?: string | null } | null)?.priority_support_until ?? null;
-  const priorityOpen = hasPrioritySupport(prioritySupportUntilIso);
+  // Enterprise tenants hold a PERMANENT priority window (SLA bullet);
+  // others get the 30-day white-glove purchase window.
+  const isEnterpriseTier = (business as { tier?: string | null } | null)?.tier === "enterprise";
+  const priorityOpen = hasPrioritySupportForTier(
+    (business as { tier?: string | null } | null)?.tier,
+    prioritySupportUntilIso
+  );
   const bookingUrl = getWhiteGloveBookingUrl();
   // Custom admin-authored offers (bespoke price, single business). Only OPEN
   // ones are payable; paid/revoked rows never render here.
@@ -493,9 +499,11 @@ export default async function BillingPage(props: {
                 allCustomOffers.find((o) => o.status === "paid")?.name ??
                 "White-glove service")}{" "}
               purchased.{" "}
-              {priorityOpen && prioritySupportUntilIso
-                ? `Priority call & video support is open until ${new Date(prioritySupportUntilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
-                : "Your priority call & video window has ended; support continues by email."}
+              {isEnterpriseTier
+                ? "Priority call & video support is always on with your Enterprise plan."
+                : priorityOpen && prioritySupportUntilIso
+                  ? `Priority call & video support is open until ${new Date(prioritySupportUntilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
+                  : "Your priority call & video window has ended; support continues by email."}
             </p>
             {priorityOpen && bookingUrl && (
               <p className="text-xs text-parchment/50">

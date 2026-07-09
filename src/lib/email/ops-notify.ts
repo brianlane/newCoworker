@@ -29,6 +29,24 @@ import {
   type OpsTermAlignmentInput
 } from "@/lib/email/templates/ops-term-alignment";
 
+/**
+ * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
+ * the operator's inbox queue. Best-effort: a lookup hiccup returns the
+ * subject untagged rather than delaying or dropping the alert.
+ */
+export async function tagOpsSubjectForTier(
+  subject: string,
+  businessId: string
+): Promise<string> {
+  try {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const business = await getBusiness(businessId);
+    return business?.tier === "enterprise" ? `[ENTERPRISE] ${subject}` : subject;
+  } catch {
+    return subject;
+  }
+}
+
 /** Fire-and-forget ops deletion request; never throws. */
 export async function sendOpsVpsDeletionEmail(
   input: Omit<OpsVpsDeletionInput, "siteUrl">
@@ -45,7 +63,7 @@ export async function sendOpsVpsDeletionEmail(
     const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
     const { subject, text, html } = buildOpsVpsDeletionEmail({ ...input, siteUrl });
-    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), { text, html });
     logger.info("ops VPS deletion request emailed", {
       businessId: input.businessId,
       virtualMachineId: input.virtualMachineId,
@@ -80,7 +98,7 @@ export async function sendOpsPlanChangeEmail(
     const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
     const { subject, text, html } = buildOpsPlanChangeEmail({ ...input, siteUrl });
-    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), { text, html });
     logger.info("ops plan-change (hardware escalation) start emailed", {
       businessId: input.businessId,
       fromTier: input.fromTier,
@@ -115,7 +133,7 @@ export async function sendOpsTermAlignmentEmail(
     const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
     const { subject, text, html } = buildOpsTermAlignmentEmail({ ...input, siteUrl });
-    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), { text, html });
     logger.info("ops term-alignment email sent", {
       businessId: input.businessId,
       outcome: input.outcome,
@@ -151,7 +169,7 @@ export async function sendOpsHardwareMigrationEmail(
     const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
     const { subject, text, html } = buildOpsHardwareMigrationEmail({ ...input, siteUrl });
-    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), { text, html });
     logger.info("ops hardware-migration email sent", {
       businessId: input.businessId,
       phase: input.phase,
@@ -189,7 +207,7 @@ export async function sendOpsDidReleaseFailedEmail(
     const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
     const { subject, text, html } = buildOpsDidReleaseFailedEmail({ ...input, siteUrl });
-    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), { text, html });
     logger.info("ops DID-release-failed alert emailed", {
       businessId: input.businessId,
       e164: input.e164,
