@@ -35,6 +35,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
+import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
 import {
   getActiveGatewayTokenForBusiness,
   issueGatewayToken,
@@ -1290,7 +1291,31 @@ async function runOrchestrator(
         // production regression at first call.
         assertPlatformTelnyxDefaults(platformDefaults);
 
-        const countryCode = process.env.TELNYX_DEFAULT_COUNTRY ?? "US";
+        // Canadian tenants get a Canadian number AND the CA-enabled messaging
+        // profile (Canadian carriers must be whitelisted on the profile or
+        // every outbound SMS fails with Telnyx 40309 — the Truly Insurance
+        // incident). The same detection gates the labeled Canadian messaging
+        // surcharge at checkout, so capability and fee travel together.
+        const canadianTenant = isCanadianBusiness({
+          phone: businessRow?.phone ?? null,
+          timezone: businessRow?.timezone ?? null
+        });
+        const caMessagingProfileId = (process.env.TELNYX_MESSAGING_PROFILE_ID_CA ?? "").trim();
+        if (canadianTenant && caMessagingProfileId) {
+          platformDefaults.messagingProfileId = caMessagingProfileId;
+        } else if (canadianTenant) {
+          // Fee may already be charged at checkout — surface the config gap
+          // loudly instead of silently provisioning a tenant whose texts to
+          // their own country will bounce.
+          logger.warn(
+            "Canadian tenant provisioned WITHOUT TELNYX_MESSAGING_PROFILE_ID_CA; outbound SMS to CA will fail until the profile is fixed",
+            { businessId }
+          );
+        }
+
+        const countryCode = canadianTenant
+          ? "CA"
+          : process.env.TELNYX_DEFAULT_COUNTRY ?? "US";
         // Bias the number search toward the owner's local area code, derived
         // from the phone they entered during onboarding, so a new tenant gets
         // a number that looks local to them. We reuse the `businessRow` already
@@ -1335,7 +1360,13 @@ async function runOrchestrator(
             // would re-run an identical/narrower search. In that case drop the
             // area-code + state filters so Telnyx can return any available US
             // number instead.
-            let fallbackAreaCode = process.env.TELNYX_DEFAULT_AREA_CODE;
+            // Canadian tenants: TELNYX_DEFAULT_AREA_CODE / TELNYX_DEFAULT_STATE
+            // are US-centric platform defaults — reusing them against a CA
+            // country search would zero out inventory, so broaden to any
+            // available Canadian number instead.
+            let fallbackAreaCode = canadianTenant
+              ? undefined
+              : process.env.TELNYX_DEFAULT_AREA_CODE;
             if (fallbackAreaCode === localAreaCode) {
               fallbackAreaCode = undefined;
             }

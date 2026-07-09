@@ -1,6 +1,8 @@
 import Stripe from "stripe";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { getCommitmentMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
+import { CANADA_MESSAGING_FEE_NAME } from "@/lib/plans/canadian-messaging";
 
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
@@ -34,6 +36,16 @@ export type CheckoutParams = {
    * it. Billed once on the first invoice; the 30-day refund carves it out.
    */
   oneTimeCarrierFeeCents?: number;
+  /**
+   * Canadian messaging surcharge — a RECURRING labeled line item riding the
+   * subscription (Canadian carriers charge per-message pass-through fees US
+   * traffic doesn't). Stripe requires every item on a subscription to share
+   * the billing interval, so the fee bills at the plan's cadence: monthly
+   * plans pay `monthlyCents` each month; term plans pay `monthlyCents × term`
+   * upfront alongside the prepaid plan. Set only when the signup is detected
+   * as Canadian (see isCanadianBusiness); existing tenants are grandfathered.
+   */
+  canadaFee?: { monthlyCents: number; billingPeriod: BillingPeriod };
 };
 
 export async function createCheckoutSession(params: CheckoutParams): Promise<{
@@ -50,6 +62,18 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
         currency: "usd",
         product_data: { name: CARRIER_REGISTRATION_FEE_NAME },
         unit_amount: params.oneTimeCarrierFeeCents
+      },
+      quantity: 1
+    });
+  }
+  if ((params.canadaFee?.monthlyCents ?? 0) > 0 && params.canadaFee) {
+    const months = getCommitmentMonths(params.canadaFee.billingPeriod);
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: { name: CANADA_MESSAGING_FEE_NAME },
+        unit_amount: params.canadaFee.monthlyCents * months,
+        recurring: { interval: "month", interval_count: months }
       },
       quantity: 1
     });
@@ -110,6 +134,40 @@ export async function ensureCommitmentSchedule(params: {
     throw new Error(`Subscription schedule ${schedule.id} has no current phase`);
   }
 
+  // Preserve any add-on items beyond the plan (e.g. the Canadian messaging
+  // surcharge) in BOTH phases — rewriting the phases with only the plan item
+  // would silently strip a live add-on from the subscription and drop it at
+  // renewal.
+  const addOnItems = subscription.items.data
+    .slice(1)
+    .map((item) => ({ price: item.price.id, quantity: item.quantity ?? 1 }));
+
+  // Phase 2 rolls the plan onto the MONTHLY renewal price, and Stripe
+  // requires every item in a phase to share the billing interval — so a
+  // term-cadence add-on (e.g. the Canada fee billed ×24 upfront) must be
+  // converted to its monthly equivalent (same product, unit ÷ term months).
+  const renewalAddOnItems = subscription.items.data.slice(1).map((item) => {
+    const price = item.price;
+    const quantity = item.quantity ?? 1;
+    const intervalMonths =
+      price.recurring?.interval === "year"
+        ? (price.recurring.interval_count ?? 1) * 12
+        : price.recurring?.interval_count ?? 1;
+    if (price.recurring?.interval === "month" && intervalMonths === 1) {
+      return { price: price.id, quantity };
+    }
+    const productId = typeof price.product === "string" ? price.product : price.product.id;
+    return {
+      price_data: {
+        currency: price.currency,
+        product: productId,
+        unit_amount: Math.round((price.unit_amount ?? 0) / Math.max(intervalMonths, 1)),
+        recurring: { interval: "month" as const, interval_count: 1 }
+      },
+      quantity
+    };
+  });
+
   await stripe.subscriptionSchedules.update(schedule.id, {
     end_behavior: "release",
     proration_behavior: "none",
@@ -117,11 +175,17 @@ export async function ensureCommitmentSchedule(params: {
       {
         start_date: currentPhase.start_date,
         end_date: currentPhase.end_date,
-        items: [{ price: currentItem.price.id, quantity: currentItem.quantity ?? 1 }]
+        items: [
+          { price: currentItem.price.id, quantity: currentItem.quantity ?? 1 },
+          ...addOnItems
+        ]
       },
       {
         start_date: currentPhase.end_date,
-        items: [{ price: renewalPriceId, quantity: currentItem.quantity ?? 1 }]
+        items: [
+          { price: renewalPriceId, quantity: currentItem.quantity ?? 1 },
+          ...renewalAddOnItems
+        ]
       }
     ]
   });

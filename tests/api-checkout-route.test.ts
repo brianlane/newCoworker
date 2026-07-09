@@ -158,6 +158,43 @@ describe("api/checkout route", () => {
         })
       })
     );
+    // A US business (default mock has no phone/timezone) never gets the
+    // Canadian messaging surcharge.
+    const usCall = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+    expect(usCall && "canadaFee" in usCall).toBe(false);
+    expect(usCall?.metadata && "canadianMessagingFee" in usCall.metadata).toBe(false);
+  });
+
+  it("adds the labeled Canadian messaging surcharge for a Canadian signup", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "4164560696", // Toronto
+      timezone: "America/Toronto"
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "biennial",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canadaFee: { monthlyCents: 499, billingPeriod: "biennial" },
+        metadata: expect.objectContaining({ canadianMessagingFee: "1" })
+      })
+    );
   });
 
   it("rejects unauthenticated checkout when signup identity fields are missing", async () => {

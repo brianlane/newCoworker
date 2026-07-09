@@ -14,6 +14,10 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
+import {
+  CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+  isCanadianBusiness
+} from "@/lib/plans/canadian-messaging";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -224,6 +228,18 @@ export async function POST(request: Request) {
     const priceId = resolvePriceId(body.tier, body.billingPeriod);
     const discountCouponId = resolveIntroDiscountCouponId(body.tier, body.billingPeriod);
     const commitmentMonths = getCommitmentMonths(body.billingPeriod);
+
+    // Canadian signups pay the labeled monthly messaging surcharge (Canadian
+    // carriers charge per-message pass-through fees US traffic doesn't).
+    // Detection uses the phone + timezone the owner entered at onboarding —
+    // the same phone that biases their coworker number purchase, so the fee
+    // and the CA-enabled messaging capability travel together. A missing
+    // business row fails toward NOT charging.
+    const feeBusiness = await getBusiness(body.businessId);
+    const canadian = isCanadianBusiness({
+      phone: feeBusiness?.phone ?? null,
+      timezone: feeBusiness?.timezone ?? null
+    });
     const now = new Date();
     const originalDay = now.getDate();
     const renewalAt = new Date(now);
@@ -277,11 +293,23 @@ export async function POST(request: Request) {
       // through as a one-time line item. Plan changes and reactivations
       // (separate routes) keep the existing campaign and never re-charge it.
       oneTimeCarrierFeeCents: CARRIER_REGISTRATION_FEE_CENTS,
+      ...(canadian
+        ? {
+            canadaFee: {
+              monthlyCents: CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+              billingPeriod: body.billingPeriod
+            }
+          }
+        : {}),
       metadata: {
         businessId: body.businessId,
         tier: body.tier,
         billingPeriod: body.billingPeriod,
         userId: metadataUserId,
+        // Rides subscription_data.metadata so change-plan can tell whether
+        // the sub it is replacing carried the surcharge (grandfathered
+        // pre-fee tenants never get it added on a later plan change).
+        ...(canadian ? { canadianMessagingFee: "1" } : {}),
         ...(customerProfileId ? { customerProfileId } : {})
       }
     });

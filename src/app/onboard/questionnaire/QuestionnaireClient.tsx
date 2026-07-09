@@ -8,6 +8,7 @@ import { RichSelect } from "@/components/ui/RichSelect";
 import { Button } from "@/components/ui/Button";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
+import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
 import {
   DRAFT_STORAGE_KEY,
   ONBOARD_STORAGE_KEY,
@@ -1091,6 +1092,14 @@ function QuestionnaireForm() {
                     tier={tier}
                     period={period}
                     businessName={form.businessName}
+                    // Mirrors the server-side detection in /api/checkout: the
+                    // phone from Step 1 (authoritative) with the browser
+                    // timezone fallback, so the summary shows exactly what
+                    // Stripe will charge.
+                    canadianFee={isCanadianBusiness({
+                      phone: form.phone,
+                      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+                    })}
                   />
 
                   <p className="text-xs text-parchment/40 text-center">
