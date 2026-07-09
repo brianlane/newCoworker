@@ -28,6 +28,10 @@ import {
   buildOpsTermAlignmentEmail,
   type OpsTermAlignmentInput
 } from "@/lib/email/templates/ops-term-alignment";
+import {
+  buildOpsBillingPostureEmail,
+  type OpsBillingPostureInput
+} from "@/lib/email/templates/ops-billing-posture";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -143,6 +147,39 @@ export async function sendOpsTermAlignmentEmail(
   } catch (err) {
     logger.warn("ops term-alignment email failed", {
       businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget fleet billing-posture findings email; never throws. Sent
+ * by the daily posture cron when any VM's Hostinger auto-renew state
+ * contradicts its tenant/pool assignment. Not tier-tagged: findings span
+ * multiple businesses.
+ */
+export async function sendOpsBillingPostureEmail(
+  input: Omit<OpsBillingPostureInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops billing-posture email skipped: RESEND_API_KEY missing", {
+        findings: input.findings.length
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsBillingPostureEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops billing-posture email sent", {
+      findings: input.findings.length,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops billing-posture email failed", {
+      findings: input.findings.length,
       error: err instanceof Error ? err.message : String(err)
     });
   }
