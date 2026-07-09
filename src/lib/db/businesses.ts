@@ -3,6 +3,7 @@ import type { Business } from "@/lib/db/schema";
 import type { EnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import type { Branding } from "@/lib/plans/branding";
 import type { EnterpriseModels } from "@/lib/plans/enterprise-models";
+import type { ComplianceModule } from "@/lib/compliance/module";
 import {
   assertResidencyModeAllowed,
   residencyAllowedForTier,
@@ -373,6 +374,20 @@ export async function updateEnterpriseModels(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ enterprise_models: models }).eq("id", id);
   if (error) throw new Error(`updateEnterpriseModels: ${error.message}`);
+}
+
+/** Custom compliance module (enterprise); null clears to platform guardrails. */
+export async function updateComplianceModule(
+  id: string,
+  module: ComplianceModule | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ compliance_module: module })
+    .eq("id", id);
+  if (error) throw new Error(`updateComplianceModule: ${error.message}`);
 }
 
 /** White-label branding (enterprise); null clears back to platform branding. */

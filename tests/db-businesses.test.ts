@@ -15,6 +15,7 @@ import {
   updateBusinessStatus,
   updateBusinessBranding,
   updateBusinessTimezone,
+  updateComplianceModule,
   updateEnterpriseModels,
   updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
@@ -334,6 +335,22 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(bad as never);
     await expect(updateEnterpriseModels("uuid-biz-1", null)).rejects.toThrow(
       "updateEnterpriseModels"
+    );
+  });
+
+  it("updateComplianceModule writes/clears compliance_module json, throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await updateComplianceModule("uuid-biz-1", { forbiddenTerms: ["merger"] });
+    expect(db.update).toHaveBeenCalledWith({ compliance_module: { forbiddenTerms: ["merger"] } });
+
+    await updateComplianceModule("uuid-biz-1", null);
+    expect(db.update).toHaveBeenCalledWith({ compliance_module: null });
+
+    const bad = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(bad as never);
+    await expect(updateComplianceModule("uuid-biz-1", null)).rejects.toThrow(
+      "updateComplianceModule"
     );
   });
 

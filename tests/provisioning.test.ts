@@ -492,6 +492,31 @@ describe("provisioning/orchestrate", () => {
     expect(call).not.toHaveProperty("inworld_agent_id");
   });
 
+  it("bakes an enterprise custom compliance module into the provisioned soul", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      business_type: "real_estate",
+      tier: "enterprise",
+      compliance_module: {
+        customPrompt: "Never quote settlement amounts on any channel.",
+        forbiddenTerms: ["merger"]
+      }
+    } as never);
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+    await orchestrateProvisioning(
+      { businessId: "biz-comp-mod", tier: "enterprise" },
+      { vpsProvisioner, remoteExec }
+    );
+
+    const call = vi.mocked(upsertBusinessConfig).mock.calls[0][0] as { soul_md: string };
+    expect(call.soul_md).toContain("CUSTOM_COMPLIANCE_MODULE_START");
+    expect(call.soul_md).toContain("Never quote settlement amounts on any channel.");
+    expect(call.soul_md).toContain("- merger");
+    // Platform guardrail still present — the module is additive.
+    expect(call.soul_md).toContain("## Compliance");
+  });
+
   it("preserves existing website_md when re-provisioning so the onboarding crawl is not wiped", async () => {
     vi.mocked(getBusinessConfig).mockResolvedValueOnce({
       business_id: "biz-uuid-1",
