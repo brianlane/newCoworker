@@ -13,6 +13,7 @@ vi.mock("@/lib/db/businesses", () => ({
 }));
 vi.mock("@/lib/db/subscriptions", () => ({
   getSubscription: vi.fn(),
+  listBusinessIdsWithStripeLinkedSubscription: vi.fn(),
   updateSubscription: vi.fn()
 }));
 vi.mock("@/lib/db/vps-inventory", () => ({
@@ -32,7 +33,11 @@ vi.mock("@/lib/logger", () => ({
 import { POST } from "@/app/api/admin/vps/[businessId]/release-to-pool/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
-import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
+import {
+  getSubscription,
+  listBusinessIdsWithStripeLinkedSubscription,
+  updateSubscription
+} from "@/lib/db/subscriptions";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
@@ -70,6 +75,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     } as never);
     vi.mocked(getBusiness).mockResolvedValue(baseBiz as never);
     vi.mocked(getSubscription).mockResolvedValue(null);
+    vi.mocked(listBusinessIdsWithStripeLinkedSubscription).mockResolvedValue(new Set());
     vi.mocked(updateSubscription).mockResolvedValue({} as never);
     vi.mocked(releaseVpsToPool).mockResolvedValue(undefined);
     getVirtualMachineMock.mockResolvedValue({ id: 1806114, subscription_id: "hsub-vm" });
@@ -168,6 +174,7 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
       stripe_subscription_id: "sub_live",
       hostinger_billing_subscription_id: null
     } as never);
+    vi.mocked(listBusinessIdsWithStripeLinkedSubscription).mockResolvedValue(new Set([BIZ_ID]));
 
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(409);
@@ -175,28 +182,22 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     expect(updateSubscription).not.toHaveBeenCalled();
   });
 
-  it("409s while a Stripe subscription is linked and past_due", async () => {
+  it("409s when an OLDER row is still Stripe-linked even though the newest row is not (any-row guard)", async () => {
+    // Newest row is a Stripe-less pending (e.g. an abandoned re-checkout),
+    // but an older non-canceled row still carries a stripe_subscription_id.
+    // The shared any-row predicate must block the release.
     vi.mocked(getSubscription).mockResolvedValue({
-      status: "past_due",
-      stripe_subscription_id: "sub_live",
-      hostinger_billing_subscription_id: null
-    } as never);
-
-    const res = await POST(makeRequest(), makeCtx());
-    expect(res.status).toBe(409);
-    expect(releaseVpsToPool).not.toHaveBeenCalled();
-  });
-
-  it("409s for a pending subscription with Stripe linkage (paid checkout mid-flight)", async () => {
-    vi.mocked(getSubscription).mockResolvedValue({
+      id: "sub-newest",
       status: "pending",
-      stripe_subscription_id: "sub_mid_flight",
+      stripe_subscription_id: null,
       hostinger_billing_subscription_id: null
     } as never);
+    vi.mocked(listBusinessIdsWithStripeLinkedSubscription).mockResolvedValue(new Set([BIZ_ID]));
 
     const res = await POST(makeRequest(), makeCtx());
     expect(res.status).toBe(409);
     expect(releaseVpsToPool).not.toHaveBeenCalled();
+    expect(updateSubscription).not.toHaveBeenCalled();
   });
 
   it("releases + cancels a pending subscription with NO Stripe linkage (abandoned checkout)", async () => {

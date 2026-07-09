@@ -34,7 +34,11 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
-import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
+import {
+  getSubscription,
+  listBusinessIdsWithStripeLinkedSubscription,
+  updateSubscription
+} from "@/lib/db/subscriptions";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
@@ -72,13 +76,13 @@ export async function POST(
     // paid checkout mid-flight in `pending`) must be canceled through the
     // proper flows first — otherwise Stripe keeps charging an account the
     // adopt-time cascade will delete. Stripe-LESS rows carry no payment and
-    // pass regardless of status; the cascade below settles them.
+    // pass regardless of status; the cascade below settles them. Uses the
+    // SAME any-row predicate as the adopt-time delete guard
+    // (listBusinessIdsWithStripeLinkedSubscription) so an older
+    // still-linked row can't slip past a newest-row-only check.
     const subscription = await getSubscription(businessId);
-    const liveStripeBilling =
-      subscription != null &&
-      subscription.stripe_subscription_id !== null &&
-      subscription.status !== "canceled";
-    if (liveStripeBilling) {
+    const stripeLinked = await listBusinessIdsWithStripeLinkedSubscription([businessId]);
+    if (stripeLinked.has(businessId)) {
       return errorResponse(
         "CONFLICT",
         "A Stripe subscription is still linked and not canceled (active, past_due, or a paid " +
