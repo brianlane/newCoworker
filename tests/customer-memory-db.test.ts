@@ -49,7 +49,7 @@ import {
   updateCustomerSummary
 } from "../src/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "../src/lib/supabase/server";
-import type { CustomerMemoryRow } from "../src/lib/customer-memory/types";
+import { normalizeContactTags, type CustomerMemoryRow } from "../src/lib/customer-memory/types";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 const CUSTOMER = "+15555550123";
@@ -80,6 +80,8 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     last_summarized_at: null,
     last_channel: null,
     alias_e164s: [],
+    tags: [],
+    owner_employee_id: null,
     created_at: "2026-05-01T00:00:00Z",
     updated_at: "2026-05-01T00:00:00Z",
     ...overrides
@@ -741,6 +743,21 @@ describe("touchLastSummarizedAt", () => {
   });
 });
 
+describe("normalizeContactTags", () => {
+  it("trims, clamps length, drops empties, de-dups case-insensitively (first spelling wins)", () => {
+    expect(normalizeContactTags(["  VIP ", "vip", "VIP", "", "  ", "Spanish"])).toEqual([
+      "VIP",
+      "Spanish"
+    ]);
+    const long = "x".repeat(100);
+    expect(normalizeContactTags([long])[0]).toHaveLength(40);
+  });
+  it("caps at 25 tags", () => {
+    const many = Array.from({ length: 30 }, (_, i) => `tag-${i}`);
+    expect(normalizeContactTags(many)).toHaveLength(25);
+  });
+});
+
 describe("updateCustomerOwnerFields", () => {
   it("only patches the fields the owner provided — never touches summary_md/counters/last_*", async () => {
     const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
@@ -794,6 +811,48 @@ describe("updateCustomerOwnerFields", () => {
       unknown
     >;
     expect(skipPatch).not.toHaveProperty("email");
+  });
+
+  it("writes normalized tags (trim, case-insensitive de-dup, drop empties)", async () => {
+    const { client, fromCalls } = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(
+      BIZ,
+      CUSTOMER,
+      { tags: ["  VIP ", "vip", "", "Spanish"] },
+      client
+    );
+    const patch = fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(patch.tags).toEqual(["VIP", "Spanish"]);
+  });
+
+  it("assigns and clears owner_employee_id (null = release to unowned)", async () => {
+    const MEMBER = "33333333-3333-4333-8333-333333333333";
+    const set = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { ownerEmployeeId: MEMBER }, set.client);
+    const setPatch = set.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(setPatch.owner_employee_id).toBe(MEMBER);
+
+    const clear = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { ownerEmployeeId: null }, clear.client);
+    const clearPatch = clear.fromCalls[0]!.calls.find((c) => c.name === "update")
+      ?.args[0] as Record<string, unknown>;
+    expect(clearPatch.owner_employee_id).toBeNull();
+
+    // Absent key → never written.
+    const skip = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "Joe" }, skip.client);
+    const skipPatch = skip.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(skipPatch).not.toHaveProperty("owner_employee_id");
+    expect(skipPatch).not.toHaveProperty("tags");
   });
 
   it("supports clearing display_name / pinned_md by passing null (UI 'clear' button)", async () => {

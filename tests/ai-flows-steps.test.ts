@@ -803,6 +803,25 @@ describe("planStep: route_to_team", () => {
     ).toBe(false);
   });
 
+  it("carries preferContactOwner only when explicitly true (owner-first routing)", () => {
+    const on = planStep({ ...base, preferContactOwner: true }, {});
+    expect(
+      on.ok && on.action.kind === "route_to_team" && on.action.preferContactOwner
+    ).toBe(true);
+    const defaulted = planStep(base, {});
+    expect(
+      defaulted.ok &&
+        defaulted.action.kind === "route_to_team" &&
+        "preferContactOwner" in defaulted.action
+    ).toBe(false);
+    const explicitOff = planStep({ ...base, preferContactOwner: false }, {});
+    expect(
+      explicitOff.ok &&
+        explicitOff.action.kind === "route_to_team" &&
+        "preferContactOwner" in explicitOff.action
+    ).toBe(false);
+  });
+
   it("carries the keep-for-owner rule through UNRENDERED, trimmed", () => {
     const r = planStep(
       {

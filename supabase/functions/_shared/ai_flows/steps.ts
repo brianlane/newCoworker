@@ -206,6 +206,8 @@ export type StepAction =
       ownerDirectWhen?: StepCondition;
       /** Passed UNRENDERED like the other route templates (worker renders it). */
       ownerDirectTemplate?: string;
+      /** Offer the lead's owning employee (contacts.owner_employee_id) first. */
+      preferContactOwner?: boolean;
     }
   | {
       kind: "browse_action";
@@ -562,6 +564,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           attachScreenshot: step.attachScreenshot === true,
           // Only an explicit opt-out is carried; undefined means ON.
           ...(step.firstToClaim === false ? { firstToClaim: false } : {}),
+          ...(step.preferContactOwner === true ? { preferContactOwner: true } : {}),
           ...(ownerDirect
             ? {
                 ownerDirectWhen: step.ownerDirectWhen,

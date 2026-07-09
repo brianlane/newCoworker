@@ -28,6 +28,7 @@ import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeT
 import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailComposer";
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { listTeamMembers } from "@/lib/db/employees";
 
 export const dynamic = "force-dynamic";
 
@@ -82,7 +83,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   // as ONE parallel group. This matters doubly for residency (vps-mode)
   // tenants, where each read is a tunnel round-trip to their box —
   // serially these were ~5 RTTs, now the page pays one.
-  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames] =
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers] =
     await Promise.all([
       listSmsHistoryForCustomer(business.id, memory.customer_e164, {
         limit: 50,
@@ -106,7 +107,10 @@ export default async function CustomerDetailPage({ params }: Props) {
         business.id,
         [memory.customer_e164, ...(memory.alias_e164s ?? [])],
         db
-      ).catch(() => new Map<string, ContactName>())
+      ).catch(() => new Map<string, ContactName>()),
+      // Roster for the "Owned by" picker; tolerated so a roster-table error
+      // never blocks the profile page.
+      listTeamMembers(business.id, db).catch(() => [])
     ]);
   // Merge is "same person, two numbers" — only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
@@ -200,6 +204,9 @@ export default async function CustomerDetailPage({ params }: Props) {
         // an unchanged save writes nothing because this is also the dirty-check
         // baseline.)
         initialType={headerBadge}
+        initialTags={memory.tags ?? []}
+        initialOwnerEmployeeId={memory.owner_employee_id}
+        teamMembers={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
       />
 
       <ContactReplyModeToggle

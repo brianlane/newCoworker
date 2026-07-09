@@ -383,6 +383,12 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               value="Off — only the currently offered teammate can claim a live offer"
             />
           )}
+          {step.preferContactOwner === true && (
+            <Row
+              label="Owner-first routing"
+              value="The contact's owning teammate is offered first; the normal rotation follows"
+            />
+          )}
           {step.claimedNotifyTemplate && (
             <Row label="Owner notice when claimed" value={step.claimedNotifyTemplate} />
           )}

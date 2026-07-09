@@ -630,6 +630,15 @@ describe("route_to_team step", () => {
     expect(dStep.type === "route_to_team" && dStep.firstToClaim).toBeUndefined();
   });
 
+  it("preserves preferContactOwner (owner-first routing for repeat leads)", () => {
+    const withPref = JSON.parse(JSON.stringify(routedInput));
+    withPref.steps[2].preferContactOwner = true;
+    const def = parseAiFlowDefinition(withPref);
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.preferContactOwner).toBe(true);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
   it("accepts a complete keep-for-owner rule and preserves both fields", () => {
     const withRule = JSON.parse(JSON.stringify(routedInput));
     withRule.steps[1].fields.push({ name: "price_band" });
