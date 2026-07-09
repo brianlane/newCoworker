@@ -92,6 +92,13 @@ vi.mock("@/lib/db/vps-inventory", () => ({
   listVpsInventory: vi.fn().mockResolvedValue([])
 }));
 
+// Adopt-time stale-tenant cascade (admin release-to-pool flow). Mocked
+// wholesale so orchestrator tests never load @/lib/auth transitively; its
+// own behavior is covered in stale-tenant-cleanup.test.ts.
+vi.mock("@/lib/provisioning/stale-tenant-cleanup", () => ({
+  cleanupStaleTenantsForVm: vi.fn().mockResolvedValue({ deletedBusinessIds: [] })
+}));
+
 vi.mock("@/lib/db/telnyx-routes", () => ({
   getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null),
   // tendlc-attach.ts persists per-business 10DLC status via this helper —
@@ -111,6 +118,7 @@ import {
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
+import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
 
 function makeVpsStub(
   vpsId = "42",
@@ -2297,6 +2305,63 @@ describe("provisioning/orchestrate", () => {
         { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, remoteExec }
       );
       expect(result.vpsId).toBe("123");
+    });
+
+    it("runs the stale-tenant cascade after a successful adopt (admin release-to-pool flow)", async () => {
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1800985"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-cascade", tier: "starter" },
+        { vpsProvisioner: vi.fn(), vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(cleanupStaleTenantsForVm).toHaveBeenCalledWith({
+        vmId: 1800985,
+        newBusinessId: "biz-pool-cascade"
+      });
+    });
+
+    it("does NOT run the stale-tenant cascade on the purchase path", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      await orchestrateProvisioning(
+        { businessId: "biz-pool-no-cascade", tier: "starter" },
+        { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, remoteExec }
+      );
+
+      expect(cleanupStaleTenantsForVm).not.toHaveBeenCalled();
+    });
+
+    it("continues the provision when the stale-tenant cascade throws (Error)", async () => {
+      vi.mocked(cleanupStaleTenantsForVm).mockRejectedValueOnce(new Error("cleanup boom"));
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1800985"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-cascade-fail", tier: "starter" },
+        { vpsProvisioner: vi.fn(), vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("1800985");
+    });
+
+    it("stringifies a non-Error stale-tenant cascade failure and continues", async () => {
+      vi.mocked(cleanupStaleTenantsForVm).mockRejectedValueOnce("cleanup string boom");
+      const pool = makePool({ claim: vi.fn().mockResolvedValue(claimedRow) });
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1800985"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-pool-cascade-nonerr", tier: "starter" },
+        { vpsProvisioner: vi.fn(), vpsAdopter, vpsPool: pool, remoteExec }
+      );
+
+      expect(result.vpsId).toBe("1800985");
     });
 
     it("skips the pool entirely when vpsPool is null (break-glass)", async () => {

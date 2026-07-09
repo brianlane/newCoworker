@@ -240,6 +240,26 @@ export async function deleteBusiness(id: string, client?: SupabaseClient): Promi
   if (error) throw new Error(`deleteBusiness: ${error.message}`);
 }
 
+/**
+ * Every business row currently pointing at a Hostinger VM id. Normally zero
+ * or one row; more than one (or a row for a box someone else now owns) means
+ * stale linkage — e.g. an admin released the box to the `vps_inventory` pool
+ * while the old account still referenced it. Consumed by the adopt-time
+ * stale-tenant cleanup (src/lib/provisioning/stale-tenant-cleanup.ts).
+ */
+export async function listBusinessesByHostingerVpsId(
+  vpsId: string,
+  client?: SupabaseClient
+): Promise<BusinessRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select()
+    .eq("hostinger_vps_id", vpsId);
+  if (error) throw new Error(`listBusinessesByHostingerVpsId: ${error.message}`);
+  return (data ?? []) as BusinessRow[];
+}
+
 export async function listBusinesses(client?: SupabaseClient): Promise<BusinessRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
