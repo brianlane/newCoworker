@@ -35,7 +35,7 @@ export function EnterpriseModelsEditor({
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
-  async function submit(models: EnterpriseModels | null) {
+  async function submit(models: EnterpriseModels | null): Promise<boolean> {
     setLoading(true);
     setError(null);
     setSaved(false);
@@ -48,12 +48,14 @@ export function EnterpriseModelsEditor({
       const json = await res.json();
       if (!res.ok) {
         setError(json.error?.message ?? "Save failed");
-      } else {
-        setSaved(true);
-        router.refresh();
+        return false;
       }
+      setSaved(true);
+      router.refresh();
+      return true;
     } catch {
       setError("Network error");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -132,12 +134,17 @@ export function EnterpriseModelsEditor({
         <Button
           size="sm"
           variant="secondary"
-          onClick={() => {
-            setOwnerChatModel("");
-            setSmsChatModel("");
-            setGeminiLiveModel("");
-            setVoiceName("");
-            void submit(null);
+          onClick={async () => {
+            // Blank the form only AFTER the clear persists — emptying it
+            // eagerly would show "no overrides" while the DB still has them
+            // if the API call fails.
+            const ok = await submit(null);
+            if (ok) {
+              setOwnerChatModel("");
+              setSmsChatModel("");
+              setGeminiLiveModel("");
+              setVoiceName("");
+            }
           }}
           loading={loading}
         >
