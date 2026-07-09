@@ -143,6 +143,7 @@ create table if not exists email_log (
   cc_email text,
   bcc_email text,
   body_full text,
+  body_html text,
   attachments jsonb not null default '[]'::jsonb,
   constraint email_log_pkey PRIMARY KEY (id),
   constraint email_log_direction_check CHECK ((direction = ANY (ARRAY['outbound'::text, 'inbound'::text]))),
@@ -164,6 +165,7 @@ alter table email_log add column if not exists created_at timestamp with time zo
 alter table email_log add column if not exists cc_email text;
 alter table email_log add column if not exists bcc_email text;
 alter table email_log add column if not exists body_full text;
+alter table email_log add column if not exists body_html text;
 alter table email_log add column if not exists attachments jsonb not null default '[]'::jsonb;
 
 create index if not exists email_log_business_created_idx ON public.email_log USING btree (business_id, created_at DESC);

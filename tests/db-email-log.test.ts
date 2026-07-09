@@ -175,12 +175,17 @@ describe("getEmailBody", () => {
       storage_path: "inbound/abc/0-quote.pdf"
     };
     const c = singleChain({
-      data: { body_preview: "hi", body_full: "hi there", attachments: [att] },
+      data: { body_preview: "hi", body_full: "hi there", body_html: "<b>hi</b>", attachments: [att] },
       error: null
     });
     const body = await getEmailBody("biz", "e1", makeDb(c as never) as never);
-    expect(body).toEqual({ body_preview: "hi", body_full: "hi there", attachments: [att] });
-    expect(c.select).toHaveBeenCalledWith("body_preview, body_full, attachments");
+    expect(body).toEqual({
+      body_preview: "hi",
+      body_full: "hi there",
+      body_html: "<b>hi</b>",
+      attachments: [att]
+    });
+    expect(c.select).toHaveBeenCalledWith("body_preview, body_full, body_html, attachments");
     expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
     expect(c.eqId).toHaveBeenCalledWith("id", "e1");
   });
@@ -203,6 +208,7 @@ describe("getEmailBody", () => {
     expect(await getEmailBody("biz", "e1")).toEqual({
       body_preview: "p",
       body_full: null,
+      body_html: null,
       attachments: []
     });
   });
@@ -271,7 +277,7 @@ describe("recordTenantMailboxInbound", () => {
   it("inserts an inbound tenant-mailbox row with a capped preview", async () => {
     const insert = vi.fn().mockResolvedValue({ error: null });
     const db = { from: vi.fn(() => ({ insert })) };
-    await recordTenantMailboxInbound(input, db as never);
+    await recordTenantMailboxInbound({ ...input, bodyHtml: "<p>z</p>" }, db as never);
     expect(db.from).toHaveBeenCalledWith("email_log");
     expect(insert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -283,6 +289,7 @@ describe("recordTenantMailboxInbound", () => {
         subject: "Quote please",
         body_preview: "z".repeat(500),
         body_full: "z".repeat(600),
+        body_html: "<p>z</p>",
         run_id: "run-1",
         flow_id: "flow-1",
         provider_message_id: "<m1@x>"
@@ -298,7 +305,12 @@ describe("recordTenantMailboxInbound", () => {
       db as never
     );
     expect(insert).toHaveBeenCalledWith(
-      expect.objectContaining({ run_id: null, flow_id: null, provider_message_id: null })
+      expect.objectContaining({
+        run_id: null,
+        flow_id: null,
+        provider_message_id: null,
+        body_html: null
+      })
     );
   });
 

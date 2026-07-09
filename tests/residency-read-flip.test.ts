@@ -118,18 +118,22 @@ describe("email-log vps reads", () => {
 
   it("getEmailBody returns the box row or null, defaulting attachments", async () => {
     vi.mocked(readMovedRows).mockResolvedValueOnce([
-      { body_preview: "p", body_full: "f", attachments: null }
+      { body_preview: "p", body_full: "f", body_html: "<p>f</p>", attachments: null }
     ] as never);
     expect(await getEmailBody(BIZ, "e1", centralDb({}))).toEqual({
       body_preview: "p",
       body_full: "f",
+      body_html: "<p>f</p>",
       attachments: []
     });
     const att = [{ filename: "a.pdf", mime_type: "application/pdf", size_bytes: 1, storage_path: "p" }];
     vi.mocked(readMovedRows).mockResolvedValueOnce([
       { body_preview: null, body_full: null, attachments: att }
     ] as never);
-    expect((await getEmailBody(BIZ, "e2", centralDb({})))?.attachments).toEqual(att);
+    const e2 = await getEmailBody(BIZ, "e2", centralDb({}));
+    expect(e2?.attachments).toEqual(att);
+    // Legacy box rows without the body_html column read back as null.
+    expect(e2?.body_html).toBeNull();
     vi.mocked(readMovedRows).mockResolvedValueOnce([] as never);
     expect(await getEmailBody(BIZ, "e404", centralDb({}))).toBeNull();
   });

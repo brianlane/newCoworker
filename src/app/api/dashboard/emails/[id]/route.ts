@@ -64,6 +64,7 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
     return successResponse({
       body_preview: body.body_preview,
       body_full: body.body_full,
+      body_html: body.body_html,
       attachments
     });
   } catch (err) {

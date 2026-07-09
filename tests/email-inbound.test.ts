@@ -201,6 +201,23 @@ describe("processInboundTenantEmail", () => {
     );
   });
 
+  it("stores the html alternative when the worker forwards one (null otherwise)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({ data: [], error: null });
+    await processInboundTenantEmail({ ...PAYLOAD, html: "<p>Hello</p>" }, db as never);
+    expect(recordTenantMailboxInbound).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyHtml: "<p>Hello</p>" }),
+      db
+    );
+    recordTenantMailboxInbound.mockClear();
+    const db2 = flowsDb({ data: [], error: null });
+    await processInboundTenantEmail(PAYLOAD, db2 as never);
+    expect(recordTenantMailboxInbound).toHaveBeenCalledWith(
+      expect.objectContaining({ bodyHtml: null }),
+      db2
+    );
+  });
+
   it("treats a duplicate (null enqueue) as already-handled and logs once", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({
