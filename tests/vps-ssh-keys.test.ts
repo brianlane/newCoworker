@@ -1,4 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomBytes } from "node:crypto";
+import { encryptSecret } from "@/lib/crypto/secret-encryption";
 
 const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
@@ -351,6 +353,68 @@ describe("vps_ssh_keys DB layer", () => {
     });
   });
 
+  describe("app-layer encryption at rest (G5)", () => {
+    const KEY = randomBytes(32).toString("base64url");
+
+    beforeEach(() => {
+      process.env.SECRETS_ENCRYPTION_KEY = KEY;
+    });
+    afterEach(() => {
+      delete process.env.SECRETS_ENCRYPTION_KEY;
+    });
+
+    it("insertVpsSshKey stores ciphertext but returns the usable plaintext PEM", async () => {
+      const chain = makeChain();
+      chain.single.mockResolvedValue({
+        data: { ...sample, private_key_pem: "ignored-db-echo" },
+        error: null
+      });
+      const db = makeDb(chain);
+      const res = await insertVpsSshKey(
+        {
+          business_id: "biz-1",
+          hostinger_vps_id: "42",
+          public_key: "ssh-ed25519 AAA",
+          private_key_pem: "SECRET-PEM",
+          fingerprint_sha256: "fp"
+        },
+        db as never
+      );
+      const insertArg = chain.insert.mock.calls[0][0];
+      expect(insertArg.private_key_pem).toMatch(/^enc:v1:/);
+      expect(insertArg.private_key_pem).not.toContain("SECRET-PEM");
+      // The orchestrator SSHes with the returned row directly — it must
+      // carry the plaintext, not the stored ciphertext.
+      expect(res.private_key_pem).toBe("SECRET-PEM");
+    });
+
+    it("reads decrypt stored ciphertext back to the plaintext PEM", async () => {
+      const stored = encryptSecret("SECRET-PEM", { SECRETS_ENCRYPTION_KEY: KEY });
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({
+        data: { ...sample, private_key_pem: stored },
+        error: null
+      });
+      const db = makeDb(chain);
+      const row = await getActiveVpsSshKey("42", db as never);
+      expect(row?.private_key_pem).toBe("SECRET-PEM");
+    });
+
+    it("fails closed when an encrypted row is read without the key", async () => {
+      const stored = encryptSecret("SECRET-PEM", { SECRETS_ENCRYPTION_KEY: KEY });
+      delete process.env.SECRETS_ENCRYPTION_KEY;
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({
+        data: { ...sample, private_key_pem: stored },
+        error: null
+      });
+      const db = makeDb(chain);
+      await expect(getActiveVpsSshKey("42", db as never)).rejects.toThrow(
+        /SECRETS_ENCRYPTION_KEY is not set/
+      );
+    });
+  });
+
   describe("fallback to createSupabaseServiceClient when no client is provided", () => {
     it("insertVpsSshKey uses the default service client", async () => {
       const chain = makeChain();
@@ -363,7 +427,10 @@ describe("vps_ssh_keys DB layer", () => {
         private_key_pem: "pem",
         fingerprint_sha256: "fp"
       });
-      expect(res).toEqual(sample);
+      // The returned row echoes the CALLER's plaintext PEM (the stored value
+      // may be ciphertext under G5), so compare against the input, not the
+      // DB echo.
+      expect(res).toEqual({ ...sample, private_key_pem: "pem" });
       expect(defaultClientSpy).toHaveBeenCalled();
     });
 

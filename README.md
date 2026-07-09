@@ -177,6 +177,13 @@ these standards:
 - **Row Level Security is on by default** with deny-by-default policies. Secret
   tables (`vps_gateway_tokens`, `vps_ssh_keys`) run RLS with **no policies**, so
   only `service_role` (which bypasses RLS) can read them.
+- **App-layer encryption at rest for stored secrets**: `vps_ssh_keys.private_key_pem`
+  and `residency_backup_keys.passphrase` are wrapped in an AES-256-GCM envelope
+  keyed by `SECRETS_ENCRYPTION_KEY` ([src/lib/crypto/secret-encryption.ts](src/lib/crypto/secret-encryption.ts)) —
+  a DB dump or leaked service-role key alone no longer exposes them. Reads
+  fail closed on undecryptable rows; legacy plaintext passes through until
+  `debug/encrypt-secrets-backfill.ts --apply` converts it. Gateway tokens stay
+  plaintext BY DESIGN (the value itself is the symmetric HMAC secret on the box).
 - **"RLS enabled, no policies" is the deny-all design, not an oversight.** The
   Supabase advisor reports INFO-level `rls_enabled_no_policy` findings for a
   set of service-role-only tables (secret stores like `vps_ssh_keys`,

@@ -32,6 +32,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { convertPkcs8Ed25519PemToOpenssh } from "@/lib/hostinger/keypair";
+import { decryptSecret, encryptSecret } from "@/lib/crypto/secret-encryption";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -87,21 +88,28 @@ function migrateRow(row: VpsSshKeyRow | null): VpsSshKeyRow | null {
   if (typeof row.private_key_pem !== "string" || row.private_key_pem.length === 0) {
     return row;
   }
+  // App-layer decryption FIRST (security review G5): rows written after the
+  // SECRETS_ENCRYPTION_KEY rollout store AES-256-GCM ciphertext; legacy
+  // plaintext rows pass through. Deliberately OUTSIDE the try below — an
+  // encrypted row that cannot be decrypted (missing/wrong key) must fail
+  // closed with the typed SecretEncryptionError, never fall through to
+  // sshExec with ciphertext as a "PEM".
+  const plaintextPem = decryptSecret(row.private_key_pem);
   try {
     return {
       ...row,
-      private_key_pem: convertPkcs8Ed25519PemToOpenssh(row.private_key_pem)
+      private_key_pem: convertPkcs8Ed25519PemToOpenssh(plaintextPem)
     };
   } catch {
     // Don't fail the entire read on a malformed PEM. A row whose
     // private_key_pem can't be parsed by node:crypto AT ALL is broken
-    // beyond what this migration can fix; surface the original row
+    // beyond what this migration can fix; surface the (decrypted) value
     // and let the downstream `sshExec` fail with the more-specific
     // "Cannot parse privateKey" error so operators see what's wrong.
     // This branch also lets test fixtures pass placeholder strings
     // ("PEM", "stub-pem") without forcing every test to hand-roll a
     // real ed25519 PEM.
-    return row;
+    return { ...row, private_key_pem: plaintextPem };
   }
 }
 
@@ -133,7 +141,9 @@ export async function insertVpsSshKey(
       hostinger_vps_id: input.hostinger_vps_id,
       hostinger_public_key_id: input.hostinger_public_key_id ?? null,
       public_key: input.public_key,
-      private_key_pem: input.private_key_pem,
+      // At-rest app-layer encryption (G5); plaintext pass-through until
+      // SECRETS_ENCRYPTION_KEY is configured.
+      private_key_pem: encryptSecret(input.private_key_pem),
       fingerprint_sha256: input.fingerprint_sha256,
       ssh_username: input.ssh_username ?? "root",
       provider: input.provider ?? "hostinger",
@@ -144,7 +154,9 @@ export async function insertVpsSshKey(
     .single();
 
   if (error) throw new Error(`insertVpsSshKey: ${error.message}`);
-  return data as VpsSshKeyRow;
+  // Return the caller-usable row: every read path decrypts via migrateRow,
+  // and the orchestrator uses the returned row's PEM directly for SSH.
+  return { ...(data as VpsSshKeyRow), private_key_pem: input.private_key_pem };
 }
 
 /**
