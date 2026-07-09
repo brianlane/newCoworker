@@ -11,6 +11,17 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"version": 1');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("browse_extract");
   });
+
+  it("offers every push trigger channel so the model never reaches for email+connectionId", () => {
+    // The Truly Insurance live-demo failure (Jul 2026): the prompt omitted
+    // tenant_email and webhook, so "when we receive an email from Privyr"
+    // compiled to the `email` channel, whose connectionId the model cannot
+    // know — validation rejected every attempt. These channels are the
+    // no-uuid alternatives the model must be able to pick.
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"channel":"tenant_email"');
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"channel":"webhook"');
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("NEVER invent or placeholder the uuid");
+  });
 });
 
 describe("buildFlowCompileUserText", () => {
