@@ -80,7 +80,12 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
 
 /** Step types available for a voice flow vs. every other (batch) channel. */
 const VOICE_STEP_TYPE_SET = new Set<string>(VOICE_STEP_TYPES);
-const NON_VOICE_STEP_TYPES = FLOW_STEP_TYPES.filter((t) => !VOICE_STEP_TYPE_SET.has(t));
+// The classic form editor offers every batch step EXCEPT branch: nested arm
+// steps need the visual canvas builder to author (an existing branch flow
+// still loads/saves here untouched).
+const NON_VOICE_STEP_TYPES = FLOW_STEP_TYPES.filter(
+  (t) => !VOICE_STEP_TYPE_SET.has(t) && t !== "branch"
+);
 /** Inbound voice flows route a live caller; outbound flows place one call. */
 const INBOUND_VOICE_STEP_TYPES = VOICE_STEP_TYPES.filter((t) => t !== "outbound_call");
 const OUTBOUND_VOICE_STEP_TYPES = ["outbound_call"] as const;
@@ -345,6 +350,24 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, minutes: 300 };
     case "wait_for_reply":
       return { id, type, phoneVar: examples.contactVar, saveAs: "reply_text", timeoutMinutes: 300 };
+    case "branch":
+      // Authored via the visual canvas builder; the classic form never offers
+      // this type (NON_VOICE_STEP_TYPES filters it) but the switch stays
+      // exhaustive over FlowStep["type"].
+      return {
+        id,
+        type,
+        question: "Which path?",
+        branches: [
+          {
+            id: freshStepId(),
+            label: "Path 1",
+            condition: { var: examples.contactVar, notEquals: "none" },
+            steps: []
+          }
+        ],
+        else: []
+      };
     case "ring_handoff":
       return { id, type, toE164: "", ringSeconds: 20 };
     case "voice_ai_intake":
@@ -386,9 +409,22 @@ function varsProducedByStep(step: FlowStep): string[] {
   return [];
 }
 
-/** Deep-clone a step with a fresh id, for the per-step duplicate button. */
+/**
+ * Deep-clone a step with fresh ids, for the per-step duplicate button. A
+ * branch clone refreshes every nested step/arm id too — step ids must stay
+ * unique across the whole flow tree.
+ */
 function duplicateOf(step: FlowStep): FlowStep {
-  return { ...(JSON.parse(JSON.stringify(step)) as FlowStep), id: freshStepId() };
+  const clone = { ...(JSON.parse(JSON.stringify(step)) as FlowStep), id: freshStepId() };
+  if (clone.type === "branch") {
+    clone.branches = clone.branches.map((arm) => ({
+      ...arm,
+      id: freshStepId(),
+      steps: arm.steps.map(duplicateOf)
+    }));
+    clone.else = clone.else.map(duplicateOf);
+  }
+  return clone;
 }
 
 /** All vars produced by steps BEFORE `index` — the legal targets for a `when`. */

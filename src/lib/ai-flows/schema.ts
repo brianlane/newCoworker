@@ -35,6 +35,7 @@ export const FLOW_STEP_TYPES = [
   "http_call",
   "sleep",
   "wait_for_reply",
+  "branch",
   "route_to_team",
   "browse_action",
   "recall_url",
@@ -462,6 +463,46 @@ const whenSchema = z
     { message: "set exactly one of equals/contains/notEquals" }
   );
 
+/** Max named arms on one branch step (plus the implicit else path). */
+export const MAX_BRANCH_ARMS = 4;
+/** Max branch nesting depth (a branch at depth 3 may not contain another). */
+export const MAX_BRANCH_DEPTH = 3;
+/** Max steps a definition may hold in total (trunk + every arm + every else). */
+export const MAX_TOTAL_STEPS = 50;
+
+/**
+ * One arm of a `branch` step: a labeled condition plus the steps that run when
+ * it is the FIRST matching arm. `steps` is a getter so the schema can
+ * reference the (later-declared) step union recursively — zod resolves it
+ * lazily at parse time.
+ */
+const branchArmSchema = z.object({
+  id: stepId,
+  label: z.string().min(1).max(80),
+  condition: whenSchema,
+  get steps() {
+    return z.array(stepSchema).max(25);
+  }
+});
+
+/**
+ * Flow-level time window: communication steps (send_sms / send_email /
+ * notify_owner / route_to_team) only execute while the local time in
+ * `timezone` is inside [start, end) on an allowed day; outside it the run
+ * defers to the next open slot (same earliest_claim_at machinery as send_sms
+ * quiet hours, which still apply on top per step).
+ */
+const flowTimeWindowSchema = z
+  .object({
+    timezone,
+    start: hhmm,
+    end: hhmm,
+    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional()
+  })
+  .refine((w) => w.start !== w.end, {
+    message: "the time window can't start and end at the same time"
+  });
+
 const stepSchema = z.discriminatedUnion("type", [
   z.object({ id: stepId, type: z.literal("extract_url"), saveAs: varName, when: whenSchema.optional() }),
   z
@@ -612,6 +653,22 @@ const stepSchema = z.discriminatedUnion("type", [
     phoneVar: varName,
     saveAs: varName.optional(),
     timeoutMinutes: z.number().int().min(1).max(43200).optional(),
+    when: whenSchema.optional()
+  }),
+  // Multi-way branch (GHL-style If/Else): arms are evaluated top to bottom
+  // against run vars, the FIRST match wins, and no match runs the `else`
+  // steps. Nesting/total-step caps and arm-id uniqueness live in
+  // validateDefinitionSemantics (they need the whole tree). A `when` guard on
+  // the branch itself skips the WHOLE branch (choice never recorded, so every
+  // arm and the else are skipped as branch_not_taken).
+  z.object({
+    id: stepId,
+    type: z.literal("branch"),
+    question: z.string().min(1).max(200),
+    branches: z.array(branchArmSchema).min(1).max(MAX_BRANCH_ARMS),
+    get else() {
+      return z.array(stepSchema).max(25);
+    },
     when: whenSchema.optional()
   }),
   z.object({
@@ -773,6 +830,7 @@ export const aiFlowDefinitionSchema = z.object({
   version: z.literal(1),
   trigger: triggerSchema,
   steps: z.array(stepSchema).min(1).max(25),
+  timeWindow: flowTimeWindowSchema.optional(),
   options: z
     .object({
       suppressDefaultReply: z.boolean().optional(),
@@ -788,6 +846,8 @@ export type TriggerCondition = z.infer<typeof conditionSchema>;
 export type FlowTrigger = z.infer<typeof triggerSchema>;
 export type FlowStep = z.infer<typeof stepSchema>;
 export type StepCondition = z.infer<typeof whenSchema>;
+export type BranchArm = z.infer<typeof branchArmSchema>;
+export type FlowTimeWindow = z.infer<typeof flowTimeWindowSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 /** The trigger channels the builder offers. */
@@ -859,6 +919,11 @@ function templateStringsForStep(step: FlowStep): string[] {
     // sleep / wait_for_reply carry only var NAMES and durations — no templates.
     case "sleep":
     case "wait_for_reply":
+    // branch: the question/labels are display copy and the conditions are
+    // var-name references (scope-checked in validateDefinitionSemantics), so
+    // there is nothing to template-check on the step itself. Nested arm steps
+    // are walked separately.
+    case "branch":
     // Voice steps carry no `{{vars.x}}` templates (phone numbers + a persona
     // string captured live), so there is nothing to scope-check here.
     case "ring_handoff":
@@ -1042,26 +1107,68 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     return issues;
   }
 
-  // A voice step under a non-voice trigger can never execute (the batch worker
-  // has no handler for it); reject it rather than silently no-op at run time.
-  for (const step of def.steps) {
+  const vars = new Set<string>();
+  // True once an earlier browse step (browse_extract or browse_action) has
+  // `screenshot: true`; the prerequisite for any later step's attachScreenshot.
+  let screenshotCaptured = false;
+  // Every step in the tree (trunk + every branch arm + every else), for the
+  // definition-wide total cap.
+  let totalSteps = 0;
+
+  // Walk one step, then (for a branch) its arms and else — the same
+  // depth-first order the worker flattens to, so "an EARLIER step" means the
+  // same thing at author time and run time. Var registration is deliberately
+  // PERMISSIVE across arms: a var produced inside one arm is legal for any
+  // later step (at run time an untaken arm's var resolves to "" and the
+  // consuming step degrades/skips, same as any missing extraction).
+  const visitStep = (step: FlowStep, depth: number): void => {
+    totalSteps += 1;
+    if (seenIds.has(step.id)) {
+      issues.push(`Duplicate step id "${step.id}".`);
+    }
+    seenIds.add(step.id);
+
+    // A voice step under a non-voice trigger can never execute (the batch
+    // worker has no handler for it); reject rather than silently no-op.
     if (VOICE_STEPS.has(step.type)) {
       issues.push(
         `Step "${step.id}" is a voice step ("${step.type}") but the trigger is "${def.trigger.channel}"; voice steps need a voice trigger.`
       );
     }
-  }
 
-  const vars = new Set<string>();
-  // True once an earlier browse step (browse_extract or browse_action) has
-  // `screenshot: true`; the prerequisite for any later step's attachScreenshot.
-  let screenshotCaptured = false;
-
-  for (const step of def.steps) {
-    if (seenIds.has(step.id)) {
-      issues.push(`Duplicate step id "${step.id}".`);
+    if (step.type === "branch") {
+      if (depth >= MAX_BRANCH_DEPTH) {
+        issues.push(
+          `Step "${step.id}" nests branches more than ${MAX_BRANCH_DEPTH} levels deep; flatten the flow instead.`
+        );
+      }
+      const armIds = new Set<string>();
+      for (const arm of step.branches) {
+        if (armIds.has(arm.id) || arm.id === "else") {
+          issues.push(
+            arm.id === "else"
+              ? `Step "${step.id}" names a branch "else", which is reserved for the none-matched path.`
+              : `Step "${step.id}" has two branches with the id "${arm.id}".`
+          );
+        }
+        armIds.add(arm.id);
+        // Same scope rule as a `when` guard: the arm condition may only test a
+        // var an EARLIER step produced.
+        if (!vars.has(arm.condition.var) && !ENGINE_VARS.has(arm.condition.var)) {
+          issues.push(
+            `Step "${step.id}" branch "${arm.label}" tests {{vars.${arm.condition.var}}} which no earlier step produces.`
+          );
+        }
+      }
+      if (step.when && !vars.has(step.when.var) && !ENGINE_VARS.has(step.when.var)) {
+        issues.push(
+          `Step "${step.id}" has a "when" condition on {{vars.${step.when.var}}} which no earlier step produces.`
+        );
+      }
+      for (const arm of step.branches) walkSteps(arm.steps, depth + 1);
+      walkSteps(step.else, depth + 1);
+      return;
     }
-    seenIds.add(step.id);
 
     for (const tpl of templateStringsForStep(step)) {
       for (const ref of collectTemplateRefs(tpl)) {
@@ -1363,6 +1470,18 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       // The reply text ("" on timeout) becomes a var for later `when` branches.
       vars.add(step.saveAs ?? "reply_text");
     }
+  };
+
+  const walkSteps = (steps: FlowStep[], depth: number): void => {
+    for (const step of steps) visitStep(step, depth);
+  };
+
+  walkSteps(def.steps, 0);
+
+  if (totalSteps > MAX_TOTAL_STEPS) {
+    issues.push(
+      `This flow has ${totalSteps} steps in total (including branch paths); the limit is ${MAX_TOTAL_STEPS}.`
+    );
   }
 
   return issues;
