@@ -1660,9 +1660,13 @@ describe("provisioning/orchestrate", () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
       process.env.TELNYX_DEFAULT_STATE = "NY";
+      // US owner phone (602 = Phoenix): the tenant is NOT Canadian, so the
+      // default-country tiers stay US — but the REQUESTED 519 tier is still
+      // CA-scoped by its NPA. (A Canadian-phone tenant never falls back to
+      // US tiers at all — see the Canadian cascade tests above.)
       const biz = {
         business_type: "insurance_agency",
-        phone: "(416) 456-0696", // 416 = Toronto → owner tier is CA-scoped
+        phone: "(602) 555-0100",
         preferred_area_code: "519"
       } as never;
       vi.mocked(getBusiness).mockResolvedValueOnce(biz);
@@ -1671,7 +1675,7 @@ describe("provisioning/orchestrate", () => {
       const didProvisioner = vi
         .fn()
         .mockRejectedValueOnce(soldOut()) // requested 519
-        .mockRejectedValueOnce(soldOut()) // owner 416
+        .mockRejectedValueOnce(soldOut()) // owner 602
         .mockRejectedValueOnce(soldOut()) // platform default 212
         .mockResolvedValueOnce({ toE164: "+15550001111" }); // any US
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
@@ -1690,8 +1694,8 @@ describe("provisioning/orchestrate", () => {
         administrativeArea: undefined
       });
       expect(didProvisioner.mock.calls[1][0].search).toEqual({
-        countryCode: "CA",
-        areaCode: "416",
+        countryCode: "US",
+        areaCode: "602",
         administrativeArea: undefined
       });
       expect(didProvisioner.mock.calls[2][0].search).toEqual({
