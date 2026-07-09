@@ -1088,10 +1088,19 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     : {};
 
+  // Enterprise voice picker: a prebuilt Gemini Live voice name written into
+  // the bridge .env by deploy-client.sh (VOICE_NAME, validated app-side
+  // against the prebuilt-voice allow-list). Blank keeps the model default.
+  const voiceName = (process.env.VOICE_NAME ?? "").trim();
+  const speechConfig = voiceName
+    ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } }
+    : {};
+
   session = await ai.live.connect({
     model: opts.model,
     config: {
       responseModalities: [Modality.AUDIO],
+      ...(speechConfig as Record<string, unknown>),
       ...(transcriptionConfig as Record<string, unknown>),
       systemInstruction: intake
         ? intakeSystemInstruction(

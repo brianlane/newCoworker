@@ -2,6 +2,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { Business } from "@/lib/db/schema";
 import type { EnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import type { Branding } from "@/lib/plans/branding";
+import type { EnterpriseModels } from "@/lib/plans/enterprise-models";
 import {
   assertResidencyModeAllowed,
   residencyAllowedForTier,
@@ -361,6 +362,17 @@ export async function updateEnterpriseLimits(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ enterprise_limits: limits }).eq("id", id);
   if (error) throw new Error(`updateEnterpriseLimits: ${error.message}`);
+}
+
+/** Designated models + voice (enterprise); null clears to platform defaults. */
+export async function updateEnterpriseModels(
+  id: string,
+  models: EnterpriseModels | null,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ enterprise_models: models }).eq("id", id);
+  if (error) throw new Error(`updateEnterpriseModels: ${error.message}`);
 }
 
 /** White-label branding (enterprise); null clears back to platform branding. */

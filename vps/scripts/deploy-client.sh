@@ -28,6 +28,8 @@
 #   BRIDGE_MEDIA_WSS_ORIGIN  — public wss:// origin for the VPS voice bridge
 #   GOOGLE_API_KEY           — Gemini API key; blank disables Live on the bridge
 #   GEMINI_LIVE_MODEL        — optional; default gemini-3.1-flash-live-preview
+#   VOICE_NAME               — optional; prebuilt Gemini Live voice (enterprise
+#                               voice picker). Blank keeps the model default.
 #   GEMINI_ROWBOAT_MODEL     — optional; Gemini model used by Rowboat's voice_task
 #                               agent via the llm-router sidecar. Defaults to
 #                               gemini-3.1-flash.
@@ -1275,6 +1277,9 @@ BUSINESS_ID=${BUSINESS_ID:-}
 BRIDGE_MEDIA_WSS_ORIGIN=${effective_bridge_media_wss_origin:-}
 GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
 GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
+# Optional prebuilt Gemini Live voice (enterprise voice picker, set from
+# businesses.enterprise_models by the orchestrator). Blank = model default.
+VOICE_NAME=${VOICE_NAME:-}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
 VOICE_TRANSCRIPTION_ENABLED=${effective_voice_transcription_enabled}
 # TELNYX_API_KEY powers the bridge's Telnyx Call Control actions: the `end_call`

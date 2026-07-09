@@ -38,6 +38,7 @@ import {
 import { resolveResidencyBackupPassphraseForDeploy } from "@/lib/residency/backup-keys";
 import { assertResidencyForPlacement } from "@/lib/residency/enforce";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
+import { parseEnterpriseModels } from "@/lib/plans/enterprise-models";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
@@ -1311,6 +1312,15 @@ async function runOrchestrator(
     // then uninstalls the platform backup timer (customer owns DR).
     residencyBackupPassphrase = await resolveResidencyBackupPassphraseForDeploy(businessId);
   }
+  // Designated models + voice (enterprise): per-tenant overrides win over
+  // the platform env defaults; validated by parseEnterpriseModels (garbage
+  // or a non-enterprise tier falls back to platform defaults).
+  const modelOverrides =
+    businessRow?.tier === "enterprise"
+      ? parseEnterpriseModels(
+          (businessRow as { enterprise_models?: unknown }).enterprise_models
+        )
+      : null;
   const bashQuote = deps?.quoteEnv ?? quoteShellEnvValue;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
   const progressUrl = `${appUrl.replace(/\/$/, "")}/api/provisioning/progress`;
@@ -1337,7 +1347,10 @@ async function runOrchestrator(
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
     ["BRIDGE_MEDIA_WSS_ORIGIN", bridgeMediaWssOrigin],
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
-    ["GEMINI_LIVE_MODEL", process.env.GEMINI_LIVE_MODEL ?? ""],
+    ["GEMINI_LIVE_MODEL", modelOverrides?.geminiLiveModel ?? process.env.GEMINI_LIVE_MODEL ?? ""],
+    // Prebuilt Gemini Live voice for the tenant (professional voice picker).
+    // Blank keeps the model's default voice.
+    ["VOICE_NAME", modelOverrides?.voiceName ?? process.env.VOICE_NAME ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     // Rollout flag for Gemini Live transcript capture. Read by the voice
     // bridge (vps/voice-bridge/src/index.ts); when "true" it attaches the
@@ -1352,7 +1365,10 @@ async function runOrchestrator(
     // llm-router. Mirrors GEMINI_ROWBOAT_MODEL so setting it on Vercel actually
     // reaches the VPS seed; blank lets deploy-client.sh apply its default
     // (gemini-2.5-flash-lite, which itself falls back to local without a key).
-    ["OWNER_CHAT_MODEL", process.env.OWNER_CHAT_MODEL ?? ""],
+    ["OWNER_CHAT_MODEL", modelOverrides?.ownerChatModel ?? process.env.OWNER_CHAT_MODEL ?? ""],
+    // Model for the Coworker (inbound customer SMS) agent; deploy-client.sh
+    // applies its own default when blank.
+    ["SMS_CHAT_MODEL", modelOverrides?.smsChatModel ?? process.env.SMS_CHAT_MODEL ?? ""],
     // Public origin of the platform app so Rowboat's voice_task agent and
     // the voice-bridge tool dispatcher can POST to /api/voice/tools/* with
     // the shared gateway token. Falls back to NEXT_PUBLIC_APP_URL so local
