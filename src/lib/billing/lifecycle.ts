@@ -34,6 +34,7 @@ import { isWithinLifetimeRefundWindow } from "@/lib/db/customer-profiles";
 import { isCanceledInGrace } from "@/lib/db/subscriptions";
 import { isVpsSize } from "@/lib/vps/size";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
+import { getPeriodPricing, type BillingPeriod, type PlanTier } from "@/lib/plans/tier";
 
 /** 30-day grace window after any cancellation. Centralised so callers stay in sync. */
 export const GRACE_WINDOW_DAYS = 30;
@@ -61,6 +62,17 @@ export type StripeOp =
       stripeSubscriptionId: string;
       /** Lifetime-cap policy (§Q1): refund is issued on the most recent invoice only. */
       reason: "thirty_day_money_back" | "admin_force";
+      /**
+       * Term-plan refund policy (Jul 2026): annual/biennial customers pay the
+       * full term upfront, and the Hostinger box bought for that term is
+       * non-refundable to us — so a 30-day money-back on a term plan refunds
+       * the term amount MINUS one month at the tier's monthly-intro rate (the
+       * service they actually used, priced as if uncommitted). Monthly plans
+       * carve out nothing extra (their latest invoice IS one month). Computed
+       * at plan time via {@link termRefundCarveOutCents} so the executor
+       * stays a dumb subtractor.
+       */
+      termCarveOutCents: number;
     };
 
 export type HostingerOp =
@@ -773,6 +785,31 @@ function pooledPlanFor(tier: string, vpsSize: string | null | undefined): string
 }
 
 // ───────────────────────────────────────────────────────────────────────
+/**
+ * How much of a term invoice is withheld from the 30-day money-back refund
+ * ON TOP of the non-refundable carrier fee.
+ *
+ * Policy (Jul 2026 "middle path"): the guarantee stays on every plan, but a
+ * term customer who exits inside 30 days pays for the service they consumed
+ * at the UNCOMMITTED price — one month at the tier's monthly-intro rate —
+ * instead of keeping the term discount on a contract they didn't complete.
+ * Rationale: term signups fund a prepaid 1/2-year Hostinger box that is
+ * non-refundable to the platform; this caps the worst case near one month
+ * of revenue (plus a poolable box) without dropping the guarantee.
+ *
+ * Monthly plans return 0 — their latest invoice already IS one month, so
+ * the existing carrier-fee carve-out is the only withholding. Enterprise
+ * pricing is deal-based (`monthlyCents: 0`), so this returns 0 there too;
+ * enterprise refunds remain operator judgment via admin force-refund.
+ */
+export function termRefundCarveOutCents(
+  tier: PlanTier,
+  billingPeriod: BillingPeriod | null
+): number {
+  if (!billingPeriod || billingPeriod === "monthly") return 0;
+  return getPeriodPricing(tier, "monthly").monthlyCents;
+}
+
 // Shared cancel builder: cancel & refund + auto-cancel share this skeleton.
 // Differences are (a) whether to emit a refund op, (b) the cancel_reason,
 // (c) the grace window (admin force collapses it to zero).
@@ -825,7 +862,8 @@ function buildCancelPlan(args: {
     plan.stripeOps.push({
       type: "refund_latest_charge",
       stripeSubscriptionId: sub.stripe_subscription_id,
-      reason: "thirty_day_money_back"
+      reason: "thirty_day_money_back",
+      termCarveOutCents: termRefundCarveOutCents(sub.tier, sub.billing_period)
     });
   }
   if (!skipStripeCancel && sub.stripe_subscription_id) {
