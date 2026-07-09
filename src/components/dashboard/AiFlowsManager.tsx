@@ -31,6 +31,7 @@ import {
   patchStepById,
   removeStepById,
   varsInScopeBefore,
+  varsProducedByStep,
   type StepContainerRef
 } from "@/lib/ai-flows/tree";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
@@ -452,23 +453,6 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         captureFields: ["name", "phone", "reason for calling"]
       };
   }
-}
-
-/** Vars a single step produces (visible to LATER steps). Mirrors schema scope. */
-function varsProducedByStep(step: FlowStep): string[] {
-  if (step.type === "extract_url") return [step.saveAs];
-  if (step.type === "browse_extract")
-    return [
-      ...(step.fields ?? []).map((f) => f.name),
-      ...(step.extractLinks ?? []).map((l) => l.name)
-    ].filter(Boolean);
-  if (step.type === "extract_text") return step.fields.map((f) => f.name).filter(Boolean);
-  if (step.type === "email_extract") return step.fields.map((f) => f.name).filter(Boolean);
-  if (step.type === "browse_action") return (step.fields ?? []).map((f) => f.name).filter(Boolean);
-  if (step.type === "http_call" && step.saveAs) return [step.saveAs];
-  if (step.type === "recall_url") return [step.saveAs];
-  if (step.type === "wait_for_reply") return [step.saveAs ?? "reply_text"];
-  return [];
 }
 
 /**

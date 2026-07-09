@@ -277,15 +277,17 @@ describe("statsByStepIdFromRunSteps", () => {
   it("maps flat step_index rows onto tree node ids", () => {
     // Flat order: s1=0, br=1, auto_sms=2, home_sms=3, else_note=4, s3=5.
     const stats = statsByStepIdFromRunSteps(tree(), [
-      { step_index: 0, status: "done" },
-      { step_index: 1, status: "done" },
-      { step_index: 2, status: "done" },
-      { step_index: 3, status: "skipped" },
-      { step_index: 4, status: "skipped" },
-      { step_index: 5, status: "failed" },
-      { step_index: 5, status: "done" },
-      { step_index: 0, status: "running" }, // non-terminal → ignored
-      { step_index: 99, status: "done" } // beyond the definition → ignored
+      { step_index: 0, step_type: "extract_text", status: "done" },
+      { step_index: 1, step_type: "branch", status: "done" },
+      { step_index: 2, step_type: "send_sms", status: "done" },
+      { step_index: 3, step_type: "send_sms", status: "skipped" },
+      { step_index: 4, step_type: "notify_owner", status: "skipped" },
+      { step_index: 5, step_type: "notify_owner", status: "failed" },
+      { step_index: 5, step_type: "notify_owner", status: "done" },
+      { step_index: 0, step_type: "extract_text", status: "running" }, // non-terminal → ignored
+      { step_index: 99, step_type: "notify_owner", status: "done" }, // beyond the definition → ignored
+      // Recorded before a step-type-changing edit → stale, ignored.
+      { step_index: 2, step_type: "send_email", status: "done" }
     ]);
     expect(stats.s1).toEqual({ done: 1, skipped: 0, failed: 0 });
     expect(stats.auto_sms).toEqual({ done: 1, skipped: 0, failed: 0 });

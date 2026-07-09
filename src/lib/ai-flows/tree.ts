@@ -228,18 +228,25 @@ export type StepStats = { done: number; skipped: number; failed: number };
  * Aggregate recorded run steps into per-node stats keyed by STEP ID. Rows are
  * `ai_flow_run_steps` projections; `step_index` is the worker's flat execution
  * index, which maps onto `flattenForDisplay`'s order (kept identical by
- * design). Rows past the flattened length (a definition that since shrank) and
- * non-terminal statuses (running/pending) are ignored.
+ * design).
+ *
+ * Historical rows can be STALE relative to the current definition (runs don't
+ * snapshot the definition, and editing the flow shifts flat indices), so rows
+ * are dropped when they can't belong to today's tree: past the flattened
+ * length, or recorded with a different `step_type` than the step now at that
+ * index. Callers should additionally scope the run set to runs started after
+ * the flow's last edit (see the flow detail page). Non-terminal statuses
+ * (running/pending) are ignored.
  */
 export function statsByStepIdFromRunSteps(
   steps: FlowStep[],
-  rows: Array<{ step_index: number; status: string }>
+  rows: Array<{ step_index: number; step_type: string; status: string }>
 ): Record<string, StepStats> {
   const flat = flattenForDisplay(steps);
   const out: Record<string, StepStats> = {};
   for (const row of rows) {
     const entry = flat[row.step_index];
-    if (!entry) continue;
+    if (!entry || entry.step.type !== row.step_type) continue;
     if (row.status !== "done" && row.status !== "skipped" && row.status !== "failed") continue;
     const id = entry.step.id;
     const stats = (out[id] ??= { done: 0, skipped: 0, failed: 0 });
