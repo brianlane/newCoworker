@@ -270,6 +270,30 @@ describe("/api/business/create — Step 1 dropdown teamSize → integer mapping"
     });
   }
 
+  it("normalizes a decorated preferredAreaCode before insert", async () => {
+    const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "(519)" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ preferredAreaCode: "519" })
+    );
+  });
+
+  it("silently drops an invalid preferredAreaCode instead of failing creation", async () => {
+    const res = await POST(jsonRequest(baseBody({ preferredAreaCode: "12" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ preferredAreaCode: null })
+    );
+  });
+
+  it("passes null preferredAreaCode when the field is unset", async () => {
+    const res = await POST(jsonRequest(baseBody({})));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ preferredAreaCode: null })
+    );
+  });
+
   it("omits teamSize entirely when the field is unset", async () => {
     // Defensive: the route still has a falsy guard around the
     // conversion so a missing field stays `undefined` rather than

@@ -76,12 +76,16 @@ describe("db/businesses", () => {
       id: "uuid-biz-1",
       name: "Sunrise Realty",
       ownerEmail: "owner@test.com",
-      tier: "starter"
+      tier: "starter",
+      preferredAreaCode: "519"
     });
 
     expect(result.name).toBe("Sunrise Realty");
     expect(db.from).toHaveBeenCalledWith("businesses");
     expect(db.insert).toHaveBeenCalled();
+    expect(db.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ preferred_area_code: "519" })
+    );
     // A prospect who paid a white-glove offer pre-signup gets it attached to
     // the new business automatically.
     expect(attachProspectWhiteGloveOffersToBusiness).toHaveBeenCalledWith(

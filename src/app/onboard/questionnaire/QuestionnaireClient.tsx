@@ -59,6 +59,7 @@ interface FormData {
   businessType: string;
   ownerName: string;
   phone: string;
+  preferredAreaCode: string;
   websiteUrl: string;
   serviceArea: string;
   typicalInquiry: string;
@@ -72,6 +73,7 @@ const EMPTY_FORM: FormData = {
   businessType: DEFAULT_BUSINESS_TYPE,
   ownerName: "",
   phone: "",
+  preferredAreaCode: "",
   websiteUrl: "",
   serviceArea: "",
   typicalInquiry: "",
@@ -99,6 +101,8 @@ function toFormData(data: Partial<OnboardingData>): Partial<FormData> {
     businessType: typeof data.businessType === "string" ? data.businessType : EMPTY_FORM.businessType,
     ownerName: typeof data.ownerName === "string" ? data.ownerName : EMPTY_FORM.ownerName,
     phone: typeof data.phone === "string" ? data.phone : EMPTY_FORM.phone,
+    preferredAreaCode:
+      typeof data.preferredAreaCode === "string" ? data.preferredAreaCode : EMPTY_FORM.preferredAreaCode,
     websiteUrl: typeof data.websiteUrl === "string" ? data.websiteUrl : EMPTY_FORM.websiteUrl,
     serviceArea: typeof data.serviceArea === "string" ? data.serviceArea : EMPTY_FORM.serviceArea,
     typicalInquiry: typeof data.typicalInquiry === "string" ? data.typicalInquiry : EMPTY_FORM.typicalInquiry,
@@ -540,6 +544,7 @@ function QuestionnaireForm() {
             businessType: onboardingData.businessType,
             ownerName: onboardingData.ownerName,
             phone: onboardingData.phone,
+            preferredAreaCode: onboardingData.preferredAreaCode,
             websiteUrl: onboardingData.websiteUrl,
             serviceArea: onboardingData.serviceArea,
             typicalInquiry: onboardingData.typicalInquiry,
@@ -847,6 +852,20 @@ function QuestionnaireForm() {
                 onChange={(e) => update("phone", e.target.value)}
                 placeholder="+1 (555) 000-0000"
               />
+              <Input
+                label="Preferred Area Code for your AI Coworker (optional)"
+                type="tel"
+                inputMode="numeric"
+                maxLength={5}
+                value={form.preferredAreaCode}
+                onChange={(e) => update("preferredAreaCode", e.target.value)}
+                placeholder="519"
+              />
+              <p className="-mt-2 text-[11px] text-parchment/45">
+                We&apos;ll try to get your coworker a phone number in this area code. If none are
+                available we&apos;ll match your own phone&apos;s area code, then fall back to a
+                nearby one.
+              </p>
               <Input
                 label="Business Website (optional)"
                 type="url"
