@@ -30,3 +30,20 @@ export function htmlToText(html: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/**
+ * True when a message's "plain text" part is really tag-stripped template
+ * source rather than prose. Some senders (e.g. Privyr via Mailchimp
+ * templates) generate the text/plain alternative by naively stripping tags
+ * from the HTML, which leaves the whole stylesheet and unrendered merge tags
+ * (`*|MC:SUBJECT|*`) in the "text". Signals:
+ *  - a Mailchimp-style merge tag anywhere, or
+ *  - several CSS rule blocks (`selector { prop:value; ... }`).
+ * A false positive only means the text gets re-derived from the HTML part,
+ * which is safe; a false negative just keeps today's behavior.
+ */
+export function looksLikeStrippedTemplate(text: string): boolean {
+  if (/\*\|[^|*\s][^|*]*\|\*/.test(text)) return true;
+  const cssBlocks = text.match(/\{[^{}]*:[^{}]*;[^{}]*\}/g);
+  return (cssBlocks?.length ?? 0) >= 3;
+}
