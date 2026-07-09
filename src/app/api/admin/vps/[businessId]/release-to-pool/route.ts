@@ -107,7 +107,12 @@ export async function POST(
       await updateSubscription(subscription.id, {
         status: "canceled",
         canceled_at: new Date().toISOString(),
-        cancel_reason: "admin_force"
+        cancel_reason: "admin_force",
+        // Explicitly null: a leftover deadline from an earlier
+        // cancel/resubscribe cycle would put this row in the grace sweep's
+        // query and trigger a data wipe — deletion must stay with the
+        // adopt-time cascade (Bugbot Medium: stale grace deadline).
+        grace_ends_at: null
       });
       subscriptionCanceled = true;
     }

@@ -134,7 +134,10 @@ describe("api/admin/vps/[businessId]/release-to-pool route", () => {
     expect(updateSubscription).toHaveBeenCalledWith("sub-row-1", {
       status: "canceled",
       canceled_at: expect.stringMatching(/^\d{4}-/),
-      cancel_reason: "admin_force"
+      cancel_reason: "admin_force",
+      // Explicitly cleared: a stale deadline would put the row in the grace
+      // sweep's wipe query; deletion must stay with the adopt-time cascade.
+      grace_ends_at: null
     });
     // Billing id came from the subscription row — no VM detail call needed.
     expect(disableAutoRenewalMock).toHaveBeenCalledWith("hsub-pilot");
