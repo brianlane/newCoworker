@@ -50,7 +50,7 @@ import { PlanCard } from "@/components/billing/PlanCard";
 import {
   getWhiteGloveBookingUrl,
   getWhiteGlovePackage,
-  hasPrioritySupport,
+  hasPrioritySupportForTier,
   listWhiteGlovePackages
 } from "@/lib/plans/white-glove";
 
@@ -202,7 +202,12 @@ export default async function BillingPage(props: {
   );
   const prioritySupportUntilIso =
     (business as { priority_support_until?: string | null } | null)?.priority_support_until ?? null;
-  const priorityOpen = hasPrioritySupport(prioritySupportUntilIso);
+  // Enterprise tenants hold a PERMANENT priority window (SLA bullet);
+  // others get the 30-day white-glove purchase window.
+  const priorityOpen = hasPrioritySupportForTier(
+    (business as { tier?: string | null } | null)?.tier,
+    prioritySupportUntilIso
+  );
   const bookingUrl = getWhiteGloveBookingUrl();
   // Custom admin-authored offers (bespoke price, single business). Only OPEN
   // ones are payable; paid/revoked rows never render here.

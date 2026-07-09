@@ -95,6 +95,20 @@ export function hasPrioritySupport(
 }
 
 /**
+ * Tier-aware priority support: ENTERPRISE tenants hold a PERMANENT priority
+ * call/video window (part of the "SLA + dedicated support" plan bullet);
+ * everyone else falls back to the white-glove purchase window.
+ */
+export function hasPrioritySupportForTier(
+  tier: string | null | undefined,
+  prioritySupportUntilIso: string | null | undefined,
+  now: Date = new Date()
+): boolean {
+  if (tier === "enterprise") return true;
+  return hasPrioritySupport(prioritySupportUntilIso, now);
+}
+
+/**
  * Scheduling link the confirmation email/banner points at. Optional — when
  * unset the copy falls back to "reply to this email to schedule".
  */

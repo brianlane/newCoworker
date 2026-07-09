@@ -15,6 +15,8 @@ import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
 import { TeamAccessManager } from "@/components/dashboard/TeamAccessManager";
 import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
 import { parseBranding } from "@/lib/plans/branding";
+import { DedicatedSupportCard } from "@/components/dashboard/DedicatedSupportCard";
+import { getEnterpriseSupportContact } from "@/lib/plans/enterprise-support";
 import { listBusinessMembers } from "@/lib/db/business-members";
 import { listTeamMembers } from "@/lib/db/employees";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -163,6 +165,10 @@ export default async function SettingsPage() {
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
+      )}
+
+      {business && isEnterprise && (
+        <DedicatedSupportCard contact={getEnterpriseSupportContact()} />
       )}
 
       {business && isEnterprise && (
