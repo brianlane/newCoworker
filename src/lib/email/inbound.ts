@@ -55,6 +55,8 @@ export type InboundEmailPayload = {
   subject: string;
   /** Plain-text body (the worker collapses HTML before posting). */
   text: string;
+  /** Raw HTML alternative, when the message had one (sanitized at display). */
+  html?: string;
   /** Provider/RFC Message-Id — drives the run dedupe key. */
   messageId: string;
   /**
@@ -186,6 +188,7 @@ export async function processInboundTenantEmail(
       fromEmail,
       subject: payload.subject,
       bodyText: payload.text,
+      bodyHtml: payload.html ?? null,
       attachments,
       flowId: firstFlowId,
       runId: firstRunId,

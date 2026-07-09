@@ -235,6 +235,8 @@ export type EmailLogBody = {
   body_preview: string | null;
   /** Full plain-text body; null on rows predating full-body capture. */
   body_full: string | null;
+  /** Raw HTML alternative; null for text-only mail and rows predating capture. */
+  body_html: string | null;
   /** Stored attachment metadata (storage paths resolved to signed URLs upstream). */
   attachments: StoredAttachment[];
 };
@@ -254,13 +256,14 @@ export async function getEmailBody(
   type BodyRow = {
     body_preview: string | null;
     body_full: string | null;
+    body_html?: string | null;
     attachments: StoredAttachment[] | null;
   };
     const vpsReadMode = await isVpsReadMode(businessId, db);
   if (vpsReadMode) {
     const rows = await readMovedRows<BodyRow>(businessId, {
       table: "email_log",
-      columns: ["body_preview", "body_full", "attachments"],
+      columns: ["body_preview", "body_full", "body_html", "attachments"],
       filters: [
         { column: "business_id", op: "eq", value: businessId },
         { column: "id", op: "eq", value: id }
@@ -272,12 +275,13 @@ export async function getEmailBody(
     return {
       body_preview: boxRow.body_preview,
       body_full: boxRow.body_full,
+      body_html: boxRow.body_html ?? null,
       attachments: boxRow.attachments ?? []
     };
   }
   const { data, error } = await db
     .from("email_log")
-    .select("body_preview, body_full, attachments")
+    .select("body_preview, body_full, body_html, attachments")
     .eq("business_id", businessId)
     .eq("id", id)
     .maybeSingle();
@@ -287,6 +291,7 @@ export async function getEmailBody(
   return {
     body_preview: row.body_preview,
     body_full: row.body_full,
+    body_html: row.body_html ?? null,
     attachments: row.attachments ?? []
   };
 }
@@ -333,6 +338,8 @@ export type RecordTenantMailboxInboundInput = {
   fromEmail: string;
   subject: string;
   bodyText: string;
+  /** Raw HTML alternative for reading-pane rendering (sanitized at display). */
+  bodyHtml?: string | null;
   /** Flow run this inbound mail enqueued, when it matched a tenant_email flow. */
   flowId?: string | null;
   runId?: string | null;
@@ -360,6 +367,7 @@ export async function recordTenantMailboxInbound(
       subject: input.subject,
       body_preview: input.bodyText.slice(0, 500),
       body_full: input.bodyText,
+      body_html: input.bodyHtml ?? null,
       attachments: input.attachments ?? [],
       source: "tenant_mailbox_inbound",
       run_id: input.runId ?? null,

@@ -19,6 +19,14 @@ export function htmlToText(html: string): string {
     .replace(/<script\b[^>]*>[\s\S]*?<\/script\b[^>]*>/gi, " ")
     .replace(/<style\b[^>]*>[\s\S]*?<\/style\b[^>]*>/gi, " ")
     .replace(/<title\b[^>]*>[\s\S]*?<\/title\b[^>]*>/gi, " ")
+    // Keep link destinations: `<a href="U">label</a>` → `label (U)`. Without
+    // this, tag-stripping silently discards every URL — e.g. an "Accept
+    // invitation" button becomes dead text. http(s) only; tracking-pixel
+    // anchors and `href="#"` noise stay dropped.
+    .replace(
+      /<a\b[^>]*\bhref\s*=\s*["']?(https?:\/\/[^"'\s>]+)["']?[^>]*>([\s\S]*?)<\/a\b[^>]*>/gi,
+      (_m, href: string, label: string) => ` ${label} (${href}) `
+    )
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/gi, " ")
     .replace(/&lt;/gi, "<")

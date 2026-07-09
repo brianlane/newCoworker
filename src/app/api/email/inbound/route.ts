@@ -26,6 +26,9 @@ const bodySchema = z.object({
   from: z.string().min(3).max(320),
   subject: z.string().max(998).default(""),
   text: z.string().max(200_000).default(""),
+  // Raw HTML alternative for dashboard rendering (sanitized at display time).
+  // Cap must stay at or above the worker's MAX_HTML_CHARS.
+  html: z.string().max(500_000).optional(),
   messageId: z.string().min(1).max(998),
   attachments: z
     .array(

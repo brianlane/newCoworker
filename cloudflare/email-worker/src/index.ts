@@ -33,6 +33,11 @@ interface Env {
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 const MAX_ATTACHMENTS = 25;
 
+// HTML body forwarded for dashboard rendering. Must stay at or below the
+// webhook's zod cap; an over-long body is dropped (text still flows) rather
+// than truncated, since truncated HTML renders as visibly broken markup.
+const MAX_HTML_CHARS = 500_000;
+
 type UploadedAttachment = { filename: string; mimeType: string; size: number; path: string };
 
 /** Bytes for a postal-mime attachment, regardless of decode mode. */
@@ -136,12 +141,17 @@ export default {
       }
     }
 
+    // Forward the HTML alternative too (sanitized at display time) so the
+    // dashboard can render the real email with styling and clickable links.
+    const html = (email.html ?? "").trim();
+
     const payload = {
       // Envelope recipient is the authoritative tenant address to route on.
       to: message.to,
       from: email.from?.address || message.from,
       subject: email.subject ?? "",
       text,
+      ...(html && html.length <= MAX_HTML_CHARS ? { html } : {}),
       messageId,
       attachments
     };

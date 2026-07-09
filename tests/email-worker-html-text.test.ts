@@ -38,6 +38,24 @@ describe("email worker htmlToText", () => {
     expect(htmlToText("<title>*|MC:SUBJECT|*</title><p>Real text</p>")).toBe("Real text");
   });
 
+  it("keeps link destinations as 'label (url)' so buttons stay actionable", () => {
+    const html =
+      '<p>Please <a href="https://x.com/accept?t=1" style="color:red">ACCEPT INVITATION</a> now.</p>';
+    expect(htmlToText(html)).toBe("Please ACCEPT INVITATION (https://x.com/accept?t=1) now.");
+  });
+
+  it("drops non-http hrefs (mailto:, #, javascript:) without emitting a url", () => {
+    expect(htmlToText('<a href="mailto:a@b.com">mail me</a>')).toBe("mail me");
+    expect(htmlToText('<a href="#top">jump</a>')).toBe("jump");
+    expect(htmlToText("<a href=\"javascript:alert(1)\">click</a>")).toBe("click");
+  });
+
+  it("strips nested markup inside a link label", () => {
+    expect(htmlToText('<a href="https://x.com"><strong>Go</strong></a>')).toBe(
+      "Go (https://x.com)"
+    );
+  });
+
   it("decodes common entities and collapses whitespace", () => {
     expect(htmlToText("<p>Tom&nbsp;&amp;&nbsp;Jerry &lt;3   &quot;cheese&quot;</p>")).toBe(
       'Tom & Jerry <3 "cheese"'

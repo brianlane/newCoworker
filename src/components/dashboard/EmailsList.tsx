@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import DOMPurify from "dompurify";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { extractEmailAddress } from "@/lib/email/address";
@@ -148,8 +149,30 @@ type Attachment = {
 
 type BodyState =
   | { status: "loading" }
-  | { status: "loaded"; bodyFull: string | null; bodyPreview: string | null; attachments: Attachment[] }
+  | {
+      status: "loaded";
+      bodyFull: string | null;
+      bodyPreview: string | null;
+      bodyHtml: string | null;
+      attachments: Attachment[];
+    }
   | { status: "error" };
+
+/**
+ * Sanitized srcdoc for the HTML reading pane. DOMPurify strips scripts, event
+ * handlers, and other active content; WHOLE_DOCUMENT keeps the email's
+ * <head><style> (most marketing mail styles via a head stylesheet). A
+ * <base target="_blank"> is injected so every link opens in a new tab — the
+ * iframe itself is sandboxed without scripts, and links escape via the
+ * sandbox's allow-popups-to-escape-sandbox token.
+ */
+function sanitizedEmailDoc(html: string): string {
+  const clean = DOMPurify.sanitize(html, { WHOLE_DOCUMENT: true });
+  const base = '<base target="_blank">';
+  return /<head[\s>]/i.test(clean)
+    ? clean.replace(/<head([^>]*)>/i, `<head$1>${base}`)
+    : `${base}${clean}`;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -193,6 +216,7 @@ function ReadingPane({
           data?: {
             body_full: string | null;
             body_preview: string | null;
+            body_html?: string | null;
             attachments?: Attachment[];
           };
         };
@@ -200,6 +224,7 @@ function ReadingPane({
           status: "loaded",
           bodyFull: json.data?.body_full ?? null,
           bodyPreview: json.data?.body_preview ?? null,
+          bodyHtml: json.data?.body_html ?? null,
           attachments: json.data?.attachments ?? []
         });
       })
@@ -216,6 +241,16 @@ function ReadingPane({
   const hasFullBody = state.status === "loaded" && state.bodyFull !== null;
   const loadedBody =
     state.status === "loaded" ? (hasFullBody ? state.bodyFull : state.bodyPreview) : row.body_preview;
+
+  // Prefer the real HTML rendering when captured; the owner can flip to the
+  // plain-text view. Sanitized once per message (memo keyed on the html).
+  const bodyHtml = state.status === "loaded" ? state.bodyHtml : null;
+  const [showPlain, setShowPlain] = useState(false);
+  const emailDoc = useMemo(
+    () => (bodyHtml && bodyHtml.trim().length > 0 ? sanitizedEmailDoc(bodyHtml) : null),
+    [bodyHtml]
+  );
+  const renderHtml = emailDoc !== null && !showPlain;
 
   return (
     <Card>
@@ -272,19 +307,44 @@ function ReadingPane({
           <span className="block text-[11px] uppercase tracking-wide text-parchment/40">
             Message
           </span>
-          {state.status === "loading" && (
-            <span className="text-[10px] text-parchment/40">Loading full message…</span>
-          )}
+          <span className="flex items-center gap-3">
+            {emailDoc !== null && (
+              <button
+                type="button"
+                onClick={() => setShowPlain((v) => !v)}
+                className="text-[10px] uppercase tracking-wide text-parchment/40 hover:text-parchment/80 transition-colors"
+              >
+                {showPlain ? "Rich view" : "Plain text"}
+              </button>
+            )}
+            {state.status === "loading" && (
+              <span className="text-[10px] text-parchment/40">Loading full message…</span>
+            )}
+          </span>
         </div>
-        <div className="rounded-md border border-parchment/10 bg-deep-ink/40 p-3 text-sm text-parchment/90 whitespace-pre-wrap break-words">
-          {loadedBody && loadedBody.length > 0 ? loadedBody : "(no body captured)"}
-        </div>
+        {renderHtml ? (
+          // Sandboxed (no scripts, opaque origin) iframe: the email's own CSS
+          // renders inside without leaking into the dashboard, and DOMPurify
+          // has already stripped active content. allow-popups (+escape) lets
+          // links — retargeted to _blank via an injected <base> — open in a
+          // normal new tab.
+          <iframe
+            title="Email message"
+            srcDoc={emailDoc}
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            className="w-full h-[65vh] rounded-md border border-parchment/10 bg-white"
+          />
+        ) : (
+          <div className="rounded-md border border-parchment/10 bg-deep-ink/40 p-3 text-sm text-parchment/90 whitespace-pre-wrap break-words">
+            {loadedBody && loadedBody.length > 0 ? loadedBody : "(no body captured)"}
+          </div>
+        )}
         {state.status === "error" && (
           <p className="mt-1 text-[10px] text-spark-orange/80">
             Couldn&apos;t load the full message; showing the stored preview.
           </p>
         )}
-        {state.status === "loaded" && !hasFullBody && (
+        {state.status === "loaded" && !hasFullBody && !renderHtml && (
           <p className="mt-1 text-[10px] text-parchment/30">
             Stored preview (first 500 characters).
           </p>
