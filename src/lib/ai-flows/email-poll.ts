@@ -83,7 +83,12 @@ type EmailFlow = {
   id: string;
   business_id: string;
   connectionId: string;
-  conditions: TriggerCondition[];
+  /**
+   * One condition list per email trigger the flow has ON THIS MAILBOX (OR
+   * semantics): a message matches the flow when any list matches. A flow
+   * watching two different mailboxes appears once per mailbox group.
+   */
+  conditionSets: TriggerCondition[][];
 };
 
 export type EmailPollResult = {
@@ -290,17 +295,24 @@ function emailFlowsFrom(
 ): EmailFlow[] {
   const out: EmailFlow[] = [];
   for (const row of rows) {
-    const def = row.definition as
-      | { trigger?: { channel?: string; connectionId?: unknown; conditions?: unknown } }
-      | null;
-    const trig = def?.trigger;
-    if (trig?.channel !== "email" || typeof trig.connectionId !== "string") continue;
-    out.push({
-      id: row.id,
-      business_id: row.business_id,
-      connectionId: trig.connectionId,
-      conditions: Array.isArray(trig.conditions) ? (trig.conditions as TriggerCondition[]) : []
-    });
+    const def = row.definition as {
+      trigger?: { channel?: string; connectionId?: unknown; conditions?: unknown };
+      triggers?: Array<{ channel?: string; connectionId?: unknown; conditions?: unknown }>;
+    } | null;
+    // Collect every email trigger in the flow's set, merging the ones that
+    // watch the same mailbox into one entry (OR across condition lists) so a
+    // flow never appears twice in a mailbox group (the seen-marker math and
+    // the per-flow ref cache both key on flow id).
+    const byConnection = new Map<string, TriggerCondition[][]>();
+    for (const trig of [def?.trigger, ...(def?.triggers ?? [])]) {
+      if (trig?.channel !== "email" || typeof trig.connectionId !== "string") continue;
+      const sets = byConnection.get(trig.connectionId) ?? [];
+      sets.push(Array.isArray(trig.conditions) ? (trig.conditions as TriggerCondition[]) : []);
+      byConnection.set(trig.connectionId, sets);
+    }
+    for (const [connectionId, conditionSets] of byConnection) {
+      out.push({ id: row.id, business_id: row.business_id, connectionId, conditionSets });
+    }
   }
   return out;
 }
@@ -317,7 +329,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       .from("ai_flows")
       .select("id, business_id, definition")
       .eq("enabled", true)
-      .eq("definition->trigger->>channel", "email")
+      .or("definition->trigger->>channel.eq.email,definition->triggers.not.is.null")
       .order("id", { ascending: true })
       .range(offset, offset + EMAIL_POLL_FLOW_PAGE - 1);
     if (error) {
@@ -420,12 +432,14 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         try {
           // Cast: the full supabase-js builder type recurses too deep for TS
           // to check structurally against the resolver's minimal chain type.
+          // Refs are resolved over ALL the flow's condition lists at once (the
+          // resolver returns a ref->values map keyed per condition ref).
           refValuesByFlow.set(
             flow.id,
             await resolveFromMatchesRefValues(
               db as unknown as ContactRefSupabase,
               businessId,
-              flow.conditions
+              flow.conditionSets.flat()
             )
           );
         } catch (e) {
@@ -439,11 +453,13 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         for (const flow of group) {
           seenRows.push({ flow_id: flow.id, message_id: msg.id });
           if (
-            !evaluateTriggerConditions(
-              flow.conditions,
-              scope.windowText,
-              scope.from,
-              refValuesByFlow.get(flow.id)
+            !flow.conditionSets.some((conditions) =>
+              evaluateTriggerConditions(
+                conditions,
+                scope.windowText,
+                scope.from,
+                refValuesByFlow.get(flow.id)
+              )
             )
           )
             continue;

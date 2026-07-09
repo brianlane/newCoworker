@@ -43,9 +43,19 @@ export type WebhookFlowEventResult = {
   flowsMatched: number;
 };
 
-type WebhookFlow = { id: string; conditions: TriggerCondition[] };
+type WebhookFlow = {
+  id: string;
+  /** One condition list per webhook trigger in the flow's set (OR semantics). */
+  conditionSets: TriggerCondition[][];
+};
 
-/** Enabled `webhook` flows for a business. */
+/**
+ * Enabled flows with a `webhook` trigger anywhere in their trigger set: the
+ * primary `trigger` (SQL channel filter) OR the additional `triggers` array
+ * (fetched broadly — flows carrying extras are rare — then filtered here).
+ * A flow with several webhook triggers matches when ANY of its condition
+ * lists does, so each flow appears once with all its lists.
+ */
 async function loadWebhookFlows(
   db: SupabaseClient,
   businessId: string
@@ -55,13 +65,21 @@ async function loadWebhookFlows(
     .select("id, definition")
     .eq("business_id", businessId)
     .eq("enabled", true)
-    .eq("definition->trigger->>channel", "webhook");
+    .or("definition->trigger->>channel.eq.webhook,definition->triggers.not.is.null");
   if (error) throw new Error(`loadWebhookFlows: ${error.message}`);
   const out: WebhookFlow[] = [];
   for (const row of (data ?? []) as Array<{ id: string; definition: unknown }>) {
-    const def = row.definition as { trigger?: { conditions?: unknown } } | null;
-    const conds = def?.trigger?.conditions;
-    out.push({ id: row.id, conditions: Array.isArray(conds) ? (conds as TriggerCondition[]) : [] });
+    const def = row.definition as {
+      trigger?: { channel?: unknown; conditions?: unknown };
+      triggers?: Array<{ channel?: unknown; conditions?: unknown }>;
+    } | null;
+    const conditionSets: TriggerCondition[][] = [];
+    for (const trig of [def?.trigger, ...(def?.triggers ?? [])]) {
+      if (trig?.channel !== "webhook") continue;
+      const conds = trig.conditions;
+      conditionSets.push(Array.isArray(conds) ? (conds as TriggerCondition[]) : []);
+    }
+    if (conditionSets.length > 0) out.push({ id: row.id, conditionSets });
   }
   return out;
 }
@@ -93,23 +111,31 @@ export async function processWebhookFlowEvent(
   let matched = 0;
   const enqueuedFlowIds: string[] = [];
   for (const flow of flows) {
-    // Pre-resolve any from_matches saved-contact refs (fail CLOSED per flow,
-    // same policy as the tenant-email path).
-    let refValues: Map<string, string[]> | undefined;
-    try {
-      // Cast: the full supabase-js builder type recurses too deep for TS to
-      // check structurally against the resolver's minimal chain type.
-      refValues = await resolveFromMatchesRefValues(
-        db as unknown as ContactRefSupabase,
-        businessId,
-        flow.conditions
-      );
-    } catch (e) {
-      console.error("webhook from_matches ref resolution", e);
-      refValues = undefined;
+    // OR across the flow's webhook triggers: the first condition list that
+    // matches fires the flow (one run — the dedupe key is per event).
+    let anyMatched = false;
+    for (const conditions of flow.conditionSets) {
+      // Pre-resolve any from_matches saved-contact refs (fail CLOSED per flow,
+      // same policy as the tenant-email path).
+      let refValues: Map<string, string[]> | undefined;
+      try {
+        // Cast: the full supabase-js builder type recurses too deep for TS to
+        // check structurally against the resolver's minimal chain type.
+        refValues = await resolveFromMatchesRefValues(
+          db as unknown as ContactRefSupabase,
+          businessId,
+          conditions
+        );
+      } catch (e) {
+        console.error("webhook from_matches ref resolution", e);
+        refValues = undefined;
+      }
+      if (evaluateTriggerConditions(conditions, scope.windowText, scope.from, refValues)) {
+        anyMatched = true;
+        break;
+      }
     }
-    if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from, refValues))
-      continue;
+    if (!anyMatched) continue;
     matched += 1;
     const run = await enqueueAiFlowRun(
       { businessId, flowId: flow.id, trigger: scope, dedupeKey },

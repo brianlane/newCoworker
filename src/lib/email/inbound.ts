@@ -76,9 +76,17 @@ function bareEmail(raw: string): string {
   return (m ? m[1] : raw).trim();
 }
 
-type TenantEmailFlow = { id: string; conditions: TriggerCondition[] };
+type TenantEmailFlow = {
+  id: string;
+  /** One condition list per tenant_email trigger in the flow's set (OR). */
+  conditionSets: TriggerCondition[][];
+};
 
-/** Enabled tenant_email flows for a business (paged so none is skipped). */
+/**
+ * Enabled flows with a tenant_email trigger anywhere in their trigger set:
+ * primary `trigger` via the SQL channel filter, plus any flow carrying an
+ * additional `triggers` array (rare; filtered by channel here).
+ */
 async function loadTenantEmailFlows(
   db: SupabaseClient,
   businessId: string
@@ -88,13 +96,21 @@ async function loadTenantEmailFlows(
     .select("id, definition")
     .eq("business_id", businessId)
     .eq("enabled", true)
-    .eq("definition->trigger->>channel", "tenant_email");
+    .or("definition->trigger->>channel.eq.tenant_email,definition->triggers.not.is.null");
   if (error) throw new Error(`loadTenantEmailFlows: ${error.message}`);
   const out: TenantEmailFlow[] = [];
   for (const row of (data ?? []) as Array<{ id: string; definition: unknown }>) {
-    const def = row.definition as { trigger?: { conditions?: unknown } } | null;
-    const conds = def?.trigger?.conditions;
-    out.push({ id: row.id, conditions: Array.isArray(conds) ? (conds as TriggerCondition[]) : [] });
+    const def = row.definition as {
+      trigger?: { channel?: unknown; conditions?: unknown };
+      triggers?: Array<{ channel?: unknown; conditions?: unknown }>;
+    } | null;
+    const conditionSets: TriggerCondition[][] = [];
+    for (const trig of [def?.trigger, ...(def?.triggers ?? [])]) {
+      if (trig?.channel !== "tenant_email") continue;
+      const conds = trig.conditions;
+      conditionSets.push(Array.isArray(conds) ? (conds as TriggerCondition[]) : []);
+    }
+    if (conditionSets.length > 0) out.push({ id: row.id, conditionSets });
   }
   return out;
 }
@@ -136,23 +152,31 @@ export async function processInboundTenantEmail(
   let firstFlowId: string | null = null;
   let firstRunId: string | null = null;
   for (const flow of flows) {
-    // Pre-resolve any from_matches saved-contact refs to live identity values
-    // (phones + emails). A resolution failure fails CLOSED for this flow only.
-    let refValues: Map<string, string[]> | undefined;
-    try {
-      // Cast: the full supabase-js builder type recurses too deep for TS to
-      // check structurally against the resolver's minimal chain type.
-      refValues = await resolveFromMatchesRefValues(
-        db as unknown as ContactRefSupabase,
-        businessId,
-        flow.conditions
-      );
-    } catch (e) {
-      console.error("tenant_email from_matches ref resolution", e);
-      refValues = undefined;
+    // OR across the flow's tenant_email triggers: the first matching
+    // condition list fires the flow (one run — dedupe key is per message).
+    let anyMatched = false;
+    for (const conditions of flow.conditionSets) {
+      // Pre-resolve any from_matches saved-contact refs to live identity values
+      // (phones + emails). A resolution failure fails CLOSED for this flow only.
+      let refValues: Map<string, string[]> | undefined;
+      try {
+        // Cast: the full supabase-js builder type recurses too deep for TS to
+        // check structurally against the resolver's minimal chain type.
+        refValues = await resolveFromMatchesRefValues(
+          db as unknown as ContactRefSupabase,
+          businessId,
+          conditions
+        );
+      } catch (e) {
+        console.error("tenant_email from_matches ref resolution", e);
+        refValues = undefined;
+      }
+      if (evaluateTriggerConditions(conditions, scope.windowText, scope.from, refValues)) {
+        anyMatched = true;
+        break;
+      }
     }
-    if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from, refValues))
-      continue;
+    if (!anyMatched) continue;
     const run = await enqueueAiFlowRun(
       { businessId, flowId: flow.id, trigger: scope, dedupeKey: `email:${payload.messageId}` },
       db

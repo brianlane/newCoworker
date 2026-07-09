@@ -34,8 +34,12 @@ function b64url(text: string): string {
   return Buffer.from(text, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-function flowRow(id: string, trigger: unknown) {
-  return { id, business_id: BIZ, definition: { version: 1, trigger, steps: [] } };
+function flowRow(id: string, trigger: unknown, triggers?: unknown[]) {
+  return {
+    id,
+    business_id: BIZ,
+    definition: { version: 1, trigger, ...(triggers ? { triggers } : {}), steps: [] }
+  };
 }
 
 type SeenTable = {
@@ -54,8 +58,9 @@ type SeenTable = {
  */
 function dbWithRange(range: ReturnType<typeof vi.fn>, seen: SeenTable = {}) {
   const order = vi.fn(() => ({ range }));
-  const eq2 = vi.fn(() => ({ order }));
-  const eq1 = vi.fn(() => ({ eq: eq2 }));
+  // Listing chain: .select().eq(enabled).or(primary-email-or-has-extras).order().range()
+  const or = vi.fn(() => ({ order }));
+  const eq1 = vi.fn(() => ({ or }));
   const flowsSelect = vi.fn(() => ({ eq: eq1 }));
   const seenIn2 = vi.fn(() =>
     Promise.resolve(
@@ -319,6 +324,42 @@ describe("pollEmailTriggers", () => {
         subject: "New referral",
         providerMessageId: "m1"
       }),
+      expect.anything()
+    );
+  });
+
+  it("fires flows whose email trigger lives in the EXTRA triggers array, merging same-mailbox triggers (multi-trigger OR)", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [
+              { name: "From", value: "Leads <leads@rx.com>" },
+              { name: "Subject", value: "New referral" }
+            ],
+            mimeType: "text/plain",
+            body: { data: b64url("Open https://rfrl.to/abc now") }
+          }
+        }
+      } as never);
+    const res = await pollEmailTriggers(
+      dbWith([
+        // Primary is manual; TWO email triggers on the same mailbox live in
+        // the extras (one misses, one matches) — merged to one entry, one run.
+        flowRow("f-multi", { channel: "manual" }, [
+          emailTrigger([{ type: "contains", value: "unrelated" }]),
+          emailTrigger([{ type: "has_url" }])
+        ]),
+        // Extras with no email trigger anywhere → not an email flow at all.
+        flowRow("f-no-email", { channel: "manual" }, [{ channel: "webhook", conditions: [] }])
+      ])
+    );
+    expect(res).toEqual({ flows: 1, mailboxes: 1, messages: 1, enqueued: 1 });
+    expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "f-multi", dedupeKey: "email:m1" }),
       expect.anything()
     );
   });

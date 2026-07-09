@@ -12,6 +12,7 @@ import { AI_FLOW_DEFINITION_VERSION } from "./types.ts";
 import type {
   AiFlowDefinition,
   CorrelationMessage,
+  FlowTrigger,
   SmsTrigger,
   StepCondition,
   TriggerCondition,
@@ -742,12 +743,8 @@ export function extractLinkByText(html: string, matchText: string, baseUrl: stri
  * shape so a corrupt/legacy row fails fast as `failed` rather than throwing deep
  * in a step.
  */
-export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
-  if (!def || typeof def !== "object") return false;
-  const d = def as Record<string, unknown>;
-  if (d.version !== AI_FLOW_DEFINITION_VERSION) return false;
-  const trigger = d.trigger as Record<string, unknown> | undefined;
-  if (!trigger) return false;
+function isExecutableTrigger(trigger: Record<string, unknown> | undefined): boolean {
+  if (!trigger || typeof trigger !== "object") return false;
   switch (trigger.channel) {
     case "sms":
       if (!Array.isArray(trigger.conditions)) return false;
@@ -785,6 +782,33 @@ export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
       break;
     default:
       return false;
+  }
+  return true;
+}
+
+/**
+ * The full trigger set of a definition (OR semantics): the primary `trigger`
+ * plus any additional `triggers`. Every enqueue site iterates this so a flow
+ * with e.g. an SMS AND a webhook trigger starts from either event.
+ */
+export function flowTriggers(def: AiFlowDefinition): FlowTrigger[] {
+  return [def.trigger, ...(def.triggers ?? [])];
+}
+
+export function isExecutableDefinition(def: unknown): def is AiFlowDefinition {
+  if (!def || typeof def !== "object") return false;
+  const d = def as Record<string, unknown>;
+  if (d.version !== AI_FLOW_DEFINITION_VERSION) return false;
+  if (!isExecutableTrigger(d.trigger as Record<string, unknown> | undefined)) return false;
+  // Additional triggers (OR set): each must be a valid trigger shape itself.
+  // Voice never appears here (single-trigger only; the authoring validator
+  // rejects it, and isExecutableTrigger has no voice arm since voice flows
+  // run on the call path, not the batch worker).
+  if (d.triggers !== undefined) {
+    if (!Array.isArray(d.triggers)) return false;
+    for (const t of d.triggers) {
+      if (!isExecutableTrigger(t as Record<string, unknown>)) return false;
+    }
   }
   if (!Array.isArray(d.steps)) return false;
   for (const s of d.steps) {

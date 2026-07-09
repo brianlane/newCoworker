@@ -39,8 +39,12 @@ const microsoftConn = {
   connectionId: "nango-conn-2"
 };
 
-function flowRow(id: string, trigger: unknown, businessId = BIZ) {
-  return { id, business_id: businessId, definition: { version: 1, trigger, steps: [] } };
+function flowRow(id: string, trigger: unknown, businessId = BIZ, triggers?: unknown[]) {
+  return {
+    id,
+    business_id: businessId,
+    definition: { version: 1, trigger, ...(triggers ? { triggers } : {}), steps: [] }
+  };
 }
 
 const createdTrigger = (overrides: Record<string, unknown> = {}) => ({
@@ -61,8 +65,9 @@ const startTrigger = (leadMinutes: number, overrides: Record<string, unknown> = 
 /** Chainable service-client stub serving the (paged) ai_flows listing. */
 function dbWithRange(range: ReturnType<typeof vi.fn>) {
   const order = vi.fn(() => ({ range }));
-  const eq2 = vi.fn(() => ({ order }));
-  const eq1 = vi.fn(() => ({ eq: eq2 }));
+  // Listing chain: .select().eq(enabled).or(primary-calendar-or-has-extras).order().range()
+  const or = vi.fn(() => ({ order }));
+  const eq1 = vi.fn(() => ({ or }));
   const flowsSelect = vi.fn(() => ({ eq: eq1 }));
   return { from: vi.fn(() => ({ select: flowsSelect })) } as never;
 }
@@ -375,6 +380,38 @@ describe("pollCalendarTriggers", () => {
         event: "ai_flow_run_enqueued_calendar",
         message: expect.stringContaining("New calendar event")
       })
+    );
+  });
+
+  it("fires flows whose calendar trigger lives in the EXTRA triggers array (multi-trigger OR)", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            id: "ev1",
+            summary: "Roof estimate",
+            created: isoIn(-2),
+            organizer: { email: "leads@rx.com" },
+            start: { dateTime: isoIn(60) }
+          }
+        ]
+      }
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([
+        // Primary is manual; the calendar trigger is one of the extras.
+        flowRow("f-multi", { channel: "manual" }, BIZ, [
+          { channel: "calendar", on: "event_created" }
+        ]),
+        // Extras with no calendar trigger anywhere → not a calendar flow.
+        flowRow("f-no-cal", { channel: "manual" }, BIZ, [{ channel: "webhook", conditions: [] }])
+      ])
+    );
+    expect(res).toEqual({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
+    expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "f-multi", dedupeKey: "cal:ev1" }),
+      expect.anything()
     );
   });
 

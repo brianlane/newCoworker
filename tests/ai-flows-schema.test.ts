@@ -1178,6 +1178,72 @@ describe("trigger channels", () => {
     ).toThrow(AiFlowValidationError);
   });
 
+  it("accepts additional triggers (OR set) and summarizes the extra count", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      triggers: [
+        { channel: "webhook", conditions: [] },
+        { channel: "tenant_email", conditions: [{ type: "has_url" }] }
+      ],
+      steps: [{ id: "s1", type: "notify_owner", message: "lead!" }]
+    });
+    expect(def.triggers).toHaveLength(2);
+    expect(summarizeDefinition(def)).toContain("(or 2 other triggers)");
+    // Singular form for one extra.
+    const one = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      triggers: [{ channel: "webhook", conditions: [] }],
+      steps: [{ id: "s1", type: "notify_owner", message: "x" }]
+    });
+    expect(summarizeDefinition(one)).toContain("(or 1 other trigger)");
+  });
+
+  it("caps extra triggers at 4 and keeps voice single-trigger (both directions)", () => {
+    const step = { id: "s1", type: "notify_owner", message: "x" };
+    // 5 extras → zod cap.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        triggers: Array.from({ length: 5 }, () => ({ channel: "manual" })),
+        steps: [step]
+      })
+    ).toThrow(AiFlowValidationError);
+    // A voice PRIMARY cannot carry extras...
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+16025551234" },
+        triggers: [{ channel: "manual" }],
+        steps: [{ id: "v1", type: "voice_transfer", toE164: "+16025556789" }]
+      })
+    ).toThrow(AiFlowValidationError);
+    // ...and voice cannot BE an extra.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        triggers: [{ channel: "voice", fromE164: "+16025551234" }],
+        steps: [step]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("applies the from_matches exactly-one-sender rule to EXTRA triggers too", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        triggers: [
+          { channel: "sms", conditions: [{ type: "from_matches" }] } // no value, no ref
+        ],
+        steps: [{ id: "s1", type: "notify_owner", message: "x" }]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
   it("accepts a webhook trigger (push from the public API; conditions only)", () => {
     const def = parseAiFlowDefinition({
       version: 1,

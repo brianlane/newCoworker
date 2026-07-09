@@ -772,6 +772,10 @@ const stepSchema = z.discriminatedUnion("type", [
 export const aiFlowDefinitionSchema = z.object({
   version: z.literal(1),
   trigger: triggerSchema,
+  // Additional triggers (OR semantics): the flow starts when ANY of
+  // [trigger, ...triggers] fires. Capped at 4 extras (5 total). Voice is
+  // excluded from the set (single-trigger; enforced in semantics).
+  triggers: z.array(triggerSchema).max(4).optional(),
   steps: z.array(stepSchema).min(1).max(25),
   options: z
     .object({
@@ -1015,17 +1019,32 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
 
   // A from_matches trigger condition needs EXACTLY ONE sender source: a
   // literal `value` or a saved-contact `ref` (the discriminatedUnion member
-  // can't hold a refine). Applies to every condition-bearing channel.
-  const trigConditions = (def.trigger as { conditions?: TriggerCondition[] }).conditions ?? [];
-  for (const c of trigConditions) {
-    if (c.type !== "from_matches") continue;
-    if (!c.value && !c.ref) {
+  // can't hold a refine). Applies to every condition-bearing channel, across
+  // the whole trigger set.
+  const allTriggers = [def.trigger, ...(def.triggers ?? [])];
+  for (const trig of allTriggers) {
+    const trigConditions = (trig as { conditions?: TriggerCondition[] }).conditions ?? [];
+    for (const c of trigConditions) {
+      if (c.type !== "from_matches") continue;
+      if (!c.value && !c.ref) {
+        issues.push(
+          'A "from matches" condition needs a sender; enter text or pick a saved contact.'
+        );
+      } else if (c.value && c.ref) {
+        issues.push(
+          'A "from matches" condition sets both a text value and a saved contact; use only one.'
+        );
+      }
+    }
+  }
+
+  // Voice stays single-trigger: it runs on the real-time call path (the
+  // telnyx-voice-inbound webhook), not the batch worker, so it can neither
+  // join an OR set nor carry one.
+  if (def.triggers && def.triggers.length > 0) {
+    if (def.trigger.channel === "voice" || def.triggers.some((t) => t.channel === "voice")) {
       issues.push(
-        'A "from matches" condition needs a sender; enter text or pick a saved contact.'
-      );
-    } else if (c.value && c.ref) {
-      issues.push(
-        'A "from matches" condition sets both a text value and a saved contact; use only one.'
+        "A voice flow uses exactly one trigger; remove the additional triggers (voice runs on the live call path)."
       );
     }
   }
@@ -1444,6 +1463,9 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
           : `When a call comes in from ${t.fromE164 ?? t.fromRef?.label ?? "a saved contact"}`;
       break;
   }
+  // Additional OR triggers get a compact count; the primary keeps its prose.
+  const extra = def.triggers?.length ?? 0;
+  if (extra > 0) trigPart += ` (or ${extra} other trigger${extra === 1 ? "" : "s"})`;
   const stepTypes = def.steps.map((s) => s.type).join(" -> ");
   return `${trigPart}: ${stepTypes}`;
 }

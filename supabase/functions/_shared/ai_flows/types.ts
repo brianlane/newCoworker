@@ -743,6 +743,13 @@ export type AiFlowOptions = {
 export type AiFlowDefinition = {
   version: typeof AI_FLOW_DEFINITION_VERSION;
   trigger: FlowTrigger;
+  /**
+   * Additional triggers (OR semantics): the flow starts when ANY trigger in
+   * [trigger, ...triggers] fires. Capped at 4 extras (5 total). Voice flows
+   * stay single-trigger (they run on the real-time call path, not the batch
+   * worker) — enforced at write time by validateDefinitionSemantics.
+   */
+  triggers?: FlowTrigger[];
   steps: FlowStep[];
   options?: AiFlowOptions;
 };
