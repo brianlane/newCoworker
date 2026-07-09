@@ -1005,12 +1005,15 @@ export function AiFlowsManager({
       }
       // Best-effort salvage warnings: the draft loaded, but parts were
       // repaired/removed — tell the owner exactly what to double-check.
-      setAiWarnings(json.data.warnings ?? []);
+      const warnings = json.data.warnings ?? [];
+      setAiWarnings(warnings);
       const def = json.data.definition;
       setEditor((e) => ({
         id: e?.id ?? null,
         name: e?.name || "New automation",
-        enabled: e?.enabled ?? true,
+        // A salvaged draft (warnings present) must be REVIEWED before it can
+        // run: load it disabled, like the adapt hand-off does.
+        enabled: warnings.length > 0 ? false : (e?.enabled ?? true),
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
         captureStepScreenshots: e?.captureStepScreenshots ?? def.options?.captureStepScreenshots ?? false,
         ...triggerToEditorFields(def.trigger),
