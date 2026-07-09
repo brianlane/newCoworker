@@ -393,6 +393,78 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
+  it("carves out only the POST-discount fee amount when a coupon touched the fee line", async () => {
+    // Real-world shape from Truly Insurance's Jul 2026 first invoice: the
+    // monthly intro coupon ($84.00) was allocated proportionally by Stripe —
+    // $78.52 onto the plan line and $5.48 onto the carrier fee line. The
+    // customer effectively paid $19.50 − $5.48 = $14.02 for the fee, so the
+    // carve-out must keep $14.02, not $19.50 (which would claw back part of
+    // the plan discount they were granted).
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_disc" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_disc",
+          amount_paid: 21450, // 27900 + 1950 − 8400 coupon
+          lines: {
+            data: [
+              {
+                description: "1 × New Coworker Standard (at $279.00 / month)",
+                amount: 27900,
+                discount_amounts: [{ amount: 7852, discount: "di_1" }]
+              },
+              {
+                description: "Carrier registration (10DLC)",
+                amount: 1950,
+                discount_amounts: [{ amount: 548, discount: "di_1" }]
+              },
+              // Defensive branches: null discount_amounts array and a
+              // null-amount entry inside one must both count as 0.
+              {
+                description: "Carrier registration (10DLC) surcharge",
+                amount: 100,
+                discount_amounts: null
+              },
+              {
+                description: "Carrier registration (10DLC) adjustment",
+                amount: 50,
+                discount_amounts: [{ amount: null, discount: "di_1" }]
+              },
+              // A fee line discounted BELOW zero (e.g. a 100%-off comp
+              // coupon plus rounding) must clamp to 0, not go negative.
+              {
+                description: "Carrier registration (10DLC) comp",
+                amount: 25,
+                discount_amounts: [{ amount: 60, discount: "di_comp" }]
+              }
+            ]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_disc" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_disc", latest_charge: "ch_disc" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_disc" }) }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(21450),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    // Fee carve-out = (1950−548) + (100−0) + (50−0) + max(25−60, 0)
+    //               = 1402 + 100 + 50 + 0 = 1552.
+    // Refund = 21450 − 1552 = 19898.
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_disc", amount: 19898 })
+    );
+    expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({ amountCents: 19898 })
+    );
+  });
+
   it("skips the refund entirely when only the carrier fee was paid", async () => {
     const stripe = {
       subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_fee_only" }) },

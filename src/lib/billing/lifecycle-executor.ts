@@ -358,9 +358,24 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       // non-refundable — the TCR/carrier fees behind it are non-refundable
       // to us and the checkout discloses it. Carve its line(s) out of the
       // 30-day money-back amount.
+      //
+      // POST-DISCOUNT: Stripe allocates invoice-level coupons (e.g. the
+      // monthly-signup intro coupon) proportionally across ALL line items,
+      // including this fee line — on Truly Insurance's Jul 2026 invoice the
+      // customer effectively paid $14.02 for the $19.50 fee. Carving out the
+      // pre-discount `line.amount` would keep more than the customer
+      // actually paid for the fee, silently clawing back part of their plan
+      // discount. Subtract each fee line's `discount_amounts` so the
+      // carve-out matches real dollars paid.
       const carrierFeeCents = (invoice.lines?.data ?? [])
         .filter((line) => (line.description ?? "").includes(CARRIER_REGISTRATION_FEE_NAME))
-        .reduce((sum, line) => sum + (line.amount ?? 0), 0);
+        .reduce((sum, line) => {
+          const discounted = (line.discount_amounts ?? []).reduce(
+            (s, d) => s + (d.amount ?? 0),
+            0
+          );
+          return sum + Math.max((line.amount ?? 0) - discounted, 0);
+        }, 0);
       const refundCents = Math.min(Math.max(amountPaidCents - carrierFeeCents, 0), amountPaidCents);
       if (carrierFeeCents > 0) {
         logger.info("refund_latest_charge: carving out non-refundable carrier registration fee", {
