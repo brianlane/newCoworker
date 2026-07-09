@@ -98,20 +98,32 @@ export const STANDARD_FEATURES: string[] = [
   "Full browser skills: operates websites like a person (logins, forms, portals)"
 ];
 
+/**
+ * Every bullet here is SHIPPED product (enterprise feature buildout,
+ * Phases 1–6) or an explicit operational commitment — this list is what
+ * sales quotes, so keep it honest:
+ *  - team roles + access control: business_members + authz matrix (Phase 1)
+ *  - multi-business agency dashboard: active-business switcher (Phase 2)
+ *  - white-label dashboard: businesses.branding (Phase 3)
+ *  - designated models + voice picker: enterprise_models (Phase 4;
+ *    prebuilt professional voices, not cloning)
+ *  - custom compliance modules: compliance_module (Phase 5)
+ *  - SLA + dedicated support: permanent priority window + support card
+ *    (Phase 6)
+ */
 export const ENTERPRISE_FEATURES: string[] = [
   "Everything in Starter and Standard, plus:",
-  "Multi-tenant agency setup",
-  "White-label dashboard",
-  "SLA + dedicated support",
+  "Multi-business agency dashboard with one login",
+  "Team access with roles (managers & staff)",
+  "White-label dashboard (your name, logo, colors)",
+  "SLA + dedicated support, priority always on",
   "Custom compliance modules",
-  "Quarterly strategy reviews",
-  "Analytics and reporting",
   "Designated reasoning models",
-  "Priority access to new features",
-  "Custom call customization",
-  "Independent hardware deployment",
-  "Professional voice cloning available",
-  "Granular access control"
+  "Choice of professional voices",
+  "Custom usage limits and call customization",
+  "Independent hardware deployment & data residency",
+  "Quarterly strategy reviews",
+  "Priority access to new features"
 ];
 
 export type TierCard = {
