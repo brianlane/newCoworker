@@ -129,9 +129,11 @@ type EditorState = {
   /** Calendar trigger: which calendar(s) to watch. */
   calendarSource: "primary" | "shared" | "both";
   /** Calendar trigger: fire on new events, or ahead of an event's start. */
-  calendarOn: "event_created" | "event_start";
+  calendarOn: "event_created" | "event_start" | "event_end";
   /** Calendar trigger (event_start): minutes before the start to run. */
   calendarLeadMinutes: number;
+  /** Calendar trigger (event_end): minutes after the ACTUAL end to run (0 = right away). */
+  calendarFollowMinutes: number;
   /** Voice trigger: the E.164 caller id that fires inbound routing. */
   voiceFromE164: string;
   /** Voice trigger: a saved person whose live number matches the caller instead. */
@@ -181,6 +183,7 @@ function emptyEditor(): EditorState {
     calendarSource: "both",
     calendarOn: "event_created",
     calendarLeadMinutes: 30,
+    calendarFollowMinutes: 0,
     voiceFromE164: "",
     voiceFromRef: null,
     voiceDirection: "inbound",
@@ -229,6 +232,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "calendarSource"
   | "calendarOn"
   | "calendarLeadMinutes"
+  | "calendarFollowMinutes"
   | "voiceFromE164"
   | "voiceFromRef"
   | "voiceDirection"
@@ -247,6 +251,7 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     calendarSource: "both" as const,
     calendarOn: "event_created" as const,
     calendarLeadMinutes: 30,
+    calendarFollowMinutes: 0,
     voiceFromE164: "",
     voiceFromRef: null as PickerRef | null,
     voiceDirection: "inbound" as const,
@@ -287,7 +292,8 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
         conditions: trigger.conditions,
         calendarSource: trigger.calendar ?? "both",
         calendarOn: trigger.on,
-        calendarLeadMinutes: trigger.leadMinutes ?? 30
+        calendarLeadMinutes: trigger.leadMinutes ?? 30,
+        calendarFollowMinutes: trigger.followMinutes ?? 0
       };
     case "voice": {
       const scheduled =
@@ -549,6 +555,11 @@ function editorTrigger(s: EditorState): FlowTrigger {
         calendar: s.calendarSource,
         on: s.calendarOn,
         ...(s.calendarOn === "event_start" ? { leadMinutes: s.calendarLeadMinutes } : {}),
+        // 0 = fire right at the event's end, which is the schema default —
+        // only a real delay is stored.
+        ...(s.calendarOn === "event_end" && s.calendarFollowMinutes > 0
+          ? { followMinutes: s.calendarFollowMinutes }
+          : {}),
         conditions: sanitizeConditions(s.conditions)
       };
     case "voice":
@@ -1577,12 +1588,17 @@ export function AiFlowsManager({
                     setEditor({
                       ...editor,
                       calendarOn:
-                        ev.target.value === "event_start" ? "event_start" : "event_created"
+                        ev.target.value === "event_start"
+                          ? "event_start"
+                          : ev.target.value === "event_end"
+                            ? "event_end"
+                            : "event_created"
                     })
                   }
                 >
                   <option value="event_created">A new event is added to the calendar</option>
                   <option value="event_start">An event is about to start</option>
+                  <option value="event_end">An event has ended</option>
                 </select>
               </div>
               {editor.calendarOn === "event_start" && (
@@ -1602,6 +1618,29 @@ export function AiFlowsManager({
                       })
                     }
                   />
+                </div>
+              )}
+              {editor.calendarOn === "event_end" && (
+                <div>
+                  <label className={labelClass}>
+                    How long after the event ends (minutes, 0 = right away)
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    className={inputClass}
+                    value={editor.calendarFollowMinutes}
+                    onChange={(ev) =>
+                      setEditor({
+                        ...editor,
+                        calendarFollowMinutes: Math.max(0, Number(ev.target.value) || 0)
+                      })
+                    }
+                  />
+                  <p className="mt-1 text-[11px] text-parchment/40">
+                    Anchored to the event&apos;s actual end time — a 30-minute and a 2-hour
+                    appointment both follow up on schedule, no guessed wait needed.
+                  </p>
                 </div>
               )}
               <div>

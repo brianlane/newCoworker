@@ -15,6 +15,7 @@
  *      a `{{vars.x}}` / `{{trigger.x}}` that isn't in scope at that point.
  */
 import { z } from "zod";
+import { formatDurationMinutes } from "./duration";
 
 export const TRIGGER_CONDITION_TYPES = [
   "contains",
@@ -284,10 +285,15 @@ const calendarTriggerSchema = z
   .object({
     channel: z.literal("calendar"),
     calendar: z.enum(["primary", "shared", "both"]).optional(),
-    on: z.enum(["event_created", "event_start"]),
+    on: z.enum(["event_created", "event_start", "event_end"]),
     // min 1: the due window is [start - leadMinutes, start), so a zero lead
     // would be an empty window that can never fire.
     leadMinutes: z.number().int().min(1).max(1440).optional(),
+    // event_end only: run this long AFTER the event's actual end time (0 /
+    // omitted = right when it ends). Anchored to the event's real end, so a
+    // 30-minute and a 2-hour appointment both follow up correctly — no
+    // guessed sleep needed.
+    followMinutes: z.number().int().min(0).max(1440).optional(),
     conditions: z.array(conditionSchema).max(20)
   })
   .superRefine((t, ctx) => {
@@ -296,10 +302,16 @@ const calendarTriggerSchema = z
         code: "custom",
         message: "event_start mode needs leadMinutes (how long before the event to run)"
       });
-    } else if (t.on === "event_created" && t.leadMinutes !== undefined) {
+    } else if (t.on !== "event_start" && t.leadMinutes !== undefined) {
       ctx.addIssue({
         code: "custom",
         message: "leadMinutes only applies to event_start mode"
+      });
+    }
+    if (t.on !== "event_end" && t.followMinutes !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        message: "followMinutes only applies to event_end mode"
       });
     }
   });
@@ -1906,7 +1918,7 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
     case "schedule":
       trigPart =
         t.everyMinutes !== undefined
-          ? `Every ${t.everyMinutes} min`
+          ? `Every ${formatDurationMinutes(t.everyMinutes)}`
           : `Daily at ${t.time} (${t.timezone})`;
       break;
     case "email":
@@ -1930,8 +1942,12 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
     case "calendar": {
       const what =
         t.on === "event_start"
-          ? `${t.leadMinutes} min before a calendar event starts`
-          : "When a calendar event is created";
+          ? `${formatDurationMinutes(t.leadMinutes ?? 0)} before a calendar event starts`
+          : t.on === "event_end"
+            ? t.followMinutes !== undefined && t.followMinutes > 0
+              ? `${formatDurationMinutes(t.followMinutes)} after a calendar event ends`
+              : "When a calendar event ends"
+            : "When a calendar event is created";
       trigPart =
         t.conditions.length === 0
           ? what

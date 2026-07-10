@@ -12,6 +12,7 @@ import {
 } from "@/components/dashboard/aiflow-labels";
 import { SmsSegmentHint } from "@/components/dashboard/SmsSegmentHint";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import { formatDurationMinutes } from "@/lib/ai-flows/duration";
 import type { StepStats } from "@/lib/ai-flows/tree";
 
 /** How the workflow starts. Mirrors CHANNEL_LABELS in AiFlowsManager. */
@@ -98,14 +99,14 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
         <>
           <Row
             label="Correlation window"
-            value={`${trigger.correlationWindowMinutes ?? 10} minute(s)`}
+            value={formatDurationMinutes(trigger.correlationWindowMinutes ?? 10)}
           />
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
       {trigger.channel === "schedule" &&
         (trigger.everyMinutes !== undefined ? (
-          <Row label="Runs" value={`Every ${trigger.everyMinutes} minutes`} />
+          <Row label="Runs" value={`Every ${formatDurationMinutes(trigger.everyMinutes)}`} />
         ) : (
           <>
             <Row label="Time" value={`${trigger.time} (${trigger.timezone})`} />
@@ -143,8 +144,12 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
             label="Runs"
             value={
               trigger.on === "event_start"
-                ? `${trigger.leadMinutes ?? 0} minute(s) before an event starts`
-                : "When a new event is added"
+                ? `${formatDurationMinutes(trigger.leadMinutes ?? 0)} before an event starts`
+                : trigger.on === "event_end"
+                  ? (trigger.followMinutes ?? 0) > 0
+                    ? `${formatDurationMinutes(trigger.followMinutes ?? 0)} after an event ends (its actual end time)`
+                    : "Right when an event ends (its actual end time)"
+                  : "When a new event is added"
             }
           />
           <Row label="Watches" value={CALENDAR_SOURCE_LABELS[trigger.calendar ?? "both"]} />
@@ -155,7 +160,7 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
         <>
           <Row label="Direction" value="Outbound: you place the call" />
           {trigger.everyMinutes !== undefined ? (
-            <Row label="Auto-dial" value={`Every ${trigger.everyMinutes} minutes`} />
+            <Row label="Auto-dial" value={`Every ${formatDurationMinutes(trigger.everyMinutes)}`} />
           ) : trigger.time !== undefined && trigger.timezone !== undefined ? (
             <>
               <Row label="Auto-dial" value={`${trigger.time} (${trigger.timezone})`} />
@@ -275,7 +280,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.matchTemplates && step.matchTemplates.length > 0 && (
             <Row label="Email must contain all of" value={step.matchTemplates.join(", ")} mono />
           )}
-          <Row label="Look back" value={`${step.lookbackMinutes ?? 60} minutes`} />
+          <Row label="Look back" value={formatDurationMinutes(step.lookbackMinutes ?? 60)} />
           <Row
             label="Fill mode"
             value={
@@ -370,7 +375,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
       return (
         <>
           <Row label="Employee offer SMS" value={step.offerTemplate} />
-          <Row label="Minutes to respond" value={String(step.responseMinutes ?? 10)} />
+          <Row label="Time to respond" value={formatDurationMinutes(step.responseMinutes ?? 10)} />
           {step.agentName && <Row label="Pinned to" value={step.agentName} />}
           {step.agentRef && (
             <Row
@@ -408,7 +413,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               <div className="text-xs font-semibold text-parchment/60">After-hours offers</div>
               <Row
                 label="Window"
-                value={`Quiet ${step.offerWindow.quietStart} – ${step.offerWindow.quietEnd} (${step.offerWindow.timezone}), grace ${step.offerWindow.graceMinutes ?? 10} min`}
+                value={`Quiet ${step.offerWindow.quietStart} – ${step.offerWindow.quietEnd} (${step.offerWindow.timezone}), grace ${formatDurationMinutes(step.offerWindow.graceMinutes ?? 10)}`}
               />
             </div>
           )}
@@ -476,7 +481,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
       return (
         <>
           {step.minutes !== undefined ? (
-            <Row label="Waits" value={`${step.minutes} minute(s)`} />
+            <Row label="Waits" value={formatDurationMinutes(step.minutes)} />
           ) : (
             <Row label="Waits until" value={`${step.untilTime ?? "?"} (${step.timezone ?? "?"})`} />
           )}
@@ -489,7 +494,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Saves the reply as" value={step.saveAs ?? "reply_text"} mono />
           <Row
             label="Gives up after"
-            value={`${step.timeoutMinutes ?? 1440} minute(s) (reply becomes "no_reply")`}
+            value={`${formatDurationMinutes(step.timeoutMinutes ?? 1440)} (reply becomes "no_reply")`}
           />
         </>
       );

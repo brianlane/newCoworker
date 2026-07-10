@@ -953,7 +953,7 @@ describe("summarizeDefinition", () => {
         trigger: { channel: "schedule", everyMinutes: 60 },
         steps
       })
-    ).toBe("Every 60 min: notify_owner");
+    ).toBe("Every 1 hour: notify_owner");
     expect(
       summarizeDefinition({
         version: 1,
@@ -1014,7 +1014,7 @@ describe("summarizeDefinition", () => {
         },
         steps
       })
-    ).toBe("30 min before a calendar event starts (matching 1 condition(s)): notify_owner");
+    ).toBe("30 minutes before a calendar event starts (matching 1 condition(s)): notify_owner");
   });
 });
 
@@ -2346,5 +2346,83 @@ describe("voice trigger + voice steps", () => {
         steps: [outboundStep]
       })
     ).toThrow(/daily mode needs both time and timezone/);
+  });
+});
+
+describe("calendar event_end trigger", () => {
+  const steps = [{ id: "n", type: "notify_owner", message: "hi" }];
+
+  it("accepts event_end with and without followMinutes", () => {
+    const withFollow = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "calendar", on: "event_end", followMinutes: 60, conditions: [] },
+      steps
+    });
+    expect(withFollow.trigger.channel === "calendar" && withFollow.trigger.followMinutes).toBe(60);
+    // Omitted followMinutes = fire right at the event's end.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_end", conditions: [] },
+        steps
+      })
+    ).not.toThrow();
+  });
+
+  it("rejects followMinutes outside event_end mode and leadMinutes on event_end", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_created", followMinutes: 30, conditions: [] },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: {
+          channel: "calendar",
+          on: "event_start",
+          leadMinutes: 30,
+          followMinutes: 30,
+          conditions: []
+        },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_end", leadMinutes: 30, conditions: [] },
+        steps
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("summarizes an event_start trigger missing its lead as 0 minutes (defensive)", () => {
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_start", conditions: [] },
+        steps
+      } as never)
+    ).toBe("0 minutes before a calendar event starts: notify_owner");
+  });
+
+  it("summarizes event_end flows with the follow delay in the largest unit", () => {
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_end", followMinutes: 120, conditions: [] },
+        steps
+      } as never)
+    ).toBe("2 hours after a calendar event ends: notify_owner");
+    expect(
+      summarizeDefinition({
+        version: 1,
+        trigger: { channel: "calendar", on: "event_end", conditions: [] },
+        steps
+      } as never)
+    ).toBe("When a calendar event ends: notify_owner");
   });
 });

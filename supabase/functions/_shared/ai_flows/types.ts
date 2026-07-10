@@ -128,9 +128,15 @@ export type CalendarTrigger = {
   channel: "calendar";
   /** Which calendar(s) to watch. Default "both". */
   calendar?: "primary" | "shared" | "both";
-  on: "event_created" | "event_start";
+  on: "event_created" | "event_start" | "event_end";
   /** event_start only: run this many minutes before the event starts. */
   leadMinutes?: number;
+  /**
+   * event_end only: run this many minutes AFTER the event's actual end time
+   * (0 / omitted = right when it ends). Anchored to the event's real end, so
+   * follow-ups track the appointment's true length.
+   */
+  followMinutes?: number;
   /** AND-ed conditions; empty means "match every event". */
   conditions: TriggerCondition[];
 };
