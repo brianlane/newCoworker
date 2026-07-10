@@ -19,6 +19,7 @@
  *     recorded run history.
  */
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import {
   ArrowDown,
   ArrowUp,
@@ -269,9 +270,86 @@ function Connector({ dashed }: { dashed?: boolean }) {
   );
 }
 
+/** Width of the fixed step-picker panel (px); matches Tailwind w-[26rem]. */
+const PICKER_WIDTH = 416;
+/** Min gap between the picker panel and the window edges (px). */
+const PICKER_MARGIN = 8;
+
 /**
- * The "+" between nodes. In edit mode it expands into the categorized step
- * picker; read-only renders a plain dot.
+ * The step picker, rendered through a PORTAL as a fixed overlay anchored to
+ * the "+" that opened it. It deliberately lives OUTSIDE the canvas: inside,
+ * it would inherit the canvas zoom (unreadably small at 50%, gigantic at
+ * 200%) and get clipped by the viewport's overflow, so the full list of step
+ * types was never visible at once. Fixed positioning + its own max-height
+ * keeps every option on screen at any canvas zoom; it opens upward from a
+ * "+" in the lower half of the window so it never runs off the bottom.
+ */
+function StepPickerOverlay({
+  anchor,
+  addableTypes,
+  onPick,
+  onClose
+}: {
+  anchor: { x: number; y: number };
+  addableTypes: readonly StepType[];
+  onPick: (type: StepType) => void;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const left = Math.min(
+    Math.max(PICKER_MARGIN, anchor.x - PICKER_WIDTH / 2),
+    Math.max(PICKER_MARGIN, vw - PICKER_WIDTH - PICKER_MARGIN)
+  );
+  // Open toward the roomier side, and cap the panel's height to the space
+  // that side actually has (minus margins) so it can never run past the
+  // window edge — it scrolls internally instead.
+  const openUp = anchor.y > vh / 2;
+  const available = openUp ? anchor.y - PICKER_MARGIN * 2 : vh - anchor.y - PICKER_MARGIN * 2;
+  const maxHeight = Math.max(120, Math.min(vh * 0.7, available));
+  const position: CSSProperties = openUp
+    ? { left, bottom: Math.max(PICKER_MARGIN, vh - anchor.y + PICKER_MARGIN), maxHeight }
+    : { left, top: anchor.y + PICKER_MARGIN, maxHeight };
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
+      <div
+        role="menu"
+        aria-label="Choose a step to add"
+        style={position}
+        className="fixed z-50 w-[26rem] max-w-[calc(100vw-16px)] overflow-y-auto rounded-md border border-parchment/15 bg-deep-ink p-2 shadow-xl"
+      >
+        <div className="flex flex-wrap gap-1.5">
+          {addableTypes.map((t) => (
+            <button
+              key={t}
+              title={STEP_TYPE_HELP[t]}
+              onClick={() => onPick(t)}
+              className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-parchment/5 ${TONE_CLASSES[STEP_TONES[t]]}`}
+            >
+              {STEP_ICONS[t]} {STEP_TYPE_LABELS[t]}
+            </button>
+          ))}
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}
+
+/**
+ * The "+" between nodes. In edit mode it opens the fixed step-picker overlay
+ * (anchored to this button's on-screen position); read-only renders a plain
+ * connector dot.
  */
 function InsertPoint({
   container,
@@ -286,52 +364,43 @@ function InsertPoint({
   onInsertStep?: (container: StepContainerRef, index: number, type: StepType) => void;
   readOnly?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
-  const popupRef = useRef<HTMLDivElement | null>(null);
-  // The picker opens inside the canvas's scroll viewport, so near the bottom
-  // edge it would render clipped — bring it fully into view on open.
-  useEffect(() => {
-    if (open) popupRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [open]);
+  const [anchor, setAnchor] = useState<{ x: number; y: number } | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const open = anchor !== null;
   if (readOnly || !onInsertStep) {
     return <Connector />;
   }
   return (
     <div className="flex flex-col items-center">
       <Connector />
-      <div className="relative">
-        <button
-          onClick={() => setOpen((v) => !v)}
-          aria-label="Add a step here"
-          className={`flex h-5 w-5 items-center justify-center rounded-full border text-parchment/50 transition-colors hover:border-signal-teal hover:text-signal-teal ${
-            open ? "border-signal-teal text-signal-teal" : "border-parchment/25"
-          }`}
-        >
-          {open ? <X className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
-        </button>
-        {open && (
-          <div
-            ref={popupRef}
-            className="absolute left-1/2 top-7 z-20 w-64 -translate-x-1/2 rounded-md border border-parchment/15 bg-deep-ink p-2 shadow-xl"
-          >
-            <div className="flex flex-wrap gap-1.5">
-              {addableTypes.map((t) => (
-                <button
-                  key={t}
-                  title={STEP_TYPE_HELP[t]}
-                  onClick={() => {
-                    setOpen(false);
-                    onInsertStep(container, index, t);
-                  }}
-                  className={`inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] hover:bg-parchment/5 ${TONE_CLASSES[STEP_TONES[t]]}`}
-                >
-                  {STEP_ICONS[t]} {STEP_TYPE_LABELS[t]}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-      </div>
+      <button
+        ref={buttonRef}
+        onClick={() => {
+          if (open) {
+            setAnchor(null);
+            return;
+          }
+          const rect = buttonRef.current?.getBoundingClientRect();
+          if (rect) setAnchor({ x: rect.left + rect.width / 2, y: rect.bottom });
+        }}
+        aria-label="Add a step here"
+        className={`flex h-5 w-5 items-center justify-center rounded-full border text-parchment/50 transition-colors hover:border-signal-teal hover:text-signal-teal ${
+          open ? "border-signal-teal text-signal-teal" : "border-parchment/25"
+        }`}
+      >
+        {open ? <X className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
+      </button>
+      {anchor && (
+        <StepPickerOverlay
+          anchor={anchor}
+          addableTypes={addableTypes}
+          onPick={(t) => {
+            setAnchor(null);
+            onInsertStep(container, index, t);
+          }}
+          onClose={() => setAnchor(null)}
+        />
+      )}
       <Connector />
     </div>
   );
