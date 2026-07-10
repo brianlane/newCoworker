@@ -729,13 +729,20 @@ export function AiFlowsManager({
     // editorFromRow is deterministic, so this matches the editor initializer.
     return row ? JSON.stringify(editorFromRow(row)) : null;
   });
-  const editorDirty =
-    editor !== null && (editorBaseline === null || JSON.stringify(editor) !== editorBaseline);
-  useUnsavedChangesWarning(editorDirty);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
+  // Dirty = the draft drifted from its opened/saved snapshot, OR there's an
+  // ungenerated "Generate with AI" description sitting in the box (typing a
+  // prompt and leaving loses it just the same — the exact miss from Truly's
+  // first test of this guard).
+  const editorDirty =
+    editor !== null &&
+    (editorBaseline === null ||
+      JSON.stringify(editor) !== editorBaseline ||
+      aiPrompt.trim().length > 0);
+  useUnsavedChangesWarning(editorDirty);
   // Best-effort salvage notes from the last AI generate (shown until the next).
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
   const [emailConns, setEmailConns] = useState<EmailConnectionOption[]>([]);
