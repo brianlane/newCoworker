@@ -116,6 +116,23 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   outbound_call: <Phone className="h-4 w-4" />
 };
 
+/**
+ * "90 min" / "2 hours" / "3 days" — wait durations in the largest whole unit,
+ * so the canvas reads like the schedule it is ("gives up after 24 hours")
+ * instead of raw minute counts.
+ */
+function humanizeMinutes(minutes: number): string {
+  if (minutes % 1440 === 0) {
+    const d = minutes / 1440;
+    return `${d} day${d === 1 ? "" : "s"}`;
+  }
+  if (minutes % 60 === 0) {
+    const h = minutes / 60;
+    return `${h} hour${h === 1 ? "" : "s"}`;
+  }
+  return `${minutes} min`;
+}
+
 /** One-line node subtitle: the step's most identifying configured value. */
 function stepSubtitle(step: FlowStep): string {
   switch (step.type) {
@@ -137,10 +154,12 @@ function stepSubtitle(step: FlowStep): string {
       return step.prompt;
     case "sleep":
       return step.minutes !== undefined
-        ? `${step.minutes} min`
+        ? `waits ${humanizeMinutes(step.minutes)}`
         : `until ${step.untilTime ?? "?"} (${step.timezone ?? "?"})`;
     case "wait_for_reply":
-      return `from {{vars.${step.phoneVar}}}`;
+      // The timeout IS the follow-up cadence — without it the canvas can't
+      // show "nudge after 2 hours, again after 24" at a glance.
+      return `from {{vars.${step.phoneVar}}} · up to ${humanizeMinutes(step.timeoutMinutes ?? 1440)}`;
     case "branch":
       return step.question;
     case "extract_url":
