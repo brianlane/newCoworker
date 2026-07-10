@@ -57,6 +57,7 @@
     "ssh2": "^1.17.0",
     "stripe": "^22.3.0",
     "tailwindcss": "^4.2.2",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^4.4.3"
   },
   "devDependencies": {

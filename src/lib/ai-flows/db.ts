@@ -269,6 +269,12 @@ export type EnqueueAiFlowRunInput = {
   trigger: Record<string, unknown>;
   /** Exactly-once key per (flow, dedupeKey); null skips deduplication. */
   dedupeKey?: string | null;
+  /**
+   * When set, the worker's claim RPC skips the run until this ISO timestamp
+   * passes (same `earliest_claim_at` mechanism quiet-hour deferrals use).
+   * Lets bulk enqueues (lead-backlog import) drip runs out over time.
+   */
+  earliestClaimAt?: string | null;
 };
 
 /**
@@ -291,7 +297,8 @@ export async function enqueueAiFlowRun(
       status: "queued",
       context: { trigger: input.trigger },
       current_step: 0,
-      dedupe_key: input.dedupeKey ?? null
+      dedupe_key: input.dedupeKey ?? null,
+      ...(input.earliestClaimAt ? { earliest_claim_at: input.earliestClaimAt } : {})
     })
     .select(RUN_COLS)
     .single();

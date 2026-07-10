@@ -96,10 +96,33 @@ export function webhookEventKey(event: WebhookEventInput): string {
     .digest("hex");
 }
 
+/**
+ * How many enabled flows would evaluate a webhook event right now — the
+ * lead-backlog import's preview uses this to warn "0 webhook flows enabled,
+ * nothing will fire" before the owner commits an upload.
+ */
+export async function countEnabledWebhookFlows(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  return (await loadWebhookFlows(db, businessId)).length;
+}
+
+export type ProcessWebhookFlowEventOptions = {
+  /**
+   * When set, enqueued runs carry this `earliest_claim_at`, so the worker's
+   * claim RPC leaves them queued until the time passes — how the lead-backlog
+   * import drips a spreadsheet of events out instead of firing all at once.
+   */
+  earliestClaimAt?: string;
+};
+
 export async function processWebhookFlowEvent(
   businessId: string,
   event: WebhookEventInput,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: ProcessWebhookFlowEventOptions
 ): Promise<WebhookFlowEventResult> {
   const db = client ?? (await createSupabaseServiceClient());
 
@@ -138,7 +161,13 @@ export async function processWebhookFlowEvent(
     if (!anyMatched) continue;
     matched += 1;
     const run = await enqueueAiFlowRun(
-      { businessId, flowId: flow.id, trigger: scope, dedupeKey },
+      {
+        businessId,
+        flowId: flow.id,
+        trigger: scope,
+        dedupeKey,
+        ...(options?.earliestClaimAt ? { earliestClaimAt: options.earliestClaimAt } : {})
+      },
       db
     );
     if (!run) continue; // already enqueued by an earlier delivery/retry
