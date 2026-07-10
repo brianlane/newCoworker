@@ -282,6 +282,12 @@ function InsertPoint({
   readOnly?: boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const popupRef = useRef<HTMLDivElement | null>(null);
+  // The picker opens inside the canvas's scroll viewport, so near the bottom
+  // edge it would render clipped — bring it fully into view on open.
+  useEffect(() => {
+    if (open) popupRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [open]);
   if (readOnly || !onInsertStep) {
     return <Connector />;
   }
@@ -299,7 +305,10 @@ function InsertPoint({
           {open ? <X className="h-3 w-3" /> : <Plus className="h-3 w-3" />}
         </button>
         {open && (
-          <div className="absolute left-1/2 top-7 z-20 w-64 -translate-x-1/2 rounded-md border border-parchment/15 bg-deep-ink p-2 shadow-xl">
+          <div
+            ref={popupRef}
+            className="absolute left-1/2 top-7 z-20 w-64 -translate-x-1/2 rounded-md border border-parchment/15 bg-deep-ink p-2 shadow-xl"
+          >
             <div className="flex flex-wrap gap-1.5">
               {addableTypes.map((t) => (
                 <button
@@ -359,6 +368,7 @@ function NodeCard({
   const subtitle = stepSubtitle(step);
   return (
     <div
+      data-step-id={step.id}
       role={readOnly ? undefined : "button"}
       tabIndex={readOnly ? undefined : 0}
       onClick={readOnly ? undefined : () => onSelectStep?.(step.id)}
@@ -695,6 +705,19 @@ export function AiFlowCanvas(props: AiFlowCanvasProps) {
       window.removeEventListener("mouseup", onUp);
     };
   }, [panning]);
+
+  // Bring a node into view when it BECOMES selected. The manager selects a
+  // step the moment it is inserted, so a "+"-added step that lands below the
+  // viewport's fold scrolls into view instead of silently not fitting.
+  // Deliberately keyed on the selection only: config edits re-render steps on
+  // every keystroke and must not yank the scroll position around.
+  useEffect(() => {
+    if (!props.selectedId || props.selectedId === "trigger") return;
+    const node = viewportRef.current?.querySelector(
+      `[data-step-id="${CSS.escape(props.selectedId)}"]`
+    );
+    node?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [props.selectedId]);
 
   const startPan = (ev: React.MouseEvent) => {
     if (ev.button !== 0) return;

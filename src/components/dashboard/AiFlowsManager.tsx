@@ -22,6 +22,7 @@ import {
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import { LeadBacklogImport } from "@/components/dashboard/LeadBacklogImport";
 import {
   findStepById,
   flattenForDisplay,
@@ -2222,6 +2223,12 @@ export function AiFlowsManager({
           </Card>
         ))
       )}
+      {/* List view only (hidden while the editor is open): the header's
+          "Import leads" anchor points here. scroll-mt keeps the card clear of
+          the viewport edge when jumped to. */}
+      <div id="lead-backlog-import" className="scroll-mt-4">
+        <LeadBacklogImport businessId={businessId} />
+      </div>
     </div>
   );
 }
