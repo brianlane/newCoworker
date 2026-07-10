@@ -81,13 +81,14 @@ export async function POST(request: Request) {
     const verification = conn
       ? await verifyCalendlyToken(conn.accessToken)
       : ({ ok: false, reason: "request_failed" } as const);
-    if (verification.ok) {
-      await upsertCalendlyConnection({
-        businessId: body.businessId,
-        accountName: verification.name,
-        accountEmail: verification.email
-      });
-    }
+    // Success stamps the verified identity; failure CLEARS it — the card
+    // must never claim "Linked to <old account>" for a token that no
+    // longer verifies against that identity.
+    await upsertCalendlyConnection({
+      businessId: body.businessId,
+      accountName: verification.ok ? verification.name : null,
+      accountEmail: verification.ok ? verification.email : null
+    });
     const row = await getPublicCalendlyConnection(body.businessId);
     return successResponse({
       connection: row,
