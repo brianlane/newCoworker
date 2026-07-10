@@ -1171,6 +1171,15 @@ export function AiFlowsManager({
     }
   };
 
+  // The header's "Import leads" link targets this anchor, so it renders in
+  // BOTH views (below the editor too) — a hash jump mid-edit must land on a
+  // real element instead of silently doing nothing.
+  const importCard = (
+    <div id="lead-backlog-import" className="scroll-mt-4">
+      <LeadBacklogImport businessId={businessId} />
+    </div>
+  );
+
   if (editor) {
     // A flow with branch steps can't round-trip through the flat classic form,
     // so it always edits visually regardless of the stored preference.
@@ -1187,6 +1196,7 @@ export function AiFlowsManager({
           : INBOUND_VOICE_STEP_TYPES
         : VISUAL_BATCH_STEP_TYPES;
     return (
+      <div className="space-y-4">
       <Card className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-parchment">
@@ -2060,6 +2070,8 @@ export function AiFlowsManager({
           </button>
         </div>
       </Card>
+      {importCard}
+      </div>
     );
   }
 
@@ -2223,12 +2235,7 @@ export function AiFlowsManager({
           </Card>
         ))
       )}
-      {/* List view only (hidden while the editor is open): the header's
-          "Import leads" anchor points here. scroll-mt keeps the card clear of
-          the viewport edge when jumped to. */}
-      <div id="lead-backlog-import" className="scroll-mt-4">
-        <LeadBacklogImport businessId={businessId} />
-      </div>
+      {importCard}
     </div>
   );
 }
