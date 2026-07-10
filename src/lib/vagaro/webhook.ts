@@ -164,16 +164,30 @@ export type VagaroWebhookResult = {
   contactSynced: boolean;
 };
 
-/** The route's core: flow events + contact sync, isolated from each other. */
+/**
+ * The route's core: flow events + contact sync, isolated from each other.
+ *
+ * A contact-sync failure only logs (the flow result still returns). A
+ * flow-processing failure runs the contact sync FIRST, then rethrows so the
+ * route answers non-2xx and Vagaro redelivers — the retried flow event is
+ * deduped by event id, and the already-applied contact sync is idempotent
+ * (create-if-missing + fill-only).
+ */
 export async function processVagaroWebhookEvent(
   businessId: string,
   event: VagaroWebhookEvent
 ): Promise<VagaroWebhookResult> {
-  const flowResult = await processWebhookFlowEvent(businessId, {
-    source: "vagaro",
-    data: event.raw,
-    eventId: event.id ?? undefined
-  });
+  let flowResult: Awaited<ReturnType<typeof processWebhookFlowEvent>> | null = null;
+  let flowError: unknown = null;
+  try {
+    flowResult = await processWebhookFlowEvent(businessId, {
+      source: "vagaro",
+      data: event.raw,
+      eventId: event.id ?? undefined
+    });
+  } catch (err) {
+    flowError = err;
+  }
 
   let contactSynced = false;
   try {
@@ -185,6 +199,11 @@ export async function processVagaroWebhookEvent(
       eventId: event.id,
       error: err instanceof Error ? err.message : String(err)
     });
+  }
+
+  if (flowResult === null) {
+    // Only reachable via the catch above; rethrow after the sync ran.
+    throw flowError;
   }
 
   return {

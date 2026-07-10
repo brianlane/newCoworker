@@ -288,6 +288,19 @@ describe("processVagaroWebhookEvent", () => {
     expect(result.contactSynced).toBe(false);
   });
 
+  it("still runs the contact sync when flow processing fails, then rethrows for redelivery", async () => {
+    vi.mocked(processWebhookFlowEvent).mockRejectedValueOnce(new Error("flow engine down"));
+    await expect(
+      processVagaroWebhookEvent(BIZ, customerEvent({ name: "Joe", phone: "5551230000" }))
+    ).rejects.toThrow(/flow engine down/);
+    // The sync half already applied this delivery's contact.
+    expect(createCustomerMemory).toHaveBeenCalledWith(BIZ, {
+      customerE164: "+15551230000",
+      displayName: "Joe",
+      email: null
+    });
+  });
+
   it("logs a contact-sync failure without losing the flow result", async () => {
     vi.mocked(getCustomerMemory).mockRejectedValueOnce("weird failure");
     const result = await processVagaroWebhookEvent(
