@@ -22,6 +22,13 @@ import { listBusinessMembers } from "@/lib/db/business-members";
 import { listTeamMembers } from "@/lib/db/employees";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
+import { WebchatWidgetSettings } from "@/components/dashboard/WebchatWidgetSettings";
+import { webchatAllowedForTier } from "@/lib/webchat/tier-gate";
+import {
+  getOrCreateWidgetSettings,
+  getWidgetSettingsForBusiness
+} from "@/lib/webchat/db";
+import { parseWidgetTheme } from "@/lib/webchat/settings-schema";
 import {
   PERSONALIZE_TIERS,
   ensureTenantMailbox,
@@ -62,6 +69,14 @@ export default async function SettingsPage() {
     ? viewAs
       ? await getTenantMailbox(business.id)
       : await ensureTenantMailbox(business.id)
+    : null;
+  // Website chat widget (Standard+). Mint-on-first-read only outside
+  // view-as — view-as stays read-only (same rationale as the mailbox card).
+  const webchatTierAllowed = webchatAllowedForTier(business?.tier);
+  const widgetRow = business
+    ? viewAs || !webchatTierAllowed
+      ? await getWidgetSettingsForBusiness(business.id)
+      : await getOrCreateWidgetSettings(business.id)
     : null;
   // Team access is enterprise-only; fetch the roster (and the employee list
   // for the optional person-profile link) only when the card will render.
@@ -168,6 +183,24 @@ export default async function SettingsPage() {
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
+      )}
+
+      {business && (
+        <WebchatWidgetSettings
+          businessId={business.id}
+          tierAllowed={webchatTierAllowed}
+          initialSettings={
+            widgetRow
+              ? {
+                  enabled: widgetRow.enabled,
+                  publicKey: widgetRow.public_key,
+                  allowedOrigins: widgetRow.allowed_origins ?? [],
+                  requireContactForm: widgetRow.require_contact_form,
+                  theme: parseWidgetTheme(widgetRow.theme)
+                }
+              : null
+          }
+        />
       )}
 
       {business && (

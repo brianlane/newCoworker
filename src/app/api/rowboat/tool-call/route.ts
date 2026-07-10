@@ -16,6 +16,7 @@ import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import { captureWebchatLead } from "@/lib/webchat/lead-capture";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import { logger } from "@/lib/logger";
 
@@ -85,6 +86,14 @@ const sendEmailArgsSchema = z.object({
   bcc: z.union([z.string(), z.array(z.string())]).optional()
 });
 const knowledgeArgsSchema = z.object({ question: z.string().min(1).max(500) });
+const captureLeadArgsSchema = z.object({
+  name: z.string().max(200).optional(),
+  phone: z.string().max(32).optional(),
+  email: z.string().email().optional(),
+  interest: z.string().max(1000).optional(),
+  notes: z.string().max(2000).optional(),
+  sessionRef: z.string().max(64).optional()
+});
 const findSlotsArgsSchema = z.object({
   purpose: z.string().max(200).optional(),
   earliest: z.string().optional(),
@@ -128,7 +137,9 @@ const CUSTOMER_TOOL_SURFACES: Record<
 
 /** Strips the surface prefix: dashboard_customer_lookup_by_phone → customer_lookup_by_phone. */
 function baseToolKey(name: string): string {
-  return name.startsWith("dashboard_") ? name.slice("dashboard_".length) : name;
+  if (name.startsWith("dashboard_")) return name.slice("dashboard_".length);
+  if (name.startsWith("webchat_")) return name.slice("webchat_".length);
+  return name;
 }
 
 const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
@@ -147,6 +158,22 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   dashboard_calendar_find_slots: { agentKey: "dashboard", toolKey: "calendar_find_slots" },
   dashboard_calendar_book_appointment: {
     agentKey: "dashboard",
+    toolKey: "calendar_book_appointment"
+  },
+  // Website chat widget (anonymous internet surface): info + lead gen ONLY.
+  // This is the COMPLETE `webchat_*` allowlist — the WebchatCoworker agent
+  // seed declares exactly these names, and because TOOL_GATES doubles as the
+  // dispatch allowlist, no webchat-prefixed name can ever resolve to SMS,
+  // email, call, or image-generation fulfilment. Keep it that way: when new
+  // side-effect tools land on other surfaces, do NOT mint webchat_ twins.
+  webchat_business_knowledge_lookup: {
+    agentKey: "webchat",
+    toolKey: "business_knowledge_lookup"
+  },
+  webchat_capture_lead: { agentKey: "webchat", toolKey: "capture_lead" },
+  webchat_calendar_find_slots: { agentKey: "webchat", toolKey: "calendar_find_slots" },
+  webchat_calendar_book_appointment: {
+    agentKey: "webchat",
     toolKey: "calendar_book_appointment"
   },
   ...Object.fromEntries(
@@ -197,6 +224,13 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
       return lookupBusinessKnowledge(businessId, parsed.data.question);
+    }
+    case "capture_lead": {
+      const parsed = captureLeadArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return captureWebchatLead(businessId, parsed.data);
     }
     case "calendar_find_slots": {
       const parsed = findSlotsArgsSchema.safeParse(args);
