@@ -1138,12 +1138,13 @@ async function upsertCustomerStep(
 
 /**
  * Is this contact protected staff for update_contact purposes? True when the
- * stored row is typed owner/employee, or the phone sits on the
+ * stored row is typed owner/employee, or any of its numbers sits on the
  * ai_flow_team_members roster (active or not — a deactivated broker is still
- * staff), AND the business hasn't switched the protection off in Settings
- * (businesses.aiflow_protect_staff_contacts, default true). Best-effort on
- * the SETTING read only (defaults to protected); the roster read shares the
- * step's error handling via the caller.
+ * staff), or matches the business's own derived numbers (owner cell, forward
+ * number, the coworker's DID — owner rows are often typed "customer"), AND
+ * the business hasn't switched the protection off in Settings
+ * (businesses.aiflow_protect_staff_contacts, default true). Read errors fail
+ * SAFE (protected).
  */
 async function isProtectedStaffContact(
   supabase: Supabase,
@@ -1171,6 +1172,19 @@ async function isProtectedStaffContact(
       return true;
     }
     staff = member != null;
+  }
+  if (!staff) {
+    // Owner numbers are usually DERIVED (businesses.phone, the forward cell,
+    // the coworker's own DID) rather than stored as an owner-typed contact —
+    // an owner testing with their cell must be protected too. Normalize the
+    // stored values (businesses.phone may be a bare NANP string) before
+    // comparing against the contact's E.164 set.
+    const selfNumbers = new Set(
+      (await businessSelfNumbers(supabase, businessId))
+        .map((n) => (isE164(n) ? n : normalizeNanpToE164(n)))
+        .filter((n): n is string => Boolean(n))
+    );
+    staff = contactNumbers.some((n) => selfNumbers.has(n));
   }
   if (!staff) return false;
   const { data: biz, error: bizErr } = await supabase
