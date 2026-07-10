@@ -43,7 +43,16 @@ export default async function AdminDashboardPage() {
       listSystemLogErrorsAll(15),
       listVpsInventory(),
       listActiveEnterpriseDeals(),
-      getFleetCalendarMonthUsageTotals(),
+      // Best effort, like the AI spend read: a transient usage-read failure
+      // degrades the cost estimate to zero metered usage instead of erroring
+      // the whole dashboard.
+      getFleetCalendarMonthUsageTotals().catch((err: unknown) => {
+        console.error(
+          "admin dashboard: fleet usage rollup failed",
+          err instanceof Error ? err.message : err
+        );
+        return { smsSent: 0, voiceMinutes: 0 };
+      }),
       getFleetCurrentAiSpendMicros()
     ]);
 
