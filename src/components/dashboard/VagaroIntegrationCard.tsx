@@ -50,6 +50,7 @@ const inputClass =
 export function VagaroIntegrationCard({ businessId, initialConnection }: Props) {
   const [connection, setConnection] = useState<VagaroConnection | null>(initialConnection);
   const [services, setServices] = useState<VagaroService[]>([]);
+  const [servicesLoading, setServicesLoading] = useState(initialConnection !== null);
   const [servicesError, setServicesError] = useState<string | null>(null);
   const [clientId, setClientId] = useState(initialConnection?.client_id ?? "");
   const [clientSecret, setClientSecret] = useState("");
@@ -70,6 +71,7 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
   useEffect(() => {
     if (!connection) return;
     let cancelled = false;
+    setServicesLoading(true);
     (async () => {
       try {
         const res = await fetch(
@@ -78,11 +80,17 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
         const json = (await res.json()) as {
           data?: { services?: VagaroService[]; servicesError?: string | null };
         };
-        if (cancelled || !res.ok) return;
+        if (cancelled) return;
+        if (!res.ok) {
+          setServicesError("request_failed");
+          return;
+        }
         setServices(json.data?.services ?? []);
         setServicesError(json.data?.servicesError ?? null);
       } catch {
         if (!cancelled) setServicesError("request_failed");
+      } finally {
+        if (!cancelled) setServicesLoading(false);
       }
     })();
     return () => {
@@ -237,9 +245,11 @@ export function VagaroIntegrationCard({ businessId, initialConnection }: Props) 
               </select>
             ) : (
               <p className="text-xs text-parchment/40">
-                {servicesError
-                  ? "Couldn't load your Vagaro services — check the credentials below."
-                  : "Loading your Vagaro services…"}
+                {servicesLoading
+                  ? "Loading your Vagaro services…"
+                  : servicesError
+                    ? "Couldn't load your Vagaro services — check the credentials below."
+                    : "No bookable services found on your Vagaro account yet."}
               </p>
             )}
           </div>
