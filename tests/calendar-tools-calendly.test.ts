@@ -245,7 +245,7 @@ describe("findCalendlySlots", () => {
       windowStart: new Date(NOW - 60 * 60_000), // in the past → clamped forward
       windowEnd: new Date(NOW + 30 * 24 * 60 * 60_000) // 30 days → clamped to 7
     });
-    const call = vi.mocked(nangoProxyForBusiness).mock.calls[2][2] as {
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls[2][2] as unknown as {
       params: { start_time: string; end_time: string };
     };
     const start = Date.parse(call.params.start_time);
