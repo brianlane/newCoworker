@@ -188,7 +188,9 @@ export default async function SmsThreadPage({
                                 ? "You"
                                 : m.source === "owner_scheduled"
                                   ? "You · scheduled"
-                                  : "Assistant"}
+                                  : m.source === "voice_follow_up"
+                                    ? "Assistant · call follow-up"
+                                    : "Assistant"}
                     </span>
                     <span className="text-parchment/30 normal-case font-normal">
                       <LocalDateTime iso={m.timestamp} />

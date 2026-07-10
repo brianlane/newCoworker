@@ -160,6 +160,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "notify_team",
+        label: "Notify your team",
+        description:
+          "Alert you (dashboard, email, or text per your notification settings) when a caller needs something only your team can resolve.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description: "Look up the caller's cross-channel history so they're greeted as a known customer.",
