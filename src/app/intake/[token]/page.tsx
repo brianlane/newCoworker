@@ -34,7 +34,9 @@ export default async function IntakePage({
             NewCoworker · White-glove setup
           </p>
           <h1 className="mt-1 text-2xl font-bold text-parchment">
-            Tell us how your assistant should work
+            {intake.business_name
+              ? `Tell us how ${intake.business_name}'s assistant should work`
+              : "Tell us how your assistant should work"}
           </h1>
           <p className="mt-2 text-sm leading-relaxed text-parchment/60">
             About 5 minutes, mostly multiple choice. Your answers become the build plan our
@@ -43,20 +45,26 @@ export default async function IntakePage({
           </p>
         </div>
 
-        {intake.status === "sent" && <WhiteGloveIntakeForm token={token} />}
+        {intake.status === "sent" && (
+          <WhiteGloveIntakeForm token={token} industry={intake.industry} />
+        )}
 
         {intake.status === "completed" && (
           <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-4 py-3 text-sm text-claw-green">
             Thanks — we&apos;ve got everything we need! Our team will review your answers and
-            reach out with next steps. If anything changes, just reply to the email you
-            received.
+            reach out with next steps.
+            {intake.recipient_email
+              ? " If anything changes, just reply to the email you received."
+              : " If anything changes, just let your NewCoworker contact know."}
           </p>
         )}
 
         {intake.status === "revoked" && (
           <p className="rounded-md border border-spark-orange/40 bg-spark-orange/10 px-4 py-3 text-sm text-spark-orange">
-            This questionnaire link is no longer active. Reply to the email you received and
-            we&apos;ll send you a fresh one.
+            This questionnaire link is no longer active.
+            {intake.recipient_email
+              ? " Reply to the email you received and we'll send you a fresh one."
+              : " Reach out to your NewCoworker contact and we'll send you a fresh one."}
           </p>
         )}
       </div>

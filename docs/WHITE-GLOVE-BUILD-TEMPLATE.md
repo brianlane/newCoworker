@@ -4,20 +4,24 @@ This is the blank reference copy of the white-glove build template, distilled fr
 Lead Management PRD (`PRDs/Lead Management.pdf`) into a short, plain-English,
 industry-agnostic document.
 
-**Normal flow:** admins don't fill this out by hand — they send the prospect the intake
-questionnaire from the admin panel (All Clients → "White-glove setup questionnaires").
-The prospect answers on the public `/intake/<token>` page and the completed build
-document (this template, filled in) is generated at `/admin/intake-doc/<id>`, ready to
-print, save as PDF, or send. Keep this file for reference and for the rare
-offline/manual deal.
+**Normal flow:** admins don't fill this out by hand — they create the intake
+questionnaire from the admin panel (All Clients → "White-glove setup questionnaires"),
+supplying the business name and industry themselves (email optional — with one the link
+is emailed automatically, without one they get a shareable link). The prospect answers
+on the public `/intake/<token>` page and the completed build document (this template,
+filled in) is generated at `/admin/intake-doc/<id>`, ready to print, save as PDF, or
+send. Keep this file for reference and for the rare offline/manual deal.
+
+**De-duplication rule:** the questionnaire never re-asks anything the onboarding
+interview already collects (business name, industry, owner, phone, website, service
+area, team size, CRM, tone). Section 1 below is filled by the admin, not the prospect.
 
 ---
 
 ## 1. About the business
 
-- Business: ______________________________________
-- Industry: ______________________________________
-- Website: ______________________________________
+- Business (filled by our team): ______________________________________
+- Industry (filled by our team): ______________________________________
 - Business hours: ______________________________________
 
 ## 2. Team & handoffs
@@ -39,7 +43,6 @@ Leads are handed to (in order — name and mobile number per line):
 
 ## 4. The first message
 
-- Tone: ☐ Friendly and warm ☐ Professional and polished ☐ Casual and relaxed
 - Greeting (sent within 60 seconds of a new lead):
 
   > ______________________________________
