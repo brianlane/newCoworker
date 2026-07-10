@@ -290,9 +290,16 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
       // No caller context on the webhook path — the model must supply any
-      // attendee phone explicitly.
+      // attendee phone explicitly. Guidance is scoped to the two details
+      // where availability/escalation framing is TRUE: a generic book
+      // failure and a missing calendar. Other failures (invalid_window,
+      // Calendly link modes, ...) are not slot conflicts — telling the model
+      // "the time was taken" would send it retry-looping the same mistake.
       const booked = await bookCalendarAppointment(businessId, parsed.data, null);
-      if (!booked.ok && booked.detail) {
+      if (
+        !booked.ok &&
+        (booked.detail === "calendar_book_failed" || booked.detail === "calendar_not_connected")
+      ) {
         return { ...booked, message: bookFailureGuidance(name, booked.detail) };
       }
       return booked;

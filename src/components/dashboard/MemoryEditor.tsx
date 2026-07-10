@@ -166,9 +166,12 @@ export function MemoryEditor({
         setWebsiteMd(inner.websiteMd);
         // The ingest endpoint persisted this server-side already — reflect
         // that in the baseline so a successful re-crawl isn't flagged as an
-        // unsaved change.
+        // unsaved change. The input state is normalized to the same trimmed
+        // value, otherwise stray whitespace would keep `dirty` latched on.
         const crawled = inner.websiteMd;
-        setBaseline((prev) => ({ ...prev, websiteMd: crawled, websiteUrl: websiteUrl.trim() }));
+        const crawledUrl = websiteUrl.trim();
+        setWebsiteUrl(crawledUrl);
+        setBaseline((prev) => ({ ...prev, websiteMd: crawled, websiteUrl: crawledUrl }));
       }
       setRecrawl({
         status: "success",

@@ -537,6 +537,28 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(json.message).not.toContain("notify_team");
   });
 
+  it("attaches no guidance to non-availability booking failures (e.g. invalid_window)", async () => {
+    // "That time was taken" framing on a malformed window would send the
+    // model retry-looping the same mistake — only real slot/calendar
+    // failures get the availability message.
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: false,
+      detail: "invalid_window"
+    });
+    const args = {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z",
+      summary: "Estimate",
+      attendeeName: "Joe Plumber"
+    };
+    const content = makeContent("calendar_book_appointment", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const json = await res.json();
+    expect(json.detail).toBe("invalid_window");
+    expect(json.message).toBeUndefined();
+  });
+
   it("notify_team writes an urgent dashboard log and dispatches the owner notification", async () => {
     vi.mocked(dispatchUrgentNotification).mockResolvedValue({
       results: [{ channel: "sms", status: "sent" }]
