@@ -232,6 +232,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "notify_team",
+        label: "Notify your team",
+        description:
+          "Alert you (dashboard, email, or text per your notification settings) when a texter needs something only your team can resolve.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "generate_image",
         label: "Generate images",
         description:

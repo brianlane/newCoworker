@@ -294,7 +294,7 @@ export function systemInstructionForBusiness(
   // voice twin of the SMS worker's groundedActionsLine
   // (supabase/functions/sms-inbound-worker/index.ts) — keep in sync.
   const groundedActionsLine =
-    "You can only take real actions through your tools — saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success (a `booking_link_created` result is NOT a booking — the caller must finish it via the link you text them). A follow-up email is a plain email, not a calendar invite — never call it one. Never invent or guess email addresses, phone numbers, times, or confirmation details — ask instead. If you can't complete something, say so plainly and offer to have the team follow up — never pretend it worked.";
+    "You can only take real actions through your tools — saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success (a `booking_link_created` result is NOT a booking — the caller must finish it via the link you text them). If a booking fails, tell the caller that time is no longer available (never blame a technical error), re-check with `calendar_find_slots` before offering another option, and if a second booking also fails, stop offering times — call `notify_team` with their preferred day and time and say a team member will confirm. A follow-up email is a plain email, not a calendar invite — never call it one; a real calendar invite only goes out when the booking succeeded with the caller's email on it. Never invent or guess email addresses, phone numbers, times, or confirmation details — ask instead. If you can't complete something, say so plainly and offer to have the team follow up — never pretend it worked.";
 
   // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
   // the lead-intake/qualification script and talk to them as internal staff.
@@ -324,6 +324,10 @@ export function systemInstructionForBusiness(
       `${identityLine} (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
       groundedActionsLine,
       "You already have this caller's phone number (it's the line they're calling from), so never ask them to read back their number. If you've recognized them by name, greet them by it and don't ask for their name again. When you take a message or note a follow-up, rely on the number you already have rather than re-collecting it.",
+      // Conversation quality (twin of the SMS worker's
+      // conversationQualityLine — keep in sync): reuse what is known, vary
+      // the phrasing, respond to what the caller actually said.
+      "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared) — reuse it, including when booking an appointment. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
       currentDateTimeLine(new Date(), businessTimezone)
     );
   }

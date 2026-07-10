@@ -7,7 +7,10 @@ import {
   BUSINESS_CONFIG_IDENTITY_MD_MAX_CHARS,
   BUSINESS_CONFIG_SOUL_MD_MAX_CHARS
 } from "@/lib/vault/business-config-markdown-limits";
-import { useBusinessConfigSave } from "@/components/dashboard/useBusinessConfigSave";
+import {
+  useBusinessConfigSave,
+  useUnsavedChangesWarning
+} from "@/components/dashboard/useBusinessConfigSave";
 
 interface SoulEditorProps {
   businessId: string;
@@ -19,6 +22,9 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
   const [soul, setSoul] = useState(initialSoul);
   const [identity, setIdentity] = useState(initialIdentity);
   const { saving, saved, saveError, clearSaveError, save } = useBusinessConfigSave();
+  const [baseline, setBaseline] = useState({ soul: initialSoul, identity: initialIdentity });
+  const dirty = soul !== baseline.soul || identity !== baseline.identity;
+  useUnsavedChangesWarning(dirty);
 
   const charLimitIssue = useMemo(() => {
     if (soul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
@@ -32,11 +38,12 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
 
   async function handleSave() {
     if (charLimitIssue) return;
-    await save({
+    const ok = await save({
       businessId,
       soulMd: soul,
       identityMd: identity
     });
+    if (ok) setBaseline({ soul, identity });
   }
 
   return (
@@ -85,6 +92,7 @@ export function SoulEditor({ businessId, initialSoul, initialIdentity }: SoulEdi
           Save
         </Button>
         {saved && <span className="text-xs text-claw-green">✓ Saved</span>}
+        {dirty && !saving && <span className="text-xs text-amber-300/80">Unsaved changes</span>}
       </div>
     </div>
   );

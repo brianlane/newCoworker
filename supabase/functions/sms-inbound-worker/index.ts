@@ -804,11 +804,29 @@ serve(async (req: Request) => {
       "send the texter that link and ask them to complete the booking " +
       "there; never describe it as confirmed. " +
       "send_email sends a plain text email — it is NOT a calendar invite, so " +
-      "never call it one. Never invent or guess email addresses, phone " +
+      "never call it one. A real calendar invite only goes out when the " +
+      "booking succeeded WITH the texter's email address on it — if they " +
+      "want an invite, ask for their email before booking; otherwise don't " +
+      "mention invites. Never invent or guess email addresses, phone " +
       "numbers, times, or confirmation details — if you need one, ask for " +
-      "it. If a tool is unavailable, turned off, or fails, say plainly that " +
+      "it. If a booking fails, tell the texter that time is no longer " +
+      "available (never blame a technical error), re-check with " +
+      "calendar_find_slots before offering another option, and if a second " +
+      "booking also fails, stop offering times — call notify_team with " +
+      "their preferred day/time and say a team member will confirm. If any " +
+      "other tool is unavailable, turned off, or fails, say plainly that " +
       "you couldn't complete that step and that someone from the team will " +
       "follow up — never pretend it worked.";
+    // Conversation quality (from tenant feedback: repeated acknowledgements
+    // and re-asking for a name the lead already gave): reuse what is known,
+    // vary the phrasing. Customer path only — staff chat has no intake.
+    const conversationQualityLine =
+      "Conversation quality: never ask for information you already have " +
+      "from this conversation or the customer profile (their name, phone, " +
+      "email, or details they've shared) — reuse it, including when booking " +
+      "an appointment. Vary your acknowledgements instead of repeating the " +
+      "same phrase, and make each reply reflect what the texter just said " +
+      "rather than restating your previous message.";
     // Date awareness: without this the model cannot resolve "tomorrow at
     // 2pm" into the ISO times the calendar tools require. Business-local
     // when the owner set a timezone; UTC fallback otherwise.
@@ -866,7 +884,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${dateLine}\n\n${phoneLine}`;
+      const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${conversationQualityLine}\n\n${dateLine}\n\n${phoneLine}`;
       customerPreamble = memoryPreamble
         ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
         : dateAndPhoneLines;

@@ -661,6 +661,7 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_find_slots",
         "calendar_book_appointment",
         "send_email",
+        "notify_team",
         "generate_image"
       ]
     },
@@ -690,6 +691,7 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_find_slots",
         "calendar_book_appointment",
         "send_email",
+        "notify_team",
         "generate_image"
       ]
     },
@@ -923,6 +925,29 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["toEmail", "subject", "bodyText"]
+      }
+    },
+    {
+      name: "notify_team",
+      description: "Alert the business team (dashboard alert + owner notification) when the texter needs something only a human can resolve — e.g. they asked for a call, a booking could not be completed, or a question you cannot answer. Call this BEFORE telling the texter the team will follow up, so the promise is backed by a real notification.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          message: {
+            type: "string",
+            description: "What the team needs to do, in plain language, at most 1000 characters."
+          },
+          customerName: {
+            type: "string",
+            description: "Customer name if known."
+          },
+          customerPhone: {
+            type: "string",
+            description: "Customer phone if known (E.164 preferred)."
+          }
+        },
+        required: ["message"]
       }
     },
     {

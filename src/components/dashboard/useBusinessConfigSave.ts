@@ -19,7 +19,8 @@ export function useBusinessConfigSave() {
 
   const clearSaveError = useCallback(() => setSaveError(null), []);
 
-  const save = useCallback(async (body: Record<string, unknown>) => {
+  /** Returns true when the save persisted (lets callers reset dirty state). */
+  const save = useCallback(async (body: Record<string, unknown>): Promise<boolean> => {
     setSaving(true);
     setSaveError(null);
     if (savedTimerRef.current) {
@@ -30,17 +31,37 @@ export function useBusinessConfigSave() {
       const result = await postBusinessConfigSave(body);
       if (!result.ok) {
         setSaveError(result.errorMessage);
-        return;
+        return false;
       }
       setSaved(true);
       savedTimerRef.current = setTimeout(() => {
         setSaved(false);
         savedTimerRef.current = null;
       }, SAVED_INDICATOR_MS);
+      return true;
     } finally {
       setSaving(false);
     }
   }, []);
 
   return { saving, saved, saveError, clearSaveError, save };
+}
+
+/**
+ * Native leave-page prompt while an editor holds unsaved changes (tenant
+ * feedback: prompt edits were silently lost by navigating away). Covers tab
+ * close, reload, and hard navigation; browsers show their own generic
+ * wording, the string itself is ignored.
+ */
+export function useUnsavedChangesWarning(dirty: boolean): void {
+  useEffect(() => {
+    if (!dirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      // Chrome still requires returnValue for the prompt to appear.
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [dirty]);
 }
