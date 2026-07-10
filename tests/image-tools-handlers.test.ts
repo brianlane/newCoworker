@@ -236,6 +236,7 @@ describe("image-tools handlers", () => {
 
   describe("generateBusinessImage", () => {
     it("refuses with image_limit_reached when the session limiter is exhausted", async () => {
+      budgetOk();
       mockRateLimitDurable.mockResolvedValue({
         success: false,
         limit: IMAGE_SESSION_LIMIT,
@@ -319,6 +320,26 @@ describe("image-tools handlers", () => {
       expect(result.detail).toBe("ai_budget_exceeded");
       expect(mockSpendSnapshot).toHaveBeenCalledWith(BIZ, db, "starter");
       expect(mockGenerateImage).not.toHaveBeenCalled();
+      // A budget refusal must not consume a session slot.
+      expect(mockRateLimitDurable).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the flat image price would push spend past the cap (headroom check)", async () => {
+      mockSpendSnapshot.mockResolvedValue({
+        periodStart: "2026-07-01T00:00:00.000Z",
+        // 10M cap - 1k spend leaves less than the 34k lite image price.
+        spendMicros: 9_999_000,
+        baseCapMicros: 10_000_000,
+        creditMicros: 0,
+        effectiveCapMicros: 10_000_000
+      });
+      const db = stubDb();
+      const result = await generateBusinessImage(BIZ, "a cat", {
+        surface: "test",
+        client: db as never
+      });
+      expect(result.detail).toBe("ai_budget_exceeded");
+      expect(mockGenerateImage).not.toHaveBeenCalled();
     });
 
     it("passes a null tier when the business row is missing", async () => {
@@ -329,15 +350,16 @@ describe("image-tools handlers", () => {
       expect(mockSpendSnapshot).toHaveBeenCalledWith(BIZ, db, null);
     });
 
-    it("refuses when no Gemini key is configured", async () => {
+    it("refuses when no Gemini key is configured (before consuming a session slot)", async () => {
       delete process.env.GOOGLE_API_KEY;
-      budgetOk();
       const db = stubDb();
       const result = await generateBusinessImage(BIZ, "a cat", {
+        session: { surface: "dashboard", key: "t1" },
         surface: "test",
         client: db as never
       });
       expect(result).toEqual({ ok: false, detail: "image_generation_unavailable" });
+      expect(mockRateLimitDurable).not.toHaveBeenCalled();
     });
 
     it("falls back to GEMINI_API_KEY when GOOGLE_API_KEY is unset", async () => {
@@ -437,7 +459,7 @@ describe("image-tools handlers", () => {
       expect(mockRateLimitDurable).toHaveBeenCalled();
     });
 
-    it("returns image_store_failed when the upload errors", async () => {
+    it("returns image_store_failed when the upload errors — and does not charge for it", async () => {
       budgetOk();
       generationOk();
       const db = stubDb({ uploadError: { message: "bucket missing" } });
@@ -446,6 +468,7 @@ describe("image-tools handlers", () => {
         client: db as never
       });
       expect(result).toEqual({ ok: false, detail: "image_store_failed" });
+      expect(mockMeterSpend).not.toHaveBeenCalled();
     });
   });
 

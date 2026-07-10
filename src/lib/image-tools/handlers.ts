@@ -193,7 +193,38 @@ export async function generateBusinessImage(
     db = await createSupabaseServiceClient();
   }
 
-  // 1) Per-session limit (AiFlow runs pass no session and skip it).
+  // 1) Cheap refusals first — a misconfigured key or exhausted budget must
+  // NOT consume a session slot (the limiter below has no release path).
+  const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
+  if (!apiKey) {
+    return { ok: false, detail: "image_generation_unavailable" };
+  }
+  const model = imageModelFromEnv();
+
+  // 2) Shared AI-budget hard gate, INCLUDING headroom for this image's flat
+  // price so the charge can never push the business past the cap. Images
+  // have no free local fallback, so an over-budget business is refused
+  // outright (parity with voice).
+  const { data: bizRow } = await db
+    .from("businesses")
+    .select("tier")
+    .eq("id", businessId)
+    .maybeSingle();
+  const tier = (bizRow as { tier?: PlanTier | null } | null)?.tier ?? null;
+  const snapshot = await getChatSpendSnapshotForBusiness(businessId, db, tier);
+  if (snapshot.spendMicros + imageCostMicrosForModel(model) > snapshot.effectiveCapMicros) {
+    return {
+      ok: false,
+      detail: "ai_budget_exceeded",
+      message:
+        "The monthly AI budget is used up, so no more images can be generated this period."
+    };
+  }
+
+  // 3) Per-session limit (AiFlow runs pass no session and skip it). The slot
+  // is consumed for every ATTEMPTED generation from here on — deliberately,
+  // so a repeatedly-failing expensive call can't be retried unbounded (the
+  // limiter is the cost fuse; there is no decrement API).
   if (opts.session) {
     const limiterKey = `imggen:${businessId}:${opts.session.surface}:${opts.session.key}`;
     const limit = await rateLimitDurable(limiterKey, {
@@ -214,31 +245,7 @@ export async function generateBusinessImage(
     }
   }
 
-  // 2) Shared AI-budget hard gate. Images have no free local fallback, so an
-  // over-budget business is refused outright (parity with voice).
-  const { data: bizRow } = await db
-    .from("businesses")
-    .select("tier")
-    .eq("id", businessId)
-    .maybeSingle();
-  const tier = (bizRow as { tier?: PlanTier | null } | null)?.tier ?? null;
-  const snapshot = await getChatSpendSnapshotForBusiness(businessId, db, tier);
-  if (snapshot.spendMicros >= snapshot.effectiveCapMicros) {
-    return {
-      ok: false,
-      detail: "ai_budget_exceeded",
-      message:
-        "The monthly AI budget is used up, so no more images can be generated this period."
-    };
-  }
-
-  const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
-  if (!apiKey) {
-    return { ok: false, detail: "image_generation_unavailable" };
-  }
-  const model = imageModelFromEnv();
-
-  // 3) Generate.
+  // 4) Generate.
   let bytes: Buffer;
   let mimeType: string;
   try {
@@ -269,16 +276,9 @@ export async function generateBusinessImage(
     return { ok: false, detail: "image_generation_failed" };
   }
 
-  // 4) Meter the flat per-image cost into the shared AI budget.
-  await meterGeminiSpendForBusiness({
-    businessId,
-    model,
-    surface: opts.surface,
-    costMicrosOverride: imageCostMicrosForModel(model),
-    client: db
-  });
-
-  // 5) Store.
+  // 5) Store BEFORE metering: a storage failure yields no usable image, so
+  // the business must not be charged for it. (Google did bill the raw call,
+  // but under-counting a rare storage blip beats charging for nothing.)
   const path = `${businessId}/${randomUUID()}.${extensionForMime(mimeType)}`;
   const { error: uploadErr } = await db.storage
     .from(GENERATED_IMAGES_BUCKET)
@@ -287,6 +287,15 @@ export async function generateBusinessImage(
     logger.warn("image-tools: upload failed", { businessId, error: uploadErr.message });
     return { ok: false, detail: "image_store_failed" };
   }
+
+  // 6) Meter the flat per-image cost into the shared AI budget.
+  await meterGeminiSpendForBusiness({
+    businessId,
+    model,
+    surface: opts.surface,
+    costMicrosOverride: imageCostMicrosForModel(model),
+    client: db
+  });
 
   return { ok: true, data: { path, mimeType } };
 }

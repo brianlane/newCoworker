@@ -2768,7 +2768,7 @@ async function generateImageStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "generate_image" }>
 ): Promise<StepOutcome> {
-  const apiKey = Deno.env.get("GOOGLE_API_KEY") ?? "";
+  const apiKey = Deno.env.get("GOOGLE_API_KEY") ?? Deno.env.get("GEMINI_API_KEY") ?? "";
   if (!apiKey) {
     return { kind: "fail", error: "generate_image: no AI key is configured on this deployment" };
   }
@@ -2796,17 +2796,38 @@ async function generateImageStep(
     candidates?: Array<{
       content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> };
     }>;
+    usageMetadata?: {
+      promptTokenCount?: number;
+      candidatesTokenCount?: number;
+      thoughtsTokenCount?: number;
+    };
   };
   const inline = (body.candidates?.[0]?.content?.parts ?? []).find(
     (p) => typeof p?.inlineData?.data === "string" && p.inlineData.data.length > 0
   )?.inlineData;
   if (!inline?.data) {
+    // Google still bills an image-less response (thinking/text-only) by its
+    // token usage — meter that before failing, mirroring the coworker tools.
+    const um = body.usageMetadata;
+    const promptTokens = Number(um?.promptTokenCount ?? 0);
+    const outputTokens =
+      Number(um?.candidatesTokenCount ?? 0) + Number(um?.thoughtsTokenCount ?? 0);
+    if (
+      Number.isFinite(promptTokens) &&
+      Number.isFinite(outputTokens) &&
+      promptTokens + outputTokens > 0
+    ) {
+      await meterAiFlowSpend(
+        supabase,
+        run,
+        "generate_image",
+        0,
+        0,
+        geminiCostMicrosFromTokens(GEMINI_MODEL, promptTokens, outputTokens)
+      );
+    }
     return { kind: "fail", error: "generate_image: the model returned no image" };
   }
-
-  // Google bills per generated image — meter the flat list price.
-  const costMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
-  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, costMicros);
 
   const mimeType = inline.mimeType && inline.mimeType.length > 0 ? inline.mimeType : "image/png";
   const ext = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
@@ -2816,6 +2837,12 @@ async function generateImageStep(
     .from(GENERATED_IMAGES_BUCKET)
     .upload(path, new Blob([bytes], { type: mimeType }), { contentType: mimeType });
   if (upErr) throw new Error(`generate_image: upload failed: ${upErr.message}`);
+
+  // Meter AFTER the store succeeds: a storage failure yields no usable image,
+  // so the business is not charged for it. Google bills per generated image —
+  // the flat list price, not token math.
+  const costMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
+  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, costMicros);
 
   const { data: signed, error: signErr } = await supabase.storage
     .from(GENERATED_IMAGES_BUCKET)

@@ -46,16 +46,24 @@ export function InlineMarkdown({ text }: { text: string }) {
 
 /**
  * Markdown image, restricted to the owner-authenticated generated-image
- * proxy. Only same-origin `/api/dashboard/images/…` sources render as an
- * `<img>` — any other URL stays plain text, so the model can never embed an
- * arbitrary remote image (tracking pixels, mixed content) in owner chat.
+ * proxy. Only a same-origin `/api/dashboard/images/<uuid>/<uuid>.<ext>`
+ * source (the exact shape the generator writes) renders as an `<img>` — any
+ * other URL stays plain text, so the model can never embed an arbitrary
+ * remote image (tracking pixels, mixed content) in owner chat. The src is
+ * REBUILT from the strictly-charset-limited match groups (hex/dash uuids +
+ * a whitelisted extension) rather than echoing matched text, so no
+ * model-controlled bytes ever reach the attribute.
  */
-const IMAGE_MD_RE = /^!\[([^\]]*)\]\((\/api\/dashboard\/images\/[^\s)]+)\)$/;
+const IMAGE_MD_RE =
+  /^!\[([^\]]*)\]\(\/api\/dashboard\/images\/([0-9a-f-]{36})\/([0-9a-f-]{36})\.(png|jpg|jpeg|webp)\)$/i;
 
 export function chatImageFromLine(line: string): { alt: string; src: string } | null {
   const m = IMAGE_MD_RE.exec(line.trim());
   if (!m) return null;
-  return { alt: m[1] || "Generated image", src: m[2] };
+  return {
+    alt: m[1] || "Generated image",
+    src: `/api/dashboard/images/${m[2].toLowerCase()}/${m[3].toLowerCase()}.${m[4].toLowerCase()}`
+  };
 }
 
 /**
