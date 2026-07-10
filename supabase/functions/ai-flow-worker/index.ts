@@ -1148,16 +1148,20 @@ async function upsertCustomerStep(
 async function isProtectedStaffContact(
   supabase: Supabase,
   businessId: string,
-  e164: string,
+  contactNumbers: string[],
   storedType: string | null | undefined
 ): Promise<boolean> {
   let staff = storedType === "owner" || storedType === "employee";
   if (!staff) {
+    // Roster check spans EVERY number attached to the contact row (primary +
+    // merged aliases + the targeted number): the contact lookup is
+    // alias-aware, so protection must be too — a flow targeting an alias of
+    // a broker's row is still targeting the broker.
     const { data: member, error } = await supabase
       .from("ai_flow_team_members")
       .select("id")
       .eq("business_id", businessId)
-      .eq("phone_e164", e164)
+      .in("phone_e164", contactNumbers)
       .limit(1)
       .maybeSingle();
     if (error) {
@@ -1204,12 +1208,18 @@ async function updateContactStep(
   }
   const { data, error } = await supabase
     .from("contacts")
-    .select("id, tags, type")
+    .select("id, tags, type, customer_e164, alias_e164s")
     .eq("business_id", run.business_id)
     .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
     .maybeSingle();
   if (error) throw new Error(`update_contact lookup: ${error.message}`);
-  const contact = data as { id: string; tags?: string[] | null; type?: string | null } | null;
+  const contact = data as {
+    id: string;
+    tags?: string[] | null;
+    type?: string | null;
+    customer_e164?: string | null;
+    alias_e164s?: string[] | null;
+  } | null;
   if (!contact) {
     appendActionTaken(
       scope,
@@ -1225,9 +1235,17 @@ async function updateContactStep(
   // tags never land on the owner or a roster member — the classic trap is an
   // employee testing a flow with their own number (upsert_customer has the
   // same philosophy via its known-business-contact guard). Staff = a stored
-  // owner/employee type, OR a phone on the ai_flow_team_members roster (the
-  // roster is authoritative even when the stored row is typed "customer").
-  if (await isProtectedStaffContact(supabase, run.business_id, action.e164, contact.type)) {
+  // owner/employee type, OR any of the row's numbers (primary, merged
+  // aliases, the targeted number) on the ai_flow_team_members roster — the
+  // roster is authoritative even when the stored row is typed "customer".
+  const contactNumbers = [
+    ...new Set(
+      [action.e164, contact.customer_e164 ?? "", ...(contact.alias_e164s ?? [])].filter(Boolean)
+    )
+  ];
+  if (
+    await isProtectedStaffContact(supabase, run.business_id, contactNumbers, contact.type)
+  ) {
     appendActionTaken(
       scope,
       `skipped a contact-tag update (${action.e164} is a staff contact; protection is on in Settings)`
