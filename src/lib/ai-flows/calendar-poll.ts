@@ -32,6 +32,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness, type NangoWorkspaceLink } from "@/lib/nango/workspace";
 import {
+  isWorkspaceCalendarProvider,
   resolveCalendarConnection,
   type ResolvedVoiceConnection
 } from "@/lib/voice-tools/connections";
@@ -476,9 +477,11 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
-      // Calendly connections have no pollable calendar (the fetchers below
-      // speak Google/Graph only) — treat them as not connected for triggers.
-      if (!conn || conn.provider === "calendly") throw new Error("calendar_not_connected");
+      // Calendly/Vagaro connections have no pollable calendar (the fetchers
+      // below speak Google/Graph only) — not connected for triggers.
+      if (!conn || !isWorkspaceCalendarProvider(conn.provider)) {
+        throw new Error("calendar_not_connected");
+      }
       const link: NangoWorkspaceLink = {
         connectionId: conn.connectionId,
         providerConfigKey: conn.providerConfigKey
