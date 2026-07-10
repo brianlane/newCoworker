@@ -309,10 +309,15 @@ function StepPickerOverlay({
     Math.max(PICKER_MARGIN, anchor.x - PICKER_WIDTH / 2),
     Math.max(PICKER_MARGIN, vw - PICKER_WIDTH - PICKER_MARGIN)
   );
+  // Open toward the roomier side, and cap the panel's height to the space
+  // that side actually has (minus margins) so it can never run past the
+  // window edge — it scrolls internally instead.
   const openUp = anchor.y > vh / 2;
+  const available = openUp ? anchor.y - PICKER_MARGIN * 2 : vh - anchor.y - PICKER_MARGIN * 2;
+  const maxHeight = Math.max(120, Math.min(vh * 0.7, available));
   const position: CSSProperties = openUp
-    ? { left, bottom: Math.max(PICKER_MARGIN, vh - anchor.y + PICKER_MARGIN) }
-    : { left, top: anchor.y + PICKER_MARGIN };
+    ? { left, bottom: Math.max(PICKER_MARGIN, vh - anchor.y + PICKER_MARGIN), maxHeight }
+    : { left, top: anchor.y + PICKER_MARGIN, maxHeight };
 
   return createPortal(
     <>
@@ -321,7 +326,7 @@ function StepPickerOverlay({
         role="menu"
         aria-label="Choose a step to add"
         style={position}
-        className="fixed z-50 w-[26rem] max-w-[calc(100vw-16px)] max-h-[70vh] overflow-y-auto rounded-md border border-parchment/15 bg-deep-ink p-2 shadow-xl"
+        className="fixed z-50 w-[26rem] max-w-[calc(100vw-16px)] overflow-y-auto rounded-md border border-parchment/15 bg-deep-ink p-2 shadow-xl"
       >
         <div className="flex flex-wrap gap-1.5">
           {addableTypes.map((t) => (
