@@ -21,6 +21,7 @@ import {
   deleteVagaroConnection,
   getActiveVagaroConnection,
   getPublicVagaroConnection,
+  getVagaroConnection,
   setVagaroBookingDefaults,
   upsertVagaroConnection,
   VagaroConnectionValidationError
@@ -95,9 +96,21 @@ export async function POST(request: Request) {
     // Verify the credentials end-to-end and hand back the service catalog
     // for the default-service picker. A failed verification keeps the row
     // (the owner can fix a typo'd secret with another save) but reports it.
+    // Verification reads the row regardless of is_active — a soft-disabled
+    // connection must never short-circuit into a fake `verified: true`.
     try {
-      const conn = await getActiveVagaroConnection(body.businessId);
-      const services = conn ? await listVagaroServices(conn) : [];
+      const conn = await getVagaroConnection(body.businessId);
+      if (!conn) {
+        // Unreachable in practice (we just upserted), but never claim a
+        // verification we didn't perform.
+        return successResponse({
+          connection: row,
+          verified: false,
+          verifyError: "request_failed",
+          services: []
+        });
+      }
+      const services = await listVagaroServices(conn);
       return successResponse({ connection: row, verified: true, services });
     } catch (err) {
       const code = err instanceof VagaroApiError ? err.code : "request_failed";
