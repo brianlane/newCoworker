@@ -295,6 +295,20 @@ describe("salvageFlowDefinition: semantic repair loop", () => {
     expect(r.type === "route_to_team" && r.ownerDirectTemplate).toBeUndefined();
   });
 
+  it("mends a send_sms whose mediaUrlVar no earlier step produces (keeps the text send)", () => {
+    const res = salvageFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        { id: "s", type: "send_sms", to: "+16025551234", body: "hi", mediaUrlVar: "ghost_img" }
+      ]
+    });
+    const s = res!.definition.steps[0];
+    expect(s.type).toBe("send_sms");
+    expect(s.type === "send_sms" && s.mediaUrlVar).toBeUndefined();
+    expect(res!.warnings.join(" ")).toContain("Adjusted step 1");
+  });
+
   it("mends a send_sms with multiple recipients (to > toAgentName > replyToGroup)", () => {
     const keepTo = salvageFlowDefinition({
       version: 1,

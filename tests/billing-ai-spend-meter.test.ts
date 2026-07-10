@@ -469,6 +469,33 @@ describe("meterGeminiSpendForBusiness", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("uses a flat costMicrosOverride verbatim (image models bill per image)", async () => {
+    const db = stubDb({ creditResult: { data: 0, error: null } });
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-lite-image",
+      surface: "generate_image",
+      // Usage present but IGNORED: the override wins over token math.
+      usage: { promptTokens: 999_999, outputTokens: 999_999 },
+      costMicrosOverride: 33_999.2,
+      client: db as never
+    });
+    const call = db.rpc.mock.calls.find((c) => c[0] === "owner_chat_record_spend");
+    expect((call![1] as Record<string, unknown>).p_cost_micros).toBe(34_000);
+  });
+
+  it("clamps a negative costMicrosOverride to zero and skips the write", async () => {
+    const db = stubDb({});
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-lite-image",
+      surface: "generate_image",
+      costMicrosOverride: -5,
+      client: db as never
+    });
+    expect(db.rpc).not.toHaveBeenCalled();
+  });
+
   it("creates a service client when none is injected", async () => {
     const db = stubDb({});
     mockCreateClient.mockResolvedValue(db as never);

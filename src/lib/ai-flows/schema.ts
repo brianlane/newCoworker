@@ -43,6 +43,7 @@ export const FLOW_STEP_TYPES = [
   "upsert_customer",
   "update_contact",
   "classify",
+  "generate_image",
   // Voice-channel steps (real-time call routing, executed by the Telnyx voice
   // webhook state machine; NOT the async ai-flow-worker). Only valid under a
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
@@ -586,6 +587,13 @@ const nonBranchStepMembers = [
      */
     replyToGroup: z.boolean().optional(),
     /**
+     * Attach the image URL held in this var (produced by an earlier
+     * generate_image step) so the text goes out as MMS. An empty/unset var at
+     * run time degrades to a plain text send — an image hiccup must not block
+     * the message.
+     */
+    mediaUrlVar: varName.optional(),
+    /**
      * Send to a single named roster member (ai_flow_team_members) instead of a
      * templated address; the worker resolves their current phone at run time,
      * so the number stays correct as the roster changes. When set, the body may
@@ -747,6 +755,19 @@ const nonBranchStepMembers = [
     phoneVar: varName,
     nameVar: varName.optional(),
     emailVar: varName.optional(),
+    when: whenSchema.optional()
+  }),
+  // Generate an AI image from a prompt template and save a signed URL to the
+  // stored image as {{vars.<saveAs>}} — consumable by a later send_sms
+  // (mediaUrlVar → MMS) or embedded in a send_email body. Metered into the
+  // shared AI budget at the flat per-image price; hard-refused when the
+  // budget is exhausted. AiFlow runs are exempt from the conversational
+  // 3-per-session limit (flows are owner-authored and explicitly enabled).
+  z.object({
+    id: stepId,
+    type: z.literal("generate_image"),
+    promptTemplate: z.string().min(1).max(2000),
+    saveAs: varName,
     when: whenSchema.optional()
   }),
   // Classify a message into exactly one author-defined category (or the
@@ -1005,6 +1026,8 @@ function templateStringsForStep(step: FlowStep): string[] {
       return step.actions.map((a) => a.valueTemplate ?? "");
     case "email_extract":
       return step.matchTemplates ?? [];
+    case "generate_image":
+      return [step.promptTemplate];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1530,6 +1553,19 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
+    // The MMS attachment reads the image URL from a var an EARLIER
+    // generate_image step must have produced (same scope rule as urlVar).
+    if (
+      step.type === "send_sms" &&
+      step.mediaUrlVar &&
+      !vars.has(step.mediaUrlVar) &&
+      !ENGINE_VARS.has(step.mediaUrlVar)
+    ) {
+      issues.push(
+        `Step "${step.id}" attaches an image from {{vars.${step.mediaUrlVar}}} which no earlier step produces.`
+      );
+    }
+
     // The quiet-hours email fallback reads the lead email from a var an
     // EARLIER step must have produced (same scope rule as urlVar / when).
     if (
@@ -1623,6 +1659,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs ?? "reply_text");
     } else if (step.type === "classify") {
       vars.add(step.saveAs);
+    } else if (step.type === "generate_image") {
+      vars.add(step.saveAs);
     }
   };
 
@@ -1698,6 +1736,12 @@ function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean
   if (/ownerDirectWhen and ownerDirectTemplate together/.test(issue)) {
     delete step.ownerDirectWhen;
     delete step.ownerDirectTemplate;
+    return true;
+  }
+  // An MMS attachment var no earlier step produces: the text itself is still
+  // what the owner wants — send it without the image.
+  if (/attaches an image from/.test(issue)) {
+    delete step.mediaUrlVar;
     return true;
   }
   // Multiple SMS recipients: keep the strongest single source.

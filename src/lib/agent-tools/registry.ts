@@ -69,6 +69,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "generate_image",
+        label: "Generate images",
+        description:
+          "Create an AI-generated image in chat when you explicitly ask for one (limit 3 per conversation; uses your AI budget).",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "business_knowledge_lookup",
         label: "Business knowledge lookup",
         description: "Answer your questions from your business knowledge and website summary.",
@@ -220,6 +228,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "send_email",
         label: "Send follow-up email",
         description: "Email a follow-up to a texter from your connected mailbox.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "generate_image",
+        label: "Generate images",
+        description:
+          "Text an AI-generated image (MMS) when a texter explicitly asks for one (limit 3 per conversation; uses your AI budget).",
         defaultEnabled: true,
         configurable: true
       },

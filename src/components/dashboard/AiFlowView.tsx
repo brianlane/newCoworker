@@ -318,6 +318,13 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           />
           <Row label="Message" value={step.body} />
           <SmsSegmentHint text={step.body} mode="aiflow" />
+          {step.mediaUrlVar && (
+            <Row
+              label="Attaches image (MMS)"
+              value={`{{vars.${step.mediaUrlVar}}}`}
+              mono
+            />
+          )}
           {step.quietHours && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
               <div className="text-xs font-semibold text-parchment/60">Quiet hours</div>
@@ -568,6 +575,13 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.removeTags && step.removeTags.length > 0 && (
             <Row label="Removes tags" value={step.removeTags.join(", ")} />
           )}
+        </>
+      );
+    case "generate_image":
+      return (
+        <>
+          <Row label="Image description" value={step.promptTemplate} />
+          <Row label="Saves the image link as" value={step.saveAs} mono />
         </>
       );
     case "ring_handoff":

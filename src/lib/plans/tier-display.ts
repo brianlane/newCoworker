@@ -68,6 +68,7 @@ export const STARTER_FEATURES: string[] = [
   "Phone number and email address dedicated to your coworker",
   "Chat access to your coworker",
   "$5/mo AI budget for agentic tasks",
+  "AI image generation (3 per conversation)",
   "Browser can read public web pages",
   "3rd party integrations",
   "Lossless memory and expansive knowledge base",

@@ -133,6 +133,13 @@ export type MeterGeminiSpendArgs = {
   inputChars?: number;
   outputChars?: number;
   /**
+   * Flat cost (micro-USD) that bypasses token math entirely. Image models
+   * bill per generated image, not per text token — the token-rate tables
+   * above would badly misprice them, so image surfaces pass the per-image
+   * list price here.
+   */
+  costMicrosOverride?: number;
+  /**
    * When set (live-voice teardown), SETTLE this call's AI-budget reservation
    * instead of a plain increment: `owner_chat_ai_settle` releases the hold the
    * inbound gate placed AND records the exact spend atomically. A zero cost still
@@ -151,13 +158,16 @@ export type MeterGeminiSpendArgs = {
 export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): Promise<void> {
   try {
     const db = args.client ?? (await createSupabaseServiceClient());
-    const costMicros = args.usage
-      ? geminiCostMicrosFromUsage(args.model, args.usage)
-      : estimateGeminiCostMicrosFromChars(
-          args.model,
-          args.inputChars ?? 0,
-          args.outputChars ?? 0
-        );
+    const costMicros =
+      args.costMicrosOverride !== undefined
+        ? Math.max(0, Math.ceil(args.costMicrosOverride))
+        : args.usage
+          ? geminiCostMicrosFromUsage(args.model, args.usage)
+          : estimateGeminiCostMicrosFromChars(
+              args.model,
+              args.inputChars ?? 0,
+              args.outputChars ?? 0
+            );
     const isSettle = typeof args.callControlId === "string" && args.callControlId.length > 0;
     // Plain path skips zero-cost writes; a settle must still run to release the
     // reservation the inbound gate placed even when the call cost nothing.

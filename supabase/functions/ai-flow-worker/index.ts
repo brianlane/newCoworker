@@ -148,6 +148,24 @@ const SCREENSHOT_BUCKET = "aiflow-screenshots";
 // retries), so an hour is generous. Never templated into user-visible copy.
 const SCREENSHOT_MMS_URL_TTL_S = 60 * 60;
 
+// Storage bucket (private) for generate_image outputs; the worker writes
+// `${businessId}/${uuid}.png` and saves a signed URL into the step's var so a
+// later send_sms (mediaUrlVar → MMS) or send_email body can use it. Created by
+// 20260819000000_generated_images_bucket.sql. 7 days: the URL may sit in a
+// deferred run's context (quiet hours) before the consuming send fires.
+const GENERATED_IMAGES_BUCKET = "generated-images";
+const GENERATED_IMAGE_URL_TTL_S = 7 * 24 * 60 * 60;
+// Image model + flat per-image list prices (micro-USD). Image models bill per
+// generated image (not per text token), so metering uses these flat costs;
+// an unknown override model assumes the priciest tier (never undercount).
+const GEMINI_IMAGE_MODEL = Deno.env.get("GEMINI_IMAGE_MODEL") ?? "gemini-3.1-flash-lite-image";
+const IMAGE_COST_MICROS: Record<string, number> = {
+  "gemini-3.1-flash-lite-image": 34_000,
+  "gemini-3.1-flash-image": 67_000,
+  "gemini-3-pro-image": 134_000
+};
+const DEFAULT_IMAGE_COST_MICROS = 134_000;
+
 /**
  * Resolve the render-service URL for a given tenant.
  *
@@ -988,6 +1006,8 @@ async function runStep(
       return updateContactStep(supabase, run, scope, action);
     case "classify":
       return classifyStep(supabase, run, scope, action);
+    case "generate_image":
+      return generateImageStep(supabase, run, scope, action);
     case "sleep":
       return sleepStep(scope, action);
     case "wait_for_reply":
@@ -2733,6 +2753,82 @@ async function classifyStep(
   return { kind: "ok", result: { [action.saveAs]: choice } };
 }
 
+/**
+ * generate_image step: spend-gated Gemini image generation. Uploads the image
+ * to the private generated-images bucket, signs a 7-day URL into vars[saveAs]
+ * (consumed by send_sms mediaUrlVar / send_email bodies), and meters the flat
+ * per-image price into the shared AI budget. A missing API key or an empty
+ * model response FAILS the step (unlike extraction there is no fallback that
+ * can stand in for an image). AiFlow runs are exempt from the conversational
+ * per-session image limit — flows are owner-authored and explicitly enabled.
+ */
+async function generateImageStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "generate_image" }>
+): Promise<StepOutcome> {
+  const apiKey = Deno.env.get("GOOGLE_API_KEY") ?? "";
+  if (!apiKey) {
+    return { kind: "fail", error: "generate_image: no AI key is configured on this deployment" };
+  }
+  // Hard budget gate (parity with extraction): images are the priciest
+  // single model call, and there is no local fallback to degrade to.
+  if (await aiFlowSpendOverCap(supabase, run.business_id)) {
+    throw new SpendCapError(
+      "the shared AI budget for this billing period is used up; image generation is paused until it resets"
+    );
+  }
+
+  const url =
+    `https://generativelanguage.googleapis.com/v1beta/models/` +
+    `${encodeURIComponent(GEMINI_IMAGE_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const res = await fetchWithTransientRetry(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents: [{ role: "user", parts: [{ text: action.prompt }] }],
+      generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+    })
+  });
+  if (!res.ok) throw new Error(`generate_image: gemini ${res.status}`);
+  const body = (await res.json()) as {
+    candidates?: Array<{
+      content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> };
+    }>;
+  };
+  const inline = (body.candidates?.[0]?.content?.parts ?? []).find(
+    (p) => typeof p?.inlineData?.data === "string" && p.inlineData.data.length > 0
+  )?.inlineData;
+  if (!inline?.data) {
+    return { kind: "fail", error: "generate_image: the model returned no image" };
+  }
+
+  // Google bills per generated image — meter the flat list price.
+  const costMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
+  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, costMicros);
+
+  const mimeType = inline.mimeType && inline.mimeType.length > 0 ? inline.mimeType : "image/png";
+  const ext = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
+  const bytes = Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0));
+  const path = `${run.business_id}/${crypto.randomUUID()}.${ext}`;
+  const { error: upErr } = await supabase.storage
+    .from(GENERATED_IMAGES_BUCKET)
+    .upload(path, new Blob([bytes], { type: mimeType }), { contentType: mimeType });
+  if (upErr) throw new Error(`generate_image: upload failed: ${upErr.message}`);
+
+  const { data: signed, error: signErr } = await supabase.storage
+    .from(GENERATED_IMAGES_BUCKET)
+    .createSignedUrl(path, GENERATED_IMAGE_URL_TTL_S);
+  if (signErr || !signed?.signedUrl) {
+    throw new Error(`generate_image: sign failed: ${signErr?.message ?? "no url"}`);
+  }
+
+  scope.vars[action.saveAs] = signed.signedUrl;
+  appendActionTaken(scope, "generated an image");
+  return { kind: "ok", result: { vars: { [action.saveAs]: signed.signedUrl }, path } };
+}
+
 async function sendSmsStep(
   supabase: Supabase,
   run: RunRow,
@@ -2903,6 +2999,9 @@ async function sendSmsStep(
       fromE164: cfg.from,
       toE164,
       text,
+      // generate_image attachment → MMS. telnyxSendSms itself keeps media
+      // sends off the RCS-first branch (an RCS payload here is text-only).
+      ...(action.mediaUrl ? { mediaUrls: [action.mediaUrl] } : {}),
       idempotencyKey: `aiflow:${run.id}:${index}`,
       // Lead-facing texts go RCS-first for eligible tenants (Standard+,
       // approved agent) with Telnyx-side SMS fallback. Internal teammate
@@ -3023,6 +3122,7 @@ async function sendGroupSmsStep(
         fromE164: own,
         toE164: recipients,
         text,
+        ...(action.mediaUrl ? { mediaUrls: [action.mediaUrl] } : {}),
         idempotencyKey: `aiflow:${run.id}:${index}`
       });
     } else {
@@ -3032,6 +3132,7 @@ async function sendGroupSmsStep(
         fromE164: cfg.from,
         toE164: recipients[0],
         text,
+        ...(action.mediaUrl ? { mediaUrls: [action.mediaUrl] } : {}),
         idempotencyKey: `aiflow:${run.id}:${index}`,
         // Degenerate group-of-one is a customer-facing text: RCS-eligible.
         rcsAgentId: await resolveRcsAgentId(supabase, run.business_id)

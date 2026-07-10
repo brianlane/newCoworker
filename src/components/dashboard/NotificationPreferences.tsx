@@ -47,6 +47,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [emailUrgent, setEmailUrgent] = useState(initial.email_urgent);
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
   const [smsWarmTransfer, setSmsWarmTransfer] = useState(initial.sms_warm_transfer);
+  const [imageLimitAlerts, setImageLimitAlerts] = useState(initial.image_limit_alerts);
   const [phone, setPhone] = useState(initial.phone_number ?? "");
   const [alertEmail, setAlertEmail] = useState(initial.alert_email ?? "");
   const [digestEmailDaily, setDigestEmailDaily] = useState(initial.digest_email_daily ?? "");
@@ -64,6 +65,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setEmailUrgent(initial.email_urgent);
     setDashboardAlerts(initial.dashboard_alerts);
     setSmsWarmTransfer(initial.sms_warm_transfer);
+    setImageLimitAlerts(initial.image_limit_alerts);
     setPhone(initial.phone_number ?? "");
     setAlertEmail(initial.alert_email ?? "");
     setDigestEmailDaily(initial.digest_email_daily ?? "");
@@ -78,6 +80,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setEmailUrgent(prefs.email_urgent);
     setDashboardAlerts(prefs.dashboard_alerts);
     setSmsWarmTransfer(prefs.sms_warm_transfer);
+    setImageLimitAlerts(prefs.image_limit_alerts);
     setPhone(prefs.phone_number ?? "");
     setAlertEmail(prefs.alert_email ?? "");
     setDigestEmailDaily(prefs.digest_email_daily ?? "");
@@ -100,6 +103,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           email_urgent: emailUrgent,
           dashboard_alerts: dashboardAlerts,
           sms_warm_transfer: smsWarmTransfer,
+          image_limit_alerts: imageLimitAlerts,
           phone_number: phone.trim() || null,
           alert_email: alertEmail.trim() || "",
           digest_email_daily: digestEmailDaily.trim() || "",
@@ -136,6 +140,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           email_urgent: false,
           dashboard_alerts: false,
           sms_warm_transfer: false,
+          image_limit_alerts: false,
           unsubscribed_at: "now"
         })
       });
@@ -208,6 +213,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Text the recipient (and you) when a call is warm-transferred to a person."
           checked={smsWarmTransfer}
           onChange={setSmsWarmTransfer}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Image limit alerts"
+          description="Alert you when a coworker hits its image generation limit (3 per conversation)."
+          checked={imageLimitAlerts}
+          onChange={setImageLimitAlerts}
           disabled={loading || unsubscribing}
         />
       </div>

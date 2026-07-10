@@ -152,6 +152,12 @@ export type StepAction =
       body: string;
       quiet?: SendSmsQuietPlan;
       /**
+       * Resolved image URL to attach (an earlier generate_image step's var):
+       * the worker sends MMS instead of plain SMS. Absent when the step has
+       * no mediaUrlVar or the var resolved empty (plain-text degrade).
+       */
+      mediaUrl?: string;
+      /**
        * Set when a TEMPLATED recipient resolved to nothing usable (the lead
        * had no phone, or the self-number scrub cleared a bogus extraction).
        * The worker skips the send with an actions_taken note instead of
@@ -247,6 +253,16 @@ export type StepAction =
       kind: "recall_url";
       /** Candidate (normalized) phone keys to look up, in priority order. */
       keys: string[];
+      saveAs: string;
+    }
+  | {
+      /**
+       * Generate an AI image from the (already rendered) prompt and save a
+       * signed URL to the stored image into vars[saveAs]. The worker owns the
+       * IO: spend gate, Gemini image call, storage upload, signing, metering.
+       */
+      kind: "generate_image";
+      prompt: string;
       saveAs: string;
     }
   | {
@@ -395,6 +411,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
     }
     case "send_sms": {
+      // MMS attachment: resolve the image URL var an earlier generate_image
+      // step produced. Anything that is not an http(s) URL (empty var, failed
+      // generation prose) degrades to a plain text send — the message itself
+      // must never be blocked by an image hiccup.
+      let mediaUrl: string | undefined;
+      if (step.mediaUrlVar) {
+        const rawMedia = scope.vars?.[step.mediaUrlVar];
+        const candidate = typeof rawMedia === "string" ? rawMedia.trim() : "";
+        if (/^https?:\/\//i.test(candidate)) mediaUrl = candidate;
+      }
       let quiet: SendSmsQuietPlan | undefined;
       if (step.quietHours) {
         const q = step.quietHours;
@@ -426,7 +452,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             to: "",
             body: step.body,
             toAgentName: step.toAgentName.trim(),
-            ...(quiet ? { quiet } : {})
+            ...(quiet ? { quiet } : {}),
+            ...(mediaUrl ? { mediaUrl } : {})
           }
         };
       }
@@ -441,7 +468,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             to: "",
             body: step.body,
             toRef: step.toRef,
-            ...(quiet ? { quiet } : {})
+            ...(quiet ? { quiet } : {}),
+            ...(mediaUrl ? { mediaUrl } : {})
           }
         };
       }
@@ -477,7 +505,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             to: recipients[0],
             recipients,
             body,
-            ...(quiet ? { quiet } : {})
+            ...(quiet ? { quiet } : {}),
+            ...(mediaUrl ? { mediaUrl } : {})
           }
         };
       }
@@ -516,7 +545,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           error: `send_sms: recipient "${toRaw}" is not a valid phone number`
         };
       }
-      return { ok: true, action: { kind: "send_sms", to, body, ...(quiet ? { quiet } : {}) } };
+      return {
+        ok: true,
+        action: {
+          kind: "send_sms",
+          to,
+          body,
+          ...(quiet ? { quiet } : {}),
+          ...(mediaUrl ? { mediaUrl } : {})
+        }
+      };
     }
     case "send_email": {
       const to = renderTemplate(step.to, scope).trim();
@@ -799,6 +837,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(sentinel ? { resolved: text === "" ? "unclear" : text } : {})
         }
       };
+    }
+    case "generate_image": {
+      const prompt = renderTemplate(step.promptTemplate, scope).trim();
+      if (!prompt) {
+        return { ok: false, error: "generate_image: prompt is empty after templating" };
+      }
+      return { ok: true, action: { kind: "generate_image", prompt, saveAs: step.saveAs } };
     }
     case "update_contact": {
       const raw = scope.vars?.[step.phoneVar];

@@ -38,6 +38,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   upsert_customer: "Save / update a customer contact",
   update_contact: "Update the contact's tags (lead status)",
   classify: "Decide what the message means",
+  generate_image: "Create an AI-generated image",
   ring_handoff: "Ring a person (warm transfer)",
   voice_ai_intake: "AI takes the call (capture the lead)",
   voice_transfer: "Connect the caller to a number",
@@ -73,6 +74,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Adds/removes tags on the contact (matched by phone) so your Contacts page always shows each lead's current status - e.g. remove \"New Lead\", add \"Contacted\".",
   classify:
     "Reads a message (like their reply) and sorts it into ONE of your categories - e.g. wants_a_call / has_a_question / not_interested - so a Branch step can take the right path on meaning, not exact words.",
+  generate_image:
+    "Creates an image from your description and saves a link to it. Attach it to a later \"Send a text\" step (goes out as a picture message) or include the link in an email. Uses your monthly AI budget.",
   ring_handoff:
     "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
   voice_ai_intake:

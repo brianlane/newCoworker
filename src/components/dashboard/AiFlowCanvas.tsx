@@ -29,6 +29,7 @@ import {
   Globe,
   HelpCircle,
   Hourglass,
+  Image as ImageIcon,
   Link2,
   Mail,
   Maximize,
@@ -84,6 +85,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   upsert_customer: "read",
   update_contact: "read",
   classify: "branch",
+  generate_image: "read",
   ring_handoff: "voice",
   voice_ai_intake: "voice",
   voice_transfer: "voice",
@@ -117,6 +119,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   upsert_customer: <UserPlus className="h-4 w-4" />,
   update_contact: <Tag className="h-4 w-4" />,
   classify: <HelpCircle className="h-4 w-4" />,
+  generate_image: <ImageIcon className="h-4 w-4" />,
   ring_handoff: <Phone className="h-4 w-4" />,
   voice_ai_intake: <Phone className="h-4 w-4" />,
   voice_transfer: <Phone className="h-4 w-4" />,
@@ -182,6 +185,8 @@ function stepSubtitle(step: FlowStep): string {
       return `${step.textVar ? `{{vars.${step.textVar}}}` : "the message"} → ${step.categories
         .map((c) => c.value)
         .join(" / ")}`;
+    case "generate_image":
+      return `saves {{vars.${step.saveAs}}}`;
     case "ring_handoff":
     case "voice_transfer":
       return step.toRef?.label ?? step.toE164 ?? "";
