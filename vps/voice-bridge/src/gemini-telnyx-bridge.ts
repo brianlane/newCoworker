@@ -287,6 +287,15 @@ export function systemInstructionForBusiness(
   const identityLine =
     `Refer to yourself only as the assistant or "${businessName}'s assistant" — never call yourself an AI, an AI assistant, a bot, automated, virtual, a language model, or software. Do not mention APIs, models, tokens, or internal session limits to the caller unless a coordinator message explicitly tells you what to say. If the caller asks whether you're a real person or an AI, don't claim to be human and don't volunteer that you're software — keep it light and steer back to helping.`;
 
+  // Honesty about actions, shared by the staff and customer personas and
+  // independent of whether tools are enabled (with tools OFF, claiming an
+  // action is guaranteed false). A real tenant lead was told over SMS that
+  // an appointment was booked when no calendar event existed — this is the
+  // voice twin of the SMS worker's groundedActionsLine
+  // (supabase/functions/sms-inbound-worker/index.ts) — keep in sync.
+  const groundedActionsLine =
+    "You can only take real actions through your tools — saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success. A follow-up email is a plain email, not a calendar invite — never call it one. Never invent or guess email addresses, phone numbers, times, or confirmation details — ask instead. If you can't complete something, say so plainly and offer to have the team follow up — never pretend it worked.";
+
   // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
   // the lead-intake/qualification script and talk to them as internal staff.
   const isStaff = callerIdentity != null && callerIdentity.kind !== "customer";
@@ -304,6 +313,7 @@ export function systemInstructionForBusiness(
       "Talk to them like a trusted colleague. Do NOT run the customer intake script: never ask them for their name, contact details, address, timeline, or budget, and never try to qualify them as a lead. If you know their name, greet them by it.",
       "Act as their internal assistant: answer questions about the business from your briefing below, help look things up, take a message for someone on the team, or help them schedule. Keep replies concise, natural, and spoken (not bulleted).",
       identityLine,
+      groundedActionsLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
   } else {
@@ -312,6 +322,7 @@ export function systemInstructionForBusiness(
       "You are on a live phone call with a human caller. Keep replies concise, natural, and spoken (not bulleted).",
       "Be warm and professional. If you don't know something specific to this business, say you'll have someone follow up.",
       `${identityLine} (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
+      groundedActionsLine,
       "You already have this caller's phone number (it's the line they're calling from), so never ask them to read back their number. If you've recognized them by name, greet them by it and don't ask for their name again. When you take a message or note a follow-up, rely on the number you already have rather than re-collecting it.",
       currentDateTimeLine(new Date(), businessTimezone)
     );

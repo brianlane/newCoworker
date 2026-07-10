@@ -841,7 +841,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "send_email",
-      description: "Send a short plain-text follow-up email to a customer from the owner connected mailbox. Use ONLY when the customer asks for information by email or agrees to receive one. Never invent recipients.",
+      description: "Send a short plain-text follow-up email to a customer from the owner connected mailbox. This is a plain email only — it is NOT a calendar invite and must never be described as one. Use ONLY when the customer asks for information by email or agrees to receive one. Never invent recipients — use only an address the customer gave you.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -905,7 +905,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset.",
+      description: "Book an appointment on the owner connected calendar. This tool is the ONLY way an appointment gets created — never tell the customer an appointment is booked or confirmed unless this call returned success. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
