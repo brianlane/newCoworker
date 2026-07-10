@@ -465,6 +465,32 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(vi.mocked(bookCalendarAppointment)).not.toHaveBeenCalled();
   });
 
+  it("accepts offset-carrying ISO instants for calendar_book_appointment", async () => {
+    // The tool contract instructs the model to send "ISO 8601 with timezone
+    // offset" — rejecting offsets made every booking attempt fail (Truly's
+    // Junaid conversation). Offsets must validate.
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "ev-2", htmlLink: null, provider: "microsoft" }
+    });
+    const args = {
+      startIso: "2026-06-12T13:00:00-04:00",
+      endIso: "2026-06-12T13:30:00-04:00",
+      summary: "Quote call",
+      attendeeName: "Junaid Awan",
+      timezone: "America/Toronto"
+    };
+    const content = makeContent("calendar_book_appointment", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).ok).toBe(true);
+    expect(vi.mocked(bookCalendarAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining(args),
+      null
+    );
+  });
+
   it("sends email through the owner mailbox on the sms toggle", async () => {
     vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
       ok: true,

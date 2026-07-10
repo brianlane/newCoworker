@@ -93,8 +93,11 @@ const findSlotsArgsSchema = z.object({
   timezone: z.string().optional()
 });
 const bookAppointmentArgsSchema = z.object({
-  startIso: z.string().datetime(),
-  endIso: z.string().datetime(),
+  // offset:true — the tool description tells the model "ISO 8601 with
+  // timezone offset"; the bare .datetime() only accepted trailing-Z UTC, so
+  // a model following its own instructions had every booking rejected.
+  startIso: z.string().datetime({ offset: true }),
+  endIso: z.string().datetime({ offset: true }),
   summary: z.string().min(1).max(200),
   attendeeName: z.string().min(1).max(200),
   attendeeEmail: z.string().email().optional(),

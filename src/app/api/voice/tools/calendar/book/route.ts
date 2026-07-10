@@ -17,8 +17,11 @@ import { bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
  */
 
 const argsSchema = z.object({
-  startIso: z.string().datetime(),
-  endIso: z.string().datetime(),
+  // offset:true — matches the tool contract ("ISO 8601 with timezone
+  // offset"); the bare .datetime() rejected offset-carrying instants and
+  // failed every booking the model formatted per its own instructions.
+  startIso: z.string().datetime({ offset: true }),
+  endIso: z.string().datetime({ offset: true }),
   summary: z.string().min(1).max(200),
   attendeeName: z.string().min(1).max(200),
   attendeeEmail: z.string().email().optional(),

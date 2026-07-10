@@ -51,22 +51,58 @@ export type BookAppointmentArgs = {
 
 type Slot = { startIso: string; endIso: string };
 
+/** True when Intl accepts the string as an IANA timezone. */
+function isValidTimeZone(tz: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Timezone the event/slot payloads should use: the model's explicit choice
- * first, then the business timezone, then UTC. Looked up per call (single
- * indexed read) and never fatal — a lookup error degrades to UTC, exactly
- * the pre-timezone behavior.
+ * first, then the business timezone, then UTC. Each candidate is validated
+ * against Intl (models occasionally send abbreviations like "EDT" that are
+ * not IANA zones) so downstream wall-clock conversion can never throw on a
+ * bad zone. Looked up per call (single indexed read) and never fatal — a
+ * lookup error degrades to UTC, exactly the pre-timezone behavior.
  */
 async function resolveToolTimezone(
   businessId: string,
   explicit: string | undefined
 ): Promise<string> {
-  if (explicit && explicit.trim().length > 0) return explicit;
+  const wanted = explicit?.trim() ?? "";
+  if (wanted.length > 0 && isValidTimeZone(wanted)) return wanted;
   try {
-    return (await getBusinessTimezone(businessId)) ?? "UTC";
+    const biz = (await getBusinessTimezone(businessId)) ?? "UTC";
+    return isValidTimeZone(biz) ? biz : "UTC";
   } catch {
     return "UTC";
   }
+}
+
+/**
+ * "YYYY-MM-DDTHH:mm:ss" wall-clock time of an instant in a timezone — the
+ * format Microsoft Graph's dateTimeTimeZone expects (naive local time plus
+ * a separate timeZone field). The caller guarantees a valid IANA zone via
+ * resolveToolTimezone.
+ */
+export function wallClockInZone(instant: Date, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit"
+  }).formatToParts(instant);
+  /* c8 ignore next -- the "00" arm is unreachable: Intl always emits every requested part */
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "00";
+  return `${get("year")}-${get("month")}-${get("day")}T${get("hour")}:${get("minute")}:${get("second")}`;
 }
 
 type FreeBusyBody = {
@@ -80,34 +116,90 @@ function parseOptionalDate(value: string | undefined, fallback: Date): Date {
   return d;
 }
 
+const QUARTER_MS = 15 * 60_000;
+
+/** Minute-of-hour (0-59) of an instant in a timezone; UTC on a bad zone. */
+function minuteInZone(instant: Date, timeZone: string): number {
+  try {
+    const minute = new Intl.DateTimeFormat("en-US", { timeZone, minute: "numeric" })
+      .formatToParts(instant)
+      .find((p) => p.type === "minute")?.value;
+    /* c8 ignore next -- Intl always yields a minute part for this format */
+    return minute ? Number(minute) : instant.getUTCMinutes();
+  } catch {
+    return instant.getUTCMinutes();
+  }
+}
+
+/**
+ * First presentable start inside a free gap, or null when nothing fits.
+ *
+ * Offered times must land on quarter-hour boundaries, preferring :00/:30
+ * (in the requester's timezone) over :15/:45 — a lead offered "5:19 PM"
+ * reads it as a glitch, not availability. Every UTC offset in use is a
+ * multiple of 15 minutes, so UTC quarter boundaries ARE local quarter
+ * boundaries everywhere; only the :00/:30 classification needs the zone
+ * (e.g. Kathmandu's +05:45 maps UTC :15 to local :00).
+ *
+ * Exactly one of the first two quarter boundaries after the gap opens is a
+ * :00/:30 — take it when the appointment still fits (at most 15 minutes
+ * later than the alternative), otherwise the earliest quarter that fits.
+ * If neither of the first two fits, no later start can either.
+ */
+function alignedGapStart(
+  gapStart: Date,
+  gapEnd: Date,
+  durationMs: number,
+  timeZone: string
+): Date | null {
+  const first = new Date(Math.ceil(gapStart.getTime() / QUARTER_MS) * QUARTER_MS);
+  const second = new Date(first.getTime() + QUARTER_MS);
+  const fits = (s: Date) => s.getTime() + durationMs <= gapEnd.getTime();
+  const onHourOrHalf = (s: Date) => {
+    const m = minuteInZone(s, timeZone);
+    return m === 0 || m === 30;
+  };
+  for (const candidate of [first, second]) {
+    if (onHourOrHalf(candidate) && fits(candidate)) return candidate;
+  }
+  // No :00/:30 fits — fall back to the earliest quarter boundary. Only
+  // `first` needs checking: `second` is later, so it can never fit when
+  // `first` doesn't.
+  return fits(first) ? first : null;
+}
+
 export function computeFreeSlots(
   windowStart: Date,
   windowEnd: Date,
   busy: Array<{ start: Date; end: Date }>,
   durationMs: number,
-  maxSlots = 3
+  maxSlots = 3,
+  timeZone = "UTC"
 ): Slot[] {
   const sorted = [...busy].sort((a, b) => a.start.getTime() - b.start.getTime());
   const slots: Slot[] = [];
+  const offerFromGap = (gapStart: Date, gapEnd: Date) => {
+    if (slots.length >= maxSlots) return;
+    const start = alignedGapStart(gapStart, gapEnd, durationMs, timeZone);
+    if (start) {
+      slots.push({
+        startIso: start.toISOString(),
+        endIso: new Date(start.getTime() + durationMs).toISOString()
+      });
+    }
+  };
   let cursor = windowStart;
   for (const block of sorted) {
     if (block.start.getTime() >= windowEnd.getTime()) break;
     if (block.end.getTime() <= cursor.getTime()) continue;
-    if (block.start.getTime() - cursor.getTime() >= durationMs) {
-      slots.push({
-        startIso: cursor.toISOString(),
-        endIso: new Date(cursor.getTime() + durationMs).toISOString()
-      });
-      if (slots.length >= maxSlots) return slots;
+    if (block.start.getTime() > cursor.getTime()) {
+      offerFromGap(cursor, block.start);
     }
     // Past the `continue` guard above, block.end > cursor always holds.
     cursor = block.end;
   }
-  if (windowEnd.getTime() - cursor.getTime() >= durationMs && slots.length < maxSlots) {
-    slots.push({
-      startIso: cursor.toISOString(),
-      endIso: new Date(cursor.getTime() + durationMs).toISOString()
-    });
+  if (cursor.getTime() < windowEnd.getTime()) {
+    offerFromGap(cursor, windowEnd);
   }
   return slots;
 }
@@ -213,10 +305,11 @@ export async function findCalendarSlots(
       }
     }
 
-    const slots = computeFreeSlots(windowStart, windowEnd, busy, durationMs);
-    // Echo the resolved timezone so the model presents the ISO slots in
-    // business-local terms instead of raw UTC.
+    // Resolved BEFORE the slot walk: quarter-hour candidates prefer :00/:30
+    // in the requester's local clock, and the echo lets the model present
+    // the ISO slots in business-local terms instead of raw UTC.
     const timezone = await resolveToolTimezone(businessId, args.timezone);
+    const slots = computeFreeSlots(windowStart, windowEnd, busy, durationMs, 3, timezone);
     return {
       ok: true,
       data: {
@@ -270,10 +363,19 @@ export async function bookCalendarAppointment(
     let eventId: string | null = null;
     let htmlLink: string | null = null;
 
-    // Model's explicit timezone → business timezone → UTC. Means a naive
-    // local "2026-06-13T14:00:00" books 2pm business-local without the
-    // model reasoning about offsets.
+    // Model's explicit timezone → business timezone → UTC (each validated
+    // against Intl so conversion below can't throw on a junk zone).
     const eventTimezone = await resolveToolTimezone(businessId, args.timezone);
+
+    // Normalize per provider instead of passing the model's string through.
+    // The surfaces validate startIso/endIso as ISO 8601 with Z or an offset
+    // (an unambiguous instant), but the providers want different shapes:
+    // Google takes any RFC3339 instant (send UTC; timeZone drives display),
+    // while Microsoft Graph's dateTimeTimeZone wants NAIVE local wall time
+    // plus the zone name — an offset-carrying string sent raw is exactly
+    // what made every Truly SMS booking attempt fail.
+    const startInstant = new Date(args.startIso);
+    const endInstant = new Date(args.endIso);
 
     // Book onto the shared NewCoworker calendar (created here on first
     // booking). Null = creation failed → book primary; never lose a booking.
@@ -295,8 +397,8 @@ export async function bookCalendarAppointment(
           data: {
             summary: args.summary,
             description,
-            start: { dateTime: args.startIso, timeZone: eventTimezone },
-            end: { dateTime: args.endIso, timeZone: eventTimezone },
+            start: { dateTime: startInstant.toISOString(), timeZone: eventTimezone },
+            end: { dateTime: endInstant.toISOString(), timeZone: eventTimezone },
             attendees: args.attendeeEmail
               ? [{ email: args.attendeeEmail, displayName: args.attendeeName }]
               : undefined
@@ -317,8 +419,8 @@ export async function bookCalendarAppointment(
           data: {
             subject: args.summary,
             body: { contentType: "Text", content: description },
-            start: { dateTime: args.startIso, timeZone: eventTimezone },
-            end: { dateTime: args.endIso, timeZone: eventTimezone },
+            start: { dateTime: wallClockInZone(startInstant, eventTimezone), timeZone: eventTimezone },
+            end: { dateTime: wallClockInZone(endInstant, eventTimezone), timeZone: eventTimezone },
             attendees: args.attendeeEmail
               ? [
                   {
