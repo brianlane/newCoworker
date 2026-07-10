@@ -2791,9 +2791,14 @@ async function generateImageStep(
       overCap = false;
     }
     if (overCap) {
-      throw new SpendCapError(
-        "the shared AI budget for this billing period is used up; image generation is paused until it resets"
-      );
+      // A permanent, owner-actionable state for this period — fail the run
+      // now (like classify/extraction) instead of retrying into the cap.
+      return {
+        kind: "fail",
+        error:
+          "generate_image: the shared AI budget for this billing period is used up; " +
+          "image generation is paused until it resets"
+      };
     }
   }
 
