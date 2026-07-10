@@ -1,5 +1,11 @@
 import { listBusinesses } from "@/lib/db/businesses";
 import { checkEnv, getEnvDisplayValue } from "@/lib/admin/system";
+import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
+import {
+  SPEND_VELOCITY_SETTINGS_KEY,
+  parseSpendVelocityConfig
+} from "../../../../../supabase/functions/_shared/spend_velocity";
+import { SpendVelocityAlertSettings } from "@/components/admin/SpendVelocityAlertSettings";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
@@ -88,6 +94,11 @@ const ENV_GROUPS: EnvGroup[] = [
 
 export default async function SystemPage() {
   const businesses = await listBusinesses();
+  // Missing row / legacy shape parse to the defaults, so the card always
+  // renders exactly what the cron will actually enforce.
+  const spendVelocityConfig = parseSpendVelocityConfig(
+    await getAdminPlatformSetting(SPEND_VELOCITY_SETTINGS_KEY).catch(() => null)
+  );
 
   const totalConfigured = ENV_GROUPS.flatMap((g) => g.vars).filter((v) => checkEnv(v.key)).length;
   const totalVars = ENV_GROUPS.flatMap((g) => g.vars).length;
@@ -121,6 +132,14 @@ export default async function SystemPage() {
           </p>
         </Card>
       </div>
+
+      <SpendVelocityAlertSettings
+        initialConfig={{
+          enabled: spendVelocityConfig.enabled,
+          thresholdMicros: spendVelocityConfig.thresholdMicros,
+          windowMinutes: spendVelocityConfig.windowMinutes
+        }}
+      />
 
       {/* Environment variables */}
       <div className="space-y-4">
