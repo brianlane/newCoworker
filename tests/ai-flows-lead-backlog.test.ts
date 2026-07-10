@@ -117,7 +117,7 @@ describe("importLeadBacklog", () => {
   });
 
   it("namespaces the row's explicit id column by source, preferring event_id > lead_id > id", async () => {
-    const rows = [
+    const rows: Record<string, string>[] = [
       { event_id: "E-1", lead_id: "L-1", id: "1", name: "a" },
       { lead_id: " L-2 ", name: "b" },
       { id: "3", name: "c" }
