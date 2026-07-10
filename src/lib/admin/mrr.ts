@@ -33,6 +33,7 @@ import {
   VOICE_ALL_IN_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
+import { addUtcMonthsClamped } from "../../../supabase/functions/_shared/billing_period_window";
 
 /** The subscription fields the revenue calculation reads (SubscriptionRow-compatible). */
 export type MrrSubscriptionInput = {
@@ -56,26 +57,16 @@ export type DayCurrentMrr = {
   countedSubscriptions: number;
 };
 
-/** UTC-safe "created_at + N months" for deriving a term end without a renewal_at. */
-function addMonthsUtc(iso: string, months: number): number {
-  const d = new Date(iso);
-  return Date.UTC(
-    d.getUTCFullYear(),
-    d.getUTCMonth() + months,
-    d.getUTCDate(),
-    d.getUTCHours(),
-    d.getUTCMinutes(),
-    d.getUTCSeconds()
-  );
-}
-
 /**
  * The monthly rate a starter/standard subscription is on as of `nowMs`.
  *
  * Term end prefers the row's `renewal_at`; a missing/unparseable value falls
  * back to `created_at + commitment_months` (row value, else the period's
  * standard length — monthly rows commit for 1 month, matching the intro-month
- * pricing before the ongoing renewal rate kicks in).
+ * pricing before the ongoing renewal rate kicks in). Month addition uses the
+ * shared CLAMPED math (`addUtcMonthsClamped`) so a month-end anchor lands on
+ * the same day checkout's renewal-date math would, not rolled into the next
+ * month.
  */
 function dayCurrentRateCents(
   sub: MrrSubscriptionInput & { tier: "starter" | "standard" },
@@ -86,7 +77,10 @@ function dayCurrentRateCents(
 
   let termEndMs = sub.renewal_at ? Date.parse(sub.renewal_at) : Number.NaN;
   if (!Number.isFinite(termEndMs)) {
-    termEndMs = addMonthsUtc(sub.created_at, sub.commitment_months ?? getCommitmentMonths(period));
+    termEndMs = addUtcMonthsClamped(
+      new Date(sub.created_at),
+      sub.commitment_months ?? getCommitmentMonths(period)
+    ).getTime();
   }
 
   if (nowMs < termEndMs) return pricing.monthlyCents;

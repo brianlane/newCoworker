@@ -118,6 +118,27 @@ describe("computeDayCurrentMrr", () => {
     );
   });
 
+  it("clamps month-end anchors when deriving the term end (Jan 31 + 1mo = Feb 28, not Mar 3)", () => {
+    // Naive month addition would put the term end at Mar 3 and misclassify
+    // Mar 1 as in-term; clamped math ends the intro month on Feb 28.
+    const result = computeDayCurrentMrr({
+      subscriptions: [
+        sub({
+          tier: "starter",
+          billing_period: "monthly",
+          renewal_at: null,
+          commitment_months: 1,
+          created_at: "2026-01-31T00:00:00Z"
+        })
+      ],
+      enterpriseDeals: [],
+      now: new Date("2026-03-01T00:00:00Z")
+    });
+    expect(result.subscriptionCents).toBe(
+      getPeriodPricing("starter", "monthly").renewalMonthlyCents
+    );
+  });
+
   it("treats a null billing_period as monthly", () => {
     const result = computeDayCurrentMrr({
       subscriptions: [

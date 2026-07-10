@@ -224,6 +224,17 @@ describe("getFleetCurrentAiSpendMicros", () => {
     expect(builder.lte).toHaveBeenCalledWith("period_start", now.toISOString());
   });
 
+  it("ends windows with clamped month math (a Jan 31 anchor expires Feb 28, not Mar 3)", async () => {
+    const { from } = fleetSpendDb({
+      data: [{ business_id: "biz-a", period_start: "2026-01-31T00:00:00Z", spend_micros: 500 }],
+      error: null
+    });
+    // Naive month addition would keep this window alive until Mar 3.
+    await expect(
+      getFleetCurrentAiSpendMicros({ from } as never, new Date("2026-03-01T00:00:00Z"))
+    ).resolves.toBe(0);
+  });
+
   it("returns 0 for null data and 0 on error (best effort — dashboard must render)", async () => {
     const { from: emptyFrom } = fleetSpendDb({ data: null, error: null });
     await expect(getFleetCurrentAiSpendMicros({ from: emptyFrom } as never)).resolves.toBe(0);

@@ -10,7 +10,10 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
-import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
+import {
+  addUtcMonthsClamped,
+  deriveMonthlyQuotaWindow
+} from "../../../supabase/functions/_shared/billing_period_window";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -109,23 +112,12 @@ export async function getChatSpendSnapshotForBusiness(
   };
 }
 
-/** UTC month shift that mirrors the spend window's one-month length. */
-function shiftUtcMonths(ms: number, months: number): number {
-  const d = new Date(ms);
-  return Date.UTC(
-    d.getUTCFullYear(),
-    d.getUTCMonth() + months,
-    d.getUTCDate(),
-    d.getUTCHours(),
-    d.getUTCMinutes(),
-    d.getUTCSeconds()
-  );
-}
-
 /**
  * FLEET-WIDE Gemini spend (micro-USD) across every tenant's CURRENT period
  * row (admin dashboard platform-cost estimate). A spend row's window is one
- * month from its `period_start` (see deriveMonthlyQuotaWindow), so the sum
+ * CLAMPED month from its `period_start` (the same `addUtcMonthsClamped`
+ * math deriveMonthlyQuotaWindow keys the rows with — naive month addition
+ * would keep a Jan-31-anchored window "alive" into early March), so the sum
  * takes each business's NEWEST started row and counts it only while its
  * window still covers `now` — summing every row in a rolling one-month
  * lookback would double-count a tenant right after a window rollover. The
@@ -139,7 +131,7 @@ export async function getFleetCurrentAiSpendMicros(
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
   const nowMs = now.getTime();
-  const lookbackIso = new Date(shiftUtcMonths(nowMs, -2)).toISOString();
+  const lookbackIso = addUtcMonthsClamped(now, -2).toISOString();
   const { data, error } = await db
     .from("owner_chat_model_spend")
     .select("business_id, period_start, spend_micros")
@@ -170,7 +162,7 @@ export async function getFleetCurrentAiSpendMicros(
 
   let total = 0;
   for (const { startMs, spendMicros } of newestByBusiness.values()) {
-    if (shiftUtcMonths(startMs, 1) > nowMs) total += spendMicros;
+    if (addUtcMonthsClamped(new Date(startMs), 1).getTime() > nowMs) total += spendMicros;
   }
   return total;
 }
