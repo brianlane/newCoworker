@@ -874,6 +874,8 @@ async function runStep(
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
       return upsertCustomerStep(supabase, run, action);
+    case "update_contact":
+      return updateContactStep(supabase, run, scope, action);
     case "sleep":
       return sleepStep(scope, action);
     case "wait_for_reply":
@@ -1127,6 +1129,63 @@ async function upsertCustomerStep(
       email: action.email || null
     }
   };
+}
+
+/**
+ * `update_contact` step: maintain the contact's lead-state tags. Removals
+ * apply before additions (one step = one status transition), matching is
+ * alias-aware like getCustomerMemory, and tags are normalized the way the
+ * dashboard write path does (trim, case-insensitive de-dup, 25-tag cap).
+ * A missing phone (planner skipReason) or missing contact row SKIPS with a
+ * note — tag bookkeeping must never fail an otherwise-healthy run.
+ */
+async function updateContactStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "update_contact" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id, tags")
+    .eq("business_id", run.business_id)
+    .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
+    .maybeSingle();
+  if (error) throw new Error(`update_contact lookup: ${error.message}`);
+  const contact = data as { id: string; tags?: string[] | null } | null;
+  if (!contact) {
+    return {
+      kind: "ok",
+      skipped: true,
+      result: { skipped: "contact_not_found", customer_e164: action.e164 }
+    };
+  }
+  const removeSet = new Set(action.removeTags.map((t) => t.trim().toLowerCase()));
+  const seen = new Set<string>();
+  const next: string[] = [];
+  for (const t of [...(Array.isArray(contact.tags) ? contact.tags : []), ...action.addTags]) {
+    const tag = t.trim().slice(0, 40);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key) || removeSet.has(key)) continue;
+    seen.add(key);
+    next.push(tag);
+    if (next.length >= 25) break;
+  }
+  const { error: updErr } = await supabase
+    .from("contacts")
+    .update({ tags: next, updated_at: new Date().toISOString() })
+    .eq("id", contact.id);
+  if (updErr) throw new Error(`update_contact write: ${updErr.message}`);
+  appendActionTaken(
+    scope,
+    `updated contact tags for ${action.e164}` +
+      (action.addTags.length > 0 ? ` (+${action.addTags.join(", +")})` : "") +
+      (action.removeTags.length > 0 ? ` (-${action.removeTags.join(", -")})` : "")
+  );
+  return { kind: "ok", result: { customer_e164: action.e164, tags: next } };
 }
 
 /**

@@ -257,6 +257,19 @@ export type StepAction =
       e164: string;
       name: string;
       email: string;
+    }
+  | {
+      /**
+       * Maintain the contact's lead-state tags. The planner resolves the
+       * phone; `skipReason` set means the phone was unusable — the worker
+       * notes the skip instead of failing (a lead-data gap is not a flow
+       * bug), mirroring send_sms's templated-recipient behavior.
+       */
+      kind: "update_contact";
+      e164: string;
+      addTags: string[];
+      removeTags: string[];
+      skipReason?: string;
     };
 
 export type StepPlan =
@@ -748,6 +761,28 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           email: readVar(step.emailVar)
         }
       };
+    }
+    case "update_contact": {
+      const raw = scope.vars?.[step.phoneVar];
+      const phone = typeof raw === "string" ? raw.trim() : "";
+      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      const addTags = step.addTags ?? [];
+      const removeTags = step.removeTags ?? [];
+      if (!e164) {
+        // Skip (with a note), never fail: the tag write is auxiliary
+        // bookkeeping and a missing lead phone must not kill the run.
+        return {
+          ok: true,
+          action: {
+            kind: "update_contact",
+            e164: "",
+            addTags,
+            removeTags,
+            skipReason: "no_contact_phone"
+          }
+        };
+      }
+      return { ok: true, action: { kind: "update_contact", e164, addTags, removeTags } };
     }
     // Voice steps execute on the real-time Telnyx call path (telnyx-voice-inbound),
     // never on the async worker — they are only valid under a voice trigger, which

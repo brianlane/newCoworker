@@ -32,6 +32,7 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
       "browse_action",
       "recall_url",
       "upsert_customer",
+      "update_contact",
       "ring_handoff",
       "voice_ai_intake",
       "voice_transfer",

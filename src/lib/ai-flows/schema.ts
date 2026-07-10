@@ -40,6 +40,7 @@ export const FLOW_STEP_TYPES = [
   "browse_action",
   "recall_url",
   "upsert_customer",
+  "update_contact",
   // Voice-channel steps (real-time call routing, executed by the Telnyx voice
   // webhook state machine; NOT the async ai-flow-worker). Only valid under a
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
@@ -735,6 +736,19 @@ const nonBranchStepMembers = [
     emailVar: varName.optional(),
     when: whenSchema.optional()
   }),
+  // Maintain the contact's lead-state tags from a flow: removals apply before
+  // additions ("removeTags New Lead, addTags Contacted" = one status change).
+  // At least one of addTags/removeTags is required (validateDefinitionSemantics
+  // — a discriminatedUnion member can't hold a refine). Tag strings mirror the
+  // dashboard limits (40 chars, 25 per list).
+  z.object({
+    id: stepId,
+    type: z.literal("update_contact"),
+    phoneVar: varName,
+    addTags: z.array(z.string().min(1).max(40)).min(1).max(25).optional(),
+    removeTags: z.array(z.string().min(1).max(40)).min(1).max(25).optional(),
+    when: whenSchema.optional()
+  }),
   // ── Voice steps (real-time call routing; see VOICE_STEP_TYPES) ──
   // Ring a human and wait for them to answer. The voice webhook warm-transfers
   // the live caller to `toE164` and rings for `ringSeconds`; on no-answer it
@@ -961,6 +975,8 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "extract_text":
     case "recall_url":
     case "upsert_customer":
+    // update_contact carries literal tag strings and a var NAME — no templates.
+    case "update_contact":
     // sleep / wait_for_reply carry only var NAMES and durations — no templates.
     case "sleep":
     case "wait_for_reply":
@@ -1380,6 +1396,22 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       issues.push(
         `Step "${step.id}" waits for a reply from {{vars.${step.phoneVar}}} which no earlier step produces.`
       );
+    }
+
+    // update_contact: the phone var must exist, and the step must actually
+    // change something (at least one of addTags/removeTags — the union member
+    // can't hold that refine).
+    if (step.type === "update_contact") {
+      if (!vars.has(step.phoneVar) && !ENGINE_VARS.has(step.phoneVar)) {
+        issues.push(
+          `Step "${step.id}" updates a contact using {{vars.${step.phoneVar}}} which no earlier step produces.`
+        );
+      }
+      if (!step.addTags && !step.removeTags) {
+        issues.push(
+          `Step "${step.id}" updates a contact but changes nothing; set addTags and/or removeTags.`
+        );
+      }
     }
 
     // upsert_customer keys/fills the customer from vars an EARLIER step

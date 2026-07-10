@@ -1253,6 +1253,47 @@ describe("trigger channels", () => {
     ).toThrow(AiFlowValidationError);
   });
 
+  it("validates update_contact: phoneVar scope + must change something", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] },
+      steps: [
+        { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }] },
+        {
+          id: "u",
+          type: "update_contact",
+          phoneVar: "lead_phone",
+          removeTags: ["New Lead"],
+          addTags: ["Contacted"]
+        }
+      ]
+    });
+    expect(def.steps[1].type).toBe("update_contact");
+    // phoneVar no earlier step produces → semantic issue.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [{ id: "u", type: "update_contact", phoneVar: "ghost", addTags: ["X"] }]
+      })
+    ).toThrow(AiFlowValidationError);
+    // Neither addTags nor removeTags → changes nothing → rejected.
+    try {
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "webhook", conditions: [] },
+        steps: [
+          { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }] },
+          { id: "u", type: "update_contact", phoneVar: "lead_phone" }
+        ]
+      });
+      expect.unreachable("expected changes-nothing validation to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AiFlowValidationError);
+      expect((err as AiFlowValidationError).issues.join(" ")).toContain("changes nothing");
+    }
+  });
+
   it("accepts a webhook trigger (push from the public API; conditions only)", () => {
     const def = parseAiFlowDefinition({
       version: 1,

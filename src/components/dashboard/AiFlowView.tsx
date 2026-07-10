@@ -536,6 +536,18 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.emailVar && <Row label="Email variable" value={`{{vars.${step.emailVar}}}`} mono />}
         </>
       );
+    case "update_contact":
+      return (
+        <>
+          <Row label="Phone variable" value={`{{vars.${step.phoneVar}}}`} mono />
+          {step.addTags && step.addTags.length > 0 && (
+            <Row label="Adds tags" value={step.addTags.join(", ")} />
+          )}
+          {step.removeTags && step.removeTags.length > 0 && (
+            <Row label="Removes tags" value={step.removeTags.join(", ")} />
+          )}
+        </>
+      );
     case "ring_handoff":
       return (
         <>

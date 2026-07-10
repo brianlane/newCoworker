@@ -630,6 +630,25 @@ export type FlowStep =
   | {
       id: string;
       /**
+       * Update the contact's TAGS (the dashboard's lead-state labels — "New
+       * Lead", "Engaged", "Appointment Scheduled", ...) from a flow, so
+       * automations can maintain the contact lifecycle without manual
+       * bookkeeping. `phoneVar` identifies the contact (E.164 or a loose NANP
+       * number, matched alias-aware); removals apply before additions so a
+       * status transition is `removeTags: ["New Lead"], addTags: ["Contacted"]`
+       * in one step. An unusable phone or a missing contact row SKIPS with a
+       * note (a lead-data gap is not a flow bug). Tags are normalized like the
+       * dashboard write path (trim, case-insensitive de-dup, 25-tag cap).
+       */
+      type: "update_contact";
+      phoneVar: string;
+      addTags?: string[];
+      removeTags?: string[];
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
        * Recall a URL a PRIOR flow run persisted (via browse_action
        * `rememberUrlKeyedByVar`) for the same person, into {{vars.<saveAs>}}.
        * Keys are gathered from the inbound group thread participants
