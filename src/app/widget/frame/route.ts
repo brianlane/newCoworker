@@ -109,6 +109,12 @@ export async function GET(request: Request) {
 <style>
   :root { --accent: ${accent}; }
   * { box-sizing: border-box; }
+  /* The gate/msgs/send-form sections toggle via the HTML hidden attribute,
+     but their author-level display:flex would override the UA stylesheet's
+     weak [hidden] { display:none } — making "hidden" purely decorative (the
+     pre-chat form rendered on top of the chat in production). Re-assert it
+     with importance so the attribute always wins. */
+  [hidden] { display: none !important; }
   html, body { height: 100%; }
   body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: #fff; display: flex; flex-direction: column; }
   .hdr { background: var(--accent); color: #fff; padding: 12px 16px; display: flex; align-items: center; justify-content: space-between; flex: 0 0 auto; }
