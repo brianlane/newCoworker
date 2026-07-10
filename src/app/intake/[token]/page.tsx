@@ -52,15 +52,19 @@ export default async function IntakePage({
         {intake.status === "completed" && (
           <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-4 py-3 text-sm text-claw-green">
             Thanks — we&apos;ve got everything we need! Our team will review your answers and
-            reach out with next steps. If anything changes, just reply to the email you
-            received.
+            reach out with next steps.
+            {intake.recipient_email
+              ? " If anything changes, just reply to the email you received."
+              : " If anything changes, just let your NewCoworker contact know."}
           </p>
         )}
 
         {intake.status === "revoked" && (
           <p className="rounded-md border border-spark-orange/40 bg-spark-orange/10 px-4 py-3 text-sm text-spark-orange">
-            This questionnaire link is no longer active. Reply to the email you received and
-            we&apos;ll send you a fresh one.
+            This questionnaire link is no longer active.
+            {intake.recipient_email
+              ? " Reply to the email you received and we'll send you a fresh one."
+              : " Reach out to your NewCoworker contact and we'll send you a fresh one."}
           </p>
         )}
       </div>

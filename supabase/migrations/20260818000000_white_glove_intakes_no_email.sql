@@ -19,10 +19,3 @@ alter table public.white_glove_intakes
     check (char_length(business_name) <= 200),
   add column if not exists industry text not null default 'other'
     check (char_length(industry) <= 40);
-
--- Backfill from any answers submitted while these were questionnaire fields.
-update public.white_glove_intakes
-set
-  business_name = coalesce(answers->>'business_name', business_name),
-  industry = coalesce(answers->>'industry', industry)
-where answers is not null;
