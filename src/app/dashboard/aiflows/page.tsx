@@ -55,7 +55,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
               How to: Meta ad leads
             </Link>
             <Link
-              href="/dashboard/aiflows#lead-backlog-import"
+              href="/dashboard/aiflows/import-leads"
               className="text-signal-teal hover:underline"
             >
               Import leads
