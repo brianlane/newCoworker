@@ -7,10 +7,12 @@ import { DeployButton } from "@/components/dashboard/DeployButton";
 import { CreateClientModal } from "@/components/admin/CreateClientModal";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { WhiteGloveOffersPanel } from "@/components/admin/WhiteGloveOffersPanel";
+import { WhiteGloveIntakesPanel } from "@/components/admin/WhiteGloveIntakesPanel";
 import {
   listProspectWhiteGloveOffers,
   whiteGloveOfferPayUrl
 } from "@/lib/db/white-glove-offers";
+import { listWhiteGloveIntakes, whiteGloveIntakeUrl } from "@/lib/white-glove/intake";
 
 export const dynamic = "force-dynamic";
 
@@ -18,6 +20,7 @@ export default async function AdminClientsPage() {
   const businesses = await listBusinesses();
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
   const prospectOffers = await listProspectWhiteGloveOffers();
+  const intakes = await listWhiteGloveIntakes();
 
   return (
     <div className="space-y-6">
@@ -113,6 +116,22 @@ export default async function AdminClientsPage() {
           </div>
         </Card>
       )}
+
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          White-glove setup questionnaires
+        </h2>
+        <WhiteGloveIntakesPanel
+          initialIntakes={intakes.map((i) => ({
+            id: i.id,
+            recipient_email: i.recipient_email,
+            status: i.status,
+            created_at: i.created_at,
+            completed_at: i.completed_at,
+            intakeUrl: whiteGloveIntakeUrl(i)
+          }))}
+        />
+      </Card>
 
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
