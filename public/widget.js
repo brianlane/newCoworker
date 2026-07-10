@@ -97,4 +97,13 @@
   function mount() { document.body.appendChild(btn); }
   if (document.body) mount();
   else document.addEventListener("DOMContentLoaded", mount);
+
+  // Tiny control handle for single-page-app hosts: pages that render the
+  // embed conditionally (e.g. our own marketing site) can hide the bubble
+  // when navigating to a route that shouldn't show it, and re-show it
+  // later, without reloading the script. Hiding also closes the panel.
+  window.__ncwWidget = {
+    show: function () { btn.style.display = "flex"; },
+    hide: function () { setOpen(false); btn.style.display = "none"; }
+  };
 })();

@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
+import { SiteChatWidget } from "@/components/marketing/SiteChatWidget";
 
 type FooterLink = { href: string; label: string; external?: boolean };
 
@@ -78,6 +79,8 @@ export function MarketingFooter() {
           </a>
         </div>
       </div>
+      {/* Dogfooded website chat widget (bubble bottom-right on every marketing page). */}
+      <SiteChatWidget />
     </footer>
   );
 }
