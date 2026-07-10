@@ -2874,17 +2874,19 @@ async function generateImageStep(
     .upload(path, new Blob([bytes], { type: mimeType }), { contentType: mimeType });
   if (upErr) throw new Error(`generate_image: upload failed: ${upErr.message}`);
 
-  // Meter AFTER the store succeeds: a storage failure yields no usable image,
-  // so the business is not charged for it. Google bills per generated image —
-  // the flat list price, not token math.
-  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, flatCostMicros);
-
   const { data: signed, error: signErr } = await supabase.storage
     .from(GENERATED_IMAGES_BUCKET)
     .createSignedUrl(path, GENERATED_IMAGE_URL_TTL_S);
   if (signErr || !signed?.signedUrl) {
     throw new Error(`generate_image: sign failed: ${signErr?.message ?? "no url"}`);
   }
+
+  // Meter LAST, once the step can no longer fail (store + sign both done):
+  // any earlier failure yields no usable image, and a thrown error here would
+  // be retried — metering before the last failure point could bill twice for
+  // one intended image. Google bills per generated image — the flat list
+  // price, not token math.
+  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, flatCostMicros);
 
   scope.vars[action.saveAs] = signed.signedUrl;
   appendActionTaken(scope, "generated an image");
