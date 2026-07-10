@@ -479,6 +479,34 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       continue;
     }
+    // Cooperative owner cancel: the dashboard "Stop this run" flips the row to
+    // `canceled` while we hold the claim. Re-read the live status before each
+    // side-effecting step so a stopped run quits at the next step boundary
+    // (the step already in flight completes) instead of texting on. Every
+    // updateRun below is additionally status-guarded, so even a cancel that
+    // lands mid-step can never be overwritten — this check is what stops the
+    // remaining SIDE EFFECTS, the guard is what protects the STATE. A read
+    // failure proceeds (cancel stays best-effort; the write guard still holds).
+    try {
+      const { data: liveRow } = await supabase
+        .from("ai_flow_runs")
+        .select("status")
+        .eq("id", run.id)
+        .maybeSingle();
+      if ((liveRow as { status?: string } | null)?.status === "canceled") {
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_run_stopped_mid_execution",
+          message: `Run stopped by the owner before step ${index + 1} ran`,
+          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+        });
+        return;
+      }
+    } catch (e) {
+      console.error("executeRun cancel check", e);
+    }
     let outcome: StepOutcome;
     try {
       outcome = await runStep(supabase, run, step, index, scope, approval, routing);
@@ -4342,10 +4370,16 @@ async function updateRun(
   id: string,
   patch: Record<string, unknown>
 ): Promise<void> {
+  // `.neq(status, canceled)`: an owner "Stop this run" is terminal the moment
+  // it lands. A worker mid-execution (or a late park/retry/terminal persist)
+  // must never resurrect or overwrite a canceled run — a matched-zero-rows
+  // update is silent by design here, and the step-boundary check in
+  // executeRun stops the remaining side effects.
   const { error } = await supabase
     .from("ai_flow_runs")
     .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .neq("status", "canceled");
   if (error) throw new Error(`ai_flow_runs update: ${error.message}`);
 }
 

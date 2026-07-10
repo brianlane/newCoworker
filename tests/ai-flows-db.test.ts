@@ -692,8 +692,8 @@ describe("cancelAiFlowRun", () => {
       cancelAiFlowRun({ businessId: "biz-1", runId: "x" }, db as any)
     ).rejects.toThrow("run not found");
   });
-  it("refuses running and terminal states", async () => {
-    for (const status of ["running", "done", "failed", "canceled"]) {
+  it("refuses terminal states", async () => {
+    for (const status of ["done", "failed", "canceled"]) {
       const { db } = makeDb({ maybe: { ...RUN_ROW, status } });
       await expect(
          
