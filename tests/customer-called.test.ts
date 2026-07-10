@@ -28,7 +28,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "update", "eq", "or", "limit"]) {
+    for (const m of ["select", "update", "eq", "or", "in", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -107,31 +107,57 @@ describe("pauseLeadAutomationOnCall", () => {
     expect(ctx2.vars.__waited_w1).toBe("1");
   });
 
-  it("defers queued follow-ups by the pause window and tags the contact", async () => {
+  it("defers only the caller's queued runs that would wake sooner, then tags the contact", async () => {
+    const resumeIso = new Date(NOW + CUSTOMER_CALLED_DEFER_MINUTES * 60_000).toISOString();
     const { db, calls } = makeDb([
       { data: [], error: null }, // no parked waits
-      { data: [{ id: "q1" }, { id: "q2" }], error: null }, // two queued runs deferred
+      {
+        // Queued lookup: q1 (never deferred) and q2 (wakes sooner) get pushed;
+        // q3 already sleeps PAST the window and must keep its later time.
+        data: [
+          { id: "q1", earliest_claim_at: null },
+          { id: "q2", earliest_claim_at: new Date(NOW + 10 * 60_000).toISOString() },
+          { id: "q3", earliest_claim_at: new Date(NOW + 10 * 60 * 60_000).toISOString() }
+        ],
+        error: null
+      },
+      { data: [{ id: "q1" }, { id: "q2" }], error: null }, // defer update
       { data: { id: "c1", tags: ["New Lead"] }, error: null },
       { data: null, error: null }
     ]);
     const res = await pauseLeadAutomationOnCall(db, BIZ, CALLER, NOW);
     expect(res).toEqual({ resumedWaits: 0, deferredRuns: 2, tagged: true });
 
-    const resumeIso = new Date(NOW + CUSTOMER_CALLED_DEFER_MINUTES * 60_000).toISOString();
+    // Lead matching (sender OR extracted phone) is the ONLY .or() — the
+    // wake-sooner guard is applied client-side (Bugbot 17abe4a0: two chained
+    // .or() trees on one PostgREST update clobber each other).
+    const ors = calls.filter((c) => c.name === "or" && c.table === "ai_flow_runs");
+    expect(ors).toHaveLength(1);
+    expect(String(ors[0].args[0])).toContain("context->trigger->>from");
+    expect(String(ors[0].args[0])).toContain("lead_phone");
+    const inCall = calls.find((c) => c.name === "in");
+    expect(inCall!.args).toEqual(["id", ["q1", "q2"]]);
     const deferUpdate = calls.find((c) => c.name === "update" && c.table === "ai_flow_runs");
     expect((deferUpdate!.args[0] as Record<string, unknown>).earliest_claim_at).toBe(resumeIso);
-    // Lead matching (sender OR extracted phone) and the only-sooner guard.
-    const ors = calls.filter((c) => c.name === "or").map((c) => String(c.args[0]));
-    expect(ors.some((o) => o.includes("context->trigger->>from") && o.includes("lead_phone"))).toBe(
-      true
-    );
-    expect(ors.some((o) => o.includes("earliest_claim_at.is.null"))).toBe(true);
 
     const tagUpdate = calls.filter((c) => c.table === "contacts" && c.name === "update")[0];
     expect((tagUpdate.args[0] as Record<string, unknown>).tags).toEqual([
       "New Lead",
       CUSTOMER_CALLED_TAG
     ]);
+  });
+
+  it("skips the defer update entirely when every queued run already sleeps past the window", async () => {
+    const { db, calls } = makeDb([
+      { data: [], error: null },
+      {
+        data: [{ id: "q1", earliest_claim_at: new Date(NOW + 24 * 60 * 60_000).toISOString() }],
+        error: null
+      }
+    ]);
+    const res = await pauseLeadAutomationOnCall(db, BIZ, CALLER, NOW);
+    expect(res).toEqual({ resumedWaits: 0, deferredRuns: 0, tagged: false });
+    expect(calls.some((c) => c.name === "in")).toBe(false);
   });
 
   it("treats null data pages as empty (lookup, resume, defer)", async () => {
@@ -155,6 +181,17 @@ describe("pauseLeadAutomationOnCall", () => {
       deferredRuns: 0,
       tagged: false
     });
+
+    const nullDeferUpdate = makeDb([
+      { data: [], error: null },
+      { data: [{ id: "q1", earliest_claim_at: null }], error: null },
+      { data: null, error: null } // defer update returns null data
+    ]);
+    expect(await pauseLeadAutomationOnCall(nullDeferUpdate.db, BIZ, CALLER, NOW)).toEqual({
+      resumedWaits: 0,
+      deferredRuns: 0,
+      tagged: false
+    });
   });
 
   it("skips tagging entirely when the call touched no active automation", async () => {
@@ -168,42 +205,41 @@ describe("pauseLeadAutomationOnCall", () => {
   });
 
   it("tag path: missing contact, already tagged (case-insensitive), and full tag list all no-op", async () => {
-    const missing = makeDb([
+    // Common prefix: no waits; one never-deferred queued run that updates.
+    const queuedPrefix: Scripted[] = [
       { data: [], error: null },
-      { data: [{ id: "q1" }], error: null },
-      { data: null, error: null } // no contact row
-    ]);
+      { data: [{ id: "q1", earliest_claim_at: null }], error: null },
+      { data: [{ id: "q1" }], error: null }
+    ];
+    const missing = makeDb([...queuedPrefix, { data: null, error: null }]); // no contact row
     expect((await pauseLeadAutomationOnCall(missing.db, BIZ, CALLER, NOW)).tagged).toBe(false);
 
     const already = makeDb([
-      { data: [], error: null },
-      { data: [{ id: "q1" }], error: null },
+      ...queuedPrefix,
       { data: { id: "c1", tags: ["customer called"] }, error: null }
     ]);
     expect((await pauseLeadAutomationOnCall(already.db, BIZ, CALLER, NOW)).tagged).toBe(false);
 
     const full = makeDb([
-      { data: [], error: null },
-      { data: [{ id: "q1" }], error: null },
+      ...queuedPrefix,
       { data: { id: "c1", tags: Array.from({ length: 25 }, (_, i) => `t${i}`) }, error: null }
     ]);
     expect((await pauseLeadAutomationOnCall(full.db, BIZ, CALLER, NOW)).tagged).toBe(false);
 
     // Null tags column treated as empty list.
     const nullTags = makeDb([
-      { data: [], error: null },
-      { data: [{ id: "q1" }], error: null },
+      ...queuedPrefix,
       { data: { id: "c1", tags: null }, error: null },
       { data: null, error: null }
     ]);
     expect((await pauseLeadAutomationOnCall(nullTags.db, BIZ, CALLER, NOW)).tagged).toBe(true);
   });
 
-  it("swallows per-query errors (lookup, resume, defer, contact, tag write)", async () => {
+  it("swallows per-query errors (lookup, resume, defer select/update, contact, tag write)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const lookupErr = makeDb([
       { data: null, error: { message: "waits down" } },
-      { data: null, error: { message: "defer down" } }
+      { data: null, error: { message: "defer lookup down" } }
     ]);
     expect(await pauseLeadAutomationOnCall(lookupErr.db, BIZ, CALLER, NOW)).toEqual({
       resumedWaits: 0,
@@ -214,7 +250,8 @@ describe("pauseLeadAutomationOnCall", () => {
     const resumeErr = makeDb([
       { data: [{ id: "r1", context: null, revision: 1 }], error: null },
       { data: null, error: { message: "resume down" } }, // r1 update fails
-      { data: [{ id: "q1" }], error: null },
+      { data: [{ id: "q1", earliest_claim_at: null }], error: null },
+      { data: [{ id: "q1" }], error: null }, // defer update ok
       { data: null, error: { message: "contact down" } } // contact lookup fails
     ]);
     expect(await pauseLeadAutomationOnCall(resumeErr.db, BIZ, CALLER, NOW)).toEqual({
@@ -223,8 +260,20 @@ describe("pauseLeadAutomationOnCall", () => {
       tagged: false
     });
 
+    const deferUpdateErr = makeDb([
+      { data: [], error: null },
+      { data: [{ id: "q1", earliest_claim_at: null }], error: null },
+      { data: null, error: { message: "defer update down" } }
+    ]);
+    expect(await pauseLeadAutomationOnCall(deferUpdateErr.db, BIZ, CALLER, NOW)).toEqual({
+      resumedWaits: 0,
+      deferredRuns: 0,
+      tagged: false
+    });
+
     const tagErr = makeDb([
       { data: [], error: null },
+      { data: [{ id: "q1", earliest_claim_at: null }], error: null },
       { data: [{ id: "q1" }], error: null },
       { data: { id: "c1", tags: [] }, error: null },
       { data: null, error: { message: "tag write down" } }

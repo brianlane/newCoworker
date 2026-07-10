@@ -156,19 +156,39 @@ async function deferQueuedRuns(
   nowMs: number
 ): Promise<number> {
   const resumeIso = new Date(nowMs + CUSTOMER_CALLED_DEFER_MINUTES * 60_000).toISOString();
+  // Two-step (select the lead's runs, then update by id): a single UPDATE
+  // with two chained .or() logic trees is ambiguous in PostgREST (the second
+  // can clobber the first), which would defer EVERY queued run for the
+  // business. Selecting first keeps the lead filter authoritative.
   const { data, error } = await supabase
     .from("ai_flow_runs")
-    .update({ earliest_claim_at: resumeIso, updated_at: new Date().toISOString() })
+    .select("id, earliest_claim_at")
     .eq("business_id", businessId)
     .eq("status", "queued")
     .or(`context->trigger->>from.eq.${caller},context->vars->>lead_phone.eq.${caller}`)
-    .or(`earliest_claim_at.is.null,earliest_claim_at.lt.${resumeIso}`)
-    .select("id");
+    .limit(50);
   if (error) {
-    console.error("customer_called: queued defer", error);
+    console.error("customer_called: queued lookup", error);
     return 0;
   }
-  return (data ?? []).length;
+  const rows = (data ?? []) as Array<{ id: string; earliest_claim_at: string | null }>;
+  // Only push runs that would wake SOONER than the pause window; a run
+  // already sleeping past it keeps its later resume time.
+  const ids = rows
+    .filter((r) => r.earliest_claim_at === null || r.earliest_claim_at < resumeIso)
+    .map((r) => r.id);
+  if (ids.length === 0) return 0;
+  const { data: updated, error: updErr } = await supabase
+    .from("ai_flow_runs")
+    .update({ earliest_claim_at: resumeIso, updated_at: new Date().toISOString() })
+    .in("id", ids)
+    .eq("status", "queued")
+    .select("id");
+  if (updErr) {
+    console.error("customer_called: queued defer", updErr);
+    return 0;
+  }
+  return (updated ?? []).length;
 }
 
 /** Append the "Customer Called" tag to the caller's contact (alias-aware). */
