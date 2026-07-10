@@ -196,78 +196,110 @@ describe("db/usage", () => {
   });
 
   describe("getFleetCalendarMonthUsageTotals", () => {
-    type FleetUsagePage = {
-      data: Array<{ sms_sent?: number | null; voice_minutes_used?: number | null }> | null;
+    type FleetPage = {
+      data: Array<Record<string, number | string | null>> | null;
       error: { message: string } | null;
     };
 
-    /** Chain ending at `.range()`, resolving queued pages in order. */
-    function fleetChain(pages: FleetUsagePage[]) {
-      let call = 0;
-      const chain: Record<string, unknown> = {};
-      chain.from = vi.fn(() => chain);
-      chain.select = vi.fn(() => chain);
-      chain.gte = vi.fn(() => chain);
-      chain.order = vi.fn(() => chain);
-      chain.range = vi.fn(async () => pages[Math.min(call++, pages.length - 1)]);
-      return chain;
+    /**
+     * Per-table chains ending at `.range()`, resolving queued pages in order
+     * (daily_usage for SMS, voice_settlements for billable seconds).
+     */
+    function fleetChain(pagesByTable: Record<string, FleetPage[]>) {
+      const calls: Record<string, number> = {};
+      const rangeSpies: Record<string, ReturnType<typeof vi.fn>> = {};
+      const from = vi.fn((table: string) => {
+        const pages = pagesByTable[table] ?? [{ data: [], error: null }];
+        rangeSpies[table] ??= vi.fn(async () => {
+          const i = calls[table] ?? 0;
+          calls[table] = i + 1;
+          return pages[Math.min(i, pages.length - 1)];
+        });
+        const chain: Record<string, unknown> = {};
+        chain.select = vi.fn(() => chain);
+        chain.gte = vi.fn(() => chain);
+        chain.order = vi.fn(() => chain);
+        chain.range = rangeSpies[table];
+        return chain;
+      });
+      return { from, rangeSpies };
     }
 
-    it("sums SMS and voice minutes across the whole fleet", async () => {
-      const db = fleetChain([
-        {
-          data: [
-            { sms_sent: 3, voice_minutes_used: 10 },
-            { sms_sent: 2, voice_minutes_used: 4.5 }
-          ],
-          error: null
-        }
-      ]);
+    it("sums fleet SMS from daily_usage and voice minutes from settled billable seconds", async () => {
+      const db = fleetChain({
+        daily_usage: [{ data: [{ sms_sent: 3 }, { sms_sent: 2 }], error: null }],
+        voice_settlements: [
+          { data: [{ billable_seconds: 600 }, { billable_seconds: 270 }], error: null }
+        ]
+      });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-      expect(await getFleetCalendarMonthUsageTotals()).toEqual({ smsSent: 5, voiceMinutes: 14.5 });
+      expect(await getFleetCalendarMonthUsageTotals()).toEqual({
+        smsSent: 5,
+        voiceMinutes: 14.5
+      });
     });
 
-    it("pages past PostgREST's 1000-row cap instead of silently truncating", async () => {
-      const fullPage = Array.from({ length: 1000 }, () => ({
-        sms_sent: 1,
-        voice_minutes_used: 2
-      }));
-      const db = fleetChain([
-        { data: fullPage, error: null },
-        { data: [{ sms_sent: 5, voice_minutes_used: 1 }], error: null }
-      ]);
+    it("pages both reads past PostgREST's 1000-row cap instead of silently truncating", async () => {
+      const smsPage = Array.from({ length: 1000 }, () => ({ sms_sent: 1 }));
+      const voicePage = Array.from({ length: 1000 }, () => ({ billable_seconds: 60 }));
+      const db = fleetChain({
+        daily_usage: [
+          { data: smsPage, error: null },
+          { data: [{ sms_sent: 5 }], error: null }
+        ],
+        voice_settlements: [
+          { data: voicePage, error: null },
+          { data: [{ billable_seconds: 120 }], error: null }
+        ]
+      });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       expect(await getFleetCalendarMonthUsageTotals()).toEqual({
         smsSent: 1005,
-        voiceMinutes: 2001
+        voiceMinutes: 1002
       });
-      expect(db.range).toHaveBeenCalledTimes(2);
-      expect(db.range).toHaveBeenNthCalledWith(1, 0, 999);
-      expect(db.range).toHaveBeenNthCalledWith(2, 1000, 1999);
+      for (const table of ["daily_usage", "voice_settlements"]) {
+        expect(db.rangeSpies[table]).toHaveBeenCalledTimes(2);
+        expect(db.rangeSpies[table]).toHaveBeenNthCalledWith(1, 0, 999);
+        expect(db.rangeSpies[table]).toHaveBeenNthCalledWith(2, 1000, 1999);
+      }
     });
 
     it("treats null data as empty and null fields as zero (explicit client)", async () => {
-      const empty = fleetChain([{ data: null, error: null }]);
+      const empty = fleetChain({
+        daily_usage: [{ data: null, error: null }],
+        voice_settlements: [{ data: null, error: null }]
+      });
       expect(await getFleetCalendarMonthUsageTotals(empty as never)).toEqual({
         smsSent: 0,
         voiceMinutes: 0
       });
       expect(createSupabaseServiceClient).not.toHaveBeenCalled();
 
-      const sparse = fleetChain([
-        { data: [{ sms_sent: null }, { voice_minutes_used: null }], error: null }
-      ]);
+      const sparse = fleetChain({
+        daily_usage: [{ data: [{ sms_sent: null }], error: null }],
+        voice_settlements: [{ data: [{ billable_seconds: null }], error: null }]
+      });
       expect(await getFleetCalendarMonthUsageTotals(sparse as never)).toEqual({
         smsSent: 0,
         voiceMinutes: 0
       });
     });
 
-    it("throws when the query fails", async () => {
-      const db = fleetChain([{ data: null, error: { message: "db down" } }]);
-      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    it("throws when either read fails", async () => {
+      const smsErr = fleetChain({
+        daily_usage: [{ data: null, error: { message: "db down" } }]
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(smsErr as never);
       await expect(getFleetCalendarMonthUsageTotals()).rejects.toThrow(
         "getFleetCalendarMonthUsageTotals: db down"
+      );
+
+      const voiceErr = fleetChain({
+        daily_usage: [{ data: [], error: null }],
+        voice_settlements: [{ data: null, error: { message: "settlements down" } }]
+      });
+      await expect(getFleetCalendarMonthUsageTotals(voiceErr as never)).rejects.toThrow(
+        "getFleetCalendarMonthUsageTotals: settlements down"
       );
     });
   });
