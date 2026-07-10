@@ -290,8 +290,17 @@ create table if not exists sms_outbound_log (
   scheduled_sms_id uuid,
   constraint sms_outbound_log_pkey PRIMARY KEY (id),
   constraint sms_outbound_log_channel_check CHECK ((channel = ANY (ARRAY['sms'::text, 'rcs'::text]))),
-  constraint sms_outbound_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'agent_offer'::text, 'owner_notify'::text, 'owner_manual'::text, 'owner_scheduled'::text, 'api'::text])))
+  constraint sms_outbound_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'agent_offer'::text, 'owner_notify'::text, 'owner_manual'::text, 'owner_scheduled'::text, 'api'::text, 'voice_follow_up'::text])))
 );
+
+-- Hand-patched ahead of the next regeneration (mirrors central migration
+-- 20260816000000_sms_outbound_voice_follow_up). `create table if not exists`
+-- never refreshes constraints on an existing box, so drop/re-add explicitly —
+-- otherwise the residency replayer wedges on the first voice_follow_up row.
+alter table sms_outbound_log
+  drop constraint if exists sms_outbound_log_source_check;
+alter table sms_outbound_log
+  add constraint sms_outbound_log_source_check CHECK ((source = ANY (ARRAY['ai_flow'::text, 'agent_offer'::text, 'owner_notify'::text, 'owner_manual'::text, 'owner_scheduled'::text, 'api'::text, 'voice_follow_up'::text])));
 
 alter table sms_outbound_log add column if not exists id uuid not null default gen_random_uuid();
 alter table sms_outbound_log add column if not exists business_id uuid;
