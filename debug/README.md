@@ -5,9 +5,10 @@ VPS fleet (Rowboat + chat-worker + Ollama). They are run locally with
 [`tsx`](https://github.com/privatenumber/tsx), read credentials from the
 repo-root `.env`, and talk to the fleet over the Hostinger API + SSH.
 
-> ⚠️ **These touch production.** They read the service-role Supabase key and
-> plaintext VPS SSH keys from `.env`, and several of them recreate containers
-> on live tenant boxes. Read what a script does before running it.
+> ⚠️ **These touch production.** They read the service-role Supabase key from
+> `.env` and decrypt VPS SSH keys via `SECRETS_ENCRYPTION_KEY`, and several of
+> them recreate containers on live tenant boxes. Read what a script does
+> before running it.
 
 These scripts are intentionally **not** part of the app bundle and are **not**
 covered by the test suite (Vitest coverage is scoped to `src/lib/**`). The
@@ -21,9 +22,52 @@ shared, reusable bits they depend on live in tested modules:
 | Var | Used for |
 | --- | --- |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | look up VPS SSH keys, enqueue/inspect chat jobs |
+| `SECRETS_ENCRYPTION_KEY` | decrypt `vps_ssh_keys.private_key_pem` / `residency_backup_keys.passphrase` (G5 envelope). Anything that SSHes **fails closed without it** |
 | `HOSTINGER_API_TOKEN` | resolve each VPS's public IP (optional `HOSTINGER_API_BASE_URL`) |
 
 Run from the repo root, e.g. `tsx debug/<script>.ts`.
+
+## Security rules (agents & operators)
+
+Non-negotiable rules for anyone — human or AI agent — running or writing
+scripts here. They exist because this directory is the one place where
+production secrets, root SSH, and tenant PII all meet.
+
+- **`SECRETS_ENCRYPTION_KEY` is load-bearing and unrecoverable.** All stored
+  SSH private keys and backup passphrases are AES-256-GCM ciphertext
+  (`enc:v1:…`); reads fail closed on a missing/wrong key
+  ([src/lib/crypto/secret-encryption.ts](../src/lib/crypto/secret-encryption.ts)).
+  The `.env` value must stay identical to Vercel's. Never regenerate it
+  "to fix" a decrypt error — a new key cannot read old ciphertext, and there
+  is no recovery path. Diagnose the mismatch instead.
+- **Never print, log, or commit secret material.** PEMs, passphrases, and
+  gateway tokens must not appear in script output, PR bodies, chat replies,
+  or committed state files — print lengths or SHA-256 fingerprints instead
+  (see `passphrase_sha256` / `identifierFingerprint` for the pattern). If a
+  secret leaks into output, treat it as compromised and rotate.
+- **SSH goes through the pinning layer.** New scripts must use
+  [`sshExecPinned`](../src/lib/hostinger/ssh-pinned.ts) with the tenant's key
+  row (as `redeploy-deploy-client.ts` does), never raw `sshExec` with the
+  default accept-any policy. On `HostKeyMismatchError`: verify the box was
+  legitimately re-imaged **before** clearing the pin
+  (`updateVpsSshKeyHostKeyFingerprint(id, null)`); an unexplained mismatch is
+  a possible MITM, not a nuisance to silence.
+- **Custody states are contracts, not bugs.** A `residency_backup_keys` row
+  with `custody='customer_held'` and a NULL passphrase is a deliberate,
+  irreversible posture (the customer owns DR). Never "repair" it by minting a
+  key; flipping back to `escrowed` is an admin decision that mints a NEW key
+  and cannot read old dumps.
+- **End-user identifiers are PII.** When operating the erasure/retention
+  tooling (`/api/admin/data-deletion`, `src/lib/privacy/*`), keep phone
+  numbers/emails out of logs, commits, and transcripts wherever possible —
+  the audit trail deliberately stores only fingerprints; don't undo that by
+  pasting the identifier elsewhere.
+- **Respect the dry-run convention.** Destructive or spending scripts default
+  to dry-run and require `--apply`; new scripts must follow the same shape
+  and carry a ⚠️ line in the table above describing the blast radius.
+- **`vps-exec.ts` is root on a live box.** Prefer a purpose-built script or a
+  read-only tail (`rowboat-logs.ts`, `system-logs.ts`) over ad-hoc root
+  commands; never use it to cat secrets off a box.
 
 ## Scripts
 
