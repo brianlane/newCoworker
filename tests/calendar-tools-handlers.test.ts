@@ -12,6 +12,10 @@ vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
   getSharedCalendar: vi.fn(),
   ensureSharedCalendar: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/calendly", () => ({
+  findCalendlySlots: vi.fn(),
+  createCalendlyBookingLink: vi.fn()
+}));
 
 import {
   bookCalendarAppointment,
@@ -23,6 +27,10 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
+import {
+  createCalendlyBookingLink,
+  findCalendlySlots
+} from "@/lib/calendar-tools/calendly";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -35,6 +43,11 @@ const MS_CONN = {
   provider: "microsoft",
   connectionId: "conn-2",
   providerConfigKey: "microsoft-calendar"
+} as never;
+const CALENDLY_CONN = {
+  provider: "calendly",
+  connectionId: "conn-3",
+  providerConfigKey: "calendly"
 } as never;
 
 beforeEach(() => {
@@ -183,6 +196,30 @@ describe("findCalendarSlots", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("delegates a Calendly connection to findCalendlySlots with the window and resolved timezone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Phoenix");
+    const delegated = { ok: true, data: { slots: [] } };
+    vi.mocked(findCalendlySlots).mockResolvedValue(delegated as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 45,
+      purpose: "consult"
+    });
+    expect(result).toBe(delegated);
+    expect(vi.mocked(findCalendlySlots)).toHaveBeenCalledWith(BIZ, CALENDLY_CONN, {
+      windowStart: new Date("2026-06-12T09:00:00.000Z"),
+      windowEnd: new Date("2026-06-12T12:00:00.000Z"),
+      durationMinutes: 45,
+      purpose: "consult",
+      timezone: "America/Phoenix"
+    });
+    // The Google/Microsoft path (and its shared-calendar read) never runs.
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(getSharedCalendar)).not.toHaveBeenCalled();
   });
 
   it("computes slots from Google FreeBusy", async () => {
@@ -477,6 +514,25 @@ describe("bookCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("delegates a Calendly connection to createCalendlyBookingLink", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    const delegated = {
+      ok: true,
+      detail: "booking_link_created",
+      data: { bookingLink: "https://calendly.com/d/abc" }
+    };
+    vi.mocked(createCalendlyBookingLink).mockResolvedValue(delegated as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toBe(delegated);
+    expect(vi.mocked(createCalendlyBookingLink)).toHaveBeenCalledWith(BIZ, CALENDLY_CONN, {
+      startIso: ARGS.startIso,
+      endIso: ARGS.endIso
+    });
+    // Never creates provider events or the shared calendar.
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
   });
 
   it("books a Google event with attendee email + caller-phone fallback", async () => {

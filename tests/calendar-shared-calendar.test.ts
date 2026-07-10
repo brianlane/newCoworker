@@ -43,6 +43,11 @@ const MS_CONN = {
   connectionId: "conn-2",
   providerConfigKey: "outlook-calendar"
 } as never;
+const CALENDLY_CONN = {
+  provider: "calendly",
+  connectionId: "conn-3",
+  providerConfigKey: "calendly"
+} as never;
 
 function connRow(overrides: Record<string, unknown> = {}) {
   return {
@@ -96,6 +101,12 @@ describe("getSharedCalendar", () => {
     expect(await getSharedCalendar(BIZ)).toBeNull();
   });
 
+  it("returns null for a Calendly connection (no shared-calendar concept)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    expect(await getSharedCalendar(BIZ)).toBeNull();
+    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+  });
+
   it("returns null when the connection row has no shared calendar yet", async () => {
     expect(await getSharedCalendar(BIZ)).toBeNull();
   });
@@ -141,6 +152,12 @@ describe("getSharedCalendar", () => {
 describe("ensureSharedCalendar", () => {
   it("returns null when no calendar connection exists", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    expect(await ensureSharedCalendar(BIZ)).toBeNull();
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("returns null for a Calendly connection without creating anything", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
     expect(await ensureSharedCalendar(BIZ)).toBeNull();
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
   });
@@ -293,6 +310,11 @@ describe("ensureSharedCalendar", () => {
 describe("sharedCalendarStatus", () => {
   it("reports not-connected as null with an empty share list", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    expect(await sharedCalendarStatus(BIZ)).toEqual({ calendarId: null, sharedWith: [] });
+  });
+
+  it("reports a Calendly connection as having no shared calendar", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
     expect(await sharedCalendarStatus(BIZ)).toEqual({ calendarId: null, sharedWith: [] });
   });
 
