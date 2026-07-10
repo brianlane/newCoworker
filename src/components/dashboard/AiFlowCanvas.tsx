@@ -18,7 +18,7 @@
  *     optional per-node stats overlay shows ran/skipped/failed counts from
  *     recorded run history.
  */
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import {
   ArrowDown,
   ArrowUp,
@@ -31,7 +31,9 @@ import {
   Hourglass,
   Link2,
   Mail,
+  Maximize,
   MessageSquare,
+  Minus,
   Phone,
   Plus,
   Search,
@@ -43,9 +45,11 @@ import {
   UserPlus,
   Users,
   Webhook,
-  X
+  X,
+  ZoomIn
 } from "lucide-react";
 import type { FlowStep, FlowTrigger, StepCondition } from "@/lib/ai-flows/schema";
+import { formatDurationMinutes } from "@/lib/ai-flows/duration";
 import {
   CONDITION_LABELS,
   STEP_TYPE_HELP,
@@ -119,23 +123,6 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   outbound_call: <Phone className="h-4 w-4" />
 };
 
-/**
- * "90 min" / "2 hours" / "3 days" — wait durations in the largest whole unit,
- * so the canvas reads like the schedule it is ("gives up after 24 hours")
- * instead of raw minute counts.
- */
-function humanizeMinutes(minutes: number): string {
-  if (minutes % 1440 === 0) {
-    const d = minutes / 1440;
-    return `${d} day${d === 1 ? "" : "s"}`;
-  }
-  if (minutes % 60 === 0) {
-    const h = minutes / 60;
-    return `${h} hour${h === 1 ? "" : "s"}`;
-  }
-  return `${minutes} min`;
-}
-
 /** One-line node subtitle: the step's most identifying configured value. */
 function stepSubtitle(step: FlowStep): string {
   switch (step.type) {
@@ -157,12 +144,12 @@ function stepSubtitle(step: FlowStep): string {
       return step.prompt;
     case "sleep":
       return step.minutes !== undefined
-        ? `waits ${humanizeMinutes(step.minutes)}`
+        ? `waits ${formatDurationMinutes(step.minutes)}`
         : `until ${step.untilTime ?? "?"} (${step.timezone ?? "?"})`;
     case "wait_for_reply":
       // The timeout IS the follow-up cadence — without it the canvas can't
       // show "nudge after 2 hours, again after 24" at a glance.
-      return `from {{vars.${step.phoneVar}}} · up to ${humanizeMinutes(step.timeoutMinutes ?? 1440)}`;
+      return `from {{vars.${step.phoneVar}}} · up to ${formatDurationMinutes(step.timeoutMinutes ?? 1440)}`;
     case "branch":
       return step.question;
     case "extract_url":
@@ -221,7 +208,7 @@ function triggerHeadline(trigger: FlowTrigger): string {
       return "Run on demand";
     case "schedule":
       return trigger.everyMinutes !== undefined
-        ? `Every ${trigger.everyMinutes} min`
+        ? `Every ${formatDurationMinutes(trigger.everyMinutes)}`
         : `Daily at ${trigger.time}`;
     case "email":
       return "Inbound email (connected inbox)";
@@ -231,8 +218,12 @@ function triggerHeadline(trigger: FlowTrigger): string {
       return "Webhook event";
     case "calendar":
       return trigger.on === "event_start"
-        ? `${trigger.leadMinutes} min before a calendar event`
-        : "Calendar event created";
+        ? `${formatDurationMinutes(trigger.leadMinutes ?? 0)} before a calendar event`
+        : trigger.on === "event_end"
+          ? (trigger.followMinutes ?? 0) > 0
+            ? `${formatDurationMinutes(trigger.followMinutes ?? 0)} after a calendar event ends`
+            : "When a calendar event ends"
+          : "Calendar event created";
     case "voice":
       return trigger.direction === "outbound" ? "Outbound call (AI talks)" : "Inbound call";
   }
@@ -638,22 +629,151 @@ function TriggerNode({
   );
 }
 
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 2;
+/** Multiplicative step for the +/- buttons. */
+const ZOOM_BUTTON_FACTOR = 1.2;
+/** Multiplicative step per wheel tick (ctrl/cmd + scroll, or trackpad pinch). */
+const ZOOM_WHEEL_FACTOR = 1.1;
+
+const clampZoom = (z: number) => Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z));
+
 export function AiFlowCanvas(props: AiFlowCanvasProps) {
+  // Mural-style navigation: ctrl/cmd + scroll (or a trackpad pinch, which
+  // browsers deliver as a ctrlKey wheel event) zooms, plain scrolling and
+  // background drag pan. Zoom uses the CSS `zoom` property so the scrollable
+  // area tracks the scaled layout (a transform would leave stale scrollbars).
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [panning, setPanning] = useState(false);
+  const panStart = useRef({ x: 0, y: 0, scrollLeft: 0, scrollTop: 0 });
+
+  const zoomBy = (factor: number) =>
+    setZoom((z) => clampZoom(Math.round(z * factor * 100) / 100));
+
+  const fitToWidth = () => {
+    const el = viewportRef.current;
+    const content = contentRef.current;
+    if (!el || !content) return;
+    const contentWidth = content.getBoundingClientRect().width;
+    if (contentWidth <= 0) return;
+    setZoom((z) => clampZoom(Math.floor(z * ((el.clientWidth - 24) / contentWidth) * 100) / 100));
+  };
+
+  // React's onWheel is passive (preventDefault is ignored), so the zoom
+  // handler attaches natively. Without preventDefault a ctrl+scroll would
+  // zoom the whole page.
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const onWheel = (ev: WheelEvent) => {
+      if (!ev.ctrlKey && !ev.metaKey) return; // plain scroll keeps panning
+      ev.preventDefault();
+      const factor = ev.deltaY < 0 ? ZOOM_WHEEL_FACTOR : 1 / ZOOM_WHEEL_FACTOR;
+      setZoom((z) => clampZoom(Math.round(z * factor * 1000) / 1000));
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, []);
+
+  // Background drag pans the viewport. Window-level listeners while panning so
+  // a drag that leaves the canvas keeps tracking until mouseup.
+  useEffect(() => {
+    if (!panning) return;
+    const onMove = (ev: MouseEvent) => {
+      const el = viewportRef.current;
+      if (!el) return;
+      el.scrollLeft = panStart.current.scrollLeft - (ev.clientX - panStart.current.x);
+      el.scrollTop = panStart.current.scrollTop - (ev.clientY - panStart.current.y);
+    };
+    const onUp = () => setPanning(false);
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, [panning]);
+
+  const startPan = (ev: React.MouseEvent) => {
+    if (ev.button !== 0) return;
+    // Nodes, insert points, and controls keep their own click behavior — only
+    // a drag that starts on empty canvas pans.
+    if ((ev.target as HTMLElement).closest('button, input, select, textarea, a, [role="button"]')) {
+      return;
+    }
+    const el = viewportRef.current;
+    if (!el) return;
+    panStart.current = {
+      x: ev.clientX,
+      y: ev.clientY,
+      scrollLeft: el.scrollLeft,
+      scrollTop: el.scrollTop
+    };
+    setPanning(true);
+  };
+
   return (
-    <div className="overflow-x-auto py-2">
-      <div className="mx-auto flex min-w-fit flex-col items-center">
-        <TriggerNode
-          trigger={props.trigger}
-          selected={props.selectedId === "trigger"}
-          readOnly={props.readOnly}
-          onSelectTrigger={props.onSelectTrigger}
-        />
-        <StepChain
-          steps={props.steps}
-          container={{ kind: "trunk" }}
-          terminal
-          props={props}
-        />
+    <div className="relative">
+      <div className="absolute right-1 top-1 z-10 flex items-center gap-0.5 rounded-md border border-parchment/15 bg-deep-ink/90 px-1 py-0.5 text-parchment/60">
+        <button
+          onClick={() => zoomBy(1 / ZOOM_BUTTON_FACTOR)}
+          aria-label="Zoom out"
+          title="Zoom out (ctrl/cmd + scroll)"
+          className="p-1 hover:text-parchment"
+        >
+          <Minus className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={() => setZoom(1)}
+          title="Reset to 100%"
+          className="w-10 text-center text-[10px] font-semibold tabular-nums hover:text-parchment"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+        <button
+          onClick={() => zoomBy(ZOOM_BUTTON_FACTOR)}
+          aria-label="Zoom in"
+          title="Zoom in (ctrl/cmd + scroll)"
+          className="p-1 hover:text-parchment"
+        >
+          <ZoomIn className="h-3.5 w-3.5" />
+        </button>
+        <button
+          onClick={fitToWidth}
+          aria-label="Fit to width"
+          title="Fit to width"
+          className="p-1 hover:text-parchment"
+        >
+          <Maximize className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div
+        ref={viewportRef}
+        onMouseDown={startPan}
+        className={`max-h-[75vh] overflow-auto py-2 ${
+          panning ? "cursor-grabbing select-none" : "cursor-grab"
+        }`}
+      >
+        <div
+          ref={contentRef}
+          className="mx-auto flex min-w-fit flex-col items-center"
+          style={{ zoom } as CSSProperties}
+        >
+          <TriggerNode
+            trigger={props.trigger}
+            selected={props.selectedId === "trigger"}
+            readOnly={props.readOnly}
+            onSelectTrigger={props.onSelectTrigger}
+          />
+          <StepChain
+            steps={props.steps}
+            container={{ kind: "trunk" }}
+            terminal
+            props={props}
+          />
+        </div>
       </div>
     </div>
   );

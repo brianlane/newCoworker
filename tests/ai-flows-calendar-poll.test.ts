@@ -9,10 +9,12 @@ vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 
 import {
   CALENDAR_CREATED_LOOKBACK_MINUTES,
+  CALENDAR_END_LOOKBACK_MINUTES,
   CALENDAR_POLL_MAX_EVENTS,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
   eventCreatedDue,
+  eventEndDue,
   eventStartDue,
   graphTimeIso,
   normalizeGoogleEvent,
@@ -62,6 +64,14 @@ const startTrigger = (leadMinutes: number, overrides: Record<string, unknown> = 
   ...overrides
 });
 
+const endTrigger = (followMinutes?: number, overrides: Record<string, unknown> = {}) => ({
+  channel: "calendar",
+  on: "event_end",
+  ...(followMinutes !== undefined ? { followMinutes } : {}),
+  conditions: [],
+  ...overrides
+});
+
 /** Chainable service-client stub serving the (paged) ai_flows listing. */
 function dbWithRange(range: ReturnType<typeof vi.fn>) {
   const order = vi.fn(() => ({ range }));
@@ -105,6 +115,36 @@ describe("eventStartDue", () => {
   });
 });
 
+describe("eventEndDue", () => {
+  const now = Date.parse("2026-07-08T12:00:00Z");
+  it("is due from end + followMinutes for the bounded lookback window", () => {
+    const endedAt = (iso: string) => ({ endIso: iso });
+    // Ended 60 min ago with a 60-min follow → due exactly now.
+    expect(eventEndDue(endedAt("2026-07-08T11:00:00Z"), 60, now)).toBe(true);
+    // Ended 5 min ago, no follow → due (still inside the lookback).
+    expect(eventEndDue(endedAt("2026-07-08T11:55:00Z"), 0, now)).toBe(true);
+    // Not yet: the follow delay hasn't elapsed.
+    expect(eventEndDue(endedAt("2026-07-08T11:55:00Z"), 30, now)).toBe(false);
+    // Still in progress: the event hasn't even ended.
+    expect(eventEndDue(endedAt("2026-07-08T12:30:00Z"), 0, now)).toBe(false);
+    // Too old: past the lookback window (no replay of ancient appointments).
+    expect(
+      eventEndDue(
+        endedAt(new Date(now - (CALENDAR_END_LOOKBACK_MINUTES + 1) * 60_000).toISOString()),
+        0,
+        now
+      )
+    ).toBe(false);
+  });
+  it("is never due without a parseable end", () => {
+    expect(eventEndDue({ endIso: undefined }, 0, now)).toBe(false);
+    expect(eventEndDue({ endIso: "not-a-date" }, 0, now)).toBe(false);
+  });
+  it("skips all-day events (their end is a date, not a moment)", () => {
+    expect(eventEndDue({ endIso: "2026-07-08T11:55:00Z", allDay: true }, 0, now)).toBe(false);
+  });
+});
+
 describe("eventCreatedDue", () => {
   it("fires only inside the created lookback window", () => {
     const now = Date.now();
@@ -133,6 +173,12 @@ describe("calendarDedupeKey", () => {
       calendarDedupeKey("event_start", { id: "e1", startIso: "2026-07-08T12:20:00Z" })
     ).toBe("cal:e1:2026-07-08T12:20:00Z");
     expect(calendarDedupeKey("event_start", { id: "e1" })).toBe("cal:e1:");
+  });
+  it("keys end mode per occurrence, distinct from a start firing", () => {
+    expect(
+      calendarDedupeKey("event_end", { id: "e1", endIso: "2026-07-08T13:00:00Z" })
+    ).toBe("cal:e1:end:2026-07-08T13:00:00Z");
+    expect(calendarDedupeKey("event_end", { id: "e1" })).toBe("cal:e1:end:");
   });
 });
 
@@ -441,6 +487,69 @@ describe("pollCalendarTriggers", () => {
     );
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("Upcoming calendar event") })
+    );
+  });
+
+  it("enqueues a run after a Google event ends, keyed per occurrence by end time", async () => {
+    const endIso = isoIn(-70); // ended 70 min ago
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            id: "done-appt",
+            summary: "Policy review",
+            start: { dateTime: isoIn(-130) },
+            end: { dateTime: endIso }
+          },
+          // Ended too recently for the 70-min follow → not yet due.
+          { id: "just-ended", summary: "Recent", end: { dateTime: isoIn(-2) } },
+          // Still in progress → not due.
+          { id: "ongoing", summary: "Live", end: { dateTime: isoIn(30) } }
+        ]
+      }
+    } as never);
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-end", endTrigger(70))]));
+    expect(res.enqueued).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        flowId: "f-end",
+        dedupeKey: `cal:done-appt:end:${endIso}`,
+        trigger: expect.objectContaining({ ends_at: endIso })
+      }),
+      expect.anything()
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_run_enqueued_calendar",
+        message: expect.stringContaining("Completed calendar event")
+      })
+    );
+  });
+
+  it("sizes the recently-ended fetch window to the largest follow + lookback", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+    const before = Date.now();
+    await pollCalendarTriggers(dbWith([flowRow("f-end", endTrigger(120))]));
+    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    const timeMin = decodeURIComponent(/timeMin=([^&]+)/.exec(endpoint)![1]);
+    const timeMax = decodeURIComponent(/timeMax=([^&]+)/.exec(endpoint)![1]);
+    const backMinutes = (before - Date.parse(timeMin)) / 60_000;
+    expect(backMinutes).toBeGreaterThanOrEqual(120 + CALENDAR_END_LOOKBACK_MINUTES - 0.1);
+    expect(backMinutes).toBeLessThan(120 + CALENDAR_END_LOOKBACK_MINUTES + 1);
+    // Upper bound is now — future events are irrelevant to end mode.
+    expect(Math.abs(Date.parse(timeMax) - before)).toBeLessThan(60_000);
+  });
+
+  it("defaults a missing followMinutes to zero (fires right at the end)", async () => {
+    const endIso = isoIn(-1);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: { items: [{ id: "fresh", summary: "Walkthrough", end: { dateTime: endIso } }] }
+    } as never);
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-end", endTrigger())]));
+    expect(res.enqueued).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ dedupeKey: `cal:fresh:end:${endIso}` }),
+      expect.anything()
     );
   });
 

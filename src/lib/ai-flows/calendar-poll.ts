@@ -9,12 +9,16 @@
  * the flow's conditions over the event text, and enqueues a queued
  * ai_flow_run per match.
  *
- * Two firing modes per flow:
+ * Three firing modes per flow:
  *   - event_created: an event whose `created` timestamp falls inside the poll
  *     lookback window (dedupe key `cal:<eventId>`).
  *   - event_start: an event starting within the next `leadMinutes` (dedupe
  *     key `cal:<eventId>:<startIso>`, so each occurrence of a recurring event
  *     fires once — and a reschedule legitimately fires again).
+ *   - event_end: an event whose ACTUAL end time passed `followMinutes` ago
+ *     (dedupe key `cal:<eventId>:end:<endIso>`). Anchored to the event's real
+ *     end, so a post-appointment follow-up works for a 30-minute and a 2-hour
+ *     appointment alike — no guessed sleep after an event_start trigger.
  *
  * Exactly-once: the unique (flow_id, dedupe_key) index on ai_flow_runs
  * absorbs repeat polls, so unlike the email poller there is no seen-marker
@@ -51,6 +55,14 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const CALENDAR_CREATED_LOOKBACK_MINUTES = 15;
 
 /**
+ * How long an event_end firing stays due past its exact moment (end +
+ * followMinutes). Covers missed ticks the same way the created lookback does,
+ * while keeping a flow that was disabled for a week from firing for every
+ * appointment in between when re-enabled.
+ */
+export const CALENDAR_END_LOOKBACK_MINUTES = 15;
+
+/**
  * Cap on events read per (calendar, query) per poll. Calendars are orders of
  * magnitude quieter than mailboxes, so a single capped page suffices; a full
  * page is flagged with an overflow warning instead of paging further.
@@ -80,8 +92,10 @@ type CalendarFlow = {
   business_id: string;
   /** Which calendar(s) the flow watches ("both" expands to primary+shared). */
   sources: CalendarSource[];
-  on: "event_created" | "event_start";
+  on: "event_created" | "event_start" | "event_end";
   leadMinutes: number;
+  /** event_end only: minutes after the event's actual end (0 = right at it). */
+  followMinutes: number;
   conditions: TriggerCondition[];
 };
 
@@ -110,6 +124,24 @@ export function eventStartDue(
   return startMs - leadMinutes * 60_000 <= nowMs && startMs > nowMs;
 }
 
+/** Whether an event_end flow is due for `ev` at `nowMs` (pure, for tests). */
+export function eventEndDue(
+  ev: Pick<CalendarEventInput, "endIso" | "allDay">,
+  followMinutes: number,
+  nowMs: number
+): boolean {
+  // An all-day event's "end" is a calendar-local date, not a moment in time —
+  // skipped for the same reason event_start skips all-day events.
+  if (ev.allDay) return false;
+  if (!ev.endIso) return false;
+  const endMs = Date.parse(ev.endIso);
+  if (!Number.isFinite(endMs)) return false;
+  const dueMs = endMs + followMinutes * 60_000;
+  // Due from the exact moment for a bounded lookback, so a missed tick still
+  // fires but a re-enabled flow doesn't replay old appointments.
+  return dueMs <= nowMs && nowMs < dueMs + CALENDAR_END_LOOKBACK_MINUTES * 60_000;
+}
+
 /** Whether an event_created flow should fire for `ev` at `nowMs` (pure). */
 export function eventCreatedDue(
   ev: Pick<CalendarEventInput, "createdIso">,
@@ -121,12 +153,16 @@ export function eventCreatedDue(
   return createdMs >= nowMs - CALENDAR_CREATED_LOOKBACK_MINUTES * 60_000;
 }
 
-/** Run-dedupe key for a due event (per-occurrence in event_start mode). */
+/** Run-dedupe key for a due event (per-occurrence in start/end modes). */
 export function calendarDedupeKey(
   on: CalendarFlow["on"],
-  ev: Pick<CalendarEventInput, "id" | "startIso">
+  ev: Pick<CalendarEventInput, "id" | "startIso" | "endIso">
 ): string {
-  return on === "event_start" ? `cal:${ev.id}:${ev.startIso ?? ""}` : `cal:${ev.id}`;
+  if (on === "event_start") return `cal:${ev.id}:${ev.startIso ?? ""}`;
+  // The `end:` segment keeps an end firing distinct from a start firing when
+  // one flow (or two flows sharing an event) uses both modes.
+  if (on === "event_end") return `cal:${ev.id}:end:${ev.endIso ?? ""}`;
+  return `cal:${ev.id}`;
 }
 
 // ── Google normalization ────────────────────────────────────────────────────
@@ -296,14 +332,19 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
   return { events: items, overflowed: items.length >= CALENDAR_POLL_MAX_EVENTS };
 }
 
-/** Events starting inside [now, now + horizon] (event_start candidates). */
-async function fetchUpcoming(
+/**
+ * Events OVERLAPPING [timeMinMs, timeMaxMs] (both providers use intersection
+ * semantics: Google's timeMin/timeMax bound the event's end/start, Graph's
+ * calendarView is a range view). Serves both start-mode (window = [now,
+ * now + horizon]) and end-mode (window = [now - follow - lookback, now]).
+ */
+async function fetchOverlapping(
   t: FetchTarget,
-  nowMs: number,
-  horizonMinutes: number
+  timeMinMs: number,
+  timeMaxMs: number
 ): Promise<CalendarFetch> {
-  const timeMin = new Date(nowMs).toISOString();
-  const timeMax = new Date(nowMs + horizonMinutes * 60_000).toISOString();
+  const timeMin = new Date(timeMinMs).toISOString();
+  const timeMax = new Date(timeMaxMs).toISOString();
   if (t.provider === "google") {
     const calId = encodeURIComponent(t.calendarId ?? "primary");
     // singleEvents expands recurrences into occurrence rows, so each
@@ -349,6 +390,7 @@ function calendarFlowsFrom(
     calendar?: unknown;
     on?: unknown;
     leadMinutes?: unknown;
+    followMinutes?: unknown;
     conditions?: unknown;
   };
   const out: CalendarFlow[] = [];
@@ -362,9 +404,14 @@ function calendarFlowsFrom(
     for (let ti = 0; ti < triggers.length; ti++) {
       const trig = triggers[ti];
       if (trig?.channel !== "calendar") continue;
-      if (trig.on !== "event_created" && trig.on !== "event_start") continue;
+      if (trig.on !== "event_created" && trig.on !== "event_start" && trig.on !== "event_end") {
+        continue;
+      }
       const leadMinutes = typeof trig.leadMinutes === "number" ? trig.leadMinutes : 0;
       if (trig.on === "event_start" && typeof trig.leadMinutes !== "number") continue;
+      // followMinutes is optional in event_end mode: omitted = fire right at
+      // the event's end.
+      const followMinutes = typeof trig.followMinutes === "number" ? trig.followMinutes : 0;
       const calendar =
         trig.calendar === "primary" || trig.calendar === "shared" ? trig.calendar : "both";
       out.push({
@@ -374,6 +421,7 @@ function calendarFlowsFrom(
         sources: calendar === "both" ? ["primary", "shared"] : [calendar],
         on: trig.on,
         leadMinutes,
+        followMinutes,
         conditions: Array.isArray(trig.conditions) ? (trig.conditions as TriggerCondition[]) : []
       });
     }
@@ -479,11 +527,24 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
             .filter((f) => f.on === "event_start" && f.sources.includes(source))
             .map((f) => f.leadMinutes);
           if (leads.length > 0) {
-            const fetched = await fetchUpcoming(
+            const horizonMinutes = Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES;
+            const fetched = await fetchOverlapping(
               target,
               nowMs,
-              Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+              nowMs + horizonMinutes * 60_000
             );
+            push(fetched.events);
+            overflowed ||= fetched.overflowed;
+          }
+          // end-mode flows share one recently-ended window sized to the
+          // largest follow delay (plus the due lookback, so an event still
+          // inside its firing window is always listed).
+          const follows = group
+            .filter((f) => f.on === "event_end" && f.sources.includes(source))
+            .map((f) => f.followMinutes);
+          if (follows.length > 0) {
+            const backMinutes = Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES;
+            const fetched = await fetchOverlapping(target, nowMs - backMinutes * 60_000, nowMs);
             push(fetched.events);
             overflowed ||= fetched.overflowed;
           }
@@ -544,7 +605,9 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
             const due =
               flow.on === "event_start"
                 ? eventStartDue(ev, flow.leadMinutes, nowMs)
-                : eventCreatedDue(ev, nowMs);
+                : flow.on === "event_end"
+                  ? eventEndDue(ev, flow.followMinutes, nowMs)
+                  : eventCreatedDue(ev, nowMs);
             if (!due) continue;
             const scope = calendarTriggerScope(ev);
             if (
@@ -575,12 +638,15 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
               message:
                 flow.on === "event_start"
                   ? `Upcoming calendar event "${ev.title}" triggered a run`
-                  : `New calendar event "${ev.title}" triggered a run`,
+                  : flow.on === "event_end"
+                    ? `Completed calendar event "${ev.title}" triggered a run`
+                    : `New calendar event "${ev.title}" triggered a run`,
               payload: {
                 flow_id: flow.id,
                 event_id: ev.id,
                 calendar: ev.calendar,
-                starts_at: ev.startIso ?? null
+                starts_at: ev.startIso ?? null,
+                ends_at: ev.endIso ?? null
               }
             });
           }

@@ -37,6 +37,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"channel":"webhook","conditions":[...]}                                                // an outside tool posts a lead/event to the coworker\'s webhook (Meta/Facebook lead ads via Zapier or Make, website forms, any API caller); [] matches every event',
   '  {"channel":"calendar","on":"event_created","calendar":"both","conditions":[...]}        // a new event is added to the connected calendar ("primary"), the shared NewCoworker calendar ("shared"), or "both"',
   '  {"channel":"calendar","on":"event_start","leadMinutes":30,"calendar":"both","conditions":[...]}  // N minutes before an event starts (reminders)',
+  '  {"channel":"calendar","on":"event_end","followMinutes":60,"calendar":"both","conditions":[...]}   // N minutes AFTER an event\'s ACTUAL end time (post-appointment follow-ups; followMinutes optional, 0/omitted = right at the end). Prefer this over event_start + sleep for anything that happens after the appointment — it tracks the event\'s real length',
   '  {"channel":"voice","fromE164":"+15551234567"}                                           // a phone CALL comes in from that number (real-time call routing; needs the caller\'s number)',
   '  {"channel":"voice","direction":"outbound"}                                              // the owner places an AI outbound call via the Place-call button; add time/timezone or everyMinutes to auto-dial on a schedule',
   "",

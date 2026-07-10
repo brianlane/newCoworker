@@ -598,6 +598,19 @@ describe("isExecutableDefinition", () => {
         trigger: { channel: "calendar", on: "event_start", leadMinutes: 30, conditions: [] }
       })
     ).toBe(true);
+    // event_end: followMinutes optional (omitted = fire right at the end).
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_end", followMinutes: 60, conditions: [] }
+      })
+    ).toBe(true);
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_end", conditions: [] }
+      })
+    ).toBe(true);
   });
   it("rejects malformed schedule / email triggers", () => {
     // schedule: neither mode, both modes, or a half-configured daily mode

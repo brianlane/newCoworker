@@ -817,9 +817,16 @@ function isExecutableTrigger(trigger: Record<string, unknown> | undefined): bool
       break;
     case "calendar": {
       // Calendar poll (aiflow-calendar-poll): conditions + a firing mode;
-      // event_start additionally needs the leadMinutes offset.
+      // event_start additionally needs the leadMinutes offset (event_end's
+      // followMinutes is optional — omitted means "right when it ends").
       if (!Array.isArray(trigger.conditions)) return false;
-      if (trigger.on !== "event_created" && trigger.on !== "event_start") return false;
+      if (
+        trigger.on !== "event_created" &&
+        trigger.on !== "event_start" &&
+        trigger.on !== "event_end"
+      ) {
+        return false;
+      }
       if (trigger.on === "event_start" && typeof trigger.leadMinutes !== "number") return false;
       break;
     }
