@@ -153,8 +153,11 @@ tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extract
 ```
 
 > ⚠️ These touch production (service-role key + decryptable VPS SSH keys via
-> `SECRETS_ENCRYPTION_KEY`, and they recreate live containers). See
-> [`debug/README.md`](debug/README.md).
+> `SECRETS_ENCRYPTION_KEY`, and they recreate live containers). Before running
+> or writing anything here, read the **Security rules (agents & operators)**
+> section of [`debug/README.md`](debug/README.md) — key handling, no-secret-
+> output, mandatory SSH host-key pinning, custody semantics, and the dry-run
+> convention.
 
 ## Security: posture summary (buyer-facing)
 
