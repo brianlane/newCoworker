@@ -548,4 +548,21 @@ Intentional operational exemptions (NOT metered against the customer's monthly S
 
 ## All work and code modifications must follow this flow
 
-For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge apply migrations, deploy functions, vps needed redeploy, seed etc then return back to main.
+For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge apply migrations, deploy functions, vps needed redeploy, seed etc then return back to main -> **clean up the worktree** (mandatory, see below).
+
+### Worktree cleanup (mandatory after merge)
+
+Never leave a worktree behind once its PR is merged. Orphaned worktrees have
+previously left `next-server` dev processes running for days, pinning ~3.5 CPU
+cores and draining the laptop battery. After returning to main:
+
+1. **Kill anything still running out of the worktree** — dev servers
+   especially. Check with `ps aux | grep newCoworker-wt-` (or
+   `lsof +D /Users/brianlane/newCoworker-wt-<name>`) and kill any PIDs found
+   (`kill`, then `kill -9` if they don't die).
+2. **Remove the worktree** from the main repo:
+   `git worktree remove /Users/brianlane/newCoworker-wt-<name>` then
+   `git worktree prune`. Worktrees live at `/Users/brianlane/newCoworker-wt-*`.
+3. **Delete the merged local branch**: `git branch -d <branch>`.
+4. **Verify**: `git worktree list` shows only the main checkout, and
+   `ps aux | grep newCoworker-wt-` finds nothing.
