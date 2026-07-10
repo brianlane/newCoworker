@@ -855,7 +855,27 @@ async function runStep(
         `unknown step type "${step.type}" — this ai-flow-worker deploy is older than the flow definition; redeploy the worker from main`
     };
   }
-  if (!plan.ok) return { kind: "fail", error: plan.error };
+  if (!plan.ok) {
+    // When the self-number scrub emptied the lead phone earlier in this run,
+    // an unusable-phone failure here is the scrub's doing — text the owner a
+    // plain-words explanation alongside the failed run (which otherwise reads
+    // as a technical error; the exact confusion from Truly's office-line
+    // test). Sent at failure time, not scrub time, because a later extraction
+    // step can still backfill a real phone. Best-effort + idempotent per run.
+    if (step.type === "upsert_customer" && scope.vars[SELF_PHONE_SCRUBBED_VAR] === "1") {
+      try {
+        await sendOwnerSms(
+          supabase,
+          run,
+          "A lead just came in, but their phone number matched your own business number, so I can't text them (this happens when a test form uses the office line, or a lead source page shows your number). Check the lead's real number and reach out directly.",
+          `aiflow-selfphone:${run.id}`
+        );
+      } catch (e) {
+        console.error("self-phone scrub owner notice failed", e);
+      }
+    }
+    return { kind: "fail", error: plan.error };
+  }
   const action = plan.action;
 
   switch (action.kind) {
@@ -1404,24 +1424,18 @@ async function scrubExtractedSelfPhones(
       step: stepLabel,
       cleared: scrub.cleared
     });
-    // Tell the owner in plain words RIGHT NOW: a lead just arrived whose
-    // phone was the business's own number, so the flow can't text them and
-    // later steps will fail or skip. Without this the run just dies with a
-    // technical "not a usable phone number" error (the exact confusion from
-    // Truly's office-number test). Best-effort + idempotent per run.
-    try {
-      await sendOwnerSms(
-        supabase,
-        run,
-        `[AiFlow] A lead just came in, but their phone number matched your own business number, so I can't text them (this happens when a test form uses the office line, or a lead source page shows your number). Check the lead's real number and reach out directly.`,
-        `aiflow-selfphone:${run.id}`
-      );
-    } catch (e) {
-      console.error("self-phone scrub owner notice failed", e);
-    }
+    // Mark the run (in persisted vars, like the wait_for_reply `__waited_*`
+    // markers) so a DOWNSTREAM unusable-phone failure can tell the owner why
+    // in plain words. Deliberately not notifying here: a later extraction
+    // step (e.g. email_extract with fillOnlyEmpty) may still backfill a real
+    // lead phone, in which case nothing is wrong.
+    scope.vars[SELF_PHONE_SCRUBBED_VAR] = "1";
   }
   return scrub.values;
 }
+
+/** Persisted-vars marker: this run's extracted lead phone was self-scrubbed. */
+const SELF_PHONE_SCRUBBED_VAR = "__self_phone_scrubbed";
 
 async function browseStep(
   supabase: Supabase,
