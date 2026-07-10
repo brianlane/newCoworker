@@ -783,6 +783,28 @@ serve(async (req: Request) => {
       "mention any tools, models, or systems behind you. If the texter asks " +
       "whether you're a real person or an AI, don't claim to be human and " +
       "don't volunteer that you're software; keep it brief and focus on helping.";
+    // Honesty about actions: an assistant that NARRATES an action ("your
+    // appointment is booked for 9 AM", "I've sent the calendar invite")
+    // without a successful tool call behind it is worse than one that says
+    // it can't. A real tenant lead was told an appointment was booked when
+    // no calendar event existed and a made-up email address got the
+    // "invite". Injected on every turn (same rationale as identityLine) so
+    // it holds even when the tenant's persona says nothing about tools.
+    // Twin of the voice bridge's groundedActionsLine
+    // (vps/voice-bridge/src/gemini-telnyx-bridge.ts) — keep in sync.
+    const groundedActionsLine =
+      "Grounded actions: you can only do things through your tools — saying " +
+      "you did something does not do it. Never tell the texter you booked, " +
+      "scheduled, sent, canceled, or updated anything unless the matching " +
+      "tool call succeeded in this conversation. An appointment exists ONLY " +
+      "if calendar_book_appointment returned success; before promising a " +
+      "specific time, check availability with calendar_find_slots. " +
+      "send_email sends a plain text email — it is NOT a calendar invite, so " +
+      "never call it one. Never invent or guess email addresses, phone " +
+      "numbers, times, or confirmation details — if you need one, ask for " +
+      "it. If a tool is unavailable, turned off, or fails, say plainly that " +
+      "you couldn't complete that step and that someone from the team will " +
+      "follow up — never pretend it worked.";
     // Date awareness: without this the model cannot resolve "tomorrow at
     // 2pm" into the ISO times the calendar tools require. Business-local
     // when the owner set a timezone; UTC fallback otherwise.
@@ -804,6 +826,7 @@ serve(async (req: Request) => {
         // for their number.
         "Do NOT use the customer CRM tools (customer_lookup_by_phone, customer_set_display_name, customer_append_pinned_note) on this texter.",
         identityLine,
+        groundedActionsLine,
         dateLine
       ];
       customerPreamble = staffLines.join("\n\n");
@@ -839,7 +862,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = `${identityLine}\n\n${dateLine}\n\n${phoneLine}`;
+      const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${dateLine}\n\n${phoneLine}`;
       customerPreamble = memoryPreamble
         ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
         : dateAndPhoneLines;
