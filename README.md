@@ -152,8 +152,65 @@ tsx debug/logs.ts        [businessId]   # tail worker memory/job logs
 tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extraction
 ```
 
-> ⚠️ These touch production (service-role key + plaintext VPS SSH keys, and
-> they recreate live containers). See [`debug/README.md`](debug/README.md).
+> ⚠️ These touch production (service-role key + decryptable VPS SSH keys via
+> `SECRETS_ENCRYPTION_KEY`, and they recreate live containers). See
+> [`debug/README.md`](debug/README.md).
+
+## Security: posture summary (buyer-facing)
+
+The narrative below is the sales/questionnaire-ready synthesis of the controls
+detailed in the sections that follow. Keep it in lockstep with the code — it is
+shown to prospects' security reviewers, so nothing in it may overstate what
+ships.
+
+> **Your customers' data lives where you can point to it.** New Coworker is
+> built around per-tenant physical isolation: every business runs on its own
+> dedicated server with its own SSH keypair, its own gateway credential, and
+> its own outbound-only tunnel — one credential opens exactly one box, so no
+> tenant's compromise can reach another's data. For enterprise deals with
+> residency requirements, the sensitive layer — contacts and AI memory, call
+> transcripts, SMS and email content — physically resides on a Canadian server
+> or on hardware you own, with a documented migration and purge runbook,
+> parity verification before cutover, and encrypted disaster-recovery dumps
+> whose decryption key you can choose to hold yourself: in that mode we keep
+> only a fingerprint and provably cannot read your backups. Bring-your-own-
+> server placements aren't taken on trust — an automated preflight verifies
+> disk encryption, co-tenancy, and hardware posture before any data lands, and
+> hourly posture reports alert on drift afterward.
+>
+> **Defense in depth, verified rather than promised.** Every stored secret
+> gets two independent layers: the database denies by default (row-level
+> security everywhere, secret tables readable by no client role at all, an
+> event trigger that automatically re-locks any new function), and on top of
+> that, SSH private keys and backup passphrases are wrapped in application-
+> layer AES-256-GCM encryption — a database dump alone exposes nothing, and
+> reads fail closed rather than ever handing ciphertext to a live system.
+> Fleet operations are protected against network interception end to end:
+> each server's SSH host key is captured at provision and every subsequent
+> platform connection — deploys, backups, wipes — verifies it strictly, so a
+> machine-in-the-middle produces a loud, typed failure instead of a session.
+> Tenant servers expose no public attack surface (default-deny firewall, all
+> services loopback-bound, ingress via outbound-only tunnel), telecom
+> webhooks are signature-verified and rate-limited, and the production
+> database passes its security advisor with zero extension/configuration
+> warnings on our side of the fence.
+>
+> **Privacy is operational, not aspirational.** Data lifecycle controls exist
+> as running code: configurable per-tenant retention windows automatically
+> prune aged transcripts, messages, and email history — on the tenant's own
+> server too, not just centrally; a verified end-user erasure request deletes
+> one person across every content table on both stores, and the audit trail
+> records a cryptographic fingerprint rather than re-creating the identifier
+> it erased. Account cancellation ends in a real wipe — data, backups, phone
+> numbers, and (for BYOS) the box itself. The baseline is where you'd expect
+> it: TLS on every hop, payments fully delegated to Stripe so card data never
+> touches the platform, role-based authorization with security-logged
+> refusals, and a published subprocessor list with honest cross-border
+> disclosure (AI voice processing and telecom carriage) ready for your
+> privacy officer's assessment. All of it is held in place by engineering
+> guardrails — a 100%-coverage test gate, static security analysis, and
+> automated review on every change — so the posture you're buying is the
+> posture that ships next month too.
 
 ## Security standards & posture
 
@@ -181,9 +238,25 @@ these standards:
   and `residency_backup_keys.passphrase` are wrapped in an AES-256-GCM envelope
   keyed by `SECRETS_ENCRYPTION_KEY` ([src/lib/crypto/secret-encryption.ts](src/lib/crypto/secret-encryption.ts)) —
   a DB dump or leaked service-role key alone no longer exposes them. Reads
-  fail closed on undecryptable rows; legacy plaintext passes through until
-  `debug/encrypt-secrets-backfill.ts --apply` converts it. Gateway tokens stay
-  plaintext BY DESIGN (the value itself is the symmetric HMAC secret on the box).
+  fail closed on undecryptable rows; plaintext pass-through exists only for
+  rollout ordering (the production stock was converted via
+  `debug/encrypt-secrets-backfill.ts --apply`, which is idempotent for any
+  future re-run). Gateway tokens stay plaintext BY DESIGN (the value itself
+  is the symmetric HMAC secret on the box).
+- **Data lifecycle: retention windows + end-user erasure (admin-only).**
+  `businesses.data_retention_days` (min 30, NULL = keep forever) is enforced
+  by a daily sweep (pg_cron → Edge `data-retention-sweep` → internal Next
+  route → [src/lib/privacy/retention.ts](src/lib/privacy/retention.ts)) that
+  prunes content history past the window — on the tenant's box too for
+  dual/vps residency tenants; contacts are exempt. Verified privacy requests
+  (PIPEDA / Law 25 / CCPA erasure) run through
+  [src/lib/privacy/deletion.ts](src/lib/privacy/deletion.ts) via
+  `POST /api/admin/data-deletion`: one person's rows are deleted across every
+  content table, central AND box, matching identifiers literally
+  (ILIKE-escaped) including phone aliases; the `coworker_logs` audit row
+  stores a sha256 fingerprint of the identifier, never the identifier itself.
+  An unreachable residency box fails the request loudly instead of reporting
+  a false "deleted".
 - **"RLS enabled, no policies" is the deny-all design, not an oversight.** The
   Supabase advisor reports INFO-level `rls_enabled_no_policy` findings for a
   set of service-role-only tables (secret stores like `vps_ssh_keys`,
