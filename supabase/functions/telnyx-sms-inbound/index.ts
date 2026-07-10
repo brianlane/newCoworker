@@ -2705,7 +2705,48 @@ serve(async (req: Request) => {
     // Team-member gate, normal path (the Safe Mode branch above applies the
     // same gate before its forward). Staff get an internal-assistant reply
     // when enabled (the default), with an optional owner forward.
+    //
+    // ONE exception, for flow testability: when a parked wait_for_reply run is
+    // watching THIS staff number (an employee testing a flow with their own
+    // phone), the flow owns the turn — resume the wait with their message and
+    // persist a suppressed audit row instead of the internal-assistant reply.
+    // Everything else about staff treatment is unchanged (no lead runs, no
+    // customer profile; the contact/tag guards protect staff rows separately),
+    // and offer replies ("1"/"2"/"86") were already intercepted above, so a
+    // claim can never be swallowed by a coincidental wait.
     if (teamMember) {
+      const staffWaitResumed = await resumeAwaitingReplyRun(
+        supabase,
+        businessId,
+        from,
+        inboundSmsBody(payload)
+      );
+      if (staffWaitResumed) {
+        const { error: swJobErr } = await supabase.from("sms_inbound_jobs").insert({
+          business_id: businessId,
+          telnyx_event_id: eventId,
+          payload: envelope as unknown as Record<string, unknown>,
+          status: "done",
+          suppress_reply: true,
+          customer_e164: from,
+          staff_kind: teamMemberKind ?? "team",
+          staff_name: teamMember.name?.trim() || null,
+          outbound_idempotency_key: crypto.randomUUID(),
+          channel: inboundChannel
+        });
+        if (swJobErr && (swJobErr as { code?: string }).code !== "23505") {
+          console.error("staff wait-resume inbound persist", swJobErr);
+        }
+        await telemetryRecord(supabase, "ai_flow_staff_wait_resumed", {
+          business_id: businessId,
+          event_id: eventId,
+          staff_kind: teamMemberKind ?? "team"
+        });
+        return new Response(JSON.stringify({ ok: true, path: "staff_wait_resumed" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
       return await respondTeamMemberGate(teamMember, teamMemberKind ?? "team", {
         reply: staffReplyEnabled,
         forward: staffForwardEnabled
