@@ -381,6 +381,21 @@ describe("enqueueAiFlowRun", () => {
     );
   });
 
+  it("passes earliestClaimAt through as earliest_claim_at (drip release)", async () => {
+    const { db, builder } = makeDb({ single: RUN_ROW });
+    const at = "2026-07-10T21:00:00.000Z";
+    await enqueueAiFlowRun({ ...input, earliestClaimAt: at }, db as never);
+    expect(builder.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ earliest_claim_at: at })
+    );
+  });
+
+  it("omits earliest_claim_at when not provided, so the run is claimable immediately", async () => {
+    const { db, builder } = makeDb({ single: RUN_ROW });
+    await enqueueAiFlowRun(input, db as never);
+    expect(builder.insert.mock.calls[0][0]).not.toHaveProperty("earliest_claim_at");
+  });
+
   it("returns null on a dedupe collision (23505)", async () => {
     const { db } = makeDb({ singleError: { message: "dup", code: "23505" } as never });
     expect(await enqueueAiFlowRun(input, db as never)).toBeNull();
