@@ -47,6 +47,7 @@ export type WebchatMessageRow = {
   business_id: string;
   role: WebchatMessageRole;
   content: string;
+  client_message_id?: string | null;
   created_at: string;
 };
 
@@ -328,16 +329,64 @@ export async function appendWebchatMessage(
   businessId: string,
   role: WebchatMessageRole,
   content: string,
+  opts: { clientMessageId?: string | null } = {},
   client?: SupabaseClient
 ): Promise<WebchatMessageRow> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("webchat_messages")
-    .insert({ session_id: sessionId, business_id: businessId, role, content })
+    .insert({
+      session_id: sessionId,
+      business_id: businessId,
+      role,
+      content,
+      client_message_id: opts.clientMessageId ?? null
+    })
     .select()
     .single();
   if (error) throw new Error(`appendWebchatMessage: ${error.message}`);
   return data as WebchatMessageRow;
+}
+
+/** Postgres unique-violation detector (same heuristics as dashboard-chat). */
+export function isWebchatUniqueViolation(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return msg.includes("23505") || msg.toLowerCase().includes("duplicate key");
+}
+
+/**
+ * Idempotent-send lookup: the visitor message previously persisted under
+ * this client-generated id, if any. Backs the widget's retry-after-network-
+ * failure path so one send can never produce two rows / two jobs.
+ */
+export async function getWebchatMessageByClientId(
+  sessionId: string,
+  clientMessageId: string,
+  client?: SupabaseClient
+): Promise<WebchatMessageRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_messages")
+    .select("*")
+    .eq("session_id", sessionId)
+    .eq("client_message_id", clientMessageId)
+    .maybeSingle();
+  if (error) throw new Error(`getWebchatMessageByClientId: ${error.message}`);
+  return (data as WebchatMessageRow | null) ?? null;
+}
+
+/**
+ * Compensating delete for the enqueue-failed path: a visitor turn whose job
+ * insert failed is removed so the transcript never carries a message no
+ * worker will ever answer.
+ */
+export async function deleteWebchatMessage(
+  messageId: number,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("webchat_messages").delete().eq("id", messageId);
+  if (error) throw new Error(`deleteWebchatMessage: ${error.message}`);
 }
 
 export async function listWebchatMessages(
@@ -423,6 +472,30 @@ export async function insertWebchatJob(
     .single();
   if (error) throw new Error(`insertWebchatJob: ${error.message}`);
   return data as WebchatJobRow;
+}
+
+/**
+ * The job enqueued for a given visitor message (newest wins if a retried
+ * enqueue ever produced more than one). Backs the idempotent-send replay:
+ * a duplicate POST returns the ORIGINAL turn's jobId so the widget resumes
+ * polling instead of double-generating.
+ */
+export async function getWebchatJobForUserMessage(
+  userMessageId: number,
+  client?: SupabaseClient
+): Promise<WebchatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .select(
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at"
+    )
+    .eq("user_message_id", userMessageId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getWebchatJobForUserMessage: ${error.message}`);
+  return (data as WebchatJobRow | null) ?? null;
 }
 
 export async function getWebchatJobById(

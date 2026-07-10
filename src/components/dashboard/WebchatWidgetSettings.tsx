@@ -99,18 +99,26 @@ export function WebchatWidgetSettings({
     }
   };
 
-  const saveConfig = async () => {
+  // The full form state as a POST payload. Every write — including the
+  // enable / pre-chat-form toggles — sends it, so what the owner SEES in
+  // the origins/theme fields is always what gets persisted (a toggle can
+  // never silently enable the widget under a stale allowlist).
+  const configPayload = () => {
     const theme: Record<string, string> = {};
     if (accent.trim()) theme.accentColor = accent.trim();
     if (greeting.trim()) theme.greeting = greeting.trim();
     if (agentName.trim()) theme.agentDisplayName = agentName.trim();
-    await post({
+    return {
       allowedOrigins: origins
         .split("\n")
         .map((s) => s.trim())
         .filter(Boolean),
       theme: Object.keys(theme).length > 0 ? theme : null
-    });
+    };
+  };
+
+  const saveConfig = async () => {
+    await post(configPayload());
   };
 
   return (
@@ -123,7 +131,17 @@ export function WebchatWidgetSettings({
               type="checkbox"
               checked={settings.enabled}
               disabled={busy}
-              onChange={(ev) => post({ enabled: ev.target.checked })}
+              onChange={(ev) =>
+                // Enabling persists the WHOLE form so the widget can't go
+                // live under a stale allowlist/theme. Disabling stays a pure
+                // { enabled: false } — the API allows that on ANY tier, so a
+                // downgraded tenant can always turn the widget off.
+                post(
+                  ev.target.checked
+                    ? { ...configPayload(), enabled: true }
+                    : { enabled: false }
+                )
+              }
             />
             Enabled
           </label>
@@ -181,7 +199,7 @@ export function WebchatWidgetSettings({
               className="mt-0.5"
               checked={settings.requireContactForm}
               disabled={busy}
-              onChange={(ev) => post({ requireContactForm: ev.target.checked })}
+              onChange={(ev) => post({ ...configPayload(), requireContactForm: ev.target.checked })}
             />
             <span>
               Ask for name and email/phone before chatting

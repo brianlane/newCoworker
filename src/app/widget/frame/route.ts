@@ -314,14 +314,30 @@ export async function GET(request: Request) {
       if (document.visibilityState === "visible" && pendingJob && !polling) pollLoop();
     });
 
+    function mintId() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+      }
+      // RFC4122-shaped fallback for very old engines.
+      return "xxxxxxxx-xxxx-4xxx-8xxx-xxxxxxxxxxxx".replace(/x/g, function () {
+        return Math.floor(Math.random() * 16).toString(16);
+      });
+    }
+
     function send(text) {
-      var doSend = function () {
-        el("user", text);
-        typing.classList.add("on");
-        sendBtn.disabled = true;
+      // One idempotency key per send. A network-failed POST is retried
+      // once with the SAME id — the server dedupes on it, so a request
+      // that actually landed is replayed, never duplicated.
+      var clientMessageId = mintId();
+      var doSend = function (isRetry) {
+        if (!isRetry) {
+          el("user", text);
+          typing.classList.add("on");
+          sendBtn.disabled = true;
+        }
         api("/api/widget/message", {
           method: "POST",
-          body: JSON.stringify({ key: cfg.key, message: text })
+          body: JSON.stringify({ key: cfg.key, message: text, clientMessageId: clientMessageId })
         }).then(function (r) {
           if (r.status === 401) {
             clearSession();
@@ -333,22 +349,31 @@ export async function GET(request: Request) {
           }
           if (r.json && r.json.ok) {
             if (r.json.data.userMessageId > lastMsgId) lastMsgId = r.json.data.userMessageId;
-            pendingJob = r.json.data.jobId;
-            pollLoop();
+            if (r.json.data.jobId) {
+              pendingJob = r.json.data.jobId;
+              pollLoop();
+            } else {
+              finishTurn();
+            }
             return;
           }
           typing.classList.remove("on");
           sendBtn.disabled = false;
           el("sys", (r.json && r.json.error && r.json.error.message) || "Could not send — please try again.");
         }).catch(function () {
+          if (!isRetry) {
+            // Transient network blip: one automatic same-id retry.
+            setTimeout(function () { doSend(true); }, 1500);
+            return;
+          }
           typing.classList.remove("on");
           sendBtn.disabled = false;
           el("sys", "Could not send — please check your connection and try again.");
         });
       };
-      if (session) { doSend(); return; }
+      if (session) { doSend(false); return; }
       // Anonymous mode: lazily mint the session on the first message.
-      startSession({}).then(function (ok) { if (ok) doSend(); })
+      startSession({}).then(function (ok) { if (ok) doSend(false); })
         .catch(function (e) { el("sys", e.message); });
     }
 

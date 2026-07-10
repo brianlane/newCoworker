@@ -21,11 +21,17 @@ import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import {
   appendWebchatMessage,
   countWebchatUserMessagesSince,
+  deleteWebchatMessage,
+  getWebchatJobForUserMessage,
+  getWebchatMessageByClientId,
   insertWebchatJob,
+  isWebchatUniqueViolation,
   listWebchatMessages,
   serializeWebchatMessages,
-  touchWebchatSession
+  touchWebchatSession,
+  type WebchatMessageRow
 } from "@/lib/webchat/db";
+import { logger } from "@/lib/logger";
 import {
   resolveWidgetContext,
   verifyWebchatSession,
@@ -50,7 +56,12 @@ const bodySchema = z.object({
     .string()
     .trim()
     .min(1, "Message is empty")
-    .max(WEBCHAT_MAX_MESSAGE_CHARS, `Message is too long (max ${WEBCHAT_MAX_MESSAGE_CHARS} chars)`)
+    .max(WEBCHAT_MAX_MESSAGE_CHARS, `Message is too long (max ${WEBCHAT_MAX_MESSAGE_CHARS} chars)`),
+  // Client-generated idempotency key: the widget mints one UUID per send
+  // and RETRIES a network-failed POST with the same value, so a turn that
+  // actually persisted server-side is replayed (original message + job)
+  // instead of duplicated.
+  clientMessageId: z.string().uuid().optional()
 });
 
 export async function POST(request: Request) {
@@ -80,6 +91,24 @@ export async function POST(request: Request) {
     const ipLimiter = rateLimit(`webchat-msg:ip:${ip}`, MESSAGE_RATE_PER_IP);
     if (!sessionLimiter.success || !ipLimiter.success) {
       return errorResponse("CONFLICT", "Too many messages, please wait a minute.", 429);
+    }
+
+    // Idempotent-send replay: if this clientMessageId already persisted (the
+    // widget retried after a network/parse failure on a POST that actually
+    // succeeded), return the ORIGINAL message + job instead of re-running
+    // the turn. Checked before the daily cap so a replay never burns quota.
+    if (body.clientMessageId) {
+      const existing = await getWebchatMessageByClientId(session.id, body.clientMessageId);
+      if (existing) {
+        const existingJob = await getWebchatJobForUserMessage(existing.id);
+        const history = await listWebchatMessages(session.id);
+        return successResponse({
+          jobId: existingJob?.id ?? null,
+          userMessageId: existing.id,
+          messages: serializeWebchatMessages(history),
+          replayed: true
+        });
+      }
     }
 
     // Per-business rolling-24h ceiling. Checked BEFORE persisting the turn
@@ -129,18 +158,59 @@ export async function POST(request: Request) {
         })
       : null;
 
-    // Persist the visitor message BEFORE enqueueing — a failed enqueue
-    // leaves their typed message recoverable on retry.
-    const userMsg = await appendWebchatMessage(session.id, ctx.business.id, "user", body.message);
+    // Persist the visitor message, then enqueue. Two failure shapes:
+    //   * The INSERT loses the idempotency race (two concurrent identical
+    //     retries): re-read the winner and replay its job.
+    //   * The JOB insert fails after the message persisted: delete the
+    //     orphaned message (compensating write) and surface the error —
+    //     otherwise the transcript would keep a visitor turn no worker will
+    //     ever answer, and the widget's retry (same clientMessageId) would
+    //     replay a jobless message forever.
+    let userMsg: WebchatMessageRow;
+    try {
+      userMsg = await appendWebchatMessage(session.id, ctx.business.id, "user", body.message, {
+        clientMessageId: body.clientMessageId ?? null
+      });
+    } catch (err) {
+      if (body.clientMessageId && isWebchatUniqueViolation(err)) {
+        const winner = await getWebchatMessageByClientId(session.id, body.clientMessageId);
+        if (winner) {
+          const winnerJob = await getWebchatJobForUserMessage(winner.id);
+          const history = await listWebchatMessages(session.id);
+          return successResponse({
+            jobId: winnerJob?.id ?? null,
+            userMessageId: winner.id,
+            messages: serializeWebchatMessages(history),
+            replayed: true
+          });
+        }
+      }
+      throw err;
+    }
 
-    const job = await insertWebchatJob({
-      businessId: ctx.business.id,
-      sessionId: session.id,
-      userMessageId: userMsg.id,
-      inputMessages,
-      statelessInputMessages,
-      rowboatConversationId: hasHistoryMarker ? session.rowboat_conversation_id : null
-    });
+    let job;
+    try {
+      job = await insertWebchatJob({
+        businessId: ctx.business.id,
+        sessionId: session.id,
+        userMessageId: userMsg.id,
+        inputMessages,
+        statelessInputMessages,
+        rowboatConversationId: hasHistoryMarker ? session.rowboat_conversation_id : null
+      });
+    } catch (err) {
+      try {
+        await deleteWebchatMessage(userMsg.id);
+      } catch (cleanupErr) {
+        // Non-fatal: the orphan stays in the transcript, but the 500 below
+        // still tells the widget the turn failed so the visitor retries.
+        logger.warn("widget/message: orphan cleanup failed after job insert error", {
+          messageId: userMsg.id,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+        });
+      }
+      throw err;
+    }
 
     await touchWebchatSession(session.id);
 

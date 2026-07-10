@@ -22,6 +22,7 @@ import {
   type WidgetSettingsPatch
 } from "@/lib/webchat/db";
 import {
+  MAX_ALLOWED_ORIGINS,
   normalizeAllowedOrigins,
   parseWidgetTheme,
   widgetThemeSchema
@@ -81,7 +82,13 @@ export async function GET(request: Request) {
 const postSchema = z.object({
   businessId: z.string().uuid(),
   enabled: z.boolean().optional(),
-  allowedOrigins: z.array(z.string().max(300)).max(50).optional(),
+  // Same ceiling normalizeAllowedOrigins enforces, so an over-long list
+  // fails fast at the schema with a precise message instead of a generic
+  // post-normalization error (they'd otherwise disagree at 21-50 entries).
+  allowedOrigins: z
+    .array(z.string().max(300))
+    .max(MAX_ALLOWED_ORIGINS, `At most ${MAX_ALLOWED_ORIGINS} allowed origins`)
+    .optional(),
   requireContactForm: z.boolean().optional(),
   theme: widgetThemeSchema.nullable().optional(),
   regenerateKey: z.boolean().optional()

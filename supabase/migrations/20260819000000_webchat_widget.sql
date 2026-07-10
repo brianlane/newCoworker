@@ -106,12 +106,23 @@ create table if not exists webchat_messages (
   business_id uuid not null references businesses(id) on delete cascade,
   role text not null check (role in ('user', 'assistant', 'system')),
   content text not null,
+  -- Client-generated idempotency key for VISITOR turns. The widget attaches
+  -- a fresh UUID per send and retries a network-failed POST with the SAME
+  -- id; the partial unique index below makes the replay collide, and the
+  -- route returns the original message + job instead of double-enqueueing.
+  -- Null for assistant/system rows (and for clients that omit it).
+  client_message_id text,
   created_at timestamptz not null default now()
 );
 
 -- Poll cursor: "messages on this session with id > cursor", in order.
 create index if not exists idx_webchat_messages_session
   on webchat_messages (session_id, id);
+
+-- Idempotent send: one row per (session, client id).
+create unique index if not exists uq_webchat_messages_client_id
+  on webchat_messages (session_id, client_message_id)
+  where client_message_id is not null;
 
 -- Daily per-business ceiling: count of user messages since midnight.
 create index if not exists idx_webchat_messages_business_created

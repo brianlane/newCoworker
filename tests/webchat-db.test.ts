@@ -14,7 +14,7 @@ type StubResult = {
  */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gt", "gte", "order", "limit", "insert", "update"]) {
+  for (const m of ["select", "eq", "gt", "gte", "order", "limit", "insert", "update", "delete"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);
@@ -34,13 +34,17 @@ import {
   appendWebchatMessage,
   countWebchatUserMessagesSince,
   createWebchatSession,
+  deleteWebchatMessage,
   getOrCreateWidgetSettings,
   getWebchatJobById,
+  getWebchatJobForUserMessage,
+  getWebchatMessageByClientId,
   getWebchatSessionById,
   getWebchatSessionByTokenHash,
   getWidgetSettingsByKeyHash,
   getWidgetSettingsForBusiness,
   insertWebchatJob,
+  isWebchatUniqueViolation,
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
@@ -270,7 +274,7 @@ describe("webchat_sessions accessors", () => {
 });
 
 describe("webchat_messages accessors", () => {
-  it("appendWebchatMessage inserts the row, throws on error", async () => {
+  it("appendWebchatMessage inserts the row (with the idempotency key when given), throws on error", async () => {
     const builder = makeBuilder({ data: { id: 1 }, error: null });
     supabaseStub.from.mockReturnValueOnce(builder);
     expect(await appendWebchatMessage(SESSION, BIZ, "user", "hi")).toEqual({ id: 1 });
@@ -278,13 +282,52 @@ describe("webchat_messages accessors", () => {
       session_id: SESSION,
       business_id: BIZ,
       role: "user",
-      content: "hi"
+      content: "hi",
+      client_message_id: null
+    });
+
+    const keyed = makeBuilder({ data: { id: 2 }, error: null });
+    supabaseStub.from.mockReturnValueOnce(keyed);
+    await appendWebchatMessage(SESSION, BIZ, "user", "hi", { clientMessageId: "cid-1" });
+    expect((keyed.insert as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      client_message_id: "cid-1"
     });
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
-    await expect(appendWebchatMessage(SESSION, BIZ, "user", "hi", injected)).rejects.toThrow(
+    await expect(appendWebchatMessage(SESSION, BIZ, "user", "hi", {}, injected)).rejects.toThrow(
       "appendWebchatMessage: x"
     );
+  });
+
+  it("isWebchatUniqueViolation matches 23505 / duplicate-key shapes only", () => {
+    expect(isWebchatUniqueViolation(new Error("appendWebchatMessage: 23505"))).toBe(true);
+    expect(isWebchatUniqueViolation(new Error("duplicate key value violates"))).toBe(true);
+    expect(isWebchatUniqueViolation("Duplicate Key somewhere")).toBe(true);
+    expect(isWebchatUniqueViolation(new Error("connection reset"))).toBe(false);
+  });
+
+  it("getWebchatMessageByClientId returns row / null / throws", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: { id: 3 }, error: null }));
+    expect(await getWebchatMessageByClientId(SESSION, "cid")).toEqual({ id: 3 });
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await getWebchatMessageByClientId(SESSION, "cid", injected)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(getWebchatMessageByClientId(SESSION, "cid")).rejects.toThrow(
+      "getWebchatMessageByClientId: x"
+    );
+  });
+
+  it("deleteWebchatMessage deletes by id, throws on error", async () => {
+    const builder = makeBuilder({ data: null, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await deleteWebchatMessage(9);
+    expect(builder.delete).toHaveBeenCalled();
+    expect(builder.eq).toHaveBeenCalledWith("id", 9);
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(deleteWebchatMessage(9, injected)).rejects.toThrow("deleteWebchatMessage: x");
   });
 
   it("listWebchatMessages returns rows / [] / throws", async () => {
@@ -352,6 +395,17 @@ describe("webchat_jobs accessors", () => {
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
     await expect(insertWebchatJob(jobInput, injected)).rejects.toThrow("insertWebchatJob: x");
+  });
+
+  it("getWebchatJobForUserMessage returns the newest job / null / throws", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: { id: JOB }, error: null }));
+    expect(await getWebchatJobForUserMessage(5)).toEqual({ id: JOB });
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await getWebchatJobForUserMessage(5, injected)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(getWebchatJobForUserMessage(5)).rejects.toThrow("getWebchatJobForUserMessage: x");
   });
 
   it("getWebchatJobById returns row / null / throws", async () => {
