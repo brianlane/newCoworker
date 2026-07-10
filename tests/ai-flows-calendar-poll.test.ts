@@ -368,6 +368,23 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
+  it("treats a Calendly connection as not pollable (no provider queries)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
+      provider: "calendly",
+      providerConfigKey: "calendly",
+      connectionId: "cx-calendly"
+    } as never);
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        message: expect.stringContaining("calendar_not_connected")
+      })
+    );
+  });
+
   it("stringifies a non-Error failure", async () => {
     vi.mocked(resolveCalendarConnection).mockRejectedValueOnce("weird failure");
     await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));

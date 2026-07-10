@@ -2,6 +2,7 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
+import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { logger } from "@/lib/logger";
 
 /**
@@ -20,6 +21,11 @@ import { logger } from "@/lib/logger";
  * falling back to the owner's primary calendar if creation fails. Slot
  * search checks busy across BOTH calendars, so owner personal events still
  * prevent double-booking.
+ *
+ * Calendly connections take a different path (calendly.ts): slot search uses
+ * the event type's available times, and "booking" returns a single-use
+ * scheduling link (detail `booking_link_created`) because Calendly cannot
+ * create bookings on the invitee's behalf. No shared calendar either way.
  */
 
 export type CalendarToolResult = {
@@ -226,6 +232,17 @@ export async function findCalendarSlots(
       return { ok: false, detail: "calendar_not_connected" };
     }
 
+    if (conn.provider === "calendly") {
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      return findCalendlySlots(businessId, conn, {
+        windowStart,
+        windowEnd,
+        durationMinutes: args.durationMinutes,
+        purpose: args.purpose,
+        timezone
+      });
+    }
+
     let busy: Array<{ start: Date; end: Date }> = [];
     // Read-only: never creates the shared calendar from the search path.
     const shared = await getSharedCalendar(businessId);
@@ -346,6 +363,14 @@ export async function bookCalendarAppointment(
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) {
       return { ok: false, detail: "calendar_not_connected" };
+    }
+
+    if (conn.provider === "calendly") {
+      // Calendly cannot create the booking — hand back a single-use link.
+      return createCalendlyBookingLink(businessId, conn, {
+        startIso: args.startIso,
+        endIso: args.endIso
+      });
     }
 
     const phoneFallback = args.attendeePhone ?? fallbackPhone ?? "";

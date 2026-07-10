@@ -92,6 +92,30 @@ describe("resolveVoiceConnection", () => {
     const res = await resolveCalendarConnection(businessId);
     expect(res?.providerConfigKey).toBe("outlook-calendar");
   });
+
+  it("resolveCalendarConnection maps calendly to the calendly provider", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("calendly")]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res?.provider).toBe("calendly");
+    expect(res?.providerConfigKey).toBe("calendly");
+  });
+
+  it("resolveCalendarConnection prefers a native calendar over calendly, and calendly over broad workspace connections", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("calendly"),
+      fakeRow("google-calendar")
+    ]);
+    const native = await resolveCalendarConnection(businessId);
+    expect(native?.providerConfigKey).toBe("google-calendar");
+
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google"),
+      fakeRow("calendly")
+    ]);
+    const calendly = await resolveCalendarConnection(businessId);
+    expect(calendly?.providerConfigKey).toBe("calendly");
+    expect(calendly?.provider).toBe("calendly");
+  });
 });
 
 describe("isEmailProviderConfigKey / providerFromKey", () => {

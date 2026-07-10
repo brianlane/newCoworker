@@ -294,7 +294,7 @@ export function systemInstructionForBusiness(
   // voice twin of the SMS worker's groundedActionsLine
   // (supabase/functions/sms-inbound-worker/index.ts) — keep in sync.
   const groundedActionsLine =
-    "You can only take real actions through your tools — saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success. A follow-up email is a plain email, not a calendar invite — never call it one. Never invent or guess email addresses, phone numbers, times, or confirmation details — ask instead. If you can't complete something, say so plainly and offer to have the team follow up — never pretend it worked.";
+    "You can only take real actions through your tools — saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success (a `booking_link_created` result is NOT a booking — the caller must finish it via the link you text them). A follow-up email is a plain email, not a calendar invite — never call it one. Never invent or guess email addresses, phone numbers, times, or confirmation details — ask instead. If you can't complete something, say so plainly and offer to have the team follow up — never pretend it worked.";
 
   // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
   // the lead-intake/qualification script and talk to them as internal staff.
@@ -616,7 +616,7 @@ function buildVoiceToolDeclarations() {
     {
       name: "calendar_book_appointment",
       description:
-        "Book an appointment on the business calendar. Only call after `calendar_find_slots` confirmed a slot and the caller agreed to it.",
+        "Book an appointment on the business calendar. Only call after `calendar_find_slots` confirmed a slot and the caller agreed to it. If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet — text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
       parameters: {
         type: Type.OBJECT,
         properties: {

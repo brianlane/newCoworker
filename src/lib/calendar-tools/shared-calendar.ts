@@ -100,7 +100,9 @@ async function writeConnectionMeta(
 export async function getSharedCalendar(businessId: string): Promise<SharedCalendarInfo | null> {
   try {
     const conn = await resolveCalendarConnection(businessId);
-    if (!conn) return null;
+    // Calendly has no calendar-create API — the shared-calendar concept only
+    // exists for Google/Microsoft connections.
+    if (!conn || conn.provider === "calendly") return null;
     const meta = await readConnectionMeta(businessId, conn);
     return meta.calendarId ? { calendarId: meta.calendarId, conn } : null;
   } catch (err) {
@@ -122,7 +124,7 @@ export async function ensureSharedCalendar(
 ): Promise<SharedCalendarInfo | null> {
   try {
     const conn = await resolveCalendarConnection(businessId);
-    if (!conn) return null;
+    if (!conn || conn.provider === "calendly") return null;
     const meta = await readConnectionMeta(businessId, conn);
     if (meta.calendarId) return { calendarId: meta.calendarId, conn };
 
@@ -198,7 +200,7 @@ async function deleteProviderCalendar(
 export async function sharedCalendarStatus(businessId: string): Promise<SharedCalendarStatus> {
   try {
     const conn = await resolveCalendarConnection(businessId);
-    if (!conn) return { calendarId: null, sharedWith: [] };
+    if (!conn || conn.provider === "calendly") return { calendarId: null, sharedWith: [] };
     const meta = await readConnectionMeta(businessId, conn);
     return { calendarId: meta.calendarId, sharedWith: meta.acl };
   } catch (err) {
