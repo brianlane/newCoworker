@@ -1137,6 +1137,67 @@ async function upsertCustomerStep(
 }
 
 /**
+ * Is this contact protected staff for update_contact purposes? True when the
+ * stored row is typed owner/employee, or any of its numbers sits on the
+ * ai_flow_team_members roster (active or not — a deactivated broker is still
+ * staff), or matches the business's own derived numbers (owner cell, forward
+ * number, the coworker's DID — owner rows are often typed "customer"), AND
+ * the business hasn't switched the protection off in Settings
+ * (businesses.aiflow_protect_staff_contacts, default true). Read errors fail
+ * SAFE (protected).
+ */
+async function isProtectedStaffContact(
+  supabase: Supabase,
+  businessId: string,
+  contactNumbers: string[],
+  storedType: string | null | undefined
+): Promise<boolean> {
+  let staff = storedType === "owner" || storedType === "employee";
+  if (!staff) {
+    // Roster check spans EVERY number attached to the contact row (primary +
+    // merged aliases + the targeted number): the contact lookup is
+    // alias-aware, so protection must be too — a flow targeting an alias of
+    // a broker's row is still targeting the broker.
+    const { data: member, error } = await supabase
+      .from("ai_flow_team_members")
+      .select("id")
+      .eq("business_id", businessId)
+      .in("phone_e164", contactNumbers)
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      // Fail SAFE: if we can't check the roster, treat the contact as staff
+      // rather than risk tagging a broker's row.
+      console.error("update_contact roster check", error);
+      return true;
+    }
+    staff = member != null;
+  }
+  if (!staff) {
+    // Owner numbers are usually DERIVED (businesses.phone, the forward cell,
+    // the coworker's own DID) rather than stored as an owner-typed contact —
+    // an owner testing with their cell must be protected too. isSelfPhone is
+    // the SHARED both-sides-normalized comparator (same one the extraction
+    // scrub and send_sms self-send guard use), so the guards can never
+    // disagree on what counts as "ourselves".
+    const selfNumbers = await businessSelfNumbers(supabase, businessId);
+    staff = contactNumbers.some((n) => isSelfPhone(n, selfNumbers));
+  }
+  if (!staff) return false;
+  const { data: biz, error: bizErr } = await supabase
+    .from("businesses")
+    .select("aiflow_protect_staff_contacts")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (bizErr) {
+    console.error("update_contact protection setting read", bizErr);
+    return true; // fail safe: protect
+  }
+  return (biz as { aiflow_protect_staff_contacts?: boolean } | null)
+    ?.aiflow_protect_staff_contacts !== false;
+}
+
+/**
  * `update_contact` step: maintain the contact's lead-state tags. Removals
  * apply before additions (one step = one status transition), matching is
  * alias-aware like getCustomerMemory, and tags are normalized the way the
@@ -1158,12 +1219,18 @@ async function updateContactStep(
   }
   const { data, error } = await supabase
     .from("contacts")
-    .select("id, tags")
+    .select("id, tags, type, customer_e164, alias_e164s")
     .eq("business_id", run.business_id)
     .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
     .maybeSingle();
   if (error) throw new Error(`update_contact lookup: ${error.message}`);
-  const contact = data as { id: string; tags?: string[] | null } | null;
+  const contact = data as {
+    id: string;
+    tags?: string[] | null;
+    type?: string | null;
+    customer_e164?: string | null;
+    alias_e164s?: string[] | null;
+  } | null;
   if (!contact) {
     appendActionTaken(
       scope,
@@ -1173,6 +1240,31 @@ async function updateContactStep(
       kind: "ok",
       skipped: true,
       result: { skipped: "contact_not_found", customer_e164: action.e164 }
+    };
+  }
+  // Staff-contact protection (default ON, toggled from Settings): lead-state
+  // tags never land on the owner or a roster member — the classic trap is an
+  // employee testing a flow with their own number (upsert_customer has the
+  // same philosophy via its known-business-contact guard). Staff = a stored
+  // owner/employee type, OR any of the row's numbers (primary, merged
+  // aliases, the targeted number) on the ai_flow_team_members roster — the
+  // roster is authoritative even when the stored row is typed "customer".
+  const contactNumbers = [
+    ...new Set(
+      [action.e164, contact.customer_e164 ?? "", ...(contact.alias_e164s ?? [])].filter(Boolean)
+    )
+  ];
+  if (
+    await isProtectedStaffContact(supabase, run.business_id, contactNumbers, contact.type)
+  ) {
+    appendActionTaken(
+      scope,
+      `skipped a contact-tag update (${action.e164} is a staff contact; protection is on in Settings)`
+    );
+    return {
+      kind: "ok",
+      skipped: true,
+      result: { skipped: "staff_contact_protected", customer_e164: action.e164 }
     };
   }
   const removeSet = new Set(action.removeTags.map((t) => t.trim().toLowerCase()));

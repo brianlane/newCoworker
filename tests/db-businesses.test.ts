@@ -18,6 +18,7 @@ import {
   updateBusinessTimezone,
   updateComplianceModule,
   updateEnterpriseModels,
+  setAiflowStaffProtection,
   updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
@@ -727,6 +728,22 @@ describe("db/businesses", () => {
     await expect(updateBusinessTimezone("uuid-biz-1", "UTC")).rejects.toThrow(
       "updateBusinessTimezone"
     );
+  });
+
+  it("setAiflowStaffProtection writes the toggle both ways and throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setAiflowStaffProtection("uuid-biz-1", false);
+    expect(db.update).toHaveBeenCalledWith({ aiflow_protect_staff_contacts: false });
+
+    await setAiflowStaffProtection("uuid-biz-1", true, db as never);
+    expect(db.update).toHaveBeenCalledWith({ aiflow_protect_staff_contacts: true });
+
+    const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    await expect(
+      setAiflowStaffProtection("uuid-biz-1", true, failing as never)
+    ).rejects.toThrow("setAiflowStaffProtection");
   });
 
   it("updateBusinessVpsSize writes the pin and supports clearing with null", async () => {
