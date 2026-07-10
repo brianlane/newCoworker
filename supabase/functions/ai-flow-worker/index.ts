@@ -856,13 +856,16 @@ async function runStep(
     };
   }
   if (!plan.ok) {
-    // When the self-number scrub emptied the lead phone earlier in this run,
-    // an unusable-phone failure here is the scrub's doing — text the owner a
-    // plain-words explanation alongside the failed run (which otherwise reads
-    // as a technical error; the exact confusion from Truly's office-line
-    // test). Sent at failure time, not scrub time, because a later extraction
-    // step can still backfill a real phone. Best-effort + idempotent per run.
-    if (step.type === "upsert_customer" && scope.vars[SELF_PHONE_SCRUBBED_VAR] === "1") {
+    // When the self-number scrub emptied THIS step's phone var earlier in the
+    // run, an unusable-phone failure here is the scrub's doing — text the
+    // owner a plain-words explanation alongside the failed run (which
+    // otherwise reads as a technical error; the exact confusion from Truly's
+    // office-line test). Gated on the failing step's own phoneVar being among
+    // the scrubbed vars (a different scrubbed field with an already-empty
+    // phoneVar is a plain no-phone lead, not the business's number). Sent at
+    // failure time, not scrub time, because a later extraction step can still
+    // backfill a real phone. Best-effort + idempotent per run.
+    if (step.type === "upsert_customer" && selfScrubbedVars(scope).includes(step.phoneVar)) {
       try {
         await sendOwnerSms(
           supabase,
@@ -1424,18 +1427,28 @@ async function scrubExtractedSelfPhones(
       step: stepLabel,
       cleared: scrub.cleared
     });
-    // Mark the run (in persisted vars, like the wait_for_reply `__waited_*`
-    // markers) so a DOWNSTREAM unusable-phone failure can tell the owner why
-    // in plain words. Deliberately not notifying here: a later extraction
-    // step (e.g. email_extract with fillOnlyEmpty) may still backfill a real
-    // lead phone, in which case nothing is wrong.
-    scope.vars[SELF_PHONE_SCRUBBED_VAR] = "1";
+    // Record WHICH vars were scrubbed (in persisted vars, like the
+    // wait_for_reply `__waited_*` markers) so a DOWNSTREAM unusable-phone
+    // failure can tell the owner why in plain words — but only when the var
+    // that failed is one the scrub actually cleared. Deliberately not
+    // notifying here: a later extraction step (e.g. email_extract with
+    // fillOnlyEmpty) may still backfill a real lead phone, in which case
+    // nothing is wrong. Merged across scrub calls (browse + email extracts).
+    scope.vars[SELF_PHONE_SCRUBBED_VAR] = [
+      ...new Set([...selfScrubbedVars(scope), ...scrub.cleared])
+    ].join(",");
   }
   return scrub.values;
 }
 
-/** Persisted-vars marker: this run's extracted lead phone was self-scrubbed. */
+/** Persisted-vars marker: comma-joined var names the self-scrub cleared. */
 const SELF_PHONE_SCRUBBED_VAR = "__self_phone_scrubbed";
+
+/** Var names this run's self-number scrub cleared so far (possibly empty). */
+function selfScrubbedVars(scope: Scope): string[] {
+  const raw = scope.vars[SELF_PHONE_SCRUBBED_VAR];
+  return typeof raw === "string" && raw.length > 0 ? raw.split(",") : [];
+}
 
 async function browseStep(
   supabase: Supabase,
