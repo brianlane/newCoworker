@@ -338,9 +338,11 @@ export function systemInstructionForBusiness(
         "- `business_knowledge_lookup` when they ask something about the business that your briefing below doesn't already answer.",
         "- `calendar_find_slots` then `calendar_book_appointment` to help them schedule something.",
         "- `send_follow_up_sms` to text them a short summary or link, and `send_follow_up_email` to email them; if email returns `email_not_connected`, send it by text instead.",
+        "- `notify_team` when they ask you to pass a message to someone else on the team.",
         // Staff are not customers: do not create/edit a customer profile for
         // their number (the SMS gate avoids this too).
         "Do NOT use the customer CRM tools (`customer_lookup_by_phone`, `customer_set_display_name`, `customer_append_pinned_note`, `capture_caller_details`) on this caller — they are staff, not a customer.",
+        "If you say you'll pass a message along, call `notify_team` before the call ends — it is your only channel to the rest of the team.",
         "Always explain what you're about to do in plain language before calling a tool, and never read a tool's raw response aloud."
       ].join(" ")
     );
@@ -352,11 +354,19 @@ export function systemInstructionForBusiness(
         "- `calendar_find_slots` then `calendar_book_appointment` when the caller wants to schedule something (consultations, viewings, intake calls).",
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
-        "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record.",
+        "- `notify_team` whenever the caller needs something only the team can resolve (confirm an appointment you couldn't book, answer a question you couldn't, return a call). This is your ONLY way to reach the team.",
+        "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record. Never let a call with a genuine lead end without having called it.",
         "- `customer_lookup_by_phone` AT THE START of every call to recognize repeat callers — defaults to the current caller's number; if it returns a profile, use the summary as your own working notes (never quote it verbatim).",
         "- `customer_set_display_name` once the caller gives you their name (won't overwrite a name the owner already saved).",
         "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly — only for facts that should reach the next conversation unchanged.",
-        "Always explain what you're about to do in plain language before calling a tool (e.g. 'Let me pull up openings on Thursday — one moment.'). Never read a tool's raw response aloud."
+        "Always explain what you're about to do in plain language before calling a tool (e.g. 'Let me pull up openings on Thursday — one moment.'). Never read a tool's raw response aloud.",
+        // Two honesty rules born from a real call where the assistant promised
+        // "let me reach out to Amy or one of the agents ... I'll get back to
+        // you" with no tool call behind it, then texted the caller about a
+        // "modern Maple Street" property that exists nowhere in the call or
+        // the knowledge base.
+        "IMPORTANT — only promise what you can do: you cannot consult the team mid-call, hear back from anyone, or take any action after the call ends. Never say you'll 'check with the team', 'reach out', or 'get back to' the caller unless you have ALREADY called `notify_team` on this call and it succeeded — and phrase the follow-up as coming from the team ('someone from the team will get back to you'), never from you personally.",
+        "IMPORTANT — stick to stated facts: in every follow-up text or email, include only details the caller said or a tool returned. Never invent or embellish names, property descriptors, addresses, prices, or times, and never describe an appointment as scheduled or confirmed unless `calendar_book_appointment` succeeded."
       ].join(" ")
     );
   }
@@ -470,6 +480,8 @@ function voiceToolPath(name: string): string {
       return "/api/voice/tools/email";
     case "capture_caller_details":
       return "/api/voice/tools/capture";
+    case "notify_team":
+      return "/api/voice/tools/notify-team";
     // Phase 5: cross-channel customer memory tools. The agent uses
     // these to recognize repeat callers and persist owner-pinned facts
     // beyond the rolling auto-summary.
@@ -617,7 +629,7 @@ function buildVoiceToolDeclarations() {
     {
       name: "send_follow_up_sms",
       description:
-        "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars.",
+        "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars. The body must only contain facts the caller stated or a tool returned — no invented details, and no appointment described as scheduled unless it was actually booked.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -652,6 +664,27 @@ function buildVoiceToolDeclarations() {
           }
         },
         required: ["toEmail", "subject", "bodyText"]
+      }
+    },
+    {
+      name: "notify_team",
+      description:
+        "Relay a caller request to the business owner/team (dashboard alert plus email/SMS per the owner's settings). Call this BEFORE telling the caller you'll check with the team, pass a message along, or have someone get back to them — it is your ONLY channel to the team. Include what the team must do and any deadline the caller mentioned.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          message: {
+            type: Type.STRING,
+            description:
+              "What the team needs to do, in one or two sentences (e.g. 'Confirm whether the Maple Street property can be shown tomorrow at 2pm and text the caller back')."
+          },
+          callerName: { type: Type.STRING, description: "Caller's name if known." },
+          callerPhone: {
+            type: Type.STRING,
+            description: "Callback number in E.164 if different from the caller's ANI."
+          }
+        },
+        required: ["message"]
       }
     },
     {

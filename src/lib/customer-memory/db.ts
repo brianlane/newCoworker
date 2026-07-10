@@ -505,10 +505,11 @@ export type SmsHistoryEntry = {
   receivedAt: string;
   /**
    * Set for worker-initiated sends from `sms_outbound_log` (AiFlow lead
-   * intros etc.) — those rows have no inbound side; `assistantReply` carries
-   * the outbound body.
+   * intros, voice-call follow-up texts etc.) — those rows have no inbound
+   * side; `assistantReply` carries the outbound body. Values mirror the
+   * `sms_outbound_log_source_check` constraint.
    */
-  source?: "ai_flow" | "agent_offer" | "owner_notify";
+  source?: string;
 };
 
 const DEFAULT_SMS_HISTORY_LIMIT = 30;
@@ -577,7 +578,7 @@ export async function listSmsHistoryForCustomer(
   for (const r of (outboundData as Array<{
     id: string;
     body: string;
-    source: "ai_flow" | "agent_offer" | "owner_notify";
+    source: string;
     created_at: string;
   }> | null) ?? []) {
     entries.push({

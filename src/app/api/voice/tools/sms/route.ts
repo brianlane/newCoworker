@@ -7,6 +7,7 @@ import {
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
 
 /**
@@ -18,6 +19,11 @@ import { logger } from "@/lib/logger";
  * The bridge declares args as `{ toE164?, body }`; when the caller's own
  * ANI should be used, the model omits `toE164` and we fall back to
  * `envelope.callerE164`.
+ *
+ * Every successful send is logged to `sms_outbound_log` (source
+ * 'voice_follow_up') so it renders in the dashboard Text history like every
+ * other outbound path — these used to be invisible platform-side (the only
+ * record lived in Telnyx).
  */
 
 const argsSchema = z.object({
@@ -61,9 +67,31 @@ export async function POST(request: Request) {
       resolveRcs: true
     });
     try {
-      const { id: messageId } = await sendTelnyxSms(config, toPhone, args.body, {
+      const { id: messageId, channel } = await sendTelnyxSms(config, toPhone, args.body, {
         meterBusinessId: envelope.businessId
       });
+      // Best-effort durable log so the text renders in the dashboard thread.
+      // A failed insert must not fail the tool call — the SMS already went out.
+      try {
+        const db = await createSupabaseServiceClient();
+        const { error: logErr } = await db.from("sms_outbound_log").insert({
+          business_id: envelope.businessId,
+          to_e164: toPhone,
+          from_e164: config.fromE164 ?? null,
+          body: args.body,
+          source: "voice_follow_up",
+          run_id: null,
+          flow_id: null,
+          telnyx_message_id: messageId,
+          channel
+        });
+        if (logErr) throw new Error(logErr.message);
+      } catch (logErr) {
+        logger.error("voice-tools/sms: outbound log insert failed", {
+          businessId: envelope.businessId,
+          error: logErr instanceof Error ? logErr.message : String(logErr)
+        });
+      }
       return voiceToolResponse({ ok: true, data: { messageId, toE164: toPhone } });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -101,7 +101,9 @@ export type OutboundLogSource =
   | "agent_offer"
   | "owner_notify"
   | "owner_manual"
-  | "owner_scheduled";
+  | "owner_scheduled"
+  | "api"
+  | "voice_follow_up";
 
 export type OutboundLogRow = {
   id: string;
