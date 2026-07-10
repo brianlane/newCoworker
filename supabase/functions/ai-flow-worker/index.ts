@@ -467,6 +467,28 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   let index = run.current_step;
   while (index < flat.length) {
     const { step, branchPath } = flat[index];
+    // Cooperative owner cancel: the dashboard "Stop this run" flips the row to
+    // `canceled` while we hold the claim. Re-read the live status at the TOP
+    // of every iteration (before branch-skip bookkeeping too, so a long skip
+    // chain can't march to `done`) so a stopped run quits at the next step
+    // boundary — the step already in flight completes, nothing after it runs.
+    // Every updateRun below is additionally status-guarded, so even a cancel
+    // that lands mid-step can never be overwritten — this check is what stops
+    // the remaining SIDE EFFECTS, the guard is what protects the STATE. A
+    // read failure proceeds (cancel stays best-effort; the write guard holds).
+    try {
+      const { data: liveRow } = await supabase
+        .from("ai_flow_runs")
+        .select("status")
+        .eq("id", run.id)
+        .maybeSingle();
+      if ((liveRow as { status?: string } | null)?.status === "canceled") {
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
+    } catch (e) {
+      console.error("executeRun cancel check", e);
+    }
     // A step under an untaken (or not-yet-evaluated) branch arm never runs —
     // recorded "skipped" like a when_unmet skip, so run history shows every
     // path with the untaken ones greyed.
@@ -531,12 +553,18 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           )
       });
       approval.options = gateOptions;
-      await updateRun(supabase, run.id, {
+      const parked = await updateRun(supabase, run.id, {
         status: "awaiting_approval",
         current_step: index,
         context: buildContext(scope, approval, routing),
         claimed_at: null
       });
+      if (!parked) {
+        // The owner stopped the run while this step executed — the park write
+        // matched nothing, so the approval prompt must not go out either.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       // Offer the owner an SMS approval path alongside the dashboard buttons.
       // Best-effort + idempotent: a send failure must not unwind the parked
       // state (that would re-run the gate on retry), and the idempotency key
@@ -593,7 +621,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       routing.route_step_index = index;
       // Persist the parked state BEFORE sending the offer so an inbound 1/2
       // reply can always be matched to this run (state before side effect).
-      await updateRun(supabase, run.id, {
+      const parked = await updateRun(supabase, run.id, {
         status: "awaiting_agent",
         current_step: index,
         context: buildContext(scope, approval, routing),
@@ -601,6 +629,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         respond_by_at: new Date(Date.now() + outcome.respondByMs).toISOString(),
         claimed_at: null
       });
+      if (!parked) {
+        // The owner stopped the run while this step executed — the park write
+        // matched nothing, so the agent offer must not go out either.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       // A send failure here leaves the run parked; the escalation sweep moves on
       // to the next agent at the deadline rather than stranding the lead — so we
       // log and stop instead of unwinding the durable parked state.
@@ -652,7 +686,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // the reply in context.vars[saveAs]. The timeout sweep
       // (resume_overdue_reply_waits) re-queues with the no_reply sentinel at
       // respond_by_at. Attempt giveback like defer — waiting is not a failure.
-      await updateRun(supabase, run.id, {
+      const parked = await updateRun(supabase, run.id, {
         status: "awaiting_reply",
         current_step: index,
         context: {
@@ -668,6 +702,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null,
         attempt_count: Math.max(0, run.attempt_count - 1)
       });
+      if (!parked) {
+        // Owner stopped the run while this step executed; don't log/telemeter
+        // a park that never landed.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_reply", {
         run_id: run.id,
         business_id: run.business_id,
@@ -699,7 +739,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // runs whose earliest_claim_at is in the future. Give back the attempt
       // the claim charged (same as the paused-business defer) — waiting out
       // quiet hours is not a failure and must not drain any budget.
-      await updateRun(supabase, run.id, {
+      const deferred = await updateRun(supabase, run.id, {
         status: "queued",
         current_step: index,
         context: buildContext(scope, approval, routing),
@@ -707,6 +747,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null,
         attempt_count: Math.max(0, run.attempt_count - 1)
       });
+      if (!deferred) {
+        // Owner stopped the run while this step executed; the re-queue lost
+        // to the cancel, so don't log/telemeter a deferral that never landed.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       await telemetryRecord(supabase, "ai_flow_run_deferred_quiet_hours", {
         run_id: run.id,
         business_id: run.business_id,
@@ -743,12 +789,18 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     });
   }
 
-  await updateRun(supabase, run.id, {
+  const finished = await updateRun(supabase, run.id, {
     status: "done",
     current_step: index,
     context: buildContext(scope, approval, routing),
     claimed_at: null
   });
+  if (!finished) {
+    // Owner stopped the run as its last step executed; it stays `canceled`
+    // rather than flipping to done, and the logs say so.
+    await stoppedMidExecutionLog(supabase, run, index);
+    return;
+  }
   await telemetryRecord(supabase, "ai_flow_run_done", {
     run_id: run.id,
     business_id: run.business_id,
@@ -771,6 +823,26 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
  * other engine-internal vars (e.g. the after-hours email markers).
  */
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+
+/**
+ * Trace an owner "Stop this run" observed mid-execution (at a step boundary,
+ * or via a park write that matched nothing). The run row already says
+ * `canceled`; this is the audit line explaining where execution quit.
+ */
+async function stoppedMidExecutionLog(
+  supabase: Supabase,
+  run: RunRow,
+  index: number
+): Promise<void> {
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "info",
+    event: "ai_flow_run_stopped_mid_execution",
+    message: `Run stopped by the owner; execution quit at step ${index + 1}`,
+    payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+  });
+}
 
 /**
  * Step types gated by the flow-level time window (definition.timeWindow):
@@ -4341,12 +4413,21 @@ async function updateRun(
   supabase: Supabase,
   id: string,
   patch: Record<string, unknown>
-): Promise<void> {
-  const { error } = await supabase
+): Promise<boolean> {
+  // `.neq(status, canceled)`: an owner "Stop this run" is terminal the moment
+  // it lands. A worker mid-execution (or a late park/retry/terminal persist)
+  // must never resurrect or overwrite a canceled run. Returns whether a row
+  // actually matched — FALSE means the run was canceled underneath us, and a
+  // caller about to perform post-persist side effects (the approval-prompt /
+  // agent-offer sends) must bail instead of messaging on a stopped run.
+  const { data, error } = await supabase
     .from("ai_flow_runs")
     .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq("id", id);
+    .eq("id", id)
+    .neq("status", "canceled")
+    .select("id");
   if (error) throw new Error(`ai_flow_runs update: ${error.message}`);
+  return ((data as unknown[] | null)?.length ?? 0) > 0;
 }
 
 async function failRun(

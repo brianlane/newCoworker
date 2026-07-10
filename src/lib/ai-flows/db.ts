@@ -469,27 +469,31 @@ export async function decideAiFlowApproval(
 }
 
 /**
- * Run states an owner may STOP from the dashboard. Deliberately excludes
- * `running`: a claimed run is mid-execution on the worker (seconds), which
- * would overwrite the cancel when it persists its own state — the parked
- * states are where a run actually sits for hours and where stopping matters.
- * Terminal states have nothing to stop.
+ * Run states an owner may STOP from the dashboard — every non-terminal state,
+ * including `running`. A running run cancels COOPERATIVELY: the worker
+ * re-reads the run's status at each step boundary and quits when it sees
+ * `canceled` (the step already in flight completes), and every worker state
+ * write is guarded with `.neq(status, canceled)` so a cancel is never
+ * overwritten by a late persist. Terminal states have nothing to stop.
  */
 export const CANCELABLE_RUN_STATUSES = [
   "queued",
+  "running",
   "awaiting_approval",
   "awaiting_agent",
   "awaiting_reply"
 ] as const;
 
 /**
- * Owner "Stop this run": flip a waiting run to `canceled` so nothing further
- * sends. Status-guarded at the DB (the update matches only cancelable states),
- * so racing the worker's claim loses cleanly — the run either cancels or the
- * caller gets a conflict to surface. Every resume path (claim RPC, offer
- * escalation, reply sweeps, inbound webhooks) filters on the waiting status it
- * owns, so a canceled run can never be picked back up. Who stopped it (and
- * from which state) is recorded in `context.canceled` for the audit trail.
+ * Owner "Stop this run": flip a non-terminal run to `canceled` so nothing
+ * further sends. Status-guarded at the DB (the update matches only cancelable
+ * states), so racing a terminal write loses cleanly — the run either cancels
+ * or the caller gets a conflict to surface. Every resume path (claim RPC,
+ * offer escalation, reply sweeps, inbound webhooks) filters on the waiting
+ * status it owns, and the worker both checks for `canceled` at step
+ * boundaries and guards its own writes, so a canceled run can never be picked
+ * back up or overwritten. Who stopped it (and from which state) is recorded
+ * in `context.canceled` for the audit trail.
  */
 export async function cancelAiFlowRun(
   args: { businessId: string; runId: string; canceledBy?: string | null },

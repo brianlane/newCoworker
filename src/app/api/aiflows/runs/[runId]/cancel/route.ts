@@ -1,9 +1,10 @@
 /**
- * Stop a waiting AiFlow run. Owner-only.
- * Cancelable states: queued / awaiting_approval / awaiting_agent /
+ * Stop a non-terminal AiFlow run. Owner-only.
+ * Cancelable states: queued / running / awaiting_approval / awaiting_agent /
  * awaiting_reply → `canceled` (nothing further sends; no resume path picks a
- * canceled run back up). A run that is actively executing (`running`) or
- * already terminal returns CONFLICT.
+ * canceled run back up). A `running` run cancels cooperatively — the worker
+ * quits at the next step boundary, so the step in flight completes. Terminal
+ * runs return CONFLICT.
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";

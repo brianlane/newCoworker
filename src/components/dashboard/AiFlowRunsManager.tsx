@@ -67,11 +67,12 @@ function statusLabel(status: string): string {
 const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
 
 // Mirrors CANCELABLE_RUN_STATUSES in src/lib/ai-flows/db.ts (a value import
-// would pull the server-only Supabase client into this client bundle). The
-// parked states are where a run sits for hours — `running` is mid-execution
-// on the worker (seconds) and would overwrite a cancel, so it isn't offered.
+// would pull the server-only Supabase client into this client bundle). A
+// `running` run cancels cooperatively: the worker quits at the next step
+// boundary, so the step already in flight still completes.
 const STOPPABLE_STATUSES = new Set([
   "queued",
+  "running",
   "awaiting_approval",
   "awaiting_agent",
   "awaiting_reply"
@@ -630,7 +631,11 @@ export function AiFlowRunsManager({
                       <button
                         onClick={() => stopRun(r.id)}
                         disabled={busy === r.id}
-                        title="Stop this run — nothing further will send, and it can't be resumed"
+                        title={
+                          r.status === "running"
+                            ? "Stop this run — it finishes the step it's on, then nothing further runs"
+                            : "Stop this run — nothing further will send, and it can't be resumed"
+                        }
                         className="rounded-md bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/25 disabled:opacity-50"
                       >
                         {busy === r.id ? "Stopping…" : "Stop this run"}
