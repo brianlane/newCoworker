@@ -6,6 +6,7 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlow, listAiFlowRuns } from "@/lib/ai-flows/db";
 import { summarizeDefinition } from "@/lib/ai-flows/schema";
+import { statsByStepIdFromRunSteps, type StepStats } from "@/lib/ai-flows/tree";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
@@ -42,6 +43,34 @@ export default async function AiFlowViewPage({ params }: Props) {
     businessId && flow
       ? (await listAiFlowRuns(businessId, { flowId, limit: 1 })).length > 0
       : false;
+
+  // Per-node run stats for the canvas overlay: aggregate the recorded step
+  // outcomes of the (up to) 100 most recent runs. Runs don't snapshot the
+  // definition, so only runs STARTED AFTER the flow's last edit are counted —
+  // older runs executed a different flatten order and their step indices
+  // would land on the wrong nodes (statsByStepIdFromRunSteps additionally
+  // type-checks each row). Best-effort — the view renders without the overlay
+  // when nothing qualifies.
+  let statsByStepId: Record<string, StepStats> | undefined;
+  if (businessId && flow && hasRuns) {
+    const recentRuns = await listAiFlowRuns(businessId, { flowId, limit: 100 });
+    const runIds = recentRuns
+      .filter((r) => r.created_at >= flow.updated_at)
+      .map((r) => r.id);
+    if (runIds.length > 0) {
+      const { data: stepRows } = await db
+        .from("ai_flow_run_steps")
+        .select("step_index,step_type,status")
+        .eq("business_id", businessId)
+        .in("run_id", runIds);
+      if (stepRows && stepRows.length > 0) {
+        statsByStepId = statsByStepIdFromRunSteps(
+          flow.definition.steps,
+          stepRows as Array<{ step_index: number; step_type: string; status: string }>
+        );
+      }
+    }
+  }
 
   // The AI mailbox is the sender for any send_email step without a connected
   // owner mailbox, so show the real address rather than a generic label. Legacy
@@ -104,7 +133,11 @@ export default async function AiFlowViewPage({ params }: Props) {
 
       {flow ? (
         <Card>
-          <AiFlowView definition={flow.definition} coworkerEmail={coworkerEmail} />
+          <AiFlowView
+            definition={flow.definition}
+            coworkerEmail={coworkerEmail}
+            statsByStepId={statsByStepId}
+          />
         </Card>
       ) : (
         <Card>

@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { retrySummary, routingSummary } from "@/lib/ai-flows/run-stats";
+import { STEP_TYPE_LABELS } from "@/components/dashboard/aiflow-labels";
 import type { AiFlowRunRow, AiFlowRunStepRow, ApprovalDecision } from "@/lib/ai-flows/db";
 import {
   APPROVAL_OPTION_DECISIONS,
@@ -58,6 +59,30 @@ const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
 export type AiFlowRef = { id: string; name: string };
 
 /** A labeled, clickable screenshot thumbnail shown in the run "investigate" view. */
+/** Friendly step name; legacy/unknown step types fall back to the raw value. */
+function stepLabel(type: string): string {
+  return (STEP_TYPE_LABELS as Record<string, string>)[type] ?? type;
+}
+
+/** True for a step skipped because it sat on an untaken branch path. */
+function stepNotTaken(s: AiFlowRunStepRow): boolean {
+  return s.status === "skipped" && s.result?.skipped === "branch_not_taken";
+}
+
+/**
+ * The chosen-path label a branch step recorded (its set_vars result carries
+ * `__branch_label_<id>`), e.g. "Auto" or "none matched".
+ */
+function branchChoiceLabel(s: AiFlowRunStepRow): string | null {
+  if (s.step_type !== "branch") return null;
+  const vars = (s.result?.vars ?? null) as Record<string, unknown> | null;
+  if (!vars) return null;
+  for (const [k, v] of Object.entries(vars)) {
+    if (k.startsWith("__branch_label_") && typeof v === "string") return v;
+  }
+  return null;
+}
+
 function Screenshot({
   url,
   label,
@@ -490,8 +515,8 @@ export function AiFlowRunsManager({
                   )}
                   {r.status === "queued" && r.earliest_claim_at && (
                     <p className="text-xs text-parchment/50">
-                      Quiet hours; resumes at{" "}
-                      {new Date(r.earliest_claim_at).toLocaleString()}
+                      Waiting for its sending window (quiet hours / business hours);
+                      resumes at {new Date(r.earliest_claim_at).toLocaleString()}
                     </p>
                   )}
                   {expandedRuns.has(r.id) && (
@@ -502,15 +527,29 @@ export function AiFlowRunsManager({
                       {(steps[r.id] ?? []).map((s) => (
                         <div key={s.id} className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="text-parchment/70">
-                              {s.step_index + 1}. {s.step_type}
+                            <span
+                              className={
+                                stepNotTaken(s) ? "text-parchment/35" : "text-parchment/70"
+                              }
+                            >
+                              {s.step_index + 1}. {stepLabel(s.step_type)}
+                              {branchChoiceLabel(s) && (
+                                <span className="text-signal-teal/80">
+                                  {" "}
+                                  → {branchChoiceLabel(s)}
+                                </span>
+                              )}
                             </span>
                             <span
                               className={
-                                s.status === "failed" ? "text-red-400" : "text-parchment/40"
+                                s.status === "failed"
+                                  ? "text-red-400"
+                                  : stepNotTaken(s)
+                                    ? "text-parchment/30"
+                                    : "text-parchment/40"
                               }
                             >
-                              {s.status}
+                              {stepNotTaken(s) ? "not taken" : s.status}
                             </span>
                           </div>
                           {s.error && s.status === "failed" && (
