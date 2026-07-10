@@ -3,8 +3,10 @@ import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
-import { getPeriodPricing } from "@/lib/plans/tier";
-import type { BillingPeriod } from "@/lib/plans/tier";
+import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
+import { getFleetCalendarMonthUsageTotals } from "@/lib/db/usage";
+import { getFleetCurrentAiSpendMicros } from "@/lib/db/chat-usage";
+import { computeDayCurrentMrr, estimateMonthlyPlatformCost } from "@/lib/admin/mrr";
 import {
   formatAdminLabel,
   getLogBadgeVariant,
@@ -33,13 +35,26 @@ function timeAgo(dateStr: string): string {
 }
 
 export default async function AdminDashboardPage() {
-  const [businesses, alerts, recentLogs, systemErrors, vpsInventory] = await Promise.all([
-    listBusinesses(),
-    getRecentAlertsAll(10),
-    getRecentLogsAll(8),
-    listSystemLogErrorsAll(15),
-    listVpsInventory()
-  ]);
+  const [businesses, alerts, recentLogs, systemErrors, vpsInventory, enterpriseDeals, monthUsage, aiSpendMicros] =
+    await Promise.all([
+      listBusinesses(),
+      getRecentAlertsAll(10),
+      getRecentLogsAll(8),
+      listSystemLogErrorsAll(15),
+      listVpsInventory(),
+      listActiveEnterpriseDeals(),
+      // Best effort, like the AI spend read: a transient usage-read failure
+      // degrades the cost estimate to zero metered usage instead of erroring
+      // the whole dashboard.
+      getFleetCalendarMonthUsageTotals().catch((err: unknown) => {
+        console.error(
+          "admin dashboard: fleet usage rollup failed",
+          err instanceof Error ? err.message : err
+        );
+        return { smsSent: 0, voiceMinutes: 0 };
+      }),
+      getFleetCurrentAiSpendMicros()
+    ]);
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
   const subscriptions = Array.from(subscriptionMap.values());
@@ -50,15 +65,12 @@ export default async function AdminDashboardPage() {
   const activeSubCount = subscriptions.filter((s) => s.status === "active").length;
   const pendingSubCount = subscriptions.filter((s) => s.status === "pending").length;
 
-  // Estimated MRR: sum active subscription monthly cents
-  const mrrCents = subscriptions
-    .filter((s) => s.status === "active")
-    .reduce((sum, s) => {
-      if (s.tier === "enterprise") return sum;
-      const period: BillingPeriod = (s.billing_period as BillingPeriod) ?? "monthly";
-      const pricing = getPeriodPricing(s.tier, period);
-      return sum + pricing.monthlyCents;
-    }, 0);
+  // Day-current best-effort MRR (renewal-aware, Stripe-backed only, real
+  // enterprise deal prices) and the estimated monthly platform spend against
+  // it — see src/lib/admin/mrr.ts.
+  const mrr = computeDayCurrentMrr({ subscriptions, enterpriseDeals });
+  const platformCost = estimateMonthlyPlatformCost({ businesses, monthUsage, aiSpendMicros });
+  const netCents = mrr.totalCents - platformCost.totalCents;
 
   // ── Signup sparkline (last 6 months) ──────────────────────────────────────
   const now = new Date();
@@ -116,8 +128,14 @@ export default async function AdminDashboardPage() {
         </Card>
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Est. MRR</p>
-          <p className="text-3xl font-bold text-parchment">{formatMoney(mrrCents)}</p>
-          <p className="text-xs text-parchment/30 mt-1">based on active plans</p>
+          <p className="text-3xl font-bold text-parchment">{formatMoney(mrr.totalCents)}</p>
+          <p className="text-xs text-parchment/30 mt-1">
+            − {formatMoney(platformCost.totalCents)}/mo est. cost ·{" "}
+            <span className={netCents >= 0 ? "text-claw-green" : "text-spark-orange"}>
+              net {netCents < 0 ? "−" : ""}
+              {formatMoney(Math.abs(netCents))}
+            </span>
+          </p>
         </Card>
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">VPS Online</p>

@@ -89,6 +89,73 @@ export async function getCalendarMonthUsageTotals(
   return { sms_sent: sms, calls_made: calls };
 }
 
+/**
+ * FLEET-WIDE current-UTC-calendar-month usage rollup (admin dashboard
+ * platform-cost estimate):
+ *
+ * - SMS from `daily_usage.sms_sent` (live writer: the `increment_usage`
+ *   RPC on every metered send).
+ * - Voice minutes from `voice_settlements.billable_seconds` — the settled
+ *   Telnyx ground truth. `daily_usage.voice_minutes_used` is deliberately
+ *   NOT used: it has no live production writer (voice quota moved to the
+ *   Stripe-period Telnyx pool), so summing it would report ~zero voice
+ *   cost forever.
+ *
+ * Both reads page in 1000-row chunks — PostgREST silently caps a single
+ * request at 1000 rows, which would otherwise under-report usage without
+ * any error as the fleet grows. Orderings (`id`; `created_at` +
+ * `call_control_id`, the settlements PK) keep `.range()` page boundaries
+ * deterministic.
+ */
+export async function getFleetCalendarMonthUsageTotals(
+  client?: SupabaseClient
+): Promise<{ smsSent: number; voiceMinutes: number }> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const monthStartYmd = calendarMonthStartUtcYmd();
+  const pageSize = 1000;
+
+  let smsSent = 0;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("daily_usage")
+      .select("sms_sent")
+      .gte("usage_date", monthStartYmd)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`getFleetCalendarMonthUsageTotals: ${error.message}`);
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      smsSent += Number((row as { sms_sent?: number | null }).sms_sent ?? 0);
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  let billableSeconds = 0;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("voice_settlements")
+      .select("billable_seconds")
+      .gte("created_at", `${monthStartYmd}T00:00:00.000Z`)
+      .order("created_at", { ascending: true })
+      .order("call_control_id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`getFleetCalendarMonthUsageTotals: ${error.message}`);
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      billableSeconds += Number(
+        (row as { billable_seconds?: number | null }).billable_seconds ?? 0
+      );
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  return { smsSent, voiceMinutes: billableSeconds / 60 };
+}
+
 export async function incrementUsage(
   businessId: string,
   field: UsageField,

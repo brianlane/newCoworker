@@ -10,7 +10,10 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
-import { deriveMonthlyQuotaWindow } from "../../../supabase/functions/_shared/billing_period_window";
+import {
+  addUtcMonthsClamped,
+  deriveMonthlyQuotaWindow
+} from "../../../supabase/functions/_shared/billing_period_window";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -107,6 +110,77 @@ export async function getChatSpendSnapshotForBusiness(
     creditMicros,
     effectiveCapMicros: baseCapMicros + creditMicros
   };
+}
+
+/**
+ * FLEET-WIDE Gemini spend (micro-USD) across every tenant's CURRENT period
+ * row (admin dashboard platform-cost estimate). A spend row's window is one
+ * CLAMPED month from its `period_start` (the same `addUtcMonthsClamped`
+ * math deriveMonthlyQuotaWindow keys the rows with — naive month addition
+ * would keep a Jan-31-anchored window "alive" into early March), so the sum
+ * takes each business's NEWEST started row and counts it only while its
+ * window still covers `now` — summing every row in a rolling one-month
+ * lookback would double-count a tenant right after a window rollover. The
+ * two-month fetch lookback is a safe superset of any window that can cover
+ * `now`. Best effort on error — the dashboard must render even if a read
+ * fails: a failed page stops the scan but the rows already merged still
+ * count, so the result is 0 only when the very FIRST page fails. A partial
+ * (under-)count is unavoidable either way; discarding merged pages would
+ * only make it worse.
+ */
+export async function getFleetCurrentAiSpendMicros(
+  client?: SupabaseClient,
+  now: Date = new Date()
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const nowMs = now.getTime();
+  const lookbackIso = addUtcMonthsClamped(now, -2).toISOString();
+
+  // Paged read: PostgREST silently caps a single response at 1000 rows,
+  // which would drop spend on a large fleet without any error. The
+  // (business_id, period_start) ordering is the table's natural key, so
+  // `.range()` page boundaries are deterministic.
+  const newestByBusiness = new Map<string, { startMs: number; spendMicros: number }>();
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("owner_chat_model_spend")
+      .select("business_id, period_start, spend_micros")
+      .gt("period_start", lookbackIso)
+      .lte("period_start", now.toISOString())
+      .order("business_id", { ascending: true })
+      .order("period_start", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.error("getFleetCurrentAiSpendMicros", error.message);
+      break;
+    }
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as {
+        business_id?: string;
+        period_start?: string;
+        spend_micros?: number | string;
+      };
+      const startMs = Date.parse(r.period_start ?? "");
+      if (!r.business_id || !Number.isFinite(startMs)) continue;
+      const prev = newestByBusiness.get(r.business_id);
+      if (prev && prev.startMs >= startMs) continue;
+      const n = Number(r.spend_micros ?? 0);
+      newestByBusiness.set(r.business_id, {
+        startMs,
+        spendMicros: Number.isFinite(n) && n > 0 ? n : 0
+      });
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  let total = 0;
+  for (const { startMs, spendMicros } of newestByBusiness.values()) {
+    if (addUtcMonthsClamped(new Date(startMs), 1).getTime() > nowMs) total += spendMicros;
+  }
+  return total;
 }
 
 /** Unexpired, unvoided bonus texts remaining across all SMS grants. 0 on error. */

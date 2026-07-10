@@ -11,6 +11,7 @@ import {
   chatSpendBaseCapMicros,
   chatSpendBaseCapMicrosForTier,
   getChatSpendSnapshotForBusiness,
+  getFleetCurrentAiSpendMicros,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
 
@@ -168,6 +169,138 @@ describe("getChatSpendSnapshotForBusiness", () => {
     const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "standard");
 
     expect(snap.baseCapMicros).toBe(10_000_000);
+  });
+});
+
+describe("getFleetCurrentAiSpendMicros", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  type FleetSpendRow = {
+    business_id?: string;
+    period_start?: string;
+    spend_micros?: number | string;
+  };
+
+  type FleetSpendPage = {
+    data: FleetSpendRow[] | null;
+    error: { message: string } | null;
+  };
+
+  /** Chain ending at `.range()`, resolving queued pages in order. */
+  function fleetSpendDb(...pages: FleetSpendPage[]) {
+    let call = 0;
+    const builder = {
+      select: vi.fn(() => builder),
+      gt: vi.fn(() => builder),
+      lte: vi.fn(() => builder),
+      order: vi.fn(() => builder),
+      range: vi.fn(async () => pages[Math.min(call++, pages.length - 1)])
+    };
+    return { from: vi.fn(() => builder), builder };
+  }
+
+  it("counts each business's newest row only while its one-month window covers now", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const { from, builder } = fleetSpendDb({
+      data: [
+        // biz-a: newer row first, older second → older is skipped, no double count.
+        { business_id: "biz-a", period_start: "2026-07-01T00:00:00Z", spend_micros: 1_000_000 },
+        { business_id: "biz-a", period_start: "2026-06-01T00:00:00Z", spend_micros: 999 },
+        // biz-b: older row first, replaced by the newer covering row (string spend).
+        { business_id: "biz-b", period_start: "2026-06-05T00:00:00Z", spend_micros: 100 },
+        { business_id: "biz-b", period_start: "2026-06-20T00:00:00Z", spend_micros: "250000" },
+        // biz-c: newest window ended 2026-07-01 → rolled over, not counted.
+        { business_id: "biz-c", period_start: "2026-06-01T00:00:00Z", spend_micros: 750_000 },
+        // Covering windows with garbage spend clamp to 0.
+        { business_id: "biz-d", period_start: "2026-07-02T00:00:00Z", spend_micros: -5 },
+        { business_id: "biz-e", period_start: "2026-07-02T00:00:00Z", spend_micros: "junk" },
+        { business_id: "biz-h", period_start: "2026-07-03T00:00:00Z" },
+        // Malformed rows are skipped outright.
+        { period_start: "2026-07-01T00:00:00Z", spend_micros: 111 },
+        { business_id: "biz-f", period_start: "not-a-date", spend_micros: 222 },
+        { business_id: "biz-g", spend_micros: 333 }
+      ],
+      error: null
+    });
+
+    const total = await getFleetCurrentAiSpendMicros({ from } as never, now);
+    expect(total).toBe(1_250_000);
+    // Fetch lookback is a two-month superset of any window that can cover now.
+    expect(builder.gt).toHaveBeenCalledWith("period_start", "2026-05-10T12:00:00.000Z");
+    expect(builder.lte).toHaveBeenCalledWith("period_start", now.toISOString());
+  });
+
+  it("pages past PostgREST's 1000-row cap instead of silently dropping spend", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+      business_id: `biz-${i}`,
+      period_start: "2026-07-01T00:00:00Z",
+      spend_micros: 10
+    }));
+    const { from, builder } = fleetSpendDb(
+      { data: fullPage, error: null },
+      {
+        data: [{ business_id: "biz-extra", period_start: "2026-07-01T00:00:00Z", spend_micros: 5 }],
+        error: null
+      }
+    );
+
+    await expect(getFleetCurrentAiSpendMicros({ from } as never, now)).resolves.toBe(10_005);
+    expect(builder.range).toHaveBeenCalledTimes(2);
+    expect(builder.range).toHaveBeenNthCalledWith(1, 0, 999);
+    expect(builder.range).toHaveBeenNthCalledWith(2, 1000, 1999);
+  });
+
+  it("ends windows with clamped month math (a Jan 31 anchor expires Feb 28, not Mar 3)", async () => {
+    const { from } = fleetSpendDb({
+      data: [{ business_id: "biz-a", period_start: "2026-01-31T00:00:00Z", spend_micros: 500 }],
+      error: null
+    });
+    // Naive month addition would keep this window alive until Mar 3.
+    await expect(
+      getFleetCurrentAiSpendMicros({ from } as never, new Date("2026-03-01T00:00:00Z"))
+    ).resolves.toBe(0);
+  });
+
+  it("returns 0 for null data and 0 when the first page fails (best effort — dashboard must render)", async () => {
+    const { from: emptyFrom } = fleetSpendDb({ data: null, error: null });
+    await expect(getFleetCurrentAiSpendMicros({ from: emptyFrom } as never)).resolves.toBe(0);
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { from: errFrom } = fleetSpendDb({ data: null, error: { message: "down" } });
+    await expect(getFleetCurrentAiSpendMicros({ from: errFrom } as never)).resolves.toBe(0);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("keeps already-merged pages when a later page fails instead of zeroing the rollup", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+      business_id: `biz-${i}`,
+      period_start: "2026-07-01T00:00:00Z",
+      spend_micros: 10
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { from } = fleetSpendDb(
+      { data: fullPage, error: null },
+      { data: null, error: { message: "transient" } }
+    );
+
+    await expect(getFleetCurrentAiSpendMicros({ from } as never, now)).resolves.toBe(10_000);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("creates a service client when none is passed and defaults now", async () => {
+    const { from } = fleetSpendDb({
+      data: [
+        { business_id: "biz-a", period_start: new Date().toISOString(), spend_micros: 42 }
+      ],
+      error: null
+    });
+    mockCreateClient.mockResolvedValueOnce({ from });
+    await expect(getFleetCurrentAiSpendMicros()).resolves.toBe(42);
+    expect(mockCreateClient).toHaveBeenCalled();
   });
 });
 
