@@ -324,6 +324,10 @@ export function systemInstructionForBusiness(
       `${identityLine} (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
       groundedActionsLine,
       "You already have this caller's phone number (it's the line they're calling from), so never ask them to read back their number. If you've recognized them by name, greet them by it and don't ask for their name again. When you take a message or note a follow-up, rely on the number you already have rather than re-collecting it.",
+      // Conversation quality (twin of the SMS worker's
+      // conversationQualityLine — keep in sync): reuse what is known, vary
+      // the phrasing, respond to what the caller actually said.
+      "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared) — reuse it, including when booking an appointment. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
       currentDateTimeLine(new Date(), businessTimezone)
     );
   }
