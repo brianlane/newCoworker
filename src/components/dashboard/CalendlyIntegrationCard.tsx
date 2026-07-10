@@ -75,7 +75,8 @@ export function CalendlyIntegrationCard({ businessId, initialConnection }: Props
       setBanner(
         json.data?.verified
           ? null
-          : "Saved, but Calendly rejected the token — double-check it and try again."
+          : "Saved, but Calendly rejected the token — double-check it and make sure it " +
+              "was created with the user profile, event types, and scheduling links scopes."
       );
     } finally {
       setSaving(false);
@@ -198,7 +199,12 @@ export function CalendlyIntegrationCard({ businessId, initialConnection }: Props
           </div>
           <p className="text-[11px] text-parchment/40">
             Create a token in Calendly under Integrations &amp; apps → API &amp; webhooks →
-            &quot;Get a token now&quot;. Any Calendly plan works.
+            &quot;Get a token now&quot;. Any Calendly plan works. When Calendly asks which
+            permissions (scopes) to grant, include{" "}
+            <span className="text-parchment/60">user profile (read)</span>,{" "}
+            <span className="text-parchment/60">event types (read)</span>, and{" "}
+            <span className="text-parchment/60">scheduling links (write)</span> — a token
+            without them will fail verification here.
           </p>
         </form>
       )}
