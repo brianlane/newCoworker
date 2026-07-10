@@ -467,26 +467,15 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   let index = run.current_step;
   while (index < flat.length) {
     const { step, branchPath } = flat[index];
-    // A step under an untaken (or not-yet-evaluated) branch arm never runs —
-    // recorded "skipped" like a when_unmet skip, so run history shows every
-    // path with the untaken ones greyed.
-    if (branchPath.length > 0 && !isOnActivePath(branchPath, scope.vars)) {
-      await recordStep(supabase, run, index, step, "skipped", { skipped: "branch_not_taken" });
-      index += 1;
-      await updateRun(supabase, run.id, {
-        current_step: index,
-        context: buildContext(scope, approval, routing)
-      });
-      continue;
-    }
     // Cooperative owner cancel: the dashboard "Stop this run" flips the row to
-    // `canceled` while we hold the claim. Re-read the live status before each
-    // side-effecting step so a stopped run quits at the next step boundary
-    // (the step already in flight completes) instead of texting on. Every
-    // updateRun below is additionally status-guarded, so even a cancel that
-    // lands mid-step can never be overwritten — this check is what stops the
-    // remaining SIDE EFFECTS, the guard is what protects the STATE. A read
-    // failure proceeds (cancel stays best-effort; the write guard still holds).
+    // `canceled` while we hold the claim. Re-read the live status at the TOP
+    // of every iteration (before branch-skip bookkeeping too, so a long skip
+    // chain can't march to `done`) so a stopped run quits at the next step
+    // boundary — the step already in flight completes, nothing after it runs.
+    // Every updateRun below is additionally status-guarded, so even a cancel
+    // that lands mid-step can never be overwritten — this check is what stops
+    // the remaining SIDE EFFECTS, the guard is what protects the STATE. A
+    // read failure proceeds (cancel stays best-effort; the write guard holds).
     try {
       const { data: liveRow } = await supabase
         .from("ai_flow_runs")
@@ -499,6 +488,18 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       }
     } catch (e) {
       console.error("executeRun cancel check", e);
+    }
+    // A step under an untaken (or not-yet-evaluated) branch arm never runs —
+    // recorded "skipped" like a when_unmet skip, so run history shows every
+    // path with the untaken ones greyed.
+    if (branchPath.length > 0 && !isOnActivePath(branchPath, scope.vars)) {
+      await recordStep(supabase, run, index, step, "skipped", { skipped: "branch_not_taken" });
+      index += 1;
+      await updateRun(supabase, run.id, {
+        current_step: index,
+        context: buildContext(scope, approval, routing)
+      });
+      continue;
     }
     let outcome: StepOutcome;
     try {
@@ -738,7 +739,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // runs whose earliest_claim_at is in the future. Give back the attempt
       // the claim charged (same as the paused-business defer) — waiting out
       // quiet hours is not a failure and must not drain any budget.
-      await updateRun(supabase, run.id, {
+      const deferred = await updateRun(supabase, run.id, {
         status: "queued",
         current_step: index,
         context: buildContext(scope, approval, routing),
@@ -746,6 +747,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null,
         attempt_count: Math.max(0, run.attempt_count - 1)
       });
+      if (!deferred) {
+        // Owner stopped the run while this step executed; the re-queue lost
+        // to the cancel, so don't log/telemeter a deferral that never landed.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       await telemetryRecord(supabase, "ai_flow_run_deferred_quiet_hours", {
         run_id: run.id,
         business_id: run.business_id,
@@ -782,12 +789,18 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     });
   }
 
-  await updateRun(supabase, run.id, {
+  const finished = await updateRun(supabase, run.id, {
     status: "done",
     current_step: index,
     context: buildContext(scope, approval, routing),
     claimed_at: null
   });
+  if (!finished) {
+    // Owner stopped the run as its last step executed; it stays `canceled`
+    // rather than flipping to done, and the logs say so.
+    await stoppedMidExecutionLog(supabase, run, index);
+    return;
+  }
   await telemetryRecord(supabase, "ai_flow_run_done", {
     run_id: run.id,
     business_id: run.business_id,
