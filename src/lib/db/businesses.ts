@@ -603,6 +603,24 @@ export async function updateBusinessTimezone(
 }
 
 /**
+ * Toggle AiFlow staff-contact tag protection (Settings): when ON (default),
+ * update_contact steps skip owner/employee contacts so lead-state tags never
+ * land on staff. See migration 20260813000000_aiflow_staff_tag_protection.
+ */
+export async function setAiflowStaffProtection(
+  id: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ aiflow_protect_staff_contacts: enabled })
+    .eq("id", id);
+  if (error) throw new Error(`setAiflowStaffProtection: ${error.message}`);
+}
+
+/**
  * Light single-column read for the calendar tools' timezone default.
  * Returns null when unset or on any read error (degrade to UTC, never
  * fail the tool call over a timezone lookup).
