@@ -202,6 +202,20 @@ describe("planStep: update_contact", () => {
   });
 });
 
+describe("planStep: unknown step types", () => {
+  it("returns undefined for a step type this build doesn't know (the worker guards on it)", () => {
+    // Runtime version skew: a stored definition can carry a step type newer
+    // than the deployed worker. planStep's exhaustive switch falls through to
+    // undefined; the worker converts that into a readable run failure telling
+    // ops to redeploy — never a bare TypeError.
+    const plan = planStep(
+      { id: "x", type: "step_from_the_future" } as unknown as FlowStep,
+      { vars: {} }
+    );
+    expect(plan).toBeUndefined();
+  });
+});
+
 describe("planStep: voice steps are rejected by the async worker", () => {
   it.each<FlowStep>([
     { id: "r", type: "ring_handoff", toE164: "+16025245719" },

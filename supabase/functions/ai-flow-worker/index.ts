@@ -842,7 +842,19 @@ async function runStep(
     }
   }
   await recordStep(supabase, run, index, step, "running");
-  const plan = planStep(step, scope);
+  // planStep's switch is compile-time exhaustive, but at RUNTIME a stored
+  // definition can carry a step type this deploy predates (two agents
+  // deploying in parallel raced exactly this way once — the old worker died
+  // with a bare TypeError). Fail readably instead so the run history says
+  // what to do.
+  const plan = planStep(step, scope) as ReturnType<typeof planStep> | undefined;
+  if (!plan) {
+    return {
+      kind: "fail",
+      error:
+        `unknown step type "${step.type}" — this ai-flow-worker deploy is older than the flow definition; redeploy the worker from main`
+    };
+  }
   if (!plan.ok) return { kind: "fail", error: plan.error };
   const action = plan.action;
 
