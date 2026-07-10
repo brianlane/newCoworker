@@ -8,6 +8,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   createEnterpriseDeal,
   listEnterpriseDeals,
+  listActiveEnterpriseDeals,
   getEnterpriseDeal,
   getEnterpriseDealByPayToken,
   revokeEnterpriseDeal,
@@ -94,6 +95,26 @@ describe("db/enterprise-deals", () => {
     const empty = mockDb({ order: vi.fn().mockResolvedValue({ data: null, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(empty as never);
     expect(await listEnterpriseDeals(DEAL.business_id)).toEqual([]);
+  });
+
+  it("listActiveEnterpriseDeals returns active rows across businesses ([] for null data)", async () => {
+    const active = { ...DEAL, status: "active" };
+    const db = mockDb({ eq: vi.fn().mockResolvedValue({ data: [active], error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await listActiveEnterpriseDeals()).toEqual([active]);
+    expect(db.eq).toHaveBeenCalledWith("status", "active");
+
+    // Explicit-client path + null data → [].
+    const empty = mockDb({ eq: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    expect(await listActiveEnterpriseDeals(empty as never)).toEqual([]);
+  });
+
+  it("listActiveEnterpriseDeals throws on error", async () => {
+    const db = mockDb({
+      eq: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(listActiveEnterpriseDeals()).rejects.toThrow("listActiveEnterpriseDeals: boom");
   });
 
   it("listEnterpriseDeals throws on error", async () => {

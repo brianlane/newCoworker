@@ -109,6 +109,46 @@ export async function getChatSpendSnapshotForBusiness(
   };
 }
 
+/**
+ * FLEET-WIDE Gemini spend (micro-USD) across every tenant's CURRENT period
+ * row (admin dashboard platform-cost estimate). A spend row's window is one
+ * month from its `period_start` (see deriveMonthlyQuotaWindow), so "current"
+ * means `period_start` within the last month. Best effort: 0 on error —
+ * the dashboard must render even if the rollup read fails.
+ */
+export async function getFleetCurrentAiSpendMicros(
+  client?: SupabaseClient,
+  now: Date = new Date()
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const oneMonthAgo = new Date(
+    Date.UTC(
+      now.getUTCFullYear(),
+      now.getUTCMonth() - 1,
+      now.getUTCDate(),
+      now.getUTCHours(),
+      now.getUTCMinutes(),
+      now.getUTCSeconds()
+    )
+  );
+  const { data, error } = await db
+    .from("owner_chat_model_spend")
+    .select("spend_micros")
+    .gt("period_start", oneMonthAgo.toISOString())
+    .lte("period_start", now.toISOString());
+  if (error) {
+    console.error("getFleetCurrentAiSpendMicros", error.message);
+    return 0;
+  }
+
+  let total = 0;
+  for (const row of data ?? []) {
+    const n = Number((row as { spend_micros?: number | string }).spend_micros ?? 0);
+    if (Number.isFinite(n) && n > 0) total += n;
+  }
+  return total;
+}
+
 /** Unexpired, unvoided bonus texts remaining across all SMS grants. 0 on error. */
 export async function getSmsBonusTextsRemaining(
   businessId: string,

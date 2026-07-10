@@ -11,6 +11,7 @@ import {
   chatSpendBaseCapMicros,
   chatSpendBaseCapMicrosForTier,
   getChatSpendSnapshotForBusiness,
+  getFleetCurrentAiSpendMicros,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
 
@@ -168,6 +169,59 @@ describe("getChatSpendSnapshotForBusiness", () => {
     const snap = await getChatSpendSnapshotForBusiness("biz-1", db as never, "standard");
 
     expect(snap.baseCapMicros).toBe(10_000_000);
+  });
+});
+
+describe("getFleetCurrentAiSpendMicros", () => {
+  afterEach(() => vi.clearAllMocks());
+
+  function fleetSpendDb(result: {
+    data: Array<{ spend_micros?: number | string }> | null;
+    error: { message: string } | null;
+  }) {
+    const builder = {
+      select: vi.fn(() => builder),
+      gt: vi.fn(() => builder),
+      lte: vi.fn(async () => result)
+    };
+    return { from: vi.fn(() => builder), builder };
+  }
+
+  it("sums positive finite spend rows and filters the last-month window", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const { from, builder } = fleetSpendDb({
+      data: [
+        { spend_micros: 1_000_000 },
+        { spend_micros: "250000" },
+        { spend_micros: -5 },
+        { spend_micros: "not-a-number" },
+        {} // missing field → 0
+      ],
+      error: null
+    });
+
+    const total = await getFleetCurrentAiSpendMicros({ from } as never, now);
+    expect(total).toBe(1_250_000);
+    expect(builder.gt).toHaveBeenCalledWith("period_start", "2026-06-10T12:00:00.000Z");
+    expect(builder.lte).toHaveBeenCalledWith("period_start", now.toISOString());
+  });
+
+  it("returns 0 for null data and 0 on error (best effort — dashboard must render)", async () => {
+    const { from: emptyFrom } = fleetSpendDb({ data: null, error: null });
+    await expect(getFleetCurrentAiSpendMicros({ from: emptyFrom } as never)).resolves.toBe(0);
+
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { from: errFrom } = fleetSpendDb({ data: null, error: { message: "down" } });
+    await expect(getFleetCurrentAiSpendMicros({ from: errFrom } as never)).resolves.toBe(0);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("creates a service client when none is passed", async () => {
+    const { from } = fleetSpendDb({ data: [{ spend_micros: 42 }], error: null });
+    mockCreateClient.mockResolvedValueOnce({ from });
+    await expect(getFleetCurrentAiSpendMicros()).resolves.toBe(42);
+    expect(mockCreateClient).toHaveBeenCalled();
   });
 });
 

@@ -74,6 +74,22 @@ export async function listEnterpriseDeals(
   return (data ?? []) as EnterpriseDealRow[];
 }
 
+/**
+ * Every ACTIVE deal across all businesses (admin dashboard MRR — the deal's
+ * monthly price is enterprise's real revenue; the tier table carries $0).
+ */
+export async function listActiveEnterpriseDeals(
+  client?: SupabaseClient
+): Promise<EnterpriseDealRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("enterprise_deals")
+    .select("*")
+    .eq("status", "active");
+  if (error) throw new Error(`listActiveEnterpriseDeals: ${error.message}`);
+  return (data ?? []) as EnterpriseDealRow[];
+}
+
 /** Single deal by id, or null when it doesn't exist. */
 export async function getEnterpriseDeal(
   dealId: string,

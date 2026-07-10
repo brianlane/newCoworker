@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getTodayUsage, getCalendarMonthUsageTotals, incrementUsage, checkLimitReached } from "@/lib/db/usage";
+import {
+  getTodayUsage,
+  getCalendarMonthUsageTotals,
+  getFleetCalendarMonthUsageTotals,
+  incrementUsage,
+  checkLimitReached
+} from "@/lib/db/usage";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -186,6 +192,59 @@ describe("db/usage", () => {
       chain.gte = vi.fn(() => sparseThenable);
       const sparse = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
       expect(sparse).toEqual({ sms_sent: 0, calls_made: 0 });
+    });
+  });
+
+  describe("getFleetCalendarMonthUsageTotals", () => {
+    function fleetChain(result: {
+      data: Array<{ sms_sent?: number | null; voice_minutes_used?: number | null }> | null;
+      error: { message: string } | null;
+    }) {
+      const thenable: PromiseLike<typeof result> = {
+        then(onFulfilled, onRejected) {
+          return Promise.resolve(result).then(onFulfilled, onRejected);
+        }
+      };
+      const chain: Record<string, unknown> = {};
+      chain.from = vi.fn(() => chain);
+      chain.select = vi.fn(() => chain);
+      chain.gte = vi.fn(() => thenable);
+      return chain;
+    }
+
+    it("sums SMS and voice minutes across the whole fleet", async () => {
+      const db = fleetChain({
+        data: [
+          { sms_sent: 3, voice_minutes_used: 10 },
+          { sms_sent: 2, voice_minutes_used: 4.5 }
+        ],
+        error: null
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      expect(await getFleetCalendarMonthUsageTotals()).toEqual({ smsSent: 5, voiceMinutes: 14.5 });
+    });
+
+    it("treats null data as empty and null fields as zero (explicit client)", async () => {
+      const empty = fleetChain({ data: null, error: null });
+      expect(await getFleetCalendarMonthUsageTotals(empty as never)).toEqual({
+        smsSent: 0,
+        voiceMinutes: 0
+      });
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+
+      const sparse = fleetChain({ data: [{ sms_sent: null }, { voice_minutes_used: null }], error: null });
+      expect(await getFleetCalendarMonthUsageTotals(sparse as never)).toEqual({
+        smsSent: 0,
+        voiceMinutes: 0
+      });
+    });
+
+    it("throws when the query fails", async () => {
+      const db = fleetChain({ data: null, error: { message: "db down" } });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await expect(getFleetCalendarMonthUsageTotals()).rejects.toThrow(
+        "getFleetCalendarMonthUsageTotals: db down"
+      );
     });
   });
 

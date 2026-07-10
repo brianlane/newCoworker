@@ -89,6 +89,32 @@ export async function getCalendarMonthUsageTotals(
   return { sms_sent: sms, calls_made: calls };
 }
 
+/**
+ * FLEET-WIDE current-UTC-calendar-month rollup from `daily_usage` (admin
+ * dashboard platform-cost estimate). Row volume is businesses × days-so-far,
+ * comfortably inside PostgREST's 1000-row page for the current fleet size.
+ */
+export async function getFleetCalendarMonthUsageTotals(
+  client?: SupabaseClient
+): Promise<{ smsSent: number; voiceMinutes: number }> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("daily_usage")
+    .select("sms_sent, voice_minutes_used")
+    .gte("usage_date", calendarMonthStartUtcYmd());
+
+  if (error) throw new Error(`getFleetCalendarMonthUsageTotals: ${error.message}`);
+
+  let smsSent = 0;
+  let voiceMinutes = 0;
+  for (const row of data ?? []) {
+    const r = row as { sms_sent?: number | null; voice_minutes_used?: number | null };
+    smsSent += Number(r.sms_sent ?? 0);
+    voiceMinutes += Number(r.voice_minutes_used ?? 0);
+  }
+  return { smsSent, voiceMinutes };
+}
+
 export async function incrementUsage(
   businessId: string,
   field: UsageField,
