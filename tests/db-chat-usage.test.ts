@@ -181,14 +181,20 @@ describe("getFleetCurrentAiSpendMicros", () => {
     spend_micros?: number | string;
   };
 
-  function fleetSpendDb(result: {
+  type FleetSpendPage = {
     data: FleetSpendRow[] | null;
     error: { message: string } | null;
-  }) {
+  };
+
+  /** Chain ending at `.range()`, resolving queued pages in order. */
+  function fleetSpendDb(...pages: FleetSpendPage[]) {
+    let call = 0;
     const builder = {
       select: vi.fn(() => builder),
       gt: vi.fn(() => builder),
-      lte: vi.fn(async () => result)
+      lte: vi.fn(() => builder),
+      order: vi.fn(() => builder),
+      range: vi.fn(async () => pages[Math.min(call++, pages.length - 1)])
     };
     return { from: vi.fn(() => builder), builder };
   }
@@ -222,6 +228,27 @@ describe("getFleetCurrentAiSpendMicros", () => {
     // Fetch lookback is a two-month superset of any window that can cover now.
     expect(builder.gt).toHaveBeenCalledWith("period_start", "2026-05-10T12:00:00.000Z");
     expect(builder.lte).toHaveBeenCalledWith("period_start", now.toISOString());
+  });
+
+  it("pages past PostgREST's 1000-row cap instead of silently dropping spend", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+      business_id: `biz-${i}`,
+      period_start: "2026-07-01T00:00:00Z",
+      spend_micros: 10
+    }));
+    const { from, builder } = fleetSpendDb(
+      { data: fullPage, error: null },
+      {
+        data: [{ business_id: "biz-extra", period_start: "2026-07-01T00:00:00Z", spend_micros: 5 }],
+        error: null
+      }
+    );
+
+    await expect(getFleetCurrentAiSpendMicros({ from } as never, now)).resolves.toBe(10_005);
+    expect(builder.range).toHaveBeenCalledTimes(2);
+    expect(builder.range).toHaveBeenNthCalledWith(1, 0, 999);
+    expect(builder.range).toHaveBeenNthCalledWith(2, 1000, 1999);
   });
 
   it("ends windows with clamped month math (a Jan 31 anchor expires Feb 28, not Mar 3)", async () => {

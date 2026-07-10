@@ -132,32 +132,45 @@ export async function getFleetCurrentAiSpendMicros(
   const db = client ?? (await createSupabaseServiceClient());
   const nowMs = now.getTime();
   const lookbackIso = addUtcMonthsClamped(now, -2).toISOString();
-  const { data, error } = await db
-    .from("owner_chat_model_spend")
-    .select("business_id, period_start, spend_micros")
-    .gt("period_start", lookbackIso)
-    .lte("period_start", now.toISOString());
-  if (error) {
-    console.error("getFleetCurrentAiSpendMicros", error.message);
-    return 0;
-  }
 
+  // Paged read: PostgREST silently caps a single response at 1000 rows,
+  // which would drop spend on a large fleet without any error. The
+  // (business_id, period_start) ordering is the table's natural key, so
+  // `.range()` page boundaries are deterministic.
   const newestByBusiness = new Map<string, { startMs: number; spendMicros: number }>();
-  for (const row of data ?? []) {
-    const r = row as {
-      business_id?: string;
-      period_start?: string;
-      spend_micros?: number | string;
-    };
-    const startMs = Date.parse(r.period_start ?? "");
-    if (!r.business_id || !Number.isFinite(startMs)) continue;
-    const prev = newestByBusiness.get(r.business_id);
-    if (prev && prev.startMs >= startMs) continue;
-    const n = Number(r.spend_micros ?? 0);
-    newestByBusiness.set(r.business_id, {
-      startMs,
-      spendMicros: Number.isFinite(n) && n > 0 ? n : 0
-    });
+  const pageSize = 1000;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("owner_chat_model_spend")
+      .select("business_id, period_start, spend_micros")
+      .gt("period_start", lookbackIso)
+      .lte("period_start", now.toISOString())
+      .order("business_id", { ascending: true })
+      .order("period_start", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      console.error("getFleetCurrentAiSpendMicros", error.message);
+      return 0;
+    }
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as {
+        business_id?: string;
+        period_start?: string;
+        spend_micros?: number | string;
+      };
+      const startMs = Date.parse(r.period_start ?? "");
+      if (!r.business_id || !Number.isFinite(startMs)) continue;
+      const prev = newestByBusiness.get(r.business_id);
+      if (prev && prev.startMs >= startMs) continue;
+      const n = Number(r.spend_micros ?? 0);
+      newestByBusiness.set(r.business_id, {
+        startMs,
+        spendMicros: Number.isFinite(n) && n > 0 ? n : 0
+      });
+    }
+    if (rows.length < pageSize) break;
   }
 
   let total = 0;
