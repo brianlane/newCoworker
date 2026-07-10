@@ -411,6 +411,17 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, phoneVar: "lead_phone", nameVar: "lead_name", emailVar: "lead_email" };
     case "update_contact":
       return { id, type, phoneVar: "lead_phone", addTags: ["Contacted"], removeTags: ["New Lead"] };
+    case "classify":
+      return {
+        id,
+        type,
+        textVar: "reply_text",
+        saveAs: "intent",
+        categories: [
+          { value: "wants_a_call", description: "asks to talk, call, book, or schedule" },
+          { value: "not_interested", description: "declines or asks to stop" }
+        ]
+      };
     case "sleep":
       return { id, type, minutes: 300 };
     case "wait_for_reply":
@@ -3238,6 +3249,79 @@ function StepFields({
           value={step.emailVar ?? ""}
           onChange={(v) => patchStep(index, { emailVar: v || undefined })}
         />
+      </div>
+    );
+  }
+  if (step.type === "classify") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Message to read (variable; empty = the triggering message)"
+          value={step.textVar ?? ""}
+          onChange={(v) => patchStep(index, { textVar: v.trim() ? v.trim() : undefined })}
+          help='Usually the reply a "Wait for their reply" step saved, e.g. reply_text.'
+        />
+        <Field
+          label="Context for the AI (optional)"
+          value={step.question ?? ""}
+          onChange={(v) => patchStep(index, { question: v.trim() ? v : undefined })}
+          help='e.g. "The lead was asked why they are shopping for insurance."'
+        />
+        <label className={labelClass}>Categories (the AI picks exactly one)</label>
+        {step.categories.map((c, ci) => (
+          <div key={ci} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={c.value}
+              placeholder="wants_a_call"
+              onChange={(ev) =>
+                patchStep(index, {
+                  categories: step.categories.map((x, xi) =>
+                    xi === ci ? { ...x, value: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            <input
+              className={inputClass}
+              value={c.description ?? ""}
+              placeholder="when to pick this (optional)"
+              onChange={(ev) =>
+                patchStep(index, {
+                  categories: step.categories.map((x, xi) =>
+                    xi === ci ? { ...x, description: ev.target.value || undefined } : x
+                  )
+                })
+              }
+            />
+            <button
+              onClick={() =>
+                patchStep(index, { categories: step.categories.filter((_, xi) => xi !== ci) })
+              }
+              className="text-parchment/40 hover:text-spark-orange"
+              aria-label="Remove category"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          </div>
+        ))}
+        <button
+          onClick={() =>
+            patchStep(index, { categories: [...step.categories, { value: "" }] })
+          }
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + category
+        </button>
+        <Field
+          label="Save the answer as"
+          value={step.saveAs}
+          onChange={(v) => patchStep(index, { saveAs: v })}
+        />
+        <p className="text-[11px] text-parchment/40">
+          The chosen category (or &quot;unclear&quot; when nothing fits) lands in this variable —
+          add a Branch step after this one with an arm per category to take the right path.
+        </p>
       </div>
     );
   }

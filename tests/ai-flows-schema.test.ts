@@ -1253,6 +1253,58 @@ describe("trigger channels", () => {
     ).toThrow(AiFlowValidationError);
   });
 
+  it("validates classify: textVar scope, unique values, reserved unclear, saveAs registers", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] },
+      steps: [
+        { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }] },
+        { id: "w", type: "wait_for_reply", phoneVar: "lead_phone" },
+        {
+          id: "c",
+          type: "classify",
+          textVar: "reply_text",
+          categories: [{ value: "wants_a_call" }, { value: "not_interested" }],
+          saveAs: "intent"
+        },
+        // saveAs is in scope for later when-guards.
+        { id: "n", type: "notify_owner", message: "call!", when: { var: "intent", equals: "wants_a_call" } }
+      ]
+    });
+    expect(def.steps[2].type).toBe("classify");
+    // textVar no earlier step produces.
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          { id: "c", type: "classify", textVar: "ghost", categories: [{ value: "a" }, { value: "b" }], saveAs: "x" }
+        ]
+      })
+    ).toThrow(AiFlowValidationError);
+    // Duplicate category values (case-insensitive) and the reserved "unclear".
+    try {
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          {
+            id: "c",
+            type: "classify",
+            categories: [{ value: "Yes" }, { value: "yes" }, { value: "unclear" }],
+            saveAs: "x"
+          }
+        ]
+      });
+      expect.unreachable("expected classify category validation to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AiFlowValidationError);
+      const joined = (err as AiFlowValidationError).issues.join(" ");
+      expect(joined).toContain("more than once");
+      expect(joined).toContain("reserved");
+    }
+  });
+
   it("validates update_contact: phoneVar scope + must change something", () => {
     const def = parseAiFlowDefinition({
       version: 1,

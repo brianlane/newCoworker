@@ -41,6 +41,7 @@ export const FLOW_STEP_TYPES = [
   "recall_url",
   "upsert_customer",
   "update_contact",
+  "classify",
   // Voice-channel steps (real-time call routing, executed by the Telnyx voice
   // webhook state machine; NOT the async ai-flow-worker). Only valid under a
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
@@ -736,6 +737,28 @@ const nonBranchStepMembers = [
     emailVar: varName.optional(),
     when: whenSchema.optional()
   }),
+  // Classify a message into exactly one author-defined category (or the
+  // reserved "unclear" fallback) so branches fork on MEANING. Values are
+  // var-name-shaped tokens so when/branch conditions match them exactly;
+  // "unclear" is reserved for the fallback and can't be an authored value
+  // (enforced in validateDefinitionSemantics).
+  z.object({
+    id: stepId,
+    type: z.literal("classify"),
+    textVar: varName.optional(),
+    question: z.string().min(1).max(300).optional(),
+    categories: z
+      .array(
+        z.object({
+          value: varName,
+          description: z.string().min(1).max(200).optional()
+        })
+      )
+      .min(2)
+      .max(8),
+    saveAs: varName,
+    when: whenSchema.optional()
+  }),
   // Maintain the contact's lead-state tags from a flow: removals apply before
   // additions ("removeTags New Lead, addTags Contacted" = one status change).
   // At least one of addTags/removeTags is required (validateDefinitionSemantics
@@ -977,6 +1000,8 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "upsert_customer":
     // update_contact carries literal tag strings and a var NAME — no templates.
     case "update_contact":
+    // classify carries var NAMES, category tokens, and a plain-text question.
+    case "classify":
     // sleep / wait_for_reply carry only var NAMES and durations — no templates.
     case "sleep":
     case "wait_for_reply":
@@ -1398,6 +1423,29 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       );
     }
 
+    // classify: the text var (when set) must exist, category values must be
+    // unique, and "unclear" is reserved for the nothing-fits fallback.
+    if (step.type === "classify") {
+      if (step.textVar && !vars.has(step.textVar) && !ENGINE_VARS.has(step.textVar)) {
+        issues.push(
+          `Step "${step.id}" classifies {{vars.${step.textVar}}} which no earlier step produces.`
+        );
+      }
+      const seenValues = new Set<string>();
+      for (const c of step.categories) {
+        const key = c.value.toLowerCase();
+        if (key === "unclear") {
+          issues.push(
+            `Step "${step.id}" uses the reserved category "unclear" (it's the automatic nothing-fits fallback); pick another value.`
+          );
+        }
+        if (seenValues.has(key)) {
+          issues.push(`Step "${step.id}" lists the category "${c.value}" more than once.`);
+        }
+        seenValues.add(key);
+      }
+    }
+
     // update_contact: the phone var must exist, and the step must actually
     // change something (at least one of addTags/removeTags — the union member
     // can't hold that refine).
@@ -1561,6 +1609,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "wait_for_reply") {
       // The reply text ("" on timeout) becomes a var for later `when` branches.
       vars.add(step.saveAs ?? "reply_text");
+    } else if (step.type === "classify") {
+      vars.add(step.saveAs);
     }
   };
 

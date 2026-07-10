@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
   allUrlsInText,
+  buildClassifyPrompt,
   buildExtractionPrompt,
+  CLASSIFY_UNCLEAR,
+  parseClassifyChoice,
   buildNowScope,
   evaluateSmsTrigger,
   evaluateStepCondition,
@@ -474,6 +477,40 @@ describe("extractLinkByText", () => {
 
   it("returns empty string when a relative href can't be resolved without a base", () => {
     expect(extractLinkByText('<a href="rel/path">Go</a>', "Go", "")).toBe("");
+  });
+});
+
+describe("buildClassifyPrompt / parseClassifyChoice", () => {
+  const categories = [
+    { value: "wants_a_call", description: "asks to talk" },
+    { value: "not_interested" }
+  ];
+
+  it("builds a strict one-of prompt including the reserved unclear fallback", () => {
+    const prompt = buildClassifyPrompt(categories, "call me pls", "Why are they shopping?");
+    expect(prompt).toContain('- "wants_a_call": asks to talk');
+    expect(prompt).toContain('- "not_interested"');
+    expect(prompt).toContain('"unclear"');
+    expect(prompt).toContain("Context: Why are they shopping?");
+    expect(prompt).toContain("call me pls");
+    // No question → no Context line.
+    expect(buildClassifyPrompt(categories, "hi")).not.toContain("Context:");
+    // Long messages are clipped to the cap.
+    expect(buildClassifyPrompt(categories, "x".repeat(9000)).length).toBeLessThan(6000);
+  });
+
+  it("parses the choice case-insensitively, returning the author's exact casing", () => {
+    expect(parseClassifyChoice('{"category":"WANTS_A_CALL"}', categories)).toBe("wants_a_call");
+    expect(parseClassifyChoice('```json\n{"category":"not_interested"}\n```', categories)).toBe(
+      "not_interested"
+    );
+  });
+
+  it("falls back to unclear on hallucinated values, missing keys, and junk", () => {
+    expect(parseClassifyChoice('{"category":"maybe_later"}', categories)).toBe(CLASSIFY_UNCLEAR);
+    expect(parseClassifyChoice('{"answer":"wants_a_call"}', categories)).toBe(CLASSIFY_UNCLEAR);
+    expect(parseClassifyChoice("not json at all", categories)).toBe(CLASSIFY_UNCLEAR);
+    expect(parseClassifyChoice('{"category":""}', categories)).toBe(CLASSIFY_UNCLEAR);
   });
 });
 

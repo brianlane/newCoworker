@@ -353,6 +353,57 @@ export function parseExtractionJson(
   return result;
 }
 
+/** The reserved classify fallback: empty text or nothing fits. */
+export const CLASSIFY_UNCLEAR = "unclear";
+
+/**
+ * Build the Gemini classification prompt: pick EXACTLY ONE category value for
+ * the message. Kept in the same strict-JSON style as extraction so the same
+ * response parsing/backoff plumbing serves both.
+ */
+export function buildClassifyPrompt(
+  categories: { value: string; description?: string }[],
+  text: string,
+  question?: string,
+  maxChars = 4000
+): string {
+  const lines = categories
+    .map((c) => `- "${c.value}"${c.description ? `: ${c.description}` : ""}`)
+    .join("\n");
+  const clipped = text.length > maxChars ? text.slice(0, maxChars) : text;
+  return [
+    "Classify the message below into EXACTLY ONE of these categories.",
+    ...(question ? [`Context: ${question}`] : []),
+    "",
+    "Categories:",
+    lines,
+    `- "${CLASSIFY_UNCLEAR}": none of the above clearly fits`,
+    "",
+    'Return ONLY a JSON object of the form {"category":"<value>"} using one of',
+    "the exact category values above. Do not invent new values.",
+    "",
+    "Message:",
+    clipped
+  ].join("\n");
+}
+
+/**
+ * Parse the classify response: the chosen value when it is one of the
+ * declared categories (case-insensitive, returning the author's exact
+ * casing), else the reserved "unclear" fallback. Never throws — an
+ * unparseable/hallucinated response is by definition unclear.
+ */
+export function parseClassifyChoice(
+  raw: string,
+  categories: { value: string }[]
+): string {
+  const obj = extractFirstJsonObject(raw);
+  const picked = typeof obj?.category === "string" ? obj.category.trim().toLowerCase() : "";
+  if (!picked) return CLASSIFY_UNCLEAR;
+  const match = categories.find((c) => c.value.toLowerCase() === picked);
+  return match ? match.value : CLASSIFY_UNCLEAR;
+}
+
 export type RoutedAgent = { name: string; phone: string };
 
 /** True for a syntactically valid E.164 number (+ then 7-15 digits, no leading 0). */

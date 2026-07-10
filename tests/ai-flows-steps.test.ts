@@ -92,6 +92,58 @@ describe("planStep: wait_for_reply", () => {
   });
 });
 
+describe("planStep: classify", () => {
+  const step = {
+    id: "c1",
+    type: "classify",
+    textVar: "reply_text",
+    question: "Why are they shopping?",
+    categories: [
+      { value: "wants_a_call", description: "asks to talk" },
+      { value: "not_interested" }
+    ],
+    saveAs: "intent"
+  } as FlowStep;
+
+  it("plans a model call for real text (var source)", () => {
+    const plan = planStep(step, { vars: { reply_text: "can someone ring me today?" } });
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "classify",
+        text: "can someone ring me today?",
+        question: "Why are they shopping?",
+        categories: [
+          { value: "wants_a_call", description: "asks to talk" },
+          { value: "not_interested" }
+        ],
+        saveAs: "intent"
+      }
+    });
+  });
+
+  it("reads the triggering message when no textVar is set", () => {
+    const plan = planStep(
+      { id: "c2", type: "classify", categories: [{ value: "a" }, { value: "b" }], saveAs: "x" } as FlowStep,
+      { trigger: { windowText: "hello there" } }
+    );
+    expect(plan.ok && plan.action.kind === "classify" && plan.action.text).toBe("hello there");
+  });
+
+  it("pre-resolves sentinels without a model call: empty → unclear, engine sentinels pass through", () => {
+    const empty = planStep(step, { vars: {} });
+    expect(empty.ok && empty.action.kind === "classify" && empty.action.resolved).toBe("unclear");
+    const noReply = planStep(step, { vars: { reply_text: "no_reply" } });
+    expect(noReply.ok && noReply.action.kind === "classify" && noReply.action.resolved).toBe(
+      "no_reply"
+    );
+    const called = planStep(step, { vars: { reply_text: "customer_called" } });
+    expect(called.ok && called.action.kind === "classify" && called.action.resolved).toBe(
+      "customer_called"
+    );
+  });
+});
+
 describe("planStep: update_contact", () => {
   const step = {
     id: "u1",

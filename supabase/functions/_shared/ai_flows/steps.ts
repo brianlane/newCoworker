@@ -260,6 +260,22 @@ export type StepAction =
     }
   | {
       /**
+       * Classify `text` into exactly one of `values` (or the reserved
+       * "unclear" fallback), saving the winner into vars[saveAs]. The planner
+       * resolves the text (a var or the trigger's message) and pre-computes
+       * the fallback: empty text plans `resolved: "unclear"` directly so the
+       * worker never burns a model call on nothing.
+       */
+      kind: "classify";
+      text: string;
+      question?: string;
+      categories: { value: string; description?: string }[];
+      saveAs: string;
+      /** Set when no model call is needed (empty text) — the decided value. */
+      resolved?: string;
+    }
+  | {
+      /**
        * Maintain the contact's lead-state tags. The planner resolves the
        * phone; `skipReason` set means the phone was unusable — the worker
        * notes the skip instead of failing (a lead-data gap is not a flow
@@ -759,6 +775,25 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           e164,
           name: readVar(step.nameVar),
           email: readVar(step.emailVar)
+        }
+      };
+    }
+    case "classify": {
+      // Text source: the named var, or the triggering message's window text.
+      const raw = step.textVar ? scope.vars?.[step.textVar] : triggerString(scope, "windowText");
+      const text = typeof raw === "string" ? raw.trim() : "";
+      // The engine's no-reply/customer-called sentinels are already decisive
+      // categories in their own right — don't ask a model to re-read them.
+      const sentinel = text === "no_reply" || text === "customer_called" || text === "";
+      return {
+        ok: true,
+        action: {
+          kind: "classify",
+          text,
+          ...(step.question ? { question: step.question } : {}),
+          categories: step.categories,
+          saveAs: step.saveAs,
+          ...(sentinel ? { resolved: text === "" ? "unclear" : text } : {})
         }
       };
     }

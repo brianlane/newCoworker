@@ -536,6 +536,23 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.emailVar && <Row label="Email variable" value={`{{vars.${step.emailVar}}}`} mono />}
         </>
       );
+    case "classify":
+      return (
+        <>
+          <Row
+            label="Reads"
+            value={step.textVar ? `{{vars.${step.textVar}}}` : "the triggering message"}
+            mono
+          />
+          {step.question && <Row label="Context" value={step.question} />}
+          <Row
+            label="Categories"
+            value={`${step.categories.map((c) => c.value).join(", ")} (or unclear)`}
+            mono
+          />
+          <Row label="Saves the answer as" value={step.saveAs} mono />
+        </>
+      );
     case "update_contact":
       return (
         <>
