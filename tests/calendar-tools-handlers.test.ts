@@ -16,7 +16,8 @@ vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
 import {
   bookCalendarAppointment,
   computeFreeSlots,
-  findCalendarSlots
+  findCalendarSlots,
+  wallClockInZone
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
@@ -88,6 +89,82 @@ describe("computeFreeSlots", () => {
     ];
     const slots = computeFreeSlots(t(9), t(20), busy, HOUR, 1);
     expect(slots).toEqual([{ startIso: t(12).toISOString(), endIso: t(13).toISOString() }]);
+  });
+
+  const at = (h: number, m: number) => new Date(Date.UTC(2026, 5, 12, h, m, 0));
+
+  it("emits no tail slot when a busy block runs to the window end", () => {
+    const busy = [{ start: t(10), end: t(20) }];
+    expect(computeFreeSlots(t(9), t(20), busy, HOUR)).toEqual([
+      { startIso: t(9).toISOString(), endIso: t(10).toISOString() }
+    ]);
+  });
+
+  it("never offers an unaligned start: a 10:07 gap opens at 10:30, not 10:07", () => {
+    // The Junaid failure mode: windowStart = "now" (5:19 PM) produced a
+    // "5:19 PM" offer. Quarter alignment + :00/:30 preference gives :30.
+    const slots = computeFreeSlots(at(10, 7), at(12, 0), [], 30 * 60_000, 3);
+    expect(slots[0]).toEqual({
+      startIso: at(10, 30).toISOString(),
+      endIso: at(11, 0).toISOString()
+    });
+  });
+
+  it("prefers the next hour over an earlier :45 start", () => {
+    const slots = computeFreeSlots(at(10, 31), at(12, 0), [], 30 * 60_000, 3);
+    expect(slots[0]?.startIso).toBe(at(11, 0).toISOString());
+  });
+
+  it("falls back to a :15/:45 start when the preferred :00/:30 no longer fits", () => {
+    // Gap 10:07-10:35, 15-minute duration: 10:30 (preferred) would end at
+    // 10:45 past the gap; 10:15 fits.
+    const slots = computeFreeSlots(at(10, 7), at(10, 35), [], 15 * 60_000, 3);
+    expect(slots).toEqual([
+      { startIso: at(10, 15).toISOString(), endIso: at(10, 30).toISOString() }
+    ]);
+  });
+
+  it("skips a gap where no aligned start fits and offers the next gap", () => {
+    // 10:07-10:30 can't fit 30 minutes from any quarter boundary; the gap
+    // after the busy block can.
+    const busy = [{ start: at(10, 30), end: at(11, 10) }];
+    const slots = computeFreeSlots(at(10, 7), at(13, 0), busy, 30 * 60_000, 3);
+    expect(slots).toEqual([
+      { startIso: at(11, 30).toISOString(), endIso: at(12, 0).toISOString() }
+    ]);
+  });
+
+  it("classifies :00/:30 in the requester's timezone, not UTC", () => {
+    // Asia/Kathmandu is UTC+05:45: 10:15Z is 4:00 PM local (preferred),
+    // while 10:00Z is 3:45 PM local. UTC classification would pick 10:00Z.
+    const slots = computeFreeSlots(
+      at(10, 0),
+      at(12, 0),
+      [],
+      30 * 60_000,
+      1,
+      "Asia/Kathmandu"
+    );
+    expect(slots[0]?.startIso).toBe(at(10, 15).toISOString());
+  });
+
+  it("degrades to UTC minute classification on an invalid timezone", () => {
+    const slots = computeFreeSlots(at(10, 7), at(12, 0), [], 30 * 60_000, 1, "not/a-zone");
+    expect(slots[0]?.startIso).toBe(at(10, 30).toISOString());
+  });
+});
+
+describe("wallClockInZone", () => {
+  it("renders the naive local wall time Microsoft Graph expects", () => {
+    expect(wallClockInZone(new Date("2026-06-12T17:00:00.000Z"), "America/Phoenix")).toBe(
+      "2026-06-12T10:00:00"
+    );
+  });
+
+  it("uses 00 (not 24) at midnight", () => {
+    expect(wallClockInZone(new Date("2026-06-12T00:00:00.000Z"), "UTC")).toBe(
+      "2026-06-12T00:00:00"
+    );
   });
 });
 
@@ -243,6 +320,26 @@ describe("findCalendarSlots", () => {
   it("echoes UTC when neither the model nor the business provides a timezone", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result.ok).toBe(true);
+    expect((result.data as { timezone: string }).timezone).toBe("UTC");
+  });
+
+  it("rejects a non-IANA explicit timezone in favor of the business zone", async () => {
+    // Models sometimes send abbreviations ("EDT") that Intl can't resolve;
+    // silently using them would blow up the wall-clock conversion later.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Toronto");
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30, timezone: "EDT" });
+    expect(result.ok).toBe(true);
+    expect((result.data as { timezone: string }).timezone).toBe("America/Toronto");
+  });
+
+  it("degrades to UTC when the stored business timezone is itself invalid", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("Mars/Olympus_Mons");
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result.ok).toBe(true);
     expect((result.data as { timezone: string }).timezone).toBe("UTC");
@@ -453,6 +550,47 @@ describe("bookCalendarAppointment", () => {
     };
     expect(payload.data.start.timeZone).toBe("America/Chicago");
     expect(payload.data.end.timeZone).toBe("America/Chicago");
+  });
+
+  it("accepts an offset-carrying instant and normalizes it per provider (Google)", async () => {
+    // The Truly booking failures: the tool contract says "ISO 8601 with
+    // timezone offset", so the model sends offsets. Google gets the
+    // instant re-serialized as UTC; timeZone drives display.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-off" } } as never);
+    const result = await bookCalendarAppointment(BIZ, {
+      ...ARGS,
+      startIso: "2026-06-12T13:00:00-04:00",
+      endIso: "2026-06-12T13:30:00-04:00",
+      timezone: "America/Toronto"
+    });
+    expect(result.ok).toBe(true);
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { start: { dateTime: string; timeZone: string }; end: { dateTime: string } };
+    };
+    expect(payload.data.start.dateTime).toBe("2026-06-12T17:00:00.000Z");
+    expect(payload.data.end.dateTime).toBe("2026-06-12T17:30:00.000Z");
+    expect(payload.data.start.timeZone).toBe("America/Toronto");
+  });
+
+  it("sends Microsoft Graph naive local wall time, not the raw model string", async () => {
+    // Graph's dateTimeTimeZone wants "2026-06-12T13:00:00" + a zone name;
+    // an offset-carrying string passed through raw is rejected.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ms-off" } } as never);
+    const result = await bookCalendarAppointment(BIZ, {
+      ...ARGS,
+      startIso: "2026-06-12T13:00:00-04:00",
+      endIso: "2026-06-12T13:30:00-04:00",
+      timezone: "America/Toronto"
+    });
+    expect(result.ok).toBe(true);
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { start: { dateTime: string; timeZone: string }; end: { dateTime: string } };
+    };
+    expect(payload.data.start.dateTime).toBe("2026-06-12T13:00:00");
+    expect(payload.data.end.dateTime).toBe("2026-06-12T13:30:00");
+    expect(payload.data.start.timeZone).toBe("America/Toronto");
   });
 
   it("books a Microsoft event, falling back to the summary for an empty body", async () => {
