@@ -1,12 +1,14 @@
 /**
  * Tests for the Calendly provider cores (src/lib/calendar-tools/calendly.ts):
  * event-type selection, available-times slot mapping (with Calendly's
- * future-start / 7-day window clamps), and single-use scheduling-link
- * creation for the booking tool.
+ * future-start / 7-day window clamps), single-use scheduling-link creation
+ * for the booking tool, and the Nango-vs-direct-PAT transport switch.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/calendly/client", () => ({ calendlyDirectRequest: vi.fn() }));
+vi.mock("@/lib/db/calendly-connections", () => ({ getActiveCalendlyConnection: vi.fn() }));
 
 import {
   CALENDLY_MAX_WINDOW_MS,
@@ -16,6 +18,8 @@ import {
   pickCalendlyEventType
 } from "@/lib/calendar-tools/calendly";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { calendlyDirectRequest } from "@/lib/calendly/client";
+import { getActiveCalendlyConnection } from "@/lib/db/calendly-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -23,6 +27,12 @@ const CONN = {
   provider: "calendly",
   connectionId: "conn-3",
   providerConfigKey: "calendly"
+} as never;
+
+const DIRECT_CONN = {
+  provider: "calendly",
+  connectionId: "calendly-row-1",
+  providerConfigKey: "calendly-direct"
 } as never;
 
 const NOW = Date.parse("2026-06-12T09:00:00.000Z");
@@ -381,5 +391,68 @@ describe("createCalendlyBookingLink", () => {
       ok: false,
       detail: "calendar_book_failed"
     });
+  });
+});
+
+describe("direct PAT transport", () => {
+  const DIRECT_ROW = {
+    id: "calendly-row-1",
+    business_id: BIZ,
+    accessToken: "pat-secret",
+    is_active: true
+  } as never;
+
+  it("routes every call through calendlyDirectRequest with the stored PAT — never Nango", async () => {
+    vi.mocked(getActiveCalendlyConnection).mockResolvedValue(DIRECT_ROW);
+    vi.mocked(calendlyDirectRequest)
+      .mockResolvedValueOnce(usersMeResponse())
+      .mockResolvedValueOnce(eventTypesResponse([THIRTY_MIN]))
+      .mockResolvedValueOnce({
+        data: { resource: { booking_url: "https://calendly.com/d/direct" } }
+      } as never);
+    const result = await createCalendlyBookingLink(BIZ, DIRECT_CONN, {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z"
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { bookingLink: string }).bookingLink).toBe(
+      "https://calendly.com/d/direct"
+    );
+    expect(vi.mocked(calendlyDirectRequest)).toHaveBeenCalledTimes(3);
+    expect(vi.mocked(calendlyDirectRequest)).toHaveBeenNthCalledWith(1, "pat-secret", {
+      endpoint: "/users/me",
+      method: "GET"
+    });
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("finds slots through the direct transport", async () => {
+    vi.mocked(getActiveCalendlyConnection).mockResolvedValue(DIRECT_ROW);
+    vi.mocked(calendlyDirectRequest)
+      .mockResolvedValueOnce(usersMeResponse())
+      .mockResolvedValueOnce(eventTypesResponse([THIRTY_MIN]))
+      .mockResolvedValueOnce({
+        data: { collection: [{ status: "available", start_time: "2026-06-12T15:00:00.000Z" }] }
+      } as never);
+    const result = await findCalendlySlots(BIZ, DIRECT_CONN, {
+      windowStart: new Date(NOW + 60 * 60_000),
+      windowEnd: new Date(NOW + 26 * 60 * 60_000),
+      durationMinutes: 30,
+      timezone: "UTC"
+    });
+    expect(result.ok).toBe(true);
+    expect((result.data as { slots: unknown[] }).slots).toHaveLength(1);
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("is calendar_not_connected when the direct row is missing or inactive", async () => {
+    vi.mocked(getActiveCalendlyConnection).mockResolvedValue(null);
+    expect(
+      await createCalendlyBookingLink(BIZ, DIRECT_CONN, {
+        startIso: "2026-06-12T17:00:00.000Z",
+        endIso: "2026-06-12T17:30:00.000Z"
+      })
+    ).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(vi.mocked(calendlyDirectRequest)).not.toHaveBeenCalled();
   });
 });
