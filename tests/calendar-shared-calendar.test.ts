@@ -11,7 +11,11 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   listWorkspaceOAuthConnections: vi.fn(),
   upsertWorkspaceOAuthConnection: vi.fn()
 }));
-vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
+vi.mock("@/lib/voice-tools/connections", () => ({
+  resolveCalendarConnection: vi.fn(),
+  // Pure helper — real behavior inline so the guards under test stay honest.
+  isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
+}));
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn() }));
 
 import {

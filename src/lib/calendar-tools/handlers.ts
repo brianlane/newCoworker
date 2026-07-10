@@ -3,6 +3,7 @@ import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
+import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { logger } from "@/lib/logger";
 
 /**
@@ -26,6 +27,10 @@ import { logger } from "@/lib/logger";
  * the event type's available times, and "booking" returns a single-use
  * scheduling link (detail `booking_link_created`) because Calendly cannot
  * create bookings on the invitee's behalf. No shared calendar either way.
+ *
+ * Vagaro connections (vagaro.ts) support REAL booking: availability search +
+ * appointment creation on the merchant's book via the direct Vagaro API
+ * (per-tenant credentials in vagaro_connections — no Nango involved).
  */
 
 export type CalendarToolResult = {
@@ -42,6 +47,8 @@ export type FindSlotsArgs = {
   latest?: string;
   durationMinutes: number;
   timezone?: string;
+  /** Vagaro only: explicit service to search (defaults to the owner's pick). */
+  serviceId?: string;
 };
 
 export type BookAppointmentArgs = {
@@ -53,6 +60,8 @@ export type BookAppointmentArgs = {
   attendeePhone?: string;
   notes?: string;
   timezone?: string;
+  /** Vagaro only: explicit service to book (defaults to the owner's pick). */
+  serviceId?: string;
 };
 
 type Slot = { startIso: string; endIso: string };
@@ -232,6 +241,18 @@ export async function findCalendarSlots(
       return { ok: false, detail: "calendar_not_connected" };
     }
 
+    if (conn.provider === "vagaro") {
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      return findVagaroSlots(businessId, {
+        windowStart,
+        windowEnd,
+        durationMinutes: args.durationMinutes,
+        purpose: args.purpose,
+        serviceId: args.serviceId,
+        timezone
+      });
+    }
+
     if (conn.provider === "calendly") {
       const timezone = await resolveToolTimezone(businessId, args.timezone);
       return findCalendlySlots(businessId, conn, {
@@ -363,6 +384,11 @@ export async function bookCalendarAppointment(
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) {
       return { ok: false, detail: "calendar_not_connected" };
+    }
+
+    if (conn.provider === "vagaro") {
+      // Real booking on the merchant's Vagaro book (direct API, no Nango).
+      return bookVagaroAppointment(businessId, args, fallbackPhone);
     }
 
     if (conn.provider === "calendly") {

@@ -1,4 +1,5 @@
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
+import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 
 /**
  * Provider-config key groupings for voice tools.
@@ -25,13 +26,25 @@ export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "outlook"] as
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
 export type ResolvedVoiceConnection = {
-  provider: "google" | "microsoft" | "calendly";
+  provider: "google" | "microsoft" | "calendly" | "vagaro";
   providerConfigKey: string;
   connectionId: string;
 };
 
 export function providerFromKey(key: string): "google" | "microsoft" {
   return key.startsWith("google") || key === "gmail" ? "google" : "microsoft";
+}
+
+/**
+ * True for the providers that expose a real Google/Microsoft calendar via
+ * the Nango proxy — the shared "NewCoworker" calendar and the calendar
+ * trigger polling only exist for these; Calendly/Vagaro connections have
+ * neither concept.
+ */
+export function isWorkspaceCalendarProvider(
+  provider: ResolvedVoiceConnection["provider"]
+): provider is "google" | "microsoft" {
+  return provider === "google" || provider === "microsoft";
 }
 
 /**
@@ -72,7 +85,16 @@ export async function resolveVoiceConnection(
   return null;
 }
 
-export function resolveCalendarConnection(businessId: string) {
+export async function resolveCalendarConnection(
+  businessId: string
+): Promise<ResolvedVoiceConnection | null> {
+  // Vagaro is the business's REAL book when connected (dedicated scheduling
+  // platform, not a workspace side calendar) — it wins over every Nango
+  // connection. Id-only probe: no secret decryption on this hot path.
+  const vagaroId = await getActiveVagaroConnectionId(businessId);
+  if (vagaroId) {
+    return { provider: "vagaro", providerConfigKey: "vagaro", connectionId: vagaroId };
+  }
   return resolveVoiceConnection(businessId, CALENDAR_KEYS);
 }
 

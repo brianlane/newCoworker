@@ -16,6 +16,10 @@ vi.mock("@/lib/calendar-tools/calendly", () => ({
   findCalendlySlots: vi.fn(),
   createCalendlyBookingLink: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/vagaro", () => ({
+  findVagaroSlots: vi.fn(),
+  bookVagaroAppointment: vi.fn()
+}));
 
 import {
   bookCalendarAppointment,
@@ -31,6 +35,7 @@ import {
   createCalendlyBookingLink,
   findCalendlySlots
 } from "@/lib/calendar-tools/calendly";
+import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -48,6 +53,11 @@ const CALENDLY_CONN = {
   provider: "calendly",
   connectionId: "conn-3",
   providerConfigKey: "calendly"
+} as never;
+const VAGARO_CONN = {
+  provider: "vagaro",
+  connectionId: "vagaro-row-1",
+  providerConfigKey: "vagaro"
 } as never;
 
 beforeEach(() => {
@@ -196,6 +206,31 @@ describe("findCalendarSlots", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("delegates a Vagaro connection to findVagaroSlots with the window, serviceId, and resolved timezone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("America/Phoenix");
+    const delegated = { ok: true, data: { slots: [] } };
+    vi.mocked(findVagaroSlots).mockResolvedValue(delegated as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 45,
+      purpose: "color",
+      serviceId: "svc-9"
+    });
+    expect(result).toBe(delegated);
+    expect(vi.mocked(findVagaroSlots)).toHaveBeenCalledWith(BIZ, {
+      windowStart: new Date("2026-06-12T09:00:00.000Z"),
+      windowEnd: new Date("2026-06-12T12:00:00.000Z"),
+      durationMinutes: 45,
+      purpose: "color",
+      serviceId: "svc-9",
+      timezone: "America/Phoenix"
+    });
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(getSharedCalendar)).not.toHaveBeenCalled();
   });
 
   it("delegates a Calendly connection to findCalendlySlots with the window and resolved timezone", async () => {
@@ -514,6 +549,17 @@ describe("bookCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("delegates a Vagaro connection to bookVagaroAppointment with the raw args + fallback phone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    const delegated = { ok: true, data: { eventId: "appt-1", provider: "vagaro" } };
+    vi.mocked(bookVagaroAppointment).mockResolvedValue(delegated as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toBe(delegated);
+    expect(vi.mocked(bookVagaroAppointment)).toHaveBeenCalledWith(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
   });
 
   it("delegates a Calendly connection to createCalendlyBookingLink", async () => {

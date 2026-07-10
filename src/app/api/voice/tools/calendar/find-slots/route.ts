@@ -24,7 +24,9 @@ const argsSchema = z.object({
   earliest: z.string().optional(),
   latest: z.string().optional(),
   durationMinutes: z.number().int().min(5).max(480).default(30),
-  timezone: z.string().optional()
+  timezone: z.string().optional(),
+  // Vagaro connections only: explicit service to search.
+  serviceId: z.string().max(120).optional()
 });
 
 export async function POST(request: Request) {

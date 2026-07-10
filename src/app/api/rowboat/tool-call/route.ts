@@ -90,7 +90,9 @@ const findSlotsArgsSchema = z.object({
   earliest: z.string().optional(),
   latest: z.string().optional(),
   durationMinutes: z.number().int().min(5).max(480).default(30),
-  timezone: z.string().optional()
+  timezone: z.string().optional(),
+  // Vagaro connections only: explicit service to search.
+  serviceId: z.string().max(120).optional()
 });
 const bookAppointmentArgsSchema = z.object({
   // offset:true — the tool description tells the model "ISO 8601 with
@@ -103,7 +105,9 @@ const bookAppointmentArgsSchema = z.object({
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional(),
   notes: z.string().max(2000).optional(),
-  timezone: z.string().optional()
+  timezone: z.string().optional(),
+  // Vagaro connections only: explicit service to book.
+  serviceId: z.string().max(120).optional()
 });
 
 type ToolResult = { ok: boolean; detail?: string; data?: unknown };

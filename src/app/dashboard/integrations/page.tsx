@@ -6,12 +6,14 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
+import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { Card } from "@/components/ui/Card";
 import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
+import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { Inbox } from "lucide-react";
 
@@ -49,6 +51,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const workspaceConnected = workspaceConnections.length > 0;
   const customIntegrations =
     businessId ? await listCustomIntegrations(businessId) : [];
+  const vagaroConnection = businessId ? await getPublicVagaroConnection(businessId) : null;
   const apiKeys = businessId && canManageApiKeys ? await listApiKeys(businessId) : [];
   const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
 
@@ -112,6 +115,18 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                   }))}
                 />
               </IntegrationCard>
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              Scheduling
+            </h2>
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
+              <VagaroIntegrationCard
+                businessId={businessId}
+                initialConnection={vagaroConnection}
+              />
             </div>
           </section>
 

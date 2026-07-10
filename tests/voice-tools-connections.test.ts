@@ -3,10 +3,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   listWorkspaceOAuthConnections: vi.fn()
 }));
+vi.mock("@/lib/db/vagaro-connections", () => ({
+  getActiveVagaroConnectionId: vi.fn()
+}));
 
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
+import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import {
   isEmailProviderConfigKey,
+  isWorkspaceCalendarProvider,
   providerFromKey,
   resolveCalendarConnection,
   resolveEmailConnection,
@@ -22,6 +27,7 @@ function fakeRow(provider_config_key: string, connection_id = `cx-${provider_con
 describe("resolveVoiceConnection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -115,6 +121,28 @@ describe("resolveVoiceConnection", () => {
     const calendly = await resolveCalendarConnection(businessId);
     expect(calendly?.providerConfigKey).toBe("calendly");
     expect(calendly?.provider).toBe("calendly");
+  });
+
+  it("resolveCalendarConnection puts an active Vagaro connection ahead of everything", async () => {
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue("vagaro-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "vagaro-row-1"
+    });
+    // Never even lists Nango connections once Vagaro answers.
+    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+  });
+});
+
+describe("isWorkspaceCalendarProvider", () => {
+  it("is true only for google/microsoft", () => {
+    expect(isWorkspaceCalendarProvider("google")).toBe(true);
+    expect(isWorkspaceCalendarProvider("microsoft")).toBe(true);
+    expect(isWorkspaceCalendarProvider("calendly")).toBe(false);
+    expect(isWorkspaceCalendarProvider("vagaro")).toBe(false);
   });
 });
 

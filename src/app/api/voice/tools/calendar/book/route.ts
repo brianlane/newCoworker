@@ -27,7 +27,9 @@ const argsSchema = z.object({
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional(),
   notes: z.string().max(2000).optional(),
-  timezone: z.string().optional()
+  timezone: z.string().optional(),
+  // Vagaro connections only: explicit service to book.
+  serviceId: z.string().max(120).optional()
 });
 
 export async function POST(request: Request) {

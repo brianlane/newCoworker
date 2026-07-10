@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
-vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
+vi.mock("@/lib/voice-tools/connections", () => ({
+  resolveCalendarConnection: vi.fn(),
+  // Pure helper — real behavior inline so the guards under test stay honest.
+  isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
+}));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
