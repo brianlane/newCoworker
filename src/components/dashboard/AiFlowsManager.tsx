@@ -22,6 +22,7 @@ import {
   type TriggerCondition
 } from "@/lib/ai-flows/schema";
 import { AiFlowCanvas } from "@/components/dashboard/AiFlowCanvas";
+import { LeadBacklogImport } from "@/components/dashboard/LeadBacklogImport";
 import {
   findStepById,
   flattenForDisplay,
@@ -428,6 +429,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
           { value: "not_interested", description: "declines or asks to stop" }
         ]
       };
+    case "generate_image":
+      return { id, type, promptTemplate: "", saveAs: "image_url" };
     case "sleep":
       return { id, type, minutes: 300 };
     case "wait_for_reply":
@@ -1170,6 +1173,15 @@ export function AiFlowsManager({
     }
   };
 
+  // The header's "Import leads" link targets this anchor, so it renders in
+  // BOTH views (below the editor too) — a hash jump mid-edit must land on a
+  // real element instead of silently doing nothing.
+  const importCard = (
+    <div id="lead-backlog-import" className="scroll-mt-4">
+      <LeadBacklogImport businessId={businessId} />
+    </div>
+  );
+
   if (editor) {
     // A flow with branch steps can't round-trip through the flat classic form,
     // so it always edits visually regardless of the stored preference.
@@ -1186,6 +1198,7 @@ export function AiFlowsManager({
           : INBOUND_VOICE_STEP_TYPES
         : VISUAL_BATCH_STEP_TYPES;
     return (
+      <div className="space-y-4">
       <Card className="space-y-6">
         <div className="flex items-center justify-between gap-3">
           <h2 className="text-lg font-semibold text-parchment">
@@ -2059,6 +2072,8 @@ export function AiFlowsManager({
           </button>
         </div>
       </Card>
+      {importCard}
+      </div>
     );
   }
 
@@ -2222,6 +2237,7 @@ export function AiFlowsManager({
           </Card>
         ))
       )}
+      {importCard}
     </div>
   );
 }
@@ -2685,6 +2701,12 @@ function StepFields({
             </>
           ))}
         <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
+        <Field
+          label='Attach image (variable from an earlier "Create an AI-generated image" step, optional)'
+          value={step.mediaUrlVar ?? ""}
+          onChange={(v) => patchStep(index, { mediaUrlVar: v.trim() ? v.trim() : undefined })}
+          help="Sends the text as a picture message (MMS). If the image is missing at run time, the text still goes out on its own."
+        />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
           <label className="flex items-center gap-2 text-xs text-parchment/70">
             <input
@@ -3360,6 +3382,29 @@ function StepFields({
         <p className="text-[11px] text-parchment/40">
           The chosen category (or &quot;unclear&quot; when nothing fits) lands in this variable —
           add a Branch step after this one with an arm per category to take the right path.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "generate_image") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Describe the image to create"
+          value={step.promptTemplate}
+          onChange={(v) => patchStep(index, { promptTemplate: v })}
+          textarea
+          help="You can reuse details earlier steps found, e.g. {{vars.listing_address}}."
+        />
+        <Field
+          label="Save the image link as"
+          value={step.saveAs}
+          onChange={(v) => patchStep(index, { saveAs: v })}
+        />
+        <p className="text-[11px] text-parchment/40">
+          Attach the saved link to a later &quot;Send a text&quot; step (goes out as a picture
+          message) or include {`{{vars.${step.saveAs || "image_url"}}}`} in an email body. Each
+          image draws from your monthly AI budget.
         </p>
       </div>
     );

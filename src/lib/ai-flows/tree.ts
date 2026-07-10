@@ -193,6 +193,8 @@ export function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   if (step.type === "recall_url") return [step.saveAs];
   if (step.type === "wait_for_reply") return [step.saveAs ?? "reply_text"];
+  if (step.type === "classify") return [step.saveAs];
+  if (step.type === "generate_image") return [step.saveAs];
   return [];
 }
 

@@ -69,6 +69,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "generate_image",
+        label: "Generate images",
+        description:
+          "Create an AI-generated image in chat when you explicitly ask for one (limit 3 per conversation; uses your AI budget).",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "business_knowledge_lookup",
         label: "Business knowledge lookup",
         description: "Answer your questions from your business knowledge and website summary.",
@@ -228,6 +236,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Notify your team",
         description:
           "Alert you (dashboard, email, or text per your notification settings) when a texter needs something only your team can resolve.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "generate_image",
+        label: "Generate images",
+        description:
+          "Text an AI-generated image (MMS) when a texter explicitly asks for one (limit 3 per conversation; uses your AI budget).",
         defaultEnabled: true,
         configurable: true
       },

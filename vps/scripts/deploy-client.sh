@@ -661,7 +661,8 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_find_slots",
         "calendar_book_appointment",
         "send_email",
-        "notify_team"
+        "notify_team",
+        "generate_image"
       ]
     },
     {
@@ -690,7 +691,8 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_find_slots",
         "calendar_book_appointment",
         "send_email",
-        "notify_team"
+        "notify_team",
+        "generate_image"
       ]
     },
     {
@@ -719,7 +721,8 @@ WORKFLOW_JSON=$(jq -nc \
         "send_sms",
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
-        "dashboard_calendar_book_appointment"
+        "dashboard_calendar_book_appointment",
+        "dashboard_generate_image"
       ]
     },
     {
@@ -747,7 +750,8 @@ WORKFLOW_JSON=$(jq -nc \
         "send_sms",
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
-        "dashboard_calendar_book_appointment"
+        "dashboard_calendar_book_appointment",
+        "dashboard_generate_image"
       ]
     },
     {
@@ -947,6 +951,29 @@ WORKFLOW_JSON=$(jq -nc \
       }
     },
     {
+      name: "generate_image",
+      description: "Create an AI-generated image and text it to the customer as a picture message (MMS). ONLY use this when the customer explicitly asks you to create, generate, or make an image — never call it proactively or as decoration. Expensive: limited to 3 images per conversation; when the tool refuses with image_limit_reached, tell the customer plainly.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description: "A detailed description of the image to generate, at most 2000 characters."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone of the customer to text the image to, e.g. +15551234567."
+          },
+          caption: {
+            type: "string",
+            description: "Optional short caption sent with the picture, at most 500 characters."
+          }
+        },
+        required: ["prompt", "phone"]
+      }
+    },
+    {
       name: "business_knowledge_lookup",
       description: "Answer a business-specific question (hours, services, pricing, policies) from the business knowledge base and website summary. Use when the answer is not already in your instructions.",
       isWebhook: $toolsAreReal,
@@ -1046,6 +1073,25 @@ WORKFLOW_JSON=$(jq -nc \
           timezone: { type: "string", description: "IANA timezone for the event times." }
         },
         required: ["startIso", "endIso", "summary", "attendeeName"]
+      }
+    },
+    {
+      name: "dashboard_generate_image",
+      description: "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. ONLY use this when the owner explicitly asks you to create, generate, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited to 3 images per conversation; when the tool refuses with image_limit_reached, tell the owner plainly.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          prompt: {
+            type: "string",
+            description: "A detailed description of the image to generate, at most 2000 characters."
+          },
+          aspectRatio: {
+            type: "string",
+            description: "Optional aspect ratio like 1:1, 3:2, 4:3, 16:9, 9:16. Defaults to 1:1."
+          }
+        },
+        required: ["prompt"]
       }
     },
     # Dashboard-surface twins of the customer tools (see the OwnerCoworker

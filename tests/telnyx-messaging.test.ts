@@ -69,4 +69,61 @@ describe("telnyx messaging", () => {
     const h = init.headers as Record<string, string>;
     expect(h["Idempotency-Key"]).toBe("idem-uuid-1");
   });
+
+  it("sendTelnyxSms attaches media_urls for MMS sends", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_mms" } })
+    });
+    const { id, channel } = await sendTelnyxSms(
+      { apiKey: "KEY", messagingProfileId: "prof", fromE164: "+15550009999" },
+      "+15550001111",
+      "Here is your image",
+      {
+        fetchImpl: fetchMock as typeof fetch,
+        mediaUrls: ["https://signed.example/pic.png"]
+      }
+    );
+    expect(id).toBe("msg_mms");
+    expect(channel).toBe("sms");
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.media_urls).toEqual(["https://signed.example/pic.png"]);
+  });
+
+  it("sendTelnyxSms skips the RCS-first branch when media is attached", async () => {
+    // The RCS payload here is text-only, so an image would be silently
+    // dropped on the rich channel — media sends must go straight to /v2/messages.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_mms2" } })
+    });
+    await sendTelnyxSms(
+      {
+        apiKey: "KEY",
+        messagingProfileId: "prof",
+        fromE164: "+15550009999",
+        rcsAgentId: "agent-1"
+      },
+      "+15550001111",
+      "pic",
+      { fetchImpl: fetchMock as typeof fetch, mediaUrls: ["https://signed.example/p.png"] }
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.telnyx.com/v2/messages");
+  });
+
+  it("sendTelnyxSms filters empty media URLs (falls back to a plain send)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "msg_plain" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "KEY", messagingProfileId: "prof" },
+      "+15550001111",
+      "Hi",
+      { fetchImpl: fetchMock as typeof fetch, mediaUrls: [""] }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.media_urls).toBeUndefined();
+  });
 });

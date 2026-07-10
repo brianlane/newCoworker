@@ -21,6 +21,11 @@ import { captureWebchatLead } from "@/lib/webchat/lead-capture";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import {
+  generateImageForDashboard,
+  generateImageForSms,
+  normalizeAspectRatio
+} from "@/lib/image-tools/handlers";
 import { logger } from "@/lib/logger";
 
 /**
@@ -55,6 +60,11 @@ import { logger } from "@/lib/logger";
  * a structured failure lets the model explain the problem to the user.
  * Only authentication problems hard-fail with 401.
  */
+
+// Image generation runs 5–15s on the lite model; keep well within Rowboat's
+// tool-call wait (the chat worker's turn timeout is 240s) but above the
+// default function budget.
+export const maxDuration = 60;
 
 const bodySchema = z.object({
   requestId: z.string().min(1),
@@ -103,6 +113,15 @@ const findSlotsArgsSchema = z.object({
   latest: z.string().optional(),
   durationMinutes: z.number().int().min(5).max(480).default(30),
   timezone: z.string().optional()
+});
+const dashboardGenerateImageArgsSchema = z.object({
+  prompt: z.string().min(1).max(2000),
+  aspectRatio: z.string().max(10).optional()
+});
+const smsGenerateImageArgsSchema = z.object({
+  prompt: z.string().min(1).max(2000),
+  phone: phoneSchema,
+  caption: z.string().max(500).optional()
 });
 const bookAppointmentArgsSchema = z.object({
   // offset:true — the tool description tells the model "ISO 8601 with
@@ -193,6 +212,8 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   // to staff and can only promise follow-ups nobody hears about. Deliberately
   // NOT given a webchat_ twin (anonymous surface must not page the team).
   notify_team: { agentKey: "sms", toolKey: "notify_team" },
+  generate_image: { agentKey: "sms", toolKey: "generate_image" },
+  dashboard_generate_image: { agentKey: "dashboard", toolKey: "generate_image" },
   business_knowledge_lookup: { agentKey: "sms", toolKey: "business_knowledge_lookup" },
   calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
   calendar_book_appointment: { agentKey: "sms", toolKey: "calendar_book_appointment" },
@@ -382,6 +403,31 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         bccEmails
       });
       return { ok: true, data: { messageId: result.messageId, provider: result.provider } };
+    }
+    case "generate_image": {
+      // Two surfaces, one base key: the dashboard twin returns an inline
+      // image URL; the texting tool delivers straight to the texter as MMS.
+      if (name.startsWith("dashboard_")) {
+        const parsed = dashboardGenerateImageArgsSchema.safeParse(args);
+        if (!parsed.success) {
+          return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        return generateImageForDashboard(
+          businessId,
+          parsed.data.prompt,
+          normalizeAspectRatio(parsed.data.aspectRatio)
+        );
+      }
+      const parsed = smsGenerateImageArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return generateImageForSms(
+        businessId,
+        parsed.data.prompt,
+        parsed.data.phone,
+        parsed.data.caption
+      );
     }
     case "send_sms": {
       const parsed = sendSmsArgsSchema.safeParse(args);

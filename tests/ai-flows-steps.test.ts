@@ -1424,3 +1424,123 @@ describe("planStep: upsert_customer", () => {
     if (!r.ok) expect(r.error).toContain("missing or unusable");
   });
 });
+
+describe("planStep: generate_image", () => {
+  it("renders the prompt template and plans the generation", () => {
+    const plan = planStep(
+      {
+        id: "g1",
+        type: "generate_image",
+        promptTemplate: "A flyer for {{vars.listing_address}}",
+        saveAs: "flyer_url"
+      } as FlowStep,
+      { vars: { listing_address: "12 Oak St" } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "generate_image", prompt: "A flyer for 12 Oak St", saveAs: "flyer_url" }
+    });
+  });
+
+  it("fails when the prompt renders empty", () => {
+    const plan = planStep(
+      { id: "g1", type: "generate_image", promptTemplate: "{{vars.missing}}", saveAs: "img" } as FlowStep,
+      { vars: {} }
+    );
+    expect(plan).toEqual({
+      ok: false,
+      error: "generate_image: prompt is empty after templating"
+    });
+  });
+});
+
+describe("planStep: send_sms mediaUrlVar (MMS attach)", () => {
+  it("attaches the resolved image URL on a plain 1:1 send", () => {
+    const plan = planStep(
+      {
+        id: "s1",
+        type: "send_sms",
+        to: "+16025551234",
+        body: "See the flyer!",
+        mediaUrlVar: "flyer_url"
+      } as FlowStep,
+      { vars: { flyer_url: " https://signed.example/p.png " } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "+16025551234",
+        body: "See the flyer!",
+        mediaUrl: "https://signed.example/p.png"
+      }
+    });
+  });
+
+  it("degrades to a plain text send when the var is empty, non-URL prose, or not a string", () => {
+    for (const vars of [
+      {},
+      { flyer_url: "" },
+      { flyer_url: "the image could not be generated" },
+      { flyer_url: 42 as unknown as string }
+    ]) {
+      const plan = planStep(
+        {
+          id: "s1",
+          type: "send_sms",
+          to: "+16025551234",
+          body: "hi",
+          mediaUrlVar: "flyer_url"
+        } as FlowStep,
+        { vars }
+      );
+      expect(plan.ok && plan.action.kind === "send_sms" && plan.action.mediaUrl).toBeUndefined();
+    }
+  });
+
+  it("carries the media URL through the toAgentName / toRef / replyToGroup paths", () => {
+    const scope: StepScope = {
+      vars: { flyer_url: "https://signed.example/p.png" },
+      trigger: { to: "+15550000000", participants: ["+15550000000", "+16025551234"] }
+    };
+    const agent = planStep(
+      {
+        id: "a",
+        type: "send_sms",
+        toAgentName: "Dave",
+        body: "flyer for {{agent.name}}",
+        mediaUrlVar: "flyer_url"
+      } as FlowStep,
+      scope
+    );
+    expect(agent.ok && agent.action.kind === "send_sms" && agent.action.mediaUrl).toBe(
+      "https://signed.example/p.png"
+    );
+    const ref = planStep(
+      {
+        id: "r",
+        type: "send_sms",
+        toRef: { source: "contact", id: "33333333-3333-4333-8333-333333333333" },
+        body: "flyer",
+        mediaUrlVar: "flyer_url"
+      } as FlowStep,
+      scope
+    );
+    expect(ref.ok && ref.action.kind === "send_sms" && ref.action.mediaUrl).toBe(
+      "https://signed.example/p.png"
+    );
+    const group = planStep(
+      {
+        id: "g",
+        type: "send_sms",
+        replyToGroup: true,
+        body: "flyer",
+        mediaUrlVar: "flyer_url"
+      } as FlowStep,
+      scope
+    );
+    expect(group.ok && group.action.kind === "send_sms" && group.action.mediaUrl).toBe(
+      "https://signed.example/p.png"
+    );
+  });
+});

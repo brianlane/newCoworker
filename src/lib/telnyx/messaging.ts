@@ -134,6 +134,13 @@ export type SendTelnyxSmsOptions = {
    * meterBusinessId is set (platform-operational messages bypass throttling).
    */
   throttleMaxPerSecond?: number;
+  /**
+   * Publicly fetchable media URLs to attach (MMS). When set, the send skips
+   * the RCS-first branch (RCS rich media is not wired) and goes out as plain
+   * MMS via `/v2/messages` `media_urls`. Metering is unchanged — an MMS
+   * consumes one monthly SMS slot like any other outbound message.
+   */
+  mediaUrls?: string[];
 };
 
 type TelnyxMessageResponse = { data?: { id?: string } };
@@ -269,8 +276,13 @@ export async function sendTelnyxSms(
       headers["Idempotency-Key"] = options.idempotencyKey;
     }
 
+    const mediaUrls = (options?.mediaUrls ?? []).filter((u) => u.length > 0);
+
     const rcsAgentId = (config.rcsAgentId ?? "").trim();
-    if (rcsAgentId && config.fromE164) {
+    // Media sends bypass RCS-first: the RCS payload here only carries text,
+    // so an image would be silently dropped on the rich channel. Plain MMS
+    // delivers it everywhere.
+    if (mediaUrls.length === 0 && rcsAgentId && config.fromE164) {
       const rcsRes = await fetchImpl("https://api.telnyx.com/v2/messages/rcs", {
         method: "POST",
         headers,
@@ -306,13 +318,16 @@ export async function sendTelnyxSms(
       }
     }
 
-    const body: Record<string, string> = {
+    const body: Record<string, string | string[]> = {
       to: toE164,
       text,
       messaging_profile_id: config.messagingProfileId
     };
     if (config.fromE164) {
       body.from = config.fromE164;
+    }
+    if (mediaUrls.length > 0) {
+      body.media_urls = mediaUrls;
     }
 
     const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
