@@ -172,11 +172,31 @@ describe("syncVagaroCustomer", () => {
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
 
-  it("swallows the already-exists race but rethrows other create failures", async () => {
+  it("re-reads after an already-exists race and still applies this delivery's fields", async () => {
     const ExistsCtor = CustomerExistsError as unknown as new (e164: string) => Error;
     vi.mocked(createCustomerMemory).mockRejectedValueOnce(new ExistsCtor("+15551230000"));
-    await syncVagaroCustomer(BIZ, customerEvent({ phone: "5551230000" }));
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null) // pre-create existence check
+      .mockResolvedValueOnce({
+        customer_e164: "+15551230000",
+        display_name: null,
+        email: null
+      } as never); // post-race re-read
+    await syncVagaroCustomer(BIZ, customerEvent({ name: "Joe", phone: "5551230000" }));
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, "+15551230000", {
+      displayName: "Joe"
+    });
+  });
 
+  it("gives up gracefully when the post-race re-read finds nothing", async () => {
+    const ExistsCtor = CustomerExistsError as unknown as new (e164: string) => Error;
+    vi.mocked(createCustomerMemory).mockRejectedValueOnce(new ExistsCtor("+15551230000"));
+    vi.mocked(getCustomerMemory).mockResolvedValue(null);
+    await syncVagaroCustomer(BIZ, customerEvent({ name: "Joe", phone: "5551230000" }));
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+  });
+
+  it("rethrows non-race create failures", async () => {
     vi.mocked(createCustomerMemory).mockRejectedValueOnce(new Error("db down"));
     await expect(
       syncVagaroCustomer(BIZ, customerEvent({ phone: "5551230000" }))

@@ -131,7 +131,7 @@ export async function syncVagaroCustomer(
   const { phone, name, email } = extractVagaroCustomer(event.payload);
   if (!phone) return;
 
-  const existing = await getCustomerMemory(businessId, phone);
+  let existing = await getCustomerMemory(businessId, phone);
   if (!existing) {
     try {
       await createCustomerMemory(businessId, {
@@ -139,12 +139,15 @@ export async function syncVagaroCustomer(
         displayName: name,
         email
       });
+      return;
     } catch (err) {
-      // Concurrent deliveries can race the existence check; the profile
-      // exists either way, so fall through to the fill-only path below.
       if (!(err instanceof CustomerExistsError)) throw err;
+      // Concurrent deliveries raced the existence check — the profile now
+      // exists, so re-read it and apply THIS delivery's fields fill-only
+      // below (returning here would silently drop them).
+      existing = await getCustomerMemory(businessId, phone);
+      if (!existing) return;
     }
-    return;
   }
 
   const patch: { displayName?: string; email?: string } = {};
