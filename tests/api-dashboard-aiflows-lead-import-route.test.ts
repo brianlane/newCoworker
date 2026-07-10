@@ -35,6 +35,7 @@ const SUMMARY = {
   duplicates: 0,
   unmatched: 0,
   skipped: 0,
+  errors: [],
   flowsEvaluated: 1,
   rows: []
 };

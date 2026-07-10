@@ -24,7 +24,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { parseCsv } from "@/lib/csv/csv";
-import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
+import { processWebhookFlowEvent, webhookEventKey } from "@/lib/ai-flows/webhook-events";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -70,11 +70,12 @@ export type LeadBacklogRowOutcome = {
   /**
    * enqueued  — at least one flow run was queued for this row.
    * duplicate — a flow matched but the row was already enqueued earlier
-   *             (same sheet re-uploaded); nothing new was queued.
+   *             (same lead re-imported); nothing new was queued.
    * no_match  — no enabled webhook flow's conditions matched the row.
    * skipped   — the row had no non-empty cells to send.
+   * error     — this row's enqueue failed (see `errors`); other rows still apply.
    */
-  status: "enqueued" | "duplicate" | "no_match" | "skipped";
+  status: "enqueued" | "duplicate" | "no_match" | "skipped" | "error";
   /** When the row's runs become claimable (absent = immediately). */
   earliestClaimAt?: string;
 };
@@ -85,6 +86,8 @@ export type LeadBacklogImportSummary = {
   duplicates: number;
   unmatched: number;
   skipped: number;
+  /** Rows whose enqueue threw (transient DB failure etc.); safe to re-upload. */
+  errors: { row: number; message: string }[];
   /** Enabled webhook flows each row was evaluated against. */
   flowsEvaluated: number;
   rows: LeadBacklogRowOutcome[];
@@ -97,16 +100,37 @@ export type LeadBacklogImportOptions = {
   dripIntervalSeconds?: number;
 };
 
-/** The row's caller idempotency key: explicit id column, else undefined
- *  (processWebhookFlowEvent then digests the payload). Namespaced by the
- *  source label so a sheet's short ids ("1", "2") can never collide with a
- *  live bridge's event ids. */
-function rowEventId(row: Record<string, string>, source: string): string | undefined {
+/** The row's explicit id-column key, namespaced by the source label so a
+ *  sheet's short ids ("1", "2") can never collide with a live bridge's event
+ *  ids. Undefined when the row has no id column. */
+function rowExplicitId(row: Record<string, string>, source: string): string | undefined {
   for (const col of ID_COLUMNS) {
     const v = (row[col] ?? "").trim();
     if (v) return `${source}:${v}`;
   }
   return undefined;
+}
+
+/**
+ * The row's idempotency key: the explicit id column when present, else the
+ * payload digest. Digest-keyed rows that repeat within one upload get a
+ * stable occurrence suffix (#1, #2, …) so two identical-looking rows still
+ * fire independently — while a RE-upload of the same sheet regenerates the
+ * same suffixes in the same order and stays fully deduped. Rows sharing an
+ * EXPLICIT id are intentionally treated as the same lead (no suffix).
+ */
+function rowEventId(
+  row: Record<string, string>,
+  data: Record<string, unknown>,
+  source: string,
+  seen: Map<string, number>
+): string {
+  const explicit = rowExplicitId(row, source);
+  const key = explicit ?? webhookEventKey({ source, data });
+  const n = seen.get(key) ?? 0;
+  seen.set(key, n + 1);
+  if (explicit) return explicit;
+  return n === 0 ? key : `${key}#${n}`;
 }
 
 function clampDripInterval(seconds: number | undefined): number {
@@ -138,12 +162,17 @@ export async function importLeadBacklog(
     duplicates: 0,
     unmatched: 0,
     skipped: 0,
+    errors: [],
     flowsEvaluated: 0,
     rows: []
   };
 
-  // Drip slot: advances only for rows actually sent, so skipped rows don't
-  // leave holes in the release schedule.
+  // Occurrence counts for digest-keyed rows (see rowEventId).
+  const seenKeys = new Map<string, number>();
+  // Drip slot: advances only when a row actually ENQUEUES, so skipped,
+  // unmatched, duplicate, and failed rows never leave holes in the release
+  // schedule (a re-imported sheet's few new leads start immediately, not
+  // hours out).
   let slot = 0;
   for (let i = 0; i < rows.length; i++) {
     // 1-based file row: +1 for the header line, +1 for 0-index.
@@ -162,20 +191,32 @@ export async function importLeadBacklog(
       slot > 0 && intervalS > 0
         ? new Date(baseMs + slot * intervalS * 1000).toISOString()
         : undefined;
-    slot += 1;
 
-    const result = await processWebhookFlowEvent(
-      businessId,
-      { source, data, eventId: rowEventId(rows[i], source) },
-      db,
-      earliestClaimAt ? { earliestClaimAt } : undefined
-    );
+    // Rows apply independently — a transient failure on one row is reported
+    // and the rest still land, matching the contacts CSV import's semantics.
+    let result;
+    try {
+      result = await processWebhookFlowEvent(
+        businessId,
+        { source, data, eventId: rowEventId(rows[i], data, source, seenKeys) },
+        db,
+        earliestClaimAt ? { earliestClaimAt } : undefined
+      );
+    } catch (e) {
+      summary.errors.push({
+        row: fileRow,
+        message: e instanceof Error ? e.message : "Unexpected error"
+      });
+      summary.rows.push({ row: fileRow, status: "error" });
+      continue;
+    }
     summary.flowsEvaluated = result.flowsEvaluated;
 
     let status: LeadBacklogRowOutcome["status"];
     if (result.enqueued > 0) {
       status = "enqueued";
       summary.enqueued += 1;
+      slot += 1;
     } else if (result.flowsMatched > 0) {
       status = "duplicate";
       summary.duplicates += 1;
@@ -186,7 +227,7 @@ export async function importLeadBacklog(
     summary.rows.push({
       row: fileRow,
       status,
-      ...(earliestClaimAt ? { earliestClaimAt } : {})
+      ...(status === "enqueued" && earliestClaimAt ? { earliestClaimAt } : {})
     });
   }
 
@@ -205,6 +246,7 @@ export async function importLeadBacklog(
         duplicates: summary.duplicates,
         unmatched: summary.unmatched,
         skipped: summary.skipped,
+        errored: summary.errors.length,
         flows_evaluated: summary.flowsEvaluated
       }
     },

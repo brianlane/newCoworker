@@ -20,6 +20,7 @@ type ImportSummary = {
   duplicates: number;
   unmatched: number;
   skipped: number;
+  errors: { row: number; message: string }[];
   flowsEvaluated: number;
 };
 
@@ -259,6 +260,15 @@ export function LeadBacklogImport({ businessId }: Props) {
             {summary.unmatched} matched no flow
             {summary.skipped > 0 ? `, ${summary.skipped} empty` : ""}
           </p>
+          {summary.errors.length > 0 && (
+            <ul className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+              {summary.errors.map((err, i) => (
+                <li key={i} className="text-[11px] text-red-300">
+                  Row {err.row}: {err.message}
+                </li>
+              ))}
+            </ul>
+          )}
           <p className="mt-1 text-[11px] text-parchment/50">
             Runs release on the schedule you picked —{" "}
             <Link href="/dashboard/aiflows/runs" className="text-signal-teal hover:underline">

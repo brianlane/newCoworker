@@ -7,7 +7,9 @@ vi.mock("@/lib/supabase/server", () => ({
 
 const processWebhookFlowEvent = vi.fn();
 vi.mock("@/lib/ai-flows/webhook-events", () => ({
-  processWebhookFlowEvent: (...a: unknown[]) => processWebhookFlowEvent(...a)
+  processWebhookFlowEvent: (...a: unknown[]) => processWebhookFlowEvent(...a),
+  // Deterministic stand-in for the real sha256 payload digest.
+  webhookEventKey: (e: { data: unknown }) => `digest(${JSON.stringify(e.data)})`
 }));
 
 const recordSystemLog = vi.fn();
@@ -89,7 +91,7 @@ describe("importLeadBacklog", () => {
       {
         source: DEFAULT_BACKLOG_SOURCE,
         data: { full_name: "Jane", phone: "+16025551234" },
-        eventId: undefined
+        eventId: 'digest({"full_name":"Jane","phone":"+16025551234"})'
       },
       DB,
       undefined
@@ -108,12 +110,47 @@ describe("importLeadBacklog", () => {
       duplicates: 0,
       unmatched: 0,
       skipped: 0,
+      errors: [],
       flowsEvaluated: 2,
       rows: [
         { row: 2, status: "enqueued" },
         { row: 3, status: "enqueued", earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
       ]
     });
+  });
+
+  it("suffixes identical digest-keyed rows so both fire, and regenerates the SAME ids on re-upload", async () => {
+    const rows = [{ name: "Twin" }, { name: "Twin" }, { name: "Other" }];
+    await importLeadBacklog("biz-1", rows, {}, DB as never);
+    const firstIds = processWebhookFlowEvent.mock.calls.map(
+      (c) => (c[1] as { eventId: string }).eventId
+    );
+    expect(firstIds).toEqual([
+      'digest({"name":"Twin"})',
+      'digest({"name":"Twin"})#1',
+      'digest({"name":"Other"})'
+    ]);
+
+    // A re-upload of the same sheet produces the same keys in the same order,
+    // so every row dedupes against its first import.
+    processWebhookFlowEvent.mockClear();
+    await importLeadBacklog("biz-1", rows, {}, DB as never);
+    const secondIds = processWebhookFlowEvent.mock.calls.map(
+      (c) => (c[1] as { eventId: string }).eventId
+    );
+    expect(secondIds).toEqual(firstIds);
+  });
+
+  it("rows sharing an EXPLICIT id are the same lead — no occurrence suffix", async () => {
+    const rows: Record<string, string>[] = [
+      { lead_id: "L-1", name: "a" },
+      { lead_id: "L-1", name: "a-updated" }
+    ];
+    await importLeadBacklog("biz-1", rows, {}, DB as never);
+    const ids = processWebhookFlowEvent.mock.calls.map(
+      (c) => (c[1] as { eventId: string }).eventId
+    );
+    expect(ids).toEqual(["backlog_import:L-1", "backlog_import:L-1"]);
   });
 
   it("namespaces the row's explicit id column by source, preferring event_id > lead_id > id", async () => {
@@ -179,6 +216,62 @@ describe("importLeadBacklog", () => {
     expect(summary.duplicates).toBe(1);
     expect(summary.unmatched).toBe(1);
     expect(summary.rows.map((r) => r.status)).toEqual(["duplicate", "no_match", "enqueued"]);
+  });
+
+  it("duplicate/unmatched rows do NOT consume a drip slot — the next new lead fires immediately", async () => {
+    processWebhookFlowEvent
+      .mockResolvedValueOnce(DUPLICATE)
+      .mockResolvedValueOnce(NO_MATCH)
+      .mockResolvedValueOnce(ENQUEUED)
+      .mockResolvedValueOnce(ENQUEUED);
+    await importLeadBacklog(
+      "biz-1",
+      [{ a: "1" }, { a: "2" }, { a: "3" }, { a: "4" }],
+      {},
+      DB as never
+    );
+    // Rows 1-3 were all offered slot 0 (immediate); only row 3's enqueue
+    // consumed it, so row 4 gets slot 1.
+    expect(processWebhookFlowEvent.mock.calls.map((c) => c[3])).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
+    ]);
+  });
+
+  it("a row whose enqueue throws is reported and the rest still land (slot unaffected)", async () => {
+    processWebhookFlowEvent
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockResolvedValueOnce(ENQUEUED)
+      .mockRejectedValueOnce("weird non-error")
+      .mockResolvedValueOnce(ENQUEUED);
+    const summary = await importLeadBacklog(
+      "biz-1",
+      [{ a: "1" }, { a: "2" }, { a: "3" }, { a: "4" }],
+      {},
+      DB as never
+    );
+    expect(summary.enqueued).toBe(2);
+    expect(summary.errors).toEqual([
+      { row: 2, message: "db down" },
+      { row: 4, message: "Unexpected error" }
+    ]);
+    expect(summary.rows.map((r) => r.status)).toEqual([
+      "error",
+      "enqueued",
+      "error",
+      "enqueued"
+    ]);
+    // Failed rows never CONSUME a slot: row 1 was offered slot 0 and failed,
+    // so row 2 enqueued at slot 0; row 3 was offered slot 1 and failed, so
+    // row 4 re-used slot 1 instead of drifting to slot 2.
+    expect(processWebhookFlowEvent.mock.calls.map((c) => c[3])).toEqual([
+      undefined,
+      undefined,
+      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() },
+      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
+    ]);
   });
 
   it("skips all-empty rows without consuming a drip slot", async () => {
