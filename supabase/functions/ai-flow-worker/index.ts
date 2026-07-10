@@ -2819,16 +2819,30 @@ async function generateImageStep(
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/` +
     `${encodeURIComponent(GEMINI_IMAGE_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-  const res = await fetchWithTransientRetry(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: action.prompt }] }],
-      generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
-    })
-  });
-  if (!res.ok) throw new Error(`generate_image: gemini ${res.status}`);
-  const body = (await res.json()) as {
+  // fetchWithTransientRetry already rides out 429/5xx blips INSIDE this call.
+  // Anything still failing after that is treated as permanent for the run:
+  // images are the priciest single model call, and a run-loop retry would
+  // call (and bill) Gemini again per attempt — fail the step instead.
+  let res: Response;
+  try {
+    res = await fetchWithTransientRetry(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: action.prompt }] }],
+        generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
+      })
+    });
+  } catch (e) {
+    return {
+      kind: "fail",
+      error: `generate_image: the image service could not be reached (${
+        e instanceof Error ? e.message : String(e)
+      })`
+    };
+  }
+  if (!res.ok) return { kind: "fail", error: `generate_image: gemini ${res.status}` };
+  type ImageResponse = {
     candidates?: Array<{
       content?: { parts?: Array<{ inlineData?: { mimeType?: string; data?: string } }> };
     }>;
@@ -2838,6 +2852,14 @@ async function generateImageStep(
       thoughtsTokenCount?: number;
     };
   };
+  let body: ImageResponse;
+  try {
+    body = (await res.json()) as ImageResponse;
+  } catch {
+    // A 200 with an unreadable body was still billed by Google — fail the
+    // step rather than let a retry bill again.
+    return { kind: "fail", error: "generate_image: unreadable model response" };
+  }
   const inline = (body.candidates?.[0]?.content?.parts ?? []).find(
     (p) => typeof p?.inlineData?.data === "string" && p.inlineData.data.length > 0
   )?.inlineData;
@@ -2868,17 +2890,25 @@ async function generateImageStep(
   const mimeType = inline.mimeType && inline.mimeType.length > 0 ? inline.mimeType : "image/png";
   const ext = mimeType === "image/jpeg" ? "jpg" : mimeType === "image/webp" ? "webp" : "png";
   const bytes = Uint8Array.from(atob(inline.data), (c) => c.charCodeAt(0));
+  // Store/sign failures also FAIL the step (not throw): a run-loop retry
+  // would regenerate — and rebill — the image, and each failed attempt would
+  // strand another object in the bucket.
   const path = `${run.business_id}/${crypto.randomUUID()}.${ext}`;
   const { error: upErr } = await supabase.storage
     .from(GENERATED_IMAGES_BUCKET)
     .upload(path, new Blob([bytes], { type: mimeType }), { contentType: mimeType });
-  if (upErr) throw new Error(`generate_image: upload failed: ${upErr.message}`);
+  if (upErr) {
+    return { kind: "fail", error: `generate_image: upload failed: ${upErr.message}` };
+  }
 
   const { data: signed, error: signErr } = await supabase.storage
     .from(GENERATED_IMAGES_BUCKET)
     .createSignedUrl(path, GENERATED_IMAGE_URL_TTL_S);
   if (signErr || !signed?.signedUrl) {
-    throw new Error(`generate_image: sign failed: ${signErr?.message ?? "no url"}`);
+    return {
+      kind: "fail",
+      error: `generate_image: sign failed: ${signErr?.message ?? "no url"}`
+    };
   }
 
   // Meter LAST, once the step can no longer fail (store + sign both done):

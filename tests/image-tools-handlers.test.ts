@@ -206,6 +206,13 @@ describe("image-tools handlers", () => {
       expect(mockDispatch).toHaveBeenCalled();
     });
 
+    it("treats a pre-migration row (no image_limit_alerts column) as default ON", async () => {
+      mockGetPrefs.mockResolvedValue({ sms_urgent: true }); // no image_limit_alerts field
+      const db = stubDb();
+      await recordImageLimitReached(BIZ, "sms", "+15550001111", db as never);
+      expect(mockDispatch).toHaveBeenCalled();
+    });
+
     it("fails open to alerting when the preferences read throws (Error and non-Error)", async () => {
       mockGetPrefs.mockRejectedValue(new Error("db down"));
       const db = stubDb();

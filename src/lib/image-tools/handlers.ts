@@ -126,7 +126,10 @@ export async function recordImageLimitReached(
   let prefEnabled = true;
   try {
     const prefs = await getNotificationPreferences(businessId, db);
-    if (prefs) prefEnabled = prefs.image_limit_alerts;
+    // Only an EXPLICIT false disables the alert: a row predating the
+    // image_limit_alerts migration has no column value, and the documented
+    // default is ON.
+    if (prefs) prefEnabled = prefs.image_limit_alerts !== false;
   } catch (err) {
     // Fail open to "alert" — the preference defaults ON, and a missed read
     // should not silently drop an owner alert.
