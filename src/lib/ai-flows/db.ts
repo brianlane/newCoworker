@@ -45,6 +45,7 @@ export type AiFlowRunStatus =
   | "running"
   | "awaiting_approval"
   | "awaiting_agent"
+  | "awaiting_reply"
   | "done"
   | "failed"
   | "canceled";
@@ -464,5 +465,60 @@ export async function decideAiFlowApproval(
     .select(RUN_COLS)
     .single();
   if (error) throw new Error(`decideAiFlowApproval: ${error.message}`);
+  return data as AiFlowRunRow;
+}
+
+/**
+ * Run states an owner may STOP from the dashboard. Deliberately excludes
+ * `running`: a claimed run is mid-execution on the worker (seconds), which
+ * would overwrite the cancel when it persists its own state — the parked
+ * states are where a run actually sits for hours and where stopping matters.
+ * Terminal states have nothing to stop.
+ */
+export const CANCELABLE_RUN_STATUSES = [
+  "queued",
+  "awaiting_approval",
+  "awaiting_agent",
+  "awaiting_reply"
+] as const;
+
+/**
+ * Owner "Stop this run": flip a waiting run to `canceled` so nothing further
+ * sends. Status-guarded at the DB (the update matches only cancelable states),
+ * so racing the worker's claim loses cleanly — the run either cancels or the
+ * caller gets a conflict to surface. Every resume path (claim RPC, offer
+ * escalation, reply sweeps, inbound webhooks) filters on the waiting status it
+ * owns, so a canceled run can never be picked back up. Who stopped it (and
+ * from which state) is recorded in `context.canceled` for the audit trail.
+ */
+export async function cancelAiFlowRun(
+  args: { businessId: string; runId: string; canceledBy?: string | null },
+  client?: SupabaseClient
+): Promise<AiFlowRunRow> {
+  const db = await resolveDb(client);
+  const current = await getAiFlowRun(args.businessId, args.runId, db);
+  if (!current) {
+    throw new Error("cancelAiFlowRun: run not found");
+  }
+  if (!(CANCELABLE_RUN_STATUSES as readonly string[]).includes(current.status)) {
+    throw new Error(`cancelAiFlowRun: run is ${current.status} and cannot be stopped`);
+  }
+  const context = {
+    ...current.context,
+    canceled: {
+      by: args.canceledBy ?? null,
+      at: new Date().toISOString(),
+      from_status: current.status
+    }
+  };
+  const { data, error } = await db
+    .from("ai_flow_runs")
+    .update({ status: "canceled", context, claimed_at: null })
+    .eq("business_id", args.businessId)
+    .eq("id", args.runId)
+    .in("status", [...CANCELABLE_RUN_STATUSES])
+    .select(RUN_COLS)
+    .single();
+  if (error) throw new Error(`cancelAiFlowRun: ${error.message}`);
   return data as AiFlowRunRow;
 }

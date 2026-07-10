@@ -30,3 +30,64 @@ export function retrySummary(errorRetryCount: number): string | null {
   if (!Number.isFinite(errorRetryCount) || errorRetryCount <= 0) return null;
   return `${errorRetryCount} ${errorRetryCount === 1 ? "retry" : "retries"}`;
 }
+
+/** One displayable key/value from a run's context (trigger field or var). */
+export type RunDataEntry = { key: string; value: string };
+
+/**
+ * Display form of one context value. Strings pass through UNTRIMMED —
+ * an empty or whitespace value is often the whole story behind a failure
+ * ("lead_phone" was ""), so it must render as visibly empty, not vanish.
+ * Arrays join, objects JSON-stringify, everything else String()s.
+ */
+export function formatRunValue(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map((v) => formatRunValue(v)).join(", ");
+  if (value && typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value ?? "");
+}
+
+/**
+ * The trigger data a run started from (context.trigger), as ordered display
+ * entries. `channel` is dropped (the flow header already says how it starts)
+ * and empty values are dropped — the trigger scope pads absent cross-channel
+ * keys with "" by design, which is noise here (unlike vars, where an empty
+ * value is usually the bug being investigated).
+ */
+export function runTriggerEntries(context: Record<string, unknown>): RunDataEntry[] {
+  const trigger = context.trigger;
+  if (!trigger || typeof trigger !== "object" || Array.isArray(trigger)) return [];
+  const out: RunDataEntry[] = [];
+  for (const [key, value] of Object.entries(trigger as Record<string, unknown>)) {
+    if (key === "channel") continue;
+    const formatted = formatRunValue(value);
+    if (formatted === "") continue;
+    out.push({ key, value: formatted });
+  }
+  return out;
+}
+
+/**
+ * The variables a run's steps produced so far (context.vars), as ordered
+ * display entries. Engine-internal bookkeeping (underscore-prefixed markers:
+ * branch choices, sleep/wait markers, quiet-hour bypass) is hidden;
+ * `claimed_agent`'s pre-routing "none" seed is kept — it reads fine and
+ * matters once routing ran. Empty values are KEPT: "lead_phone: (empty)" is
+ * exactly what explains an upsert/send failure.
+ */
+export function runVarEntries(context: Record<string, unknown>): RunDataEntry[] {
+  const vars = context.vars;
+  if (!vars || typeof vars !== "object" || Array.isArray(vars)) return [];
+  const out: RunDataEntry[] = [];
+  for (const [key, value] of Object.entries(vars as Record<string, unknown>)) {
+    if (key.startsWith("_")) continue;
+    out.push({ key, value: formatRunValue(value) });
+  }
+  return out;
+}
