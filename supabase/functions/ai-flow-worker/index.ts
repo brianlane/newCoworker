@@ -84,7 +84,9 @@ import {
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
+  capMicrosForTier,
   geminiCostMicrosFromTokens,
+  readActiveChatCreditMicros,
   readChatSpendMicros,
   resolveChatPeriodStart,
   type SpendSupabase
@@ -2777,8 +2779,12 @@ async function generateImageStep(
   // Hard budget gate WITH headroom for this image's flat price (parity with
   // the coworker image tools): images are the priciest single model call,
   // there is no local fallback to degrade to, and the charge must never push
-  // the business past the cap. Fails OPEN on a read error like
-  // aiFlowSpendOverCap — a metering blip must never block a lead flow.
+  // the business past the cap. The cap is tier-aware ($5 starter / $10
+  // otherwise) plus active purchased credits — the same effective cap
+  // getChatSpendSnapshotForBusiness gives the dashboard/SMS tools, so the
+  // surfaces can never disagree on whether a tenant may generate. Fails OPEN
+  // on a read error like aiFlowSpendOverCap — a metering blip must never
+  // block a lead flow.
   const flatCostMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
   if (AIFLOW_SPEND_METERING_ENABLED) {
     let overCap = false;
@@ -2786,7 +2792,15 @@ async function generateImageStep(
       const spend = supabase as unknown as SpendSupabase;
       const periodStart = await resolveChatPeriodStart(spend, run.business_id);
       const spent = await readChatSpendMicros(spend, run.business_id, periodStart);
-      overCap = spent + flatCostMicros > CHAT_SPEND_CAP_MICROS;
+      const credits = await readActiveChatCreditMicros(spend, run.business_id);
+      const { data: bizRow } = await supabase
+        .from("businesses")
+        .select("tier")
+        .eq("id", run.business_id)
+        .maybeSingle();
+      const tier = (bizRow as { tier?: string | null } | null)?.tier ?? null;
+      const capMicros = capMicrosForTier(tier, CHAT_SPEND_CAP_MICROS) + credits;
+      overCap = spent + flatCostMicros > capMicros;
     } catch {
       overCap = false;
     }
