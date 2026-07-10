@@ -701,6 +701,19 @@ describe("cancelAiFlowRun", () => {
       ).rejects.toThrow(`run is ${status} and cannot be stopped`);
     }
   });
+  it("maps a lost race (guarded update matched nothing) to the stoppable error", async () => {
+    // Pre-read said awaiting, but the worker claimed the run before the write:
+    // PostgREST reports zero rows as PGRST116 on .single().
+    const { db } = makeDb({
+      maybe: RUN_ROW,
+      single: null,
+      singleError: { message: "0 rows", code: "PGRST116" } as never
+    });
+    await expect(
+       
+      cancelAiFlowRun({ businessId: "biz-1", runId: "run-1" }, db as any)
+    ).rejects.toThrow("no longer waiting and cannot be stopped");
+  });
   it("throws on update error", async () => {
     const { db } = makeDb({ maybe: RUN_ROW, single: null, singleError: { message: "u" } });
     await expect(

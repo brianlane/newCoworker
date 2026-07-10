@@ -519,6 +519,14 @@ export async function cancelAiFlowRun(
     .in("status", [...CANCELABLE_RUN_STATUSES])
     .select(RUN_COLS)
     .single();
-  if (error) throw new Error(`cancelAiFlowRun: ${error.message}`);
+  if (error) {
+    // PGRST116 = the guarded update matched zero rows: the worker claimed the
+    // run (or a duplicate cancel landed) between the pre-read and the write.
+    // Same owner-facing outcome as the pre-read guard, not a server error.
+    if ((error as { code?: string }).code === "PGRST116") {
+      throw new Error("cancelAiFlowRun: run is no longer waiting and cannot be stopped");
+    }
+    throw new Error(`cancelAiFlowRun: ${error.message}`);
+  }
   return data as AiFlowRunRow;
 }

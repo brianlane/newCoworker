@@ -297,8 +297,10 @@ export function AiFlowRunsManager({
       const json = (await res.json()) as { ok: boolean; error?: { message: string } };
       if (!json.ok) {
         setError(json.error?.message ?? "Could not stop the run");
-        return;
       }
+      // Reload on failure too (like `decide`): a CONFLICT usually means the
+      // run moved (worker claimed it / finished / already stopped) and the
+      // stale parked row with its Stop button must resync to reality.
       await reload();
     } finally {
       setBusy(null);
