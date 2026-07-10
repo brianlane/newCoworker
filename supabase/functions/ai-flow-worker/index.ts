@@ -1146,6 +1146,9 @@ async function updateContactStep(
   action: Extract<StepAction, { kind: "update_contact" }>
 ): Promise<StepOutcome> {
   if (action.skipReason) {
+    // Mirror the send_sms skip path: the note keeps {{vars.actions_taken}}
+    // honest for downstream steps ("tagging never ran, and here's why").
+    appendActionTaken(scope, "skipped a contact-tag update (no usable phone)");
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
   const { data, error } = await supabase
@@ -1157,6 +1160,10 @@ async function updateContactStep(
   if (error) throw new Error(`update_contact lookup: ${error.message}`);
   const contact = data as { id: string; tags?: string[] | null } | null;
   if (!contact) {
+    appendActionTaken(
+      scope,
+      `skipped a contact-tag update (no contact on file for ${action.e164})`
+    );
     return {
       kind: "ok",
       skipped: true,
