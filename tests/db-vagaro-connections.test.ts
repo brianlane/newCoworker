@@ -241,7 +241,19 @@ describe("upsertVagaroConnection", () => {
     ).rejects.toThrow(/insert fail/);
   });
 
-  it("updates in place, keeping the stored secret when none is supplied", async () => {
+  it("defaults the API host on create when none is supplied", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    c.single.mockResolvedValue({ data: STORED, error: null });
+    await upsertVagaroConnection(
+      { businessId: BIZ, clientId: "client-abc", clientSecret: "s" },
+      makeDb(c)
+    );
+    const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
+    expect(inserted.api_base_url).toBe("https://api.vagaro.com");
+  });
+
+  it("updates in place, keeping the stored secret AND regional URL when omitted", async () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: { id: "vg-1" }, error: null });
     c.single.mockResolvedValue({ data: STORED, error: null });
@@ -252,7 +264,21 @@ describe("upsertVagaroConnection", () => {
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.client_id).toBe("client-new");
     expect(patch).not.toHaveProperty("client_secret_encrypted");
+    // A credentials-only save must never reset a merchant's regional host.
+    expect(patch).not.toHaveProperty("api_base_url");
     expect(patch.is_active).toBe(false);
+  });
+
+  it("writes an explicitly-supplied API host on update", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: "vg-1" }, error: null });
+    c.single.mockResolvedValue({ data: STORED, error: null });
+    await upsertVagaroConnection(
+      { businessId: BIZ, clientId: "client-new", apiBaseUrl: "https://usa03.vagaro.com" },
+      makeDb(c)
+    );
+    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.api_base_url).toBe("https://usa03.vagaro.com");
   });
 
   it("rotates the secret when a new one is supplied and surfaces update errors", async () => {

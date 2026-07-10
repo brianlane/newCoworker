@@ -173,6 +173,11 @@ export type UpsertVagaroConnectionInput = {
    * keeps the stored secret.
    */
   clientSecret?: string;
+  /**
+   * Regional API host. Defaults to the US host on create; `undefined` on
+   * update keeps the stored value (same semantics as `clientSecret` — a
+   * credentials-only save must never reset a merchant's regional URL).
+   */
   apiBaseUrl?: string;
   isActive?: boolean;
 };
@@ -193,9 +198,8 @@ export async function upsertVagaroConnection(
       "Client ID must be 1-200 characters"
     );
   }
-  const apiBaseUrl = validateVagaroApiBaseUrl(
-    input.apiBaseUrl ?? VAGARO_DEFAULT_API_BASE_URL
-  );
+  const apiBaseUrl =
+    input.apiBaseUrl === undefined ? null : validateVagaroApiBaseUrl(input.apiBaseUrl);
   const secret = input.clientSecret?.trim();
 
   const db = client ?? (await createSupabaseServiceClient());
@@ -219,7 +223,7 @@ export async function upsertVagaroConnection(
         business_id: input.businessId,
         client_id: clientId,
         client_secret_encrypted: encryptIntegrationSecret(secret),
-        api_base_url: apiBaseUrl,
+        api_base_url: apiBaseUrl ?? VAGARO_DEFAULT_API_BASE_URL,
         webhook_verification_token: randomBytes(24).toString("hex"),
         ...(input.isActive === undefined ? {} : { is_active: input.isActive })
       })
@@ -231,8 +235,8 @@ export async function upsertVagaroConnection(
 
   const patch: Record<string, unknown> = {
     client_id: clientId,
-    api_base_url: apiBaseUrl,
     updated_at: new Date().toISOString(),
+    ...(apiBaseUrl === null ? {} : { api_base_url: apiBaseUrl }),
     ...(secret ? { client_secret_encrypted: encryptIntegrationSecret(secret) } : {}),
     ...(input.isActive === undefined ? {} : { is_active: input.isActive })
   };
