@@ -26,6 +26,7 @@ const PROVIDER_LABELS: Record<string, string> = {
   "google-calendar": "Google Calendar",
   outlook: "Microsoft Outlook",
   "outlook-calendar": "Outlook Calendar",
+  calendly: "Calendly",
   onedrive: "OneDrive",
   slack: "Slack",
   zoom: "Zoom"

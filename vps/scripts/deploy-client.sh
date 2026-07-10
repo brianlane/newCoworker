@@ -751,6 +751,55 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_calendar_book_appointment",
         "dashboard_generate_image"
       ]
+    },
+    {
+      name: "WebchatCoworker",
+      type: "conversation",
+      # Website chat widget (Standard+): the ANONYMOUS-INTERNET surface.
+      # Deliberately the smallest tool surface of any agent — info + lead
+      # gen only. NO send_sms, NO send_email, NO calls, NO image tools:
+      # visitors are untrusted, so even a fully prompt-injected turn can
+      # only look up public knowledge, capture a lead, or book a calendar
+      # slot. The platform dispatcher (/api/rowboat/tool-call) allowlists
+      # exactly these webchat_* names — declaring anything else here would
+      # fail closed there. Keep both layers in lockstep.
+      description: "Website chat widget agent: business info and lead capture only.",
+      disabled: false,
+      instructions: $instructions,
+      outputVisibility: "user_facing",
+      controlType: "retain",
+      model: $smsModel,
+      ragK: 3,
+      ragReturnType: "chunks",
+      tools: [
+        "webchat_business_knowledge_lookup",
+        "webchat_capture_lead",
+        "webchat_calendar_find_slots",
+        "webchat_calendar_book_appointment"
+      ]
+    },
+    {
+      name: "WebchatCoworkerLocal",
+      type: "conversation",
+      # Spend-cap fallback twin of WebchatCoworker (same pattern as
+      # CoworkerLocal / OwnerCoworkerLocal): identical restricted tool
+      # surface, pinned to the LOCAL Ollama model. The chat-worker forces
+      # startAgent=WebchatCoworkerLocal once the shared period spend cap
+      # trips, so anonymous widget traffic can never bill unbounded Gemini.
+      description: "Website chat widget spend-cap fallback: identical to WebchatCoworker but on the local model.",
+      disabled: $localAgentsDisabled,
+      instructions: $instructions,
+      outputVisibility: "user_facing",
+      controlType: "retain",
+      model: $model,
+      ragK: 3,
+      ragReturnType: "chunks",
+      tools: [
+        "webchat_business_knowledge_lookup",
+        "webchat_capture_lead",
+        "webchat_calendar_find_slots",
+        "webchat_calendar_book_appointment"
+      ]
     }
   ],
   prompts: [{
@@ -1073,6 +1122,77 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["note", "phone"]
+      }
+    },
+    # Website chat widget surface (WebchatCoworker/-Local). Same dispatcher
+    # cores as the knowledge/calendar tools above plus the webchat-only
+    # lead-capture core; separate Settings toggles under the webchat agent
+    # key. This is the COMPLETE widget tool surface — see the agent comment.
+    {
+      name: "webchat_business_knowledge_lookup",
+      description: "Answer a website visitor question (hours, services, pricing, policies) from the business knowledge base and website summary. Use when the answer is not already in your instructions.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          question: {
+            type: "string",
+            description: "The question to answer, in plain words."
+          }
+        },
+        required: ["question"]
+      }
+    },
+    {
+      name: "webchat_capture_lead",
+      description: "Record a website visitor as a lead so the team can follow up. Call when the visitor shares contact details or asks to be contacted. Include whatever they provided — never invent details.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Visitor name, if given." },
+          phone: { type: "string", description: "Visitor phone number, if given." },
+          email: { type: "string", description: "Visitor email address, if given." },
+          interest: { type: "string", description: "What the visitor wants — service, question, timeline." },
+          notes: { type: "string", description: "Any other useful context from the conversation." },
+          sessionRef: { type: "string", description: "The session reference from your system prompt, passed verbatim." }
+        },
+        required: []
+      }
+    },
+    {
+      name: "webchat_calendar_find_slots",
+      description: "Find up to 3 free time ranges on the owner connected calendar for a website visitor. Use before proposing appointment times.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          purpose: { type: "string", description: "What the appointment is for." },
+          earliest: { type: "string", description: "Earliest acceptable start, ISO 8601. Defaults to now." },
+          latest: { type: "string", description: "Latest acceptable end, ISO 8601. Defaults to 7 days out." },
+          durationMinutes: { type: "number", description: "Appointment length in minutes. Defaults to 30." },
+          timezone: { type: "string", description: "IANA timezone of the visitor, if known." }
+        },
+        required: []
+      }
+    },
+    {
+      name: "webchat_calendar_book_appointment",
+      description: "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          startIso: { type: "string", description: "Start time, ISO 8601." },
+          endIso: { type: "string", description: "End time, ISO 8601." },
+          summary: { type: "string", description: "Short event title." },
+          attendeeName: { type: "string", description: "Visitor name for the event." },
+          attendeeEmail: { type: "string", description: "Visitor email, if provided." },
+          attendeePhone: { type: "string", description: "Visitor phone, if known." },
+          notes: { type: "string", description: "Extra context for the event description." },
+          timezone: { type: "string", description: "IANA timezone for the event times." }
+        },
+        required: ["startIso", "endIso", "summary", "attendeeName"]
       }
     },
     {
@@ -1541,8 +1661,10 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     # up" reply instead of routing to an agent that cannot run.
     if [[ "${HAS_LOCAL_MODEL}" == "true" ]]; then
       CHAT_WORKER_OWNER_LOCAL_AGENT_VALUE="${CHAT_WORKER_OWNER_LOCAL_AGENT-OwnerCoworkerLocal}"
+      CHAT_WORKER_WEBCHAT_LOCAL_AGENT_VALUE="${CHAT_WORKER_WEBCHAT_LOCAL_AGENT-WebchatCoworkerLocal}"
     else
       CHAT_WORKER_OWNER_LOCAL_AGENT_VALUE=""
+      CHAT_WORKER_WEBCHAT_LOCAL_AGENT_VALUE=""
     fi
 
     cat > "${CHAT_WORKER_DEST}/.env" <<CWENV_EOF
@@ -1565,6 +1687,11 @@ CHAT_WORKER_OWNER_START_AGENT=${CHAT_WORKER_OWNER_START_AGENT-OwnerCoworker}
 # Over-cap fallback agent. Empty on no-local-model hosts (kvm1): the worker
 # then refuses over-cap turns instead of downgrading to a local agent.
 CHAT_WORKER_OWNER_LOCAL_AGENT=${CHAT_WORKER_OWNER_LOCAL_AGENT_VALUE}
+# Website chat widget entry agent (this deploy seeds WebchatCoworker above)
+# and its over-cap local twin (empty on kvm1, same semantics as the owner
+# pair: the worker refuses over-cap webchat turns instead of downgrading).
+CHAT_WORKER_WEBCHAT_START_AGENT=${CHAT_WORKER_WEBCHAT_START_AGENT-WebchatCoworker}
+CHAT_WORKER_WEBCHAT_LOCAL_AGENT=${CHAT_WORKER_WEBCHAT_LOCAL_AGENT_VALUE}
 # Owner-rule memory capture. After each owner turn the worker runs a background
 # extraction over the owner message and, when it states a durable business rule,
 # POSTs to WORKER_VERCEL_BASE_URL/api/voice/tools/owner-append-business-memory

@@ -15,7 +15,11 @@ vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (...a: unknown[]) => recordSystemLog(...a)
 }));
 
-import { processWebhookFlowEvent, webhookEventKey } from "@/lib/ai-flows/webhook-events";
+import {
+  countEnabledWebhookFlows,
+  processWebhookFlowEvent,
+  webhookEventKey
+} from "@/lib/ai-flows/webhook-events";
 
 /** A db whose ai_flows query resolves to the given flow rows (or error). */
 function flowsDb(result: { data: unknown; error: unknown }) {
@@ -250,5 +254,46 @@ describe("processWebhookFlowEvent", () => {
       flowsEvaluated: 0,
       flowsMatched: 0
     });
+  });
+
+  it("forwards earliestClaimAt (lead-backlog drip) onto every enqueued run", async () => {
+    const db = flowsDb({
+      data: [{ id: "flow-drip", definition: { trigger: { channel: "webhook", conditions: [] } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
+
+    const at = "2026-07-10T21:00:00.000Z";
+    await processWebhookFlowEvent("biz-1", EVENT, db as never, { earliestClaimAt: at });
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "flow-drip", earliestClaimAt: at }),
+      db
+    );
+
+    // Without the option the enqueue input must NOT carry the key at all.
+    enqueueAiFlowRun.mockClear();
+    await processWebhookFlowEvent("biz-1", EVENT, db as never);
+    expect(enqueueAiFlowRun.mock.calls[0][0]).not.toHaveProperty("earliestClaimAt");
+  });
+});
+
+describe("countEnabledWebhookFlows", () => {
+  it("counts only flows carrying a webhook trigger somewhere in their set", async () => {
+    const db = flowsDb({
+      data: [
+        { id: "f1", definition: { trigger: { channel: "webhook", conditions: [] } } },
+        {
+          id: "f2",
+          definition: { trigger: { channel: "sms", conditions: [] }, triggers: [{ channel: "manual" }] }
+        }
+      ],
+      error: null
+    });
+    await expect(countEnabledWebhookFlows("biz-1", db as never)).resolves.toBe(1);
+  });
+
+  it("uses the default client when none is injected", async () => {
+    defaultClientSpy.mockResolvedValueOnce(flowsDb({ data: [], error: null }));
+    await expect(countEnabledWebhookFlows("biz-1")).resolves.toBe(0);
   });
 });

@@ -798,7 +798,11 @@ serve(async (req: Request) => {
       "scheduled, sent, canceled, or updated anything unless the matching " +
       "tool call succeeded in this conversation. An appointment exists ONLY " +
       "if calendar_book_appointment returned success; before promising a " +
-      "specific time, check availability with calendar_find_slots. " +
+      "specific time, check availability with calendar_find_slots. If " +
+      "calendar_book_appointment returns detail booking_link_created with a " +
+      "bookingLink (Calendly accounts), the appointment is NOT booked yet — " +
+      "send the texter that link and ask them to complete the booking " +
+      "there; never describe it as confirmed. " +
       "send_email sends a plain text email — it is NOT a calendar invite, so " +
       "never call it one. Never invent or guess email addresses, phone " +
       "numbers, times, or confirmation details — if you need one, ask for " +

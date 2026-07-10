@@ -18,7 +18,7 @@
  * per call, so they ARE configurable.
  */
 
-export type AgentKey = "dashboard" | "voice" | "sms";
+export type AgentKey = "dashboard" | "voice" | "sms" | "webchat";
 
 export type AgentToolDefinition = {
   toolKey: string;
@@ -259,6 +259,52 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Pin customer notes",
         description:
           "Pin permanent facts (preferences, constraints) to a customer's profile.",
+        defaultEnabled: true,
+        configurable: true
+      }
+    ]
+  },
+  {
+    // Website chat widget (Standard+). DELIBERATELY the smallest tool
+    // surface of any coworker: it faces the anonymous internet, so it is
+    // info + lead gen ONLY — no SMS sends, no email sends, no calls, no
+    // image generation. This list is enforced structurally: the Rowboat
+    // workflow seed declares only `webchat_*` tool names for the
+    // WebchatCoworker agents, and /api/rowboat/tool-call maps those names
+    // exclusively to the entries below (unknown names fail closed). Do NOT
+    // add side-effect tools here without revisiting that threat model.
+    key: "webchat",
+    label: "Website chat coworker",
+    description:
+      "Answers visitors on the chat widget embedded in your own website. Info and lead capture only.",
+    tools: [
+      {
+        toolKey: "business_knowledge_lookup",
+        label: "Business knowledge lookup",
+        description:
+          "Answer visitor questions from your business knowledge and website summary.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "capture_lead",
+        label: "Capture lead details",
+        description:
+          "Record a visitor's name, phone, email, and what they're looking for so you can follow up.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_find_slots",
+        label: "Find calendar openings",
+        description: "Look up free slots on your connected calendar for a website visitor.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_book_appointment",
+        label: "Book appointments",
+        description: "Book appointments on your connected calendar for a website visitor.",
         defaultEnabled: true,
         configurable: true
       }

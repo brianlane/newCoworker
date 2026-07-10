@@ -139,6 +139,12 @@ const groups: FeatureGroup[] = [
         description:
           "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too.",
         Icon: Mail
+      },
+      {
+        title: "Website Chat Widget",
+        description:
+          "Embed your coworker on your own website with one snippet. Visitors get instant answers about your business, and every conversation captures a lead. Standard and Enterprise plans.",
+        Icon: Globe
       }
     ]
   },

@@ -75,6 +75,13 @@ export default async function MetaLeadsGuidePage() {
             lead in real time — and texts them back, files them, and fills you in, on your
             behalf.
           </p>
+          <p className="mt-1 text-sm text-parchment/50">
+            Already sitting on a spreadsheet of past leads? Use{" "}
+            <Link href="/dashboard/aiflows" className="text-signal-teal hover:underline">
+              Import a lead backlog
+            </Link>{" "}
+            on the AiFlows page to run them through the same flows.
+          </p>
         </div>
         <Link
           href="/dashboard/aiflows"

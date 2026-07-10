@@ -139,6 +139,14 @@ export async function proxy(request: NextRequest) {
     // External clients send no Origin header, so CSRF would 403 every call.
     // Same rationale as the exemptions above.
     !pathname.startsWith("/api/public/") &&
+    // /api/widget/* is the website chat widget API, authenticated solely by
+    // the tenant's public site key (ncw_pub_…) + a per-session bearer
+    // (ncws_…) — never by a session cookie, so CSRF adds no protection.
+    // The iframe is same-origin (its fetches would usually pass anyway),
+    // but privacy tooling can blank Origin/Referer inside embedded frames
+    // and CSRF must not 403 legitimate visitors. Same rationale as
+    // /api/public/ above.
+    !pathname.startsWith("/api/widget/") &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");

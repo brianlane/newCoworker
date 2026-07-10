@@ -85,7 +85,7 @@ import {
   extractOwnerRule,
   fitBulletsToPayload
 } from "./memory-capture.mjs";
-import { fulfillEmailSends } from "./email-tool.mjs";
+import { extractEmailSendRequests, fulfillEmailSends } from "./email-tool.mjs";
 
 const SUPABASE_URL = required("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = required("SUPABASE_SERVICE_ROLE_KEY");
@@ -111,6 +111,16 @@ const OWNER_START_AGENT = (process.env.CHAT_WORKER_OWNER_START_AGENT ?? "OwnerCo
 const OWNER_START_AGENT_OPTS = OWNER_START_AGENT
   ? { startAgent: OWNER_START_AGENT }
   : {};
+
+// Website chat widget agents (webchat_jobs queue). WebchatCoworker is the
+// capability-restricted anonymous-visitor agent seeded by deploy-client.sh
+// (info + lead gen tools ONLY — no SMS/email/call/image); its Local twin is
+// the spend-cap fallback. Same empty-string escape hatch as the owner pair:
+// deploy-client.sh writes CHAT_WORKER_WEBCHAT_LOCAL_AGENT="" on kvm1 (no
+// local model), which makes the worker REFUSE over-cap webchat turns with an
+// honest visitor-facing reply instead of routing to an agent that can't run.
+const WEBCHAT_START_AGENT = (process.env.CHAT_WORKER_WEBCHAT_START_AGENT ?? "WebchatCoworker").trim();
+const WEBCHAT_LOCAL_AGENT = (process.env.CHAT_WORKER_WEBCHAT_LOCAL_AGENT ?? "WebchatCoworkerLocal").trim();
 
 // --- Owner-chat spend cap ("runaway fuse") --------------------------------
 // The Gemini-backed OwnerCoworker agent bills per token. We meter estimated
@@ -1136,6 +1146,228 @@ async function processLoop() {
   }
 }
 
+// ===========================================================================
+// Website chat widget queue (webchat_jobs) — the ANONYMOUS-VISITOR surface.
+//
+// Mirrors the owner-dashboard pipeline above (same claim/reclaim RPCs
+// pattern, same always-stateless forced-startAgent turn, same retry
+// taxonomy) with the surface-specific differences kept deliberately small:
+//
+//   * startAgent is WebchatCoworker (restricted tool surface: knowledge
+//     lookup, lead capture, calendar only) — over-cap turns downgrade to
+//     WebchatCoworkerLocal, exactly like the owner pair.
+//   * NO owner-side fulfilment runs here: no fulfillEmailSends (the email
+//     adapter must never be reachable from an anonymous surface), and no
+//     owner-rule memory capture (visitor messages are untrusted input —
+//     capturing them as business rules would let any visitor write to the
+//     tenant's memory). Any EMAIL_SEND-style sentinel block a confused or
+//     prompt-injected model emits is STRIPPED before the reply persists.
+//   * The over-cap refusal is visitor-facing copy — a website visitor has
+//     no business seeing the tenant's billing details.
+// ===========================================================================
+
+const WEBCHAT_OVER_CAP_REFUSAL =
+  "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
+
+// Deterministic fallback when stripping sentinel blocks leaves an empty
+// reply (the whole generation was a hallucinated tool block).
+const WEBCHAT_EMPTY_AFTER_STRIP_REPLY =
+  "Sorry, I can't do that from this chat — but I'm happy to answer questions or take your contact details so the team can follow up.";
+
+async function claimNextWebchatJob() {
+  const { data, error } = await sb.rpc("claim_webchat_job", {
+    p_worker_id: WORKER_ID,
+    p_business_id: BUSINESS_ID
+  });
+  if (error) {
+    // A missing RPC (platform migration not applied yet) is expected during
+    // rollout ordering — log once per sweep at warn, never crash the drain.
+    log("warn", "webchat_claim_failed", { error: error.message });
+    return null;
+  }
+  return data && data.length > 0 ? data[0] : null;
+}
+
+async function reclaimStaleWebchat() {
+  const { data, error } = await sb.rpc("reclaim_stale_webchat_jobs", {
+    p_max_age_ms: STALE_CLAIM_MS
+  });
+  if (error) {
+    log("warn", "webchat_reclaim_failed", { error: error.message });
+    return 0;
+  }
+  const n = Array.isArray(data) ? data.length : 0;
+  if (n > 0) {
+    log("warn", "webchat_reclaimed_stale", { count: n, ids: data.map((j) => j.id) });
+  }
+  return n;
+}
+
+async function failWebchatJob(jobId, code, detail) {
+  await sb
+    .from("webchat_jobs")
+    .update({
+      status: "error",
+      error_code: code,
+      error_detail: String(detail || "").slice(0, 500),
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", jobId);
+}
+
+// Insert the assistant reply, update the session's sticky has-history
+// marker, and flip the job to done. Shared by the happy path and the
+// over-cap refusal path.
+async function finishWebchatJob(job, content, conversationId, nextState) {
+  const { data: msg, error: insertErr } = await sb
+    .from("webchat_messages")
+    .insert({
+      session_id: job.session_id,
+      business_id: job.business_id,
+      role: "assistant",
+      content
+    })
+    .select("id")
+    .single();
+  if (insertErr) {
+    throw new Error(`message_insert_failed:${insertErr.message}`);
+  }
+
+  // Sticky continuation marker (same semantics as the owner path): we never
+  // RESUME this id — every webchat turn is stateless-forced — it only tells
+  // the enqueue route "this session has prior Rowboat history", flipping it
+  // to the full-tail input variant. Only refresh when Rowboat returned one.
+  const sessionUpdate = { last_seen_at: new Date().toISOString() };
+  if (conversationId) sessionUpdate.rowboat_conversation_id = conversationId;
+  if (nextState !== undefined) sessionUpdate.rowboat_state = nextState;
+  const { error: sErr } = await sb
+    .from("webchat_sessions")
+    .update(sessionUpdate)
+    .eq("id", job.session_id);
+  if (sErr) log("warn", "webchat_session_update_failed", { error: sErr.message });
+
+  const { error: jobErr } = await sb
+    .from("webchat_jobs")
+    .update({
+      status: "done",
+      assistant_message_id: msg.id,
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", job.id);
+  if (jobErr) {
+    // Reply already persisted (the visitor's poll will render it); the job
+    // row stays 'processing' and the reclaimer retries the status flip via
+    // a re-run — same acceptance as the owner path's job_update_failed.
+    log("error", "webchat_job_update_failed", { jobId: job.id, error: jobErr.message });
+  }
+  return msg.id;
+}
+
+async function processWebchatJob(job) {
+  const t0 = Date.now();
+  log("info", "webchat_process_start", {
+    jobId: job.id,
+    sessionId: job.session_id,
+    attempts: job.attempts
+  });
+
+  if (job.attempts > MAX_ATTEMPTS) {
+    log("error", "webchat_max_attempts_exceeded", { jobId: job.id, attempts: job.attempts });
+    await failWebchatJob(
+      job.id,
+      "max_attempts_exceeded",
+      `Job exceeded ${MAX_ATTEMPTS} attempts without success.`
+    );
+    return;
+  }
+
+  try {
+    if (!Array.isArray(job.input_messages) || job.input_messages.length === 0) {
+      throw new Error("input_empty:no messages to send to rowboat");
+    }
+    const fallbackMessages = Array.isArray(job.stateless_input_messages)
+      ? job.stateless_input_messages
+      : null;
+
+    // Webchat shares the SAME period spend fuse as owner chat + SMS (all
+    // Gemini turns meter into owner_chat_model_spend via the llm-router), so
+    // the cap read is identical. Anonymous traffic degrading to the free
+    // local model — not billing unbounded Gemini — is the entire point.
+    const { overCap } = await resolveOwnerChatCap();
+
+    if (overCap && !WEBCHAT_LOCAL_AGENT) {
+      log("warn", "webchat_turn_refused_over_cap", { jobId: job.id });
+      await finishWebchatJob(job, WEBCHAT_OVER_CAP_REFUSAL, null, undefined);
+      log("info", "webchat_process_done", { jobId: job.id, ms: Date.now() - t0, refused: true });
+      return;
+    }
+
+    const startAgent = overCap && WEBCHAT_LOCAL_AGENT ? WEBCHAT_LOCAL_AGENT : WEBCHAT_START_AGENT;
+    const startAgentOpts = startAgent ? { startAgent } : {};
+
+    // Always stateless with an explicit startAgent, never resuming a stored
+    // conversationId — same reasoning as the owner path: Rowboat ignores
+    // startAgent when a conversationId is supplied, so resuming would pin
+    // the conversation to whatever agent the first turn bound (breaking the
+    // over-cap downgrade mid-conversation). The enqueue route replays the
+    // history tail in the input every turn, so no context is lost.
+    const turnMessages = fallbackMessages ?? job.input_messages;
+    let result;
+    try {
+      result = await callRowboat(turnMessages, null, null, startAgentOpts);
+    } catch (err) {
+      const code = String(err?.message || "").split(":")[0];
+      if (!isRetryableErrorCode(code)) throw err;
+      log("warn", "webchat_turn_retry", {
+        jobId: job.id,
+        code,
+        detail: String(err?.message || "").slice(0, 200)
+      });
+      result = await callRowboat(turnMessages, null, null, startAgentOpts);
+    }
+    const { content, conversationId, state: nextState } = result;
+
+    // The widget surface has NO sentinel tools. Strip any EMAIL_SEND-style
+    // block a confused/prompt-injected model emits — nothing is sent, the
+    // raw protocol JSON never reaches the visitor, and an all-block reply
+    // degrades to an honest canned line.
+    const { cleanedContent, requests, invalidCount } = extractEmailSendRequests(content);
+    if (requests.length > 0 || invalidCount > 0) {
+      log("warn", "webchat_sentinel_stripped", {
+        jobId: job.id,
+        blocks: requests.length + invalidCount
+      });
+    }
+    const finalContent = cleanedContent.trim() || WEBCHAT_EMPTY_AFTER_STRIP_REPLY;
+
+    const msgId = await finishWebchatJob(job, finalContent, conversationId, nextState);
+    log("info", "webchat_process_done", {
+      jobId: job.id,
+      msgId,
+      durationMs: Date.now() - t0,
+      contentLen: finalContent.length,
+      agent: startAgent
+    });
+  } catch (err) {
+    const msg = String(err?.message || "unknown_error");
+    const code = msg.split(":")[0];
+    log("error", "webchat_process_failed", {
+      jobId: job.id,
+      error: msg,
+      durationMs: Date.now() - t0
+    });
+    await failWebchatJob(job.id, code, msg);
+  }
+}
+
+async function processWebchatLoop() {
+  for (;;) {
+    const job = await claimNextWebchatJob();
+    if (!job) return;
+    await processWebchatJob(job);
+  }
+}
+
 async function reclaimStale() {
   const { data, error } = await sb.rpc("reclaim_stale_chat_jobs", {
     p_max_age_ms: STALE_CLAIM_MS
@@ -1162,7 +1394,9 @@ async function drain() {
   try {
     try {
       await reclaimStale();
+      await reclaimStaleWebchat();
       await processLoop();
+      await processWebchatLoop();
     } catch (err) {
       // Bugbot Low-severity finding on PR #79: drain() is invoked
       // from a Realtime subscription callback and from setInterval,
@@ -1196,6 +1430,8 @@ async function main() {
     rowboatTimeoutMs: ROWBOAT_TIMEOUT_MS,
     maxAttempts: MAX_ATTEMPTS,
     ownerStartAgent: OWNER_START_AGENT || "(workflow default)",
+    webchatStartAgent: WEBCHAT_START_AGENT || "(workflow default)",
+    webchatLocalAgent: WEBCHAT_LOCAL_AGENT,
     ownerSpendMetering: OWNER_CHAT_SPEND_METERING_ENABLED ? "on" : "off",
     ownerSpendCapUsd: (OWNER_CHAT_SPEND_CAP_MICROS / 1_000_000).toFixed(2),
     ownerLocalAgent: OWNER_CHAT_LOCAL_AGENT,
@@ -1229,6 +1465,19 @@ async function main() {
       },
       () => {
         // Fire-and-forget; drain() is its own try/catch.
+        drain();
+      }
+    )
+    .on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "webchat_jobs",
+        filter: `business_id=eq.${BUSINESS_ID}`
+      },
+      () => {
+        // Same shared drain — it processes both queues.
         drain();
       }
     )

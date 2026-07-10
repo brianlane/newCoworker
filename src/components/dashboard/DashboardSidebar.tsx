@@ -17,7 +17,8 @@ import {
   Workflow,
   CreditCard,
   ArrowDownUp,
-  BarChart3
+  BarChart3,
+  Globe
 } from "lucide-react";
 
 const ownerNavItems = [
@@ -28,6 +29,10 @@ const ownerNavItems = [
   { label: "Chat", href: "/dashboard/chat", icon: MessageSquare },
   { label: "Calls", href: "/dashboard/calls", icon: Phone },
   { label: "Texts", href: "/dashboard/messages", icon: MessageCircle },
+  // Website chat widget conversations (Standard+ perk — like Analytics, the
+  // page renders an upgrade card for Starter tenants, so the link stays
+  // visible as an upsell).
+  { label: "Web chat", href: "/dashboard/webchat", icon: Globe },
   // AiFlow email activity (sends + trigger emails) from email_log — the
   // email counterpart of the Texts/Calls history pages.
   { label: "Emails", href: "/dashboard/emails", icon: Mail },

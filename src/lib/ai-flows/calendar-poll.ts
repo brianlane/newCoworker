@@ -476,7 +476,9 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
-      if (!conn) throw new Error("calendar_not_connected");
+      // Calendly connections have no pollable calendar (the fetchers below
+      // speak Google/Graph only) — treat them as not connected for triggers.
+      if (!conn || conn.provider === "calendly") throw new Error("calendar_not_connected");
       const link: NangoWorkspaceLink = {
         connectionId: conn.connectionId,
         providerConfigKey: conn.providerConfigKey
