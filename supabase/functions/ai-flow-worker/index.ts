@@ -855,7 +855,30 @@ async function runStep(
         `unknown step type "${step.type}" — this ai-flow-worker deploy is older than the flow definition; redeploy the worker from main`
     };
   }
-  if (!plan.ok) return { kind: "fail", error: plan.error };
+  if (!plan.ok) {
+    // When the self-number scrub emptied THIS step's phone var earlier in the
+    // run, an unusable-phone failure here is the scrub's doing — text the
+    // owner a plain-words explanation alongside the failed run (which
+    // otherwise reads as a technical error; the exact confusion from Truly's
+    // office-line test). Gated on the failing step's own phoneVar being among
+    // the scrubbed vars (a different scrubbed field with an already-empty
+    // phoneVar is a plain no-phone lead, not the business's number). Sent at
+    // failure time, not scrub time, because a later extraction step can still
+    // backfill a real phone. Best-effort + idempotent per run.
+    if (step.type === "upsert_customer" && selfScrubbedVars(scope).includes(step.phoneVar)) {
+      try {
+        await sendOwnerSms(
+          supabase,
+          run,
+          "A lead just came in, but their phone number matched your own business number, so I can't text them (this happens when a test form uses the office line, or a lead source page shows your number). Check the lead's real number and reach out directly.",
+          `aiflow-selfphone:${run.id}`
+        );
+      } catch (e) {
+        console.error("self-phone scrub owner notice failed", e);
+      }
+    }
+    return { kind: "fail", error: plan.error };
+  }
   const action = plan.action;
 
   switch (action.kind) {
@@ -1404,8 +1427,27 @@ async function scrubExtractedSelfPhones(
       step: stepLabel,
       cleared: scrub.cleared
     });
+    // Record WHICH vars were scrubbed (in persisted vars, like the
+    // wait_for_reply `__waited_*` markers) so a DOWNSTREAM unusable-phone
+    // failure can tell the owner why in plain words — but only when the var
+    // that failed is one the scrub actually cleared. Deliberately not
+    // notifying here: a later extraction step (e.g. email_extract with
+    // fillOnlyEmpty) may still backfill a real lead phone, in which case
+    // nothing is wrong. Merged across scrub calls (browse + email extracts).
+    scope.vars[SELF_PHONE_SCRUBBED_VAR] = [
+      ...new Set([...selfScrubbedVars(scope), ...scrub.cleared])
+    ].join(",");
   }
   return scrub.values;
+}
+
+/** Persisted-vars marker: comma-joined var names the self-scrub cleared. */
+const SELF_PHONE_SCRUBBED_VAR = "__self_phone_scrubbed";
+
+/** Var names this run's self-number scrub cleared so far (possibly empty). */
+function selfScrubbedVars(scope: Scope): string[] {
+  const raw = scope.vars[SELF_PHONE_SCRUBBED_VAR];
+  return typeof raw === "string" && raw.length > 0 ? raw.split(",") : [];
 }
 
 async function browseStep(
