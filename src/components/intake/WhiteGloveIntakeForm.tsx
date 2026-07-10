@@ -189,7 +189,7 @@ export function WhiteGloveIntakeForm({ token }: { token: string }) {
                   value={answers[q.id] as string}
                   onChange={(e) => setValue(q.id, e.target.value)}
                   placeholder={placeholderFor(q)}
-                  maxLength={320}
+                  maxLength={q.maxLength}
                 />
               )}
 
@@ -199,7 +199,7 @@ export function WhiteGloveIntakeForm({ token }: { token: string }) {
                   value={answers[q.id] as string}
                   onChange={(e) => setValue(q.id, e.target.value)}
                   placeholder={placeholderFor(q)}
-                  maxLength={2000}
+                  maxLength={q.maxLength}
                 />
               )}
             </div>

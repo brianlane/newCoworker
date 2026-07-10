@@ -24,10 +24,11 @@ export default async function IntakeDocPage({
 }: {
   params: Promise<{ intakeId: string }>;
 }) {
-  const user = await getAuthUser();
-  if (!user?.isAdmin) redirect("/admin/login?next=/admin/clients");
-
   const { intakeId } = await params;
+  const user = await getAuthUser();
+  if (!user?.isAdmin) {
+    redirect(`/admin/login?next=${encodeURIComponent(`/admin/intake-doc/${intakeId}`)}`);
+  }
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(intakeId)) {
     notFound();
   }

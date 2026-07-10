@@ -48,6 +48,19 @@ describe("white-glove template questionnaire", () => {
     }
   });
 
+  it("every text question's maxLength matches the schema cap (form can never outrun validation)", () => {
+    const base = fullAnswers();
+    for (const q of INTAKE_QUESTIONS) {
+      if (q.type !== "text" && q.type !== "textarea") continue;
+      expect(q.maxLength).toBeGreaterThan(0);
+      const max = q.maxLength as number;
+      const atCap = { ...base, [q.id]: "x".repeat(max) };
+      expect(intakeAnswersSchema.safeParse(atCap).success).toBe(true);
+      const overCap = { ...base, [q.id]: "x".repeat(max + 1) };
+      expect(intakeAnswersSchema.safeParse(overCap).success).toBe(false);
+    }
+  });
+
   it("every industry option has a preset with a greeting and at most 3 questions", () => {
     for (const opt of INDUSTRY_OPTIONS) {
       const preset = INDUSTRY_PRESETS[opt.value];
@@ -183,6 +196,25 @@ describe("renderWhiteGloveDocSections", () => {
     expect(all).toContain("Website: —");
     expect(all).toContain("• (none selected)");
     expect(doc.sections.find((s) => s.heading === "9. Notes")?.lines).toEqual(["—"]);
+  });
+
+  it("keeps a checked 'Other' visible even when its description was left blank", () => {
+    const answers = {
+      ...fullAnswers(),
+      lead_sources: ["other"] as IntakeAnswers["lead_sources"],
+      lead_sources_other: "",
+      never_handle: ["other"] as IntakeAnswers["never_handle"],
+      never_handle_other: ""
+    };
+    const doc = renderWhiteGloveDocSections(answers);
+    expect(doc.sections.find((s) => s.heading === "3. Lead sources")?.lines).toEqual([
+      "• Other"
+    ]);
+    const handoff = doc.sections
+      .find((s) => s.heading === "7. When a human takes over")
+      ?.lines.join("\n");
+    expect(handoff).toContain("• Other");
+    expect(handoff).not.toContain("(none selected)");
   });
 
   it("survives an unknown stored choice value by printing the raw value", () => {

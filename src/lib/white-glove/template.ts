@@ -26,6 +26,12 @@ export type IntakeQuestion = {
   options?: IntakeChoiceOption[];
   placeholder?: string;
   required: boolean;
+  /**
+   * Input cap for text/textarea questions — MUST match the field's
+   * intakeAnswersSchema max so the form can never accept input the submit
+   * route then rejects (enforced by unit test).
+   */
+  maxLength?: number;
 };
 
 // ── Choice catalogs ─────────────────────────────────────────────────────────
@@ -222,7 +228,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Business name",
     type: "text",
     placeholder: "Acme Home Services",
-    required: true
+    required: true,
+    maxLength: 200
   },
   {
     id: "industry",
@@ -239,7 +246,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "If other, what do you do?",
     type: "text",
     placeholder: "e.g. Landscaping design",
-    required: false
+    required: false,
+    maxLength: 120
   },
   {
     id: "website",
@@ -247,7 +255,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Website (optional)",
     type: "text",
     placeholder: "https://…",
-    required: false
+    required: false,
+    maxLength: 300
   },
   {
     id: "business_hours",
@@ -255,7 +264,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Business hours",
     type: "text",
     placeholder: "Mon–Fri 9am–5pm",
-    required: true
+    required: true,
+    maxLength: 200
   },
   {
     id: "team",
@@ -264,7 +274,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     help: "One person per line: name and mobile number.",
     type: "textarea",
     placeholder: "Jane Smith — 555-123-4567\nJohn Doe — 555-987-6543",
-    required: true
+    required: true,
+    maxLength: 2000
   },
   {
     id: "lead_sources",
@@ -281,7 +292,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Other lead sources",
     type: "text",
     placeholder: "e.g. Trade shows",
-    required: false
+    required: false,
+    maxLength: 200
   },
   {
     id: "tone",
@@ -298,7 +310,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     help: "Leave blank to use our suggested wording for your industry. {name} is replaced with the lead's name.",
     type: "textarea",
     placeholder: "Hi {name}! Thanks for reaching out…",
-    required: false
+    required: false,
+    maxLength: 500
   },
   {
     id: "qualification_questions",
@@ -307,7 +320,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     help: "One per line, 3 at most — fewer questions means fewer leads lost. Leave blank to use our suggestions.",
     type: "textarea",
     placeholder: "What can we help you with?\nHow soon are you hoping to get started?",
-    required: false
+    required: false,
+    maxLength: 1000
   },
   {
     id: "appointment_length",
@@ -380,7 +394,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Anything else the assistant should never handle?",
     type: "text",
     placeholder: "e.g. Warranty claims",
-    required: false
+    required: false,
+    maxLength: 300
   },
   {
     id: "consent_confirmed",
@@ -397,7 +412,8 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     label: "Anything else we should know for your build?",
     type: "textarea",
     placeholder: "Special requests, systems you already use, busy seasons…",
-    required: false
+    required: false,
+    maxLength: 1000
   }
 ];
 
@@ -410,7 +426,11 @@ function labelOf(options: IntakeChoiceOption[], value: string): string {
   return options.find((o) => o.value === value)?.label ?? value;
 }
 
-/** Map multi-choice values to labels, appending free-text "other" detail. */
+/**
+ * Map multi-choice values to labels, appending free-text "other" detail.
+ * A checked "other" with no description still shows up as "Other" — a
+ * prospect's selection is never silently dropped from the document.
+ */
 function multiLabels(
   options: IntakeChoiceOption[],
   values: string[],
@@ -420,6 +440,7 @@ function multiLabels(
     .filter((v) => v !== "other")
     .map((v) => labelOf(options, v));
   if (otherText) labels.push(otherText);
+  else if (values.includes("other")) labels.push("Other");
   return labels;
 }
 
