@@ -1,0 +1,442 @@
+/**
+ * Service-role data access for the website chat widget
+ * (chat_widget_settings / webchat_sessions / webchat_messages /
+ * webchat_jobs — migration 20260819000000_webchat_widget.sql).
+ *
+ * Every table is RLS-on/no-policies, so ALL access flows through here after
+ * the caller's own auth: the public widget routes verify the site key +
+ * per-session bearer (src/lib/webchat/service.ts) and the dashboard routes
+ * gate on requireBusinessRole — same trust model as db/dashboard-chat.ts.
+ */
+
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { mintWidgetKey } from "@/lib/webchat/keys";
+
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+export type ChatWidgetSettingsRow = {
+  business_id: string;
+  enabled: boolean;
+  public_key: string;
+  public_key_sha256: string;
+  allowed_origins: string[];
+  require_contact_form: boolean;
+  theme: unknown | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WebchatSessionRow = {
+  id: string;
+  business_id: string;
+  session_token_sha256: string;
+  visitor_name: string | null;
+  visitor_email: string | null;
+  visitor_phone: string | null;
+  rowboat_conversation_id: string | null;
+  rowboat_state: unknown | null;
+  last_seen_at: string;
+  created_at: string;
+};
+
+export type WebchatMessageRole = "user" | "assistant" | "system";
+
+export type WebchatMessageRow = {
+  id: number;
+  session_id: string;
+  business_id: string;
+  role: WebchatMessageRole;
+  content: string;
+  created_at: string;
+};
+
+export type WebchatJobRow = {
+  id: string;
+  business_id: string;
+  session_id: string;
+  user_message_id: number;
+  status: "queued" | "processing" | "done" | "error";
+  attempts: number;
+  assistant_message_id: number | null;
+  error_code: string | null;
+  error_detail: string | null;
+  created_at: string;
+  completed_at: string | null;
+};
+
+/**
+ * API-shape projection of stored messages — single source of truth for the
+ * `{ id, role, content, createdAt }` envelope the widget poll route and the
+ * owner transcript route both return (mirrors serializeChatMessages).
+ */
+export function serializeWebchatMessages(rows: WebchatMessageRow[]) {
+  return rows.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    createdAt: m.created_at
+  }));
+}
+
+// ---------------------------------------------------------------------
+// chat_widget_settings
+// ---------------------------------------------------------------------
+
+export async function getWidgetSettingsForBusiness(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<ChatWidgetSettingsRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("chat_widget_settings")
+    .select("*")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) throw new Error(`getWidgetSettingsForBusiness: ${error.message}`);
+  return (data as ChatWidgetSettingsRow | null) ?? null;
+}
+
+export async function getWidgetSettingsByKeyHash(
+  keySha256: string,
+  client?: SupabaseClient
+): Promise<ChatWidgetSettingsRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("chat_widget_settings")
+    .select("*")
+    .eq("public_key_sha256", keySha256)
+    .maybeSingle();
+  if (error) throw new Error(`getWidgetSettingsByKeyHash: ${error.message}`);
+  return (data as ChatWidgetSettingsRow | null) ?? null;
+}
+
+/**
+ * Get the business's widget settings, minting the row (disabled, fresh
+ * site key) on first touch. Two concurrent first-touches can race the
+ * insert; the primary key makes one lose — we swallow that and re-read the
+ * winner (same pattern as getOrCreateActiveThread).
+ */
+export async function getOrCreateWidgetSettings(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<ChatWidgetSettingsRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const existing = await getWidgetSettingsForBusiness(businessId, db);
+  if (existing) return existing;
+  const key = mintWidgetKey();
+  const { data, error } = await db
+    .from("chat_widget_settings")
+    .insert({
+      business_id: businessId,
+      enabled: false,
+      public_key: key.plaintext,
+      public_key_sha256: key.hash
+    })
+    .select()
+    .single();
+  if (!error) return data as ChatWidgetSettingsRow;
+  const winner = await getWidgetSettingsForBusiness(businessId, db);
+  if (winner) return winner;
+  throw new Error(`getOrCreateWidgetSettings: ${error.message}`);
+}
+
+export type WidgetSettingsPatch = {
+  enabled?: boolean;
+  allowed_origins?: string[];
+  require_contact_form?: boolean;
+  theme?: unknown | null;
+};
+
+export async function updateWidgetSettings(
+  businessId: string,
+  patch: WidgetSettingsPatch,
+  client?: SupabaseClient
+): Promise<ChatWidgetSettingsRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("chat_widget_settings")
+    .update({ ...patch, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .select()
+    .single();
+  if (error) throw new Error(`updateWidgetSettings: ${error.message}`);
+  return data as ChatWidgetSettingsRow;
+}
+
+/**
+ * Rotate the site key. Old embeds stop resolving immediately — the owner
+ * settings card shows the new snippet to paste. Returns the updated row
+ * (public_key is the new plaintext; it is public by design).
+ */
+export async function regenerateWidgetKey(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<ChatWidgetSettingsRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const key = mintWidgetKey();
+  const { data, error } = await db
+    .from("chat_widget_settings")
+    .update({
+      public_key: key.plaintext,
+      public_key_sha256: key.hash,
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId)
+    .select()
+    .single();
+  if (error) throw new Error(`regenerateWidgetKey: ${error.message}`);
+  return data as ChatWidgetSettingsRow;
+}
+
+// ---------------------------------------------------------------------
+// webchat_sessions
+// ---------------------------------------------------------------------
+
+export type WebchatContactPatch = {
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+};
+
+export async function createWebchatSession(
+  businessId: string,
+  sessionTokenSha256: string,
+  contact: WebchatContactPatch,
+  client?: SupabaseClient
+): Promise<WebchatSessionRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_sessions")
+    .insert({
+      business_id: businessId,
+      session_token_sha256: sessionTokenSha256,
+      visitor_name: contact.name?.trim() || null,
+      visitor_email: contact.email?.trim() || null,
+      visitor_phone: contact.phone?.trim() || null
+    })
+    .select()
+    .single();
+  if (error) throw new Error(`createWebchatSession: ${error.message}`);
+  return data as WebchatSessionRow;
+}
+
+export async function getWebchatSessionByTokenHash(
+  sessionTokenSha256: string,
+  client?: SupabaseClient
+): Promise<WebchatSessionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_sessions")
+    .select("*")
+    .eq("session_token_sha256", sessionTokenSha256)
+    .maybeSingle();
+  if (error) throw new Error(`getWebchatSessionByTokenHash: ${error.message}`);
+  return (data as WebchatSessionRow | null) ?? null;
+}
+
+/**
+ * Merge captured contact details onto the session. New NON-EMPTY values win
+ * (a visitor correcting a typo mid-conversation should overwrite), empty /
+ * missing fields leave the stored value alone.
+ */
+export async function updateWebchatSessionContact(
+  sessionId: string,
+  contact: WebchatContactPatch,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const patch: Record<string, string> = {};
+  const name = contact.name?.trim();
+  const email = contact.email?.trim();
+  const phone = contact.phone?.trim();
+  if (name) patch.visitor_name = name;
+  if (email) patch.visitor_email = email;
+  if (phone) patch.visitor_phone = phone;
+  if (Object.keys(patch).length === 0) return;
+  const { error } = await db
+    .from("webchat_sessions")
+    .update(patch)
+    .eq("id", sessionId);
+  if (error) throw new Error(`updateWebchatSessionContact: ${error.message}`);
+}
+
+/** Session lookup by primary key, for tool-call sessionRef validation. */
+export async function getWebchatSessionById(
+  sessionId: string,
+  client?: SupabaseClient
+): Promise<WebchatSessionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .maybeSingle();
+  if (error) throw new Error(`getWebchatSessionById: ${error.message}`);
+  return (data as WebchatSessionRow | null) ?? null;
+}
+
+/** Bump last_seen_at so the idle-TTL window slides with real activity. */
+export async function touchWebchatSession(
+  sessionId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("webchat_sessions")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("id", sessionId);
+  if (error) throw new Error(`touchWebchatSession: ${error.message}`);
+}
+
+/** A session row plus its message count, for the owner's Web chat list. */
+export type WebchatSessionSummary = WebchatSessionRow & { message_count: number };
+
+export async function listWebchatSessionsForBusiness(
+  businessId: string,
+  opts: { limit?: number } = {},
+  client?: SupabaseClient
+): Promise<WebchatSessionSummary[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const limit = opts.limit ?? 50;
+  const { data, error } = await db
+    .from("webchat_sessions")
+    .select(
+      "id, business_id, session_token_sha256, visitor_name, visitor_email, visitor_phone, rowboat_conversation_id, rowboat_state, last_seen_at, created_at, webchat_messages(count)"
+    )
+    .eq("business_id", businessId)
+    .order("last_seen_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listWebchatSessionsForBusiness: ${error.message}`);
+  type EmbeddedRow = WebchatSessionRow & {
+    webchat_messages?: Array<{ count?: number }> | null;
+  };
+  return ((data as EmbeddedRow[] | null) ?? []).map((row) => {
+    const { webchat_messages, ...rest } = row;
+    const count = Array.isArray(webchat_messages)
+      ? Number(webchat_messages[0]?.count ?? 0)
+      : 0;
+    return { ...rest, message_count: Number.isFinite(count) ? count : 0 };
+  });
+}
+
+// ---------------------------------------------------------------------
+// webchat_messages
+// ---------------------------------------------------------------------
+
+export async function appendWebchatMessage(
+  sessionId: string,
+  businessId: string,
+  role: WebchatMessageRole,
+  content: string,
+  client?: SupabaseClient
+): Promise<WebchatMessageRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_messages")
+    .insert({ session_id: sessionId, business_id: businessId, role, content })
+    .select()
+    .single();
+  if (error) throw new Error(`appendWebchatMessage: ${error.message}`);
+  return data as WebchatMessageRow;
+}
+
+export async function listWebchatMessages(
+  sessionId: string,
+  client?: SupabaseClient
+): Promise<WebchatMessageRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_messages")
+    .select("*")
+    .eq("session_id", sessionId)
+    .order("id", { ascending: true });
+  if (error) throw new Error(`listWebchatMessages: ${error.message}`);
+  return (data as WebchatMessageRow[] | null) ?? [];
+}
+
+/** Poll cursor: everything on the session with id > afterId, in order. */
+export async function listWebchatMessagesSince(
+  sessionId: string,
+  afterId: number,
+  client?: SupabaseClient
+): Promise<WebchatMessageRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_messages")
+    .select("*")
+    .eq("session_id", sessionId)
+    .gt("id", afterId)
+    .order("id", { ascending: true });
+  if (error) throw new Error(`listWebchatMessagesSince: ${error.message}`);
+  return (data as WebchatMessageRow[] | null) ?? [];
+}
+
+/**
+ * Count of VISITOR messages for a business since `sinceIso` — the
+ * per-business daily ceiling read (abuse control on an anonymous surface).
+ */
+export async function countWebchatUserMessagesSince(
+  businessId: string,
+  sinceIso: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("webchat_messages")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .eq("role", "user")
+    .gte("created_at", sinceIso);
+  if (error) throw new Error(`countWebchatUserMessagesSince: ${error.message}`);
+  return count ?? 0;
+}
+
+// ---------------------------------------------------------------------
+// webchat_jobs
+// ---------------------------------------------------------------------
+
+export type InsertWebchatJobInput = {
+  businessId: string;
+  sessionId: string;
+  userMessageId: number;
+  inputMessages: Array<{ role: WebchatMessageRole; content: string }>;
+  statelessInputMessages: Array<{ role: WebchatMessageRole; content: string }> | null;
+  rowboatConversationId: string | null;
+};
+
+export async function insertWebchatJob(
+  input: InsertWebchatJobInput,
+  client?: SupabaseClient
+): Promise<WebchatJobRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .insert({
+      business_id: input.businessId,
+      session_id: input.sessionId,
+      user_message_id: input.userMessageId,
+      input_messages: input.inputMessages,
+      stateless_input_messages: input.statelessInputMessages,
+      rowboat_conversation_id: input.rowboatConversationId
+    })
+    .select()
+    .single();
+  if (error) throw new Error(`insertWebchatJob: ${error.message}`);
+  return data as WebchatJobRow;
+}
+
+export async function getWebchatJobById(
+  jobId: string,
+  client?: SupabaseClient
+): Promise<WebchatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .select(
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at"
+    )
+    .eq("id", jobId)
+    .maybeSingle();
+  if (error) throw new Error(`getWebchatJobById: ${error.message}`);
+  return (data as WebchatJobRow | null) ?? null;
+}

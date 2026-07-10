@@ -25,6 +25,23 @@ const securityHeaders = [
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" }
 ];
 
+// /widget/frame is the ONE page that must be embeddable in an <iframe> on
+// OTHER sites (the website chat widget). Browsers enforce the INTERSECTION
+// of every CSP header on a response, so the global `frame-ancestors 'none'`
+// above would override the per-tenant frame-ancestors the frame route sets
+// dynamically (from chat_widget_settings.allowed_origins) no matter what we
+// add — the global rule's matcher must EXCLUDE the path entirely. Everything
+// else from the baseline set that doesn't block framing is re-applied here.
+const widgetFrameHeaders = [
+  { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
+  { key: "X-Content-Type-Options", value: "nosniff" },
+  { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+  { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), browsing-topics=()" },
+  // No frame-ancestors here: the route handler emits it per tenant. The
+  // widget is a public embed — keep it out of search results.
+  { key: "X-Robots-Tag", value: "noindex" }
+];
+
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   turbopack: {
@@ -36,7 +53,12 @@ const nextConfig: NextConfig = {
   // server-only routes (orchestrator / provisioning), never from the browser.
   serverExternalPackages: ["ssh2"],
   async headers() {
-    return [{ source: "/:path*", headers: securityHeaders }];
+    return [
+      // Negative lookahead: every path EXCEPT /widget/frame gets the
+      // full baseline (incl. the no-framing pair). See widgetFrameHeaders.
+      { source: "/((?!widget/frame).*)", headers: securityHeaders },
+      { source: "/widget/frame", headers: widgetFrameHeaders }
+    ];
   }
 };
 
