@@ -22,13 +22,22 @@ export default async function AdminClientsPage() {
   const prospectOffers = await listProspectWhiteGloveOffers();
   const intakes = await listWhiteGloveIntakes();
 
+  // "Active" means a paying client — active subscription backed by a real
+  // Stripe payment — matching the dashboard's day-current MRR definition
+  // (src/lib/admin/mrr.ts). Wiped rows, canceled internal pilots, and
+  // no-subscription smoke clones count only toward the total.
+  const activeClientCount = businesses.filter((b) => {
+    const sub = subscriptionMap.get(b.id);
+    return sub?.status === "active" && sub.stripe_subscription_id !== null;
+  }).length;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl font-bold text-parchment">Admin Overview</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            {businesses.length} active client{businesses.length !== 1 ? "s" : ""}
+            {activeClientCount} active · {businesses.length} total
           </p>
         </div>
         <CreateClientModal />
