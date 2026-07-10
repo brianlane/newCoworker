@@ -50,6 +50,7 @@ import {
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
+import { useUnsavedChangesWarning } from "@/components/dashboard/useBusinessConfigSave";
 
 // Sort fields for the flows list. Default is "last run" desc, matching the
 // server's activity ordering so the list opens unchanged.
@@ -717,6 +718,20 @@ export function AiFlowsManager({
     const row = initialFlows.find((f) => f.id === initialEditId);
     return row ? editorFromRow(row) : null;
   });
+  // Snapshot of the editor as it was OPENED (or last saved): the flow editor
+  // is dirty whenever the live state has drifted from it. `null` while the
+  // editor holds an AI-generated draft — those are unsaved by definition
+  // (leaving would throw away paid AI work). Tenant feedback: flow edits
+  // were being silently lost by navigating away.
+  const [editorBaseline, setEditorBaseline] = useState<string | null>(() => {
+    if (!initialEditId) return null;
+    const row = initialFlows.find((f) => f.id === initialEditId);
+    // editorFromRow is deterministic, so this matches the editor initializer.
+    return row ? JSON.stringify(editorFromRow(row)) : null;
+  });
+  const editorDirty =
+    editor !== null && (editorBaseline === null || JSON.stringify(editor) !== editorBaseline);
+  useUnsavedChangesWarning(editorDirty);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [aiPrompt, setAiPrompt] = useState("");
@@ -790,6 +805,8 @@ export function AiFlowsManager({
           /* warnings are advisory — never block the draft on them */
         }
         setEditor(editorFromDefinition(def, "Adapted automation"));
+        // An adapted draft is unsaved AI work — dirty until saved.
+        setEditorBaseline(null);
       }
     } catch {
       /* malformed/absent draft — fall back to the normal list view */
@@ -1021,6 +1038,7 @@ export function AiFlowsManager({
         return;
       }
       setEditor(null);
+      setEditorBaseline(null);
       setAiWarnings([]);
       setSelectedNode(null);
       await reload();
@@ -1167,6 +1185,8 @@ export function AiFlowsManager({
         timeWindow: def.timeWindow ?? null,
         steps: def.steps
       }));
+      // A generated draft is unsaved AI work — dirty until saved.
+      setEditorBaseline(null);
     } finally {
       setAiBusy(false);
     }
@@ -1215,9 +1235,21 @@ export function AiFlowsManager({
                 </button>
               ))}
             </div>
+            {editorDirty && !busy && (
+              <span className="text-xs text-amber-300/80">Unsaved changes</span>
+            )}
             <button
               onClick={() => {
+                // Closing throws away edits — make that a decision, not an
+                // accident (the browser prompt only covers page unloads).
+                if (
+                  editorDirty &&
+                  !window.confirm("Discard unsaved changes to this automation?")
+                ) {
+                  return;
+                }
                 setEditor(null);
+                setEditorBaseline(null);
                 // Salvage notes belong to the draft being abandoned.
                 setAiWarnings([]);
                 setSelectedNode(null);
@@ -2051,7 +2083,10 @@ export function AiFlowsManager({
           </label>
         </section>
 
-        <div className="flex justify-end gap-2">
+        <div className="flex items-center justify-end gap-3">
+          {editorDirty && !busy && (
+            <span className="text-xs text-amber-300/80">Unsaved changes</span>
+          )}
           <button
             onClick={save}
             disabled={busy}
@@ -2086,7 +2121,10 @@ export function AiFlowsManager({
         <button
           onClick={() => {
             setAiWarnings([]);
-            setEditor(emptyEditor());
+            const fresh = emptyEditor();
+            setEditor(fresh);
+            // A pristine new flow isn't dirty until the owner types something.
+            setEditorBaseline(JSON.stringify(fresh));
           }}
           className="inline-flex items-center gap-1 rounded-md bg-signal-teal px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90"
 >
@@ -2168,7 +2206,10 @@ export function AiFlowsManager({
                 <button
                   onClick={() => {
                     setAiWarnings([]);
-                    setEditor(editorFromRow(row));
+                    const opened = editorFromRow(row);
+                    setEditor(opened);
+                    // Opening a saved flow starts clean; edits make it dirty.
+                    setEditorBaseline(JSON.stringify(opened));
                   }}
                   aria-label="Edit"
                 >
