@@ -22,8 +22,8 @@ function sub(overrides: Partial<MrrSubscriptionInput> = {}): MrrSubscriptionInpu
     stripe_subscription_id: "sub_123",
     billing_period: "biennial",
     renewal_at: "2028-06-01T00:00:00Z",
-    commitment_months: 24,
-    contract_auto_renew: false,
+    stripe_current_period_start: "2026-06-01T00:00:00Z",
+    stripe_current_period_end: "2028-06-01T00:00:00Z",
     created_at: "2026-06-01T00:00:00Z",
     ...overrides
   };
@@ -41,9 +41,15 @@ describe("computeDayCurrentMrr", () => {
     expect(result.countedSubscriptions).toBe(1);
   });
 
-  it("prices a past-term subscription at the renewal rate when auto-renew is off", () => {
+  it("prices a rolled-over term subscription at the renewal rate (past renewal_at + monthly Stripe period)", () => {
     const result = computeDayCurrentMrr({
-      subscriptions: [sub({ renewal_at: "2026-07-01T00:00:00Z", contract_auto_renew: false })],
+      subscriptions: [
+        sub({
+          renewal_at: "2026-06-15T00:00:00Z",
+          stripe_current_period_start: "2026-06-15T00:00:00Z",
+          stripe_current_period_end: "2026-07-15T00:00:00Z"
+        })
+      ],
       enterpriseDeals: [],
       now: NOW
     });
@@ -53,44 +59,46 @@ describe("computeDayCurrentMrr", () => {
     expect(result.totalCents).toBe(18_900);
   });
 
-  it("keeps a past-term subscription on the contract rate when auto-renew is on (new full term)", () => {
+  it("keeps the contract rate past renewal_at while the Stripe period is still term-length (auto-renewed contract)", () => {
+    // renewal_at is never advanced on an auto-renewed full term — the
+    // 24-month Stripe period is what says "still committed".
     const result = computeDayCurrentMrr({
-      subscriptions: [sub({ renewal_at: "2026-07-01T00:00:00Z", contract_auto_renew: true })],
+      subscriptions: [
+        sub({
+          renewal_at: "2026-06-15T00:00:00Z",
+          stripe_current_period_start: "2026-06-15T00:00:00Z",
+          stripe_current_period_end: "2028-06-15T00:00:00Z"
+        })
+      ],
       enterpriseDeals: [],
       now: NOW
     });
     expect(result.subscriptionCents).toBe(9900);
   });
 
-  it("derives the term end from created_at + commitment_months when renewal_at is missing or malformed", () => {
-    // Missing renewal_at, 24-month commitment from 2026-06-01 → in term.
-    const inTerm = computeDayCurrentMrr({
-      subscriptions: [sub({ renewal_at: null })],
-      enterpriseDeals: [],
-      now: NOW
-    });
-    expect(inTerm.subscriptionCents).toBe(9900);
-
-    // Malformed renewal_at + a commitment that ended before NOW → renewal rate.
-    const pastTerm = computeDayCurrentMrr({
+  it("fails toward the contract rate when the Stripe period cache is missing (same direction as the billing page)", () => {
+    const result = computeDayCurrentMrr({
       subscriptions: [
-        sub({ renewal_at: "not-a-date", created_at: "2024-01-01T00:00:00Z", commitment_months: 24 })
+        sub({
+          renewal_at: "2026-06-15T00:00:00Z",
+          stripe_current_period_start: null,
+          stripe_current_period_end: null
+        })
       ],
       enterpriseDeals: [],
       now: NOW
     });
-    expect(pastTerm.subscriptionCents).toBe(18_900);
+    expect(result.subscriptionCents).toBe(9900);
   });
 
-  it("falls back to the period's standard commitment length when commitment_months is null", () => {
-    // Starter monthly created 2026-07-01: 1-month commitment covers NOW → intro rate.
+  it("prices a monthly plan at the intro rate inside its first month, renewal rate after", () => {
+    // renewal_at stamped at checkout (created + 1 month) still ahead of NOW.
     const inIntro = computeDayCurrentMrr({
       subscriptions: [
         sub({
           tier: "starter",
           billing_period: "monthly",
-          renewal_at: null,
-          commitment_months: null,
+          renewal_at: "2026-08-01T00:00:00Z",
           created_at: "2026-07-01T00:00:00Z"
         })
       ],
@@ -99,14 +107,14 @@ describe("computeDayCurrentMrr", () => {
     });
     expect(inIntro.subscriptionCents).toBe(getPeriodPricing("starter", "monthly").monthlyCents);
 
-    // Same row created two months ago → ongoing monthly renewal rate.
+    // Missing renewal_at falls back to created_at + 1 month; created two
+    // months ago → ongoing renewal rate.
     const ongoing = computeDayCurrentMrr({
       subscriptions: [
         sub({
           tier: "starter",
           billing_period: "monthly",
           renewal_at: null,
-          commitment_months: null,
           created_at: "2026-05-01T00:00:00Z"
         })
       ],
@@ -116,18 +124,33 @@ describe("computeDayCurrentMrr", () => {
     expect(ongoing.subscriptionCents).toBe(
       getPeriodPricing("starter", "monthly").renewalMonthlyCents
     );
+
+    // Malformed renewal_at takes the same created_at fallback — created this
+    // month → still intro.
+    const malformed = computeDayCurrentMrr({
+      subscriptions: [
+        sub({
+          tier: "starter",
+          billing_period: "monthly",
+          renewal_at: "not-a-date",
+          created_at: "2026-07-01T00:00:00Z"
+        })
+      ],
+      enterpriseDeals: [],
+      now: NOW
+    });
+    expect(malformed.subscriptionCents).toBe(getPeriodPricing("starter", "monthly").monthlyCents);
   });
 
-  it("clamps month-end anchors when deriving the term end (Jan 31 + 1mo = Feb 28, not Mar 3)", () => {
-    // Naive month addition would put the term end at Mar 3 and misclassify
-    // Mar 1 as in-term; clamped math ends the intro month on Feb 28.
+  it("clamps month-end anchors for the monthly intro fallback (Jan 31 + 1mo = Feb 28, not Mar 3)", () => {
+    // Naive month addition would put the intro end at Mar 3 and misclassify
+    // Mar 1 as intro-priced; clamped math ends the intro month on Feb 28.
     const result = computeDayCurrentMrr({
       subscriptions: [
         sub({
           tier: "starter",
           billing_period: "monthly",
           renewal_at: null,
-          commitment_months: 1,
           created_at: "2026-01-31T00:00:00Z"
         })
       ],
@@ -142,7 +165,7 @@ describe("computeDayCurrentMrr", () => {
   it("treats a null billing_period as monthly", () => {
     const result = computeDayCurrentMrr({
       subscriptions: [
-        sub({ billing_period: null, renewal_at: null, commitment_months: null, created_at: "2026-07-05T00:00:00Z" })
+        sub({ billing_period: null, renewal_at: null, created_at: "2026-07-05T00:00:00Z" })
       ],
       enterpriseDeals: [],
       now: NOW

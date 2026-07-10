@@ -4,13 +4,13 @@
  *
  * REVENUE: unlike the old card math (active rows × the static contract rate
  * in src/lib/plans/tier.ts), this picks the rate a subscription is actually
- * on TODAY: inside the committed term → contract rate; past the term with
- * auto-renew off → the higher month-to-month renewal rate; past the term
- * with auto-renew on → a fresh term at the contract rate. Rows with no
- * Stripe subscription behind them (internal pilots, admin-created accounts)
- * are excluded — nobody is being charged. Enterprise is priced from its
- * ACTIVE `enterprise_deals` row (the real quoted monthly price) instead of
- * the $0 tier-table placeholder.
+ * on TODAY: inside a committed (possibly auto-renewed) term → contract rate;
+ * rolled onto month-to-month after the term (per `isCommitmentElapsed`, the
+ * same signal the billing page and change-plan use) → the higher renewal
+ * rate. Rows with no Stripe subscription behind them (internal pilots,
+ * admin-created accounts) are excluded — nobody is being charged.
+ * Enterprise is priced from its ACTIVE `enterprise_deals` row (the real
+ * quoted monthly price) instead of the $0 tier-table placeholder.
  *
  * COST: local estimate from the same cost snapshot the enterprise deal
  * calculator uses (src/lib/plans/enterprise-pricing.ts): the Hostinger
@@ -27,6 +27,7 @@
 
 import { getCommitmentMonths, getPeriodPricing } from "@/lib/plans/tier";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { isCommitmentElapsed } from "@/lib/db/subscriptions";
 import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
@@ -42,8 +43,8 @@ export type MrrSubscriptionInput = {
   stripe_subscription_id: string | null;
   billing_period: BillingPeriod | null;
   renewal_at: string | null;
-  commitment_months: number | null;
-  contract_auto_renew: boolean;
+  stripe_current_period_start: string | null;
+  stripe_current_period_end: string | null;
   created_at: string;
 };
 
@@ -58,36 +59,43 @@ export type DayCurrentMrr = {
 };
 
 /**
- * The monthly rate a starter/standard subscription is on as of `nowMs`.
+ * The monthly rate a starter/standard subscription is on as of `now`.
  *
- * Term end prefers the row's `renewal_at`; a missing/unparseable value falls
- * back to `created_at + commitment_months` (row value, else the period's
- * standard length — monthly rows commit for 1 month, matching the intro-month
- * pricing before the ongoing renewal rate kicks in). Month addition uses the
- * shared CLAMPED math (`addUtcMonthsClamped`) so a month-end anchor lands on
- * the same day checkout's renewal-date math would, not rolled into the next
- * month.
+ * Term (12/24-month) plans use the codebase's canonical rollover signal,
+ * {@link isCommitmentElapsed}: a past `renewal_at` alone is NOT enough,
+ * because with auto-renew ON the subscription renews for another FULL
+ * prepaid term while `renewal_at` is never advanced — the cached Stripe
+ * period being monthly-length is what distinguishes "rolling month-to-month
+ * at the renewal rate" from "inside a (possibly renewed) contract at the
+ * contract rate". Missing period cache fails toward "still committed"
+ * (the LOWER contract rate), same direction the billing page fails.
+ *
+ * Monthly plans have no commitment: the intro month bills the contract rate,
+ * everything after it the ongoing renewal rate. The intro-month end prefers
+ * `renewal_at` (stamped at checkout as start + 1 month) and falls back to
+ * `created_at` plus one CLAMPED month (`addUtcMonthsClamped` — the same
+ * day-clamping checkout's renewal-date math uses, so a Jan 31 signup ends
+ * its intro month on Feb 28, not rolled into March).
  */
 function dayCurrentRateCents(
   sub: MrrSubscriptionInput & { tier: "starter" | "standard" },
-  nowMs: number
+  now: Date
 ): number {
   const period: BillingPeriod = sub.billing_period ?? "monthly";
   const pricing = getPeriodPricing(sub.tier, period);
 
-  let termEndMs = sub.renewal_at ? Date.parse(sub.renewal_at) : Number.NaN;
-  if (!Number.isFinite(termEndMs)) {
-    termEndMs = addUtcMonthsClamped(
-      new Date(sub.created_at),
-      sub.commitment_months ?? getCommitmentMonths(period)
-    ).getTime();
+  if (period !== "monthly") {
+    return isCommitmentElapsed(sub, now) ? pricing.renewalMonthlyCents : pricing.monthlyCents;
   }
 
-  if (nowMs < termEndMs) return pricing.monthlyCents;
-  // Past the term: auto-renew restarts a full term at the contract rate;
-  // otherwise the commitment schedule rolled the tenant onto month-to-month
-  // at the renewal price.
-  return sub.contract_auto_renew ? pricing.monthlyCents : pricing.renewalMonthlyCents;
+  let introEndMs = sub.renewal_at ? Date.parse(sub.renewal_at) : Number.NaN;
+  if (!Number.isFinite(introEndMs)) {
+    introEndMs = addUtcMonthsClamped(
+      new Date(sub.created_at),
+      getCommitmentMonths(period)
+    ).getTime();
+  }
+  return now.getTime() < introEndMs ? pricing.monthlyCents : pricing.renewalMonthlyCents;
 }
 
 export function computeDayCurrentMrr(params: {
@@ -96,7 +104,7 @@ export function computeDayCurrentMrr(params: {
   enterpriseDeals: Array<{ monthly_cents: number }>;
   now?: Date;
 }): DayCurrentMrr {
-  const nowMs = (params.now ?? new Date()).getTime();
+  const now = params.now ?? new Date();
 
   let subscriptionCents = 0;
   let countedSubscriptions = 0;
@@ -108,7 +116,7 @@ export function computeDayCurrentMrr(params: {
     if (sub.tier === "enterprise") continue;
     subscriptionCents += dayCurrentRateCents(
       sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
-      nowMs
+      now
     );
     countedSubscriptions += 1;
   }
