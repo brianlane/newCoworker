@@ -1176,15 +1176,12 @@ async function isProtectedStaffContact(
   if (!staff) {
     // Owner numbers are usually DERIVED (businesses.phone, the forward cell,
     // the coworker's own DID) rather than stored as an owner-typed contact —
-    // an owner testing with their cell must be protected too. Normalize the
-    // stored values (businesses.phone may be a bare NANP string) before
-    // comparing against the contact's E.164 set.
-    const selfNumbers = new Set(
-      (await businessSelfNumbers(supabase, businessId))
-        .map((n) => (isE164(n) ? n : normalizeNanpToE164(n)))
-        .filter((n): n is string => Boolean(n))
-    );
-    staff = contactNumbers.some((n) => selfNumbers.has(n));
+    // an owner testing with their cell must be protected too. isSelfPhone is
+    // the SHARED both-sides-normalized comparator (same one the extraction
+    // scrub and send_sms self-send guard use), so the guards can never
+    // disagree on what counts as "ourselves".
+    const selfNumbers = await businessSelfNumbers(supabase, businessId);
+    staff = contactNumbers.some((n) => isSelfPhone(n, selfNumbers));
   }
   if (!staff) return false;
   const { data: biz, error: bizErr } = await supabase
