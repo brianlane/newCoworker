@@ -63,6 +63,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s8","type":"browse_action","urlVar":"lead_url","actions":[{"kind":"click_text","target":"Leave an update"},{"kind":"fill_placeholder","target":"Add an update","valueTemplate":"{{vars.actions_taken}}"}],"screenshot":true,"rememberUrlKeyedByVar":"lead_phone"}',
   '  {"id":"s9","type":"recall_url","keyFromTrigger":"participants","saveAs":"lead_url"}   // recall a link a PRIOR run saved for this same person',
   '  {"id":"s10","type":"upsert_customer","phoneVar":"lead_phone","nameVar":"lead_name","emailVar":"lead_email"}   // save/update the lead on the Contacts page from extracted vars (phoneVar required; add this whenever the flow captures a new lead\'s details)',
+  '  {"id":"s11","type":"update_contact","phoneVar":"lead_phone","removeTags":["New Lead"],"addTags":["Contacted"]}   // move the contact between lead-status tags on the Contacts page (removals apply before additions; at least one of addTags/removeTags)',
   "",
   "Voice steps (ONLY under a voice trigger; a voice flow uses exactly ONE",
   "trigger and only these steps — never mix them with the steps above):",

@@ -874,6 +874,8 @@ async function runStep(
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
       return upsertCustomerStep(supabase, run, action);
+    case "update_contact":
+      return updateContactStep(supabase, run, scope, action);
     case "sleep":
       return sleepStep(scope, action);
     case "wait_for_reply":
@@ -1125,6 +1127,106 @@ async function upsertCustomerStep(
       customer_e164: action.e164,
       display_name: action.name || null,
       email: action.email || null
+    }
+  };
+}
+
+/**
+ * `update_contact` step: maintain the contact's lead-state tags. Removals
+ * apply before additions (one step = one status transition), matching is
+ * alias-aware like getCustomerMemory, and tags are normalized the way the
+ * dashboard write path does (trim, case-insensitive de-dup, 25-tag cap).
+ * A missing phone (planner skipReason) or missing contact row SKIPS with a
+ * note — tag bookkeeping must never fail an otherwise-healthy run.
+ */
+async function updateContactStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "update_contact" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    // Mirror the send_sms skip path: the note keeps {{vars.actions_taken}}
+    // honest for downstream steps ("tagging never ran, and here's why").
+    appendActionTaken(scope, "skipped a contact-tag update (no usable phone)");
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+  const { data, error } = await supabase
+    .from("contacts")
+    .select("id, tags")
+    .eq("business_id", run.business_id)
+    .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
+    .maybeSingle();
+  if (error) throw new Error(`update_contact lookup: ${error.message}`);
+  const contact = data as { id: string; tags?: string[] | null } | null;
+  if (!contact) {
+    appendActionTaken(
+      scope,
+      `skipped a contact-tag update (no contact on file for ${action.e164})`
+    );
+    return {
+      kind: "ok",
+      skipped: true,
+      result: { skipped: "contact_not_found", customer_e164: action.e164 }
+    };
+  }
+  const removeSet = new Set(action.removeTags.map((t) => t.trim().toLowerCase()));
+  const seen = new Set<string>();
+  const next: string[] = [];
+  // Tags actually stripped from the row (vs. merely CONFIGURED removals that
+  // were never present) — the actions_taken note must not over-claim.
+  const removed: string[] = [];
+  // Existing tags (minus removals) survive unconditionally — the DB cap
+  // guarantees there are at most 25 of them, so no truncation is possible.
+  for (const t of Array.isArray(contact.tags) ? contact.tags : []) {
+    const tag = t.trim().slice(0, 40);
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    if (removeSet.has(key)) {
+      removed.push(tag);
+      continue;
+    }
+    seen.add(key);
+    next.push(tag);
+  }
+  // Additions are tracked individually so the actions_taken note (and the
+  // recorded result) only claim tags that actually landed — a full contact
+  // drops the overflow explicitly instead of silently.
+  const added: string[] = [];
+  const droppedAtCap: string[] = [];
+  for (const t of action.addTags) {
+    const tag = t.trim().slice(0, 40);
+    const key = tag.toLowerCase();
+    if (!tag || removeSet.has(key)) continue;
+    if (seen.has(key)) continue; // already on the contact — nothing to write
+    if (next.length >= 25) {
+      droppedAtCap.push(tag);
+      continue;
+    }
+    seen.add(key);
+    next.push(tag);
+    added.push(tag);
+  }
+  const { error: updErr } = await supabase
+    .from("contacts")
+    .update({ tags: next, updated_at: new Date().toISOString() })
+    .eq("id", contact.id);
+  if (updErr) throw new Error(`update_contact write: ${updErr.message}`);
+  appendActionTaken(
+    scope,
+    `updated contact tags for ${action.e164}` +
+      (added.length > 0 ? ` (+${added.join(", +")})` : "") +
+      (removed.length > 0 ? ` (-${removed.join(", -")})` : "") +
+      (droppedAtCap.length > 0
+        ? ` — ${droppedAtCap.length} tag(s) not added (25-tag limit): ${droppedAtCap.join(", ")}`
+        : "")
+  );
+  return {
+    kind: "ok",
+    result: {
+      customer_e164: action.e164,
+      tags: next,
+      ...(droppedAtCap.length > 0 ? { dropped_at_cap: droppedAtCap } : {})
     }
   };
 }

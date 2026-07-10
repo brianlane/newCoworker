@@ -92,6 +92,64 @@ describe("planStep: wait_for_reply", () => {
   });
 });
 
+describe("planStep: update_contact", () => {
+  const step = {
+    id: "u1",
+    type: "update_contact",
+    phoneVar: "lead_phone",
+    addTags: ["Contacted"],
+    removeTags: ["New Lead"]
+  } as FlowStep;
+
+  it("resolves the phone and carries the tag lists", () => {
+    const plan = planStep(step, { vars: { lead_phone: "(647) 449-4244" } });
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "update_contact",
+        e164: "+16474494244",
+        addTags: ["Contacted"],
+        removeTags: ["New Lead"]
+      }
+    });
+  });
+
+  it("defaults absent tag lists to empty arrays", () => {
+    const addOnly = planStep(
+      { id: "u2", type: "update_contact", phoneVar: "p", addTags: ["VIP"] } as FlowStep,
+      { vars: { p: "+16025551234" } }
+    );
+    expect(addOnly).toEqual({
+      ok: true,
+      action: { kind: "update_contact", e164: "+16025551234", addTags: ["VIP"], removeTags: [] }
+    });
+    const removeOnly = planStep(
+      { id: "u3", type: "update_contact", phoneVar: "p", removeTags: ["Lost"] } as FlowStep,
+      { vars: { p: "+16025551234" } }
+    );
+    expect(removeOnly).toEqual({
+      ok: true,
+      action: { kind: "update_contact", e164: "+16025551234", addTags: [], removeTags: ["Lost"] }
+    });
+  });
+
+  it("skips (never fails) when the phone is unusable — tag bookkeeping is auxiliary", () => {
+    for (const vars of [{}, { lead_phone: "none" }, { lead_phone: "12345" }]) {
+      const plan = planStep(step, { vars });
+      expect(plan).toEqual({
+        ok: true,
+        action: {
+          kind: "update_contact",
+          e164: "",
+          addTags: ["Contacted"],
+          removeTags: ["New Lead"],
+          skipReason: "no_contact_phone"
+        }
+      });
+    }
+  });
+});
+
 describe("planStep: voice steps are rejected by the async worker", () => {
   it.each<FlowStep>([
     { id: "r", type: "ring_handoff", toE164: "+16025245719" },

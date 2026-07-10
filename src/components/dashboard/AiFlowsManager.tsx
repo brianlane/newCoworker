@@ -409,6 +409,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, keyFromTrigger: "participants", saveAs: "saved_url" };
     case "upsert_customer":
       return { id, type, phoneVar: "lead_phone", nameVar: "lead_name", emailVar: "lead_email" };
+    case "update_contact":
+      return { id, type, phoneVar: "lead_phone", addTags: ["Contacted"], removeTags: ["New Lead"] };
     case "sleep":
       return { id, type, minutes: 300 };
     case "wait_for_reply":
@@ -3235,6 +3237,36 @@ function StepFields({
           label="Email variable (optional)"
           value={step.emailVar ?? ""}
           onChange={(v) => patchStep(index, { emailVar: v || undefined })}
+        />
+      </div>
+    );
+  }
+  if (step.type === "update_contact") {
+    const parseTags = (v: string): string[] | undefined => {
+      const list = v
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      return list.length > 0 ? list : undefined;
+    };
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Phone variable (identifies the contact)"
+          value={step.phoneVar}
+          onChange={(v) => patchStep(index, { phoneVar: v })}
+        />
+        <Field
+          label="Add tags (comma-separated)"
+          value={(step.addTags ?? []).join(", ")}
+          onChange={(v) => patchStep(index, { addTags: parseTags(v) })}
+          help='e.g. "Contacted" — tags show on the Contacts page and power its filters.'
+        />
+        <Field
+          label="Remove tags (comma-separated)"
+          value={(step.removeTags ?? []).join(", ")}
+          onChange={(v) => patchStep(index, { removeTags: parseTags(v) })}
+          help='e.g. "New Lead" — removals apply before additions, so one step moves a lead between statuses.'
         />
       </div>
     );

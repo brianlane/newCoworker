@@ -37,6 +37,7 @@ import {
   Send,
   ShieldCheck,
   Timer,
+  Tag,
   Trash2,
   UserPlus,
   Users,
@@ -76,6 +77,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   browse_action: "read",
   recall_url: "read",
   upsert_customer: "read",
+  update_contact: "read",
   ring_handoff: "voice",
   voice_ai_intake: "voice",
   voice_transfer: "voice",
@@ -107,6 +109,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   browse_action: <Globe className="h-4 w-4" />,
   recall_url: <Link2 className="h-4 w-4" />,
   upsert_customer: <UserPlus className="h-4 w-4" />,
+  update_contact: <Tag className="h-4 w-4" />,
   ring_handoff: <Phone className="h-4 w-4" />,
   voice_ai_intake: <Phone className="h-4 w-4" />,
   voice_transfer: <Phone className="h-4 w-4" />,
@@ -161,6 +164,11 @@ function stepSubtitle(step: FlowStep): string {
       return `saves {{vars.${step.saveAs}}}`;
     case "upsert_customer":
       return `phone {{vars.${step.phoneVar}}}`;
+    case "update_contact":
+      return [
+        ...(step.addTags ?? []).map((t) => `+${t}`),
+        ...(step.removeTags ?? []).map((t) => `-${t}`)
+      ].join(" ");
     case "ring_handoff":
     case "voice_transfer":
       return step.toRef?.label ?? step.toE164 ?? "";
