@@ -4,7 +4,14 @@ import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { retrySummary, routingSummary } from "@/lib/ai-flows/run-stats";
+import {
+  formatRunValue,
+  retrySummary,
+  routingSummary,
+  runTriggerEntries,
+  runVarEntries,
+  type RunDataEntry
+} from "@/lib/ai-flows/run-stats";
 import { STEP_TYPE_LABELS } from "@/components/dashboard/aiflow-labels";
 import type { AiFlowRunRow, AiFlowRunStepRow, ApprovalDecision } from "@/lib/ai-flows/db";
 import {
@@ -35,6 +42,7 @@ const STATUS_STYLES: Record<string, string> = {
   running: "bg-signal-teal/15 text-signal-teal",
   awaiting_approval: "bg-spark-orange/15 text-spark-orange",
   awaiting_agent: "bg-spark-orange/15 text-spark-orange",
+  awaiting_reply: "bg-spark-orange/15 text-spark-orange",
   done: "bg-claw-green/15 text-claw-green",
   failed: "bg-red-500/15 text-red-400",
   canceled: "bg-parchment/10 text-parchment/40"
@@ -44,7 +52,9 @@ const STATUS_STYLES: Record<string, string> = {
 // want to talk about it in the UI. The DB status stays `awaiting_agent`; the
 // owner-facing badge reads "AWAITING EMPLOYEE".
 const STATUS_LABELS: Record<string, string> = {
-  awaiting_agent: "Awaiting employee"
+  awaiting_agent: "Awaiting employee",
+  awaiting_reply: "Awaiting their reply",
+  canceled: "Stopped"
 };
 
 function statusLabel(status: string): string {
@@ -55,6 +65,17 @@ function statusLabel(status: string): string {
 // "completed at" timestamp. Non-terminal runs (queued/running/awaiting_*) have
 // no completion yet, so we only show "triggered at" for them.
 const TERMINAL_STATUSES = new Set(["done", "failed", "canceled"]);
+
+// Mirrors CANCELABLE_RUN_STATUSES in src/lib/ai-flows/db.ts (a value import
+// would pull the server-only Supabase client into this client bundle). The
+// parked states are where a run sits for hours — `running` is mid-execution
+// on the worker (seconds) and would overwrite a cancel, so it isn't offered.
+const STOPPABLE_STATUSES = new Set([
+  "queued",
+  "awaiting_approval",
+  "awaiting_agent",
+  "awaiting_reply"
+]);
 
 export type AiFlowRef = { id: string; name: string };
 
@@ -81,6 +102,61 @@ function branchChoiceLabel(s: AiFlowRunStepRow): string | null {
     if (k.startsWith("__branch_label_") && typeof v === "string") return v;
   }
   return null;
+}
+
+/**
+ * The vars a step's recorded result produced (its set_vars payload), minus
+ * engine-internal underscore markers — "what did this step actually find".
+ */
+function stepProducedEntries(s: AiFlowRunStepRow): RunDataEntry[] {
+  const vars = (s.result?.vars ?? null) as Record<string, unknown> | null;
+  if (!vars || typeof vars !== "object") return [];
+  return Object.entries(vars)
+    .filter(([k]) => !k.startsWith("_"))
+    .map(([key, value]) => ({ key, value: formatRunValue(value) }));
+}
+
+/** One key/value list of run data ("(empty)" keeps blank values visible). */
+function DataList({ title, entries }: { title: string; entries: RunDataEntry[] }) {
+  return (
+    <div className="space-y-1">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-parchment/40">
+        {title}
+      </div>
+      <dl className="space-y-0.5">
+        {entries.map((e) => (
+          <div key={e.key} className="flex gap-2 text-xs">
+            <dt className="shrink-0 font-mono text-signal-teal/80">{e.key}</dt>
+            <dd className="max-h-40 min-w-0 flex-1 overflow-y-auto whitespace-pre-wrap break-words text-parchment/70">
+              {e.value === "" ? (
+                <span className="italic text-spark-orange/80">(empty)</span>
+              ) : (
+                e.value
+              )}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+/**
+ * "What data was in this run": the trigger content it started from and every
+ * variable its steps produced so far. Shown for in-progress, completed, AND
+ * failed runs — on a failure this is usually the answer ("lead_phone was
+ * empty"), so it renders above the step list.
+ */
+function RunDataSection({ context }: { context: Record<string, unknown> }) {
+  const trigger = runTriggerEntries(context);
+  const vars = runVarEntries(context);
+  if (trigger.length === 0 && vars.length === 0) return null;
+  return (
+    <div className="space-y-2 rounded-md border border-parchment/10 bg-deep-ink/30 p-2">
+      {trigger.length > 0 && <DataList title="Trigger data" entries={trigger} />}
+      {vars.length > 0 && <DataList title="Data captured (variables)" entries={vars} />}
+    </div>
+  );
 }
 
 function Screenshot({
@@ -206,6 +282,29 @@ export function AiFlowRunsManager({
     );
     const json = (await res.json()) as { ok: boolean; data?: { steps: AiFlowRunStepRow[] } };
     if (json.ok && json.data) setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
+  };
+
+  /** Owner "Stop this run": nothing further sends; no resume path revives it. */
+  const stopRun = async (runId: string) => {
+    setBusy(runId);
+    setError(null);
+    try {
+      const res = await fetch(`/api/aiflows/runs/${runId}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? "Could not stop the run");
+      }
+      // Reload on failure too (like `decide`): a CONFLICT usually means the
+      // run moved (worker claimed it / finished / already stopped) and the
+      // stale parked row with its Stop button must resync to reality.
+      await reload();
+    } finally {
+      setBusy(null);
+    }
   };
 
   const toggle = async (runId: string) => {
@@ -519,11 +618,31 @@ export function AiFlowRunsManager({
                       resumes at {new Date(r.earliest_claim_at).toLocaleString()}
                     </p>
                   )}
+                  {r.status === "awaiting_reply" && r.respond_by_at && (
+                    <p className="text-xs text-parchment/50">
+                      Waiting for their text back until{" "}
+                      {new Date(r.respond_by_at).toLocaleString()} (then the no-reply path
+                      runs)
+                    </p>
+                  )}
+                  {STOPPABLE_STATUSES.has(r.status) && (
+                    <div className="flex justify-end">
+                      <button
+                        onClick={() => stopRun(r.id)}
+                        disabled={busy === r.id}
+                        title="Stop this run — nothing further will send, and it can't be resumed"
+                        className="rounded-md bg-red-500/15 px-2.5 py-1 text-xs font-medium text-red-400 hover:bg-red-500/25 disabled:opacity-50"
+                      >
+                        {busy === r.id ? "Stopping…" : "Stop this run"}
+                      </button>
+                    </div>
+                  )}
                   {expandedRuns.has(r.id) && (
-                    <div className="space-y-1 border-t border-parchment/10 pt-2">
+                    <div className="space-y-2 border-t border-parchment/10 pt-2">
                       {r.last_error && r.status !== "done" && (
                         <p className="text-xs text-red-400">Error: {r.last_error}</p>
                       )}
+                      <RunDataSection context={r.context} />
                       {(steps[r.id] ?? []).map((s) => (
                         <div key={s.id} className="space-y-1">
                           <div className="flex items-center justify-between text-xs">
@@ -554,6 +673,22 @@ export function AiFlowRunsManager({
                           </div>
                           {s.error && s.status === "failed" && (
                             <p className="text-xs text-red-400/90">{s.error}</p>
+                          )}
+                          {stepProducedEntries(s).length > 0 && (
+                            <p className="pl-3 text-[11px] text-parchment/45">
+                              {stepProducedEntries(s).map((e, i) => (
+                                <span key={e.key}>
+                                  {i > 0 && " · "}
+                                  <span className="font-mono text-signal-teal/70">{e.key}</span>
+                                  {": "}
+                                  {e.value === "" ? (
+                                    <span className="italic text-spark-orange/80">(empty)</span>
+                                  ) : (
+                                    e.value
+                                  )}
+                                </span>
+                              ))}
+                            </p>
                           )}
                           {(s.screenshot_before_url || s.screenshot_url) && (
                             <div className="flex flex-wrap gap-3 pt-1">

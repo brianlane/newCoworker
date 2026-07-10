@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AI_FLOW_NAME_MAX,
+  CANCELABLE_RUN_STATUSES,
+  cancelAiFlowRun,
   createAiFlow,
   decideAiFlowApproval,
   deleteAiFlow,
@@ -641,5 +643,82 @@ describe("decideAiFlowApproval", () => {
        
       decideAiFlowApproval({ businessId: "biz-1", runId: "run-1", decision: "approve" }, db as any)
     ).rejects.toThrow("decideAiFlowApproval: u");
+  });
+});
+
+describe("cancelAiFlowRun", () => {
+  it("stops every waiting state, recording who and from which state", async () => {
+    for (const status of CANCELABLE_RUN_STATUSES) {
+      const { db, builder } = makeDb({
+        maybe: { ...RUN_ROW, status },
+        single: { ...RUN_ROW, status: "canceled" }
+      });
+      const out = await cancelAiFlowRun(
+        { businessId: "biz-1", runId: "run-1", canceledBy: "user-1" },
+         
+        db as any
+      );
+      expect(out.status).toBe("canceled");
+      expect(builder.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          status: "canceled",
+          claimed_at: null,
+          context: expect.objectContaining({
+            canceled: expect.objectContaining({ by: "user-1", from_status: status })
+          })
+        })
+      );
+      // The write is status-guarded so racing the worker's claim loses cleanly.
+      expect(builder.in).toHaveBeenCalledWith("status", [...CANCELABLE_RUN_STATUSES]);
+    }
+  });
+  it("defaults canceledBy to null", async () => {
+    const { db, builder } = makeDb({
+      maybe: RUN_ROW,
+      single: { ...RUN_ROW, status: "canceled" }
+    });
+     
+    await cancelAiFlowRun({ businessId: "biz-1", runId: "run-1" }, db as any);
+    expect(builder.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ canceled: expect.objectContaining({ by: null }) })
+      })
+    );
+  });
+  it("throws when the run is missing", async () => {
+    const { db } = makeDb({ maybe: null });
+    await expect(
+       
+      cancelAiFlowRun({ businessId: "biz-1", runId: "x" }, db as any)
+    ).rejects.toThrow("run not found");
+  });
+  it("refuses running and terminal states", async () => {
+    for (const status of ["running", "done", "failed", "canceled"]) {
+      const { db } = makeDb({ maybe: { ...RUN_ROW, status } });
+      await expect(
+         
+        cancelAiFlowRun({ businessId: "biz-1", runId: "run-1" }, db as any)
+      ).rejects.toThrow(`run is ${status} and cannot be stopped`);
+    }
+  });
+  it("maps a lost race (guarded update matched nothing) to the stoppable error", async () => {
+    // Pre-read said awaiting, but the worker claimed the run before the write:
+    // PostgREST reports zero rows as PGRST116 on .single().
+    const { db } = makeDb({
+      maybe: RUN_ROW,
+      single: null,
+      singleError: { message: "0 rows", code: "PGRST116" } as never
+    });
+    await expect(
+       
+      cancelAiFlowRun({ businessId: "biz-1", runId: "run-1" }, db as any)
+    ).rejects.toThrow("no longer waiting and cannot be stopped");
+  });
+  it("throws on update error", async () => {
+    const { db } = makeDb({ maybe: RUN_ROW, single: null, singleError: { message: "u" } });
+    await expect(
+       
+      cancelAiFlowRun({ businessId: "biz-1", runId: "run-1" }, db as any)
+    ).rejects.toThrow("cancelAiFlowRun: u");
   });
 });
