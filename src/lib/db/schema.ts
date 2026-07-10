@@ -10,7 +10,7 @@ export const businessSchema = z.object({
 
 export const coworkerLogSchema = z.object({
   businessId: z.string().uuid(),
-  taskType: z.enum(["call", "sms", "data_flow", "email", "provisioning", "webchat"]),
+  taskType: z.enum(["call", "sms", "data_flow", "email", "provisioning", "webchat", "image"]),
   status: z.enum(["thinking", "success", "urgent_alert", "error"]),
   logPayload: z.record(z.string(), z.unknown()),
   createdAt: z.string()

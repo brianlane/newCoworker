@@ -43,6 +43,7 @@ describe("db/notification-preferences", () => {
     expect(row.email_urgent).toBe(true);
     expect(row.dashboard_alerts).toBe(true);
     expect(row.sms_warm_transfer).toBe(true);
+    expect(row.image_limit_alerts).toBe(true);
     expect(row.phone_number).toBeNull();
     expect(row.alert_email).toBeNull();
     expect(row.digest_email_daily).toBeNull();
@@ -670,6 +671,37 @@ describe("db/notification-preferences", () => {
     await updateNotificationPreferences("biz-1", { email_urgent: true });
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ email_urgent: true, unsubscribed_at: null })
+    );
+  });
+
+  it("updateNotificationPreferences persists image_limit_alerts and clears unsubscribed_at on re-enable", async () => {
+    const startingPrefs = {
+      ...PREFS,
+      image_limit_alerts: false,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, image_limit_alerts: true, unsubscribed_at: null },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const row = await updateNotificationPreferences("biz-1", { image_limit_alerts: true });
+    expect(row.image_limit_alerts).toBe(true);
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ image_limit_alerts: true, unsubscribed_at: null })
     );
   });
 

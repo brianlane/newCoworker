@@ -223,6 +223,22 @@ describe("varsProducedByStep", () => {
       varsProducedByStep({ id: "x", type: "wait_for_reply", phoneVar: "p", saveAs: "ans" })
     ).toEqual(["ans"]);
     expect(varsProducedByStep({ id: "x", type: "notify_owner", message: "m" })).toEqual([]);
+    expect(
+      varsProducedByStep({
+        id: "x",
+        type: "classify",
+        categories: [{ value: "a" }, { value: "b" }],
+        saveAs: "intent"
+      })
+    ).toEqual(["intent"]);
+    expect(
+      varsProducedByStep({
+        id: "x",
+        type: "generate_image",
+        promptTemplate: "a banner",
+        saveAs: "img_url"
+      })
+    ).toEqual(["img_url"]);
     // Optional field lists absent → nothing produced.
     expect(
       varsProducedByStep({

@@ -65,6 +65,12 @@ const comparisonRows: ComparisonRow[] = [
     standard: "$10",
     enterprise: "Custom"
   },
+  {
+    label: "AI image generation",
+    starter: "3 per conversation",
+    standard: "3 per conversation",
+    enterprise: "Custom"
+  },
   { label: "Dedicated phone number & email", starter: CHECK, standard: CHECK, enterprise: CHECK },
   { label: "Appointment booking & follow-ups", starter: CHECK, standard: CHECK, enterprise: CHECK },
   { label: "Lossless permanent memory", starter: CHECK, standard: CHECK, enterprise: CHECK },

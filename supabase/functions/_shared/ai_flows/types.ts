@@ -464,6 +464,12 @@ export type FlowStep =
        * as a lead); a contact ref is a normal 1:1 lead recipient.
        */
       toRef?: ContactRef;
+      /**
+       * Attach the image URL held in this var (an earlier generate_image
+       * step's saveAs) so the text goes out as MMS. An empty/unset var at run
+       * time degrades to a plain text send.
+       */
+      mediaUrlVar?: string;
       when?: StepCondition;
     }
   | {
@@ -673,6 +679,22 @@ export type FlowStep =
       phoneVar: string;
       addTags?: string[];
       removeTags?: string[];
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * Generate an AI image from the rendered prompt template and save a
+       * signed URL to the stored image into {{vars.<saveAs>}} — consumable by
+       * a later send_sms (mediaUrlVar → MMS) or embedded in a send_email
+       * body. Runs on the spend-gated Gemini path (flat per-image price into
+       * the shared AI budget; hard-refused when the budget is exhausted).
+       * AiFlow runs are exempt from the conversational per-session image
+       * limit — flows are owner-authored and explicitly enabled.
+       */
+      type: "generate_image";
+      promptTemplate: string;
+      saveAs: string;
       when?: StepCondition;
     }
   | {

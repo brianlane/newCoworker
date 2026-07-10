@@ -2426,3 +2426,61 @@ describe("calendar event_end trigger", () => {
     ).toBe("When a calendar event ends: notify_owner");
   });
 });
+
+describe("generate_image step + send_sms mediaUrlVar", () => {
+  it("accepts a generate_image step and registers its saveAs for later steps", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        { id: "g1", type: "generate_image", promptTemplate: "A flyer for the open house", saveAs: "flyer_url" },
+        { id: "s1", type: "send_sms", to: "+15550001111", body: "See {{vars.flyer_url}}", mediaUrlVar: "flyer_url" },
+        { id: "e1", type: "send_email", to: "owner@example.com", subject: "Flyer", body: "Link: {{vars.flyer_url}}" }
+      ]
+    });
+    const gen = def.steps[0];
+    expect(gen.type === "generate_image" && gen.saveAs).toBe("flyer_url");
+    const sms = def.steps[1];
+    expect(sms.type === "send_sms" && sms.mediaUrlVar).toBe("flyer_url");
+  });
+
+  it("templates in promptTemplate are scope-checked like every other step", () => {
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          { id: "g1", type: "generate_image", promptTemplate: "A photo of {{vars.nope}}", saveAs: "img" }
+        ]
+      })
+    );
+    expect(issues.some((i) => i.includes("{{vars.nope}}"))).toBe(true);
+  });
+
+  it("rejects a send_sms mediaUrlVar no earlier step produces", () => {
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          { id: "s1", type: "send_sms", to: "+15550001111", body: "hi", mediaUrlVar: "missing_img" }
+        ]
+      })
+    );
+    expect(issues).toEqual([
+      'Step "s1" attaches an image from {{vars.missing_img}} which no earlier step produces.'
+    ]);
+  });
+
+  it("summarizeDefinition includes the generate_image step type", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        { id: "g1", type: "generate_image", promptTemplate: "a banner", saveAs: "img" },
+        { id: "n1", type: "notify_owner", message: "made {{vars.img}}" }
+      ]
+    });
+    expect(summarizeDefinition(def)).toBe("On demand: generate_image -> notify_owner");
+  });
+});
