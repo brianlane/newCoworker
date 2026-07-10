@@ -28,6 +28,9 @@ import { importLeadBacklog, parseLeadBacklog } from "@/lib/ai-flows/lead-backlog
 import { countEnabledWebhookFlows } from "@/lib/ai-flows/webhook-events";
 
 export const dynamic = "force-dynamic";
+// A full 500-row import runs synchronously (one flow-match + enqueue round
+// trip per row); give it headroom beyond the platform default.
+export const maxDuration = 300;
 
 const IMPORT_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
