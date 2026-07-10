@@ -6,10 +6,15 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 vi.mock("@/lib/db/vagaro-connections", () => ({
   getActiveVagaroConnectionId: vi.fn()
 }));
+vi.mock("@/lib/db/calendly-connections", () => ({
+  getActiveCalendlyConnectionId: vi.fn()
+}));
 
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
+import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
 import {
+  CALENDLY_DIRECT_KEY,
   isEmailProviderConfigKey,
   isWorkspaceCalendarProvider,
   providerFromKey,
@@ -28,6 +33,7 @@ describe("resolveVoiceConnection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -134,6 +140,32 @@ describe("resolveVoiceConnection", () => {
     });
     // Never even lists Nango connections once Vagaro answers.
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+  });
+
+  it("resolveCalendarConnection resolves a direct (PAT) Calendly connection", async () => {
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue("calendly-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "calendly",
+      providerConfigKey: CALENDLY_DIRECT_KEY,
+      connectionId: "calendly-row-1"
+    });
+  });
+
+  it("direct Calendly loses to native calendars but beats the Nango calendly key and broad fallbacks", async () => {
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue("calendly-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const native = await resolveCalendarConnection(businessId);
+    expect(native?.providerConfigKey).toBe("google-calendar");
+
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("calendly"),
+      fakeRow("google")
+    ]);
+    const direct = await resolveCalendarConnection(businessId);
+    expect(direct?.providerConfigKey).toBe(CALENDLY_DIRECT_KEY);
+    expect(direct?.provider).toBe("calendly");
   });
 });
 

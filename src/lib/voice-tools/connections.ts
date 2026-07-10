@@ -1,5 +1,6 @@
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
+import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
 
 /**
  * Provider-config key groupings for voice tools.
@@ -11,17 +12,21 @@ import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 // Dedicated calendar connections first; the broad full-scope "google" /
 // "outlook" workspace connections (which include calendar read/write) act as
 // fallbacks so owners who connected the all-in-one integration get calendar
-// tools without reconnecting. Calendly sits after the native calendars
-// (it can only hand out booking links, not create events) but before the
-// broad workspace fallbacks (a deliberate Calendly connect should win over
-// an incidental all-in-one Google connect).
-const CALENDAR_KEYS = [
-  "google-calendar",
-  "outlook-calendar",
-  "calendly",
-  "google",
-  "outlook"
-] as const;
+// tools without reconnecting. Calendly (Nango OAuth or the dashboard PAT —
+// see CALENDLY_DIRECT_KEY) sits after the native calendars (it can only
+// hand out booking links, not create events) but before the broad workspace
+// fallbacks (a deliberate Calendly connect should win over an incidental
+// all-in-one Google connect).
+const NATIVE_CALENDAR_KEYS = ["google-calendar", "outlook-calendar"] as const;
+const FALLBACK_CALENDAR_KEYS = ["calendly", "google", "outlook"] as const;
+
+/**
+ * Synthetic providerConfigKey marking a DIRECT Calendly connection (owner
+ * pasted a Personal Access Token on the dashboard, stored in
+ * `calendly_connections`) as opposed to the Nango OAuth key "calendly".
+ * The calendar-tools Calendly cores pick their HTTP transport off this.
+ */
+export const CALENDLY_DIRECT_KEY = "calendly-direct";
 export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "outlook"] as const;
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
@@ -72,6 +77,15 @@ export async function resolveVoiceConnection(
   preferredKeys: readonly string[]
 ): Promise<ResolvedVoiceConnection | null> {
   const rows = await listWorkspaceOAuthConnections(businessId);
+  return firstMatch(rows, preferredKeys);
+}
+
+type WorkspaceRow = Awaited<ReturnType<typeof listWorkspaceOAuthConnections>>[number];
+
+function firstMatch(
+  rows: readonly WorkspaceRow[],
+  preferredKeys: readonly string[]
+): ResolvedVoiceConnection | null {
   for (const key of preferredKeys) {
     const match = rows.find((r) => r.provider_config_key === key);
     if (match) {
@@ -95,7 +109,25 @@ export async function resolveCalendarConnection(
   if (vagaroId) {
     return { provider: "vagaro", providerConfigKey: "vagaro", connectionId: vagaroId };
   }
-  return resolveVoiceConnection(businessId, CALENDAR_KEYS);
+
+  const rows = await listWorkspaceOAuthConnections(businessId);
+  const native = firstMatch(rows, NATIVE_CALENDAR_KEYS);
+  if (native) return native;
+
+  // Direct (PAT) Calendly occupies the same priority slot as the Nango
+  // "calendly" key: after the dedicated Google/Outlook calendars, before
+  // the broad workspace fallbacks. When both exist the direct connection
+  // wins — pasting a PAT is the more deliberate act.
+  const directCalendlyId = await getActiveCalendlyConnectionId(businessId);
+  if (directCalendlyId) {
+    return {
+      provider: "calendly",
+      providerConfigKey: CALENDLY_DIRECT_KEY,
+      connectionId: directCalendlyId
+    };
+  }
+
+  return firstMatch(rows, FALLBACK_CALENDAR_KEYS);
 }
 
 /** A mailbox connection is always Google or Microsoft — never Calendly. */

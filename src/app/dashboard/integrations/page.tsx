@@ -7,6 +7,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
+import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { Card } from "@/components/ui/Card";
@@ -14,6 +15,7 @@ import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
+import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { Inbox } from "lucide-react";
 
@@ -52,6 +54,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const customIntegrations =
     businessId ? await listCustomIntegrations(businessId) : [];
   const vagaroConnection = businessId ? await getPublicVagaroConnection(businessId) : null;
+  const calendlyConnection = businessId ? await getPublicCalendlyConnection(businessId) : null;
   const apiKeys = businessId && canManageApiKeys ? await listApiKeys(businessId) : [];
   const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
 
@@ -126,6 +129,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               <VagaroIntegrationCard
                 businessId={businessId}
                 initialConnection={vagaroConnection}
+              />
+              <CalendlyIntegrationCard
+                businessId={businessId}
+                initialConnection={calendlyConnection}
               />
             </div>
           </section>

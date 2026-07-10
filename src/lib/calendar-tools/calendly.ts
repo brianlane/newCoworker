@@ -13,12 +13,24 @@
  *     booked yet — it must send the link to the customer to finish.
  *
  * Both pick the owner's active event type whose duration is closest to the
- * requested duration (ties go to the earlier listing). All HTTP goes through
- * the Nango proxy, which re-verifies the connection belongs to the business.
+ * requested duration (ties go to the earlier listing).
+ *
+ * Two transports, chosen by the resolved connection's providerConfigKey:
+ *   - "calendly" (Nango OAuth) → the Nango proxy, which re-verifies the
+ *     connection belongs to the business;
+ *   - CALENDLY_DIRECT_KEY (dashboard-pasted Personal Access Token) → direct
+ *     calls to api.calendly.com via src/lib/calendly/client.ts.
+ * Both return the same `{ data } | null` shape, so everything below is
+ * transport-agnostic.
  */
 
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
-import type { ResolvedVoiceConnection } from "@/lib/voice-tools/connections";
+import { calendlyDirectRequest } from "@/lib/calendly/client";
+import { getActiveCalendlyConnection } from "@/lib/db/calendly-connections";
+import {
+  CALENDLY_DIRECT_KEY,
+  type ResolvedVoiceConnection
+} from "@/lib/voice-tools/connections";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
 
 /** Calendly rejects availability queries spanning more than 7 days. */
@@ -56,6 +68,32 @@ function proxyLink(conn: ResolvedVoiceConnection): ProxyLink {
   return { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
 }
 
+type CalendlyRequestConfig = {
+  endpoint: string;
+  method: "GET" | "POST";
+  params?: Record<string, string>;
+  data?: unknown;
+};
+
+/**
+ * Transport-agnostic request: direct PAT for dashboard-connected accounts,
+ * the Nango proxy otherwise. Null means "not usable" for BOTH transports
+ * (missing/inactive direct row or revoked PAT; stale/foreign Nango link),
+ * which callers map to `calendar_not_connected`.
+ */
+async function calendlyRequest(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  config: CalendlyRequestConfig
+): Promise<{ data: unknown } | null> {
+  if (conn.providerConfigKey === CALENDLY_DIRECT_KEY) {
+    const row = await getActiveCalendlyConnection(businessId);
+    if (!row) return null;
+    return calendlyDirectRequest(row.accessToken, config);
+  }
+  return nangoProxyForBusiness(businessId, proxyLink(conn), config);
+}
+
 /**
  * The connected account's user URI — the required `user` filter for the
  * event-types listing. Null when the Nango link is stale/foreign (the proxy
@@ -65,7 +103,7 @@ async function resolveUserUri(
   businessId: string,
   conn: ResolvedVoiceConnection
 ): Promise<string | null> {
-  const res = await nangoProxyForBusiness(businessId, proxyLink(conn), {
+  const res = await calendlyRequest(businessId, conn, {
     endpoint: "/users/me",
     method: "GET"
   });
@@ -100,7 +138,7 @@ export async function pickCalendlyEventType(
   const userUri = await resolveUserUri(businessId, conn);
   if (!userUri) return "not_connected";
 
-  const res = await nangoProxyForBusiness(businessId, proxyLink(conn), {
+  const res = await calendlyRequest(businessId, conn, {
     endpoint: "/event_types",
     method: "GET",
     params: { user: userUri, active: "true", count: "100" }
@@ -158,7 +196,7 @@ export async function findCalendlySlots(
     return { ok: false, detail: "invalid_window" };
   }
 
-  const res = await nangoProxyForBusiness(businessId, proxyLink(conn), {
+  const res = await calendlyRequest(businessId, conn, {
     endpoint: "/event_type_available_times",
     method: "GET",
     params: {
@@ -225,7 +263,7 @@ export async function createCalendlyBookingLink(
   if (picked === "no_event_types") return { ok: false, detail: "calendly_no_event_types" };
   const { eventType } = picked;
 
-  const res = await nangoProxyForBusiness(businessId, proxyLink(conn), {
+  const res = await calendlyRequest(businessId, conn, {
     endpoint: "/scheduling_links",
     method: "POST",
     data: {
