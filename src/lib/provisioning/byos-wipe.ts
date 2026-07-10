@@ -18,6 +18,7 @@
 
 import { getActiveVpsSshKeyForBusiness } from "@/lib/db/vps-ssh-keys";
 import { sshExec } from "@/lib/hostinger/ssh";
+import { sshExecPinned } from "@/lib/hostinger/ssh-pinned";
 import { logger } from "@/lib/logger";
 
 export const BYOS_WIPE_DONE_MARKER = "newcoworker-byos-wipe-complete";
@@ -80,15 +81,19 @@ export async function wipeByosBox(
     );
   }
   const b64 = Buffer.from(BYOS_WIPE_SCRIPT, "utf8").toString("base64");
-  const result = await exec({
-    host: input.vpsHost,
-    username: key.ssh_username,
-    privateKeyPem: key.private_key_pem,
-    command:
-      `printf '%s' '${b64}' | base64 -d > /tmp/newcoworker-byos-wipe.sh` +
-      ` && chmod +x /tmp/newcoworker-byos-wipe.sh && bash /tmp/newcoworker-byos-wipe.sh`,
-    timeoutMs: 10 * 60 * 1000
-  });
+  const result = await sshExecPinned(
+    key,
+    {
+      host: input.vpsHost,
+      username: key.ssh_username,
+      privateKeyPem: key.private_key_pem,
+      command:
+        `printf '%s' '${b64}' | base64 -d > /tmp/newcoworker-byos-wipe.sh` +
+        ` && chmod +x /tmp/newcoworker-byos-wipe.sh && bash /tmp/newcoworker-byos-wipe.sh`,
+      timeoutMs: 10 * 60 * 1000
+    },
+    { exec }
+  );
   if (!result.stdout.includes(BYOS_WIPE_DONE_MARKER)) {
     throw new Error(
       `wipeByosBox: wipe on ${input.vpsHost} did not complete (exit ${result.exitCode}): ` +

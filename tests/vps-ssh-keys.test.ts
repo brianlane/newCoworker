@@ -14,7 +14,8 @@ import {
   listActiveVpsSshKeys,
   reassignVpsSshKeyBusiness,
   rotateVpsSshKey,
-  updateVpsSshKeyPlacement
+  updateVpsSshKeyPlacement,
+  updateVpsSshKeyHostKeyFingerprint
 } from "@/lib/db/vps-ssh-keys";
 import { generateKeyPair as nodeGenKeyPair } from "node:crypto";
 import { promisify } from "node:util";
@@ -301,7 +302,13 @@ describe("vps_ssh_keys DB layer", () => {
         db as never
       );
       expect(db.from).toHaveBeenCalledWith("vps_ssh_keys");
-      expect(chain.update).toHaveBeenCalledWith({ host: "198.51.100.9", region: "ca" });
+      // The host-key pin is cleared with the placement: a corrected address
+      // is a different machine with different host keys (G7).
+      expect(chain.update).toHaveBeenCalledWith({
+        host: "198.51.100.9",
+        region: "ca",
+        host_key_fingerprint: null
+      });
       expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
     });
 
@@ -319,6 +326,42 @@ describe("vps_ssh_keys DB layer", () => {
       chain.eq.mockResolvedValueOnce({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await updateVpsSshKeyPlacement("row-uuid", { host: "198.51.100.9", region: "us" });
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("updateVpsSshKeyHostKeyFingerprint", () => {
+    it("records the fingerprint on the row", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      const db = makeDb(chain);
+      await updateVpsSshKeyHostKeyFingerprint("row-uuid", "SHA256:abc", db as never);
+      expect(chain.update).toHaveBeenCalledWith({ host_key_fingerprint: "SHA256:abc" });
+      expect(chain.eq).toHaveBeenCalledWith("id", "row-uuid");
+    });
+
+    it("clears the pin with null (re-image flows)", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      const db = makeDb(chain);
+      await updateVpsSshKeyHostKeyFingerprint("row-uuid", null, db as never);
+      expect(chain.update).toHaveBeenCalledWith({ host_key_fingerprint: null });
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: { message: "pin boom" } });
+      const db = makeDb(chain);
+      await expect(
+        updateVpsSshKeyHostKeyFingerprint("row-uuid", "SHA256:abc", db as never)
+      ).rejects.toThrow(/updateVpsSshKeyHostKeyFingerprint: pin boom/);
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.eq.mockResolvedValueOnce({ error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await updateVpsSshKeyHostKeyFingerprint("row-uuid", "SHA256:abc");
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

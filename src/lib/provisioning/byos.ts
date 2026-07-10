@@ -33,6 +33,7 @@ import {
 } from "@/lib/db/vps-ssh-keys";
 import { generateSshKeypair } from "@/lib/hostinger/keypair";
 import { sshExec } from "@/lib/hostinger/ssh";
+import { sshExecPinned } from "@/lib/hostinger/ssh-pinned";
 import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
 import {
   runWithSshConnectRetry,
@@ -205,15 +206,21 @@ export async function probeByosSsh(
   const row = await requireByosKeyRow(businessId);
   let result;
   try {
-    result = await exec({
-      host: row.host,
-      username: row.ssh_username,
-      privateKeyPem: row.private_key_pem,
-      command: `echo ${BYOS_PROBE_MARKER}`,
-      // Fast feedback: the admin is waiting on this HTTP response.
-      timeoutMs: 30_000,
-      connectTimeoutMs: 15_000
-    });
+    // Host-key pinning (G7): first probe captures the box fingerprint,
+    // later probes verify strictly.
+    result = await sshExecPinned(
+      row,
+      {
+        host: row.host,
+        username: row.ssh_username,
+        privateKeyPem: row.private_key_pem,
+        command: `echo ${BYOS_PROBE_MARKER}`,
+        // Fast feedback: the admin is waiting on this HTTP response.
+        timeoutMs: 30_000,
+        connectTimeoutMs: 15_000
+      },
+      { exec }
+    );
   } catch (err) {
     throw new ByosEnrollmentError(
       `SSH probe to ${row.host} failed: ${err instanceof Error ? err.message : String(err)}. ` +
@@ -323,14 +330,18 @@ export async function runByosPreflight(
 
   let result;
   try {
-    result = await exec({
-      host: row.host,
-      username: row.ssh_username,
-      privateKeyPem: row.private_key_pem,
-      command,
-      timeoutMs: 120_000,
-      connectTimeoutMs: 30_000
-    });
+    result = await sshExecPinned(
+      row,
+      {
+        host: row.host,
+        username: row.ssh_username,
+        privateKeyPem: row.private_key_pem,
+        command,
+        timeoutMs: 120_000,
+        connectTimeoutMs: 30_000
+      },
+      { exec }
+    );
   } catch (err) {
     throw new ByosEnrollmentError(
       `Preflight SSH run on ${row.host} failed: ${err instanceof Error ? err.message : String(err)}`
@@ -376,14 +387,18 @@ export function makeByosProvisioner(deps: ByosSshDeps = {}): VpsProvisioner {
     const row = await requireByosKeyRow(businessId);
     const probe = await runWithSshConnectRetry(
       () =>
-        exec({
-          host: row.host,
-          username: row.ssh_username,
-          privateKeyPem: row.private_key_pem,
-          command: `echo ${BYOS_PROBE_MARKER}`,
-          timeoutMs: 60_000,
-          connectTimeoutMs: 30_000
-        }),
+        sshExecPinned(
+          row,
+          {
+            host: row.host,
+            username: row.ssh_username,
+            privateKeyPem: row.private_key_pem,
+            command: `echo ${BYOS_PROBE_MARKER}`,
+            timeoutMs: 60_000,
+            connectTimeoutMs: 30_000
+          },
+          { exec }
+        ),
       deps.sleep ? { sleep: deps.sleep } : undefined
     );
     // Same success contract as probeByosSsh: exit 0 AND the echoed marker —

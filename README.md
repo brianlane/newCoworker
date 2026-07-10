@@ -252,6 +252,16 @@ order from the wire inward:
   config can't lock the fleet out. fail2ban bans brute-forcers,
   unattended-upgrades patches the OS, and Hostinger's Monarx malware scanner
   is installed at purchase.
+- **SSH host-key pinning — TOFU at provision, strict after.** The box's host-key
+  fingerprint is captured on the first connection after a (re)provision and
+  stored on the key row (`vps_ssh_keys.host_key_fingerprint`); every later
+  platform SSH (deploys, backups, wipes, probes, vault sync) verifies strictly
+  against it via [src/lib/hostinger/ssh-pinned.ts](src/lib/hostinger/ssh-pinned.ts).
+  A mismatch aborts with a typed `HostKeyMismatchError`. Known caveat: the very
+  first connection to a fresh image is trust-on-first-use — the pin closes the
+  MITM window for the fleet's steady state, not that initial handshake. Flows
+  that re-image a box clear the pin (adopt/recreate, BYOS host corrections);
+  fresh provisions start on a new unpinned row.
 - **Application auth — one unique bearer per tenant.** Each box's
   `ROWBOAT_GATEWAY_TOKEN` is its own 256-bit token (next section): it
   authenticates platform→box calls, signs the box's tool-call JWTs, and

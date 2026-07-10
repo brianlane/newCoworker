@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
-  getActiveVpsSshKeyForBusiness: vi.fn()
+  getActiveVpsSshKeyForBusiness: vi.fn(),
+  updateVpsSshKeyHostKeyFingerprint: vi.fn()
 }));
 
 vi.mock("@/lib/logger", () => ({

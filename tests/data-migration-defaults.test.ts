@@ -15,7 +15,8 @@ describe("data-migration default dependencies", () => {
       sshExec: sshExecMock
     }));
     vi.doMock("@/lib/db/vps-ssh-keys", () => ({
-      getActiveVpsSshKeyForBusiness: getActiveKeyMock
+      getActiveVpsSshKeyForBusiness: getActiveKeyMock,
+      updateVpsSshKeyHostKeyFingerprint: vi.fn()
     }));
     vi.doMock("@/lib/db/data-backups", async () => {
       const actual = await vi.importActual<typeof import("@/lib/db/data-backups")>(

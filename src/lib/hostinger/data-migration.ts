@@ -28,6 +28,7 @@
 import * as nodeCrypto from "node:crypto";
 import { logger } from "@/lib/logger";
 import { sshExec, type SshExecResult } from "@/lib/hostinger/ssh";
+import { sshExecPinned, type HostKeyPinnable } from "@/lib/hostinger/ssh-pinned";
 import { getActiveVpsSshKeyForBusiness, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import {
   DATA_BACKUP_BUCKET,
@@ -52,6 +53,11 @@ export type SshExecutor = (opts: {
   privateKeyPem: string;
   username: string;
   command: string;
+  /**
+   * Tenant key row for host-key pinning (G7). Honored by the production
+   * default executor; injected test executors may ignore it.
+   */
+  sshKeyRow?: HostKeyPinnable;
 }) => Promise<SshExecResult>;
 
 export type StorageLike = {
@@ -118,16 +124,19 @@ export function buildBackupStoragePath(businessId: string): string {
   return `backups/${businessId}/latest.tar.gz`;
 }
 
+/* c8 ignore start -- production-only default; tests inject sshExecutor */
 function defaultSshExecutor(): SshExecutor {
   return async (opts) => {
-    return sshExec({
+    const plainOpts = {
       host: opts.host,
       username: opts.username,
       privateKeyPem: opts.privateKeyPem,
       command: opts.command
-    });
+    };
+    return opts.sshKeyRow ? sshExecPinned(opts.sshKeyRow, plainOpts) : sshExec(plainOpts);
   };
 }
+/* c8 ignore stop */
 
 async function defaultStorage(): Promise<StorageLike> {
   const supa = await createSupabaseServiceClient();
@@ -176,7 +185,8 @@ export async function backupBusinessData(
     host: input.vpsHost,
     privateKeyPem: sshKey.private_key_pem,
     username,
-    command: tarCmd
+    command: tarCmd,
+    sshKeyRow: sshKey
   });
   if (res.exitCode !== 0) {
     throw new Error(
@@ -310,7 +320,8 @@ export async function restoreBusinessData(
     host: input.vpsHost,
     privateKeyPem: sshKey.private_key_pem,
     username,
-    command: untarCmd
+    command: untarCmd,
+    sshKeyRow: sshKey
   });
   if (res.exitCode !== 0) {
     throw new Error(

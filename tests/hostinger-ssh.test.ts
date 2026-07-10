@@ -329,6 +329,57 @@ describe("sshExec", () => {
     expect(res.exitCode).toBe(0);
   });
 
+  it("onHostKey capture: accept-any + onHostKey installs a verifier that captures and accepts", async () => {
+    const blob = Buffer.from("captured-host-key");
+    const crypto = await import("node:crypto");
+    const expected =
+      "SHA256:" +
+      crypto.createHash("sha256").update(blob).digest("base64").replace(/=+$/, "");
+    const client = new FakeClient({
+      hostKeyBlob: blob,
+      onReady: (stream) => stream.emit("close", 0, null)
+    });
+    const captured: string[] = [];
+    const res = await sshExec(
+      {
+        host: "h",
+        username: "u",
+        privateKeyPem: "P",
+        command: "x",
+        onHostKey: (fp) => captured.push(fp)
+      },
+      { clientFactory: () => client }
+    );
+    expect(res.exitCode).toBe(0);
+    expect(client.lastConnectCfg!.hostVerifier).toBeTypeOf("function");
+    expect(captured).toEqual([expected]);
+  });
+
+  it("onHostKey capture: fires under strict policy too (even on mismatch rejection)", async () => {
+    const blob = Buffer.from("mitm-host-key");
+    const crypto = await import("node:crypto");
+    const presented =
+      "SHA256:" +
+      crypto.createHash("sha256").update(blob).digest("base64").replace(/=+$/, "");
+    const client = new FakeClient({ hostKeyBlob: blob });
+    const captured: string[] = [];
+    await expect(
+      sshExec(
+        {
+          host: "h",
+          username: "u",
+          privateKeyPem: "P",
+          command: "x",
+          hostKeyPolicy: "strict",
+          expectedHostKeyFingerprint: "SHA256:pinned-other",
+          onHostKey: (fp) => captured.push(fp)
+        },
+        { clientFactory: () => client }
+      )
+    ).rejects.toThrow(/Host key verification failed/);
+    expect(captured).toEqual([presented]);
+  });
+
   it("overall timer is cleared on successful completion (no leaked timers)", async () => {
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");

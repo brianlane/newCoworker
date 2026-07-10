@@ -6,11 +6,14 @@ const moduleGetActiveVpsSshKey = vi.fn();
 const moduleInsertVpsSshKey = vi.fn();
 const moduleReassignVpsSshKeyBusiness = vi.fn();
 const moduleRotateVpsSshKey = vi.fn();
+const moduleUpdateVpsSshKeyHostKeyFingerprint = vi.fn();
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
   getActiveVpsSshKey: (...args: unknown[]) => moduleGetActiveVpsSshKey(...args),
   insertVpsSshKey: (...args: unknown[]) => moduleInsertVpsSshKey(...args),
   reassignVpsSshKeyBusiness: (...args: unknown[]) => moduleReassignVpsSshKeyBusiness(...args),
-  rotateVpsSshKey: (...args: unknown[]) => moduleRotateVpsSshKey(...args)
+  rotateVpsSshKey: (...args: unknown[]) => moduleRotateVpsSshKey(...args),
+  updateVpsSshKeyHostKeyFingerprint: (...args: unknown[]) =>
+    moduleUpdateVpsSshKeyHostKeyFingerprint(...args)
 }));
 
 import { adoptVpsForBusiness, type AdoptVpsDeps } from "@/lib/hostinger/adopt";
@@ -185,6 +188,36 @@ describe("adoptVpsForBusiness", () => {
     expect(deps.db!.insertVpsSshKey).not.toHaveBeenCalled();
     // The old tenant's data is wiped even though their key authenticated.
     expect(client.recreateVirtualMachine).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears a stale host-key pin on the reused row after recreate (re-image = new host keys)", async () => {
+    const pinnedRow = { ...keyRow, business_id: "biz-previous", host_key_fingerprint: "SHA256:stale" };
+    const reassignedRow = { ...pinnedRow, business_id: "biz-new" };
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce(runningVm)
+        .mockResolvedValueOnce({ state: "recreating", ipv4: [] })
+        .mockResolvedValue(runningVm)
+    });
+    const clearPin = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(pinnedRow),
+        reassignVpsSshKeyBusiness: vi.fn().mockResolvedValue(reassignedRow),
+        updateVpsSshKeyHostKeyFingerprint: clearPin
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-new", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(clearPin).toHaveBeenCalledWith("row-1", null);
+    // The returned row must also be unpinned so the orchestrator's
+    // bootstrap TOFU-captures the fresh image's key.
+    expect(res.sshKey.host_key_fingerprint).toBeNull();
   });
 
   it("recreates a stopped box even on a same-business retry", async () => {

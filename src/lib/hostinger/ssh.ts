@@ -37,6 +37,13 @@ export type SshExecOptions = {
   hostKeyPolicy?: "accept-any" | "strict";
   /** When `hostKeyPolicy: "strict"`, caller provides the expected host-key fingerprint in OpenSSH `SHA256:…` format. */
   expectedHostKeyFingerprint?: string;
+  /**
+   * Capture callback invoked with the presented host key's `SHA256:…`
+   * fingerprint during the handshake (both policies). Used by the pinning
+   * layer (src/lib/hostinger/ssh-pinned.ts) to record the fingerprint on
+   * first connect so later connections can verify strictly.
+   */
+  onHostKey?: (fingerprintSha256: string) => void;
 };
 
 export type SshExecResult = {
@@ -97,7 +104,8 @@ export async function sshExec(
     onStdout,
     onStderr,
     hostKeyPolicy = "accept-any",
-    expectedHostKeyFingerprint
+    expectedHostKeyFingerprint,
+    onHostKey
   } = opts;
 
   if (hostKeyPolicy === "strict" && !expectedHostKeyFingerprint) {
@@ -185,11 +193,14 @@ export async function sshExec(
       passphrase,
       readyTimeout: connectTimeoutMs
     };
-    if (hostKeyPolicy === "strict") {
+    if (hostKeyPolicy === "strict" || onHostKey) {
       connectCfg.hostVerifier = (key: Buffer | string) => {
         const blob = typeof key === "string" ? Buffer.from(key, "base64") : key;
         const fp = `SHA256:${nodeCrypto.createHash("sha256").update(blob).digest("base64").replace(/=+$/, "")}`;
-        return fp === expectedHostKeyFingerprint;
+        // Capture fires under BOTH policies so the pinning layer can record
+        // a first-connect fingerprint while still accepting the key.
+        onHostKey?.(fp);
+        return hostKeyPolicy === "strict" ? fp === expectedHostKeyFingerprint : true;
       };
     }
     client.connect(connectCfg);

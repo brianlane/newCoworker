@@ -70,7 +70,7 @@ import {
 import { cloudflareTunnelProvisionerFromEnv } from "@/lib/cloudflare/tunnel";
 import { quoteShellEnvValue } from "@/lib/provisioning/orchestrate";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
-import { sshExec } from "@/lib/hostinger/ssh";
+import { sshExecPinned } from "@/lib/hostinger/ssh-pinned";
 import {
   assertSafeGitRef,
   ensureNextPublicSupabaseUrlOrExit,
@@ -322,7 +322,9 @@ async function redeployOne(
   );
   const command = buildRedeployCommand(ref, envPrefix);
   try {
-    const result = await sshExec({
+    // Host-key pinning (G7): strict against the key row's recorded
+    // fingerprint, TOFU-capture on a row that has none yet.
+    const result = await sshExecPinned(key, {
       host: publicIp,
       port: 22,
       username: key.ssh_username,
