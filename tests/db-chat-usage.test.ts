@@ -262,13 +262,31 @@ describe("getFleetCurrentAiSpendMicros", () => {
     ).resolves.toBe(0);
   });
 
-  it("returns 0 for null data and 0 on error (best effort — dashboard must render)", async () => {
+  it("returns 0 for null data and 0 when the first page fails (best effort — dashboard must render)", async () => {
     const { from: emptyFrom } = fleetSpendDb({ data: null, error: null });
     await expect(getFleetCurrentAiSpendMicros({ from: emptyFrom } as never)).resolves.toBe(0);
 
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     const { from: errFrom } = fleetSpendDb({ data: null, error: { message: "down" } });
     await expect(getFleetCurrentAiSpendMicros({ from: errFrom } as never)).resolves.toBe(0);
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("keeps already-merged pages when a later page fails instead of zeroing the rollup", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({
+      business_id: `biz-${i}`,
+      period_start: "2026-07-01T00:00:00Z",
+      spend_micros: 10
+    }));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { from } = fleetSpendDb(
+      { data: fullPage, error: null },
+      { data: null, error: { message: "transient" } }
+    );
+
+    await expect(getFleetCurrentAiSpendMicros({ from } as never, now)).resolves.toBe(10_000);
     expect(errSpy).toHaveBeenCalled();
     errSpy.mockRestore();
   });

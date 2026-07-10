@@ -122,8 +122,11 @@ export async function getChatSpendSnapshotForBusiness(
  * window still covers `now` — summing every row in a rolling one-month
  * lookback would double-count a tenant right after a window rollover. The
  * two-month fetch lookback is a safe superset of any window that can cover
- * `now`. Best effort: 0 on error — the dashboard must render even if the
- * rollup read fails.
+ * `now`. Best effort on error — the dashboard must render even if a read
+ * fails: a failed page stops the scan but the rows already merged still
+ * count, so the result is 0 only when the very FIRST page fails. A partial
+ * (under-)count is unavoidable either way; discarding merged pages would
+ * only make it worse.
  */
 export async function getFleetCurrentAiSpendMicros(
   client?: SupabaseClient,
@@ -150,7 +153,7 @@ export async function getFleetCurrentAiSpendMicros(
       .range(from, from + pageSize - 1);
     if (error) {
       console.error("getFleetCurrentAiSpendMicros", error.message);
-      return 0;
+      break;
     }
 
     const rows = data ?? [];
