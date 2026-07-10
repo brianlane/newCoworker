@@ -196,43 +196,67 @@ describe("db/usage", () => {
   });
 
   describe("getFleetCalendarMonthUsageTotals", () => {
-    function fleetChain(result: {
+    type FleetUsagePage = {
       data: Array<{ sms_sent?: number | null; voice_minutes_used?: number | null }> | null;
       error: { message: string } | null;
-    }) {
-      const thenable: PromiseLike<typeof result> = {
-        then(onFulfilled, onRejected) {
-          return Promise.resolve(result).then(onFulfilled, onRejected);
-        }
-      };
+    };
+
+    /** Chain ending at `.range()`, resolving queued pages in order. */
+    function fleetChain(pages: FleetUsagePage[]) {
+      let call = 0;
       const chain: Record<string, unknown> = {};
       chain.from = vi.fn(() => chain);
       chain.select = vi.fn(() => chain);
-      chain.gte = vi.fn(() => thenable);
+      chain.gte = vi.fn(() => chain);
+      chain.order = vi.fn(() => chain);
+      chain.range = vi.fn(async () => pages[Math.min(call++, pages.length - 1)]);
       return chain;
     }
 
     it("sums SMS and voice minutes across the whole fleet", async () => {
-      const db = fleetChain({
-        data: [
-          { sms_sent: 3, voice_minutes_used: 10 },
-          { sms_sent: 2, voice_minutes_used: 4.5 }
-        ],
-        error: null
-      });
+      const db = fleetChain([
+        {
+          data: [
+            { sms_sent: 3, voice_minutes_used: 10 },
+            { sms_sent: 2, voice_minutes_used: 4.5 }
+          ],
+          error: null
+        }
+      ]);
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       expect(await getFleetCalendarMonthUsageTotals()).toEqual({ smsSent: 5, voiceMinutes: 14.5 });
     });
 
+    it("pages past PostgREST's 1000-row cap instead of silently truncating", async () => {
+      const fullPage = Array.from({ length: 1000 }, () => ({
+        sms_sent: 1,
+        voice_minutes_used: 2
+      }));
+      const db = fleetChain([
+        { data: fullPage, error: null },
+        { data: [{ sms_sent: 5, voice_minutes_used: 1 }], error: null }
+      ]);
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      expect(await getFleetCalendarMonthUsageTotals()).toEqual({
+        smsSent: 1005,
+        voiceMinutes: 2001
+      });
+      expect(db.range).toHaveBeenCalledTimes(2);
+      expect(db.range).toHaveBeenNthCalledWith(1, 0, 999);
+      expect(db.range).toHaveBeenNthCalledWith(2, 1000, 1999);
+    });
+
     it("treats null data as empty and null fields as zero (explicit client)", async () => {
-      const empty = fleetChain({ data: null, error: null });
+      const empty = fleetChain([{ data: null, error: null }]);
       expect(await getFleetCalendarMonthUsageTotals(empty as never)).toEqual({
         smsSent: 0,
         voiceMinutes: 0
       });
       expect(createSupabaseServiceClient).not.toHaveBeenCalled();
 
-      const sparse = fleetChain({ data: [{ sms_sent: null }, { voice_minutes_used: null }], error: null });
+      const sparse = fleetChain([
+        { data: [{ sms_sent: null }, { voice_minutes_used: null }], error: null }
+      ]);
       expect(await getFleetCalendarMonthUsageTotals(sparse as never)).toEqual({
         smsSent: 0,
         voiceMinutes: 0
@@ -240,7 +264,7 @@ describe("db/usage", () => {
     });
 
     it("throws when the query fails", async () => {
-      const db = fleetChain({ data: null, error: { message: "db down" } });
+      const db = fleetChain([{ data: null, error: { message: "db down" } }]);
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
       await expect(getFleetCalendarMonthUsageTotals()).rejects.toThrow(
         "getFleetCalendarMonthUsageTotals: db down"

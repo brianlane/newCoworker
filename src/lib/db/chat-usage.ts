@@ -109,42 +109,68 @@ export async function getChatSpendSnapshotForBusiness(
   };
 }
 
+/** UTC month shift that mirrors the spend window's one-month length. */
+function shiftUtcMonths(ms: number, months: number): number {
+  const d = new Date(ms);
+  return Date.UTC(
+    d.getUTCFullYear(),
+    d.getUTCMonth() + months,
+    d.getUTCDate(),
+    d.getUTCHours(),
+    d.getUTCMinutes(),
+    d.getUTCSeconds()
+  );
+}
+
 /**
  * FLEET-WIDE Gemini spend (micro-USD) across every tenant's CURRENT period
  * row (admin dashboard platform-cost estimate). A spend row's window is one
- * month from its `period_start` (see deriveMonthlyQuotaWindow), so "current"
- * means `period_start` within the last month. Best effort: 0 on error —
- * the dashboard must render even if the rollup read fails.
+ * month from its `period_start` (see deriveMonthlyQuotaWindow), so the sum
+ * takes each business's NEWEST started row and counts it only while its
+ * window still covers `now` — summing every row in a rolling one-month
+ * lookback would double-count a tenant right after a window rollover. The
+ * two-month fetch lookback is a safe superset of any window that can cover
+ * `now`. Best effort: 0 on error — the dashboard must render even if the
+ * rollup read fails.
  */
 export async function getFleetCurrentAiSpendMicros(
   client?: SupabaseClient,
   now: Date = new Date()
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const oneMonthAgo = new Date(
-    Date.UTC(
-      now.getUTCFullYear(),
-      now.getUTCMonth() - 1,
-      now.getUTCDate(),
-      now.getUTCHours(),
-      now.getUTCMinutes(),
-      now.getUTCSeconds()
-    )
-  );
+  const nowMs = now.getTime();
+  const lookbackIso = new Date(shiftUtcMonths(nowMs, -2)).toISOString();
   const { data, error } = await db
     .from("owner_chat_model_spend")
-    .select("spend_micros")
-    .gt("period_start", oneMonthAgo.toISOString())
+    .select("business_id, period_start, spend_micros")
+    .gt("period_start", lookbackIso)
     .lte("period_start", now.toISOString());
   if (error) {
     console.error("getFleetCurrentAiSpendMicros", error.message);
     return 0;
   }
 
-  let total = 0;
+  const newestByBusiness = new Map<string, { startMs: number; spendMicros: number }>();
   for (const row of data ?? []) {
-    const n = Number((row as { spend_micros?: number | string }).spend_micros ?? 0);
-    if (Number.isFinite(n) && n > 0) total += n;
+    const r = row as {
+      business_id?: string;
+      period_start?: string;
+      spend_micros?: number | string;
+    };
+    const startMs = Date.parse(r.period_start ?? "");
+    if (!r.business_id || !Number.isFinite(startMs)) continue;
+    const prev = newestByBusiness.get(r.business_id);
+    if (prev && prev.startMs >= startMs) continue;
+    const n = Number(r.spend_micros ?? 0);
+    newestByBusiness.set(r.business_id, {
+      startMs,
+      spendMicros: Number.isFinite(n) && n > 0 ? n : 0
+    });
+  }
+
+  let total = 0;
+  for (const { startMs, spendMicros } of newestByBusiness.values()) {
+    if (shiftUtcMonths(startMs, 1) > nowMs) total += spendMicros;
   }
   return total;
 }

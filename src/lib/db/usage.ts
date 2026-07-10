@@ -92,25 +92,37 @@ export async function getCalendarMonthUsageTotals(
 /**
  * FLEET-WIDE current-UTC-calendar-month rollup from `daily_usage` (admin
  * dashboard platform-cost estimate). Row volume is businesses × days-so-far,
- * comfortably inside PostgREST's 1000-row page for the current fleet size.
+ * so the read pages in 1000-row chunks — PostgREST silently caps a single
+ * request at 1000 rows, which would otherwise under-report usage without
+ * any error as the fleet grows. The `id` ordering keeps `.range()` page
+ * boundaries deterministic.
  */
 export async function getFleetCalendarMonthUsageTotals(
   client?: SupabaseClient
 ): Promise<{ smsSent: number; voiceMinutes: number }> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("daily_usage")
-    .select("sms_sent, voice_minutes_used")
-    .gte("usage_date", calendarMonthStartUtcYmd());
-
-  if (error) throw new Error(`getFleetCalendarMonthUsageTotals: ${error.message}`);
+  const monthStart = calendarMonthStartUtcYmd();
+  const pageSize = 1000;
 
   let smsSent = 0;
   let voiceMinutes = 0;
-  for (const row of data ?? []) {
-    const r = row as { sms_sent?: number | null; voice_minutes_used?: number | null };
-    smsSent += Number(r.sms_sent ?? 0);
-    voiceMinutes += Number(r.voice_minutes_used ?? 0);
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("daily_usage")
+      .select("sms_sent, voice_minutes_used")
+      .gte("usage_date", monthStart)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`getFleetCalendarMonthUsageTotals: ${error.message}`);
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as { sms_sent?: number | null; voice_minutes_used?: number | null };
+      smsSent += Number(r.sms_sent ?? 0);
+      voiceMinutes += Number(r.voice_minutes_used ?? 0);
+    }
+    if (rows.length < pageSize) break;
   }
   return { smsSent, voiceMinutes };
 }

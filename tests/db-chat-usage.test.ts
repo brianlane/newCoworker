@@ -175,8 +175,14 @@ describe("getChatSpendSnapshotForBusiness", () => {
 describe("getFleetCurrentAiSpendMicros", () => {
   afterEach(() => vi.clearAllMocks());
 
+  type FleetSpendRow = {
+    business_id?: string;
+    period_start?: string;
+    spend_micros?: number | string;
+  };
+
   function fleetSpendDb(result: {
-    data: Array<{ spend_micros?: number | string }> | null;
+    data: FleetSpendRow[] | null;
     error: { message: string } | null;
   }) {
     const builder = {
@@ -187,22 +193,34 @@ describe("getFleetCurrentAiSpendMicros", () => {
     return { from: vi.fn(() => builder), builder };
   }
 
-  it("sums positive finite spend rows and filters the last-month window", async () => {
+  it("counts each business's newest row only while its one-month window covers now", async () => {
     const now = new Date("2026-07-10T12:00:00Z");
     const { from, builder } = fleetSpendDb({
       data: [
-        { spend_micros: 1_000_000 },
-        { spend_micros: "250000" },
-        { spend_micros: -5 },
-        { spend_micros: "not-a-number" },
-        {} // missing field → 0
+        // biz-a: newer row first, older second → older is skipped, no double count.
+        { business_id: "biz-a", period_start: "2026-07-01T00:00:00Z", spend_micros: 1_000_000 },
+        { business_id: "biz-a", period_start: "2026-06-01T00:00:00Z", spend_micros: 999 },
+        // biz-b: older row first, replaced by the newer covering row (string spend).
+        { business_id: "biz-b", period_start: "2026-06-05T00:00:00Z", spend_micros: 100 },
+        { business_id: "biz-b", period_start: "2026-06-20T00:00:00Z", spend_micros: "250000" },
+        // biz-c: newest window ended 2026-07-01 → rolled over, not counted.
+        { business_id: "biz-c", period_start: "2026-06-01T00:00:00Z", spend_micros: 750_000 },
+        // Covering windows with garbage spend clamp to 0.
+        { business_id: "biz-d", period_start: "2026-07-02T00:00:00Z", spend_micros: -5 },
+        { business_id: "biz-e", period_start: "2026-07-02T00:00:00Z", spend_micros: "junk" },
+        { business_id: "biz-h", period_start: "2026-07-03T00:00:00Z" },
+        // Malformed rows are skipped outright.
+        { period_start: "2026-07-01T00:00:00Z", spend_micros: 111 },
+        { business_id: "biz-f", period_start: "not-a-date", spend_micros: 222 },
+        { business_id: "biz-g", spend_micros: 333 }
       ],
       error: null
     });
 
     const total = await getFleetCurrentAiSpendMicros({ from } as never, now);
     expect(total).toBe(1_250_000);
-    expect(builder.gt).toHaveBeenCalledWith("period_start", "2026-06-10T12:00:00.000Z");
+    // Fetch lookback is a two-month superset of any window that can cover now.
+    expect(builder.gt).toHaveBeenCalledWith("period_start", "2026-05-10T12:00:00.000Z");
     expect(builder.lte).toHaveBeenCalledWith("period_start", now.toISOString());
   });
 
@@ -217,8 +235,13 @@ describe("getFleetCurrentAiSpendMicros", () => {
     errSpy.mockRestore();
   });
 
-  it("creates a service client when none is passed", async () => {
-    const { from } = fleetSpendDb({ data: [{ spend_micros: 42 }], error: null });
+  it("creates a service client when none is passed and defaults now", async () => {
+    const { from } = fleetSpendDb({
+      data: [
+        { business_id: "biz-a", period_start: new Date().toISOString(), spend_micros: 42 }
+      ],
+      error: null
+    });
     mockCreateClient.mockResolvedValueOnce({ from });
     await expect(getFleetCurrentAiSpendMicros()).resolves.toBe(42);
     expect(mockCreateClient).toHaveBeenCalled();
