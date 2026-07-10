@@ -31,9 +31,15 @@ export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: Int
   const [notice, setNotice] = useState<string | null>(null);
 
   async function refresh() {
-    const res = await fetch("/api/admin/white-glove-intakes");
-    const json = await res.json();
-    if (res.ok) setIntakes(json.data?.intakes ?? []);
+    // Best-effort: a failed refresh must never surface as an error for an
+    // action that already succeeded (create shows the intake optimistically).
+    try {
+      const res = await fetch("/api/admin/white-glove-intakes");
+      const json = await res.json();
+      if (res.ok) setIntakes(json.data?.intakes ?? []);
+    } catch {
+      // Keep the current list.
+    }
   }
 
   async function send() {
@@ -61,6 +67,22 @@ export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: Int
             : "Questionnaire created — the email couldn't be sent automatically, so copy the link below and send it yourself."
         );
         setEmail("");
+        // Show the created intake (and its copyable link) IMMEDIATELY from
+        // the POST response — the manual-send path must not depend on the
+        // follow-up refresh succeeding.
+        const created = json.data?.intake;
+        const intakeUrl: string | undefined = json.data?.intakeUrl;
+        if (created && intakeUrl) {
+          const view: IntakeView = {
+            id: created.id,
+            recipient_email: created.recipient_email,
+            status: created.status,
+            created_at: created.created_at,
+            completed_at: created.completed_at,
+            intakeUrl
+          };
+          setIntakes((prev) => [view, ...prev.filter((i) => i.id !== view.id)]);
+        }
         await refresh();
       }
     } catch {
