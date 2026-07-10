@@ -347,6 +347,17 @@ export async function GET(request: Request) {
             showGateIfNeeded();
             return;
           }
+          if (r.status === 403) {
+            // Server-side contact gate: this session must provide details
+            // before chatting (flag flipped after the session started, or
+            // the stored session predates the requirement).
+            clearSession();
+            typing.classList.remove("on");
+            sendBtn.disabled = false;
+            el("sys", "Please share your details to continue the chat.");
+            showGate();
+            return;
+          }
           if (r.json && r.json.ok) {
             if (r.json.data.userMessageId > lastMsgId) lastMsgId = r.json.data.userMessageId;
             if (r.json.data.jobId) {

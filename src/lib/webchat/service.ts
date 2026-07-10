@@ -140,6 +140,27 @@ export async function resolveWidgetContext(args: {
 }
 
 /**
+ * Does this session satisfy the owner's pre-chat contact requirement?
+ *
+ * Enforced at MESSAGE time, not just session mint: bearers created while
+ * the form was off (or by a hand-rolled client that skipped it) must not
+ * keep chatting past a later-enabled requirement. Same rule the session
+ * route applies to the submitted form: a name plus at least one of
+ * email/phone. Lead-capture merges count — a visitor who told the AGENT
+ * their details mid-conversation passes without re-seeing the form.
+ */
+export function sessionSatisfiesContactGate(
+  settings: Pick<ChatWidgetSettingsRow, "require_contact_form">,
+  session: Pick<WebchatSessionRow, "visitor_name" | "visitor_email" | "visitor_phone">
+): boolean {
+  if (!settings.require_contact_form) return true;
+  const name = session.visitor_name?.trim();
+  const email = session.visitor_email?.trim();
+  const phone = session.visitor_phone?.trim();
+  return Boolean(name) && Boolean(email || phone);
+}
+
+/**
  * `frame-ancestors` source list for the /widget/frame response. Empty
  * allowlist ⇒ any site may embed (`*`). Non-empty ⇒ the exact origins,
  * with the `www.`/bare twin of each host included — the browser matches

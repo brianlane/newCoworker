@@ -29,6 +29,7 @@ import {
   loadWebchatBusinessFlags,
   refererAllowedForFrame,
   resolveWidgetContext,
+  sessionSatisfiesContactGate,
   verifyWebchatSession,
   webchatDailyMessageCap
 } from "@/lib/webchat/service";
@@ -256,6 +257,34 @@ describe("verifyWebchatSession", () => {
       })
     ).toEqual(fresh);
     expect(mockSession).toHaveBeenCalledWith(hashWebchatToken(SESSION_TOKEN), undefined);
+  });
+});
+
+describe("sessionSatisfiesContactGate", () => {
+  const on = { require_contact_form: true };
+  const off = { require_contact_form: false };
+  const empty = { visitor_name: null, visitor_email: null, visitor_phone: null };
+
+  it("always passes when the form requirement is off", () => {
+    expect(sessionSatisfiesContactGate(off, empty)).toBe(true);
+  });
+
+  it("requires a name plus at least one of email/phone when on", () => {
+    expect(sessionSatisfiesContactGate(on, empty)).toBe(false);
+    expect(sessionSatisfiesContactGate(on, { ...empty, visitor_name: "Ada" })).toBe(false);
+    expect(
+      sessionSatisfiesContactGate(on, { ...empty, visitor_email: "a@b.com" })
+    ).toBe(false);
+    expect(
+      sessionSatisfiesContactGate(on, { visitor_name: "Ada", visitor_email: "a@b.com", visitor_phone: null })
+    ).toBe(true);
+    expect(
+      sessionSatisfiesContactGate(on, { visitor_name: "Ada", visitor_email: null, visitor_phone: "+1555" })
+    ).toBe(true);
+    // Whitespace-only values don't count.
+    expect(
+      sessionSatisfiesContactGate(on, { visitor_name: "  ", visitor_email: "a@b.com", visitor_phone: null })
+    ).toBe(false);
   });
 });
 

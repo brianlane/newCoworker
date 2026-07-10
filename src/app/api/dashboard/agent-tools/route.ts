@@ -26,7 +26,7 @@ const businessIdSchema = z.string().uuid();
 
 const putBodySchema = z.object({
   businessId: z.string().uuid(),
-  agentKey: z.enum(["dashboard", "voice", "sms"]),
+  agentKey: z.enum(["dashboard", "voice", "sms", "webchat"]),
   toolKey: z.string().min(1).max(100),
   enabled: z.boolean()
 });

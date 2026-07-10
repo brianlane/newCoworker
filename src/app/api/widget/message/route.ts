@@ -34,6 +34,7 @@ import {
 import { logger } from "@/lib/logger";
 import {
   resolveWidgetContext,
+  sessionSatisfiesContactGate,
   verifyWebchatSession,
   webchatDailyMessageCap
 } from "@/lib/webchat/service";
@@ -84,6 +85,18 @@ export async function POST(request: Request) {
       // The widget restarts its session on 401 — expired TTL and stale
       // bearers are normal, not errors.
       return errorResponse("UNAUTHORIZED", "Chat session expired. Please start a new chat.");
+    }
+
+    // Pre-chat contact gate, re-checked EVERY turn: a bearer minted while
+    // the form was off (or by a client that skipped it) can't keep chatting
+    // past a later-enabled requirement. The frame maps this 403 to the
+    // contact form.
+    if (!sessionSatisfiesContactGate(ctx.settings, session)) {
+      return errorResponse(
+        "FORBIDDEN",
+        "Please share your name and an email or phone number to continue this chat.",
+        403
+      );
     }
 
     const ip = rateLimitIdentifierFromRequest(request);
