@@ -1173,12 +1173,19 @@ async function updateContactStep(
   const removeSet = new Set(action.removeTags.map((t) => t.trim().toLowerCase()));
   const seen = new Set<string>();
   const next: string[] = [];
+  // Tags actually stripped from the row (vs. merely CONFIGURED removals that
+  // were never present) — the actions_taken note must not over-claim.
+  const removed: string[] = [];
   // Existing tags (minus removals) survive unconditionally — the DB cap
   // guarantees there are at most 25 of them, so no truncation is possible.
   for (const t of Array.isArray(contact.tags) ? contact.tags : []) {
     const tag = t.trim().slice(0, 40);
     const key = tag.toLowerCase();
-    if (!tag || seen.has(key) || removeSet.has(key)) continue;
+    if (!tag || seen.has(key)) continue;
+    if (removeSet.has(key)) {
+      removed.push(tag);
+      continue;
+    }
     seen.add(key);
     next.push(tag);
   }
@@ -1209,7 +1216,7 @@ async function updateContactStep(
     scope,
     `updated contact tags for ${action.e164}` +
       (added.length > 0 ? ` (+${added.join(", +")})` : "") +
-      (action.removeTags.length > 0 ? ` (-${action.removeTags.join(", -")})` : "") +
+      (removed.length > 0 ? ` (-${removed.join(", -")})` : "") +
       (droppedAtCap.length > 0
         ? ` — ${droppedAtCap.length} tag(s) not added (25-tag limit): ${droppedAtCap.join(", ")}`
         : "")
