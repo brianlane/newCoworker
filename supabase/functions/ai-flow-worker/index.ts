@@ -494,14 +494,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         .eq("id", run.id)
         .maybeSingle();
       if ((liveRow as { status?: string } | null)?.status === "canceled") {
-        await systemLog(supabase, {
-          businessId: run.business_id,
-          source: "aiflow",
-          level: "info",
-          event: "ai_flow_run_stopped_mid_execution",
-          message: `Run stopped by the owner before step ${index + 1} ran`,
-          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
-        });
+        await stoppedMidExecutionLog(supabase, run, index);
         return;
       }
     } catch (e) {
@@ -559,12 +552,18 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           )
       });
       approval.options = gateOptions;
-      await updateRun(supabase, run.id, {
+      const parked = await updateRun(supabase, run.id, {
         status: "awaiting_approval",
         current_step: index,
         context: buildContext(scope, approval, routing),
         claimed_at: null
       });
+      if (!parked) {
+        // The owner stopped the run while this step executed — the park write
+        // matched nothing, so the approval prompt must not go out either.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       // Offer the owner an SMS approval path alongside the dashboard buttons.
       // Best-effort + idempotent: a send failure must not unwind the parked
       // state (that would re-run the gate on retry), and the idempotency key
@@ -621,7 +620,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       routing.route_step_index = index;
       // Persist the parked state BEFORE sending the offer so an inbound 1/2
       // reply can always be matched to this run (state before side effect).
-      await updateRun(supabase, run.id, {
+      const parked = await updateRun(supabase, run.id, {
         status: "awaiting_agent",
         current_step: index,
         context: buildContext(scope, approval, routing),
@@ -629,6 +628,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         respond_by_at: new Date(Date.now() + outcome.respondByMs).toISOString(),
         claimed_at: null
       });
+      if (!parked) {
+        // The owner stopped the run while this step executed — the park write
+        // matched nothing, so the agent offer must not go out either.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       // A send failure here leaves the run parked; the escalation sweep moves on
       // to the next agent at the deadline rather than stranding the lead — so we
       // log and stop instead of unwinding the durable parked state.
@@ -680,7 +685,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // the reply in context.vars[saveAs]. The timeout sweep
       // (resume_overdue_reply_waits) re-queues with the no_reply sentinel at
       // respond_by_at. Attempt giveback like defer — waiting is not a failure.
-      await updateRun(supabase, run.id, {
+      const parked = await updateRun(supabase, run.id, {
         status: "awaiting_reply",
         current_step: index,
         context: {
@@ -696,6 +701,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         claimed_at: null,
         attempt_count: Math.max(0, run.attempt_count - 1)
       });
+      if (!parked) {
+        // Owner stopped the run while this step executed; don't log/telemeter
+        // a park that never landed.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_reply", {
         run_id: run.id,
         business_id: run.business_id,
@@ -799,6 +810,26 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
  * other engine-internal vars (e.g. the after-hours email markers).
  */
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+
+/**
+ * Trace an owner "Stop this run" observed mid-execution (at a step boundary,
+ * or via a park write that matched nothing). The run row already says
+ * `canceled`; this is the audit line explaining where execution quit.
+ */
+async function stoppedMidExecutionLog(
+  supabase: Supabase,
+  run: RunRow,
+  index: number
+): Promise<void> {
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "info",
+    event: "ai_flow_run_stopped_mid_execution",
+    message: `Run stopped by the owner; execution quit at step ${index + 1}`,
+    payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+  });
+}
 
 /**
  * Step types gated by the flow-level time window (definition.timeWindow):
@@ -4369,18 +4400,21 @@ async function updateRun(
   supabase: Supabase,
   id: string,
   patch: Record<string, unknown>
-): Promise<void> {
+): Promise<boolean> {
   // `.neq(status, canceled)`: an owner "Stop this run" is terminal the moment
   // it lands. A worker mid-execution (or a late park/retry/terminal persist)
-  // must never resurrect or overwrite a canceled run — a matched-zero-rows
-  // update is silent by design here, and the step-boundary check in
-  // executeRun stops the remaining side effects.
-  const { error } = await supabase
+  // must never resurrect or overwrite a canceled run. Returns whether a row
+  // actually matched — FALSE means the run was canceled underneath us, and a
+  // caller about to perform post-persist side effects (the approval-prompt /
+  // agent-offer sends) must bail instead of messaging on a stopped run.
+  const { data, error } = await supabase
     .from("ai_flow_runs")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("id", id)
-    .neq("status", "canceled");
+    .neq("status", "canceled")
+    .select("id");
   if (error) throw new Error(`ai_flow_runs update: ${error.message}`);
+  return ((data as unknown[] | null)?.length ?? 0) > 0;
 }
 
 async function failRun(
