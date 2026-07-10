@@ -37,6 +37,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   recall_url: "Recall a saved link from an earlier run",
   upsert_customer: "Save / update a customer contact",
   update_contact: "Update the contact's tags (lead status)",
+  classify: "Decide what the message means",
   ring_handoff: "Ring a person (warm transfer)",
   voice_ai_intake: "AI takes the call (capture the lead)",
   voice_transfer: "Connect the caller to a number",
@@ -70,6 +71,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Creates or updates a customer on your Customers page from details earlier steps found (phone, name, email).",
   update_contact:
     "Adds/removes tags on the contact (matched by phone) so your Contacts page always shows each lead's current status - e.g. remove \"New Lead\", add \"Contacted\".",
+  classify:
+    "Reads a message (like their reply) and sorts it into ONE of your categories - e.g. wants_a_call / has_a_question / not_interested - so a Branch step can take the right path on meaning, not exact words.",
   ring_handoff:
     "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
   voice_ai_intake:

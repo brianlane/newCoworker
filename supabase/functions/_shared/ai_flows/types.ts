@@ -630,6 +630,29 @@ export type FlowStep =
   | {
       id: string;
       /**
+       * Decisive conversation routing: classify a message into EXACTLY ONE of
+       * the author's categories so a `branch` step can fork on meaning instead
+       * of brittle substring matches. Reads the text in `textVar` (typically a
+       * wait_for_reply's saveAs) or, when omitted, the triggering message
+       * ({{trigger.windowText}}). The chosen category VALUE lands in
+       * {{vars.<saveAs>}}; when the text is empty or nothing fits, the
+       * reserved fallback "unclear" lands instead — so branches always have a
+       * decidable value. Classification runs on the same spend-gated Gemini
+       * extraction path as extract_text.
+       */
+      type: "classify";
+      /** Var holding the text to classify; omitted = the triggering message. */
+      textVar?: string;
+      /** Optional context for the model, e.g. "The lead was asked why they are shopping." */
+      question?: string;
+      /** 2–8 categories; `value` is the token branches match on. */
+      categories: { value: string; description?: string }[];
+      saveAs: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
        * Update the contact's TAGS (the dashboard's lead-state labels — "New
        * Lead", "Engaged", "Appointment Scheduled", ...) from a flow, so
        * automations can maintain the contact lifecycle without manual

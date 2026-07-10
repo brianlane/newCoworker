@@ -30,7 +30,10 @@ import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
+  buildClassifyPrompt,
   buildExtractionPrompt,
+  CLASSIFY_UNCLEAR,
+  parseClassifyChoice,
   buildNowScope,
   evaluateStepCondition,
   extractLeadIdentity,
@@ -876,6 +879,8 @@ async function runStep(
       return upsertCustomerStep(supabase, run, action);
     case "update_contact":
       return updateContactStep(supabase, run, scope, action);
+    case "classify":
+      return classifyStep(supabase, run, scope, action);
     case "sleep":
       return sleepStep(scope, action);
     case "wait_for_reply":
@@ -2390,23 +2395,27 @@ async function fetchWithTransientRetry(url: string, init: RequestInit): Promise<
   return await fetch(url, init);
 }
 
-/** Gemini structured extraction; empty map when no API key (regex fallback covers it). */
-async function extractFields(
+/**
+ * One spend-gated Gemini JSON call — the shared engine room for extract_text /
+ * browse extraction AND classify. Returns the response text, or null when no
+ * API key is configured (callers fail open with their own fallback). Throws
+ * SpendCapError when the shared AI budget is exhausted.
+ */
+async function geminiJsonForPrompt(
   supabase: Supabase,
   run: RunRow,
-  fields: ExtractField[],
-  pageText: string
-): Promise<Record<string, string>> {
+  prompt: string,
+  surface: string
+): Promise<string | null> {
   const apiKey = Deno.env.get("GOOGLE_API_KEY") ?? "";
-  if (!apiKey) return {};
-  // Spend gate: AiFlow extraction bills per token into the shared pool, so an
+  if (!apiKey) return null;
+  // Spend gate: AiFlow model calls bill per token into the shared pool, so an
   // exhausted budget blocks the Gemini call (throws SpendCapError → run fails).
   if (await aiFlowSpendOverCap(supabase, run.business_id)) {
     throw new SpendCapError(
       "the shared AI budget for this billing period is used up; extraction is paused until it resets"
     );
   }
-  const prompt = buildExtractionPrompt(fields, pageText);
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=` +
     encodeURIComponent(apiKey);
@@ -2446,8 +2455,64 @@ async function extractFields(
     promptTokens + outputTokens > 0
       ? geminiCostMicrosFromTokens(GEMINI_MODEL, promptTokens, outputTokens)
       : null;
-  await meterAiFlowSpend(supabase, run, "extract", prompt.length, text.length, exactCostMicros);
+  await meterAiFlowSpend(supabase, run, surface, prompt.length, text.length, exactCostMicros);
+  return text;
+}
+
+/** Gemini structured extraction; empty map when no API key (regex fallback covers it). */
+async function extractFields(
+  supabase: Supabase,
+  run: RunRow,
+  fields: ExtractField[],
+  pageText: string
+): Promise<Record<string, string>> {
+  const text = await geminiJsonForPrompt(
+    supabase,
+    run,
+    buildExtractionPrompt(fields, pageText),
+    "extract"
+  );
+  if (text === null) return {};
   return parseExtractionJson(text, fields);
+}
+
+/**
+ * classify step: decide which of the author's categories the message means,
+ * writing the winner into vars[saveAs] so a branch can fork on it. Sentinel
+ * inputs were pre-resolved by the planner (no model call); a missing API key
+ * or an unusable model response resolves to the reserved "unclear" fallback —
+ * the flow's unclear arm handles it, never a crash.
+ */
+async function classifyStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "classify" }>
+): Promise<StepOutcome> {
+  if (action.resolved !== undefined) {
+    scope.vars[action.saveAs] = action.resolved;
+    return {
+      kind: "ok",
+      result: { [action.saveAs]: action.resolved, pre_resolved: true }
+    };
+  }
+  let text: string | null;
+  try {
+    text = await geminiJsonForPrompt(
+      supabase,
+      run,
+      buildClassifyPrompt(action.categories, action.text, action.question),
+      "classify"
+    );
+  } catch (e) {
+    // An exhausted shared AI budget is a permanent, owner-actionable state
+    // for this period — fail the run instead of retrying into the cap.
+    if (e instanceof SpendCapError) return { kind: "fail", error: `classify: ${e.message}` };
+    throw e;
+  }
+  const choice = text === null ? CLASSIFY_UNCLEAR : parseClassifyChoice(text, action.categories);
+  scope.vars[action.saveAs] = choice;
+  return { kind: "ok", result: { [action.saveAs]: choice } };
 }
 
 async function sendSmsStep(

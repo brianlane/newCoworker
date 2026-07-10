@@ -27,6 +27,7 @@ import {
   Flag,
   GitBranch,
   Globe,
+  HelpCircle,
   Hourglass,
   Link2,
   Mail,
@@ -78,6 +79,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   recall_url: "read",
   upsert_customer: "read",
   update_contact: "read",
+  classify: "branch",
   ring_handoff: "voice",
   voice_ai_intake: "voice",
   voice_transfer: "voice",
@@ -110,6 +112,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   recall_url: <Link2 className="h-4 w-4" />,
   upsert_customer: <UserPlus className="h-4 w-4" />,
   update_contact: <Tag className="h-4 w-4" />,
+  classify: <HelpCircle className="h-4 w-4" />,
   ring_handoff: <Phone className="h-4 w-4" />,
   voice_ai_intake: <Phone className="h-4 w-4" />,
   voice_transfer: <Phone className="h-4 w-4" />,
@@ -188,6 +191,10 @@ function stepSubtitle(step: FlowStep): string {
         ...(step.addTags ?? []).map((t) => `+${t}`),
         ...(step.removeTags ?? []).map((t) => `-${t}`)
       ].join(" ");
+    case "classify":
+      return `${step.textVar ? `{{vars.${step.textVar}}}` : "the message"} → ${step.categories
+        .map((c) => c.value)
+        .join(" / ")}`;
     case "ring_handoff":
     case "voice_transfer":
       return step.toRef?.label ?? step.toE164 ?? "";
