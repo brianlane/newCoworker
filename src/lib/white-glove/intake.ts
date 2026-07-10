@@ -20,7 +20,12 @@ export type WhiteGloveIntakeRow = {
   id: string;
   /** Unguessable capability behind the public /intake/<token> link. */
   token: string;
-  recipient_email: string;
+  /** The prospect's business name (admin-supplied — not asked in the form). */
+  business_name: string;
+  /** INDUSTRY_OPTIONS value driving the questionnaire's suggested wording. */
+  industry: string;
+  /** Null when the admin generated a link without an email to send to. */
+  recipient_email: string | null;
   /** Null for prospects with no account yet. */
   business_id: string | null;
   /** The prospect's submitted answers; null until completed. */
@@ -33,7 +38,10 @@ export type WhiteGloveIntakeRow = {
 
 export async function createWhiteGloveIntake(
   data: {
-    recipientEmail: string;
+    businessName: string;
+    industry: string;
+    /** Optional — omit to just generate a shareable link (no email sent). */
+    recipientEmail?: string | null;
     /** Optional: tie the questionnaire to an existing business. */
     businessId?: string | null;
     createdBy: string;
@@ -44,7 +52,9 @@ export async function createWhiteGloveIntake(
   const { data: row, error } = await db
     .from("white_glove_intakes")
     .insert({
-      recipient_email: data.recipientEmail,
+      business_name: data.businessName,
+      industry: data.industry,
+      recipient_email: data.recipientEmail ?? null,
       business_id: data.businessId ?? null,
       created_by: data.createdBy
     })

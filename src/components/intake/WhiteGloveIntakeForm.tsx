@@ -4,15 +4,16 @@
  * The public white-glove intake questionnaire form (/intake/<token>).
  *
  * Renders INTAKE_QUESTIONS grouped by section — multiple choice first
- * wherever possible, free text only where unavoidable. Choosing an industry
- * pre-fills the suggested greeting + qualification questions (visible as
- * placeholders the prospect can override). Submission POSTs to
- * /intake/<token>/submit; completed intakes render read-only server-side.
+ * wherever possible, free text only where unavoidable. The industry the
+ * admin picked at create time pre-fills the suggested greeting +
+ * qualification questions (visible as placeholders the prospect can
+ * override). Submission POSTs to /intake/<token>/submit; completed intakes
+ * render read-only server-side.
  */
 import { useMemo, useState } from "react";
 import {
   INTAKE_QUESTIONS,
-  INDUSTRY_PRESETS,
+  presetForIndustry,
   type IntakeQuestion
 } from "@/lib/white-glove/template";
 
@@ -26,7 +27,14 @@ function initialAnswers(): Record<string, AnswerValue> {
   return init;
 }
 
-export function WhiteGloveIntakeForm({ token }: { token: string }) {
+export function WhiteGloveIntakeForm({
+  token,
+  industry
+}: {
+  token: string;
+  /** Admin-picked INDUSTRY_OPTIONS value; drives the suggested wording. */
+  industry: string;
+}) {
   const [answers, setAnswers] = useState<Record<string, AnswerValue>>(initialAnswers);
   const [submitting, setSubmitting] = useState(false);
   const [done, setDone] = useState(false);
@@ -42,8 +50,7 @@ export function WhiteGloveIntakeForm({ token }: { token: string }) {
     return grouped;
   }, []);
 
-  const industry = typeof answers.industry === "string" ? answers.industry : "";
-  const preset = industry ? INDUSTRY_PRESETS[industry] : undefined;
+  const preset = presetForIndustry(industry);
 
   function setValue(id: string, value: AnswerValue) {
     setAnswers((prev) => ({ ...prev, [id]: value }));
@@ -62,8 +69,8 @@ export function WhiteGloveIntakeForm({ token }: { token: string }) {
   function placeholderFor(q: IntakeQuestion): string | undefined {
     // The industry presets double as live placeholders so the prospect sees
     // the exact wording we'd use if they leave the field blank.
-    if (q.id === "greeting" && preset) return preset.greeting;
-    if (q.id === "qualification_questions" && preset) {
+    if (q.id === "greeting") return preset.greeting;
+    if (q.id === "qualification_questions") {
       return preset.qualificationQuestions.join("\n");
     }
     return q.placeholder;

@@ -40,9 +40,10 @@ export default async function IntakeDocPage({
   const parsed = intakeAnswersSchema.safeParse(intake.answers);
   if (!parsed.success) notFound();
   const answers = parsed.data;
+  const meta = { businessName: intake.business_name, industry: intake.industry };
 
-  const doc = renderWhiteGloveDocSections(answers);
-  const markdown = renderWhiteGloveDoc(answers);
+  const doc = renderWhiteGloveDocSections(answers, meta);
+  const markdown = renderWhiteGloveDoc(answers, meta);
   const completedOn = intake.completed_at
     ? new Date(intake.completed_at).toLocaleDateString("en-US", {
         year: "numeric",
@@ -56,10 +57,12 @@ export default async function IntakeDocPage({
       <div className="mx-auto w-full max-w-3xl px-8 py-10 print:px-0 print:py-0">
         <WhiteGloveDocActions
           markdown={markdown}
-          filename={`white-glove-build-${answers.business_name
-            .toLowerCase()
-            .replace(/[^a-z0-9]+/g, "-")
-            .replace(/(^-|-$)/g, "")}.md`}
+          filename={`white-glove-build-${
+            intake.business_name
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, "-")
+              .replace(/(^-|-$)/g, "") || "intake"
+          }.md`}
         />
 
         <header className="mb-8 border-b border-neutral-300 pb-6">
@@ -69,7 +72,8 @@ export default async function IntakeDocPage({
           <h1 className="mt-1 text-2xl font-bold">{doc.title}</h1>
           <p className="mt-3 text-sm leading-relaxed text-neutral-600">{doc.intro}</p>
           <p className="mt-2 text-xs text-neutral-500">
-            Prepared from the questionnaire completed by {intake.recipient_email}
+            Prepared from the questionnaire completed
+            {intake.recipient_email ? ` by ${intake.recipient_email}` : ""}
             {completedOn ? ` on ${completedOn}` : ""}.
           </p>
         </header>

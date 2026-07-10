@@ -4,23 +4,20 @@ import {
   INDUSTRY_OPTIONS,
   INDUSTRY_PRESETS,
   intakeAnswersSchema,
+  presetForIndustry,
   renderWhiteGloveDoc,
   renderWhiteGloveDocSections,
-  type IntakeAnswers
+  type IntakeAnswers,
+  type IntakeMeta
 } from "@/lib/white-glove/template";
 
 /** A fully-specified valid submission (every optional field present). */
 function fullAnswers(): IntakeAnswers {
   return intakeAnswersSchema.parse({
-    business_name: "Acme Home Services",
-    industry: "home_services",
-    industry_other: "",
-    website: "https://acme.example",
     business_hours: "Mon–Fri 9am–5pm",
     team: "Jane Smith — 555-123-4567\nJohn Doe — 555-987-6543",
     lead_sources: ["facebook_instagram", "referrals", "other"],
     lead_sources_other: "Trade shows",
-    tone: "friendly",
     greeting: "Hi {name}! Thanks for calling Acme.",
     qualification_questions: "What do you need fixed?\nHow soon?",
     appointment_length: "30",
@@ -37,7 +34,37 @@ function fullAnswers(): IntakeAnswers {
   });
 }
 
+const META: IntakeMeta = { businessName: "Acme Home Services", industry: "home_services" };
+
+/**
+ * Topics the onboarding interview already collects (Step 1 form + chat).
+ * The intake questionnaire must NEVER re-ask them — the admin supplies
+ * business name + industry at create time, and the rest lives in
+ * onboarding's knownContext/profile.
+ */
+const ONBOARDING_COLLECTED_FIELDS = [
+  "business_name",
+  "industry",
+  "industry_other",
+  "website",
+  "owner_name",
+  "phone",
+  "service_area",
+  "team_size",
+  "crm",
+  "crm_used",
+  "tone"
+];
+
 describe("white-glove template questionnaire", () => {
+  it("never re-asks a topic the onboarding interview already collects", () => {
+    const ids = INTAKE_QUESTIONS.map((q) => q.id as string);
+    for (const field of ONBOARDING_COLLECTED_FIELDS) {
+      expect(ids).not.toContain(field);
+      expect(Object.keys(intakeAnswersSchema.shape)).not.toContain(field);
+    }
+  });
+
   it("every question id maps to a schema key, and choice/multi questions carry options", () => {
     const schemaKeys = new Set(Object.keys(intakeAnswersSchema.shape));
     for (const q of INTAKE_QUESTIONS) {
@@ -70,14 +97,16 @@ describe("white-glove template questionnaire", () => {
     }
   });
 
+  it("presetForIndustry falls back to the generic preset for unknown values", () => {
+    expect(presetForIndustry("home_services")).toBe(INDUSTRY_PRESETS.home_services);
+    expect(presetForIndustry("not_a_real_industry")).toBe(INDUSTRY_PRESETS.other);
+  });
+
   it("the schema applies defaults for omitted optional fields", () => {
     const minimal = intakeAnswersSchema.parse({
-      business_name: "Solo Law",
-      industry: "legal",
       business_hours: "By appointment",
       team: "Ana — 555-000-1111",
       lead_sources: ["website_form"],
-      tone: "professional",
       appointment_length: "60",
       appointment_buffer: "none",
       booking_notice: "next_day",
@@ -92,31 +121,31 @@ describe("white-glove template questionnaire", () => {
     expect(minimal.never_handle).toEqual([]);
     expect(minimal.never_handle_other).toBe("");
     expect(minimal.notes).toBe("");
-    expect(minimal.website).toBe("");
-    expect(minimal.industry_other).toBe("");
     expect(minimal.lead_sources_other).toBe("");
   });
 
   it("the schema rejects unknown choice values and empty required fields", () => {
     const base = fullAnswers();
-    expect(intakeAnswersSchema.safeParse({ ...base, industry: "nope" }).success).toBe(false);
     expect(intakeAnswersSchema.safeParse({ ...base, lead_sources: [] }).success).toBe(false);
-    expect(intakeAnswersSchema.safeParse({ ...base, business_name: "  " }).success).toBe(false);
+    expect(intakeAnswersSchema.safeParse({ ...base, business_hours: "  " }).success).toBe(false);
     expect(
       intakeAnswersSchema.safeParse({ ...base, never_handle: ["not_a_topic"] }).success
+    ).toBe(false);
+    expect(
+      intakeAnswersSchema.safeParse({ ...base, appointment_length: "90" }).success
     ).toBe(false);
   });
 });
 
 describe("renderWhiteGloveDocSections", () => {
-  it("merges every answer into the document", () => {
-    const doc = renderWhiteGloveDocSections(fullAnswers());
+  it("merges every answer + the admin-supplied meta into the document", () => {
+    const doc = renderWhiteGloveDocSections(fullAnswers(), META);
     expect(doc.title).toBe("White-Glove Build & Installation — Acme Home Services");
     expect(doc.intro).toContain("single source of truth");
     const all = doc.sections.flatMap((s) => [s.heading, ...s.lines]).join("\n");
-    // About / team / sources
+    // About (from META) / hours / team / sources
+    expect(all).toContain("Business: Acme Home Services");
     expect(all).toContain("Industry: Home services (HVAC, plumbing, roofing…)");
-    expect(all).toContain("Website: https://acme.example");
     expect(all).toContain("Business hours: Mon–Fri 9am–5pm");
     expect(all).toContain("• Jane Smith — 555-123-4567");
     expect(all).toContain("• John Doe — 555-987-6543");
@@ -151,7 +180,7 @@ describe("renderWhiteGloveDocSections", () => {
 
   it("falls back to the industry preset greeting/questions when left blank", () => {
     const answers = { ...fullAnswers(), greeting: "", qualification_questions: "" };
-    const doc = renderWhiteGloveDocSections(answers);
+    const doc = renderWhiteGloveDocSections(answers, META);
     const all = doc.sections.flatMap((s) => s.lines).join("\n");
     expect(all).toContain(INDUSTRY_PRESETS.home_services.greeting);
     for (const q of INDUSTRY_PRESETS.home_services.qualificationQuestions) {
@@ -159,41 +188,37 @@ describe("renderWhiteGloveDocSections", () => {
     }
   });
 
+  it("uses the generic preset (and the raw industry as its label) for unknown industries", () => {
+    const doc = renderWhiteGloveDocSections(
+      { ...fullAnswers(), greeting: "" },
+      { businessName: "Odd Co", industry: "beekeeping" }
+    );
+    const all = doc.sections.flatMap((s) => s.lines).join("\n");
+    expect(all).toContain("Industry: beekeeping");
+    expect(all).toContain(INDUSTRY_PRESETS.other.greeting);
+  });
+
   it("caps custom qualification questions at 3", () => {
     const answers = {
       ...fullAnswers(),
       qualification_questions: "Q1\nQ2\nQ3\nQ4\nQ5"
     };
-    const all = renderWhiteGloveDocSections(answers)
+    const all = renderWhiteGloveDocSections(answers, META)
       .sections.flatMap((s) => s.lines)
       .join("\n");
     expect(all).toContain("3. Q3");
     expect(all).not.toContain("Q4");
   });
 
-  it("uses the free-text industry when 'other' is chosen (and the label when blank)", () => {
-    const custom = { ...fullAnswers(), industry: "other", industry_other: "Landscaping design" };
-    expect(
-      renderWhiteGloveDocSections(custom).sections[0].lines.join("\n")
-    ).toContain("Industry: Landscaping design");
-
-    const blank = { ...fullAnswers(), industry: "other", industry_other: "" };
-    expect(renderWhiteGloveDocSections(blank).sections[0].lines.join("\n")).toContain(
-      "Industry: Other"
-    );
-  });
-
   it("renders placeholders for blank optional fields and empty handoff topics", () => {
     const answers = {
       ...fullAnswers(),
-      website: "",
       notes: "",
       never_handle: [] as string[],
       never_handle_other: ""
     };
-    const doc = renderWhiteGloveDocSections(answers);
+    const doc = renderWhiteGloveDocSections(answers, META);
     const all = doc.sections.flatMap((s) => s.lines).join("\n");
-    expect(all).toContain("Website: —");
     expect(all).toContain("• (none selected)");
     expect(doc.sections.find((s) => s.heading === "9. Notes")?.lines).toEqual(["—"]);
   });
@@ -206,7 +231,7 @@ describe("renderWhiteGloveDocSections", () => {
       never_handle: ["other"] as IntakeAnswers["never_handle"],
       never_handle_other: ""
     };
-    const doc = renderWhiteGloveDocSections(answers);
+    const doc = renderWhiteGloveDocSections(answers, META);
     expect(doc.sections.find((s) => s.heading === "3. Lead sources")?.lines).toEqual([
       "• Other"
     ]);
@@ -220,19 +245,22 @@ describe("renderWhiteGloveDocSections", () => {
   it("survives an unknown stored choice value by printing the raw value", () => {
     // Defensive path: a hand-edited row with a value no longer in the catalog
     // still renders (labelOf falls back to the raw value).
-    const answers = { ...fullAnswers(), tone: "sassy" as IntakeAnswers["tone"] };
-    const all = renderWhiteGloveDocSections(answers)
+    const answers = {
+      ...fullAnswers(),
+      booking_notice: "instantly" as IntakeAnswers["booking_notice"]
+    };
+    const all = renderWhiteGloveDocSections(answers, META)
       .sections.flatMap((s) => s.lines)
       .join("\n");
-    expect(all).toContain("Tone: sassy");
+    expect(all).toContain("Earliest booking: instantly");
   });
 });
 
 describe("renderWhiteGloveDoc (markdown)", () => {
   it("emits the title, intro, and every section as markdown", () => {
-    const md = renderWhiteGloveDoc(fullAnswers());
+    const md = renderWhiteGloveDoc(fullAnswers(), META);
     expect(md).toContain("# White-Glove Build & Installation — Acme Home Services");
-    const doc = renderWhiteGloveDocSections(fullAnswers());
+    const doc = renderWhiteGloveDocSections(fullAnswers(), META);
     for (const section of doc.sections) {
       expect(md).toContain(`## ${section.heading}`);
     }

@@ -17,12 +17,9 @@ import { rateLimitDurable } from "@/lib/rate-limit";
 const TOKEN = "0f0f0f0f-0000-4000-8000-0000000000aa";
 
 const VALID_ANSWERS = {
-  business_name: "Acme Home Services",
-  industry: "home_services",
   business_hours: "Mon–Fri 9am–5pm",
   team: "Jane Smith — 555-123-4567",
   lead_sources: ["website_form"],
-  tone: "friendly",
   appointment_length: "30",
   appointment_buffer: "none",
   booking_notice: "2h",
@@ -60,7 +57,7 @@ describe("POST /intake/[token]/submit", () => {
     expect(submitWhiteGloveIntake).toHaveBeenCalledWith(
       TOKEN,
       expect.objectContaining({
-        business_name: "Acme Home Services",
+        business_hours: "Mon–Fri 9am–5pm",
         greeting: "",
         never_handle: []
       })
@@ -85,11 +82,11 @@ describe("POST /intake/[token]/submit", () => {
     expect(badJson.status).toBe(400);
 
     const invalid = await POST(
-      submitRequest({ ...VALID_ANSWERS, industry: "unknown" }),
+      submitRequest({ ...VALID_ANSWERS, appointment_length: "90" }),
       routeParams(TOKEN)
     );
     expect(invalid.status).toBe(400);
-    expect((await invalid.json()).error).toContain("industry");
+    expect((await invalid.json()).error).toContain("appointment_length");
     expect(submitWhiteGloveIntake).not.toHaveBeenCalled();
   });
 

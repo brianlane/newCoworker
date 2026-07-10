@@ -2,10 +2,17 @@
  * White-glove build questionnaire + document generator.
  *
  * Distilled from PRDs/Lead Management.pdf into a short, plain-English,
- * industry-agnostic intake: the PROSPECT answers ~20 mostly-multiple-choice
+ * industry-agnostic intake: the PROSPECT answers mostly-multiple-choice
  * questions on the public /intake/<token> page, and `renderWhiteGloveDoc`
  * merges those answers into the finished "White-Glove Build & Installation"
  * document the operator works from (and the customer signs off on).
+ *
+ * DE-DUPLICATION RULE: anything the onboarding interview already collects
+ * (Step 1 form + chat — business name, industry/business type, owner, phone,
+ * website, service area, team size, CRM, tone) is NOT asked here. The
+ * customer should never answer the same question twice. Business name and
+ * industry are supplied by the ADMIN when the questionnaire is created
+ * (`IntakeMeta`); industry drives the suggested wording presets.
  *
  * Everything here is pure: the questionnaire definition drives the public
  * form UI, `intakeAnswersSchema` validates the submission server-side, and
@@ -34,6 +41,16 @@ export type IntakeQuestion = {
   maxLength?: number;
 };
 
+/**
+ * Row-level context the admin supplies at create time (NOT asked of the
+ * prospect — see the de-duplication rule above).
+ */
+export type IntakeMeta = {
+  businessName: string;
+  /** An INDUSTRY_OPTIONS value; unknown values render as-is. */
+  industry: string;
+};
+
 // ── Choice catalogs ─────────────────────────────────────────────────────────
 
 export const INDUSTRY_OPTIONS: IntakeChoiceOption[] = [
@@ -52,12 +69,6 @@ const LEAD_SOURCE_OPTIONS: IntakeChoiceOption[] = [
   { value: "phone_calls", label: "Phone calls" },
   { value: "referrals", label: "Referrals" },
   { value: "other", label: "Other" }
-];
-
-const TONE_OPTIONS: IntakeChoiceOption[] = [
-  { value: "friendly", label: "Friendly and warm" },
-  { value: "professional", label: "Professional and polished" },
-  { value: "casual", label: "Casual and relaxed" }
 ];
 
 const APPOINTMENT_LENGTH_OPTIONS: IntakeChoiceOption[] = [
@@ -129,15 +140,10 @@ function enumOf(options: IntakeChoiceOption[]) {
 }
 
 export const intakeAnswersSchema = z.object({
-  business_name: z.string().trim().min(1).max(200),
-  industry: enumOf(INDUSTRY_OPTIONS),
-  industry_other: z.string().trim().max(120).optional().default(""),
-  website: z.string().trim().max(300).optional().default(""),
   business_hours: z.string().trim().min(1).max(200),
   team: z.string().trim().min(1).max(2000),
   lead_sources: z.array(enumOf(LEAD_SOURCE_OPTIONS)).min(1).max(LEAD_SOURCE_OPTIONS.length),
   lead_sources_other: z.string().trim().max(200).optional().default(""),
-  tone: enumOf(TONE_OPTIONS),
   greeting: z.string().trim().max(500).optional().default(""),
   qualification_questions: z.string().trim().max(1000).optional().default(""),
   appointment_length: enumOf(APPOINTMENT_LENGTH_OPTIONS),
@@ -219,49 +225,19 @@ export const INDUSTRY_PRESETS: Record<string, IndustryPreset> = {
   }
 };
 
+/** The preset for an industry value, falling back to the generic one. */
+export function presetForIndustry(industry: string): IndustryPreset {
+  return INDUSTRY_PRESETS[industry] ?? INDUSTRY_PRESETS.other;
+}
+
 // ── Questionnaire definition (drives the public form) ──────────────────────
 
 export const INTAKE_QUESTIONS: IntakeQuestion[] = [
   {
-    id: "business_name",
-    section: "About your business",
-    label: "Business name",
-    type: "text",
-    placeholder: "Acme Home Services",
-    required: true,
-    maxLength: 200
-  },
-  {
-    id: "industry",
-    section: "About your business",
-    label: "What industry are you in?",
-    help: "We'll pre-fill suggested wording you can change.",
-    type: "choice",
-    options: INDUSTRY_OPTIONS,
-    required: true
-  },
-  {
-    id: "industry_other",
-    section: "About your business",
-    label: "If other, what do you do?",
-    type: "text",
-    placeholder: "e.g. Landscaping design",
-    required: false,
-    maxLength: 120
-  },
-  {
-    id: "website",
-    section: "About your business",
-    label: "Website (optional)",
-    type: "text",
-    placeholder: "https://…",
-    required: false,
-    maxLength: 300
-  },
-  {
     id: "business_hours",
-    section: "About your business",
+    section: "Your availability",
     label: "Business hours",
+    help: "When your team is reachable — appointments and handoffs respect these.",
     type: "text",
     placeholder: "Mon–Fri 9am–5pm",
     required: true,
@@ -294,14 +270,6 @@ export const INTAKE_QUESTIONS: IntakeQuestion[] = [
     placeholder: "e.g. Trade shows",
     required: false,
     maxLength: 200
-  },
-  {
-    id: "tone",
-    section: "The first message",
-    label: "How should the assistant sound?",
-    type: "choice",
-    options: TONE_OPTIONS,
-    required: true
   },
   {
     id: "greeting",
@@ -452,15 +420,16 @@ function splitLines(text: string): string[] {
 }
 
 /**
- * Merge the prospect's answers into the structured build document. The
- * markdown (`renderWhiteGloveDoc`) and the print view both come from this.
+ * Merge the prospect's answers + the admin-supplied meta into the structured
+ * build document. The markdown (`renderWhiteGloveDoc`) and the print view
+ * both come from this.
  */
-export function renderWhiteGloveDocSections(answers: IntakeAnswers): WhiteGloveDoc {
-  const preset = INDUSTRY_PRESETS[answers.industry];
-  const industryLabel =
-    answers.industry === "other" && answers.industry_other
-      ? answers.industry_other
-      : labelOf(INDUSTRY_OPTIONS, answers.industry);
+export function renderWhiteGloveDocSections(
+  answers: IntakeAnswers,
+  meta: IntakeMeta
+): WhiteGloveDoc {
+  const preset = presetForIndustry(meta.industry);
+  const industryLabel = labelOf(INDUSTRY_OPTIONS, meta.industry);
   const greeting = answers.greeting || preset.greeting;
   const questions = splitLines(answers.qualification_questions).slice(0, 3);
   const qualification = questions.length > 0 ? questions : preset.qualificationQuestions;
@@ -479,9 +448,8 @@ export function renderWhiteGloveDocSections(answers: IntakeAnswers): WhiteGloveD
     {
       heading: "1. About the business",
       lines: [
-        `Business: ${answers.business_name}`,
+        `Business: ${meta.businessName}`,
         `Industry: ${industryLabel}`,
-        `Website: ${answers.website || "—"}`,
         `Business hours: ${answers.business_hours}`
       ]
     },
@@ -499,7 +467,6 @@ export function renderWhiteGloveDocSections(answers: IntakeAnswers): WhiteGloveD
     {
       heading: "4. The first message",
       lines: [
-        `Tone: ${labelOf(TONE_OPTIONS, answers.tone)}`,
         `Greeting (sent within 60 seconds of a new lead): "${greeting}"`,
         "The assistant may ask AT MOST these questions before booking:",
         ...qualification.map((q, i) => `${i + 1}. ${q}`),
@@ -573,7 +540,7 @@ export function renderWhiteGloveDocSections(answers: IntakeAnswers): WhiteGloveD
   ];
 
   return {
-    title: `White-Glove Build & Installation — ${answers.business_name}`,
+    title: `White-Glove Build & Installation — ${meta.businessName}`,
     intro:
       "This document is the single source of truth for your white-glove build. " +
       "It captures how your AI assistant greets leads, books appointments, follows up, " +
@@ -583,8 +550,8 @@ export function renderWhiteGloveDocSections(answers: IntakeAnswers): WhiteGloveD
 }
 
 /** The finished document as markdown (download / copy). */
-export function renderWhiteGloveDoc(answers: IntakeAnswers): string {
-  const doc = renderWhiteGloveDocSections(answers);
+export function renderWhiteGloveDoc(answers: IntakeAnswers, meta: IntakeMeta): string {
+  const doc = renderWhiteGloveDocSections(answers, meta);
   const parts = [
     `# ${doc.title}`,
     doc.intro,

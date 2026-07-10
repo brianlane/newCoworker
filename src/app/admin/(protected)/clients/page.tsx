@@ -124,6 +124,7 @@ export default async function AdminClientsPage() {
         <WhiteGloveIntakesPanel
           initialIntakes={intakes.map((i) => ({
             id: i.id,
+            business_name: i.business_name,
             recipient_email: i.recipient_email,
             status: i.status,
             created_at: i.created_at,

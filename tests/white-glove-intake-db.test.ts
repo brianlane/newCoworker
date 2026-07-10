@@ -33,6 +33,8 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 const INTAKE = {
   id: "0f0f0f0f-0000-4000-8000-000000000001",
   token: "0f0f0f0f-0000-4000-8000-0000000000aa",
+  business_name: "Acme Home Services",
+  industry: "home_services",
   recipient_email: "prospect@example.com",
   business_id: null,
   answers: null,
@@ -42,28 +44,44 @@ const INTAKE = {
   completed_at: null
 };
 
-const ANSWERS = { business_name: "Acme" } as unknown as IntakeAnswers;
+const ANSWERS = { business_hours: "Mon–Fri 9–5" } as unknown as IntakeAnswers;
 
 describe("white-glove/intake DB layer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  it("createWhiteGloveIntake inserts and returns the row (prospect + business-tied)", async () => {
+  it("createWhiteGloveIntake inserts and returns the row (with email, without, business-tied)", async () => {
     const db = mockDb({ single: vi.fn().mockResolvedValue({ data: INTAKE, error: null }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     const row = await createWhiteGloveIntake({
+      businessName: INTAKE.business_name,
+      industry: INTAKE.industry,
       recipientEmail: INTAKE.recipient_email,
       createdBy: INTAKE.created_by
     });
     expect(row).toEqual(INTAKE);
     expect(db.insert).toHaveBeenCalledWith({
+      business_name: INTAKE.business_name,
+      industry: INTAKE.industry,
       recipient_email: INTAKE.recipient_email,
       business_id: null,
       created_by: INTAKE.created_by
     });
 
+    // Email-less creation: the admin just gets a shareable link.
     await createWhiteGloveIntake({
+      businessName: "Solo Law",
+      industry: "legal",
+      createdBy: INTAKE.created_by
+    });
+    expect(db.insert).toHaveBeenLastCalledWith(
+      expect.objectContaining({ business_name: "Solo Law", recipient_email: null })
+    );
+
+    await createWhiteGloveIntake({
+      businessName: INTAKE.business_name,
+      industry: INTAKE.industry,
       recipientEmail: INTAKE.recipient_email,
       businessId: "biz-1",
       createdBy: INTAKE.created_by
@@ -79,7 +97,12 @@ describe("white-glove/intake DB layer", () => {
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(
-      createWhiteGloveIntake({ recipientEmail: "p@x.com", createdBy: "a@b.c" })
+      createWhiteGloveIntake({
+        businessName: "Acme",
+        industry: "other",
+        recipientEmail: "p@x.com",
+        createdBy: "a@b.c"
+      })
     ).rejects.toThrow("createWhiteGloveIntake: boom");
   });
 

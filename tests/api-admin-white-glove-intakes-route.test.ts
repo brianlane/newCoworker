@@ -33,6 +33,8 @@ const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 const INTAKE = {
   id: INTAKE_ID,
   token: "tok-1",
+  business_name: "Acme Home Services",
+  industry: "home_services",
   recipient_email: "prospect@example.com",
   business_id: null,
   answers: null,
@@ -61,11 +63,19 @@ describe("api/admin/white-glove-intakes route", () => {
     vi.mocked(createWhiteGloveIntake).mockResolvedValue(INTAKE as never);
   });
 
-  it("POST creates an intake for the prospect email with the admin as author", async () => {
-    const res = await POST(jsonRequest("POST", { recipientEmail: "prospect@example.com" }));
+  it("POST creates an intake from a business name + email with the admin as author", async () => {
+    const res = await POST(
+      jsonRequest("POST", {
+        businessName: "Acme Home Services",
+        industry: "home_services",
+        recipientEmail: "prospect@example.com"
+      })
+    );
     const body = await res.json();
     expect(res.status).toBe(200);
     expect(createWhiteGloveIntake).toHaveBeenCalledWith({
+      businessName: "Acme Home Services",
+      industry: "home_services",
       recipientEmail: "prospect@example.com",
       businessId: null,
       createdBy: "admin@example.com"
@@ -73,9 +83,39 @@ describe("api/admin/white-glove-intakes route", () => {
     expect(body.data.intakeUrl).toContain("/intake/tok-1");
   });
 
+  it("POST works with just a business name (no email) — link only, nothing emailed", async () => {
+    process.env.RESEND_API_KEY = "resend_test";
+    try {
+      vi.mocked(createWhiteGloveIntake).mockResolvedValue({
+        ...INTAKE,
+        recipient_email: null
+      } as never);
+      const res = await POST(jsonRequest("POST", { businessName: "Solo Law" }));
+      const body = await res.json();
+      expect(res.status).toBe(200);
+      // Industry defaults to the generic preset.
+      expect(createWhiteGloveIntake).toHaveBeenCalledWith(
+        expect.objectContaining({
+          businessName: "Solo Law",
+          industry: "other",
+          recipientEmail: null
+        })
+      );
+      expect(body.data.emailedTo).toBeNull();
+      expect(body.data.intakeUrl).toContain("/intake/tok-1");
+      expect(sendOwnerEmail).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.RESEND_API_KEY;
+    }
+  });
+
   it("POST can tie the intake to an existing business", async () => {
     const res = await POST(
-      jsonRequest("POST", { recipientEmail: "owner@example.com", businessId: BIZ_ID })
+      jsonRequest("POST", {
+        businessName: "Corp",
+        recipientEmail: "owner@example.com",
+        businessId: BIZ_ID
+      })
     );
     expect(res.status).toBe(200);
     expect(createWhiteGloveIntake).toHaveBeenCalledWith(
@@ -86,7 +126,12 @@ describe("api/admin/white-glove-intakes route", () => {
   it("POST emails the questionnaire link and reports emailedTo", async () => {
     process.env.RESEND_API_KEY = "resend_test";
     try {
-      const res = await POST(jsonRequest("POST", { recipientEmail: "prospect@example.com" }));
+      const res = await POST(
+        jsonRequest("POST", {
+          businessName: "Acme Home Services",
+          recipientEmail: "prospect@example.com"
+        })
+      );
       const body = await res.json();
       expect(res.status).toBe(200);
       expect(body.data.emailedTo).toBe("prospect@example.com");
@@ -103,20 +148,26 @@ describe("api/admin/white-glove-intakes route", () => {
 
   it("POST still succeeds (emailedTo null) when the key is unset or the send fails", async () => {
     delete process.env.RESEND_API_KEY;
-    const noKey = await POST(jsonRequest("POST", { recipientEmail: "p@x.com" }));
+    const noKey = await POST(
+      jsonRequest("POST", { businessName: "Acme", recipientEmail: "p@x.com" })
+    );
     expect((await noKey.json()).data.emailedTo).toBeNull();
 
     process.env.RESEND_API_KEY = "resend_test";
     try {
       vi.mocked(sendOwnerEmail).mockRejectedValueOnce(new Error("resend down"));
-      const failed = await POST(jsonRequest("POST", { recipientEmail: "p@x.com" }));
+      const failed = await POST(
+        jsonRequest("POST", { businessName: "Acme", recipientEmail: "p@x.com" })
+      );
       const body = await failed.json();
       expect(failed.status).toBe(200);
       expect(body.data.emailedTo).toBeNull();
 
       // Resend can also reject WITHOUT throwing (no message id): still null.
       vi.mocked(sendOwnerEmail).mockResolvedValueOnce(null);
-      const rejected = await POST(jsonRequest("POST", { recipientEmail: "p@x.com" }));
+      const rejected = await POST(
+        jsonRequest("POST", { businessName: "Acme", recipientEmail: "p@x.com" })
+      );
       expect((await rejected.json()).data.emailedTo).toBeNull();
     } finally {
       delete process.env.RESEND_API_KEY;
@@ -125,21 +176,28 @@ describe("api/admin/white-glove-intakes route", () => {
 
   it("POST falls back to the admin userId when the email is missing", async () => {
     vi.mocked(requireAdmin).mockResolvedValue({ userId: "admin-1", email: null } as never);
-    const res = await POST(jsonRequest("POST", { recipientEmail: "p@x.com" }));
+    const res = await POST(jsonRequest("POST", { businessName: "Acme" }));
     expect(res.status).toBe(200);
     expect(createWhiteGloveIntake).toHaveBeenCalledWith(
       expect.objectContaining({ createdBy: "admin-1" })
     );
   });
 
-  it("POST 400s on a missing/invalid recipient email or businessId", async () => {
+  it("POST 400s on a missing name, unknown industry, or invalid email/businessId", async () => {
     expect((await POST(jsonRequest("POST", {}))).status).toBe(400);
-    expect((await POST(jsonRequest("POST", { recipientEmail: "not-an-email" }))).status).toBe(
-      400
-    );
+    expect((await POST(jsonRequest("POST", { businessName: "  " }))).status).toBe(400);
     expect(
-      (await POST(jsonRequest("POST", { recipientEmail: "p@x.com", businessId: "nope" })))
-        .status
+      (await POST(jsonRequest("POST", { businessName: "Acme", industry: "nope" }))).status
+    ).toBe(400);
+    expect(
+      (
+        await POST(
+          jsonRequest("POST", { businessName: "Acme", recipientEmail: "not-an-email" })
+        )
+      ).status
+    ).toBe(400);
+    expect(
+      (await POST(jsonRequest("POST", { businessName: "Acme", businessId: "nope" }))).status
     ).toBe(400);
     expect(createWhiteGloveIntake).not.toHaveBeenCalled();
   });
