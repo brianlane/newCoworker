@@ -1406,17 +1406,21 @@ describe("planStep: upsert_customer", () => {
       action: { kind: "upsert_customer", e164: "+14804929641", name: "", email: "" }
     });
   });
-  it("fails when the phone var is missing", () => {
-    expect(planStep(base, { vars: {} })).toEqual({
-      ok: false,
-      error: 'upsert_customer: phoneVar "lead_phone" is not a usable phone number'
-    });
+  it("fails with a human-readable explanation when the phone var is missing", () => {
+    const r = planStep(base, { vars: {} });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      // Owner-facing wording: names the var, explains the two likely causes
+      // (absent from the source / discarded by the self-number scrub), and
+      // states the consequence — never a bare technical failure.
+      expect(r.error).toContain("{{vars.lead_phone}}");
+      expect(r.error).toContain("missing or unusable");
+      expect(r.error).toContain("matched the business's own number");
+    }
   });
   it("fails when the phone var is not a usable number", () => {
     const r = planStep(base, { vars: { lead_phone: "call me", lead_name: "X" } });
-    expect(r).toEqual({
-      ok: false,
-      error: 'upsert_customer: phoneVar "lead_phone" is not a usable phone number'
-    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error).toContain("missing or unusable");
   });
 });

@@ -1404,6 +1404,21 @@ async function scrubExtractedSelfPhones(
       step: stepLabel,
       cleared: scrub.cleared
     });
+    // Tell the owner in plain words RIGHT NOW: a lead just arrived whose
+    // phone was the business's own number, so the flow can't text them and
+    // later steps will fail or skip. Without this the run just dies with a
+    // technical "not a usable phone number" error (the exact confusion from
+    // Truly's office-number test). Best-effort + idempotent per run.
+    try {
+      await sendOwnerSms(
+        supabase,
+        run,
+        `[AiFlow] A lead just came in, but their phone number matched your own business number, so I can't text them (this happens when a test form uses the office line, or a lead source page shows your number). Check the lead's real number and reach out directly.`,
+        `aiflow-selfphone:${run.id}`
+      );
+    } catch (e) {
+      console.error("self-phone scrub owner notice failed", e);
+    }
   }
   return scrub.values;
 }
