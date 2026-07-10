@@ -7,7 +7,6 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlows } from "@/lib/ai-flows/db";
 import { Card } from "@/components/ui/Card";
 import { AiFlowsManager } from "@/components/dashboard/AiFlowsManager";
-import { LeadBacklogImport } from "@/components/dashboard/LeadBacklogImport";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +55,12 @@ export default async function AiFlowsPage({ searchParams }: Props) {
               How to: Meta ad leads
             </Link>
             <Link
+              href="/dashboard/aiflows#lead-backlog-import"
+              className="text-signal-teal hover:underline"
+            >
+              Import leads
+            </Link>
+            <Link
               href="/dashboard/aiflows/library"
               className="text-signal-teal hover:underline"
             >
@@ -81,16 +86,13 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           </a>
         </Card>
       ) : (
-        <>
-          <AiFlowsManager
-            businessId={businessId}
-            businessType={businessType}
-            initialFlows={flows}
-            initialEditId={edit ?? null}
-            initialAdaptDraft={adapt === "1"}
-          />
-          <LeadBacklogImport businessId={businessId} />
-        </>
+        <AiFlowsManager
+          businessId={businessId}
+          businessType={businessType}
+          initialFlows={flows}
+          initialEditId={edit ?? null}
+          initialAdaptDraft={adapt === "1"}
+        />
       )}
     </div>
   );
