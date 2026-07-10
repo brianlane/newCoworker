@@ -1173,13 +1173,32 @@ async function updateContactStep(
   const removeSet = new Set(action.removeTags.map((t) => t.trim().toLowerCase()));
   const seen = new Set<string>();
   const next: string[] = [];
-  for (const t of [...(Array.isArray(contact.tags) ? contact.tags : []), ...action.addTags]) {
+  // Existing tags (minus removals) survive unconditionally — the DB cap
+  // guarantees there are at most 25 of them, so no truncation is possible.
+  for (const t of Array.isArray(contact.tags) ? contact.tags : []) {
     const tag = t.trim().slice(0, 40);
     const key = tag.toLowerCase();
     if (!tag || seen.has(key) || removeSet.has(key)) continue;
     seen.add(key);
     next.push(tag);
-    if (next.length >= 25) break;
+  }
+  // Additions are tracked individually so the actions_taken note (and the
+  // recorded result) only claim tags that actually landed — a full contact
+  // drops the overflow explicitly instead of silently.
+  const added: string[] = [];
+  const droppedAtCap: string[] = [];
+  for (const t of action.addTags) {
+    const tag = t.trim().slice(0, 40);
+    const key = tag.toLowerCase();
+    if (!tag || removeSet.has(key)) continue;
+    if (seen.has(key)) continue; // already on the contact — nothing to write
+    if (next.length >= 25) {
+      droppedAtCap.push(tag);
+      continue;
+    }
+    seen.add(key);
+    next.push(tag);
+    added.push(tag);
   }
   const { error: updErr } = await supabase
     .from("contacts")
@@ -1189,10 +1208,20 @@ async function updateContactStep(
   appendActionTaken(
     scope,
     `updated contact tags for ${action.e164}` +
-      (action.addTags.length > 0 ? ` (+${action.addTags.join(", +")})` : "") +
-      (action.removeTags.length > 0 ? ` (-${action.removeTags.join(", -")})` : "")
+      (added.length > 0 ? ` (+${added.join(", +")})` : "") +
+      (action.removeTags.length > 0 ? ` (-${action.removeTags.join(", -")})` : "") +
+      (droppedAtCap.length > 0
+        ? ` — ${droppedAtCap.length} tag(s) not added (25-tag limit): ${droppedAtCap.join(", ")}`
+        : "")
   );
-  return { kind: "ok", result: { customer_e164: action.e164, tags: next } };
+  return {
+    kind: "ok",
+    result: {
+      customer_e164: action.e164,
+      tags: next,
+      ...(droppedAtCap.length > 0 ? { dropped_at_cap: droppedAtCap } : {})
+    }
+  };
 }
 
 /**
