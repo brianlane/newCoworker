@@ -13,7 +13,10 @@ import {
 } from "@/lib/vault/business-config-markdown-limits";
 import { starterVaultBudgetStatus } from "@/lib/vault/starterContextBudget";
 import { websiteIngestErrorMessage } from "@/lib/website-ingest-copy";
-import { useBusinessConfigSave } from "@/components/dashboard/useBusinessConfigSave";
+import {
+  useBusinessConfigSave,
+  useUnsavedChangesWarning
+} from "@/components/dashboard/useBusinessConfigSave";
 
 interface MemoryEditorProps {
   businessId: string;
@@ -66,6 +69,23 @@ export function MemoryEditor({
   }, [tier, soul, identity, memory, websiteMd]);
   const { saving, saved, saveError, clearSaveError, save } = useBusinessConfigSave();
 
+  // Last-persisted values: edits are "dirty" until a save (or re-crawl,
+  // which persists server-side) brings the baseline up to date.
+  const [baseline, setBaseline] = useState({
+    soul: initialSoul,
+    identity: initialIdentity,
+    memory: initialMemory,
+    websiteUrl: initialWebsiteUrl,
+    websiteMd: initialWebsiteMd
+  });
+  const dirty =
+    soul !== baseline.soul ||
+    identity !== baseline.identity ||
+    memory !== baseline.memory ||
+    websiteUrl !== baseline.websiteUrl ||
+    websiteMd !== baseline.websiteMd;
+  useUnsavedChangesWarning(dirty);
+
   const charLimitIssue = useMemo(() => {
     if (soul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
       return `Soul exceeds ${BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters`;
@@ -84,7 +104,7 @@ export function MemoryEditor({
 
   async function handleSave() {
     if (charLimitIssue) return;
-    await save({
+    const ok = await save({
       businessId,
       soulMd: soul,
       identityMd: identity,
@@ -92,6 +112,7 @@ export function MemoryEditor({
       websiteMd,
       websiteUrl
     });
+    if (ok) setBaseline({ soul, identity, memory, websiteUrl, websiteMd });
   }
 
   async function runIngest(sourceHtml?: string) {
@@ -143,6 +164,11 @@ export function MemoryEditor({
       }
       if (typeof inner.websiteMd === "string") {
         setWebsiteMd(inner.websiteMd);
+        // The ingest endpoint persisted this server-side already — reflect
+        // that in the baseline so a successful re-crawl isn't flagged as an
+        // unsaved change.
+        const crawled = inner.websiteMd;
+        setBaseline((prev) => ({ ...prev, websiteMd: crawled, websiteUrl: websiteUrl.trim() }));
       }
       setRecrawl({
         status: "success",
@@ -354,6 +380,9 @@ export function MemoryEditor({
           Save Changes
         </Button>
         {saved && <span className="text-sm text-claw-green">✓ Saved</span>}
+        {dirty && !saving && (
+          <span className="text-sm text-amber-300/80">Unsaved changes</span>
+        )}
       </div>
     </div>
   );

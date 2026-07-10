@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { NextResponse } from "next/server";
 import { resolveRowboatWebhookClaims } from "@/lib/rowboat/webhook-jwt";
@@ -18,6 +19,8 @@ import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { captureWebchatLead } from "@/lib/webchat/lead-capture";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
+import { insertCoworkerLog } from "@/lib/db/logs";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { logger } from "@/lib/logger";
 
 /**
@@ -114,8 +117,45 @@ const bookAppointmentArgsSchema = z.object({
   notes: z.string().max(2000).optional(),
   timezone: z.string().optional()
 });
+const notifyTeamArgsSchema = z.object({
+  /** What the team needs to do, in plain language. */
+  message: z.string().min(1).max(1000),
+  /** Customer's name if known, so the owner knows who to get back to. */
+  customerName: z.string().max(200).optional(),
+  /** Customer's phone if the model knows it (the webhook has no caller context). */
+  customerPhone: z.string().max(32).optional()
+});
 
-type ToolResult = { ok: boolean; detail?: string; data?: unknown };
+type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: string };
+
+/**
+ * Model-facing guidance attached to a failed booking (their persona says
+ * nothing about failure handling, and without this the model either blames
+ * "a system error" or retry-loops — Truly's lead was offered four failing
+ * times in a row until he gave up). Attributed to availability, per-surface
+ * escalation: the texting coworker escalates via notify_team, the website
+ * widget saves the request via capture_lead, and dashboard chat just tells
+ * the owner directly.
+ */
+function bookFailureGuidance(toolName: string, detail: string): string {
+  const escalate =
+    toolName === "calendar_book_appointment"
+      ? "call notify_team with their preferred day/time and tell the customer a team member will confirm the appointment"
+      : toolName === "webchat_calendar_book_appointment"
+        ? "save their preferred day/time with capture_lead and say the team will confirm the appointment"
+        : "tell the owner the booking could not be completed";
+  if (detail === "calendar_not_connected") {
+    return (
+      "No calendar is connected, so you cannot book or promise any appointment time. " +
+      `Collect the preferred day/time, then ${escalate}.`
+    );
+  }
+  return (
+    "The booking did not go through — treat that time as no longer available and " +
+    "never blame a technical error. Re-check availability with the find-slots tool " +
+    `and offer a fresh option. If a second booking also fails, stop offering times: ${escalate}.`
+  );
+}
 
 /**
  * toolName → the Settings → Coworker tools toggle that gates it, plus the
@@ -148,6 +188,11 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   // declares the bare names, the dashboard coworker its `dashboard_` twins —
   // same cores, separate Settings toggles.
   send_email: { agentKey: "sms", toolKey: "send_email" },
+  // Texting-coworker escalation channel (same rationale as the voice twin in
+  // /api/voice/tools/notify-team): without it the SMS assistant has NO path
+  // to staff and can only promise follow-ups nobody hears about. Deliberately
+  // NOT given a webchat_ twin (anonymous surface must not page the team).
+  notify_team: { agentKey: "sms", toolKey: "notify_team" },
   business_knowledge_lookup: { agentKey: "sms", toolKey: "business_knowledge_lookup" },
   calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
   calendar_book_appointment: { agentKey: "sms", toolKey: "calendar_book_appointment" },
@@ -246,7 +291,61 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       }
       // No caller context on the webhook path — the model must supply any
       // attendee phone explicitly.
-      return bookCalendarAppointment(businessId, parsed.data, null);
+      const booked = await bookCalendarAppointment(businessId, parsed.data, null);
+      if (!booked.ok && booked.detail) {
+        return { ...booked, message: bookFailureGuidance(name, booked.detail) };
+      }
+      return booked;
+    }
+    case "notify_team": {
+      const parsed = notifyTeamArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const customerPhone = parsed.data.customerPhone ?? null;
+      // Dashboard log row first, so the request is visible even if every
+      // notification channel is disabled or fails (mirrors the voice twin).
+      const logId = randomUUID();
+      const logPayload = {
+        source: "sms_tool_notify_team",
+        message: parsed.data.message,
+        customerName: parsed.data.customerName ?? null,
+        customerPhone
+      };
+      await insertCoworkerLog({
+        id: logId,
+        business_id: businessId,
+        task_type: "sms",
+        status: "urgent_alert",
+        log_payload: logPayload
+      });
+      const who = parsed.data.customerName
+        ? `${parsed.data.customerName}${customerPhone ? ` (${customerPhone})` : ""}`
+        : customerPhone ?? "a texter";
+      let notified = false;
+      try {
+        const { results } = await dispatchUrgentNotification({
+          businessId,
+          summary: `Texter follow-up needed: ${parsed.data.message}`.slice(0, 200),
+          kind: "sms_team_notify",
+          payload: { logId, ...logPayload },
+          emailSubject: `Follow up with ${who}`,
+          emailBody:
+            `Your texting coworker was messaging with ${who} and promised the team ` +
+            `would follow up.\n\nRequest: ${parsed.data.message}`,
+          smsBody: `[Coworker] Follow up with ${who}: ${parsed.data.message}`.slice(0, 640)
+        });
+        notified = results.some((r) => r.status === "sent");
+      } catch (err) {
+        // The dashboard log row is already written; report the degraded
+        // state truthfully so the model doesn't tell the texter the team
+        // was reached when no channel delivered.
+        logger.warn("rowboat/tool-call: notify_team dispatch failed", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      return { ok: true, data: { logId, notified } };
     }
     case "send_email": {
       const parsed = sendEmailArgsSchema.safeParse(args);

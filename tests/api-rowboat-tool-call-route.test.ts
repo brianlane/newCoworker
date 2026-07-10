@@ -54,6 +54,14 @@ vi.mock("@/lib/calendar-tools/handlers", () => ({
   bookCalendarAppointment: vi.fn()
 }));
 
+vi.mock("@/lib/db/logs", () => ({
+  insertCoworkerLog: vi.fn()
+}));
+
+vi.mock("@/lib/notifications/dispatch", () => ({
+  dispatchUrgentNotification: vi.fn()
+}));
+
 import { POST } from "@/app/api/rowboat/tool-call/route";
 import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
@@ -67,6 +75,8 @@ import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
+import { insertCoworkerLog } from "@/lib/db/logs";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -463,6 +473,125 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     const res = await POST(makeRequest(content));
     expect((await res.json()).detail).toMatch(/^invalid_args:/);
     expect(vi.mocked(bookCalendarAppointment)).not.toHaveBeenCalled();
+  });
+
+  it("attaches availability-framed guidance when a booking fails", async () => {
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_book_failed"
+    });
+    const args = {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z",
+      summary: "Estimate",
+      attendeeName: "Joe Plumber"
+    };
+    const content = makeContent("calendar_book_appointment", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const json = await res.json();
+    expect(json.ok).toBe(false);
+    expect(json.detail).toBe("calendar_book_failed");
+    // Availability framing + the SMS surface's escalation path.
+    expect(json.message).toContain("no longer available");
+    expect(json.message).toContain("notify_team");
+  });
+
+  it("guides collection + escalation when no calendar is connected (webchat twin)", async () => {
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+    const args = {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z",
+      summary: "Estimate",
+      attendeeName: "Joe Plumber"
+    };
+    const content = makeContent("webchat_calendar_book_appointment", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const json = await res.json();
+    expect(json.detail).toBe("calendar_not_connected");
+    // The anonymous widget has no notify_team — it saves the request instead.
+    expect(json.message).toContain("capture_lead");
+    expect(json.message).not.toContain("notify_team");
+  });
+
+  it("tells the dashboard coworker to inform the owner on booking failure", async () => {
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_book_failed"
+    });
+    const args = {
+      startIso: "2026-06-12T17:00:00.000Z",
+      endIso: "2026-06-12T17:30:00.000Z",
+      summary: "Estimate",
+      attendeeName: "Joe"
+    };
+    const content = makeContent("dashboard_calendar_book_appointment", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const json = await res.json();
+    expect(json.message).toContain("tell the owner");
+    expect(json.message).not.toContain("notify_team");
+  });
+
+  it("notify_team writes an urgent dashboard log and dispatches the owner notification", async () => {
+    vi.mocked(dispatchUrgentNotification).mockResolvedValue({
+      results: [{ channel: "sms", status: "sent" }]
+    } as never);
+    const content = makeContent("notify_team", {
+      message: "Junaid wants a call about an auto quote",
+      customerName: "Junaid Awan",
+      customerPhone: "+16478096050"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.data.notified).toBe(true);
+    expect(typeof json.data.logId).toBe("string");
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "sms", "notify_team");
+    expect(vi.mocked(insertCoworkerLog)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: BIZ,
+        task_type: "sms",
+        status: "urgent_alert",
+        log_payload: expect.objectContaining({
+          source: "sms_tool_notify_team",
+          message: "Junaid wants a call about an auto quote",
+          customerName: "Junaid Awan",
+          customerPhone: "+16478096050"
+        })
+      })
+    );
+    expect(vi.mocked(dispatchUrgentNotification)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        kind: "sms_team_notify",
+        smsBody: expect.stringContaining("Junaid Awan (+16478096050)")
+      })
+    );
+  });
+
+  it("notify_team reports notified=false when dispatch throws (log row already written)", async () => {
+    vi.mocked(dispatchUrgentNotification).mockRejectedValue(new Error("channels down"));
+    const content = makeContent("notify_team", { message: "Call back the texter" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const json = await res.json();
+    expect(json.ok).toBe(true);
+    expect(json.data.notified).toBe(false);
+    expect(vi.mocked(insertCoworkerLog)).toHaveBeenCalled();
+  });
+
+  it("rejects invalid notify_team args", async () => {
+    const content = makeContent("notify_team", { message: "" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(insertCoworkerLog)).not.toHaveBeenCalled();
   });
 
   it("accepts offset-carrying ISO instants for calendar_book_appointment", async () => {
