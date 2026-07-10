@@ -151,10 +151,12 @@ const SCREENSHOT_MMS_URL_TTL_S = 60 * 60;
 // Storage bucket (private) for generate_image outputs; the worker writes
 // `${businessId}/${uuid}.png` and saves a signed URL into the step's var so a
 // later send_sms (mediaUrlVar → MMS) or send_email body can use it. Created by
-// 20260819000000_generated_images_bucket.sql. 7 days: the URL may sit in a
-// deferred run's context (quiet hours) before the consuming send fires.
+// 20260819000000_generated_images_bucket.sql. 32 days: the URL may sit in a
+// deferred run's context across sleeps/wait_for_reply, which cap at 30 days
+// (MAX_WAIT_MINUTES) — the TTL must outlive the longest possible deferral
+// plus delivery headroom so the consuming send never holds a dead link.
 const GENERATED_IMAGES_BUCKET = "generated-images";
-const GENERATED_IMAGE_URL_TTL_S = 7 * 24 * 60 * 60;
+const GENERATED_IMAGE_URL_TTL_S = 32 * 24 * 60 * 60;
 // Image model + flat per-image list prices (micro-USD). Image models bill per
 // generated image (not per text token), so metering uses these flat costs;
 // an unknown override model assumes the priciest tier (never undercount).
@@ -2772,12 +2774,27 @@ async function generateImageStep(
   if (!apiKey) {
     return { kind: "fail", error: "generate_image: no AI key is configured on this deployment" };
   }
-  // Hard budget gate (parity with extraction): images are the priciest
-  // single model call, and there is no local fallback to degrade to.
-  if (await aiFlowSpendOverCap(supabase, run.business_id)) {
-    throw new SpendCapError(
-      "the shared AI budget for this billing period is used up; image generation is paused until it resets"
-    );
+  // Hard budget gate WITH headroom for this image's flat price (parity with
+  // the coworker image tools): images are the priciest single model call,
+  // there is no local fallback to degrade to, and the charge must never push
+  // the business past the cap. Fails OPEN on a read error like
+  // aiFlowSpendOverCap — a metering blip must never block a lead flow.
+  const flatCostMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
+  if (AIFLOW_SPEND_METERING_ENABLED) {
+    let overCap = false;
+    try {
+      const spend = supabase as unknown as SpendSupabase;
+      const periodStart = await resolveChatPeriodStart(spend, run.business_id);
+      const spent = await readChatSpendMicros(spend, run.business_id, periodStart);
+      overCap = spent + flatCostMicros > CHAT_SPEND_CAP_MICROS;
+    } catch {
+      overCap = false;
+    }
+    if (overCap) {
+      throw new SpendCapError(
+        "the shared AI budget for this billing period is used up; image generation is paused until it resets"
+      );
+    }
   }
 
   const url =
@@ -2841,8 +2858,7 @@ async function generateImageStep(
   // Meter AFTER the store succeeds: a storage failure yields no usable image,
   // so the business is not charged for it. Google bills per generated image —
   // the flat list price, not token math.
-  const costMicros = IMAGE_COST_MICROS[GEMINI_IMAGE_MODEL] ?? DEFAULT_IMAGE_COST_MICROS;
-  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, costMicros);
+  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, flatCostMicros);
 
   const { data: signed, error: signErr } = await supabase.storage
     .from(GENERATED_IMAGES_BUCKET)
