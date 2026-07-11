@@ -124,16 +124,34 @@ export async function POST(request: Request) {
       recipientEmail: business.owner_email
     });
 
-    await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", business.owner_email, subject, {
-      text,
-      html
-    });
+    const apiKey = process.env.RESEND_API_KEY?.trim();
+    if (!apiKey) {
+      return errorResponse("CONFLICT", "RESEND_API_KEY is not configured; nudge not sent", 409);
+    }
+
+    let messageId: string | null = null;
+    try {
+      messageId = await sendOwnerEmail(apiKey, business.owner_email, subject, { text, html });
+    } catch (err) {
+      logger.error("admin.nudge: send failed", {
+        adminEmail: admin.email,
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return errorResponse("INTERNAL_SERVER_ERROR", "Email send failed; nudge not sent", 502);
+    }
+    if (!messageId) {
+      // Resend accepted the call but returned no id — treat as undelivered
+      // rather than telling the operator the reminder went out.
+      return errorResponse("INTERNAL_SERVER_ERROR", "Email provider returned no message id", 502);
+    }
 
     logger.info("admin.nudge: onboarding reminder sent", {
       adminEmail: admin.email,
       businessId,
       ownerEmail: business.owner_email,
-      itemCount: items.length
+      itemCount: items.length,
+      messageId
     });
 
     return successResponse({ sent: true, items });
