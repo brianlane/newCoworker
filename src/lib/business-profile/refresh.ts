@@ -26,6 +26,7 @@ export async function refreshBusinessProfileMd(
   }
   const md = renderBusinessProfileMd({
     name: business.name,
+    ownerName: business.owner_name ?? null,
     businessType: business.business_type ?? null,
     phone: business.phone ?? null,
     address: business.address ?? null,

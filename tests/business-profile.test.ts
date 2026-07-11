@@ -125,6 +125,7 @@ describe("renderBusinessProfileMd", () => {
   it("renders all facts with labeled industry and 12h hours", () => {
     const md = renderBusinessProfileMd({
       name: "Sunrise Realty",
+      ownerName: "Amy Laidlaw",
       businessType: "real_estate",
       phone: "+1 602 555 0147",
       address: "123 Main St, Phoenix, AZ",
@@ -136,6 +137,7 @@ describe("renderBusinessProfileMd", () => {
     });
     expect(md).toContain("## Business profile");
     expect(md).toContain("- Business name: Sunrise Realty");
+    expect(md).toContain("- Owner / primary contact: Amy Laidlaw");
     expect(md).toContain("- Industry: Real Estate");
     expect(md).toContain("- Phone: +1 602 555 0147");
     expect(md).toContain("- Address: 123 Main St, Phoenix, AZ");
@@ -174,6 +176,7 @@ describe("refreshBusinessProfileMd", () => {
     vi.mocked(getBusiness).mockResolvedValue({
       id: "biz-1",
       name: "Acme Plumbing",
+      owner_name: "Pat Piper",
       business_type: "plumbing",
       phone: "+16025550147",
       address: "9 Pipe Rd",
@@ -184,6 +187,7 @@ describe("refreshBusinessProfileMd", () => {
 
     const md = await refreshBusinessProfileMd("biz-1", db as never);
 
+    expect(md).toContain("- Owner / primary contact: Pat Piper");
     expect(md).toContain("- Industry: Plumbing");
     expect(md).toContain("- Monday: 8:00 AM to 4:00 PM");
     expect(patchBusinessConfig).toHaveBeenCalledWith("biz-1", { profile_md: md }, db);

@@ -18,6 +18,7 @@ import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
 import {
   BUSINESS_HOURS_DAYS,
   isValidHoursTime,
+  parseBusinessHours,
   type BusinessHours
 } from "@/lib/business-profile/profile";
 import { BUSINESS_TYPE_LABELS } from "@/lib/onboarding/businessTypes";
@@ -67,7 +68,7 @@ export async function POST(request: Request) {
     const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
     const { data: biz } = await db
       .from("businesses")
-      .select("id")
+      .select("id, business_hours")
       .in("id", activeBusinessId ? [activeBusinessId] : [])
       .order("created_at", { ascending: false })
       .limit(1)
@@ -75,11 +76,14 @@ export async function POST(request: Request) {
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
     const businessId = (biz as { id: string }).id;
 
-    // Normalize hours: only keep days the caller sent; zod has already
-    // validated shapes, so this is a plain narrowing copy.
+    // Merge submitted days OVER the stored value (zod has already validated
+    // shapes). A payload carrying only some weekdays must not silently drop
+    // the previously saved schedule for the others — omitting a day means
+    // "unchanged", an explicit null means "closed".
     let hours: BusinessHours | undefined;
     if (body.hours !== undefined) {
-      hours = {};
+      hours =
+        parseBusinessHours((biz as { business_hours?: unknown }).business_hours ?? null) ?? {};
       for (const day of BUSINESS_HOURS_DAYS) {
         const entry = body.hours[day];
         if (entry !== undefined) hours[day] = entry;

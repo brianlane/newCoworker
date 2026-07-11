@@ -89,6 +89,8 @@ export function formatHoursTime(time: string): string {
 
 export type BusinessProfileFacts = {
   name: string;
+  /** Owner / primary contact display name (businesses.owner_name). */
+  ownerName?: string | null;
   /** Industry slug (businesses.business_type); labeled via BUSINESS_TYPE_LABELS. */
   businessType?: string | null;
   phone?: string | null;
@@ -117,6 +119,8 @@ export function renderBusinessProfileMd(facts: BusinessProfileFacts): string {
   const lines: string[] = [];
   const name = facts.name.trim();
   if (name) lines.push(`- Business name: ${name}`);
+  const ownerName = facts.ownerName?.trim();
+  if (ownerName) lines.push(`- Owner / primary contact: ${ownerName}`);
   const type = facts.businessType?.trim();
   if (type) lines.push(`- Industry: ${businessTypeLabel(type)}`);
   const phone = facts.phone?.trim();

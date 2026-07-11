@@ -55,7 +55,11 @@ export async function POST(request: Request) {
     }
     if (body.phone !== undefined) {
       await updateBusinessProfileFields(businessId, { phone: body.phone || null }, db);
-      // Phone shows up in the rendered profile block; keep it fresh.
+    }
+    if (body.ownerName !== undefined || body.phone !== undefined) {
+      // Both facts appear in the rendered profile block the agent is
+      // grounded on — re-render and push so the coworker stops using the
+      // old primary-contact name/number immediately.
       await refreshBusinessProfileMd(businessId, db);
       void syncVaultToVpsAndLog(businessId);
     }
