@@ -74,6 +74,7 @@ import {
   buildApprovalGateOptions
 } from "../_shared/ai_flows/approval_options.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
+import { shortenSmsBodyUrls } from "../_shared/sms_short_links.ts";
 import {
   formatInTimeZone,
   nextTimeOfDayMs,
@@ -3384,11 +3385,30 @@ async function sendSmsStep(
     };
   }
 
+  // Tracked short links: rewrite long URLs in lead-facing texts to /s/<code>
+  // redirects so link clicks are measurable per flow (sms_links table).
+  // Teammate notifications keep raw URLs — tracking is for lead engagement,
+  // and dashboard links read clearer unshortened. Strictly fail-safe: any
+  // error leaves the original URL in place and the send proceeds.
+  let outboundBody = bodyText;
+  if (!internalAgentSend) {
+    const shortened = await shortenSmsBodyUrls(supabase, {
+      businessId: run.business_id,
+      text: bodyText,
+      source: "ai_flow",
+      baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+      toE164,
+      flowId: run.flow_id,
+      runId: run.id
+    });
+    outboundBody = shortened.text;
+  }
+
   // No auto-appended opt-out footer on AiFlow sends. The "Reply STOP to opt out."
   // suffix corrupts control replies (e.g. the literal "Y" a partner system expects)
   // and was never part of these message bodies. We still normalize to GSM-safe text
   // and cap length via prepareSmsBody; STOP/HELP handling lives in the inbound path.
-  const text = prepareSmsBody(bodyText);
+  const text = prepareSmsBody(outboundBody);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -3524,7 +3544,18 @@ async function sendGroupSmsStep(
     };
   }
 
-  const text = prepareSmsBody(action.body);
+  // Group replies are lead-facing too: same tracked-short-link rewrite as the
+  // 1:1 path (to_e164 stays null — one body, many recipients). Fail-safe.
+  const groupShortened = await shortenSmsBodyUrls(supabase, {
+    businessId: run.business_id,
+    text: action.body,
+    source: "ai_flow",
+    baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+    flowId: run.flow_id,
+    runId: run.id
+  });
+
+  const text = prepareSmsBody(groupShortened.text);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
