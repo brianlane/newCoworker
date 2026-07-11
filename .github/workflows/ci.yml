@@ -146,6 +146,60 @@ jobs:
       - name: npm audit (prod deps, high+)
         run: npm audit --omit=dev --audit-level=high
 
+  # The REAL ai-flow-worker against a REAL local Postgres: `supabase start`
+  # applies every migration (which keeps the migration ledger honest — the
+  # duplicate-version drift this job's first run exposed broke local starts
+  # repo-wide), `supabase functions serve` runs the actual worker bundle, and
+  # the suite ticks it over HTTP exactly like pg_cron. Covers what the unit
+  # and live-AI layers cannot: run claiming/reclaim, revision bumps,
+  # wait_for_reply park + timeout RPCs, sleep deferrals, step persistence.
+  worker-integration:
+    name: Worker Integration (local Supabase)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    needs: [quality, typecheck, test, deno-check, security]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Setup Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      - name: Start local Supabase (applies all migrations)
+        run: supabase start -x studio,imgproxy,mailpit,realtime,storage-api
+
+      - name: Serve edge functions
+        run: |
+          printf 'INTERNAL_CRON_SECRET=itest-cron-secret\n' > supabase/functions/.env.itest
+          (supabase functions serve --env-file supabase/functions/.env.itest > /tmp/functions-serve.log 2>&1 &)
+          # Ready when the worker answers (401 = up, auth working; retry ~60s).
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:54321/functions/v1/ai-flow-worker || true)
+            if [ "$CODE" = "401" ]; then echo "functions ready"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::edge functions never came up"; cat /tmp/functions-serve.log; exit 1
+
+      - name: Run worker integration suite
+        run: |
+          export ITEST_SERVICE_ROLE_KEY=$(supabase status --output json | jq -r '.SERVICE_ROLE_KEY')
+          npm run test:worker-integration
+
+      - name: Dump serve log on failure
+        if: failure()
+        run: tail -200 /tmp/functions-serve.log || true
+
   # Vercel deploys moved from the git integration into CI (vercel.json sets
   # git.deploymentEnabled: false) so a deployment only happens once the five
   # jobs above are green — not on every single commit. Previews deploy per
@@ -234,7 +288,7 @@ jobs:
     # a worst-case gate from cancelling the job AFTER it opened — which
     # would burn the paid Gemini calls without recording a verdict.
     timeout-minutes: 40
-    needs: [quality, typecheck, test, deno-check, security, vercel-deploy]
+    needs: [quality, typecheck, test, deno-check, security, vercel-deploy, worker-integration]
     permissions:
       contents: read
       checks: read

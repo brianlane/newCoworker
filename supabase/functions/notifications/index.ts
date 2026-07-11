@@ -250,7 +250,13 @@ serve(async (req: Request) => {
   const basePayload: Record<string, unknown> = {
     summary,
     logId: record.id,
-    taskType: record.task_type
+    taskType: record.task_type,
+    // Needs-human escalations stamp the contact so the escalation module's
+    // recent-page dedupe (payload->>contactE164) can find prior pages for
+    // untaggable contacts — see _shared/needs_human.ts.
+    ...(record.task_type === "sms_needs_human" && record.log_payload?.contact_e164
+      ? { contactE164: String(record.log_payload.contact_e164) }
+      : {})
   };
   const errors: string[] = [];
 

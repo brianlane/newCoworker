@@ -37,7 +37,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "update", "insert", "upsert", "eq", "or", "in", "not", "limit", "order", "maybeSingle", "range"]) {
+    for (const m of ["select", "update", "insert", "upsert", "eq", "or", "in", "not", "gte", "limit", "order", "maybeSingle", "range"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -75,13 +75,14 @@ describe("hasNeedsHumanTag", () => {
 });
 
 describe("escalateToHuman", () => {
-  it("tags the contact, fires the tag hooks, and pages the owner", async () => {
+  it("pages the owner, tags the contact, and fires the tag hooks", async () => {
     const fetchFn = okFetch();
-    // Scripted terminal awaits, in call order: contact lookup, tag update,
-    // goal-event run lookup (empty → no jumps), contact-event flow page
-    // (empty → no runs), then the notify POST (fetch, not db).
+    // Scripted terminal awaits, in call order: contact lookup, recent-page
+    // dedupe lookup, (notify POST — fetch, not db), tag update, goal-event
+    // run lookup (empty → no jumps), contact-event flow page (empty).
     const { db, calls } = makeDb([
       { data: contactRow() },
+      { data: [] }, // recent-page dedupe (none)
       { data: null }, // tags update
       { data: [] }, // applyGoalEvent: candidate runs (none)
       { data: [] } // enqueueContactEventRuns: enabled flows page (none)
@@ -124,9 +125,22 @@ describe("escalateToHuman", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it("a recent page for an untaggable contact also counts as OPEN (no page spam)", async () => {
+    const fetchFn = okFetch();
+    const { db, calls } = makeDb([
+      { data: null }, // no contact row (nothing can carry the tag)
+      { data: [{ id: "n1" }] } // a page inside the re-page window
+    ]);
+    expect(await escalateToHuman(db, input(fetchFn))).toBe("already_open");
+    expect(fetchFn).not.toHaveBeenCalled();
+    const dedupe = calls.find((c) => c.table === "notifications" && c.name === "eq" && c.args[0] === "payload->>contactE164");
+    expect(dedupe?.args[1]).toBe(LEAD);
+  });
+
   it("no contact row: nothing to tag, but the owner is still paged", async () => {
     const fetchFn = okFetch();
-    const { db, calls } = makeDb([{ data: null }]);
+    // Dedupe lookup returns null data (not an empty page) — same outcome.
+    const { db, calls } = makeDb([{ data: null }, { data: null }]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
     expect(calls.some((c) => c.name === "update")).toBe(false);
     const body = JSON.parse(
@@ -140,18 +154,19 @@ describe("escalateToHuman", () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchFn = okFetch();
     const full = Array.from({ length: 25 }, (_, i) => `t${i}`);
-    const { db, calls } = makeDb([{ data: contactRow({ tags: full }) }]);
+    const { db, calls } = makeDb([{ data: contactRow({ tags: full }) }, { data: [] }]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
     expect(calls.some((c) => c.name === "update")).toBe(false);
     expect(fetchFn).toHaveBeenCalledTimes(1);
     err.mockRestore();
   });
 
-  it("a failed tag write skips the hooks but still pages", async () => {
+  it("a failed tag write after a successful page still reports escalated (page won)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow() },
+      { data: [] }, // recent-page dedupe
       { data: null, error: { message: "boom" } } // tags update fails
     ]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
@@ -161,10 +176,20 @@ describe("escalateToHuman", () => {
     err.mockRestore();
   });
 
+  it("a recent-page lookup error degrades to paging (never blocks the alert)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchFn = okFetch();
+    const { db } = makeDb([{ data: null }, { data: null, error: { message: "boom" } }]);
+    expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
   it("goal hooks fire for every linked number (primary + aliases + texter)", async () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow({ customer_e164: "+16025550000", alias_e164s: [LEAD] }) },
+      { data: [] }, // recent-page dedupe
       { data: null }, // tag update
       { data: [] }, // goal lookup for +16025550000
       { data: [] }, // goal lookup for +14168775223 (texter/alias)
@@ -188,6 +213,7 @@ describe("escalateToHuman", () => {
           tags: null
         })
       },
+      { data: [] }, // recent-page dedupe
       { data: null }, // tag update
       { data: [] }, // goal lookup (texter number only)
       { data: [] } // contact-event flows page
@@ -207,6 +233,7 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow({ tags: ["Engaged", 7, "  ", null] as unknown as string[] }) },
+      { data: [] }, // recent-page dedupe
       { data: null },
       { data: [] },
       { data: [] }
@@ -219,7 +246,7 @@ describe("escalateToHuman", () => {
   it("a contact-lookup error degrades to page-only (never throws)", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const fetchFn = okFetch();
-    const { db } = makeDb([{ data: null, error: { message: "boom" } }]);
+    const { db } = makeDb([{ data: null, error: { message: "boom" } }, { data: [] }]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
     expect(fetchFn).toHaveBeenCalledTimes(1);
     err.mockRestore();
@@ -230,10 +257,12 @@ describe("escalateToHuman", () => {
     const globalFetch = vi.fn(async () => new Response("nope", { status: 500 }));
     vi.stubGlobal("fetch", globalFetch);
     try {
-      const { db } = makeDb([{ data: null }]);
+      const { db, calls } = makeDb([{ data: null }, { data: [] }]);
       const { fetchFn: _omitted, ...noFetch } = input(okFetch());
       expect(await escalateToHuman(db, noFetch)).toBe("notify_failed");
       expect(globalFetch).toHaveBeenCalledTimes(1);
+      // Page-first ordering: a failed page must leave NO tag behind.
+      expect(calls.some((c) => c.name === "update")).toBe(false);
     } finally {
       vi.unstubAllGlobals();
       err.mockRestore();
@@ -254,7 +283,7 @@ describe("escalateToHuman", () => {
 
   it("clips oversized intent/reason/preview to the payload bounds", async () => {
     const fetchFn = okFetch();
-    const { db } = makeDb([{ data: null }]);
+    const { db } = makeDb([{ data: null }, { data: [] }]);
     await escalateToHuman(db, {
       ...input(fetchFn),
       intent: "i".repeat(200),

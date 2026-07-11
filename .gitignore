@@ -50,3 +50,4 @@ debug/.cost-data-*.json
 debug/.tmp-*
 vps/voice-bridge/dist/
 deno.lock
+supabase/functions/.env.itest
