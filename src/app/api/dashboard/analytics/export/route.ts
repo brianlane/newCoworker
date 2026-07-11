@@ -58,11 +58,12 @@ export async function GET(request: Request) {
     let csv: string;
     let filename: string;
     if (kind === "flows") {
-      csv = flowFunnelsCsv((await getFlowFunnels(businessId, { client: db })).rows);
+      const funnels = await getFlowFunnels(businessId, { client: db });
+      csv = flowFunnelsCsv(funnels.rows, funnels.clipped);
       filename = "flow-performance-30d.csv";
     } else {
       const series = await getDailyUsageSeries(businessId, { client: db });
-      csv = dailySeriesCsv(series.days);
+      csv = dailySeriesCsv(series.days, series.clipped);
       filename = "analytics-daily-30d.csv";
     }
     return new Response(csv, {

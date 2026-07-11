@@ -28,6 +28,15 @@ describe("dailySeriesCsv", () => {
       { date: "total", calls: "0", texts: "0", voice_minutes: "0" }
     ]);
   });
+
+  it("appends the partial-counts note when the source scan was clipped", () => {
+    const clipped = dailySeriesCsv(
+      [{ date: "2026-07-01", calls: 1, sms: 1, voiceMinutes: 1 }],
+      true
+    );
+    expect(clipped).toMatch(/most recent activity only/);
+    expect(dailySeriesCsv([], false)).not.toMatch(/most recent activity/);
+  });
 });
 
 describe("flowFunnelsCsv", () => {
@@ -76,5 +85,10 @@ describe("flowFunnelsCsv", () => {
       goals_reached: "1"
     });
     expect(parsed.rows[1].enabled).toBe("no");
+  });
+
+  it("appends the partial-counts note when clipped", () => {
+    expect(flowFunnelsCsv([], true)).toMatch(/most recent activity only/);
+    expect(flowFunnelsCsv([], false)).not.toMatch(/most recent activity/);
   });
 });
