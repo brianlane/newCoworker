@@ -389,6 +389,7 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
       id: "x",
       business_id: BIZ,
       customer_e164: PRIMARY,
+      alias_e164s: [CUSTOMER],
       tags: []
     } as never);
     const res = await DETAIL_PATCH(
@@ -399,7 +400,13 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, PRIMARY, {
       tags: ["Engaged"]
     });
+    // Goal events fan out over every linked number — a parked run may still
+    // be keyed on the merged-away alias.
     expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, PRIMARY, {
+      kind: "tag_added",
+      tag: "Engaged"
+    });
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, CUSTOMER, {
       kind: "tag_added",
       tag: "Engaged"
     });

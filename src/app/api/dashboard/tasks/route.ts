@@ -423,11 +423,19 @@ export async function GET(request: Request) {
 
     // Scope + ordering + cap. "Mine" with no linked roster member is empty
     // by design — the client explains the linkage instead of showing all.
+    // In-motion leads (active runs) always rank above tag-only cards so the
+    // MAX_TASKS cap can never hide a running workflow behind recently-edited
+    // tagged contacts; within each group, newest activity first.
     const scoped =
       scope === "mine"
         ? cards.filter((c) => myEmployeeId !== null && c.ownerEmployeeId === myEmployeeId)
         : cards;
-    scoped.sort((a, b) => (a.lastActivityAt < b.lastActivityAt ? 1 : -1));
+    scoped.sort((a, b) => {
+      const aActive = a.runs.length > 0 ? 1 : 0;
+      const bActive = b.runs.length > 0 ? 1 : 0;
+      if (aActive !== bActive) return bActive - aActive;
+      return a.lastActivityAt < b.lastActivityAt ? 1 : -1;
+    });
 
     return successResponse({
       tasks: scoped.slice(0, MAX_TASKS),

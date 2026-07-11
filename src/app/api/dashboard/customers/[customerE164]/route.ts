@@ -243,9 +243,15 @@ export async function PATCH(
       const before = new Set(
         normalizeContactTags(existing.tags ?? []).map((t) => t.toLowerCase())
       );
+      // Runs match goal events by the exact number they were triggered with,
+      // which after a profile merge may be an ALIAS — fire for every linked
+      // number so a parked run keyed on the old number still jumps.
+      const goalNumbers = [canonicalE164, ...(existing.alias_e164s ?? [])];
       for (const tag of normalizeContactTags(body.tags)) {
         if (before.has(tag.toLowerCase())) continue;
-        await fireGoalEvent(businessId, canonicalE164, { kind: "tag_added", tag });
+        for (const number of goalNumbers) {
+          await fireGoalEvent(businessId, number, { kind: "tag_added", tag });
+        }
       }
     }
 

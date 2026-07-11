@@ -154,9 +154,30 @@ export async function deleteEndUserData(
   // kept central in every residency mode, so the journaled central delete
   // reaches the box copy; a direct box delete on the primary identifiers
   // still runs for vps tenants as belt-and-braces.
+  // Every number linked to this person (primary + merge aliases), captured
+  // BEFORE the contact rows are deleted — ai_reply_reasoning below is keyed
+  // by whichever number the person texted from, which may be an alias.
+  const linkedNumbers = new Set<string>(e164 ? [e164] : []);
   {
     let central = 0;
     if (e164) {
+      const { data: linkedRows, error: linkedErr } = await db
+        .from("contacts")
+        .select("customer_e164, alias_e164s")
+        .eq("business_id", businessId)
+        .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`);
+      if (linkedErr) {
+        throw new EndUserDeletionError(`contacts (linked-number scan): ${linkedErr.message}`);
+      }
+      for (const row of (linkedRows ?? []) as Array<{
+        customer_e164: string;
+        alias_e164s?: unknown;
+      }>) {
+        linkedNumbers.add(row.customer_e164);
+        for (const alias of Array.isArray(row.alias_e164s) ? row.alias_e164s : []) {
+          if (typeof alias === "string" && alias) linkedNumbers.add(alias);
+        }
+      }
       const [primary, alias] = await Promise.all([
         db
           .from("contacts")
@@ -286,13 +307,15 @@ export async function deleteEndUserData(
       });
     }
 
-    // ai_reply_reasoning (per-reply AI decision records; central-only table)
+    // ai_reply_reasoning (per-reply AI decision records; central-only table).
+    // Keyed by whichever number the person texted from, so the delete spans
+    // every linked number (primary + merge aliases, captured above).
     {
       const { data, error } = await db
         .from("ai_reply_reasoning")
         .delete()
         .eq("business_id", businessId)
-        .eq("contact_e164", e164)
+        .in("contact_e164", [...linkedNumbers])
         .select("id");
       if (error) throw new EndUserDeletionError(`ai_reply_reasoning: ${error.message}`);
       results.push({ table: "ai_reply_reasoning", central: count(data), box: null });
