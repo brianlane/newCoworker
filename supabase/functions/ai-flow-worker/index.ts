@@ -3280,7 +3280,24 @@ async function sendSmsStep(
     });
     if (!send.ok) {
       await release();
-      throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
+      const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
+      // A Telnyx 4xx is PERMANENT for this exact payload (invalid 'to'
+      // number, blocked destination, rejected content) — retrying resends
+      // the same rejected request. Fail the step readably instead of
+      // burning the whole retry budget: a Privyr digest email once yielded
+      // lead_phone "+11459337300" (not a dialable NANP number) and the run
+      // spent five retries on guaranteed 40310s before dying with a raw
+      // error blob. 408 (timeout) and 429 (rate limit) are transient and
+      // keep the retry path, as do 5xx/network errors.
+      if (send.status >= 400 && send.status < 500 && send.status !== 408 && send.status !== 429) {
+        return {
+          kind: "fail",
+          error:
+            `send_sms: the carrier rejected the text to ${toE164} and a retry can't fix it — ` +
+            `usually the number isn't a real dialable line. (${detail})`
+        };
+      }
+      throw new Error(detail);
     }
     let messageId: string | null = null;
     try {
@@ -3409,7 +3426,19 @@ async function sendGroupSmsStep(
     }
     if (!send.ok) {
       await release();
-      throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);
+      const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
+      // Same permanent-4xx rule as the 1:1 send above (408/429 stay
+      // transient): retrying an invalid recipient or rejected payload can
+      // only fail again.
+      if (send.status >= 400 && send.status < 500 && send.status !== 408 && send.status !== 429) {
+        return {
+          kind: "fail",
+          error:
+            `send_sms: the carrier rejected the group text and a retry can't fix it — ` +
+            `check the recipient numbers. (${detail})`
+        };
+      }
+      throw new Error(detail);
     }
     let messageId: string | null = null;
     try {
