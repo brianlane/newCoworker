@@ -122,7 +122,19 @@ export async function DELETE(request: Request) {
       (subRows ?? []) as AccountDeletionSubscriptionFields[]
     );
     if (!eligibility.eligible) {
-      return errorResponse("CONFLICT", eligibility.reason, 409);
+      // Human-readable message (the card renders it verbatim); the machine
+      // slug rides along for clients that want to branch.
+      const blockedCopy: Record<typeof eligibility.reason, string> = {
+        active_subscription:
+          "You have an active subscription. Cancel it from the Billing page first.",
+        past_due_subscription:
+          "Your subscription has a past-due balance. Resolve it in Billing first.",
+        canceled_in_grace:
+          "Your cancellation is still in its data-retention grace window; everything is wiped automatically when it ends.",
+        checkout_in_flight:
+          "A recent checkout is still being finalized. Try again in a few minutes."
+      };
+      return errorResponse("CONFLICT", blockedCopy[eligibility.reason], 409);
     }
 
     // Stop any attached VM first (mirrors the admin subscription-less
