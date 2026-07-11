@@ -25,6 +25,7 @@ import {
   telnyxStreamingStop
 } from "./telnyx-call-actions.js";
 import { composeIntakeLeadSms } from "./intake.js";
+import { loadVoiceFlowContext } from "./flow-run-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
 
@@ -1197,6 +1198,19 @@ function main(): void {
             }
           }
 
+          // AiFlow context bridge (voice twin of the SMS worker's block): a
+          // lead an automation recently texted may CALL instead of texting
+          // back — without this the receptionist restarts intake on a caller
+          // whose details the workflow already collected. Best-effort: null
+          // on any failure (loadVoiceFlowContext never throws), degraded
+          // prompt, never a refused call. Staff callers are skipped for the
+          // same reason as the memory note.
+          let flowContextNote: string | undefined;
+          if (trustedFromE164 && !callerIsStaff) {
+            flowContextNote =
+              (await loadVoiceFlowContext(supabase, businessId, trustedFromE164)) ?? undefined;
+          }
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -1220,6 +1234,7 @@ function main(): void {
             voiceTools,
             transcriptAdapter,
             customerMemorySummary,
+            flowContextNote,
             callerIdentity,
             intake,
             recordDiag
