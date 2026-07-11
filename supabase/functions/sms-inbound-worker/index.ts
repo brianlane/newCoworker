@@ -169,7 +169,9 @@ async function storeInboundImageForEditing(
   image: TelnyxInboundImage
 ): Promise<string | null> {
   try {
-    const res = await fetch(image.url);
+    // No redirects: only the pinned Telnyx host may serve the bytes — a 3xx
+    // bouncing elsewhere is a refusal, not a hop (SSRF).
+    const res = await fetch(image.url, { redirect: "manual" });
     if (!res.ok) {
       console.warn("inbound MMS media fetch failed", res.status);
       return null;

@@ -2791,10 +2791,21 @@ async function resolveFlowInputImage(
     return INPUT_IMAGE_TYPES.has(mimeType) ? { bytes, mimeType } : null;
   };
 
-  // Inbound tenant-mailbox attachment.
+  // Inbound tenant-mailbox attachment. The path carries no business prefix,
+  // so tenancy is verified against email_log: the attachment's storage_path
+  // must appear on one of THIS business's inbound mail rows — a crafted ref
+  // to another tenant's (message-id-derived, guessable) path reads nothing.
   if (ref.startsWith("email-attachments:")) {
     const path = ref.slice("email-attachments:".length);
     if (!path.startsWith("inbound/")) return null;
+    const { data: ownerRow, error: ownerErr } = await supabase
+      .from("email_log")
+      .select("id")
+      .eq("business_id", businessId)
+      .contains("attachments", JSON.stringify([{ storage_path: path }]))
+      .limit(1)
+      .maybeSingle();
+    if (ownerErr || !ownerRow) return null;
     const { data, error } = await supabase.storage.from("email-attachments").download(path);
     if (error || !data) return null;
     const bytes = new Uint8Array(await data.arrayBuffer());
@@ -2832,9 +2843,11 @@ async function resolveFlowInputImage(
     parsed.hostname === "telnyx.com" || parsed.hostname.endsWith(".telnyx.com");
   if (!(telnyxHost || (ownHost && parsed.hostname === ownHost))) return null;
   // An own-host signed URL must additionally point at an object THIS run may
-  // read: this business's generated-images prefix, or an inbound tenant-mail
-  // attachment. Without this, a signed URL for another tenant's object on
-  // the same project host would pass the host check.
+  // read: this business's generated-images prefix. (Email attachments are
+  // deliberately NOT accepted in URL form — they go through the
+  // `email-attachments:` ref above, which verifies tenancy via email_log.)
+  // Without this, a signed URL for another tenant's object on the same
+  // project host would pass the host check.
   if (!telnyxHost) {
     const objMatch = /^\/storage\/v1\/object\/(?:sign|authenticated|public)\/([^/]+)\/(.+)$/.exec(
       parsed.pathname
@@ -2843,9 +2856,8 @@ async function resolveFlowInputImage(
     const bucket = objMatch[1];
     const objectPath = decodeURIComponent(objMatch[2]);
     const allowed =
-      (bucket === GENERATED_IMAGES_BUCKET &&
-        objectPath.toLowerCase().startsWith(`${businessId.toLowerCase()}/`)) ||
-      (bucket === "email-attachments" && objectPath.startsWith("inbound/"));
+      bucket === GENERATED_IMAGES_BUCKET &&
+      objectPath.toLowerCase().startsWith(`${businessId.toLowerCase()}/`);
     if (!allowed) return null;
   }
   try {

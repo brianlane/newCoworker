@@ -243,7 +243,9 @@ async function evaluateAndEnqueueAiFlows(
   if (ctx.image) {
     triggerImage = ctx.image.url;
     try {
-      const res = await fetch(ctx.image.url);
+      // No redirects: only the pinned Telnyx host may serve the bytes — a
+      // 3xx bouncing elsewhere is a refusal, not a hop (SSRF).
+      const res = await fetch(ctx.image.url, { redirect: "manual" });
       if (res.ok) {
         const bytes = new Uint8Array(await res.arrayBuffer());
         if (bytes.length > 0 && bytes.length <= 10 * 1024 * 1024) {
