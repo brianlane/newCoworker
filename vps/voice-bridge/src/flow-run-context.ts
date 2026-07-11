@@ -87,6 +87,11 @@ export function presentableVars(vars: Record<string, unknown>): [string, string]
 /**
  * Per-caller context block for the voice system instruction. Null when
  * there is nothing to say (no recent runs and no recent automated message).
+ *
+ * Ordering differs from the SMS mirror on purpose: the voice bridge hard-
+ * clips this block to VOICE_FLOW_CONTEXT_MAX_CHARS, so the header, the last
+ * automated text, and the continue-the-thread guidance LEAD — a clip can
+ * only ever cost var lines of older runs, never the guidance itself.
  */
 export function formatVoiceFlowContext(
   runs: FlowRunSnapshot[],
@@ -100,6 +105,16 @@ export function formatVoiceFlowContext(
       "Facts the automation already collected are listed below — treat them as KNOWN. " +
       "Do NOT ask for or re-confirm any of them (including their phone number: they are calling from it)."
   ];
+  if (lastFlowMessage?.trim()) {
+    lines.push("");
+    lines.push(
+      `Last automated text sent to this caller: "${truncate(lastFlowMessage, MAX_LAST_MESSAGE_CHARS)}"`
+    );
+    lines.push(
+      "If the caller brings it up or seems to be responding to it, continue THAT conversation " +
+        "naturally — acknowledge and move forward; never restart intake."
+    );
+  }
   for (const run of shown) {
     const when = run.updatedAt ? `, last update ${run.updatedAt}` : "";
     lines.push("");
@@ -110,16 +125,6 @@ export function formatVoiceFlowContext(
     } else {
       for (const [key, value] of vars) lines.push(`- ${key}: ${value}`);
     }
-  }
-  if (lastFlowMessage?.trim()) {
-    lines.push("");
-    lines.push(
-      `Last automated text sent to this caller: "${truncate(lastFlowMessage, MAX_LAST_MESSAGE_CHARS)}"`
-    );
-    lines.push(
-      "If the caller brings it up or seems to be responding to it, continue THAT conversation " +
-        "naturally — acknowledge and move forward; never restart intake."
-    );
   }
   return lines.join("\n");
 }
