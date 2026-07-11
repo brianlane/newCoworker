@@ -18,6 +18,13 @@ import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import {
+  listDocumentsTool,
+  setDocumentExpirationTool,
+  shareDocumentTool,
+  updateDocumentTool,
+  type DocumentToolSurface
+} from "@/lib/documents/tool-handlers";
 import { captureWebchatLead } from "@/lib/webchat/lead-capture";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import { insertCoworkerLog } from "@/lib/db/logs";
@@ -147,6 +154,22 @@ const bookAppointmentArgsSchema = z.object({
   // Vagaro connections only: explicit service to book.
   serviceId: z.string().max(120).optional()
 });
+const documentShareArgsSchema = z.object({
+  /** Document id or (partial) title. */
+  document: z.string().min(1).max(300),
+  phone: phoneSchema.optional(),
+  email: z.string().email().optional(),
+  message: z.string().max(500).optional()
+});
+const documentUpdateArgsSchema = z.object({
+  document: z.string().min(1).max(300),
+  instruction: z.string().min(3).max(2000)
+});
+const documentSetExpirationArgsSchema = z.object({
+  document: z.string().min(1).max(300),
+  /** ISO date/datetime; omit/empty/null to clear (never expires). */
+  expiresAt: z.string().max(64).nullish()
+});
 const notifyTeamArgsSchema = z.object({
   /** What the team needs to do, in plain language. */
   message: z.string().min(1).max(1000),
@@ -212,6 +235,13 @@ function baseToolKey(name: string): string {
   return name;
 }
 
+/** Which coworker surface a declared tool name belongs to (by its prefix). */
+function toolSurface(name: string): DocumentToolSurface {
+  if (name.startsWith("dashboard_")) return "dashboard";
+  if (name.startsWith("webchat_")) return "webchat";
+  return "sms";
+}
+
 const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   send_sms: { agentKey: "dashboard", toolKey: "send_sms" },
   // Marketplace parity (all tools on all workers): the texting coworker
@@ -252,6 +282,20 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   webchat_calendar_book_appointment: {
     agentKey: "webchat",
     toolKey: "calendar_book_appointment"
+  },
+  // Business documents: share exists on every Rowboat surface (webchat's
+  // twin is inline-only — the handler never sends SMS/email for webchat);
+  // list/update/set-expiration are dashboard-only by design (customers must
+  // never mutate business knowledge), so no sms/webchat names exist for
+  // them and unknown names fail closed.
+  document_share: { agentKey: "sms", toolKey: "document_share" },
+  dashboard_document_share: { agentKey: "dashboard", toolKey: "document_share" },
+  webchat_document_share: { agentKey: "webchat", toolKey: "document_share" },
+  dashboard_document_list: { agentKey: "dashboard", toolKey: "document_list" },
+  dashboard_document_update: { agentKey: "dashboard", toolKey: "document_update" },
+  dashboard_document_set_expiration: {
+    agentKey: "dashboard",
+    toolKey: "document_set_expiration"
   },
   ...Object.fromEntries(
     Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
@@ -300,7 +344,52 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      return lookupBusinessKnowledge(businessId, parsed.data.question);
+      // Owner dashboard reads as staff (sees internal docs); customer
+      // surfaces read as clients.
+      return lookupBusinessKnowledge(businessId, parsed.data.question, {
+        audience: toolSurface(name) === "dashboard" ? "staff" : "clients"
+      });
+    }
+    case "document_list": {
+      return listDocumentsTool(businessId);
+    }
+    case "document_share": {
+      const parsed = documentShareArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return shareDocumentTool(
+        businessId,
+        {
+          documentRef: parsed.data.document,
+          ...(parsed.data.phone ? { phone: parsed.data.phone } : {}),
+          ...(parsed.data.email ? { email: parsed.data.email } : {}),
+          ...(parsed.data.message ? { message: parsed.data.message } : {})
+        },
+        toolSurface(name)
+      );
+    }
+    case "document_update": {
+      const parsed = documentUpdateArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return updateDocumentTool(
+        businessId,
+        { documentRef: parsed.data.document, instruction: parsed.data.instruction },
+        toolSurface(name)
+      );
+    }
+    case "document_set_expiration": {
+      const parsed = documentSetExpirationArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return setDocumentExpirationTool(
+        businessId,
+        { documentRef: parsed.data.document, expiresAt: parsed.data.expiresAt ?? null },
+        toolSurface(name)
+      );
     }
     case "capture_lead": {
       const parsed = captureLeadArgsSchema.safeParse(args);

@@ -121,10 +121,8 @@ describe("getFlowFunnels", () => {
       gte: ReturnType<typeof vi.fn>;
       limit: ReturnType<typeof vi.fn>;
     };
-    expect(runsChain.gte).toHaveBeenCalledWith(
-      "created_at",
-      new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString()
-    );
+    // Day-aligned window shared with every other analytics card.
+    expect(runsChain.gte).toHaveBeenCalledWith("created_at", "2026-06-05T00:00:00.000Z");
     expect(runsChain.limit).toHaveBeenCalledWith(FLOW_FUNNEL_SCAN_LIMIT);
     const links = chains.sms_links as { not: ReturnType<typeof vi.fn> };
     expect(links.not).toHaveBeenCalledWith("flow_id", "is", null);
@@ -147,6 +145,22 @@ describe("getFlowFunnels", () => {
     const funnels = await getFlowFunnels("biz-1", { client, now: NOW });
     expect(funnels.rows).toHaveLength(FLOW_FUNNEL_FLOW_LIMIT);
     expect(funnels.rows[0].flowId).toBe(busyId);
+  });
+
+  it("a full flow-candidate list alone does NOT flag clipping (counts stay accurate)", async () => {
+    const manyFlows = Array.from({ length: FLOW_FUNNEL_CANDIDATE_LIMIT }, (_, i) => ({
+      id: `flow-${i}`,
+      name: `Flow ${i}`,
+      enabled: true
+    }));
+    const { client } = makeClient({
+      ai_flows: { data: manyFlows, error: null },
+      ai_flow_runs: { data: [], error: null },
+      sms_outbound_log: { data: [], error: null },
+      sms_links: { data: [], error: null }
+    });
+    const funnels = await getFlowFunnels("biz-1", { client, now: NOW });
+    expect(funnels.clipped).toBe(false);
   });
 
   it("flags clipping when any source scan fills its cap", async () => {

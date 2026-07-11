@@ -146,22 +146,114 @@ jobs:
       - name: npm audit (prod deps, high+)
         run: npm audit --omit=dev --audit-level=high
 
+  # Vercel deploys moved from the git integration into CI (vercel.json sets
+  # git.deploymentEnabled: false) so a deployment only happens once the five
+  # jobs above are green — not on every single commit. Previews deploy per
+  # PR (superseded pushes are cancelled by the concurrency group first);
+  # pushes to main deploy production. Remote build (`vercel deploy` without
+  # --prebuilt) keeps build env/behavior identical to the old git-triggered
+  # builds. The e2e job `needs` this, so the chain is:
+  # checks → deploy → live e2e against a commit that actually deploys.
+  vercel-deploy:
+    name: Vercel Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [quality, typecheck, test, deno-check, security]
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Deploy to Vercel
+        id: deploy
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          if [ -z "$VERCEL_TOKEN" ]; then
+            echo "::error::VERCEL_TOKEN secret is not available to this run — cannot deploy."
+            exit 1
+          fi
+          if [ "${{ github.event_name }}" = "push" ]; then
+            TARGET_FLAG="--prod"
+            echo "target=production" >> "$GITHUB_OUTPUT"
+          else
+            TARGET_FLAG=""
+            echo "target=preview" >> "$GITHUB_OUTPUT"
+          fi
+          URL=$(npx --yes vercel@latest deploy $TARGET_FLAG --yes --token "$VERCEL_TOKEN" | tail -1)
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "Deployed: $URL"
+          echo "### Vercel deployment" >> "$GITHUB_STEP_SUMMARY"
+          echo "$URL" >> "$GITHUB_STEP_SUMMARY"
+
+      # The git integration's bot comment is gone with auto-deploys; keep the
+      # preview URL discoverable with one sticky (edited-in-place) PR comment.
+      - name: Comment preview URL on the PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          MARKER="<!-- ci-vercel-preview -->"
+          BODY="$MARKER
+          **Vercel preview** (deployed by CI after all checks passed): ${{ steps.deploy.outputs.url }} — commit ${{ github.event.pull_request.head.sha }}"
+          EXISTING=$(gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" \
+            --paginate -q ".[] | select(.body | startswith(\"$MARKER\")) | .id" | head -1)
+          if [ -n "$EXISTING" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$EXISTING" -f body="$BODY" > /dev/null
+          else
+            gh api "repos/${{ github.repository }}/issues/${{ github.event.pull_request.number }}/comments" -f body="$BODY" > /dev/null
+          fi
+
   # Live-AI end-to-end suite (tests/e2e/): real Gemini calls exercising the
   # reply-reasoning trailer round trip and full AiFlow executions where the
   # model makes the branch decisions — the contract class that unit tests
   # cannot cover (the Truly Insurance trailer leak of 2026-07-11 shipped
   # through 100%-coverage unit tests because only the live model mangles
-  # markers). Gated on every other job in this workflow so the paid model
-  # calls only run once a commit is otherwise green, and superseded pushes
-  # are cancelled by the workflow-level concurrency group before reaching it.
+  # markers).
+  #
+  # Runs LAST, twice-gated so the paid model calls fire only on an
+  # otherwise-mergeable commit:
+  #   1. `needs`: the five check jobs PLUS the Vercel deploy in THIS
+  #      workflow (free, event-driven) — checks → deploy → e2e;
+  #   2. the e2e-gate step: polls until every OTHER check on the SHA —
+  #      cross-workflow (Analyze/CodeQL/audit) and app-reported (Cursor
+  #      Bugbot, GitGuardian) — is literally SUCCESS (a NEUTRAL Bugbot
+  #      means open findings and keeps the gate closed) AND every review
+  #      thread is resolved. See .github/scripts/e2e-gate.sh.
+  # Superseded pushes are cancelled by the workflow-level concurrency group.
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [quality, typecheck, test, deno-check, security]
+    # Budget: gate poll (≤20m) + npm ci (~1m) + live suite (~1m nominal,
+    # up to ~15m if every serial test rode its full 120s timeout). 40m keeps
+    # a worst-case gate from cancelling the job AFTER it opened — which
+    # would burn the paid Gemini calls without recording a verdict.
+    timeout-minutes: 40
+    needs: [quality, typecheck, test, deno-check, security, vercel-deploy]
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Push events (post-merge main) skip the PR-shaped gate: Bugbot/Vercel/
+      # threads exist on the PR, which already enforced all of this pre-merge.
+      - name: Wait for every other check to pass and all threads to resolve
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/e2e-gate.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v6

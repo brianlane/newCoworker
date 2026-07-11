@@ -21,6 +21,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { analyticsWindowStart } from "@/lib/analytics/dashboard-analytics";
 import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -77,7 +78,10 @@ export async function getFlowFunnels(
   const db = opts.client ?? (await createSupabaseServiceClient());
   const now = opts.now ?? new Date();
   const days = opts.days ?? FLOW_FUNNEL_WINDOW_DAYS;
-  const cutoffIso = new Date(now.getTime() - days * 24 * 60 * 60 * 1000).toISOString();
+  // Day-aligned like every other card on /dashboard/analytics
+  // (analyticsWindowStart): the funnel must describe the same interval as
+  // the volume charts or the page contradicts itself.
+  const cutoffIso = analyticsWindowStart(now, days).toISOString();
 
   // ai_flows and sms_outbound_log are residency-moved tables: vps tenants
   // read their box. The data-api filter grammar has no "is not null", so
@@ -190,8 +194,11 @@ export async function getFlowFunnels(
   rows.sort((a, b) => b.runs - a.runs);
   return {
     rows: rows.slice(0, FLOW_FUNNEL_FLOW_LIMIT),
+    // Activity-scan caps only: a business with 200+ FLOWS but modest volume
+    // has accurate counts for every listed flow — the candidate cap trims
+    // which flows are ranked, not their numbers, so it must not trigger the
+    // "counts are partial" warning.
     clipped:
-      flows.length >= FLOW_FUNNEL_CANDIDATE_LIMIT ||
       runRows.length >= FLOW_FUNNEL_SCAN_LIMIT ||
       sends.length >= FLOW_FUNNEL_SCAN_LIMIT ||
       linkRows.length >= FLOW_FUNNEL_SCAN_LIMIT

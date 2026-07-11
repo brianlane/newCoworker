@@ -774,6 +774,132 @@ export async function getInboundCallStats(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Period-over-period comparison (ported from BizBlasts' DashboardService
+// period_comparison / calculate_change)
+// ---------------------------------------------------------------------------
+
+export type PeriodChange = {
+  current: number;
+  previous: number;
+  /** Signed % change vs the prior window; null when the baseline is 0. */
+  percent: number | null;
+  direction: "up" | "down" | "flat";
+};
+
+/** Delta of one metric vs the prior window, rounded to one decimal. */
+export function computePeriodChange(current: number, previous: number): PeriodChange {
+  const direction = current > previous ? "up" : current < previous ? "down" : "flat";
+  const percent =
+    previous === 0 ? null : Math.round(((current - previous) / previous) * 1000) / 10;
+  return { current, previous, percent, direction };
+}
+
+export type PreviousPeriodTotals = {
+  /** Answered calls, both directions (same population as the volume series). */
+  calls: number;
+  sms: number;
+  voiceMinutes: number;
+  /** Inbound answered (same population as the answer-rate card). */
+  answered: number;
+  /** Inbound refused (`voice_call_blocked`). */
+  missed: number;
+  /** answered / (answered + missed); null when the prior window had no calls. */
+  answerRate: number | null;
+  /** True when the transcript scan hit its row cap — totals undercount. */
+  clipped: boolean;
+};
+
+/**
+ * Totals for the PRIOR window of the same length ([2·days ago, days ago)),
+ * feeding the "vs prior period" deltas next to the current cards. Same
+ * sources and semantics as the current-window fetchers: transcripts for
+ * calls/minutes (residency-routed, missed excluded), `daily_usage.sms_sent`
+ * for texts, `voice_call_blocked` system_logs for refusals. Unlike the
+ * answer-rate card's exact counts, `answered` here derives from the capped
+ * scan — `clipped` says when that matters.
+ */
+export async function getPreviousPeriodTotals(
+  businessId: string,
+  opts: { days?: number; client?: SupabaseClient; now?: Date } = {}
+): Promise<PreviousPeriodTotals> {
+  const db = opts.client ?? (await createSupabaseServiceClient());
+  const days = opts.days ?? ANALYTICS_WINDOW_DAYS;
+  const now = opts.now ?? new Date();
+  const currStart = analyticsWindowStart(now, days);
+  const prevStart = analyticsWindowStart(now, 2 * days);
+  const prevStartIso = prevStart.toISOString();
+  const currStartIso = currStart.toISOString();
+
+  type CallRow = {
+    started_at: string;
+    ended_at: string | null;
+    direction: VoiceTranscriptDirection;
+  };
+  const [smsRes, callRows, blockedRes] = await Promise.all([
+    db
+      .from("daily_usage")
+      .select("sms_sent")
+      .eq("business_id", businessId)
+      .gte("usage_date", utcYmd(prevStart))
+      .lt("usage_date", utcYmd(currStart)),
+    fetchTranscriptRows<CallRow>(businessId, db, {
+      columns: ["started_at", "ended_at", "direction"],
+      filter: { startIso: prevStartIso, endIso: currStartIso },
+      limit: ANALYTICS_CALL_SCAN_LIMIT,
+      label: "getPreviousPeriodTotals calls"
+    }),
+    db
+      .from("system_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", businessId)
+      .eq("event", "voice_call_blocked")
+      .gte("created_at", prevStartIso)
+      .lt("created_at", currStartIso)
+  ]);
+  if (smsRes.error) throw new Error(`getPreviousPeriodTotals sms: ${smsRes.error.message}`);
+  if (blockedRes.error) {
+    throw new Error(`getPreviousPeriodTotals blocked: ${blockedRes.error.message}`);
+  }
+
+  const sms = ((smsRes.data as Array<{ sms_sent: number | null }> | null) ?? []).reduce(
+    (sum, row) => sum + Number(row.sms_sent ?? 0),
+    0
+  );
+  // Minutes are rounded PER DAY and then summed — the exact aggregation the
+  // current-window series total uses — so the delta never disagrees with the
+  // card purely over rounding.
+  const secondsByDate = new Map<string, number>();
+  let answered = 0;
+  for (const row of callRows) {
+    const date = utcYmd(new Date(row.started_at));
+    secondsByDate.set(
+      date,
+      (secondsByDate.get(date) ?? 0) + callSeconds(row.started_at, row.ended_at)
+    );
+    if (row.direction === "inbound") answered += 1;
+  }
+  let voiceMinutes = 0;
+  for (const daySeconds of secondsByDate.values()) {
+    voiceMinutes += Math.round(daySeconds / 60);
+  }
+  const missed = blockedRes.count ?? 0;
+  const inboundTotal = answered + missed;
+  const clipped = callRows.length >= ANALYTICS_CALL_SCAN_LIMIT;
+  return {
+    calls: callRows.length,
+    sms,
+    voiceMinutes,
+    answered,
+    missed,
+    // A capped scan undercounts `answered` while `missed` stays exact, which
+    // would SKEW the rate rather than merely shrink it — suppress the rate
+    // (and therefore the delta line) instead of showing a wrong one.
+    answerRate: clipped || inboundTotal === 0 ? null : answered / inboundTotal,
+    clipped
+  };
+}
+
 export type AnswerRateStats = {
   /** Inbound calls the AI actually took (a transcript row exists). */
   answered: number;

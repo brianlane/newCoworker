@@ -239,6 +239,23 @@ describe("varsProducedByStep", () => {
         saveAs: "img_url"
       })
     ).toEqual(["img_url"]);
+    expect(
+      varsProducedByStep({
+        id: "x",
+        type: "share_document",
+        documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        to: "{{trigger.from}}",
+        saveAs: "doc_url"
+      })
+    ).toEqual(["doc_url"]);
+    expect(
+      varsProducedByStep({
+        id: "x",
+        type: "share_document",
+        documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        to: "{{trigger.from}}"
+      })
+    ).toEqual([]);
     // Optional field lists absent → nothing produced.
     expect(
       varsProducedByStep({

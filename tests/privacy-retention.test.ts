@@ -27,12 +27,17 @@ const PRUNED_TABLES = [
   "notifications",
   "scheduled_sms",
   "ai_reply_reasoning",
+  "business_document_shares",
   "sms_links",
   "sms_owner_reply_prompts"
 ] as const;
 
 /** Central-only tables (not residency-moved): pruned with box: null. */
-const CENTRAL_ONLY_TABLES = new Set<string>(["ai_reply_reasoning", "sms_links"]);
+const CENTRAL_ONLY_TABLES = new Set<string>([
+  "ai_reply_reasoning",
+  "business_document_shares",
+  "sms_links"
+]);
 
 /** The subset that also lives on a residency box. */
 const BOXED_TABLES = PRUNED_TABLES.filter((t) => !CENTRAL_ONLY_TABLES.has(t));
@@ -47,7 +52,7 @@ function makeCentralDb(perTable: Partial<Record<string, TableResult>> = {}) {
   const from = vi.fn((table: string) => {
     const result = perTable[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
-    for (const m of ["delete", "eq", "lt", "in", "not"]) {
+    for (const m of ["delete", "eq", "lt", "in", "not", "or"]) {
       chain[m] = vi.fn().mockReturnValue(chain);
     }
     chain.select = vi.fn().mockResolvedValue(result);
@@ -85,8 +90,8 @@ describe("pruneExpiredContent — central-only tenants", () => {
     expect(res.tables.every((t) => t.box === null)).toBe(true);
     expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(2);
     expect(res.tables.find((t) => t.table === "notifications")?.central).toBe(0);
-    // 9 central deletes, no data-api construction.
-    expect(db.from).toHaveBeenCalledTimes(9);
+    // 10 central deletes, no data-api construction.
+    expect(db.from).toHaveBeenCalledTimes(10);
   });
 
   it.each(PRUNED_TABLES)("throws loudly when the central delete on %s fails", async (table) => {

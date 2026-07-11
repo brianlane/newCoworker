@@ -82,6 +82,9 @@ export type EmailConnectionOption = { id: string; label: string };
 /** A team member with an email, offered in the cc/bcc "Add employee" picker. */
 export type EmployeeEmailOption = { name: string; email: string };
 
+/** A shareable business document, offered in the share_document step picker. */
+export type DocumentOption = { id: string; title: string; expired: boolean };
+
 const inputClass =
   "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
 const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
@@ -481,6 +484,17 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       };
     case "generate_image":
       return { id, type, promptTemplate: "", saveAs: "image_url" };
+    case "share_document":
+      // documentId is filled from the picker; the placeholder uuid never
+      // saves (the API validates the document exists for this business).
+      return {
+        id,
+        type,
+        documentId: "",
+        to: `{{vars.${examples.contactVar}}}`,
+        via: "sms",
+        messageTemplate: "Here it is: {{share_url}}"
+      };
     case "sleep":
       return { id, type, minutes: 300 };
     case "wait_for_reply":
@@ -828,6 +842,8 @@ export function AiFlowsManager({
   const [rosterPeople, setRosterPeople] = useState<PickerPerson[]>([]);
   const [contactPeople, setContactPeople] = useState<PickerPerson[]>([]);
   const pickerPeople = [...rosterPeople, ...contactPeople];
+  // Client-shareable business documents for the share_document step picker.
+  const [documents, setDocuments] = useState<DocumentOption[]>([]);
   // Run-now panel: which flow's panel is open, its input, and the last outcome.
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
@@ -995,6 +1011,53 @@ export function AiFlowsManager({
         );
       } catch {
         /* picker stays empty; owners can still type cc/bcc addresses */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  // Client-shareable documents for the share_document step picker.
+  // Best-effort: on failure the picker hides and the step shows a hint.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/dashboard/documents?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: {
+            documents?: Array<{
+              id?: string;
+              title?: string;
+              audience?: string;
+              status?: string;
+              expires_at?: string | null;
+            }>;
+          };
+        };
+        if (cancelled || !json.ok || !json.data?.documents) return;
+        setDocuments(
+          json.data.documents
+            .filter(
+              (d): d is { id: string; title: string; audience?: string; status?: string; expires_at?: string | null } =>
+                typeof d.id === "string" &&
+                typeof d.title === "string" &&
+                d.status === "ready" &&
+                d.audience !== "staff"
+            )
+            .map((d) => ({
+              id: d.id,
+              title: d.title,
+              expired: Boolean(d.expires_at && Date.parse(d.expires_at) <= Date.now())
+            }))
+        );
+      } catch {
+        /* picker stays empty */
       }
     })();
     return () => {
@@ -1517,6 +1580,7 @@ export function AiFlowsManager({
                     emailConns={emailConns}
                     employees={employees}
                     people={pickerPeople}
+                    documents={documents}
                     examples={examples}
                   />
                 )}
@@ -2245,6 +2309,7 @@ export function AiFlowsManager({
                 emailConns={emailConns}
                 employees={employees}
                 people={pickerPeople}
+                documents={documents}
                 examples={examples}
               />
               {/* Voice steps have no `when` guard (they run on the real-time call
@@ -2712,6 +2777,7 @@ function StepFields({
   emailConns,
   employees,
   people,
+  documents,
   examples
 }: {
   step: FlowStep;
@@ -2721,6 +2787,8 @@ function StepFields({
   employees: EmployeeEmailOption[];
   /** Saved employees + contacts for the dynamic-number pickers. */
   people: PickerPerson[];
+  /** Client-shareable business documents for the share_document picker. */
+  documents: DocumentOption[];
   examples: AiFlowExampleCopy;
 }) {
   if (step.type === "extract_url") {
@@ -3739,6 +3807,73 @@ function StepFields({
         <p className="text-[11px] text-parchment/40">
           The chosen category (or &quot;unclear&quot; when nothing fits) lands in this variable —
           add a Branch step after this one with an arm per category to take the right path.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "share_document") {
+    return (
+      <div className="space-y-2">
+        <div>
+          <label className={labelClass}>Document to share</label>
+          <select
+            className={inputClass}
+            value={step.documentId}
+            onChange={(e) => {
+              const doc = documents.find((d) => d.id === e.target.value);
+              patchStep(index, {
+                documentId: e.target.value,
+                documentTitle: doc?.title
+              });
+            }}
+          >
+            <option value="">Pick a document…</option>
+            {documents.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.title}
+                {d.expired ? " (expired — extend it first)" : ""}
+              </option>
+            ))}
+          </select>
+          {documents.length === 0 && (
+            <p className="mt-1 text-[11px] text-parchment/40">
+              No shareable documents on file yet — upload one under Memory → Documents first.
+            </p>
+          )}
+        </div>
+        <div>
+          <label className={labelClass}>Deliver by</label>
+          <select
+            className={inputClass}
+            value={step.via ?? "sms"}
+            onChange={(e) => patchStep(index, { via: e.target.value })}
+          >
+            <option value="sms">Text message</option>
+            <option value="email">Email</option>
+          </select>
+        </div>
+        <Field
+          label={(step.via ?? "sms") === "email" ? "Email address" : "Phone number"}
+          value={step.to}
+          onChange={(v) => patchStep(index, { to: v })}
+          help="Usually a variable an earlier step extracted, e.g. {{vars.lead_phone}} or {{trigger.from}}."
+        />
+        <Field
+          label="Message (optional)"
+          value={step.messageTemplate ?? ""}
+          onChange={(v) => patchStep(index, { messageTemplate: v.trim() ? v : undefined })}
+          textarea
+          help="Use {{share_url}} to place the link; without it the link is added at the end."
+        />
+        <Field
+          label="Save the link as (optional)"
+          value={step.saveAs ?? ""}
+          onChange={(v) => patchStep(index, { saveAs: v.trim() ? v : undefined })}
+          help="A short name so later steps can reuse the link (e.g. price_sheet_url)."
+        />
+        <p className="text-[11px] text-parchment/40">
+          Only client-facing, unexpired documents can be shared. If the document expires later,
+          this step stops sending it and notifies you instead.
         </p>
       </div>
     );

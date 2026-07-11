@@ -372,6 +372,7 @@ export function systemInstructionForBusiness(
         "You can act on this call by calling these tools:",
         "- `business_knowledge_lookup` when they ask something about the business that your briefing below doesn't already answer.",
         "- `calendar_find_slots` then `calendar_book_appointment` to help them schedule something.",
+        "- `document_share` to text them an expiring link to a document listed in your documents.md briefing when they need a copy.",
         "- `send_follow_up_sms` to text them a short summary or link, and `send_follow_up_email` to email them; if email returns `email_not_connected`, send it by text instead.",
         "- `notify_team` when they ask you to pass a message to someone else on the team.",
         // Staff are not customers: do not create/edit a customer profile for
@@ -387,6 +388,7 @@ export function systemInstructionForBusiness(
         "You can act on the caller's behalf by calling these tools:",
         "- `business_knowledge_lookup` when the caller asks something specific to this business that your briefing below doesn't answer directly.",
         "- `calendar_find_slots` then `calendar_book_appointment` when the caller wants to schedule something (consultations, viewings, intake calls).",
+        "- `document_share` when the caller asks for a copy of a document listed in your documents.md briefing (price sheet, menu, policy) — it texts them an expiring link.",
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         "- `notify_team` whenever the caller needs something only the team can resolve (confirm an appointment you couldn't book, answer a question you couldn't, return a call). This is your ONLY way to reach the team.",
@@ -543,6 +545,10 @@ function voiceToolPath(name: string): string {
       return "/api/voice/tools/customer-set-display-name";
     case "customer_append_pinned_note":
       return "/api/voice/tools/customer-append-pinned-note";
+    // Business documents: text the caller an expiring link to a
+    // client-facing document (audience + expiration enforced server-side).
+    case "document_share":
+      return "/api/voice/tools/document-share";
     default:
       return "";
   }
@@ -737,6 +743,29 @@ function buildVoiceToolDeclarations() {
           }
         },
         required: ["message"]
+      }
+    },
+    {
+      name: "document_share",
+      description:
+        "Text the caller an expiring link to one of the business's documents (price sheet, service menu, policy, brochure) when they ask for a copy. Refer to the document by its title from your documents.md briefing. Internal/staff documents and expired documents are refused server-side — if the tool fails, tell the caller the team will follow up with a copy.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          document: {
+            type: Type.STRING,
+            description: "The document's title (or part of it) as listed in your briefing."
+          },
+          phone: {
+            type: Type.STRING,
+            description: "Destination phone in E.164. Defaults to the caller's ANI if omitted."
+          },
+          message: {
+            type: Type.STRING,
+            description: "Optional short intro sentence to send with the link."
+          }
+        },
+        required: ["document"]
       }
     },
     {
