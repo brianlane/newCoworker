@@ -72,7 +72,17 @@ beforeEach(() => {
     definition: { trigger: { channel: "webhook" } }
   } as never);
   vi.mocked(listAiFlows).mockResolvedValue([
-    { id: FLOW, name: "Lead intake", enabled: true, definition: { trigger: { channel: "webhook" } } },
+    {
+      id: FLOW,
+      name: "Lead intake",
+      enabled: true,
+      definition: {
+        trigger: { channel: "webhook" },
+        steps: [
+          { type: "extract_text", fields: [{ name: "lead_phone" }, { name: "product" }] }
+        ]
+      }
+    },
     { id: "f-off", name: "Disabled", enabled: false, definition: { trigger: { channel: "sms" } } },
     { id: "f-voice", name: "Voice", enabled: true, definition: { trigger: { channel: "voice" } } }
   ] as never);
@@ -147,8 +157,18 @@ describe("POST /api/dashboard/aiflows/lead-import", () => {
         { full_name: "Bob", phone: "+16025555678" }
       ],
       webhookFlowsEnabled: 1,
-      // Disabled and voice flows are not offered as targets.
-      flows: [{ id: FLOW, name: "Lead intake" }]
+      // Disabled and voice flows are not offered as targets. The fit check
+      // runs against the REAL parsed sheet: phone is satisfied by the CSV's
+      // phone column; product has no matching column or value shape.
+      flows: [
+        {
+          id: FLOW,
+          name: "Lead intake",
+          webhook: true,
+          expectedFields: ["lead_phone", "product"],
+          missingFields: ["product"]
+        }
+      ]
     });
     expect(countEnabledWebhookFlows).toHaveBeenCalledWith(BIZ);
     expect(importLeadBacklog).not.toHaveBeenCalled();

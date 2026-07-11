@@ -71,6 +71,146 @@ export function parseLeadBacklog(csvText: string): LeadBacklogParseResult {
   return { ok: true, headers: parsed.headers, rows: parsed.rows };
 }
 
+// ---------------------------------------------------------------------------
+// Sheet ↔ flow fit check (preview heuristic)
+//
+// A flow's extract_text steps read the trigger text (the flattened row), so
+// their field names — lead_name, lead_phone, lead_email, product… — are what
+// the flow EXPECTS each lead to supply. The preview compares those against
+// the sheet's columns/values and warns about fields the sheet doesn't appear
+// to provide (e.g. a Telnyx billing report has phone-shaped values but no
+// name/email/product), so the owner catches a wrong file before 49 runs try
+// to mine it. Heuristic and advisory only — it never blocks the import.
+// ---------------------------------------------------------------------------
+
+/** Minimal structural view of a definition (works for any AiFlowDefinition). */
+type StepLike = {
+  type?: unknown;
+  fields?: Array<{ name?: unknown }>;
+  branches?: Array<{ steps?: StepLike[] }>;
+  else?: StepLike[];
+};
+type DefinitionLike = {
+  trigger?: { channel?: unknown };
+  triggers?: Array<{ channel?: unknown }>;
+  steps?: StepLike[];
+};
+
+/** True when the flow starts from a webhook event (primary OR extra trigger). */
+export function flowHasWebhookTrigger(definition: unknown): boolean {
+  const def = definition as DefinitionLike | null;
+  if (def?.trigger?.channel === "webhook") return true;
+  return (def?.triggers ?? []).some((t) => t?.channel === "webhook");
+}
+
+/**
+ * The field names the flow's extract_text steps read from the trigger text —
+ * i.e. what each imported row is expected to supply. Walks branch arms and
+ * else-paths too; deduped in first-seen order. Only extract_text counts:
+ * browse_extract reads a fetched page and email_extract reads a mailbox, so
+ * their fields say nothing about the sheet.
+ */
+export function expectedTriggerFields(definition: unknown): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const walk = (steps: StepLike[] | undefined) => {
+    for (const step of steps ?? []) {
+      if (step.type === "extract_text") {
+        for (const f of step.fields ?? []) {
+          if (typeof f.name === "string" && !seen.has(f.name)) {
+            seen.add(f.name);
+            out.push(f.name);
+          }
+        }
+      }
+      for (const arm of step.branches ?? []) walk(arm.steps);
+      walk(step.else);
+    }
+  };
+  walk((definition as DefinitionLike | null)?.steps);
+  return out;
+}
+
+/** Tokens too generic to indicate a match on their own ("lead_phone" must
+ *  match on "phone", not on "lead"). */
+const GENERIC_FIELD_TOKENS = new Set([
+  "lead",
+  "customer",
+  "client",
+  "contact",
+  "the",
+  "a",
+  "of",
+  "digits",
+  "value",
+  "info",
+  "detail",
+  "details",
+  "field",
+  "data"
+]);
+
+/** Fold common synonyms onto one canonical token so a "mobile" column
+ *  satisfies a lead_phone field. */
+function canonicalToken(token: string): string {
+  if (["mobile", "cell", "tel", "telephone", "phone"].includes(token)) return "phone";
+  if (["mail", "email"].includes(token)) return "email";
+  return token;
+}
+
+/** Split snake/camel/kebab identifiers into canonical lowercase tokens. */
+function tokensOf(identifier: string): Set<string> {
+  const parts = identifier
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return new Set(parts.map(canonicalToken));
+}
+
+const PHONE_VALUE_RE = /^\+?\d{7,15}$/;
+const EMAIL_VALUE_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/** How many sample rows the value-shape fallback scans. */
+const FIT_SAMPLE_ROWS = 20;
+
+/**
+ * Which expected fields the sheet does NOT appear to supply. A field counts
+ * as supplied when a column name shares a meaningful (non-generic) token with
+ * it, or — for phone/email fields — when any sampled cell value has the right
+ * shape (a billing export's number columns really do hold phones, even though
+ * no column is called "phone").
+ */
+export function missingSheetFields(
+  expectedFields: string[],
+  headers: string[],
+  rows: Record<string, string>[]
+): string[] {
+  const headerTokens = headers.map((h) => tokensOf(h));
+  const sample = rows.slice(0, FIT_SAMPLE_ROWS);
+
+  // Phone values get formatting characters stripped ("(602) 555-1234").
+  // Deliberately NOT dots: stripping them would turn monetary decimals like
+  // "0.004000" into 7-digit "phones" and mute the warning on billing sheets.
+  const anyPhoneValue = (): boolean =>
+    sample.some((row) =>
+      Object.values(row).some((v) => PHONE_VALUE_RE.test(v.replace(/[\s()-]/g, "")))
+    );
+  const anyEmailValue = (): boolean =>
+    sample.some((row) => Object.values(row).some((v) => EMAIL_VALUE_RE.test(v.trim())));
+
+  return expectedFields.filter((field) => {
+    const fieldTokens = [...tokensOf(field)].filter((t) => !GENERIC_FIELD_TOKENS.has(t));
+    // A field named only in generic terms ("details") is unjudgeable — stay
+    // quiet rather than warn on every sheet.
+    if (fieldTokens.length === 0) return false;
+    if (fieldTokens.some((t) => headerTokens.some((ht) => ht.has(t)))) return false;
+    if (fieldTokens.includes("phone") && anyPhoneValue()) return false;
+    if (fieldTokens.includes("email") && anyEmailValue()) return false;
+    return true;
+  });
+}
+
 export type LeadBacklogRowOutcome = {
   /** 1-based file row (row 1 is the header). */
   row: number;
