@@ -58,8 +58,8 @@ describe("generateShortCode", () => {
     expect(code).toMatch(/^[a-z0-9]{8}$/);
   });
 
-  it("is deterministic for an injected byte source (modulo wraps large bytes)", () => {
-    // 0..7 → first 8 alphabet chars; 250..257 wraps modulo 36.
+  it("is deterministic for an injected byte source (mask wraps large bytes)", () => {
+    // 0..7 → first 8 alphabet chars; bytes ≥ 32 wrap via the power-of-two mask.
     expect(generateShortCode(bytes(0))).toBe("abcdefgh");
     expect(generateShortCode(bytes(250))).toBe(generateShortCode(bytes(250)));
   });

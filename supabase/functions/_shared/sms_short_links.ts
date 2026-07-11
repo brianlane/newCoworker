@@ -16,7 +16,10 @@
 
 export const SHORT_CODE_LENGTH = 8;
 
-const SHORT_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+// Exactly 32 symbols so a random byte maps to an index with a power-of-two
+// mask (`byte & 31`) — uniform by construction, with no modulo bias on the
+// CSPRNG output (CodeQL js/biased-cryptographic-random).
+const SHORT_CODE_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567";
 
 /** Postgres unique-violation SQLSTATE — short-code collision, retry. */
 const UNIQUE_VIOLATION = "23505";
@@ -44,7 +47,8 @@ export function generateShortCode(randomBytes: RandomBytes = defaultRandomBytes)
   const bytes = randomBytes(SHORT_CODE_LENGTH);
   let code = "";
   for (let i = 0; i < SHORT_CODE_LENGTH; i += 1) {
-    code += SHORT_CODE_ALPHABET[bytes[i] % SHORT_CODE_ALPHABET.length];
+    // Power-of-two mask over the 32-symbol alphabet: uniform, no modulo bias.
+    code += SHORT_CODE_ALPHABET[bytes[i] & 31];
   }
   return code;
 }
