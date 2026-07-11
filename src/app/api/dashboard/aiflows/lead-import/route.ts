@@ -26,7 +26,13 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
-import { importLeadBacklog, parseLeadBacklog } from "@/lib/ai-flows/lead-backlog";
+import {
+  expectedTriggerFields,
+  flowHasWebhookTrigger,
+  importLeadBacklog,
+  missingSheetFields,
+  parseLeadBacklog
+} from "@/lib/ai-flows/lead-backlog";
 import { countEnabledWebhookFlows } from "@/lib/ai-flows/webhook-events";
 import { getAiFlow, listAiFlows } from "@/lib/ai-flows/db";
 
@@ -92,10 +98,21 @@ export async function POST(request: Request) {
         webhookFlowsEnabled: await countEnabledWebhookFlows(query.businessId),
         // Target-flow dropdown options: enabled flows the batch worker can
         // run (voice flows live on the real-time call path, so they can't
-        // be a target).
+        // be a target). Each carries the sheet↔flow fit check: the fields
+        // its extract_text steps read from the trigger, and which of those
+        // this sheet doesn't appear to supply.
         flows: flows
           .filter((f) => f.enabled && f.definition.trigger.channel !== "voice")
-          .map((f) => ({ id: f.id, name: f.name }))
+          .map((f) => {
+            const expectedFields = expectedTriggerFields(f.definition);
+            return {
+              id: f.id,
+              name: f.name,
+              webhook: flowHasWebhookTrigger(f.definition),
+              expectedFields,
+              missingFields: missingSheetFields(expectedFields, parsed.headers, parsed.rows)
+            };
+          })
       });
     }
 

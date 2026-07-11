@@ -29,7 +29,10 @@ vi.mock("@/lib/ai-flows/db", () => ({
 import {
   DEFAULT_BACKLOG_SOURCE,
   MAX_BACKLOG_ROWS,
+  expectedTriggerFields,
+  flowHasWebhookTrigger,
   importLeadBacklog,
+  missingSheetFields,
   parseLeadBacklog
 } from "@/lib/ai-flows/lead-backlog";
 
@@ -84,6 +87,109 @@ describe("parseLeadBacklog", () => {
     const res = parseLeadBacklog(csv);
     expect(res.ok).toBe(false);
     if (!res.ok) expect(res.error).toContain(`limit is ${MAX_BACKLOG_ROWS}`);
+  });
+});
+
+describe("flowHasWebhookTrigger", () => {
+  it("detects the primary trigger, extra triggers, and neither", () => {
+    expect(flowHasWebhookTrigger({ trigger: { channel: "webhook" } })).toBe(true);
+    expect(
+      flowHasWebhookTrigger({
+        trigger: { channel: "sms" },
+        triggers: [{ channel: "manual" }, { channel: "webhook" }]
+      })
+    ).toBe(true);
+    expect(flowHasWebhookTrigger({ trigger: { channel: "email" } })).toBe(false);
+    expect(flowHasWebhookTrigger(null)).toBe(false);
+  });
+});
+
+describe("expectedTriggerFields", () => {
+  it("collects extract_text field names across trunk, branch arms, and else paths (deduped)", () => {
+    const def = {
+      steps: [
+        { type: "extract_text", fields: [{ name: "lead_name" }, { name: "lead_phone" }] },
+        // Reads a fetched page / a mailbox — says nothing about the sheet.
+        { type: "browse_extract", fields: [{ name: "portal_only" }] },
+        { type: "email_extract", fields: [{ name: "mailbox_only" }] },
+        {
+          type: "branch",
+          branches: [
+            { steps: [{ type: "extract_text", fields: [{ name: "product" }] }] }
+          ],
+          else: [
+            { type: "extract_text", fields: [{ name: "lead_name" }, { name: 7 }] }
+          ]
+        }
+      ]
+    };
+    expect(expectedTriggerFields(def)).toEqual(["lead_name", "lead_phone", "product"]);
+  });
+
+  it("returns [] for a definition with no steps (or no extract_text)", () => {
+    expect(expectedTriggerFields(null)).toEqual([]);
+    expect(expectedTriggerFields({ steps: [{ type: "send_sms" }] })).toEqual([]);
+    // Malformed extract_text without a fields array must not crash.
+    expect(expectedTriggerFields({ steps: [{ type: "extract_text" }] })).toEqual([]);
+  });
+});
+
+describe("missingSheetFields", () => {
+  const MDR_HEADERS = [
+    "originating_number",
+    "terminating_number",
+    "on-net",
+    "createtimestamp(utc)",
+    "cost",
+    "rate",
+    "direction",
+    "status",
+    "message_body"
+  ];
+  const MDR_ROWS = [
+    {
+      originating_number: "73339",
+      terminating_number: "+16028053377",
+      cost: "0.004000",
+      message_body: "Your verification code is 482913"
+    }
+  ];
+
+  it("flags name/email/product as missing from a billing export, but not phone (shape match)", () => {
+    expect(
+      missingSheetFields(
+        ["lead_name", "lead_phone", "lead_email", "product"],
+        MDR_HEADERS,
+        MDR_ROWS
+      )
+    ).toEqual(["lead_name", "lead_email", "product"]);
+  });
+
+  it("matches fields to columns by meaningful tokens, synonyms, and camelCase", () => {
+    const headers = ["full_name", "mobile", "e-mail", "productType"];
+    const rows = [{ full_name: "Jane", mobile: "call me", "e-mail": "n/a", productType: "auto" }];
+    expect(
+      missingSheetFields(["lead_name", "leadPhone", "lead_email", "product"], headers, rows)
+    ).toEqual([]);
+  });
+
+  it("email value shape satisfies an email field under an unrelated column name", () => {
+    expect(
+      missingSheetFields(["lead_email"], ["col_a"], [{ col_a: "jane@example.com" }])
+    ).toEqual([]);
+    expect(missingSheetFields(["lead_email"], ["col_a"], [{ col_a: "not-an-email" }])).toEqual([
+      "lead_email"
+    ]);
+  });
+
+  it("phone shape tolerates formatting characters", () => {
+    expect(
+      missingSheetFields(["lead_phone"], ["weird"], [{ weird: "(602) 555-1234" }])
+    ).toEqual([]);
+  });
+
+  it("stays quiet on fields with only generic tokens", () => {
+    expect(missingSheetFields(["details"], ["cost"], [{ cost: "1" }])).toEqual([]);
   });
 });
 

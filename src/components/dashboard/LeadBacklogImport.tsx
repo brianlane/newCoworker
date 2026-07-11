@@ -7,13 +7,24 @@ import { AlertTriangle, Upload } from "lucide-react";
 
 type Props = { businessId: string };
 
+type PreviewFlow = {
+  id: string;
+  name: string;
+  /** Starts from a webhook event (so the default option runs it). */
+  webhook: boolean;
+  /** Fields the flow's extract steps read from each lead. */
+  expectedFields: string[];
+  /** Expected fields this sheet doesn't appear to supply. */
+  missingFields: string[];
+};
+
 type Preview = {
   headers: string[];
   totalRows: number;
   sampleRows: Record<string, string>[];
   webhookFlowsEnabled: number;
   /** Enabled, batch-runnable flows offered as explicit import targets. */
-  flows: { id: string; name: string }[];
+  flows: PreviewFlow[];
 };
 
 type ImportSummary = {
@@ -55,6 +66,37 @@ const DRIP_CHOICES = [
   { label: "1 lead every 15 minutes", seconds: 900 },
   { label: "All at once", seconds: 0 }
 ] as const;
+
+/**
+ * Sheet ↔ flow fit warning: the flows that would run declare which fields
+ * they read from each lead (their extract steps); when this sheet doesn't
+ * appear to supply some of them, say so BEFORE the owner fires N runs at a
+ * file that isn't a lead list (e.g. a billing export). Advisory only.
+ */
+function FitCheckNotice({ preview, flowId }: { preview: Preview; flowId: string }) {
+  // The flows the current selection would actually run.
+  const targets = flowId
+    ? preview.flows.filter((f) => f.id === flowId)
+    : preview.flows.filter((f) => f.webhook);
+  const gaps = targets.filter((f) => f.missingFields.length > 0);
+  if (gaps.length === 0) return null;
+  return (
+    <div className="flex items-start gap-1.5 text-xs text-amber-300">
+      <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+      <div className="space-y-0.5">
+        {gaps.map((f) => (
+          <p key={f.id}>
+            <span className="font-semibold">{f.name}</span> reads{" "}
+            {f.expectedFields.join(", ")} from each lead, but this sheet doesn&apos;t seem
+            to include{" "}
+            <span className="font-semibold">{f.missingFields.join(", ")}</span> — the AI
+            may leave those blank or guess wrong. Double-check this is the right file.
+          </p>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 /**
  * "Import a lead backlog" card: upload an Excel/CSV sheet of leads and run
@@ -223,6 +265,8 @@ export function LeadBacklogImport({ businessId }: Props) {
               </span>
             </p>
           )}
+
+          <FitCheckNotice preview={preview} flowId={flowId} />
 
           <div className="flex flex-wrap items-end gap-3">
             <label className="text-xs text-parchment/60">
