@@ -56,6 +56,12 @@ describe("classifyEngagement", () => {
     ).toBe("quiet");
   });
 
+  it("a stale interaction is quiet even on a recently created row (merge backdating)", () => {
+    expect(
+      classifyEngagement({ created_at: daysAgo(3), last_interaction_at: daysAgo(120) }, NOW)
+    ).toBe("quiet");
+  });
+
   it("tolerates junk timestamps and defaults `now`", () => {
     expect(
       classifyEngagement({ created_at: "garbage", last_interaction_at: "junk" }, NOW)

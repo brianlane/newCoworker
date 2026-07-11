@@ -41,6 +41,10 @@ export function classifyEngagement(
     const age = now.getTime() - last;
     if (age <= ENGAGEMENT_ACTIVE_DAYS * DAY_MS) return "active";
     if (age <= ENGAGEMENT_COOLING_DAYS * DAY_MS) return "cooling";
+    // A REAL interaction 90+ days back is a lapsed relationship no matter
+    // how new the row is (merges backdate created_at; imports can carry
+    // history) — never "new".
+    return "quiet";
   }
   const created = Date.parse(contact.created_at);
   if (Number.isFinite(created) && now.getTime() - created <= ENGAGEMENT_ACTIVE_DAYS * DAY_MS) {
