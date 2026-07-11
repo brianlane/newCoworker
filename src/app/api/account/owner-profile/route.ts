@@ -46,23 +46,35 @@ export async function POST(request: Request) {
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
     const businessId = (biz as { id: string }).id;
 
+    let wroteAnything = false;
+    let writeError: unknown = null;
     if (body.ownerName !== undefined) {
       const { error } = await db
         .from("businesses")
         .update({ owner_name: body.ownerName || null })
         .eq("id", businessId);
       if (error) throw new Error(`owner-profile: ${error.message}`);
+      wroteAnything = true;
     }
     if (body.phone !== undefined) {
-      await updateBusinessProfileFields(businessId, { phone: body.phone || null }, db);
+      try {
+        await updateBusinessProfileFields(businessId, { phone: body.phone || null }, db);
+        wroteAnything = true;
+      } catch (err) {
+        // Defer the failure: the owner_name write above may already have
+        // landed, and the refresh below must still run so profile_md (and
+        // the live agent) reflects the committed name change.
+        writeError = err;
+      }
     }
-    if (body.ownerName !== undefined || body.phone !== undefined) {
+    if (wroteAnything) {
       // Both facts appear in the rendered profile block the agent is
       // grounded on — re-render and push so the coworker stops using the
       // old primary-contact name/number immediately.
       await refreshBusinessProfileMd(businessId, db);
       void syncVaultToVpsAndLog(businessId);
     }
+    if (writeError) throw writeError;
 
     return successResponse({ ok: true });
   } catch (err) {

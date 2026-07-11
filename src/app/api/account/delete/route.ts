@@ -26,7 +26,7 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
-import { getSubscription } from "@/lib/db/subscriptions";
+import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import {
   DELETE_CONFIRM_PHRASE,
@@ -97,8 +97,31 @@ export async function DELETE(request: Request) {
     const business = await getBusiness(businessId, db);
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
 
-    const subscription = await getSubscription(businessId, db);
-    const eligibility = resolveAccountDeletionEligibility(subscription);
+    // FAIL-CLOSED billing lookup: getSubscription collapses query errors
+    // into null, which here would read as "never paid" and wave a live
+    // subscription through the gate. Query directly and refuse on any read
+    // error — a transient DB hiccup must block deletion, not allow it.
+    const { data: subRow, error: subError } = await db
+      .from("subscriptions")
+      .select("status, grace_ends_at, wiped_at")
+      .eq("business_id", businessId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (subError) {
+      logger.error("account.delete: subscription lookup failed; refusing (fail closed)", {
+        businessId,
+        error: subError.message
+      });
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        "Could not verify billing state; please retry",
+        500
+      );
+    }
+    const eligibility = resolveAccountDeletionEligibility(
+      (subRow as Pick<SubscriptionRow, "status" | "grace_ends_at" | "wiped_at"> | null) ?? null
+    );
     if (!eligibility.eligible) {
       return errorResponse("CONFLICT", eligibility.reason, 409);
     }
