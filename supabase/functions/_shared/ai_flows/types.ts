@@ -694,6 +694,14 @@ export type FlowStep =
        */
       type: "generate_image";
       promptTemplate: string;
+      /**
+       * Optional source image to EDIT: a template resolving to
+       * {{trigger.image}} (photo attached to the triggering MMS/email) or an
+       * earlier step's image var. Empty render → generate from scratch;
+       * unusable reference → the step fails. The worker only fetches
+       * platform-controlled sources (own buckets + Telnyx media CDN).
+       */
+      inputImageTemplate?: string;
       saveAs: string;
       when?: StepCondition;
     }

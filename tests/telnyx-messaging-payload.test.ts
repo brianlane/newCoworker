@@ -1,8 +1,47 @@
 import { describe, expect, it } from "vitest";
 import {
+  isTelnyxMediaUrl,
+  telnyxInboundImages,
   telnyxMessagingParticipants,
   telnyxMessagingPhoneString
 } from "../supabase/functions/_shared/telnyx_messaging_payload";
+
+describe("isTelnyxMediaUrl", () => {
+  it("accepts https URLs on telnyx.com and its subdomains only", () => {
+    expect(isTelnyxMediaUrl("https://media.telnyx.com/abc")).toBe(true);
+    expect(isTelnyxMediaUrl("https://telnyx.com/abc")).toBe(true);
+    expect(isTelnyxMediaUrl("http://media.telnyx.com/abc")).toBe(false);
+    expect(isTelnyxMediaUrl("https://eviltelnyx.com/abc")).toBe(false);
+    expect(isTelnyxMediaUrl("https://telnyx.com.evil.example/abc")).toBe(false);
+    expect(isTelnyxMediaUrl("not a url")).toBe(false);
+  });
+});
+
+describe("telnyxInboundImages", () => {
+  it("keeps only supported image types on Telnyx media hosts", () => {
+    const images = telnyxInboundImages({
+      media: [
+        { url: "https://media.telnyx.com/a.jpg", content_type: " IMAGE/JPEG " },
+        { url: "https://media.telnyx.com/b.png", content_type: "image/png" },
+        { url: "https://media.telnyx.com/c.mp4", content_type: "video/mp4" },
+        { url: "https://evil.example/d.jpg", content_type: "image/jpeg" },
+        { url: 42, content_type: "image/jpeg" },
+        { content_type: "image/jpeg" },
+        "garbage",
+        null
+      ]
+    });
+    expect(images).toEqual([
+      { url: "https://media.telnyx.com/a.jpg", contentType: "image/jpeg" },
+      { url: "https://media.telnyx.com/b.png", contentType: "image/png" }
+    ]);
+  });
+
+  it("returns [] when media is absent or not an array", () => {
+    expect(telnyxInboundImages({})).toEqual([]);
+    expect(telnyxInboundImages({ media: "nope" })).toEqual([]);
+  });
+});
 
 describe("telnyxMessagingPhoneString", () => {
   it("reads string to", () => {

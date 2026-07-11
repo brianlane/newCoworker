@@ -16,7 +16,11 @@
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { telnyxMessagingPhoneString } from "../_shared/telnyx_messaging_payload.ts";
+import {
+  telnyxInboundImages,
+  telnyxMessagingPhoneString,
+  type TelnyxInboundImage
+} from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
@@ -139,6 +143,60 @@ function inboundPayloadText(p: Record<string, unknown>): string {
   return inboundSmsBody(p);
 }
 
+// ── Inbound MMS photos as edit sources ──────────────────────────────────────
+// Same bucket + `<businessId>/<uuid>.<ext>` shape the generate_image tools
+// write, so the tool's business-scoped ref validation covers stored inbound
+// photos with zero extra machinery. Created by 20260819000000_generated_images_bucket.sql.
+const GENERATED_IMAGES_BUCKET = "generated-images";
+const MAX_INBOUND_IMAGE_BYTES = 10 * 1024 * 1024;
+
+const INBOUND_IMAGE_EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp"
+};
+
+/**
+ * Download an inbound MMS photo from Telnyx's media CDN and store it in the
+ * generated-images bucket so the texting coworker can edit it (generate_image
+ * inputImageRef). Best-effort: any failure returns null and the text is
+ * handled as if no photo arrived — a media blip must never block a reply.
+ * The URL was host-pinned to *.telnyx.com by telnyxInboundImages.
+ */
+async function storeInboundImageForEditing(
+  supabase: SupabaseClient<any, any, any>,
+  businessId: string,
+  image: TelnyxInboundImage
+): Promise<string | null> {
+  try {
+    const res = await fetch(image.url);
+    if (!res.ok) {
+      console.warn("inbound MMS media fetch failed", res.status);
+      return null;
+    }
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    if (bytes.length === 0 || bytes.length > MAX_INBOUND_IMAGE_BYTES) {
+      console.warn("inbound MMS media skipped: size", bytes.length);
+      return null;
+    }
+    const ext = INBOUND_IMAGE_EXT[image.contentType] ?? "jpg";
+    const path = `${businessId}/${crypto.randomUUID()}.${ext}`;
+    const { error } = await supabase.storage
+      .from(GENERATED_IMAGES_BUCKET)
+      .upload(path, new Blob([bytes], { type: image.contentType }), {
+        contentType: image.contentType
+      });
+    if (error) {
+      console.warn("inbound MMS media store failed", error.message);
+      return null;
+    }
+    return path;
+  } catch (e) {
+    console.warn("inbound MMS media capture failed", e instanceof Error ? e.message : e);
+    return null;
+  }
+}
+
 async function clearJobReplyCache(
   supabase: SupabaseClient<any, any, any>,
   jobId: string
@@ -238,7 +296,13 @@ serve(async (req: Request) => {
     const payload = envelope?.data?.payload ?? {};
     const fromRaw = telnyxMessagingPhoneString(payload, "from");
     const fromE164 = normalizeE164(fromRaw);
-    const userText = inboundPayloadText(payload).trim();
+    const inboundImages = telnyxInboundImages(payload);
+    // A photo with no caption is a real message (e.g. "edit this picture" is
+    // coming next, or the photo IS the ask) — give the model a stand-in text
+    // instead of dead-lettering the job as empty.
+    const userText =
+      inboundPayloadText(payload).trim() ||
+      (inboundImages.length > 0 ? "(The texter sent a photo with no text.)" : "");
 
     if (!fromE164 || !userText) {
       await supabase.rpc("complete_sms_inbound_job", {
@@ -888,6 +952,26 @@ serve(async (req: Request) => {
       customerPreamble = memoryPreamble
         ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
         : dateAndPhoneLines;
+    }
+
+    // Inbound MMS photo → stored edit source. Only when the reply path is
+    // actually about to run (download + store cost nothing on suppressed
+    // jobs, which return before reaching here). Best-effort: on a capture
+    // failure the model simply never learns a photo existed.
+    if (inboundImages.length > 0) {
+      const imageRef = await storeInboundImageForEditing(
+        supabase,
+        job.business_id,
+        inboundImages[0]
+      );
+      if (imageRef) {
+        customerPreamble +=
+          `\n\nThe texter attached a photo to this message. Its image reference is ` +
+          `"${imageRef}". If they ask you to edit it, restyle it, or create an image ` +
+          `based on it, call generate_image with inputImageRef set to exactly that ` +
+          `value (and their request as the prompt). Do not mention the reference ` +
+          `string itself to the texter.`;
+      }
     }
 
     let convId: string | undefined;

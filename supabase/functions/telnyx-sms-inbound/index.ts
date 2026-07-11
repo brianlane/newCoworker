@@ -6,6 +6,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import {
+  telnyxInboundImages,
   telnyxMessagingParticipants,
   telnyxMessagingPhoneString
 } from "../_shared/telnyx_messaging_payload.ts";
@@ -210,6 +211,12 @@ async function evaluateAndEnqueueAiFlows(
     bodyText: string;
     /** Every E.164 number in the thread (sender + all `to`), for group replies. */
     participants: string[];
+    /**
+     * First image attachment on an inbound MMS (raw Telnyx media URL, host
+     * pre-pinned to *.telnyx.com). Exposed to flows as {{trigger.image}} so a
+     * generate_image step can edit the photo the texter sent. "" when none.
+     */
+    imageUrl?: string;
   }
 ): Promise<{ suppressingRunQueued: boolean }> {
   let evalRes: AiFlowEval = { suppress: false, matched: [] };
@@ -243,7 +250,10 @@ async function evaluateAndEnqueueAiFlows(
             // posts back to everyone except our own DID.
             participants: ctx.participants,
             group: ctx.participants.length > 2,
-            event_id: ctx.eventId
+            event_id: ctx.eventId,
+            // Photo the texter attached (Telnyx media URL; "" when none) —
+            // consumable by a generate_image step's inputImageTemplate.
+            image: ctx.imageUrl ?? ""
           }
         },
         current_step: 0,
@@ -2643,7 +2653,8 @@ serve(async (req: Request) => {
             to,
             eventId,
             bodyText: inboundSmsBody(payload),
-            participants: normalizedParticipants(payload)
+            participants: normalizedParticipants(payload),
+            imageUrl: telnyxInboundImages(payload)[0]?.url ?? ""
           });
           // Persist the inbound as an already-`done` job so it still appears in
           // the AiFlow correlation window + audit trail for FUTURE messages
@@ -2776,7 +2787,8 @@ serve(async (req: Request) => {
           to,
           eventId,
           bodyText: inboundSmsBody(payload),
-          participants: normalizedParticipants(payload)
+          participants: normalizedParticipants(payload),
+          imageUrl: telnyxInboundImages(payload)[0]?.url ?? ""
         });
 
     const { error } = await supabase.from("sms_inbound_jobs").insert({

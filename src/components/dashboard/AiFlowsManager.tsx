@@ -3417,11 +3417,19 @@ function StepFields({
     return (
       <div className="space-y-2">
         <Field
-          label="Describe the image to create"
+          label="Describe the image to create (or the edit to apply)"
           value={step.promptTemplate}
           onChange={(v) => patchStep(index, { promptTemplate: v })}
           textarea
           help="You can reuse details earlier steps found, e.g. {{vars.listing_address}}."
+        />
+        <Field
+          label="Start from an existing photo (optional)"
+          value={step.inputImageTemplate ?? ""}
+          onChange={(v) =>
+            patchStep(index, { inputImageTemplate: v.trim() ? v : undefined })
+          }
+          help='Use {{trigger.image}} for a photo attached to the triggering text or email, or an earlier step&apos;s image variable. Leave empty to create from scratch.'
         />
         <Field
           label="Save the image link as"

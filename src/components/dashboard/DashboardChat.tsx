@@ -12,7 +12,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
 import { Badge } from "@/components/ui/Badge";
-import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
+import { ChatMarkdown, chatImageFromLine } from "@/components/ui/ChatMarkdown";
 import { parseEnvelope } from "@/lib/client/api-envelope";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
@@ -172,6 +172,8 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const [viewingThreadId, setViewingThreadId] = useState<string | null>(null);
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [loadingThread, setLoadingThread] = useState(false);
+  const [uploadingImage, setUploadingImage] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Outstanding fetch / poll lifecycle. AbortController fires on unmount,
   // "New conversation", switching threads mid-send, or a fresh send. The
@@ -182,6 +184,37 @@ export function DashboardChat({ businessId, businessName }: Props) {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, []);
+
+  // Attach a photo: upload to the private generated-images bucket, then drop
+  // its owner-authenticated proxy URL into the composer as image markdown.
+  // The coworker sees the URL in the message and can pass it to
+  // dashboard_generate_image (inputImageUrl) to edit the photo.
+  const attachImage = useCallback(
+    async (file: File) => {
+      setUploadingImage(true);
+      setError(null);
+      try {
+        const form = new FormData();
+        form.append("businessId", businessId);
+        form.append("file", file);
+        const res = await fetch("/api/dashboard/images", { method: "POST", body: form });
+        const json = await parseEnvelope<{ imageUrl: string }>(res);
+        if (!json.ok) {
+          setError(json.error.message);
+          return;
+        }
+        setInput((prev) =>
+          `${prev.trimEnd()}${prev.trim() ? "\n" : ""}![Attached image](${json.data.imageUrl})\n`
+        );
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Image upload failed");
+      } finally {
+        setUploadingImage(false);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+      }
+    },
+    [businessId]
+  );
 
   const fetchThreads = useCallback(async () => {
     try {
@@ -979,7 +1012,29 @@ export function DashboardChat({ businessId, businessName }: Props) {
                     {m.role === "assistant" ? (
                       <ChatMarkdown text={m.content} />
                     ) : (
-                      <p className="whitespace-pre-wrap">{m.content}</p>
+                      <p className="whitespace-pre-wrap">
+                        {m.content.split("\n").map((line, li) => {
+                          // Owner-attached images (same-origin proxy markdown)
+                          // render as thumbnails instead of raw markdown text.
+                          const img = chatImageFromLine(line);
+                          return (
+                            <span key={li}>
+                              {li > 0 && "\n"}
+                              {img ? (
+                                // eslint-disable-next-line @next/next/no-img-element -- proxy route, not a static asset
+                                <img
+                                  src={img.src}
+                                  alt={img.alt}
+                                  className="max-h-48 max-w-full rounded-lg border border-parchment/10"
+                                  loading="lazy"
+                                />
+                              ) : (
+                                line
+                              )}
+                            </span>
+                          );
+                        })}
+                      </p>
                     )}
                   </div>
                 </div>
@@ -1013,15 +1068,38 @@ export function DashboardChat({ businessId, businessName }: Props) {
               <span className="text-xs text-parchment/40">
                 {input.length}/4000
               </span>
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                loading={sending}
-                disabled={sending || isPaused || !input.trim()}
-              >
-                Send
-              </Button>
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  data-testid="chat-image-input"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) void attachImage(file);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  loading={uploadingImage}
+                  disabled={sending || isPaused || uploadingImage}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  Attach image
+                </Button>
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  loading={sending}
+                  disabled={sending || isPaused || !input.trim()}
+                >
+                  Send
+                </Button>
+              </div>
             </div>
           </form>
         </Card>

@@ -138,12 +138,18 @@ export async function processInboundTenantEmail(
   }
 
   const fromEmail = bareEmail(payload.from);
+  // First image attachment → {{trigger.image}} (an `email-attachments:<path>`
+  // ref the AiFlow worker can resolve as a generate_image edit source).
+  const firstImage = ownAttachments.find((a) =>
+    ["image/jpeg", "image/png", "image/webp"].includes(a.mimeType.trim().toLowerCase())
+  );
   const scope = tenantEmailTriggerScope({
     id: payload.messageId,
     fromEmail,
     subject: payload.subject,
     bodyText: payload.text,
-    toEmail: payload.to
+    toEmail: payload.to,
+    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {})
   });
 
   const flows = await loadTenantEmailFlows(db, businessId);

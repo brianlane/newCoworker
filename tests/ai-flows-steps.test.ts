@@ -1452,6 +1452,42 @@ describe("planStep: generate_image", () => {
       error: "generate_image: prompt is empty after templating"
     });
   });
+
+  it("carries a rendered inputImageTemplate as the edit source", () => {
+    const plan = planStep(
+      {
+        id: "g2",
+        type: "generate_image",
+        promptTemplate: "Age this face 20 years",
+        inputImageTemplate: "{{trigger.image}}",
+        saveAs: "aged"
+      } as FlowStep,
+      { vars: {}, trigger: { image: "https://media.telnyx.com/photo.jpg" } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "generate_image",
+        prompt: "Age this face 20 years",
+        inputImage: "https://media.telnyx.com/photo.jpg",
+        saveAs: "aged"
+      }
+    });
+  });
+
+  it("generates from scratch when the input template renders empty (no photo attached)", () => {
+    const plan = planStep(
+      {
+        id: "g3",
+        type: "generate_image",
+        promptTemplate: "a flyer",
+        inputImageTemplate: "{{trigger.image}}",
+        saveAs: "img"
+      } as FlowStep,
+      { vars: {}, trigger: { image: "" } }
+    );
+    expect(plan.ok && plan.action.kind === "generate_image" && plan.action.inputImage).toBeUndefined();
+  });
 });
 
 describe("planStep: send_sms mediaUrlVar (MMS attach)", () => {

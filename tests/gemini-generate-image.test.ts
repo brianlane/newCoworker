@@ -77,6 +77,28 @@ describe("geminiGenerateImage", () => {
     expect(body.contents[0].parts[0].text).toBe("a flyer");
   });
 
+  it("sends an input image as an inlineData part (editing mode)", async () => {
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(okJsonResponse(imagePayload({ mimeType: "image/png" })));
+    await geminiGenerateImage({
+      apiKey: "k",
+      model: "m",
+      prompt: "age this face 20 years",
+      inputImage: { bytes: Buffer.from("source-photo"), mimeType: "image/jpeg" }
+    });
+    const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.contents[0].parts).toEqual([
+      { text: "age this face 20 years" },
+      {
+        inlineData: {
+          mimeType: "image/jpeg",
+          data: Buffer.from("source-photo").toString("base64")
+        }
+      }
+    ]);
+  });
+
   it("passes the aspect ratio through imageConfig when set", async () => {
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")

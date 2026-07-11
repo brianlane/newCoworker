@@ -581,6 +581,9 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
       return (
         <>
           <Row label="Image description" value={step.promptTemplate} />
+          {step.inputImageTemplate && (
+            <Row label="Starts from photo" value={step.inputImageTemplate} mono />
+          )}
           <Row label="Saves the image link as" value={step.saveAs} mono />
         </>
       );

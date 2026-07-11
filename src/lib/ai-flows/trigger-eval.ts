@@ -167,7 +167,15 @@ export function emailTriggerScope(msg: InboundEmailMessage): TriggerScope {
  * template the mailbox the mail arrived at.
  */
 export function tenantEmailTriggerScope(
-  msg: InboundEmailMessage & { toEmail?: string }
+  msg: InboundEmailMessage & {
+    toEmail?: string;
+    /**
+     * First image attachment on the mail, as an `email-attachments:<path>`
+     * bucket reference. Exposed as {{trigger.image}} so a generate_image
+     * step's inputImageTemplate can edit the photo the sender attached.
+     */
+    imageRef?: string;
+  }
 ): TriggerScope {
   const windowText = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
   return {
@@ -178,7 +186,8 @@ export function tenantEmailTriggerScope(
     subject: msg.subject.slice(0, 300),
     message_id: msg.id,
     ...(msg.toEmail ? { to: msg.toEmail } : {}),
-    ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
+    ...(msg.receivedAt ? { received_at: msg.receivedAt } : {}),
+    image: msg.imageRef ?? ""
   };
 }
 

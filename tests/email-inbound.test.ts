@@ -164,6 +164,46 @@ describe("processInboundTenantEmail", () => {
     );
   });
 
+  it("exposes the first image attachment as trigger.image (email-attachments ref)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [{ id: "flow-img", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-img" });
+
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          // Non-image first: it must be skipped in favor of the jpeg.
+          {
+            filename: "quote.pdf",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-quote.pdf"
+          },
+          {
+            filename: "face.jpg",
+            mimeType: "IMAGE/JPEG",
+            size: 20,
+            path: "inbound/_msg-1_example.com_/1-face.jpg"
+          }
+        ]
+      },
+      db as never
+    );
+
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          image: "email-attachments:inbound/_msg-1_example.com_/1-face.jpg"
+        })
+      }),
+      db
+    );
+  });
+
   it("fires flows whose tenant_email trigger lives in the EXTRA triggers array (multi-trigger OR)", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({
