@@ -57,9 +57,22 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
   }
 
   function handleDragOver(index: number, e: React.DragEvent<HTMLLIElement>) {
+    // Ignore foreign drags (files, text selections, other widgets): without
+    // an active sidebar drag there is nothing to drop, so don't
+    // preventDefault (no drop cursor) and don't highlight a target row.
+    if (dragIndexRef.current === null) return;
     e.preventDefault();
     e.dataTransfer.dropEffect = "move";
     if (overIndex !== index) setOverIndex(index);
+  }
+
+  function handleListDragLeave(e: React.DragEvent<HTMLUListElement>) {
+    // Clear the target highlight when the pointer leaves the list entirely
+    // mid-drag — otherwise the last hovered row keeps its highlight until
+    // the next dragover/drag-end. Moves between rows fire dragleave too, but
+    // with relatedTarget still inside the list, so those are ignored.
+    if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
+    setOverIndex(null);
   }
 
   function handleDrop(index: number, e: React.DragEvent<HTMLLIElement>) {
@@ -111,7 +124,11 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
         Drag to reorder the navigation (or use the arrows) and hide pages you don&apos;t use.
         Settings and Notifications always stay visible.
       </p>
-      <ul className="space-y-1 mb-4" data-testid="sidebar-customizer-list">
+      <ul
+        className="space-y-1 mb-4"
+        data-testid="sidebar-customizer-list"
+        onDragLeave={handleListDragLeave}
+      >
         {items.map((item, index) => (
           <li
             key={item.key}
