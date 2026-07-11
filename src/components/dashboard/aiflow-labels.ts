@@ -30,6 +30,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   notify_owner: "Notify me",
   http_call: "Call another service (API)",
   branch: "Branch (if / else paths)",
+  goal: "Goal (skip ahead when reached)",
   sleep: "Wait before continuing",
   wait_for_reply: "Wait for their reply",
   route_to_team: "Hand off to team/employees",
@@ -64,6 +65,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Pauses until the person texts back (or the wait times out). Their reply is saved so later steps can branch on it - if they don't reply in time, the saved reply is empty, which lets you send a follow-up nudge.",
   branch:
     "Splits the workflow into paths: each path has a condition (checked top to bottom, first match wins) and its own steps; no match runs the \"none matched\" path.",
+  goal:
+    "A checkpoint tied to a milestone (they reply, an appointment is booked, a tag is added, or a teammate claims the lead). The moment the milestone happens, the workflow jumps straight here - skipping any follow-ups in between - so people who already converted stop getting nudges.",
   route_to_team: "Offers the lead to a teammate to claim, and falls back to you if no one does.",
   browse_action: "Clicks buttons or types into fields on a web page on your behalf.",
   recall_url:

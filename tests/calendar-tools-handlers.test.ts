@@ -20,6 +20,7 @@ vi.mock("@/lib/calendar-tools/vagaro", () => ({
   findVagaroSlots: vi.fn(),
   bookVagaroAppointment: vi.fn()
 }));
+vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 
 import {
   bookCalendarAppointment,
@@ -36,6 +37,7 @@ import {
   findCalendlySlots
 } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -560,6 +562,20 @@ describe("bookCalendarAppointment", () => {
     expect(vi.mocked(bookVagaroAppointment)).toHaveBeenCalledWith(BIZ, ARGS, "+15551230000");
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
+    // A real Vagaro booking fires the appointment_booked goal for the lead.
+    expect(vi.mocked(fireGoalEvent)).toHaveBeenCalledWith(BIZ, "+15551230000", {
+      kind: "appointment_booked"
+    });
+  });
+
+  it("a failed Vagaro booking fires no goal event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "vagaro_slot_taken"
+    } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
   });
 
   it("delegates a Calendly connection to createCalendlyBookingLink", async () => {
@@ -579,6 +595,8 @@ describe("bookCalendarAppointment", () => {
     // Never creates provider events or the shared calendar.
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
+    // A scheduling LINK is not a booking — no goal event.
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
   });
 
   it("books a Google event with attendee email + caller-phone fallback", async () => {
@@ -618,6 +636,10 @@ describe("bookCalendarAppointment", () => {
     };
     expect(payload.data.description).toContain("Phone: +15559998888");
     expect(payload.data.description).not.toContain("+15551230000");
+    // The goal event carries the same phone precedence.
+    expect(vi.mocked(fireGoalEvent)).toHaveBeenCalledWith(BIZ, "+15559998888", {
+      kind: "appointment_booked"
+    });
   });
 
   it("books without any phone when neither args nor fallback provide one", async () => {

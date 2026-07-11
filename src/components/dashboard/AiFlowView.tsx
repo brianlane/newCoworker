@@ -505,6 +505,30 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           />
         </>
       );
+    case "goal":
+      return (
+        <>
+          <Row label="Goal" value={step.label} />
+          <div className="space-y-1">
+            <div className="text-xs font-medium text-parchment/50">
+              Jumps here the moment any of these happen (skipping the steps in between)
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {step.events.map((ev, i) => (
+                <Chip key={i}>
+                  {ev.kind === "replied"
+                    ? "They text back"
+                    : ev.kind === "appointment_booked"
+                      ? "An appointment is booked"
+                      : ev.kind === "claimed"
+                        ? "A teammate claims the lead"
+                        : `Tag added: ${ev.tag ?? ""}`}
+                </Chip>
+              ))}
+            </div>
+          </div>
+        </>
+      );
     case "branch":
       return (
         <div className="space-y-2">

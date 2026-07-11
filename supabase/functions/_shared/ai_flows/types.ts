@@ -359,6 +359,21 @@ export type BrowseActionItem = {
   valueTemplate?: string;
 };
 
+/**
+ * The external milestones a `goal` step can watch for (GHL-style Goal Events):
+ *   - replied:             the lead texted back (any inbound SMS from them);
+ *   - appointment_booked:  a calendar booking landed for the lead;
+ *   - tag_added:           the named tag was added to the lead's contact;
+ *   - claimed:             a teammate claimed the lead via route_to_team.
+ */
+export type GoalEventKind = "replied" | "appointment_booked" | "tag_added" | "claimed";
+
+/** One watched milestone on a `goal` step. `tag` is set for tag_added only. */
+export type GoalEvent = {
+  kind: GoalEventKind;
+  tag?: string;
+};
+
 export type FlowStep =
   | { id: string; type: "extract_url"; saveAs: string; when?: StepCondition }
   | {
@@ -772,6 +787,27 @@ export type FlowStep =
       minutes?: number;
       untilTime?: string;
       timezone?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * GHL-style Goal Event checkpoint. Reached inline it is a no-op marker;
+       * its power is the JUMP: when a watched external event (reply, booking,
+       * tag, claim) lands for the run's lead while the run is queued/deferred
+       * or parked awaiting a reply, the run fast-forwards straight to this
+       * step — every step in between is recorded "skipped" (goal_jump). This
+       * is "stop nurturing people who already converted": follow-up sends
+       * between here and the current step never fire once the goal is hit.
+       * Trunk-only (never inside a branch arm; enforced at author time) so a
+       * jump can never land on an unevaluated branch path.
+       */
+      type: "goal";
+      /** Display label, e.g. "Booked an appointment". */
+      label: string;
+      /** Watched milestones (any match jumps). 1-4 entries. */
+      events: GoalEvent[];
+      /** Inline guard only (a jump ignores it): unmet → the checkpoint skips. */
       when?: StepCondition;
     }
   | {

@@ -4,6 +4,7 @@ import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { logger } from "@/lib/logger";
 
 /**
@@ -388,7 +389,13 @@ export async function bookCalendarAppointment(
 
     if (conn.provider === "vagaro") {
       // Real booking on the merchant's Vagaro book (direct API, no Nango).
-      return bookVagaroAppointment(businessId, args, fallbackPhone);
+      const vagaroResult = await bookVagaroAppointment(businessId, args, fallbackPhone);
+      if (vagaroResult.ok) {
+        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+          kind: "appointment_booked"
+        });
+      }
+      return vagaroResult;
     }
 
     if (conn.provider === "calendly") {
@@ -488,6 +495,14 @@ export async function bookCalendarAppointment(
       eventId = data?.id ?? null;
       htmlLink = data?.webLink ?? null;
     }
+
+    // Goal Events: a real booking may fast-forward the lead's parked/queued
+    // AiFlow runs to an "appointment booked" goal (skipping follow-up sends
+    // between here and there). Best-effort inside fireGoalEvent; the Calendly
+    // path above is exempt — a scheduling LINK is not a booking.
+    await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+      kind: "appointment_booked"
+    });
 
     return {
       ok: true,

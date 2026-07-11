@@ -275,6 +275,101 @@ describe("validateDefinitionSemantics", () => {
   });
 });
 
+describe("goal step (GHL-style Goal Events)", () => {
+  const goalFlow = (goalStep: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "sms", conditions: [] },
+    steps: [
+      { id: "s1", type: "send_sms", to: "{{trigger.from}}", body: "hi" },
+      goalStep,
+      { id: "s3", type: "notify_owner", message: "past the goal" }
+    ]
+  });
+
+  it("accepts a trunk goal with every event kind (tag_added carrying its tag)", () => {
+    const def = parseAiFlowDefinition(
+      goalFlow({
+        id: "g1",
+        type: "goal",
+        label: "Converted",
+        events: [
+          { kind: "replied" },
+          { kind: "appointment_booked" },
+          { kind: "tag_added", tag: "Won" },
+          { kind: "claimed" }
+        ]
+      })
+    );
+    const goal = def.steps[1];
+    expect(goal.type === "goal" && goal.events).toHaveLength(4);
+  });
+
+  it("rejects tag_added without a tag, and a tag on any other kind", () => {
+    const noTag = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(
+        goalFlow({ id: "g1", type: "goal", label: "x", events: [{ kind: "tag_added" }] })
+      )
+    );
+    expect(noTag.some((i) => i.includes("names no tag"))).toBe(true);
+
+    const strayTag = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(
+        goalFlow({
+          id: "g1",
+          type: "goal",
+          label: "x",
+          events: [{ kind: "replied", tag: "Won" }]
+        })
+      )
+    );
+    expect(strayTag.some((i) => i.includes('tags only apply to "tag_added"'))).toBe(true);
+  });
+
+  it("rejects a goal nested inside a branch arm (trunk-only)", () => {
+    const def = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        { id: "s1", type: "extract_text", fields: [{ name: "lead_type" }] },
+        {
+          id: "b1",
+          type: "branch",
+          question: "path?",
+          branches: [
+            {
+              id: "arm1",
+              label: "Buyers",
+              condition: { var: "lead_type", equals: "buyer" },
+              steps: [
+                { id: "g1", type: "goal", label: "Booked", events: [{ kind: "appointment_booked" }] }
+              ]
+            }
+          ],
+          else: []
+        }
+      ]
+    });
+    const issues = validateDefinitionSemantics(def);
+    expect(issues.some((i) => i.includes("goals must sit on the main path"))).toBe(true);
+  });
+
+  it("rejects out-of-range events (empty list, > 4 entries) at the shape layer", () => {
+    expect(() =>
+      parseAiFlowDefinition(goalFlow({ id: "g1", type: "goal", label: "x", events: [] }))
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition(
+        goalFlow({
+          id: "g1",
+          type: "goal",
+          label: "x",
+          events: Array.from({ length: 5 }, () => ({ kind: "replied" }))
+        })
+      )
+    ).toThrow(AiFlowValidationError);
+  });
+});
+
 describe("upsert_customer step", () => {
   const withUpsert = (phoneVar: string, nameVar?: string, emailVar?: string) => ({
     version: 1,

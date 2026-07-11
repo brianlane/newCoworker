@@ -37,6 +37,7 @@ export const FLOW_STEP_TYPES = [
   "sleep",
   "wait_for_reply",
   "branch",
+  "goal",
   "route_to_team",
   "browse_action",
   "recall_url",
@@ -483,6 +484,16 @@ const whenSchema = z
     { message: "set exactly one of equals/contains/notEquals" }
   );
 
+/**
+ * The external milestones a `goal` step can watch for (GHL-style Goal
+ * Events). Mirrors GoalEventKind in _shared/ai_flows/types.ts.
+ */
+export const GOAL_EVENT_KINDS = ["replied", "appointment_booked", "tag_added", "claimed"] as const;
+export type GoalEventKind = (typeof GOAL_EVENT_KINDS)[number];
+
+/** Max watched milestones on one goal step. */
+export const MAX_GOAL_EVENTS = 4;
+
 /** Max named arms on one branch step (plus the implicit else path). */
 export const MAX_BRANCH_ARMS = 4;
 /** Max branch nesting depth (a branch at depth 3 may not contain another). */
@@ -671,6 +682,26 @@ const nonBranchStepMembers = [
     phoneVar: varName,
     saveAs: varName.optional(),
     timeoutMinutes: z.number().int().min(1).max(43200).optional(),
+    when: whenSchema.optional()
+  }),
+  // GHL-style Goal Event checkpoint: when a watched external milestone lands
+  // for the run's lead (replied / appointment booked / tag added / claimed),
+  // the run fast-forwards to this step and everything in between is skipped
+  // (goal_jump) — "stop nurturing people who already converted". Trunk-only
+  // and tag-required-for-tag_added are enforced in validateDefinitionSemantics.
+  z.object({
+    id: stepId,
+    type: z.literal("goal"),
+    label: z.string().min(1).max(120),
+    events: z
+      .array(
+        z.object({
+          kind: z.enum(GOAL_EVENT_KINDS),
+          tag: z.string().min(1).max(40).optional()
+        })
+      )
+      .min(1)
+      .max(MAX_GOAL_EVENTS),
     when: whenSchema.optional()
   }),
   z.object({
@@ -1055,6 +1086,8 @@ function templateStringsForStep(step: FlowStep): string[] {
     // sleep / wait_for_reply carry only var NAMES and durations — no templates.
     case "sleep":
     case "wait_for_reply":
+    // goal carries a display label and literal event kinds/tags — no templates.
+    case "goal":
     // branch: the question/labels are display copy and the conditions are
     // var-name references (scope-checked in validateDefinitionSemantics), so
     // there is nothing to template-check on the step itself. Nested arm steps
@@ -1493,6 +1526,29 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           issues.push(`Step "${step.id}" lists the category "${c.value}" more than once.`);
         }
         seenValues.add(key);
+      }
+    }
+
+    // goal: trunk-only (a jump onto an unevaluated branch path would be
+    // unsafe), and each watched event must be fully specified — tag_added
+    // needs its tag, and a tag on any other kind is a config mistake.
+    if (step.type === "goal") {
+      if (depth > 0) {
+        issues.push(
+          `Step "${step.id}" is a goal checkpoint inside a branch; goals must sit on the main path.`
+        );
+      }
+      for (const ev of step.events) {
+        if (ev.kind === "tag_added" && !(ev.tag ?? "").trim()) {
+          issues.push(
+            `Step "${step.id}" watches for a tag being added but names no tag; set the tag.`
+          );
+        }
+        if (ev.kind !== "tag_added" && ev.tag !== undefined) {
+          issues.push(
+            `Step "${step.id}" sets a tag on a "${ev.kind}" goal event; tags only apply to "tag_added".`
+          );
+        }
       }
     }
 

@@ -32,6 +32,10 @@ import {
   sharedEnvRowboatBearer
 } from "../_shared/gateway_token.ts";
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
+import {
+  REASONING_PROMPT_INSTRUCTION,
+  splitReplyReasoning
+} from "../_shared/reply_reasoning.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -954,6 +958,11 @@ serve(async (req: Request) => {
       customerPreamble = memoryPreamble
         ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
         : dateAndPhoneLines;
+      // Decision-engine capture (PRD Ch. 6): ask the model to end its reply
+      // with a machine-read reasoning trailer. splitReplyReasoning strips it
+      // before caching/sending, so the customer never sees it. Customer path
+      // only — staff chat is internal and needs no lead-facing rationale.
+      customerPreamble += REASONING_PROMPT_INSTRUCTION;
     }
 
     // Inbound MMS photo → stored edit source. Only when the reply path is
@@ -1070,7 +1079,32 @@ serve(async (req: Request) => {
           budgetMs: ROWBOAT_RETRY_BUDGET_MS,
           customerPreamble
         });
-        reply = parsed.reply;
+        // Strip the reasoning trailer BEFORE anything caches or sends the
+        // reply — the trailer is for the ai_reply_reasoning record only.
+        const split = splitReplyReasoning(parsed.reply);
+        reply = split.reply;
+        if (!reply.trim()) {
+          // Degenerate turn: the model answered with ONLY the trailer. Treat
+          // it like an empty assistant reply (throw → retry/dead-letter)
+          // rather than caching/sending an empty SMS.
+          throw new Error("rowboat_empty_assistant_after_reasoning_strip");
+        }
+        // Persist the decision record best-effort: a failure here (or a model
+        // that ignored the trailer instruction) never touches the reply path.
+        if (!isStaff && split.reasoning) {
+          const { error: reasoningErr } = await supabase.from("ai_reply_reasoning").insert({
+            business_id: job.business_id,
+            contact_e164: fromE164,
+            channel: "sms",
+            inbound_preview: userText.slice(0, 300),
+            reply_preview: reply.slice(0, 300),
+            intent: split.reasoning.intent,
+            rationale: split.reasoning.rationale,
+            escalated: split.reasoning.escalated,
+            model: turnPlan.stateless ? "local" : "gemini"
+          });
+          if (reasoningErr) console.error("ai_reply_reasoning insert", reasoningErr);
+        }
 
         if (cap.overCap) {
           await telemetryRecord(supabase, "sms_chat_spend_over_cap_local", {

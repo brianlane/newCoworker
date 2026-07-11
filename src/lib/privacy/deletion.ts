@@ -286,6 +286,18 @@ export async function deleteEndUserData(
       });
     }
 
+    // ai_reply_reasoning (per-reply AI decision records; central-only table)
+    {
+      const { data, error } = await db
+        .from("ai_reply_reasoning")
+        .delete()
+        .eq("business_id", businessId)
+        .eq("contact_e164", e164)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`ai_reply_reasoning: ${error.message}`);
+      results.push({ table: "ai_reply_reasoning", central: count(data), box: null });
+    }
+
     // sms_owner_reply_prompts (their inbound messages surfaced to the owner)
     {
       const { data, error } = await db

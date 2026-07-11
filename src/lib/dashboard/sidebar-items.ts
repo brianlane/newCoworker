@@ -20,6 +20,9 @@ export type SidebarItemDef = {
 
 export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "dashboard", label: "Dashboard", href: "/dashboard" },
+  // Staff Task Center: every lead in motion (active workflow + lead state +
+  // goals + collected info + response reasoning). Staff-visible.
+  { key: "tasks", label: "Tasks", href: "/dashboard/tasks" },
   { key: "analytics", label: "Analytics", href: "/dashboard/analytics" },
   { key: "chat", label: "Chat", href: "/dashboard/chat" },
   { key: "calls", label: "Calls", href: "/dashboard/calls" },

@@ -307,6 +307,20 @@ describe("flattenSteps", () => {
     ]);
   });
 
+  it("keeps goal checkpoints stable in the flat order (jump indices depend on it)", () => {
+    const withGoal: EngineFlowStep[] = [
+      { id: "s1", type: "extract_text", fields: [{ name: "insurance_type" }] },
+      engineBranchStep(),
+      { id: "g1", type: "goal", label: "Booked", events: [{ kind: "appointment_booked" }] },
+      { id: "s3", type: "notify_owner", message: "Done" }
+    ];
+    const flat = flattenSteps(withGoal);
+    expect(flat.map((e) => e.step.id)).toEqual(["s1", "s2", "s2a", "s2b", "s2e", "g1", "s3"]);
+    // Trunk goal: empty branchPath — exactly what makes it a legal jump target.
+    expect(flat[5].branchPath).toEqual([]);
+    expect(flattenSteps(withGoal)).toEqual(flattenSteps(withGoal));
+  });
+
   it("drops malformed entries instead of throwing", () => {
     const corrupt = [
       null,

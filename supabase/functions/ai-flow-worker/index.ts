@@ -82,6 +82,7 @@ import {
   timeWindowDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
+import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   capMicrosForTier,
@@ -1012,6 +1013,17 @@ async function runStep(
       return classifyStep(supabase, run, scope, action);
     case "generate_image":
       return generateImageStep(supabase, run, scope, action);
+    case "goal":
+      // Checkpoint marker: the interesting work (the jump) happened in
+      // applyGoalEvent when the external milestone landed; executing the
+      // step just records how the run arrived here.
+      appendActionTaken(
+        scope,
+        action.reachedVia === "passed_inline"
+          ? `passed goal "${action.label}"`
+          : `jumped to goal "${action.label}" (${action.reachedVia})`
+      );
+      return { kind: "ok", result: { goal: action.label, reached_via: action.reachedVia } };
     case "sleep":
       return sleepStep(scope, action);
     case "wait_for_reply":
@@ -1440,6 +1452,12 @@ async function updateContactStep(
     .update({ tags: next, updated_at: new Date().toISOString() })
     .eq("id", contact.id);
   if (updErr) throw new Error(`update_contact write: ${updErr.message}`);
+  // Goal Events: each tag that actually landed may jump OTHER parked/queued
+  // runs for this lead to a matching tag_added goal (this running run is
+  // untouched — its own goals are passed inline). Best-effort by design.
+  for (const tag of added) {
+    await applyGoalEvent(supabase, run.business_id, action.e164, { kind: "tag_added", tag });
+  }
   appendActionTaken(
     scope,
     `updated contact tags for ${action.e164}` +
@@ -4010,6 +4028,14 @@ async function routeToTeamStep(
     // Claim-driven ownership: the claimer becomes the contact's owner if the
     // contact is currently unowned (never steals). Best-effort by design.
     if (claimedBy) await assignContactOwnerOnClaim(supabase, run, scope, claimedBy);
+    // Goal Events: a claim may jump the lead's OTHER parked/queued runs (e.g.
+    // a nurture flow) to a "claimed" goal. This run continues normally.
+    {
+      const leadPhone = leadContactPhone(scope);
+      if (leadPhone) {
+        await applyGoalEvent(supabase, run.business_id, leadPhone, { kind: "claimed" });
+      }
+    }
     return {
       kind: "ok",
       result: { routed: lateClaim ? "late_claimed" : "claimed", claimed_by: claimedBy },

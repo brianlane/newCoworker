@@ -139,10 +139,24 @@ describe("deleteEndUserData — central-only tenants", () => {
       "sms_rowboat_threads",
       "sms_outbound_log",
       "scheduled_sms",
+      "ai_reply_reasoning",
       "sms_owner_reply_prompts",
       "voice_call_transcripts",
       "email_log"
     ]);
+  });
+
+  it("erases the person's AI reasoning records centrally (box: null — central-only table)", async () => {
+    const db = makeCentralDb({
+      ai_reply_reasoning: { data: [{ id: "r1" }, { id: "r2" }], error: null }
+    });
+    const res = await deleteEndUserData(BIZ, { e164: E164 }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.ai_reply_reasoning).toEqual({
+      table: "ai_reply_reasoning",
+      central: 2,
+      box: null
+    });
   });
 
   it.each([
@@ -152,6 +166,7 @@ describe("deleteEndUserData — central-only tenants", () => {
     ["sms_rowboat_threads", /sms_rowboat_threads: boom/, { e164: E164 }],
     ["sms_outbound_log", /sms_outbound_log: boom/, { e164: E164 }],
     ["scheduled_sms", /scheduled_sms: boom/, { e164: E164 }],
+    ["ai_reply_reasoning", /ai_reply_reasoning: boom/, { e164: E164 }],
     ["sms_owner_reply_prompts", /sms_owner_reply_prompts: boom/, { e164: E164 }],
     ["voice_call_transcripts", /voice_call_transcripts: boom/, { e164: E164 }],
     ["email_log#1", /email_log \(to\): boom/, { email: EMAIL }],

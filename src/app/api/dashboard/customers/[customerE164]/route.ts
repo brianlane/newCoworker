@@ -35,9 +35,11 @@ import {
   CONTACT_TYPES,
   MAX_CONTACT_TAGS,
   MAX_CONTACT_TAG_LENGTH,
-  SMS_REPLY_MODES
+  SMS_REPLY_MODES,
+  normalizeContactTags
 } from "@/lib/customer-memory/types";
 import { getTeamMember } from "@/lib/db/employees";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 export const dynamic = "force-dynamic";
 
@@ -222,6 +224,18 @@ export async function PATCH(
       ...(body.tags !== undefined ? { tags: body.tags } : {}),
       ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: body.ownerEmployeeId } : {})
     });
+
+    // Goal Events: tags the edit ADDED (vs. the pre-edit row) may fast-forward
+    // this lead's parked/queued AiFlow runs to a matching "tag added" goal.
+    // Diffed against the same normalization the write used; best-effort inside
+    // fireGoalEvent, so a goal failure never fails the save.
+    if (body.tags !== undefined) {
+      const before = new Set((existing.tags ?? []).map((t) => t.toLowerCase()));
+      for (const tag of normalizeContactTags(body.tags)) {
+        if (before.has(tag.toLowerCase())) continue;
+        await fireGoalEvent(businessId, customerE164, { kind: "tag_added", tag });
+      }
+    }
 
     return successResponse({ ok: true });
   } catch (err) {
