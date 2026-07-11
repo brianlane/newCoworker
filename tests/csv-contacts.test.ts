@@ -41,7 +41,7 @@ function makeDb(results: Scripted[]) {
     const calls: CallLog[] = [];
     log.push({ table, calls });
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "insert", "update", "delete", "eq", "or", "order", "range", "limit"]) {
+    for (const m of ["select", "insert", "update", "delete", "eq", "or", "ilike", "order", "range", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ name: m, args });
         return builder;
@@ -222,6 +222,7 @@ describe("importContactsCsv", () => {
   it("creates a new contact, normalizing a 10-digit US number", async () => {
     const { db, log } = makeDb([
       { data: null, error: null }, // lookup: no existing
+      { data: [], error: null }, // email fold scan: nobody has this email
       { data: null, error: null } // insert ok
     ]);
     const summary = await importContactsCsv(
@@ -242,7 +243,7 @@ describe("importContactsCsv", () => {
       })
     );
     expect(summary.errors).toEqual([]);
-    const insert = log[1].calls.find((c) => c.name === "insert");
+    const insert = log[2].calls.find((c) => c.name === "insert");
     expect(insert?.args[0]).toMatchObject({
       business_id: BIZ,
       customer_e164: "+16025551234",
@@ -253,6 +254,169 @@ describe("importContactsCsv", () => {
       sms_reply_mode: "suppress",
       pinned_md: "VIP"
     });
+  });
+
+  it("folds a new number into the single existing customer sharing its email", async () => {
+    const { db, log } = makeDb([
+      { data: null, error: null }, // phone lookup: nothing
+      {
+        // email scan: exactly one customer match, alias list already started
+        data: [
+          {
+            id: "match-1",
+            customer_e164: "+16025559999",
+            alias_e164s: ["+16025558888"],
+            type: "customer"
+          }
+        ],
+        error: null
+      },
+      { data: null, error: null } // fold update ok
+    ]);
+    const summary = await importContactsCsv(
+      BIZ,
+      "phone,name,email\n+16025551234,Jane Doe,jo_hn@example.com",
+      db
+    );
+    expect(summary).toMatchObject({ created: 0, updated: 1, skipped: 0 });
+    expect(summary.errors).toEqual([]);
+    // The email match is a LITERAL (ILIKE metacharacters escaped) capped at 2.
+    expect(log[1].calls.find((c) => c.name === "ilike")?.args).toEqual([
+      "email",
+      "jo\\_hn@example.com"
+    ]);
+    expect(log[1].calls.find((c) => c.name === "limit")?.args).toEqual([2]);
+    // The fold updates the MATCHED profile and appends the new number as an
+    // alias (deduped), so future texts from it resolve there.
+    const update = log[2].calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toMatchObject({
+      display_name: "Jane Doe",
+      name_source: "manual",
+      email: "jo_hn@example.com",
+      alias_e164s: ["+16025558888", "+16025551234"]
+    });
+    expect(log[2].calls.find((c) => c.name === "eq")?.args).toEqual(["id", "match-1"]);
+    // Not a creation: no contact_created event.
+    expect(fireContactEvent).not.toHaveBeenCalled();
+  });
+
+  it("does not double-append an alias the profile already carries", async () => {
+    const { db, log } = makeDb([
+      { data: null, error: null },
+      {
+        data: [
+          {
+            id: "match-1",
+            customer_e164: "+16025559999",
+            alias_e164s: ["+16025551234"],
+            type: "customer"
+          }
+        ],
+        error: null
+      },
+      { data: null, error: null }
+    ]);
+    await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    const update = log[2].calls.find((c) => c.name === "update");
+    expect((update?.args[0] as { alias_e164s: string[] }).alias_e164s).toEqual([
+      "+16025551234"
+    ]);
+  });
+
+  it("treats a null fold-scan page as no match and folds onto a null alias list", async () => {
+    // Null scan page → plain create.
+    const { db: db1 } = makeDb([
+      { data: null, error: null },
+      { data: null, error: null }, // fold scan: null page
+      { data: null, error: null } // insert
+    ]);
+    const s1 = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db1);
+    expect(s1).toMatchObject({ created: 1, updated: 0 });
+
+    // Single match whose alias list is null → alias array starts fresh.
+    const { db: db2, log } = makeDb([
+      { data: null, error: null },
+      {
+        data: [{ id: "m1", customer_e164: "+16025559999", alias_e164s: null, type: "customer" }],
+        error: null
+      },
+      { data: null, error: null }
+    ]);
+    const s2 = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db2);
+    expect(s2).toMatchObject({ created: 0, updated: 1 });
+    const update = log[2].calls.find((c) => c.name === "update");
+    expect((update?.args[0] as { alias_e164s: string[] }).alias_e164s).toEqual([
+      "+16025551234"
+    ]);
+  });
+
+  it("creates instead of folding when the email is ambiguous (2+ matches)", async () => {
+    const { db, log } = makeDb([
+      { data: null, error: null },
+      {
+        data: [
+          { id: "m1", customer_e164: "+16025559998", alias_e164s: [], type: "customer" },
+          { id: "m2", customer_e164: "+16025559999", alias_e164s: [], type: "customer" }
+        ],
+        error: null
+      },
+      { data: null, error: null } // insert
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 1, updated: 0 });
+    expect(log[2].calls.some((c) => c.name === "insert")).toBe(true);
+  });
+
+  it("creates instead of folding when the email match is not a customer profile", async () => {
+    const { db } = makeDb([
+      { data: null, error: null },
+      {
+        data: [{ id: "m1", customer_e164: "+16025559999", alias_e164s: null, type: "company" }],
+        error: null
+      },
+      { data: null, error: null }
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 1, updated: 0 });
+  });
+
+  it("skips the email fold entirely when the row re-types the contact", async () => {
+    const { db, log } = makeDb([
+      { data: null, error: null }, // phone lookup
+      { data: null, error: null } // insert (no fold scan in between)
+    ]);
+    const summary = await importContactsCsv(
+      BIZ,
+      "phone,type,email\n+16025551234,tester,a@b.co",
+      db
+    );
+    expect(summary).toMatchObject({ created: 1, updated: 0 });
+    // Only two table interactions: lookup + insert.
+    expect(log).toHaveLength(2);
+    expect(log[1].calls.some((c) => c.name === "insert")).toBe(true);
+  });
+
+  it("reports fold scan and fold update errors per row", async () => {
+    const { db } = makeDb([
+      { data: null, error: null }, // row 1 lookup
+      { data: null, error: { message: "scan down" } }, // row 1 fold scan fails
+      { data: null, error: null }, // row 2 lookup
+      {
+        data: [{ id: "m1", customer_e164: "+16025559999", alias_e164s: [], type: "customer" }],
+        error: null
+      },
+      { data: null, error: { message: "fold down" } } // row 2 fold update fails
+    ]);
+    const summary = await importContactsCsv(
+      BIZ,
+      "phone,email\n+16025551111,a@b.co\n+16025552222,a@b.co",
+      db
+    );
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 2 });
+    expect(summary.errors).toEqual([
+      { row: 2, message: "scan down" },
+      { row: 3, message: "fold down" }
+    ]);
   });
 
   it("creates with nulls when optional cells are blank (no manual name_source)", async () => {

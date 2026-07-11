@@ -11,6 +11,13 @@
  *   * Existing contact (primary number OR merged-away alias) → update, but
  *     only with non-empty cells — a blank cell means "leave as is", never
  *     "clear". A CSV name is a deliberate label (name_source='manual').
+ *   * New phone whose EMAIL matches exactly ONE existing customer profile →
+ *     the same person's second number (CustomerLinker-style email
+ *     cross-conflict resolution): the existing profile is updated and the
+ *     new number is recorded in its alias_e164s, so texts/calls from it
+ *     resolve to that profile instead of forking a duplicate person.
+ *     Ambiguous emails (2+ matches) or non-customer matches fall through
+ *     to a plain create.
  *   * No contact yet → create.
  *   * Bad rows are reported with their 1-based file row number and skipped;
  *     good rows still apply.
@@ -30,6 +37,7 @@ import {
 } from "@/lib/customer-memory/types";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+import { escapeLikeLiteral } from "@/lib/privacy/deletion";
 import { parseCsv, serializeCsv } from "./csv";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -240,7 +248,42 @@ export async function importContactsCsv(
         return true;
       };
 
+      // Email cross-conflict (ported from BizBlasts' CustomerLinker): the
+      // row's phone is unknown, but its email already identifies exactly one
+      // existing CUSTOMER profile → same person, second number. Update that
+      // profile and record the new number as an alias instead of creating a
+      // duplicate person row. Strict guards: exactly one email match, both
+      // sides classified customer (a row that re-types the contact is a
+      // signal they are NOT the same person).
+      const tryEmailFold = async (): Promise<boolean> => {
+        if (!email) return false;
+        if (type && type !== "customer") return false;
+        const { data: matches, error: matchErr } = await db
+          .from("contacts")
+          .select("id, customer_e164, alias_e164s, type")
+          .eq("business_id", businessId)
+          .ilike("email", escapeLikeLiteral(email))
+          .limit(2);
+        if (matchErr) throw new Error(matchErr.message);
+        const rows = (matches ?? []) as Array<{
+          id: string;
+          customer_e164: string;
+          alias_e164s: string[] | null;
+          type: string;
+        }>;
+        if (rows.length !== 1 || rows[0].type !== "customer") return false;
+        const aliases = new Set([...(rows[0].alias_e164s ?? []), phone]);
+        const { error: foldErr } = await db
+          .from("contacts")
+          .update({ ...patch, alias_e164s: [...aliases] })
+          .eq("id", rows[0].id);
+        if (foldErr) throw new Error(foldErr.message);
+        return true;
+      };
+
       if (await applyUpdate()) {
+        summary.updated += 1;
+      } else if (await tryEmailFold()) {
         summary.updated += 1;
       } else {
         const { error: insErr } = await db.from("contacts").insert({
