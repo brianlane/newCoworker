@@ -303,9 +303,24 @@ export async function importContactsCsv(
           return "raced";
         }
         // CSV cells are deliberate owner edits — apply to the survivor
-        // BEFORE the merge so a patch failure aborts the fold cleanly.
+        // BEFORE the merge so a patch failure aborts the fold cleanly. On
+        // that failure the bare temp row is removed again: leaving it would
+        // make a RE-IMPORT of the row take the plain phone-update path
+        // (the number now "exists") and silently skip the email fold forever.
         const { error: patchErr } = await db.from("contacts").update(patch).eq("id", rows[0].id);
-        if (patchErr) throw new Error(patchErr.message);
+        if (patchErr) {
+          const { error: undoErr } = await db
+            .from("contacts")
+            .delete()
+            .eq("business_id", businessId)
+            .eq("customer_e164", phone);
+          if (undoErr) {
+            // Both the patch and the undo failed — surface both so the owner
+            // knows the number now exists as a bare contact.
+            throw new Error(`${patchErr.message} (temp row cleanup also failed: ${undoErr.message})`);
+          }
+          throw new Error(patchErr.message);
+        }
         const { error: mergeErr } = await db.rpc("merge_customer_memories", {
           p_business_id: businessId,
           p_from_e164: phone,

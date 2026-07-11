@@ -432,14 +432,15 @@ describe("importContactsCsv", () => {
     expect(log[1].calls.some((c) => c.name === "insert")).toBe(true);
   });
 
-  it("reports fold scan and survivor-patch errors per row", async () => {
-    const { db } = makeDb([
+  it("reports fold scan and survivor-patch errors per row, undoing the temp row", async () => {
+    const { db, log } = makeDb([
       { data: null, error: null }, // row 1 lookup
       { data: null, error: { message: "scan down" } }, // row 1 fold scan fails
       { data: null, error: null }, // row 2 lookup
       ONE_MATCH,
       { data: null, error: null }, // row 2 bare temp insert ok
-      { data: null, error: { message: "patch down" } } // row 2 survivor patch fails (pre-merge)
+      { data: null, error: { message: "patch down" } }, // row 2 survivor patch fails (pre-merge)
+      { data: null, error: null } // row 2 temp-row undo delete ok
     ]);
     const summary = await importContactsCsv(
       BIZ,
@@ -450,6 +451,28 @@ describe("importContactsCsv", () => {
     expect(summary.errors).toEqual([
       { row: 2, message: "scan down" },
       { row: 3, message: "patch down" }
+    ]);
+    // The bare temp row is deleted again so a RE-IMPORT retries the fold
+    // instead of taking the plain phone-update path forever.
+    const undo = log[log.length - 1];
+    expect(undo.calls.some((c) => c.name === "delete")).toBe(true);
+    expect(undo.calls.find((c) => c.name === "eq" && c.args[0] === "customer_e164")?.args).toEqual([
+      "customer_e164",
+      "+16025552222"
+    ]);
+  });
+
+  it("reports both failures when the temp-row undo also fails", async () => {
+    const { db } = makeDb([
+      { data: null, error: null },
+      ONE_MATCH,
+      { data: null, error: null }, // bare insert ok
+      { data: null, error: { message: "patch down" } }, // patch fails
+      { data: null, error: { message: "undo down" } } // undo fails too
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary.errors).toEqual([
+      { row: 2, message: "patch down (temp row cleanup also failed: undo down)" }
     ]);
   });
 
