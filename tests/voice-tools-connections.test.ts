@@ -9,11 +9,16 @@ vi.mock("@/lib/db/vagaro-connections", () => ({
 vi.mock("@/lib/db/calendly-connections", () => ({
   getActiveCalendlyConnectionId: vi.fn()
 }));
+vi.mock("@/lib/db/caldav-connections", () => ({
+  getActiveCaldavConnectionId: vi.fn()
+}));
 
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
+import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 import {
+  CALDAV_DIRECT_KEY,
   CALENDLY_DIRECT_KEY,
   isEmailProviderConfigKey,
   isWorkspaceCalendarProvider,
@@ -34,6 +39,7 @@ describe("resolveVoiceConnection", () => {
     vi.clearAllMocks();
     vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
     vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCaldavConnectionId).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -142,6 +148,30 @@ describe("resolveVoiceConnection", () => {
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
   });
 
+  it("resolveCalendarConnection resolves a direct CalDAV connection", async () => {
+    vi.mocked(getActiveCaldavConnectionId).mockResolvedValue("caldav-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "caldav",
+      providerConfigKey: CALDAV_DIRECT_KEY,
+      connectionId: "caldav-row-1"
+    });
+  });
+
+  it("direct CalDAV loses to native calendars but beats Calendly (real booking > link-only)", async () => {
+    vi.mocked(getActiveCaldavConnectionId).mockResolvedValue("caldav-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const native = await resolveCalendarConnection(businessId);
+    expect(native?.providerConfigKey).toBe("google-calendar");
+
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue("calendly-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("calendly")]);
+    const caldav = await resolveCalendarConnection(businessId);
+    expect(caldav?.providerConfigKey).toBe(CALDAV_DIRECT_KEY);
+    expect(caldav?.provider).toBe("caldav");
+  });
+
   it("resolveCalendarConnection resolves a direct (PAT) Calendly connection", async () => {
     vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue("calendly-row-1");
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
@@ -175,6 +205,7 @@ describe("isWorkspaceCalendarProvider", () => {
     expect(isWorkspaceCalendarProvider("microsoft")).toBe(true);
     expect(isWorkspaceCalendarProvider("calendly")).toBe(false);
     expect(isWorkspaceCalendarProvider("vagaro")).toBe(false);
+    expect(isWorkspaceCalendarProvider("caldav")).toBe(false);
   });
 });
 

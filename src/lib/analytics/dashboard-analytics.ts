@@ -103,7 +103,7 @@ export const CALL_SENTIMENT_KEYS: VoiceCallSentiment[] = [
  * calls live on the `voice_call_blocked` ledger side so each attempt lands
  * in exactly one bucket) and windows on `started_at`.
  */
-type TranscriptFilter = {
+export type TranscriptFilter = {
   startIso: string;
   /** Exclusive end; omitted = open-ended (trailing window). */
   endIso?: string;
@@ -114,9 +114,10 @@ type TranscriptFilter = {
 /**
  * Residency-routed transcript scan: vps-mode tenants read their box (same
  * routing as the call-history list), everyone else reads central. Newest
- * first, capped at `limit`.
+ * first, capped at `limit`. Exported for the snapshot sweep
+ * (src/lib/analytics/snapshots.ts), which aggregates the same population.
  */
-async function fetchTranscriptRows<T>(
+export async function fetchTranscriptRows<T>(
   businessId: string,
   db: SupabaseClient,
   opts: { columns: string[]; filter: TranscriptFilter; limit: number; label: string }
