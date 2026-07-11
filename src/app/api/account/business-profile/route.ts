@@ -31,10 +31,11 @@ const daySchema = z.union([z.null(), z.object({ open: timeSchema, close: timeSch
 
 const schema = z.object({
   address: z.string().trim().max(300, "Address is too long").optional(),
+  // "" clears the stored industry; anything else must be a known slug.
   businessType: z
     .string()
     .trim()
-    .refine((v) => v in BUSINESS_TYPE_LABELS, "Unknown industry")
+    .refine((v) => v === "" || v in BUSINESS_TYPE_LABELS, "Unknown industry")
     .optional(),
   hours: z
     .object({
@@ -89,7 +90,9 @@ export async function POST(request: Request) {
       businessId,
       {
         ...(body.address !== undefined ? { address: body.address || null } : {}),
-        ...(body.businessType !== undefined ? { business_type: body.businessType } : {}),
+        ...(body.businessType !== undefined
+          ? { business_type: body.businessType || null }
+          : {}),
         ...(hours !== undefined ? { business_hours: hours as Record<string, unknown> } : {})
       },
       db

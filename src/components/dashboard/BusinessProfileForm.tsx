@@ -65,7 +65,9 @@ export function BusinessProfileForm({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           address: address.trim(),
-          ...(businessType ? { businessType } : {}),
+          // Always sent: "" clears the industry server-side. Omitting the
+          // key would leave a previously-saved industry stuck forever.
+          businessType,
           hours
         })
       });

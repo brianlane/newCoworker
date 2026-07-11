@@ -81,7 +81,10 @@ export async function DELETE(request: Request) {
     }
 
     const db = await createSupabaseServiceClient();
-    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
+    // Owner-only (`manage_billing` = owner in the role policy): account
+    // deletion is at least as destructive as billing cancel, so a manager
+    // on the tenant must not be able to hard-delete the business.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: biz } = await db
       .from("businesses")
       .select("id")

@@ -76,6 +76,10 @@ export default async function SettingsPage() {
 
   const db = await createSupabaseServiceClient();
   const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
+  // Account deletion is owner-only (`manage_billing` = owner in the role
+  // policy); managers see the settings page without the delete card.
+  const canDeleteAccount =
+    (await resolveActiveBusinessIdForAction(user, "manage_billing")) !== null;
   const { data: businesses } = await db
     .from("businesses")
     .select(
@@ -390,7 +394,7 @@ export default async function SettingsPage() {
         </form>
       </Card>
 
-      {!viewAs && <DeleteAccountCard />}
+      {!viewAs && canDeleteAccount && <DeleteAccountCard />}
     </div>
   );
 }

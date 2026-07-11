@@ -19,7 +19,8 @@ export async function GET() {
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const db = await createSupabaseServiceClient();
-    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
+    // Owner-only, matching the DELETE route this preview feeds.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: biz } = await db
       .from("businesses")
       .select("id")
