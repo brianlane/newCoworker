@@ -128,6 +128,9 @@ export async function getFlowFunnels(
       .eq("source", "ai_flow")
       .not("flow_id", "is", null)
       .gte("created_at", cutoffIso)
+      // Newest-first so a capped scan keeps the MOST RECENT activity — the
+      // exact claim the clipped footnote makes.
+      .order("created_at", { ascending: false })
       .limit(FLOW_FUNNEL_SCAN_LIMIT);
     if (error) throw new Error(`getFlowFunnels sends: ${error.message}`);
     return ((data as SendRow[] | null) ?? []);
@@ -149,6 +152,8 @@ export async function getFlowFunnels(
       .eq("business_id", businessId)
       .not("flow_id", "is", null)
       .gte("created_at", cutoffIso)
+      // Newest-first for the same capped-scan honesty as the sends read.
+      .order("created_at", { ascending: false })
       .limit(FLOW_FUNNEL_SCAN_LIMIT)
   ]);
   if (runsRes.error) throw new Error(`getFlowFunnels runs: ${runsRes.error.message}`);

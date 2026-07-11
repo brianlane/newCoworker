@@ -23,7 +23,8 @@
  */
 
 import { redirect } from "next/navigation";
-import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
+import { can } from "@/lib/authz/policy";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -47,6 +48,8 @@ import {
   isValidAnalyticsDay,
   type DayDetailCall
 } from "@/lib/analytics/dashboard-analytics";
+import { getEngagementOverview } from "@/lib/analytics/engagement";
+import { getEmployeePerformance } from "@/lib/analytics/employee-performance";
 import {
   FORECAST_MIN_DAYS,
   forecastActivity,
@@ -58,6 +61,8 @@ import {
   AnswerRateCard,
   DailyVolumeCard,
   DayDetailCard,
+  EmployeePerformanceCard,
+  EngagementCard,
   FlowFunnelCard,
   PeakHoursCard,
   SegmentDetailCard,
@@ -100,7 +105,11 @@ export default async function DashboardAnalyticsPage(props: {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const activeBusinessId = await resolveActiveBusinessId(user);
+  const ctx = await resolveActiveBusinessContext(user, db);
+  const activeBusinessId = ctx.businessId;
+  // Team performance is an OWNER read (per-teammate stats are personnel
+  // data); manage_billing is the owner-only capability marker.
+  const isOwnerViewer = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name, tier, timezone")
@@ -200,6 +209,8 @@ export default async function DashboardAnalyticsPage(props: {
     callStats,
     previousPeriod,
     snapshotSeries,
+    engagement,
+    teamPerformance,
     flowFunnels,
     dayDetail,
     sentimentDetail,
@@ -215,6 +226,12 @@ export default async function DashboardAnalyticsPage(props: {
       // Long-window trend from the nightly snapshots (survives retention
       // pruning); a blip or an empty table just hides the trend card.
       getSnapshotSeries(business.id, 84, { client: db, now }).catch(() => null),
+      // Segment counts + the quiet win-back shortlist; a blip hides the card.
+      getEngagementOverview(business.id, { client: db, now }).catch(() => null),
+      // Owner-only roster leaderboard — never even fetched for team viewers.
+      isOwnerViewer
+        ? getEmployeePerformance(business.id, { client: db, now }).catch(() => null)
+        : Promise.resolve(null),
       // Per-flow funnel; a blip hides the card.
       getFlowFunnels(business.id, { client: db, now }).catch(() => null),
       selectedDay
@@ -450,6 +467,12 @@ export default async function DashboardAnalyticsPage(props: {
           hourHref={(hour) => `/dashboard/analytics?hour=${hour}#segment-detail`}
           selectedHour={selectedHour}
         />
+      )}
+
+      {engagement && engagement.total > 0 && <EngagementCard view={engagement} />}
+
+      {teamPerformance && teamPerformance.length > 0 && (
+        <EmployeePerformanceCard rows={teamPerformance} />
       )}
 
       {(selectedSentiment || selectedHour !== null) &&
