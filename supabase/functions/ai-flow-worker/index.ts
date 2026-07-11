@@ -1347,19 +1347,36 @@ async function upsertCustomerStep(
   await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
   if (!existedBefore) {
     // contact_created triggers: a flow that files a brand-new lead may start
-    // OTHER flows (loop-guarded against this one). Idempotent per contact.
-    await enqueueContactEventRuns(supabase, run.business_id, {
-      kind: "contact_created",
-      contact: {
-        e164: action.e164,
-        ...(action.name ? { name: action.name } : {}),
-        ...(action.email ? { email: action.email } : {})
-      },
-      sourceFlowId: run.flow_id,
-      // Keyed to THIS run (idempotent across step retries) rather than the
-      // phone forever — a deleted-then-refiled contact is a new creation.
-      dedupeKey: `ce:created:${action.e164}:${run.id}`
-    });
+    // OTHER flows (loop-guarded against this one). Fired only when the row
+    // verifiably EXISTS now — enrichCustomerProfile is best-effort and can
+    // exit without creating anything (staff-contact guard, RPC failure), and
+    // a "new contact" event for a lead that was never filed would start
+    // automations on a phantom. A verify-read failure just skips the event.
+    try {
+      const { data: createdRow, error: verifyErr } = await supabase
+        .from("contacts")
+        .select("id")
+        .eq("business_id", run.business_id)
+        .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
+        .maybeSingle();
+      if (!verifyErr && createdRow != null) {
+        await enqueueContactEventRuns(supabase, run.business_id, {
+          kind: "contact_created",
+          contact: {
+            e164: action.e164,
+            ...(action.name ? { name: action.name } : {}),
+            ...(action.email ? { email: action.email } : {})
+          },
+          sourceFlowId: run.flow_id,
+          // Keyed to THIS run (idempotent across step retries) rather than
+          // the phone forever — a deleted-then-refiled contact is a new
+          // creation.
+          dedupeKey: `ce:created:${action.e164}:${run.id}`
+        });
+      }
+    } catch (e) {
+      console.error("upsert_customer contact_created verify", e);
+    }
   }
   return {
     kind: "ok",
