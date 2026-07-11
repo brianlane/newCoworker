@@ -29,7 +29,7 @@ import { readSupabaseEnv } from "@/lib/supabase/env";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import {
   DELETE_CONFIRM_PHRASE,
-  resolveAccountDeletionEligibility,
+  resolveAccountDeletionEligibilityForRows,
   type AccountDeletionSubscriptionFields
 } from "@/lib/account/deletion";
 import {
@@ -101,13 +101,12 @@ export async function DELETE(request: Request) {
     // into null, which here would read as "never paid" and wave a live
     // subscription through the gate. Query directly and refuse on any read
     // error — a transient DB hiccup must block deletion, not allow it.
-    const { data: subRow, error: subError } = await db
+    // EVERY row is scanned (not just the newest): an abandoned pending row
+    // can shadow an older active one.
+    const { data: subRows, error: subError } = await db
       .from("subscriptions")
       .select("status, grace_ends_at, wiped_at, stripe_subscription_id")
-      .eq("business_id", businessId)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .eq("business_id", businessId);
     if (subError) {
       logger.error("account.delete: subscription lookup failed; refusing (fail closed)", {
         businessId,
@@ -119,8 +118,8 @@ export async function DELETE(request: Request) {
         500
       );
     }
-    const eligibility = resolveAccountDeletionEligibility(
-      (subRow as AccountDeletionSubscriptionFields | null) ?? null
+    const eligibility = resolveAccountDeletionEligibilityForRows(
+      (subRows ?? []) as AccountDeletionSubscriptionFields[]
     );
     if (!eligibility.eligible) {
       return errorResponse("CONFLICT", eligibility.reason, 409);

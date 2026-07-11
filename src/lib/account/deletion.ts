@@ -158,3 +158,21 @@ export function resolveAccountDeletionEligibility(
   }
   return { eligible: true };
 }
+
+/**
+ * Eligibility across EVERY subscription row of the business, not just the
+ * newest: an abandoned `pending` row can sit on top of (and hide) an older
+ * `active` one — the exact shadowing scenario the checkout guard
+ * (`findCheckoutBlockingSubscription`) exists for. Any blocking row refuses
+ * the deletion.
+ */
+export function resolveAccountDeletionEligibilityForRows(
+  rows: AccountDeletionSubscriptionFields[],
+  now: Date = new Date()
+): AccountDeletionEligibility {
+  for (const row of rows) {
+    const result = resolveAccountDeletionEligibility(row, now);
+    if (!result.eligible) return result;
+  }
+  return { eligible: true };
+}

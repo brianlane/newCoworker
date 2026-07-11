@@ -14,7 +14,8 @@ vi.mock("@/lib/db/telnyx-routes", () => ({ getTelnyxVoiceRouteForBusiness: vi.fn
 import {
   DELETE_CONFIRM_PHRASE,
   getAccountDeletionImpact,
-  resolveAccountDeletionEligibility
+  resolveAccountDeletionEligibility,
+  resolveAccountDeletionEligibilityForRows
 } from "@/lib/account/deletion";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
@@ -243,6 +244,47 @@ describe("resolveAccountDeletionEligibility", () => {
         status: "canceled",
         grace_ends_at: "2999-01-01T00:00:00Z"
       })
+    ).toEqual({ eligible: false, reason: "canceled_in_grace" });
+  });
+});
+
+describe("resolveAccountDeletionEligibilityForRows", () => {
+  const NOW = new Date("2026-07-10T00:00:00Z");
+  const base = { grace_ends_at: null, wiped_at: null, stripe_subscription_id: null };
+
+  it("is eligible for an empty row set (never had a subscription)", () => {
+    expect(resolveAccountDeletionEligibilityForRows([], NOW)).toEqual({ eligible: true });
+  });
+
+  it("refuses when ANY row blocks — an active row shadowed by a newer pending row still gates", () => {
+    expect(
+      resolveAccountDeletionEligibilityForRows(
+        [
+          { ...base, status: "pending" },
+          { ...base, status: "active" }
+        ],
+        NOW
+      )
+    ).toEqual({ eligible: false, reason: "active_subscription" });
+  });
+
+  it("is eligible when every row is non-blocking", () => {
+    expect(
+      resolveAccountDeletionEligibilityForRows(
+        [
+          { ...base, status: "pending" },
+          { ...base, status: "canceled", stripe_subscription_id: "sub_1" }
+        ],
+        NOW
+      )
+    ).toEqual({ eligible: true });
+  });
+
+  it("defaults `now` to the wallclock when omitted", () => {
+    expect(
+      resolveAccountDeletionEligibilityForRows([
+        { ...base, status: "canceled", grace_ends_at: "2999-01-01T00:00:00Z" }
+      ])
     ).toEqual({ eligible: false, reason: "canceled_in_grace" });
   });
 });

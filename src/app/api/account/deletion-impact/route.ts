@@ -9,7 +9,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   getAccountDeletionImpact,
-  resolveAccountDeletionEligibility,
+  resolveAccountDeletionEligibilityForRows,
   type AccountDeletionSubscriptionFields
 } from "@/lib/account/deletion";
 import { logger } from "@/lib/logger";
@@ -32,17 +32,15 @@ export async function GET() {
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
     const businessId = (biz as { id: string }).id;
 
-    // Same FAIL-CLOSED billing lookup as the DELETE handler — the preview
-    // must never advertise deletion the actual request would refuse.
+    // Same FAIL-CLOSED, every-row billing lookup as the DELETE handler —
+    // the preview must never advertise deletion the actual request would
+    // refuse (including active rows shadowed by a newer pending one).
     const [impact, subLookup] = await Promise.all([
       getAccountDeletionImpact(businessId, db),
       db
         .from("subscriptions")
         .select("status, grace_ends_at, wiped_at, stripe_subscription_id")
         .eq("business_id", businessId)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle()
     ]);
     if (!impact) return errorResponse("NOT_FOUND", "Business not found", 404);
     if (subLookup.error) {
@@ -57,8 +55,8 @@ export async function GET() {
       );
     }
 
-    const eligibility = resolveAccountDeletionEligibility(
-      (subLookup.data as AccountDeletionSubscriptionFields | null) ?? null
+    const eligibility = resolveAccountDeletionEligibilityForRows(
+      (subLookup.data ?? []) as AccountDeletionSubscriptionFields[]
     );
     return successResponse({ impact, eligibility });
   } catch (err) {
