@@ -30,7 +30,10 @@ type TableResult = { data: unknown; error: { message: string } | null };
 /**
  * Chainable central-db stub. `perCall` maps "<table>#<n>" (n = 1-based call
  * index per table) or "<table>" to a result, so tests can fail a SPECIFIC
- * delete on tables the module hits more than once (contacts, email_log).
+ * operation on tables the module hits more than once (contacts, email_log).
+ * The chain is THENABLE (one from() = one awaited result) so both shapes
+ * work: mutation chains ending in .select() and select-first reads like the
+ * linked-number scan.
  */
 function makeCentralDb(perCall: Partial<Record<string, TableResult>> = {}) {
   const seen = new Map<string, number>();
@@ -39,10 +42,11 @@ function makeCentralDb(perCall: Partial<Record<string, TableResult>> = {}) {
     seen.set(table, n);
     const result = perCall[`${table}#${n}`] ?? perCall[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
-    for (const m of ["delete", "eq", "lt", "in", "not", "contains", "ilike"]) {
+    for (const m of ["delete", "select", "eq", "lt", "in", "not", "contains", "ilike", "or"]) {
       chain[m] = vi.fn().mockReturnValue(chain);
     }
-    chain.select = vi.fn().mockResolvedValue(result);
+    chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(result).then(resolve, reject);
     return chain;
   });
   return { from };
@@ -98,8 +102,11 @@ describe("normalizeEndUserIdentifier / fingerprintIdentifier", () => {
 describe("deleteEndUserData — central-only tenants", () => {
   it("deletes phone-keyed + contact rows for an e164-only request", async () => {
     const db = makeCentralDb({
-      "contacts#1": { data: [{ id: "c1" }], error: null },
-      "contacts#2": { data: [{ id: "c2" }], error: null },
+      // contacts#1 is the linked-number scan (aliases captured pre-delete);
+      // a null page is treated as empty.
+      "contacts#1": { data: null, error: null },
+      "contacts#2": { data: [{ id: "c1" }], error: null },
+      "contacts#3": { data: [{ id: "c2" }], error: null },
       sms_rowboat_threads: { data: [{ business_id: BIZ }], error: null },
       voice_call_transcripts: { data: [{ id: "t1" }, { id: "t2" }], error: null }
     });
@@ -141,17 +148,67 @@ describe("deleteEndUserData — central-only tenants", () => {
       "scheduled_sms",
       "sms_owner_reply_prompts",
       "voice_call_transcripts",
-      "email_log"
+      "email_log",
+      "ai_reply_reasoning"
     ]);
   });
 
+  it("erases the person's AI reasoning records centrally across every linked number", async () => {
+    const db = makeCentralDb({
+      // The pre-delete scan reports a merge alias — reasoning stored under
+      // it must be erased too (the .in() spans primary + aliases). Malformed
+      // alias payloads (non-array, non-string/empty entries) are tolerated.
+      "contacts#1": {
+        data: [
+          { customer_e164: E164, alias_e164s: ["+15550008888", "", 7] },
+          { customer_e164: "+15550007777", alias_e164s: "junk" }
+        ],
+        error: null
+      },
+      ai_reply_reasoning: { data: [{ id: "r1" }, { id: "r2" }], error: null }
+    });
+    const res = await deleteEndUserData(BIZ, { e164: E164 }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.ai_reply_reasoning).toEqual({
+      table: "ai_reply_reasoning",
+      central: 2,
+      box: null
+    });
+  });
+
+  it("an EMAIL-ONLY erasure still deletes reasoning through the contact's numbers", async () => {
+    const db = makeCentralDb({
+      // contacts#1 = the email-axis linked-number scan; #2 = the email delete.
+      "contacts#1": {
+        data: [{ customer_e164: E164, alias_e164s: ["+15550008888"] }],
+        error: null
+      },
+      "contacts#2": { data: [{ id: "c1" }], error: null },
+      ai_reply_reasoning: { data: [{ id: "r1" }], error: null }
+    });
+    const res = await deleteEndUserData(BIZ, { email: EMAIL }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.ai_reply_reasoning).toEqual({
+      table: "ai_reply_reasoning",
+      central: 1,
+      box: null
+    });
+    // A contact-less email erasure has no numbers → no reasoning pass.
+    const none = makeCentralDb({});
+    const res2 = await deleteEndUserData(BIZ, { email: EMAIL }, { client: none as never });
+    expect(res2.tables.some((t) => t.table === "ai_reply_reasoning")).toBe(false);
+  });
+
   it.each([
-    ["contacts#1", /contacts \(e164\): boom/, { e164: E164 }],
-    ["contacts#2", /contacts \(alias\): boom/, { e164: E164 }],
-    ["contacts#1", /contacts \(email\): boom/, { email: EMAIL }],
+    ["contacts#1", /contacts \(linked-number scan\): boom/, { e164: E164 }],
+    ["contacts#2", /contacts \(e164\): boom/, { e164: E164 }],
+    ["contacts#3", /contacts \(alias\): boom/, { e164: E164 }],
+    ["contacts#1", /contacts \(linked-number scan, email\): boom/, { email: EMAIL }],
+    ["contacts#2", /contacts \(email\): boom/, { email: EMAIL }],
     ["sms_rowboat_threads", /sms_rowboat_threads: boom/, { e164: E164 }],
     ["sms_outbound_log", /sms_outbound_log: boom/, { e164: E164 }],
     ["scheduled_sms", /scheduled_sms: boom/, { e164: E164 }],
+    ["ai_reply_reasoning", /ai_reply_reasoning: boom/, { e164: E164 }],
     ["sms_owner_reply_prompts", /sms_owner_reply_prompts: boom/, { e164: E164 }],
     ["voice_call_transcripts", /voice_call_transcripts: boom/, { e164: E164 }],
     ["email_log#1", /email_log \(to\): boom/, { email: EMAIL }],

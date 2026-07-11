@@ -10,6 +10,7 @@
  */
 import { firstUrlInText, isE164, normalizeNanpToE164, renderTemplate } from "./engine.ts";
 import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
+import { goalReachedVar } from "./goal_events.ts";
 import type {
   BrowseAuth,
   ContactRef,
@@ -309,6 +310,17 @@ export type StepAction =
       addTags: string[];
       removeTags: string[];
       skipReason?: string;
+    }
+  | {
+      /**
+       * Goal Event checkpoint reached in sequence. A pure marker for the
+       * worker to record: `reachedVia` is the event kind when an external
+       * jump fast-forwarded the run here (stamped in vars as
+       * `__goal_<id>`), or "passed_inline" when execution simply arrived.
+       */
+      kind: "goal";
+      label: string;
+      reachedVia: string;
     };
 
 export type StepPlan =
@@ -887,6 +899,20 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         };
       }
       return { ok: true, action: { kind: "update_contact", e164, addTags, removeTags } };
+    }
+    case "goal": {
+      // Checkpoint marker: reaching it inline is a no-op; a goal-event jump
+      // stamps `__goal_<id>` (the event kind) before re-queuing, so the
+      // recorded result says HOW the run got here.
+      const via = scope.vars?.[goalReachedVar(step.id)];
+      return {
+        ok: true,
+        action: {
+          kind: "goal",
+          label: step.label,
+          reachedVia: typeof via === "string" && via ? via : "passed_inline"
+        }
+      };
     }
     // Voice steps execute on the real-time Telnyx call path (telnyx-voice-inbound),
     // never on the async worker — they are only valid under a voice trigger, which

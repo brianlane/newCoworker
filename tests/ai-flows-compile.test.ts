@@ -7,6 +7,7 @@ import {
   extractFlowJson,
   humanizeCompileIssues
 } from "@/lib/ai-flows/compile";
+import { FLOW_STEP_TYPES } from "@/lib/ai-flows/schema";
 
 describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
   it("documents the schema contract", () => {
@@ -16,29 +17,9 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
 
   it("covers EVERY step type the schema supports (the generator must be able to author any flow)", () => {
     // Non-voice steps appear as JSON examples; voice steps in their own block.
-    for (const type of [
-      "extract_url",
-      "browse_extract",
-      "extract_text",
-      "email_extract",
-      "send_sms",
-      "send_email",
-      "approval_gate",
-      "notify_owner",
-      "http_call",
-      "sleep",
-      "wait_for_reply",
-      "route_to_team",
-      "browse_action",
-      "recall_url",
-      "upsert_customer",
-      "update_contact",
-      "classify",
-      "ring_handoff",
-      "voice_ai_intake",
-      "voice_transfer",
-      "outbound_call"
-    ]) {
+    // Iterates the schema's own list so adding a step type FAILS this test
+    // until the generator prompt documents it.
+    for (const type of FLOW_STEP_TYPES) {
       expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain(`"type":"${type}"`);
     }
   });

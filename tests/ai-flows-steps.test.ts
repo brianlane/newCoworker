@@ -35,6 +35,41 @@ describe("planStep: sleep", () => {
   });
 });
 
+describe("planStep: goal", () => {
+  const step = {
+    id: "g1",
+    type: "goal",
+    label: "Appointment booked",
+    events: [{ kind: "appointment_booked" }]
+  } as FlowStep;
+
+  it("reports passed_inline when execution simply arrives", () => {
+    expect(planStep(step, { vars: {} })).toEqual({
+      ok: true,
+      action: { kind: "goal", label: "Appointment booked", reachedVia: "passed_inline" }
+    });
+  });
+
+  it("reports the jump event when applyGoalEvent stamped the reached-via var", () => {
+    const plan = planStep(step, { vars: { __goal_g1: "appointment_booked" } });
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "goal", label: "Appointment booked", reachedVia: "appointment_booked" }
+    });
+  });
+
+  it("treats a non-string/empty marker as passed_inline", () => {
+    expect(planStep(step, { vars: { __goal_g1: "" } })).toEqual({
+      ok: true,
+      action: { kind: "goal", label: "Appointment booked", reachedVia: "passed_inline" }
+    });
+    expect(planStep(step, { vars: { __goal_g1: 7 } })).toEqual({
+      ok: true,
+      action: { kind: "goal", label: "Appointment booked", reachedVia: "passed_inline" }
+    });
+  });
+});
+
 describe("planStep: wait_for_reply", () => {
   const step = {
     id: "w1",

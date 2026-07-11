@@ -24,6 +24,8 @@ vi.mock("@/lib/db/employees", () => ({
   getTeamMember: vi.fn()
 }));
 
+vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
+
 import { GET as LIST_GET } from "@/app/api/dashboard/customers/route";
 import {
   GET as DETAIL_GET,
@@ -41,6 +43,7 @@ import {
 } from "@/lib/customer-memory/db";
 import { rateLimit } from "@/lib/rate-limit";
 import { getTeamMember } from "@/lib/db/employees";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CUSTOMER = "+15551234567";
@@ -346,6 +349,82 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
       tags: ["VIP", "spanish"]
     });
+    // Both tags are new (the pre-edit row had none) → two tag_added goals.
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, CUSTOMER, { kind: "tag_added", tag: "VIP" });
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      kind: "tag_added",
+      tag: "spanish"
+    });
+  });
+
+  it("fires tag_added goals only for tags the edit actually ADDED", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      // The stored spelling carries legacy whitespace: the diff must
+      // normalize BOTH sides, or " VIP " would look like a new tag.
+      tags: [" VIP ", "New Lead"]
+    } as never);
+    const res = await DETAIL_PATCH(
+      // Keeps VIP (case changed), drops New Lead, adds Engaged.
+      patchReq({ tags: ["vip", "Engaged"] }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(fireGoalEvent).toHaveBeenCalledTimes(1);
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      kind: "tag_added",
+      tag: "Engaged"
+    });
+  });
+
+  it("an alias URL writes (and fires goals) against the surviving row's PRIMARY number", async () => {
+    const PRIMARY = "+15550009999";
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    // The URL segment is a merged-away alias; the alias-aware lookup resolves
+    // to the surviving row keyed on PRIMARY.
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: PRIMARY,
+      alias_e164s: [CUSTOMER],
+      tags: []
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ tags: ["Engaged"] }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, PRIMARY, {
+      tags: ["Engaged"]
+    });
+    // Goal events fan out over every linked number — a parked run may still
+    // be keyed on the merged-away alias.
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, PRIMARY, {
+      kind: "tag_added",
+      tag: "Engaged"
+    });
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      kind: "tag_added",
+      tag: "Engaged"
+    });
+  });
+
+  it("non-tag edits fire no goal events", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ pinnedMd: "note" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(fireGoalEvent).not.toHaveBeenCalled();
   });
 
   it("assigns an owner only after validating them against the business roster", async () => {

@@ -65,7 +65,7 @@ type StepType = FlowStep["type"];
  * Node color category, GHL-style: waits amber, outward communication teal,
  * reads neutral, voice green, branches violet.
  */
-type NodeTone = "wait" | "comm" | "read" | "voice" | "branch";
+type NodeTone = "wait" | "comm" | "read" | "voice" | "branch" | "goal";
 
 const STEP_TONES: Record<StepType, NodeTone> = {
   extract_url: "read",
@@ -80,6 +80,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   sleep: "wait",
   wait_for_reply: "wait",
   branch: "branch",
+  goal: "goal",
   route_to_team: "comm",
   browse_action: "read",
   recall_url: "read",
@@ -98,7 +99,8 @@ const TONE_CLASSES: Record<NodeTone, string> = {
   comm: "border-signal-teal/50 text-signal-teal",
   read: "border-parchment/25 text-parchment/70",
   voice: "border-claw-green/50 text-claw-green",
-  branch: "border-purple-400/50 text-purple-300"
+  branch: "border-purple-400/50 text-purple-300",
+  goal: "border-rose-400/50 text-rose-300"
 };
 
 const STEP_ICONS: Record<StepType, ReactNode> = {
@@ -114,6 +116,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   sleep: <Timer className="h-4 w-4" />,
   wait_for_reply: <Hourglass className="h-4 w-4" />,
   branch: <GitBranch className="h-4 w-4" />,
+  goal: <Flag className="h-4 w-4" />,
   route_to_team: <Users className="h-4 w-4" />,
   browse_action: <Globe className="h-4 w-4" />,
   recall_url: <Link2 className="h-4 w-4" />,
@@ -125,6 +128,14 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   voice_ai_intake: <Phone className="h-4 w-4" />,
   voice_transfer: <Phone className="h-4 w-4" />,
   outbound_call: <Phone className="h-4 w-4" />
+};
+
+/** Short goal-event wording for node subtitles (tag_added renders its tag). */
+const GOAL_EVENT_SHORT: Record<string, string> = {
+  replied: "they reply",
+  appointment_booked: "appointment booked",
+  tag_added: "tag added",
+  claimed: "teammate claims"
 };
 
 /** One-line node subtitle: the step's most identifying configured value. */
@@ -156,6 +167,10 @@ function stepSubtitle(step: FlowStep): string {
       return `from {{vars.${step.phoneVar}}} · up to ${formatDurationMinutes(step.timeoutMinutes ?? 1440)}`;
     case "branch":
       return step.question;
+    case "goal":
+      return `${step.label} · ${step.events
+        .map((e) => (e.kind === "tag_added" ? `tag "${e.tag ?? ""}"` : GOAL_EVENT_SHORT[e.kind]))
+        .join(" / ")}`;
     case "extract_url":
       return `saves {{vars.${step.saveAs}}}`;
     case "extract_text":
@@ -370,6 +385,11 @@ function InsertPoint({
   if (readOnly || !onInsertStep) {
     return <Connector />;
   }
+  // Goal checkpoints are trunk-only (a milestone jump can never land on an
+  // unevaluated branch path), so insert points inside an arm/else don't
+  // offer them — mirrors the validateDefinitionSemantics rule.
+  const offeredTypes =
+    container.kind === "trunk" ? addableTypes : addableTypes.filter((t) => t !== "goal");
   return (
     <div className="flex flex-col items-center">
       <Connector />
@@ -393,7 +413,7 @@ function InsertPoint({
       {anchor && (
         <StepPickerOverlay
           anchor={anchor}
-          addableTypes={addableTypes}
+          addableTypes={offeredTypes}
           onPick={(t) => {
             setAnchor(null);
             onInsertStep(container, index, t);

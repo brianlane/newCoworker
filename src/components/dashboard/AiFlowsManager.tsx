@@ -8,7 +8,9 @@ import {
   BROWSE_ACTION_KINDS,
   ENGINE_PROVIDED_VARS,
   FLOW_STEP_TYPES,
+  GOAL_EVENT_KINDS,
   MAX_BRANCH_ARMS,
+  MAX_GOAL_EVENTS,
   VOICE_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
   HTTP_METHODS,
@@ -435,6 +437,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, minutes: 300 };
     case "wait_for_reply":
       return { id, type, phoneVar: examples.contactVar, saveAs: "reply_text", timeoutMinutes: 300 };
+    case "goal":
+      return { id, type, label: "Appointment booked", events: [{ kind: "appointment_booked" }] };
     case "branch":
       // Authored via the visual canvas builder; the classic form never offers
       // this type (NON_VOICE_STEP_TYPES filters it) but the switch stays
@@ -3571,6 +3575,91 @@ function StepFields({
           the saved reply becomes &quot;no_reply&quot; — add a follow-up step with the condition
           &quot;{step.saveAs ?? "reply_text"} equals no_reply&quot; to send a nudge, and another
           with &quot;not equals no_reply&quot; for when they did reply.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "goal") {
+    const kindLabel: Record<(typeof GOAL_EVENT_KINDS)[number], string> = {
+      replied: "They text back",
+      appointment_booked: "An appointment is booked",
+      tag_added: "A tag is added to the contact",
+      claimed: "A teammate claims the lead"
+    };
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Goal name"
+          value={step.label}
+          onChange={(v) => patchStep(index, { label: v })}
+          help='Shown on the canvas and in run history, e.g. "Appointment booked".'
+        />
+        <label className={labelClass}>Jump here the moment any of these happen</label>
+        {step.events.map((ev, ei) => (
+          <div key={ei} className="flex gap-2">
+            <select
+              className={inputClass}
+              value={ev.kind}
+              onChange={(e) => {
+                const kind = e.target.value as (typeof GOAL_EVENT_KINDS)[number];
+                patchStep(index, {
+                  events: step.events.map((x, xi) =>
+                    xi === ei
+                      ? kind === "tag_added"
+                        ? { kind, tag: x.tag ?? "" }
+                        : { kind }
+                      : x
+                  )
+                });
+              }}
+            >
+              {GOAL_EVENT_KINDS.map((k) => (
+                <option key={k} value={k}>
+                  {kindLabel[k]}
+                </option>
+              ))}
+            </select>
+            {ev.kind === "tag_added" && (
+              <input
+                className={inputClass}
+                value={ev.tag ?? ""}
+                placeholder="Appointment Scheduled"
+                onChange={(e) =>
+                  patchStep(index, {
+                    events: step.events.map((x, xi) =>
+                      xi === ei ? { ...x, tag: e.target.value } : x
+                    )
+                  })
+                }
+              />
+            )}
+            {step.events.length > 1 && (
+              <button
+                onClick={() =>
+                  patchStep(index, { events: step.events.filter((_, xi) => xi !== ei) })
+                }
+                className="text-parchment/40 hover:text-spark-orange"
+                aria-label="Remove goal event"
+              >
+                <Trash2 className="h-4 w-4" />
+              </button>
+            )}
+          </div>
+        ))}
+        {step.events.length < MAX_GOAL_EVENTS && (
+          <button
+            onClick={() =>
+              patchStep(index, { events: [...step.events, { kind: "replied" as const }] })
+            }
+            className="text-xs text-signal-teal hover:underline"
+          >
+            + milestone
+          </button>
+        )}
+        <p className="text-[11px] text-parchment/40">
+          When the milestone happens, this lead&apos;s run skips everything between where it is
+          and this checkpoint — so someone who already converted stops getting follow-ups. If
+          the run reaches this step normally, it just passes through.
         </p>
       </div>
     );

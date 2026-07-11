@@ -154,9 +154,35 @@ export async function deleteEndUserData(
   // kept central in every residency mode, so the journaled central delete
   // reaches the box copy; a direct box delete on the primary identifiers
   // still runs for vps tenants as belt-and-braces.
+  // Every number linked to this person (primary + merge aliases), captured
+  // BEFORE the contact rows are deleted — ai_reply_reasoning below is keyed
+  // by whichever number the person texted from, which may be an alias, and
+  // an EMAIL-ONLY request still identifies phone-keyed reasoning through the
+  // contact row's numbers.
+  const linkedNumbers = new Set<string>(e164 ? [e164] : []);
+  const collectLinkedNumbers = (rows: unknown): void => {
+    for (const row of (Array.isArray(rows) ? rows : []) as Array<{
+      customer_e164: string;
+      alias_e164s?: unknown;
+    }>) {
+      linkedNumbers.add(row.customer_e164);
+      for (const alias of Array.isArray(row.alias_e164s) ? row.alias_e164s : []) {
+        if (typeof alias === "string" && alias) linkedNumbers.add(alias);
+      }
+    }
+  };
   {
     let central = 0;
     if (e164) {
+      const { data: linkedRows, error: linkedErr } = await db
+        .from("contacts")
+        .select("customer_e164, alias_e164s")
+        .eq("business_id", businessId)
+        .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`);
+      if (linkedErr) {
+        throw new EndUserDeletionError(`contacts (linked-number scan): ${linkedErr.message}`);
+      }
+      collectLinkedNumbers(linkedRows);
       const [primary, alias] = await Promise.all([
         db
           .from("contacts")
@@ -180,6 +206,20 @@ export async function deleteEndUserData(
       central += count(primary.data) + count(alias.data);
     }
     if (email) {
+      // Same pre-delete capture on the email axis: an email-only erasure
+      // must still find the person's phone numbers for the phone-keyed
+      // reasoning delete below.
+      const { data: emailLinked, error: emailLinkedErr } = await db
+        .from("contacts")
+        .select("customer_e164, alias_e164s")
+        .eq("business_id", businessId)
+        .ilike("email", emailPattern!);
+      if (emailLinkedErr) {
+        throw new EndUserDeletionError(
+          `contacts (linked-number scan, email): ${emailLinkedErr.message}`
+        );
+      }
+      collectLinkedNumbers(emailLinked);
       const { data, error } = await db
         .from("contacts")
         .delete()
@@ -381,6 +421,22 @@ export async function deleteEndUserData(
         (await boxDelete("email_log", [{ column: "from_email", op: "ilike", value: emailPattern! }]));
     }
     results.push({ table: "email_log", central: central.sent + central.received, box });
+  }
+
+  // ── ai_reply_reasoning (per-reply AI decision records; central-only) ────
+  // Keyed by whichever number the person texted from, so the delete spans
+  // every linked number captured pre-delete — the e164 request's primary +
+  // merge aliases, AND the numbers an email-only request's contact rows
+  // carried. Runs on either identifier axis.
+  if (linkedNumbers.size > 0) {
+    const { data, error } = await db
+      .from("ai_reply_reasoning")
+      .delete()
+      .eq("business_id", businessId)
+      .in("contact_e164", [...linkedNumbers])
+      .select("id");
+    if (error) throw new EndUserDeletionError(`ai_reply_reasoning: ${error.message}`);
+    results.push({ table: "ai_reply_reasoning", central: count(data), box: null });
   }
 
   const identifierFingerprint = fingerprintIdentifier(e164, email);

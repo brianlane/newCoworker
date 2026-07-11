@@ -252,6 +252,18 @@ export async function pruneExpiredContent(
     });
   }
 
+  // ── ai_reply_reasoning (central-only: not a residency-moved table) ─────
+  {
+    const { data, error } = await db
+      .from("ai_reply_reasoning")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: ai_reply_reasoning: ${error.message}`);
+    results.push({ table: "ai_reply_reasoning", central: centralCount(data), box: null });
+  }
+
   // ── sms_owner_reply_prompts (answered only) ────────────────────────────
   {
     const { data, error } = await db

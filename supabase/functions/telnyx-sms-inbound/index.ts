@@ -34,6 +34,7 @@ import {
 } from "../_shared/ai_flows/engine.ts";
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
+import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { parseRouting } from "../_shared/ai_flows/routing.ts";
 import {
   matchLateClaimReply,
@@ -327,17 +328,19 @@ async function evaluateAndEnqueueAiFlows(
  * context.vars[save_as], the per-step resolution marker stamped, and a
  * re-queue. Revision-gated like the offer-reply resumes so a concurrent
  * timeout sweep can't be clobbered — losing a race means that run's
- * no-reply branch already ran. Returns true when at least one run resumed
- * (the caller then suppresses the default Coworker reply AND skips trigger
- * evaluation — the flow owns this turn).
+ * no-reply branch already ran. Returns the resumed run ids; a non-empty
+ * list makes the caller suppress the default Coworker reply AND skip
+ * trigger evaluation (the flow owns this turn), and exempts those runs
+ * from the "replied" goal jump — the reply must flow through their
+ * authored branch logic, not leapfrog it.
  */
 async function resumeAwaitingReplyRun(
   supabase: SupabaseClient,
   businessId: string,
   from: string | null,
   bodyText: string
-): Promise<boolean> {
-  if (!from) return false;
+): Promise<string[]> {
+  if (!from) return [];
   try {
     const { data } = await supabase
       .from("ai_flow_runs")
@@ -352,9 +355,9 @@ async function resumeAwaitingReplyRun(
       context: Record<string, unknown> | null;
       revision: number;
     }>;
-    if (rows.length === 0) return false;
+    if (rows.length === 0) return [];
 
-    let resumedAny = false;
+    const resumedIds: string[] = [];
     for (const run of rows) {
       const waiting =
         (run.context?.waiting_reply as { save_as?: unknown; marker?: unknown } | undefined) ?? {};
@@ -396,18 +399,18 @@ async function resumeAwaitingReplyRun(
         continue;
       }
       if ((resumed ?? []).length > 0) {
-        resumedAny = true;
+        resumedIds.push(run.id);
         await telemetryRecord(supabase, "ai_flow_run_reply_resumed", {
           business_id: businessId,
           run_id: run.id
         });
       }
     }
-    return resumedAny;
+    return resumedIds;
   } catch (e) {
     // Never let the resume path break inbound SMS processing.
     console.error("resumeAwaitingReplyRun", e);
-    return false;
+    return [];
   }
 }
 
@@ -2695,6 +2698,14 @@ serve(async (req: Request) => {
             participants: normalizedParticipants(payload),
             image: telnyxInboundImages(payload)[0]
           });
+          // Goal Events: Safe Mode changes only who ANSWERS the customer —
+          // their text is still a reply, so parked/queued runs jump to a
+          // "replied" goal exactly like on the normal path. (Safe Mode never
+          // runs the wait-resume, so there are no freshly-resumed runs to
+          // exempt.) Best-effort — never blocks the forward path.
+          if (from) {
+            await applyGoalEvent(supabase, businessId, from, { kind: "replied" });
+          }
           // Persist the inbound as an already-`done` job so it still appears in
           // the AiFlow correlation window + audit trail for FUTURE messages
           // (a multi-message "text then link" flow must see this part later).
@@ -2765,12 +2776,9 @@ serve(async (req: Request) => {
     // and offer replies ("1"/"2"/"86") were already intercepted above, so a
     // claim can never be swallowed by a coincidental wait.
     if (teamMember) {
-      const staffWaitResumed = await resumeAwaitingReplyRun(
-        supabase,
-        businessId,
-        from,
-        inboundSmsBody(payload)
-      );
+      const staffWaitResumed =
+        (await resumeAwaitingReplyRun(supabase, businessId, from, inboundSmsBody(payload)))
+          .length > 0;
       if (staffWaitResumed) {
         const { error: swJobErr } = await supabase.from("sms_inbound_jobs").insert({
           business_id: businessId,
@@ -2807,12 +2815,21 @@ serve(async (req: Request) => {
     // next text, capture the message into the run and re-queue it. The flow
     // owns this conversational turn (same philosophy as suppressDefaultReply),
     // so a successful resume also suppresses the default Coworker reply below.
-    const waitReplyResumed = await resumeAwaitingReplyRun(
+    const resumedWaitRunIds = await resumeAwaitingReplyRun(
       supabase,
       businessId,
       from,
       inboundSmsBody(payload)
     );
+    const waitReplyResumed = resumedWaitRunIds.length > 0;
+
+    // Goal Events: any lead text may fast-forward their OTHER parked/queued
+    // runs to a "replied" goal checkpoint. Runs whose wait just consumed this
+    // reply are exempt — the reply must flow through their authored branch
+    // logic, not leapfrog it. Best-effort — never blocks inbound processing.
+    if (from) {
+      await applyGoalEvent(supabase, businessId, from, { kind: "replied" }, resumedWaitRunIds);
+    }
 
     // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the
     // default Coworker reply when an automation is actually queued to handle

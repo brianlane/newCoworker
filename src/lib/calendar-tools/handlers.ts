@@ -4,6 +4,7 @@ import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { logger } from "@/lib/logger";
 
 /**
@@ -388,7 +389,16 @@ export async function bookCalendarAppointment(
 
     if (conn.provider === "vagaro") {
       // Real booking on the merchant's Vagaro book (direct API, no Nango).
-      return bookVagaroAppointment(businessId, args, fallbackPhone);
+      const vagaroResult = await bookVagaroAppointment(businessId, args, fallbackPhone);
+      // Same confirmed-event rule as the Google/Microsoft paths: only a
+      // response carrying an appointment id counts as booked for goals.
+      const vagaroEventId = (vagaroResult.data as { eventId?: unknown } | undefined)?.eventId;
+      if (vagaroResult.ok && vagaroEventId) {
+        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+          kind: "appointment_booked"
+        });
+      }
+      return vagaroResult;
     }
 
     if (conn.provider === "calendly") {
@@ -487,6 +497,18 @@ export async function bookCalendarAppointment(
       const data = res.data as { id?: string; webLink?: string };
       eventId = data?.id ?? null;
       htmlLink = data?.webLink ?? null;
+    }
+
+    // Goal Events: a real booking may fast-forward the lead's parked/queued
+    // AiFlow runs to an "appointment booked" goal (skipping follow-up sends
+    // between here and there). Only a CONFIRMED create fires it — a provider
+    // response without an event id is not a booking. Best-effort inside
+    // fireGoalEvent; the Calendly path above is exempt — a scheduling LINK is
+    // not a booking.
+    if (eventId) {
+      await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+        kind: "appointment_booked"
+      });
     }
 
     return {

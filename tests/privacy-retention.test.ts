@@ -26,8 +26,12 @@ const PRUNED_TABLES = [
   "voice_outbound_dial_log",
   "notifications",
   "scheduled_sms",
+  "ai_reply_reasoning",
   "sms_owner_reply_prompts"
 ] as const;
+
+/** The subset that also lives on a residency box (ai_reply_reasoning is central-only). */
+const BOXED_TABLES = PRUNED_TABLES.filter((t) => t !== "ai_reply_reasoning");
 
 type TableResult = { data: unknown; error: { message: string } | null };
 
@@ -77,8 +81,8 @@ describe("pruneExpiredContent — central-only tenants", () => {
     expect(res.tables.every((t) => t.box === null)).toBe(true);
     expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(2);
     expect(res.tables.find((t) => t.table === "notifications")?.central).toBe(0);
-    // 7 central deletes, no data-api construction.
-    expect(db.from).toHaveBeenCalledTimes(7);
+    // 8 central deletes, no data-api construction.
+    expect(db.from).toHaveBeenCalledTimes(8);
   });
 
   it.each(PRUNED_TABLES)("throws loudly when the central delete on %s fails", async (table) => {
@@ -120,8 +124,9 @@ describe("pruneExpiredContent — residency (dual/vps) tenants", () => {
         filters: [{ column: "transcript_id", op: "in", value: ["t-1", "t-2"] }]
       })
     );
-    // Every pruned table got a box delete scoped to the business.
-    for (const table of PRUNED_TABLES) {
+    // Every box-resident table got a box delete scoped to the business;
+    // the central-only ai_reply_reasoning reports box: null.
+    for (const table of BOXED_TABLES) {
       expect(apiDelete).toHaveBeenCalledWith(
         expect.objectContaining({
           table,
@@ -131,7 +136,9 @@ describe("pruneExpiredContent — residency (dual/vps) tenants", () => {
         })
       );
     }
-    expect(res.tables.every((t) => t.box === 1)).toBe(true);
+    expect(
+      res.tables.every((t) => (t.table === "ai_reply_reasoning" ? t.box === null : t.box === 1))
+    ).toBe(true);
   });
 
   it("skips the turns pass when no box transcripts are expired", async () => {

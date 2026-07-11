@@ -35,9 +35,11 @@ import {
   CONTACT_TYPES,
   MAX_CONTACT_TAGS,
   MAX_CONTACT_TAG_LENGTH,
-  SMS_REPLY_MODES
+  SMS_REPLY_MODES,
+  normalizeContactTags
 } from "@/lib/customer-memory/types";
 import { getTeamMember } from "@/lib/db/employees";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 export const dynamic = "force-dynamic";
 
@@ -203,7 +205,14 @@ export async function PATCH(
       }
     }
 
-    await updateCustomerOwnerFields(businessId, customerE164, {
+    // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
+    // it alias-aware to the surviving row. Write (and fire goal events)
+    // against that row's PRIMARY number — updateCustomerOwnerFields filters
+    // on customer_e164 only, so the alias spelling would update nothing
+    // while events fired anyway.
+    const canonicalE164 = existing.customer_e164;
+
+    await updateCustomerOwnerFields(businessId, canonicalE164, {
       // A non-empty name the owner types is a deliberate label → 'manual' (wins
       // over the derived owner/employee overlay). CLEARING the name (null/empty)
       // resets provenance to 'auto' so a later auto-capture isn't mistaken for an
@@ -222,6 +231,29 @@ export async function PATCH(
       ...(body.tags !== undefined ? { tags: body.tags } : {}),
       ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: body.ownerEmployeeId } : {})
     });
+
+    // Goal Events: tags the edit ADDED (vs. the pre-edit row) may fast-forward
+    // this lead's parked/queued AiFlow runs to a matching "tag added" goal.
+    // Diffed against the same normalization the write used; best-effort inside
+    // fireGoalEvent, so a goal failure never fails the save.
+    if (body.tags !== undefined) {
+      // Both sides of the diff go through the SAME normalization the write
+      // used — comparing raw stored tags would make a legacy spelling or
+      // stray whitespace look "new" and fire a spurious goal jump.
+      const before = new Set(
+        normalizeContactTags(existing.tags ?? []).map((t) => t.toLowerCase())
+      );
+      // Runs match goal events by the exact number they were triggered with,
+      // which after a profile merge may be an ALIAS — fire for every linked
+      // number so a parked run keyed on the old number still jumps.
+      const goalNumbers = [canonicalE164, ...(existing.alias_e164s ?? [])];
+      for (const tag of normalizeContactTags(body.tags)) {
+        if (before.has(tag.toLowerCase())) continue;
+        for (const number of goalNumbers) {
+          await fireGoalEvent(businessId, number, { kind: "tag_added", tag });
+        }
+      }
+    }
 
     return successResponse({ ok: true });
   } catch (err) {

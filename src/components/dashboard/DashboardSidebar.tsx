@@ -6,6 +6,7 @@ import { SIDEBAR_ITEMS } from "@/lib/dashboard/sidebar-items";
 import type { SidebarLayoutItem } from "@/lib/dashboard/sidebar-prefs";
 import {
   LayoutDashboard,
+  ListChecks,
   MessageSquare,
   Phone,
   MessageCircle,
@@ -31,6 +32,7 @@ import {
  */
 const NAV_ICONS: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard,
+  tasks: ListChecks,
   analytics: BarChart3,
   chat: MessageSquare,
   calls: Phone,
