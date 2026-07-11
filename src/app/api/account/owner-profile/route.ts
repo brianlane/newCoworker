@@ -1,9 +1,7 @@
 /**
- * Owner-facing: rename the signed-in account's business.
- *
- * Auth: owner-only (Supabase session). The business is resolved by the auth
- * user's email (the same `owner_email` linkage every other owner route uses),
- * so a caller can only ever rename their own business.
+ * Owner-facing: update the owner's display name and contact phone on the
+ * active business row. The phone also appears in the rendered Business
+ * profile block, so the save refreshes `profile_md` + kicks the vault sync.
  */
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
@@ -11,32 +9,32 @@ import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { updateBusinessName } from "@/lib/db/businesses";
+import { updateBusinessProfileFields } from "@/lib/db/businesses";
 import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const schema = z.object({
-  name: z.string().trim().min(1, "Business name is required").max(120, "Business name is too long")
+  ownerName: z.string().trim().max(120, "Name is too long").optional(),
+  phone: z
+    .string()
+    .trim()
+    .max(40, "Phone number is too long")
+    .refine((v) => v === "" || /^[+()0-9 .\-]+$/.test(v), "Enter a valid phone number")
+    .optional()
 });
 
 export async function POST(request: Request) {
   try {
     const user = await getAuthUser();
-    // View-as is read-only: this route resolves the business from the
-    // SIGNED-IN user's email, so an impersonating admin's write would land
-    // on the wrong business. Refuse instead (see isViewAsActive).
+    // View-as is read-only (see /api/account/business-name for rationale).
     if (await isViewAsActive(user)) {
       return errorResponse("FORBIDDEN", "View-as is read-only; exit view-as to make changes", 403);
     }
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
 
-    const { name } = schema.parse(await request.json());
+    const body = schema.parse(await request.json());
 
     const db = await createSupabaseServiceClient();
-    // Target the newest business, matching how the dashboard layout, billing
-    // routes, and the Settings page resolve "the" business for an owner who has
-    // more than one row under the same owner_email — so the rename hits the row
-    // the user is actually looking at.
     const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
     const { data: biz } = await db
       .from("businesses")
@@ -46,13 +44,23 @@ export async function POST(request: Request) {
       .limit(1)
       .maybeSingle();
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
+    const businessId = (biz as { id: string }).id;
 
-    await updateBusinessName((biz as { id: string }).id, name, db);
-    // The business name appears in the rendered Business-profile block; keep
-    // the canonical profile_md fresh and push it to the live agent.
-    await refreshBusinessProfileMd((biz as { id: string }).id, db);
-    void syncVaultToVpsAndLog((biz as { id: string }).id);
-    return successResponse({ name });
+    if (body.ownerName !== undefined) {
+      const { error } = await db
+        .from("businesses")
+        .update({ owner_name: body.ownerName || null })
+        .eq("id", businessId);
+      if (error) throw new Error(`owner-profile: ${error.message}`);
+    }
+    if (body.phone !== undefined) {
+      await updateBusinessProfileFields(businessId, { phone: body.phone || null }, db);
+      // Phone shows up in the rendered profile block; keep it fresh.
+      await refreshBusinessProfileMd(businessId, db);
+      void syncVaultToVpsAndLog(businessId);
+    }
+
+    return successResponse({ ok: true });
   } catch (err) {
     return handleRouteError(err);
   }

@@ -115,7 +115,7 @@ log "Fetching business config from Supabase..."
 CONFIG_JSON=$(curl -sf \
   -H "apikey: ${SUPABASE_SERVICE_KEY}" \
   -H "Authorization: Bearer ${SUPABASE_SERVICE_KEY}" \
-  "${SUPABASE_URL}/rest/v1/business_configs?business_id=eq.${BUSINESS_ID}&select=soul_md,identity_md,memory_md,website_md" \
+  "${SUPABASE_URL}/rest/v1/business_configs?business_id=eq.${BUSINESS_ID}&select=soul_md,identity_md,memory_md,website_md,profile_md" \
   | jq -r '.[0]')
 
 SOUL_MD=$(echo "$CONFIG_JSON" | jq -r '.soul_md // empty')
@@ -124,6 +124,9 @@ MEMORY_MD=$(echo "$CONFIG_JSON" | jq -r '.memory_md // empty')
 # website_md is optional; absent on older deployments without the
 # 20260426000000_add_business_website migration applied yet.
 WEBSITE_MD=$(echo "$CONFIG_JSON" | jq -r '.website_md // empty')
+# profile_md (rendered Business-profile block: hours/address/contact) is
+# optional; absent before the 20260822000000_business_profile migration.
+PROFILE_MD=$(echo "$CONFIG_JSON" | jq -r '.profile_md // empty')
 
 slugify() {
   echo "$1" \
@@ -140,6 +143,8 @@ echo "$MEMORY_MD"   > /opt/rowboat/vault/memory.md
 # a stable file to stat; an empty file simply omits the website section from
 # Gemini Live's system instruction.
 echo "$WEBSITE_MD"  > /opt/rowboat/vault/website.md
+# profile.md: rendered Business-profile block (same empty-file convention).
+echo "$PROFILE_MD"  > /opt/rowboat/vault/profile.md
 
 mkdir -p /opt/rowboat/memory/Organizations /opt/rowboat/memory/People /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects
 mkdir -p /opt/rowboat/memory/.newcoworker-seeds
@@ -591,8 +596,10 @@ chmod 600 "${SEED_TMP}"
 # the .md vault files don't break mongosh parsing. Empty md files collapse
 # to empty strings, which Rowboat tolerates — the agent just runs with
 # whatever instructions are non-empty.
-ROWBOAT_INSTRUCTIONS=$(jq -nRs --arg soul "$SOUL_MD" --arg id "$IDENTITY_MD" --arg mem "$MEMORY_MD" --arg web "$WEBSITE_MD" '
-  ([$id, $soul, $web, $mem] | map(select(length > 0)) | join("\n\n"))
+# Field order must stay in lockstep with buildAgentInstructions in
+# src/lib/vps/sync-vault.ts (identity → profile → soul → website → memory).
+ROWBOAT_INSTRUCTIONS=$(jq -nRs --arg soul "$SOUL_MD" --arg id "$IDENTITY_MD" --arg mem "$MEMORY_MD" --arg web "$WEBSITE_MD" --arg profile "$PROFILE_MD" '
+  ([$id, $profile, $soul, $web, $mem] | map(select(length > 0)) | join("\n\n"))
 ' || echo "")
 ROWBOAT_INSTRUCTIONS=${ROWBOAT_INSTRUCTIONS:-"You are a professional AI coworker. Reply concisely and helpfully."}
 

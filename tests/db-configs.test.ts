@@ -226,6 +226,20 @@ describe("db/configs", () => {
     expect(payload.website_md).toBe("# w");
   });
 
+  it("patchBusinessConfig forwards profile_md when present (Business-profile save path)", async () => {
+    const { db, updateChain } = raceSafeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await patchBusinessConfig("biz-uuid-1", { profile_md: "## Business profile" });
+
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.profile_md).toBe("## Business profile");
+    // Other vault fields stay untouched — profile refresh must never
+    // clobber concurrently-edited memory/website content.
+    expect(payload.soul_md).toBeUndefined();
+    expect(payload.website_md).toBeUndefined();
+  });
+
   it("patchBusinessConfig throws when the skeleton upsert fails", async () => {
     const db = {
       from: vi.fn().mockReturnValue({

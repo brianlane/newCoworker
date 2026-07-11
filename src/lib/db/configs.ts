@@ -8,6 +8,13 @@ export type ConfigRow = {
   identity_md: string;
   memory_md: string;
   website_md: string;
+  /**
+   * Canonical rendered "Business profile" markdown (hours/address/contact),
+   * derived from the businesses row by renderBusinessProfileMd on every
+   * profile save. Optional on the type: rows read before the
+   * 20260822000000_business_profile migration ran won't have it.
+   */
+  profile_md?: string;
   rowboat_project_id?: string | null;
   updated_at: string;
 };
@@ -48,6 +55,7 @@ export async function patchBusinessConfig(
     identity_md?: string;
     memory_md?: string;
     website_md?: string;
+    profile_md?: string;
   },
   client?: SupabaseClient
 ): Promise<void> {
@@ -73,6 +81,7 @@ export async function patchBusinessConfig(
   if (patch.identity_md !== undefined) updatePayload.identity_md = patch.identity_md;
   if (patch.memory_md !== undefined) updatePayload.memory_md = patch.memory_md;
   if (patch.website_md !== undefined) updatePayload.website_md = patch.website_md;
+  if (patch.profile_md !== undefined) updatePayload.profile_md = patch.profile_md;
 
   const { error: updateError } = await db
     .from("business_configs")

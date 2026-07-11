@@ -10,12 +10,16 @@ import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
+import { BusinessProfileForm } from "@/components/dashboard/BusinessProfileForm";
+import { OwnerProfileForm } from "@/components/dashboard/OwnerProfileForm";
+import { DeleteAccountCard } from "@/components/dashboard/DeleteAccountCard";
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
 import { FlowSafetySettings } from "@/components/dashboard/FlowSafetySettings";
 import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
 import { TeamAccessManager } from "@/components/dashboard/TeamAccessManager";
 import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
 import { parseBranding } from "@/lib/plans/branding";
+import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { DedicatedSupportCard } from "@/components/dashboard/DedicatedSupportCard";
 import { getEnterpriseSupportContact } from "@/lib/plans/enterprise-support";
 import { listBusinessMembers } from "@/lib/db/business-members";
@@ -38,6 +42,29 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Settings hub sections (BizBlasts-style categorized layout): a sticky
+ * quick-nav jumps to anchored groups instead of one undifferentiated card
+ * stack. Section ids double as the anchor targets.
+ */
+const SECTIONS = [
+  { id: "account", label: "Account" },
+  { id: "business", label: "Business" },
+  { id: "coworker", label: "Coworker" },
+  { id: "channels", label: "Channels" },
+  { id: "team", label: "Team", enterpriseOnly: true },
+  { id: "danger", label: "Danger Zone" }
+] as const;
+
+function SectionHeading({ id, title, blurb }: { id: string; title: string; blurb: string }) {
+  return (
+    <div id={id} className="pt-2 scroll-mt-24">
+      <h2 className="text-lg font-semibold text-parchment">{title}</h2>
+      <p className="text-xs text-parchment/40 mt-0.5">{blurb}</p>
+    </div>
+  );
+}
+
 export default async function SettingsPage() {
   const user = await getAuthUser();
   if (!user) redirect("/login");
@@ -52,7 +79,7 @@ export default async function SettingsPage() {
   const { data: businesses } = await db
     .from("businesses")
     .select(
-      "id, name, tier, enterprise_limits, timezone, branding, aiflow_protect_staff_contacts"
+      "id, name, tier, enterprise_limits, timezone, branding, aiflow_protect_staff_contacts, address, business_hours, business_type, owner_name, phone"
     )
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
@@ -92,12 +119,41 @@ export default async function SettingsPage() {
       ? await resolveActiveRenewalDate(subscription)
       : null;
 
+  const visibleSections = SECTIONS.filter(
+    (s) => !("enterpriseOnly" in s && s.enterpriseOnly) || isEnterprise
+  );
+
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Account Settings</h1>
-        <p className="text-sm text-parchment/50 mt-1">Billing, notifications, and preferences</p>
+        <h1 className="text-2xl font-bold text-parchment">Settings</h1>
+        <p className="text-sm text-parchment/50 mt-1">
+          Account, business profile, coworker behavior, and channels
+        </p>
       </div>
+
+      {/* Quick nav — anchors into the section groups below. */}
+      <nav
+        className="flex flex-wrap gap-2 sticky top-0 z-10 bg-deep-ink/95 backdrop-blur py-2 -my-2"
+        aria-label="Settings sections"
+      >
+        {visibleSections.map((s) => (
+          <a
+            key={s.id}
+            href={`#${s.id}`}
+            className="rounded-full border border-parchment/15 px-3 py-1 text-xs text-parchment/60 hover:text-parchment hover:border-signal-teal/50 transition-colors"
+          >
+            {s.label}
+          </a>
+        ))}
+      </nav>
+
+      {/* ============ Account ============ */}
+      <SectionHeading
+        id="account"
+        title="Account"
+        blurb="Plan, billing, login email, and password"
+      />
 
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">Account</h2>
@@ -171,6 +227,39 @@ export default async function SettingsPage() {
         email={user.email}
       />
 
+      {/* ============ Business ============ */}
+      <SectionHeading
+        id="business"
+        title="Business"
+        blurb="Who you are — your coworker answers customer questions from these facts"
+      />
+
+      {business && (
+        <OwnerProfileForm
+          initialOwnerName={(business as { owner_name?: string | null }).owner_name ?? null}
+          initialPhone={(business as { phone?: string | null }).phone ?? null}
+        />
+      )}
+
+      {business && (
+        <BusinessProfileForm
+          initialAddress={(business as { address?: string | null }).address ?? null}
+          initialBusinessType={
+            (business as { business_type?: string | null }).business_type ?? null
+          }
+          initialHours={parseBusinessHours(
+            (business as { business_hours?: unknown }).business_hours ?? null
+          )}
+        />
+      )}
+
+      {/* ============ Coworker ============ */}
+      <SectionHeading
+        id="coworker"
+        title="Coworker"
+        blurb="What your coworker can do and how it behaves"
+      />
+
       {business && mailbox && (
         <MailboxSettings
           businessId={business.id}
@@ -184,6 +273,23 @@ export default async function SettingsPage() {
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
       )}
+
+      {business && (
+        <FlowSafetySettings
+          businessId={business.id}
+          initialProtectStaffContacts={
+            (business as { aiflow_protect_staff_contacts?: boolean })
+              .aiflow_protect_staff_contacts !== false
+          }
+        />
+      )}
+
+      {/* ============ Channels ============ */}
+      <SectionHeading
+        id="channels"
+        title="Channels"
+        blurb="Phone number, website chat, and how we reach you"
+      />
 
       {business && (
         <WebchatWidgetSettings
@@ -200,42 +306,6 @@ export default async function SettingsPage() {
                 }
               : null
           }
-        />
-      )}
-
-      {business && (
-        <FlowSafetySettings
-          businessId={business.id}
-          initialProtectStaffContacts={
-            (business as { aiflow_protect_staff_contacts?: boolean })
-              .aiflow_protect_staff_contacts !== false
-          }
-        />
-      )}
-
-      {business && isEnterprise && (
-        <DedicatedSupportCard contact={getEnterpriseSupportContact()} />
-      )}
-
-      {business && isEnterprise && (
-        <BrandingEditor
-          businessId={business.id}
-          initialBranding={parseBranding((business as { branding?: unknown }).branding)}
-        />
-      )}
-
-      {business && isEnterprise && (
-        <TeamAccessManager
-          businessId={business.id}
-          initialMembers={teamMembers.map((m) => ({
-            id: m.id,
-            email: m.email,
-            role: m.role,
-            status: m.status,
-            created_at: m.created_at,
-            employee_id: m.employee_id
-          }))}
-          employees={employees.map((e) => ({ id: e.id, name: e.name }))}
         />
       )}
 
@@ -267,10 +337,48 @@ export default async function SettingsPage() {
         </a>
       </Card>
 
+      {/* ============ Team (enterprise) ============ */}
+      {business && isEnterprise && (
+        <>
+          <SectionHeading
+            id="team"
+            title="Team"
+            blurb="Dashboard access, branding, and dedicated support"
+          />
+
+          <DedicatedSupportCard contact={getEnterpriseSupportContact()} />
+
+          <BrandingEditor
+            businessId={business.id}
+            initialBranding={parseBranding((business as { branding?: unknown }).branding)}
+          />
+
+          <TeamAccessManager
+            businessId={business.id}
+            initialMembers={teamMembers.map((m) => ({
+              id: m.id,
+              email: m.email,
+              role: m.role,
+              status: m.status,
+              created_at: m.created_at,
+              employee_id: m.employee_id
+            }))}
+            employees={employees.map((e) => ({ id: e.id, name: e.name }))}
+          />
+        </>
+      )}
+
+      {/* ============ Danger Zone ============ */}
+      <SectionHeading
+        id="danger"
+        title="Danger Zone"
+        blurb="Irreversible actions — read carefully"
+      />
+
       <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-2">Danger Zone</h2>
+        <h2 className="text-sm font-semibold text-parchment mb-2">Sessions</h2>
         <p className="text-xs text-parchment/40 mb-4">
-          These actions are irreversible. Contact support before proceeding.
+          Signs you out everywhere, including other devices.
         </p>
         <form action="/api/auth/signout" method="POST">
           <button
@@ -281,6 +389,8 @@ export default async function SettingsPage() {
           </button>
         </form>
       </Card>
+
+      {!viewAs && <DeleteAccountCard />}
     </div>
   );
 }

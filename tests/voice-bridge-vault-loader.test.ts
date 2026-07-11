@@ -8,7 +8,9 @@ import {
 } from "../vps/voice-bridge/src/vault-loader";
 
 async function makeVault(
-  files: Partial<Record<"soul.md" | "identity.md" | "memory.md" | "website.md", string>>
+  files: Partial<
+    Record<"soul.md" | "identity.md" | "memory.md" | "website.md" | "profile.md", string>
+  >
 ): Promise<string> {
   const dir = await fs.mkdtemp(join(os.tmpdir(), "vault-test-"));
   for (const [name, content] of Object.entries(files)) {
@@ -53,7 +55,17 @@ describe("loadVaultForPrompt", () => {
     expect(snap.website).toMatch(/widgets/);
     expect(snap.identity).toBe("");
     expect(snap.memory).toBe("");
+    expect(snap.profile).toBe("");
     expect(snap.presentFiles.sort()).toEqual(["soul", "website"]);
+  });
+
+  it("loads profile.md (structured business profile) when present", async () => {
+    const dir = await vault({
+      "profile.md": "## Business profile\n- Monday: 9:00 AM to 5:00 PM"
+    });
+    const snap = await loadVaultForPrompt({ vaultPath: dir });
+    expect(snap.profile).toMatch(/Monday/);
+    expect(snap.presentFiles).toEqual(["profile"]);
   });
 
   it("truncates oversized per-file content with a visible marker", async () => {
@@ -81,24 +93,27 @@ describe("loadVaultForPrompt", () => {
 });
 
 describe("composeVaultPromptSection", () => {
-  it("orders sections identity -> soul -> website -> memory with guardrail preamble", () => {
+  it("orders sections identity -> profile -> soul -> website -> memory with guardrail preamble", () => {
     const output = composeVaultPromptSection({
       soul: "soul body",
       identity: "identity body",
       memory: "memory body",
       website: "website body",
+      profile: "profile body",
       totalChars: 0,
-      presentFiles: ["soul", "identity", "memory", "website"]
+      presentFiles: ["soul", "identity", "memory", "website", "profile"]
     });
 
     const idxPreamble = output.indexOf("Below is your business-specific");
     const idxIdentity = output.indexOf("identity.md");
+    const idxProfile = output.indexOf("profile.md");
     const idxSoul = output.indexOf("soul.md");
     const idxWebsite = output.indexOf("website.md");
     const idxMemory = output.indexOf("memory.md");
     expect(idxPreamble).toBeGreaterThanOrEqual(0);
     expect(idxIdentity).toBeGreaterThan(idxPreamble);
-    expect(idxSoul).toBeGreaterThan(idxIdentity);
+    expect(idxProfile).toBeGreaterThan(idxIdentity);
+    expect(idxSoul).toBeGreaterThan(idxProfile);
     expect(idxWebsite).toBeGreaterThan(idxSoul);
     expect(idxMemory).toBeGreaterThan(idxWebsite);
   });
@@ -109,6 +124,7 @@ describe("composeVaultPromptSection", () => {
       identity: "ident",
       memory: "",
       website: "",
+      profile: "",
       totalChars: 5,
       presentFiles: ["identity"]
     });
@@ -116,5 +132,6 @@ describe("composeVaultPromptSection", () => {
     expect(output).not.toMatch(/soul.md/);
     expect(output).not.toMatch(/website.md/);
     expect(output).not.toMatch(/memory.md/);
+    expect(output).not.toMatch(/profile.md/);
   });
 });

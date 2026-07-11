@@ -73,6 +73,14 @@ export type BusinessRow = {
    * owner's browser at onboarding; editable in Settings.
    */
   timezone?: string | null;
+  /** Free-form street address shown to customers (Settings → Business profile). */
+  address?: string | null;
+  /**
+   * Per-day open/close windows (Settings → Business profile). Shape is
+   * validated app-side — see src/lib/business-profile/profile.ts. Rendered
+   * into business_configs.profile_md for prompt composition.
+   */
+  business_hours?: Record<string, unknown> | null;
   /**
    * Hardware pin (Hostinger box size), decoupled from `tier` (entitlements).
    * Null = tier default. Resolved via `resolveVpsSize` (new provisions) /
@@ -590,6 +598,33 @@ export async function updateBusinessPhone(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ phone }).eq("id", id);
   if (error) throw new Error(`updateBusinessPhone: ${error.message}`);
+}
+
+/**
+ * Patch the structured business-profile fields (Settings → Business
+ * profile). Only provided keys are written; callers validate shapes
+ * (hours via parseBusinessHours, industry against BUSINESS_TYPE_LABELS)
+ * before calling.
+ */
+export async function updateBusinessProfileFields(
+  id: string,
+  patch: {
+    phone?: string | null;
+    address?: string | null;
+    business_type?: string | null;
+    business_hours?: Record<string, unknown> | null;
+  },
+  client?: SupabaseClient
+): Promise<void> {
+  const update: Record<string, unknown> = {};
+  if (patch.phone !== undefined) update.phone = patch.phone;
+  if (patch.address !== undefined) update.address = patch.address;
+  if (patch.business_type !== undefined) update.business_type = patch.business_type;
+  if (patch.business_hours !== undefined) update.business_hours = patch.business_hours;
+  if (Object.keys(update).length === 0) return;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update(update).eq("id", id);
+  if (error) throw new Error(`updateBusinessProfileFields: ${error.message}`);
 }
 
 export async function updateBusinessTimezone(
