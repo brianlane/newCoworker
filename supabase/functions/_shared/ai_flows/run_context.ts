@@ -187,7 +187,20 @@ async function loadFlowNames(supabase: AnyClient, flowIds: string[]): Promise<Ma
   return names;
 }
 
-/** Drop test runs — simulated sends never reached the contact. */
+/**
+ * PostgREST predicate excluding test runs AT THE QUERY so they can never
+ * occupy the page and starve live runs out of the limit. `->>` yields null
+ * when the key is absent (every non-test run), and `neq` alone drops null
+ * rows — hence the explicit is.null arm.
+ */
+const NOT_TEST_RUN_OR =
+  "context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true";
+
+/**
+ * Drop test runs — simulated sends never reached the contact. The query
+ * already excludes them (NOT_TEST_RUN_OR); this in-memory sweep is runtime
+ * defense for rows that predate the predicate or fakes that ignore it.
+ */
 function liveRuns(rows: RunRow[]): RunRow[] {
   return rows.filter((row) => !isTestModeTrigger(runTrigger(row.context)));
 }
@@ -225,10 +238,9 @@ export async function loadFlowRunContext(
       .or(
         `context->trigger->>from.eq.${contactE164},context->vars->>lead_phone.eq.${contactE164},context->waiting_reply->>from.eq.${contactE164}`
       )
+      .or(NOT_TEST_RUN_OR)
       .order("updated_at", { ascending: false })
-      // Over-fetch a little: test runs are dropped after the query and must
-      // not starve the live ones out of the page.
-      .limit(MAX_RUNS_PER_CONTACT * 2);
+      .limit(MAX_RUNS_PER_CONTACT);
     if (error) {
       console.error("run_context: run lookup", error);
       return null;
@@ -279,9 +291,9 @@ export async function loadBusinessFlowActivity(
       .select("flow_id, status, updated_at, context")
       .eq("business_id", businessId)
       .gte("updated_at", sinceIso)
+      .or(NOT_TEST_RUN_OR)
       .order("updated_at", { ascending: false })
-      // Same over-fetch as the per-contact loader (test runs are dropped).
-      .limit(MAX_RUNS_PER_BUSINESS * 2);
+      .limit(MAX_RUNS_PER_BUSINESS);
     if (error) {
       console.error("run_context: business run lookup", error);
       return null;

@@ -205,12 +205,15 @@ describe("loadFlowRunContext", () => {
     expect(text).not.toContain("__branch_x");
     expect(text).toContain("when does your current policy renew?");
 
-    // Wire shape: lead-identity OR (same keys as goal_events), lookback
-    // filter, and the ai_flow-only outbound lookup.
-    const or = calls.find((c) => c.name === "or");
-    expect(or?.args[0]).toContain(`context->trigger->>from.eq.${LEAD}`);
-    expect(or?.args[0]).toContain(`context->vars->>lead_phone.eq.${LEAD}`);
-    expect(or?.args[0]).toContain(`context->waiting_reply->>from.eq.${LEAD}`);
+    // Wire shape: lead-identity OR (same keys as goal_events), query-level
+    // test-run exclusion (test runs must not starve live runs out of the
+    // page limit), lookback filter, and the ai_flow-only outbound lookup.
+    const ors = calls.filter((c) => c.name === "or");
+    expect(ors[0]?.args[0]).toContain(`context->trigger->>from.eq.${LEAD}`);
+    expect(ors[0]?.args[0]).toContain(`context->vars->>lead_phone.eq.${LEAD}`);
+    expect(ors[0]?.args[0]).toContain(`context->waiting_reply->>from.eq.${LEAD}`);
+    expect(ors[1]?.args[0]).toContain("test_mode.is.null");
+    expect(ors[1]?.args[0]).toContain("test_mode.neq.true");
     expect(calls.filter((c) => c.name === "gte")).toHaveLength(2);
     const outboundSource = calls.find(
       (c) => c.table === "sms_outbound_log" && c.name === "eq" && c.args[0] === "source"
@@ -218,7 +221,7 @@ describe("loadFlowRunContext", () => {
     expect(outboundSource?.args[1]).toBe("ai_flow");
   });
 
-  it("test runs are dropped (their sends never reached the contact)", async () => {
+  it("test runs are dropped in memory even if the query predicate missed them", async () => {
     const { db } = makeDb([
       {
         data: [
@@ -318,8 +321,8 @@ describe("loadFlowRunContext", () => {
 });
 
 describe("loadBusinessFlowActivity", () => {
-  it("digest lines carry the best available lead identity", async () => {
-    const { db } = makeDb([
+  it("digest lines carry the best available lead identity (test runs excluded at the query)", async () => {
+    const { db, calls } = makeDb([
       {
         data: [
           dbRun(),
@@ -344,6 +347,8 @@ describe("loadBusinessFlowActivity", () => {
     expect(text).toContain('- "Post-appointment follow-up" for Ana: waiting for this contact\'s reply');
     expect(text).toContain('for +16025550111: finished');
     expect(text).toContain('- "Post-appointment follow-up": finished');
+    const or = calls.find((c) => c.name === "or");
+    expect(or?.args[0]).toContain("test_mode.is.null");
   });
 
   it("no recent runs (empty page or null data) → null", async () => {
