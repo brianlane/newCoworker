@@ -24,21 +24,33 @@ const BIZ = "11111111-1111-4111-8111-111111111111";
 
 /**
  * Count-query mock: every `.from(t).select(..., {head, count}).eq(...)`
- * chain resolves with the count configured for that table (or an error).
+ * chain (optionally followed by `.neq(...)`) resolves with the count
+ * configured for that table (or an error). The chain object is thenable so
+ * both `await q` and `await q.neq(...)` work, mirroring supabase-js.
  */
 function mockCountDb(
   countsByTable: Record<string, number | { error: string }>
 ) {
+  const neqCalls: Array<{ table: string; column: string; value: string }> = [];
+  const resolveFor = (table: string) => {
+    const entry = countsByTable[table];
+    if (entry !== undefined && typeof entry === "object") {
+      return { count: null, error: { message: entry.error } };
+    }
+    return { count: entry ?? 0, error: null };
+  };
   return {
+    neqCalls,
     from: vi.fn((table: string) => ({
       select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockImplementation(() => {
-          const entry = countsByTable[table];
-          if (entry !== undefined && typeof entry === "object") {
-            return Promise.resolve({ count: null, error: { message: entry.error } });
-          }
-          return Promise.resolve({ count: entry ?? 0, error: null });
-        })
+        eq: vi.fn().mockImplementation(() => ({
+          then: (onFulfilled: (v: unknown) => unknown) =>
+            Promise.resolve(resolveFor(table)).then(onFulfilled),
+          neq: vi.fn().mockImplementation((column: string, value: string) => {
+            neqCalls.push({ table, column, value });
+            return Promise.resolve(resolveFor(table));
+          })
+        }))
       })
     }))
   };
@@ -78,6 +90,11 @@ describe("getAccountDeletionImpact", () => {
 
     const impact = await getAccountDeletionImpact(BIZ, db as never);
 
+    // Revoked invites don't lose anything on delete — the members count
+    // must exclude them, matching listAccessibleBusinesses.
+    expect(db.neqCalls).toEqual([
+      { table: "business_members", column: "status", value: "revoked" }
+    ]);
     expect(impact).toEqual({
       businessName: "Sunrise Realty",
       counts: {

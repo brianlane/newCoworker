@@ -37,7 +37,12 @@ export type AccountDeletionImpact = {
   didE164: string | null;
 };
 
-const COUNT_TABLES: Array<{ key: keyof AccountDeletionCounts; table: string }> = [
+const COUNT_TABLES: Array<{
+  key: keyof AccountDeletionCounts;
+  table: string;
+  /** Optional `status <> value` filter (e.g. skip revoked memberships). */
+  excludeStatus?: string;
+}> = [
   { key: "contacts", table: "contacts" },
   { key: "voiceTranscripts", table: "voice_call_transcripts" },
   { key: "smsInbound", table: "sms_inbound_jobs" },
@@ -45,7 +50,9 @@ const COUNT_TABLES: Array<{ key: keyof AccountDeletionCounts; table: string }> =
   { key: "emails", table: "email_log" },
   { key: "aiflows", table: "ai_flows" },
   { key: "employees", table: "ai_flow_team_members" },
-  { key: "dashboardMembers", table: "business_members" }
+  // Revoked invites no longer grant access (listAccessibleBusinesses skips
+  // them), so counting them would overstate who loses access on delete.
+  { key: "dashboardMembers", table: "business_members", excludeStatus: "revoked" }
 ];
 
 /**
@@ -74,11 +81,14 @@ export async function getAccountDeletionImpact(
   };
 
   await Promise.all(
-    COUNT_TABLES.map(async ({ key, table }) => {
-      const { count, error } = await db
+    COUNT_TABLES.map(async ({ key, table, excludeStatus }) => {
+      const base = db
         .from(table)
         .select("*", { head: true, count: "exact" })
         .eq("business_id", businessId);
+      const { count, error } = await (excludeStatus
+        ? base.neq("status", excludeStatus)
+        : base);
       if (!error && typeof count === "number") counts[key] = count;
     })
   );
