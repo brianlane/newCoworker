@@ -43,21 +43,32 @@ import {
   DEFAULT_IMAGE_MODEL,
   GENERATED_IMAGES_BUCKET,
   IMAGE_SESSION_LIMIT,
+  MAX_INPUT_IMAGE_BYTES,
   generateBusinessImage,
   generateImageForDashboard,
   generateImageForSms,
   imageCostMicrosForModel,
   imageModelFromEnv,
   normalizeAspectRatio,
-  recordImageLimitReached
+  normalizeImageRef,
+  recordImageLimitReached,
+  resolveInputImage
 } from "@/lib/image-tools/handlers";
 
 const BIZ = "11111111-2222-3333-4444-555555555555";
+const REF_UUID = "99999999-8888-7777-6666-555555555555";
+const GOOD_REF = `${BIZ}/${REF_UUID}.jpg`;
 
 type StorageStub = {
   upload: ReturnType<typeof vi.fn>;
   createSignedUrl: ReturnType<typeof vi.fn>;
+  download: ReturnType<typeof vi.fn>;
 };
+
+/** Minimal Blob stand-in for storage downloads (arrayBuffer + type). */
+function blobOf(bytes: Buffer, type = "image/jpeg") {
+  return { type, arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) };
+}
 
 function stubDb(opts?: {
   tier?: string | null;
@@ -65,6 +76,7 @@ function stubDb(opts?: {
   uploadError?: { message: string } | null;
   signedUrl?: string | null;
   signError?: { message: string } | null;
+  downloadResult?: { data: unknown; error: { message: string } | null };
 }) {
   const storage: StorageStub = {
     upload: vi.fn(async () => ({ error: opts?.uploadError ?? null })),
@@ -74,7 +86,10 @@ function stubDb(opts?: {
           ? null
           : { signedUrl: opts?.signedUrl ?? "https://signed.example/img" },
       error: opts?.signError ?? null
-    }))
+    })),
+    download: vi.fn(async () =>
+      opts?.downloadResult ?? { data: blobOf(Buffer.from("src-img")), error: null }
+    )
   };
   const from = vi.fn(() => {
     const builder = {
@@ -170,6 +185,80 @@ describe("image-tools handlers", () => {
       expect(normalizeAspectRatio("7:5")).toBeUndefined();
       expect(normalizeAspectRatio(42)).toBeUndefined();
       expect(normalizeAspectRatio(undefined)).toBeUndefined();
+    });
+  });
+
+  describe("normalizeImageRef", () => {
+    it("accepts the bare path and the proxy URL form (case-normalized)", () => {
+      expect(normalizeImageRef(BIZ, GOOD_REF)).toBe(GOOD_REF);
+      expect(normalizeImageRef(BIZ, ` /api/dashboard/images/${BIZ}/${REF_UUID}.JPG `)).toBe(
+        GOOD_REF
+      );
+      expect(normalizeImageRef(BIZ, `${BIZ}/${REF_UUID}.webp`)).toBe(`${BIZ}/${REF_UUID}.webp`);
+    });
+
+    it("rejects cross-tenant refs, non-strings, and malformed shapes", () => {
+      const otherBiz = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+      expect(normalizeImageRef(BIZ, `${otherBiz}/${REF_UUID}.jpg`)).toBeNull();
+      expect(normalizeImageRef(BIZ, 42)).toBeNull();
+      expect(normalizeImageRef(BIZ, "https://evil.example/x.jpg")).toBeNull();
+      expect(normalizeImageRef(BIZ, `${BIZ}/../${REF_UUID}.jpg`)).toBeNull();
+      expect(normalizeImageRef(BIZ, `${BIZ}/${REF_UUID}.gif`)).toBeNull();
+    });
+  });
+
+  describe("resolveInputImage", () => {
+    it("downloads a valid ref and returns bytes + mime", async () => {
+      const db = stubDb();
+      const resolved = await resolveInputImage(BIZ, GOOD_REF, db as never);
+      expect(resolved).not.toBeNull();
+      expect(Buffer.from(resolved!.bytes).toString()).toBe("src-img");
+      expect(resolved!.mimeType).toBe("image/jpeg");
+      expect(db._storage.download).toHaveBeenCalledWith(GOOD_REF);
+    });
+
+    it("falls back to the extension mime when the blob type is empty", async () => {
+      const db = stubDb({ downloadResult: { data: blobOf(Buffer.from("x"), ""), error: null } });
+      const resolved = await resolveInputImage(BIZ, GOOD_REF, db as never);
+      expect(resolved!.mimeType).toBe("image/jpeg");
+    });
+
+    it("returns null for bad refs, download errors, empty, and oversized objects", async () => {
+      expect(await resolveInputImage(BIZ, "nope", stubDb() as never)).toBeNull();
+      expect(
+        await resolveInputImage(
+          BIZ,
+          GOOD_REF,
+          stubDb({ downloadResult: { data: null, error: { message: "missing" } } }) as never
+        )
+      ).toBeNull();
+      // Errorless empty download (no data, no error object).
+      expect(
+        await resolveInputImage(
+          BIZ,
+          GOOD_REF,
+          stubDb({ downloadResult: { data: null, error: null } }) as never
+        )
+      ).toBeNull();
+      expect(
+        await resolveInputImage(
+          BIZ,
+          GOOD_REF,
+          stubDb({ downloadResult: { data: blobOf(Buffer.alloc(0)), error: null } }) as never
+        )
+      ).toBeNull();
+      expect(
+        await resolveInputImage(
+          BIZ,
+          GOOD_REF,
+          stubDb({
+            downloadResult: {
+              data: blobOf(Buffer.alloc(MAX_INPUT_IMAGE_BYTES + 1)),
+              error: null
+            }
+          }) as never
+        )
+      ).toBeNull();
     });
   });
 
@@ -466,6 +555,37 @@ describe("image-tools handlers", () => {
       expect(mockRateLimitDurable).toHaveBeenCalled();
     });
 
+    it("passes a resolved input image through to Gemini (editing mode)", async () => {
+      budgetOk();
+      generationOk();
+      const db = stubDb();
+      const result = await generateBusinessImage(BIZ, "age this face 20 years", {
+        inputImageRef: GOOD_REF,
+        surface: "test",
+        client: db as never
+      });
+      expect(result.ok).toBe(true);
+      expect(mockGenerateImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputImage: expect.objectContaining({ mimeType: "image/jpeg" })
+        })
+      );
+    });
+
+    it("refuses with input_image_not_found before consuming a session slot", async () => {
+      budgetOk();
+      const db = stubDb({ downloadResult: { data: null, error: { message: "missing" } } });
+      const result = await generateBusinessImage(BIZ, "edit", {
+        inputImageRef: GOOD_REF,
+        session: { surface: "dashboard", key: "t1" },
+        surface: "test",
+        client: db as never
+      });
+      expect(result.detail).toBe("input_image_not_found");
+      expect(mockRateLimitDurable).not.toHaveBeenCalled();
+      expect(mockGenerateImage).not.toHaveBeenCalled();
+    });
+
     it("returns image_store_failed when the upload errors — and does not charge for it", async () => {
       budgetOk();
       generationOk();
@@ -486,7 +606,7 @@ describe("image-tools handlers", () => {
       budgetOk();
       generationOk();
       const db = stubDb();
-      const result = await generateImageForDashboard(BIZ, "a cat", "16:9", db as never);
+      const result = await generateImageForDashboard(BIZ, "a cat", { aspectRatio: "16:9", client: db as never });
       expect(mockRateLimitDurable).toHaveBeenCalledWith(
         `imggen:${BIZ}:dashboard:thread-9`,
         expect.anything()
@@ -503,7 +623,7 @@ describe("image-tools handlers", () => {
       budgetOk();
       generationOk();
       const db = stubDb();
-      await generateImageForDashboard(BIZ, "a cat", undefined, db as never);
+      await generateImageForDashboard(BIZ, "a cat", { client: db as never });
       expect(mockRateLimitDurable).toHaveBeenCalledWith(
         `imggen:${BIZ}:dashboard:no-thread`,
         expect.anything()
@@ -516,7 +636,7 @@ describe("image-tools handlers", () => {
       budgetOk();
       generationOk();
       const db = stubDb();
-      const result = await generateImageForDashboard(BIZ, "a cat", undefined, db as never);
+      const result = await generateImageForDashboard(BIZ, "a cat", { client: db as never });
       expect(result.ok).toBe(true);
       expect(mockRateLimitDurable).toHaveBeenCalledWith(
         `imggen:${BIZ}:dashboard:no-thread`,
@@ -526,7 +646,7 @@ describe("image-tools handlers", () => {
       // Non-Error rejections take the String(err) logging path.
       mockGetActiveThread.mockRejectedValue("thread read down (non-Error)");
       generationOk();
-      const again = await generateImageForDashboard(BIZ, "a cat", undefined, db as never);
+      const again = await generateImageForDashboard(BIZ, "a cat", { client: db as never });
       expect(again.ok).toBe(true);
     });
 
@@ -534,7 +654,7 @@ describe("image-tools handlers", () => {
       mockGetActiveThread.mockResolvedValue({ id: "t" });
       mockRateLimitDurable.mockResolvedValue({ success: false, limit: 3, remaining: 0, reset: 0 });
       const db = stubDb();
-      const result = await generateImageForDashboard(BIZ, "a cat", undefined, db as never);
+      const result = await generateImageForDashboard(BIZ, "a cat", { client: db as never });
       expect(result.ok).toBe(false);
       expect(result.detail).toBe("image_limit_reached");
     });
@@ -550,6 +670,24 @@ describe("image-tools handlers", () => {
       expect(result.ok).toBe(true);
       expect(mockCreateClient).toHaveBeenCalled();
     });
+
+    it("passes an attached image through as the edit source (proxy URL form)", async () => {
+      mockGetActiveThread.mockResolvedValue({ id: "t" });
+      allowLimiter();
+      budgetOk();
+      generationOk();
+      const db = stubDb();
+      const result = await generateImageForDashboard(BIZ, "make it a sunset", {
+        inputImageRef: `/api/dashboard/images/${GOOD_REF}`,
+        client: db as never
+      });
+      expect(result.ok).toBe(true);
+      expect(mockGenerateImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputImage: expect.objectContaining({ mimeType: "image/jpeg" })
+        })
+      );
+    });
   });
 
   describe("generateImageForSms", () => {
@@ -561,7 +699,7 @@ describe("image-tools handlers", () => {
       mockSendSms.mockResolvedValue({ id: "msg-1", channel: "sms" });
       const db = stubDb({ signedUrl: "https://signed.example/pic.png" });
 
-      const result = await generateImageForSms(BIZ, "a cat", "+15550001111", "Here!", db as never);
+      const result = await generateImageForSms(BIZ, "a cat", "+15550001111", { caption: "Here!", client: db as never });
 
       expect(mockRateLimitDurable).toHaveBeenCalledWith(
         `imggen:${BIZ}:sms:+15550001111`,
@@ -586,14 +724,14 @@ describe("image-tools handlers", () => {
       mockGetMessaging.mockResolvedValue({ apiKey: "k", messagingProfileId: "p" });
       mockSendSms.mockResolvedValue({ id: "msg-2", channel: "sms" });
       const db = stubDb();
-      await generateImageForSms(BIZ, "a cat", "+15550001111", "  ", db as never);
+      await generateImageForSms(BIZ, "a cat", "+15550001111", { caption: "  ", client: db as never });
       expect(mockSendSms.mock.calls[0][2]).toBe("Here is the image you asked for.");
     });
 
     it("passes a core failure through unchanged", async () => {
       mockRateLimitDurable.mockResolvedValue({ success: false, limit: 3, remaining: 0, reset: 0 });
       const db = stubDb();
-      const result = await generateImageForSms(BIZ, "a cat", "+15550001111", undefined, db as never);
+      const result = await generateImageForSms(BIZ, "a cat", "+15550001111", { client: db as never });
       expect(result.detail).toBe("image_limit_reached");
       expect(mockSendSms).not.toHaveBeenCalled();
     });
@@ -604,13 +742,13 @@ describe("image-tools handlers", () => {
       generationOk();
       const errDb = stubDb({ signError: { message: "sign down" } });
       expect(
-        (await generateImageForSms(BIZ, "a", "+15550001111", undefined, errDb as never)).detail
+        (await generateImageForSms(BIZ, "a", "+15550001111", { client: errDb as never })).detail
       ).toBe("image_store_failed");
 
       generationOk();
       const noUrlDb = stubDb({ signedUrl: null });
       expect(
-        (await generateImageForSms(BIZ, "a", "+15550001111", undefined, noUrlDb as never)).detail
+        (await generateImageForSms(BIZ, "a", "+15550001111", { client: noUrlDb as never })).detail
       ).toBe("image_store_failed");
     });
 
@@ -622,13 +760,13 @@ describe("image-tools handlers", () => {
       mockSendSms.mockRejectedValue(new Error("Monthly SMS limit reached"));
       const db = stubDb();
       expect(
-        (await generateImageForSms(BIZ, "a", "+15550001111", undefined, db as never)).detail
+        (await generateImageForSms(BIZ, "a", "+15550001111", { client: db as never })).detail
       ).toBe("sms_quota_blocked");
 
       generationOk();
       mockSendSms.mockRejectedValue("telnyx 500");
       expect(
-        (await generateImageForSms(BIZ, "a", "+15550001111", undefined, db as never)).detail
+        (await generateImageForSms(BIZ, "a", "+15550001111", { client: db as never })).detail
       ).toBe("mms_send_failed");
     });
 
@@ -643,6 +781,25 @@ describe("image-tools handlers", () => {
       const result = await generateImageForSms(BIZ, "a cat", "+15550001111");
       expect(result.ok).toBe(true);
       expect(mockCreateClient).toHaveBeenCalled();
+    });
+
+    it("passes the texter's photo ref through as the edit source", async () => {
+      allowLimiter();
+      budgetOk();
+      generationOk();
+      mockGetMessaging.mockResolvedValue({ apiKey: "k", messagingProfileId: "p" });
+      mockSendSms.mockResolvedValue({ id: "msg-4", channel: "sms" });
+      const db = stubDb();
+      const result = await generateImageForSms(BIZ, "add a party hat", "+15550001111", {
+        inputImageRef: GOOD_REF,
+        client: db as never
+      });
+      expect(result.ok).toBe(true);
+      expect(mockGenerateImage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          inputImage: expect.objectContaining({ mimeType: "image/jpeg" })
+        })
+      );
     });
   });
 });

@@ -6,6 +6,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import {
+  telnyxInboundImages,
   telnyxMessagingParticipants,
   telnyxMessagingPhoneString
 } from "../_shared/telnyx_messaging_payload.ts";
@@ -210,6 +211,12 @@ async function evaluateAndEnqueueAiFlows(
     bodyText: string;
     /** Every E.164 number in the thread (sender + all `to`), for group replies. */
     participants: string[];
+    /**
+     * First image attachment on an inbound MMS (host pre-pinned to
+     * *.telnyx.com). Exposed to flows as {{trigger.image}} so a
+     * generate_image step can edit the photo the texter sent.
+     */
+    image?: { url: string; contentType: string };
   }
 ): Promise<{ suppressingRunQueued: boolean }> {
   let evalRes: AiFlowEval = { suppress: false, matched: [] };
@@ -224,6 +231,44 @@ async function evaluateAndEnqueueAiFlows(
     return { suppressingRunQueued: false };
   }
   if (evalRes.matched.length === 0) return { suppressingRunQueued: false };
+
+  // A matched flow may run long after Telnyx's media CDN link expires
+  // (deferred quiet-hours/timeWindow runs), and suppressed-reply flows never
+  // pass through the worker's capture path — so make {{trigger.image}}
+  // DURABLE now: store the photo in generated-images and reference the
+  // bucket path. Only costs a download when an MMS actually matched a flow.
+  // Best-effort: on a store failure fall back to the raw Telnyx URL, which
+  // still works for promptly-running flows.
+  let triggerImage = "";
+  if (ctx.image) {
+    triggerImage = ctx.image.url;
+    try {
+      // No redirects: only the pinned Telnyx host may serve the bytes — a
+      // 3xx bouncing elsewhere is a refusal, not a hop (SSRF).
+      const res = await fetch(ctx.image.url, { redirect: "manual" });
+      if (res.ok) {
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        if (bytes.length > 0 && bytes.length <= 10 * 1024 * 1024) {
+          const ext =
+            ctx.image.contentType === "image/png"
+              ? "png"
+              : ctx.image.contentType === "image/webp"
+                ? "webp"
+                : "jpg";
+          const path = `${businessId}/${crypto.randomUUID()}.${ext}`;
+          const { error: upErr } = await supabase.storage
+            .from("generated-images")
+            .upload(path, new Blob([bytes], { type: ctx.image.contentType }), {
+              contentType: ctx.image.contentType
+            });
+          if (!upErr) triggerImage = path;
+          else console.warn("trigger image store failed", upErr.message);
+        }
+      }
+    } catch (e) {
+      console.warn("trigger image capture failed", e instanceof Error ? e.message : e);
+    }
+  }
 
   let suppressingRunQueued = false;
   try {
@@ -243,7 +288,11 @@ async function evaluateAndEnqueueAiFlows(
             // posts back to everyone except our own DID.
             participants: ctx.participants,
             group: ctx.participants.length > 2,
-            event_id: ctx.eventId
+            event_id: ctx.eventId,
+            // Photo the texter attached ("" when none): a durable
+            // generated-images path (or the raw Telnyx URL when the store
+            // failed) — consumable by generate_image's inputImageTemplate.
+            image: triggerImage
           }
         },
         current_step: 0,
@@ -2643,7 +2692,8 @@ serve(async (req: Request) => {
             to,
             eventId,
             bodyText: inboundSmsBody(payload),
-            participants: normalizedParticipants(payload)
+            participants: normalizedParticipants(payload),
+            image: telnyxInboundImages(payload)[0]
           });
           // Persist the inbound as an already-`done` job so it still appears in
           // the AiFlow correlation window + audit trail for FUTURE messages
@@ -2776,7 +2826,8 @@ serve(async (req: Request) => {
           to,
           eventId,
           bodyText: inboundSmsBody(payload),
-          participants: normalizedParticipants(payload)
+          participants: normalizedParticipants(payload),
+          image: telnyxInboundImages(payload)[0]
         });
 
     const { error } = await supabase.from("sms_inbound_jobs").insert({

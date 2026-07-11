@@ -118,12 +118,18 @@ const findSlotsArgsSchema = z.object({
 });
 const dashboardGenerateImageArgsSchema = z.object({
   prompt: z.string().min(1).max(2000),
-  aspectRatio: z.string().max(10).optional()
+  aspectRatio: z.string().max(10).optional(),
+  // Source image to EDIT (uploaded/attached/previously generated): the
+  // /api/dashboard/images/... URL or bare ref the model saw in conversation.
+  inputImageUrl: z.string().max(300).optional()
 });
 const smsGenerateImageArgsSchema = z.object({
   prompt: z.string().min(1).max(2000),
   phone: phoneSchema,
-  caption: z.string().max(500).optional()
+  caption: z.string().max(500).optional(),
+  // Source image to EDIT: the stored ref of a photo the texter sent (MMS),
+  // surfaced to the model in its context notes.
+  inputImageRef: z.string().max(300).optional()
 });
 const bookAppointmentArgsSchema = z.object({
   // offset:true — the tool description tells the model "ISO 8601 with
@@ -416,22 +422,19 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         if (!parsed.success) {
           return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
         }
-        return generateImageForDashboard(
-          businessId,
-          parsed.data.prompt,
-          normalizeAspectRatio(parsed.data.aspectRatio)
-        );
+        return generateImageForDashboard(businessId, parsed.data.prompt, {
+          aspectRatio: normalizeAspectRatio(parsed.data.aspectRatio),
+          ...(parsed.data.inputImageUrl ? { inputImageRef: parsed.data.inputImageUrl } : {})
+        });
       }
       const parsed = smsGenerateImageArgsSchema.safeParse(args);
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      return generateImageForSms(
-        businessId,
-        parsed.data.prompt,
-        parsed.data.phone,
-        parsed.data.caption
-      );
+      return generateImageForSms(businessId, parsed.data.prompt, parsed.data.phone, {
+        ...(parsed.data.caption !== undefined ? { caption: parsed.data.caption } : {}),
+        ...(parsed.data.inputImageRef ? { inputImageRef: parsed.data.inputImageRef } : {})
+      });
     }
     case "send_sms": {
       const parsed = sendSmsArgsSchema.safeParse(args);

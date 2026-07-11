@@ -309,6 +309,44 @@ describe("salvageFlowDefinition: semantic repair loop", () => {
     expect(res!.warnings.join(" ")).toContain("Adjusted step 1");
   });
 
+  it("mends a generate_image whose inputImageTemplate references an unproduced var", () => {
+    const res = salvageFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "g",
+          type: "generate_image",
+          promptTemplate: "a banner",
+          inputImageTemplate: "{{vars.ghost_img}}",
+          saveAs: "img"
+        }
+      ]
+    });
+    const g = res!.definition.steps[0];
+    expect(g.type).toBe("generate_image");
+    expect(g.type === "generate_image" && g.inputImageTemplate).toBeUndefined();
+    expect(res!.warnings.join(" ")).toContain("Adjusted step 1");
+  });
+
+  it("still drops a generate_image whose PROMPT references an unproduced var", () => {
+    const res = salvageFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "g",
+          type: "generate_image",
+          promptTemplate: "a banner for {{vars.ghost}}",
+          inputImageTemplate: "{{vars.ghost}}",
+          saveAs: "img"
+        },
+        { id: "n", type: "notify_owner", message: "done" }
+      ]
+    });
+    expect(res!.definition.steps.map((s) => s.type)).toEqual(["notify_owner"]);
+  });
+
   it("mends a send_sms with multiple recipients (to > toAgentName > replyToGroup)", () => {
     const keepTo = salvageFlowDefinition({
       version: 1,

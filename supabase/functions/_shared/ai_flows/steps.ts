@@ -263,6 +263,13 @@ export type StepAction =
        */
       kind: "generate_image";
       prompt: string;
+      /**
+       * Rendered source-image reference for editing mode (a Telnyx media URL,
+       * an `email-attachments:<path>` ref, an own-storage signed URL, or a
+       * generated-images path). Absent → generate from scratch. The WORKER
+       * validates/fetches it against its platform-source allowlist.
+       */
+      inputImage?: string;
       saveAs: string;
     }
   | {
@@ -843,7 +850,21 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!prompt) {
         return { ok: false, error: "generate_image: prompt is empty after templating" };
       }
-      return { ok: true, action: { kind: "generate_image", prompt, saveAs: step.saveAs } };
+      // Editing mode: an empty render means the triggering message simply
+      // carried no photo — generate from scratch. A non-empty render is
+      // validated/fetched by the worker against its platform-source allowlist.
+      const inputImage = step.inputImageTemplate
+        ? renderTemplate(step.inputImageTemplate, scope).trim()
+        : "";
+      return {
+        ok: true,
+        action: {
+          kind: "generate_image",
+          prompt,
+          ...(inputImage ? { inputImage } : {}),
+          saveAs: step.saveAs
+        }
+      };
     }
     case "update_contact": {
       const raw = scope.vars?.[step.phoneVar];

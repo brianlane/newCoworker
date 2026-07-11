@@ -66,3 +66,42 @@ export function telnyxMessagingParticipants(payload: Record<string, unknown>): s
   }
   return out;
 }
+
+export type TelnyxInboundImage = { url: string; contentType: string };
+
+/** Image content types the AI image tools can consume as an edit source. */
+const INBOUND_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+/** Hosts Telnyx serves inbound MMS media from — the ONLY hosts the platform
+ * will ever download inbound media from (SSRF guard: the URL comes from a
+ * signature-verified webhook, but pin the host anyway). */
+export function isTelnyxMediaUrl(url: string): boolean {
+  try {
+    const u = new URL(url);
+    return u.protocol === "https:" && (u.hostname === "telnyx.com" || u.hostname.endsWith(".telnyx.com"));
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Usable image attachments on an inbound Telnyx MMS: `media[]` entries whose
+ * content type the image tools accept and whose URL is a Telnyx media host.
+ * Empty for plain SMS, non-image media (video/vcard), and malformed entries.
+ */
+export function telnyxInboundImages(payload: Record<string, unknown>): TelnyxInboundImage[] {
+  const raw = payload["media"];
+  if (!Array.isArray(raw)) return [];
+  const out: TelnyxInboundImage[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const url = (item as { url?: unknown }).url;
+    const contentType = (item as { content_type?: unknown }).content_type;
+    if (typeof url !== "string" || typeof contentType !== "string") continue;
+    const normalizedType = contentType.trim().toLowerCase();
+    if (!INBOUND_IMAGE_TYPES.has(normalizedType)) continue;
+    if (!isTelnyxMediaUrl(url)) continue;
+    out.push({ url, contentType: normalizedType });
+  }
+  return out;
+}

@@ -29,12 +29,25 @@ export const GEMINI_IMAGE_ASPECT_RATIOS = [
 
 export type GeminiImageAspectRatio = (typeof GEMINI_IMAGE_ASPECT_RATIOS)[number];
 
+export type GeminiInputImage = {
+  bytes: Buffer;
+  /** e.g. `image/jpeg` — must be an image type the API accepts. */
+  mimeType: string;
+};
+
 export type GeminiGenerateImageParams = {
   apiKey: string;
   /** Short model id, e.g. `gemini-3.1-flash-lite-image` (no `models/` prefix). */
   model: string;
-  /** The image description. */
+  /** The image description (or the edit instruction when `inputImage` is set). */
   prompt: string;
+  /**
+   * Optional source image for editing/reference generation: sent as an
+   * `inlineData` part alongside the prompt, so "age this face 20 years" or
+   * "put this product on a beach" edits the supplied photo instead of
+   * generating from scratch.
+   */
+  inputImage?: GeminiInputImage;
   /** Optional aspect ratio; omitted ⇒ the model default (1:1). */
   aspectRatio?: GeminiImageAspectRatio;
   signal?: AbortSignal;
@@ -111,7 +124,26 @@ export async function geminiGenerateImage(
     },
     signal: params.signal,
     body: JSON.stringify({
-      contents: [{ role: "user", parts: [{ text: params.prompt }] }],
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: params.prompt },
+            // Editing/reference mode: the source photo rides alongside the
+            // instruction as inline data (nano-banana image editing).
+            ...(params.inputImage
+              ? [
+                  {
+                    inlineData: {
+                      mimeType: params.inputImage.mimeType,
+                      data: params.inputImage.bytes.toString("base64")
+                    }
+                  }
+                ]
+              : [])
+          ]
+        }
+      ],
       generationConfig: {
         responseModalities: ["TEXT", "IMAGE"],
         ...(params.aspectRatio ? { imageConfig: { aspectRatio: params.aspectRatio } } : {})

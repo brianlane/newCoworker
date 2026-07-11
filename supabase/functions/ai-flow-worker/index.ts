@@ -2757,14 +2757,147 @@ async function classifyStep(
   return { kind: "ok", result: { [action.saveAs]: choice } };
 }
 
+/** Max bytes for a generate_image edit source (matches the coworker tools). */
+const MAX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024;
+
+const INPUT_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
+
+const INPUT_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp"
+};
+
 /**
- * generate_image step: spend-gated Gemini image generation. Uploads the image
- * to the private generated-images bucket, signs a 7-day URL into vars[saveAs]
- * (consumed by send_sms mediaUrlVar / send_email bodies), and meters the flat
- * per-image price into the shared AI budget. A missing API key or an empty
- * model response FAILS the step (unlike extraction there is no fallback that
- * can stand in for an image). AiFlow runs are exempt from the conversational
- * per-session image limit — flows are owner-authored and explicitly enabled.
+ * Resolve a generate_image edit source to raw bytes. Accepted forms — ALL
+ * platform-controlled (never an arbitrary URL, so no SSRF surface):
+ *   - `email-attachments:<inbound/...>` — an inbound tenant-mailbox
+ *     attachment (path written by the platform into the trigger context);
+ *   - a generated-images path `<businessId>/<uuid>.<ext>` for THIS business
+ *     (a prior generation or a stored inbound MMS photo);
+ *   - an https URL on our own Supabase host (a signed URL an earlier
+ *     generate_image step saved) or on Telnyx's media CDN ({{trigger.image}}
+ *     from an inbound MMS).
+ * Returns null (with a reason) on anything else, oversize, or a fetch miss.
+ */
+async function resolveFlowInputImage(
+  supabase: Supabase,
+  businessId: string,
+  ref: string,
+  /**
+   * The run's own platform-written {{trigger.image}} value. An
+   * `email-attachments:` ref is accepted ONLY when it matches this exactly —
+   * the platform wrote it into the run context for THIS tenant's inbound
+   * mail, so no DB lookup (and no enqueue-vs-log race) is needed, and a
+   * crafted literal path to another tenant's attachment reads nothing.
+   */
+  trustedTriggerImage: string
+): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
+  const finish = (bytes: Uint8Array, mimeType: string) => {
+    if (bytes.length === 0 || bytes.length > MAX_INPUT_IMAGE_BYTES) return null;
+    return INPUT_IMAGE_TYPES.has(mimeType) ? { bytes, mimeType } : null;
+  };
+
+  // Inbound tenant-mailbox attachment. The path carries no business prefix,
+  // so tenancy comes from the run context itself: the ref must be the exact
+  // value the platform wrote into THIS run's {{trigger.image}} when the
+  // tenant's own mailbox received the mail. A crafted literal ref to another
+  // tenant's (message-id-derived, guessable) path reads nothing, and there
+  // is no dependency on the email_log write landing before the run starts.
+  if (ref.startsWith("email-attachments:")) {
+    if (ref !== trustedTriggerImage) return null;
+    const path = ref.slice("email-attachments:".length);
+    if (!path.startsWith("inbound/")) return null;
+    const { data, error } = await supabase.storage.from("email-attachments").download(path);
+    if (error || !data) return null;
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    const ext = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+    return finish(bytes, data.type || INPUT_MIME_BY_EXT[ext] || "");
+  }
+
+  // Bare generated-images path for THIS business.
+  const pathMatch = /^([0-9a-f-]{36})\/([0-9a-f-]{36})\.(png|jpg|jpeg|webp)$/i.exec(ref);
+  if (pathMatch) {
+    if (pathMatch[1].toLowerCase() !== businessId.toLowerCase()) return null;
+    const { data, error } = await supabase.storage.from(GENERATED_IMAGES_BUCKET).download(ref);
+    if (error || !data) return null;
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    return finish(bytes, data.type || INPUT_MIME_BY_EXT[pathMatch[3].toLowerCase()]);
+  }
+
+  // https URL: only our own Supabase host (signed URLs we minted) or the
+  // Telnyx media CDN (inbound MMS attachments from the verified webhook).
+  let parsed: URL;
+  try {
+    parsed = new URL(ref);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "https:") return null;
+  const ownHost = (() => {
+    try {
+      return new URL(Deno.env.get("SUPABASE_URL") ?? "").hostname;
+    } catch {
+      return "";
+    }
+  })();
+  const telnyxHost =
+    parsed.hostname === "telnyx.com" || parsed.hostname.endsWith(".telnyx.com");
+  if (!(telnyxHost || (ownHost && parsed.hostname === ownHost))) return null;
+  // An own-host signed URL must additionally point at an object THIS run may
+  // read: this business's generated-images prefix. (Email attachments are
+  // deliberately NOT accepted in URL form — they go through the
+  // `email-attachments:` ref above, which verifies tenancy via email_log.)
+  // Without this, a signed URL for another tenant's object on the same
+  // project host would pass the host check.
+  if (!telnyxHost) {
+    const objMatch = /^\/storage\/v1\/object\/(?:sign|authenticated|public)\/([^/]+)\/(.+)$/.exec(
+      parsed.pathname
+    );
+    if (!objMatch) return null;
+    const bucket = objMatch[1];
+    const objectPath = decodeURIComponent(objMatch[2]);
+    const allowed =
+      bucket === GENERATED_IMAGES_BUCKET &&
+      objectPath.toLowerCase().startsWith(`${businessId.toLowerCase()}/`);
+    if (!allowed) return null;
+  }
+  try {
+    // NEVER follow redirects: a permitted first hop must not be able to
+    // bounce the fetch to an internal/metadata endpoint (SSRF). Telnyx media
+    // and our own signed URLs serve bytes directly; any 3xx is a refusal.
+    const res = await fetch(ref, { redirect: "manual" });
+    if (!res.ok) return null;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+    const ext = parsed.pathname.slice(parsed.pathname.lastIndexOf(".") + 1).toLowerCase();
+    return finish(bytes, contentType || INPUT_MIME_BY_EXT[ext] || "");
+  } catch {
+    return null;
+  }
+}
+
+/** Chunked base64 for input images (btoa on a giant string blows the stack). */
+function inputImageBase64(bytes: Uint8Array): string {
+  let binary = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+/**
+ * generate_image step: spend-gated Gemini image generation (or editing, when
+ * inputImage is set). Uploads the image to the private generated-images
+ * bucket, signs a 32-day URL into vars[saveAs] (consumed by send_sms
+ * mediaUrlVar / send_email bodies; the TTL outlives the 30-day max deferral),
+ * and meters the flat per-image price into the shared AI budget. A missing
+ * API key or an empty model response FAILS the step (unlike extraction there
+ * is no fallback that can stand in for an image). AiFlow runs are exempt from
+ * the conversational per-session image limit — flows are owner-authored and
+ * explicitly enabled.
  */
 async function generateImageStep(
   supabase: Supabase,
@@ -2816,6 +2949,29 @@ async function generateImageStep(
     }
   }
 
+  // Editing mode: resolve the source image BEFORE the (billed) model call.
+  // An unresolvable reference FAILS the step — silently generating from
+  // scratch instead of editing the owner's chosen photo would be worse.
+  let inputImage: { bytes: Uint8Array; mimeType: string } | null = null;
+  if (action.inputImage) {
+    const trustedTriggerImage =
+      typeof scope.trigger?.image === "string" ? scope.trigger.image : "";
+    inputImage = await resolveFlowInputImage(
+      supabase,
+      run.business_id,
+      action.inputImage,
+      trustedTriggerImage
+    );
+    if (!inputImage) {
+      return {
+        kind: "fail",
+        error:
+          "generate_image: the source image could not be loaded (missing, expired, " +
+          "oversized, or not an accepted image type/source)"
+      };
+    }
+  }
+
   const url =
     `https://generativelanguage.googleapis.com/v1beta/models/` +
     `${encodeURIComponent(GEMINI_IMAGE_MODEL)}:generateContent?key=${encodeURIComponent(apiKey)}`;
@@ -2829,7 +2985,24 @@ async function generateImageStep(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        contents: [{ role: "user", parts: [{ text: action.prompt }] }],
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { text: action.prompt },
+              ...(inputImage
+                ? [
+                    {
+                      inlineData: {
+                        mimeType: inputImage.mimeType,
+                        data: inputImageBase64(inputImage.bytes)
+                      }
+                    }
+                  ]
+                : [])
+            ]
+          }
+        ],
         generationConfig: { responseModalities: ["TEXT", "IMAGE"] }
       })
     });

@@ -2472,6 +2472,44 @@ describe("generate_image step + send_sms mediaUrlVar", () => {
     ]);
   });
 
+  it("accepts an inputImageTemplate (editing mode) referencing trigger.image or earlier vars", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        {
+          id: "g1",
+          type: "generate_image",
+          promptTemplate: "Show this face aged 20 years in the sun",
+          inputImageTemplate: "{{trigger.image}}",
+          saveAs: "aged_url"
+        },
+        { id: "s1", type: "send_sms", to: "{{trigger.from}}", body: "Here!", mediaUrlVar: "aged_url" }
+      ]
+    });
+    const gen = def.steps[0];
+    expect(gen.type === "generate_image" && gen.inputImageTemplate).toBe("{{trigger.image}}");
+  });
+
+  it("scope-checks vars referenced in inputImageTemplate", () => {
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "manual" },
+        steps: [
+          {
+            id: "g1",
+            type: "generate_image",
+            promptTemplate: "restyle",
+            inputImageTemplate: "{{vars.ghost_img}}",
+            saveAs: "img"
+          }
+        ]
+      })
+    );
+    expect(issues.some((i) => i.includes("{{vars.ghost_img}}"))).toBe(true);
+  });
+
   it("summarizeDefinition includes the generate_image step type", () => {
     const def = parseAiFlowDefinition({
       version: 1,

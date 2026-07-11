@@ -26,7 +26,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   geminiGenerateImage,
   GEMINI_IMAGE_ASPECT_RATIOS,
-  type GeminiImageAspectRatio
+  type GeminiImageAspectRatio,
+  type GeminiInputImage
 } from "@/lib/gemini-generate-image";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
@@ -66,6 +67,68 @@ export const IMAGE_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** Signed-URL lifetime for MMS media: Telnyx fetches promptly after the send. */
 const MMS_SIGNED_URL_TTL_S = 3600;
+
+/** Hard cap on an input (source) image for editing. Matches the bucket limit
+ * headroom; anything larger fails resolution rather than ballooning the
+ * base64 payload to Gemini. */
+export const MAX_INPUT_IMAGE_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The exact object shape every surface writes into the generated-images
+ * bucket: `<businessId>/<uuid>.<ext>`. Input references are REBUILT from
+ * these anchored groups, so a model-supplied ref can never traverse into
+ * another tenant's prefix or another bucket.
+ */
+const IMAGE_REF_RE =
+  /^(?:\/api\/dashboard\/images\/)?([0-9a-f-]{36})\/([0-9a-f-]{36})\.(png|jpg|jpeg|webp)$/i;
+
+const REF_MIME_BY_EXT: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp"
+};
+
+/**
+ * Normalize a model-supplied image reference (bare storage path or the
+ * dashboard proxy URL form) to a generated-images path — REJECTING any ref
+ * whose business prefix is not the calling business. Returns null when the
+ * ref is not acceptable.
+ */
+export function normalizeImageRef(businessId: string, ref: unknown): string | null {
+  if (typeof ref !== "string") return null;
+  const m = IMAGE_REF_RE.exec(ref.trim());
+  if (!m) return null;
+  if (m[1].toLowerCase() !== businessId.toLowerCase()) return null;
+  return `${m[1].toLowerCase()}/${m[2].toLowerCase()}.${m[3].toLowerCase()}`;
+}
+
+/**
+ * Download a normalized generated-images ref for use as a Gemini input image.
+ * Only our own private bucket is ever read — no arbitrary URL fetching on
+ * this path (SSRF-safe by construction). Returns null when the ref is
+ * invalid, cross-tenant, missing, or oversized.
+ */
+export async function resolveInputImage(
+  businessId: string,
+  ref: unknown,
+  db: SupabaseClient
+): Promise<GeminiInputImage | null> {
+  const path = normalizeImageRef(businessId, ref);
+  if (!path) return null;
+  const { data, error } = await db.storage.from(GENERATED_IMAGES_BUCKET).download(path);
+  if (error || !data) {
+    logger.warn("image-tools: input image download failed", {
+      businessId,
+      error: error?.message ?? "no data"
+    });
+    return null;
+  }
+  const buffer = Buffer.from(await data.arrayBuffer());
+  if (buffer.length === 0 || buffer.length > MAX_INPUT_IMAGE_BYTES) return null;
+  const ext = path.slice(path.lastIndexOf(".") + 1);
+  return { bytes: buffer, mimeType: data.type || REF_MIME_BY_EXT[ext] };
+}
 
 export type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: string };
 
@@ -158,6 +221,15 @@ export async function recordImageLimitReached(
 export type GenerateBusinessImageOpts = {
   aspectRatio?: GeminiImageAspectRatio;
   /**
+   * Optional source image to EDIT (a generated-images ref: bare
+   * `<businessId>/<uuid>.<ext>` path or the dashboard proxy URL form) —
+   * an inbound MMS photo, an uploaded dashboard image, or a previously
+   * generated image for iterative edits. Must belong to the calling
+   * business; an unresolvable ref refuses rather than silently generating
+   * from scratch.
+   */
+  inputImageRef?: string;
+  /**
    * Session identity for the 3-per-session limit. Omit ONLY for surfaces that
    * are explicitly exempt (AiFlow runs — owner-authored, explicitly run).
    */
@@ -203,6 +275,23 @@ export async function generateBusinessImage(
     return { ok: false, detail: "image_generation_unavailable" };
   }
   const model = imageModelFromEnv();
+
+  // Resolve the source image (editing mode) BEFORE any slot is consumed: a
+  // bad/cross-tenant/missing ref is a cheap refusal, and silently generating
+  // from scratch instead of editing would be worse than failing.
+  let inputImage: GeminiInputImage | undefined;
+  if (opts.inputImageRef !== undefined) {
+    const resolved = await resolveInputImage(businessId, opts.inputImageRef, db);
+    if (!resolved) {
+      return {
+        ok: false,
+        detail: "input_image_not_found",
+        message:
+          "The source image reference could not be found. Pass the exact image reference you were given (or omit it to create a new image from scratch)."
+      };
+    }
+    inputImage = resolved;
+  }
 
   // 2) Shared AI-budget hard gate, INCLUDING headroom for this image's flat
   // price so the charge can never push the business past the cap. Images
@@ -256,6 +345,7 @@ export async function generateBusinessImage(
       apiKey,
       model,
       prompt,
+      ...(inputImage ? { inputImage } : {}),
       aspectRatio: opts.aspectRatio
     });
     bytes = result.bytes;
@@ -312,10 +402,14 @@ export async function generateBusinessImage(
 export async function generateImageForDashboard(
   businessId: string,
   prompt: string,
-  aspectRatio?: GeminiImageAspectRatio,
-  client?: SupabaseClient
+  opts?: {
+    aspectRatio?: GeminiImageAspectRatio;
+    /** Source image to edit: an uploaded/previously generated proxy URL or bare ref. */
+    inputImageRef?: string;
+    client?: SupabaseClient;
+  }
 ): Promise<ToolResult> {
-  const db = client ?? (await createSupabaseServiceClient());
+  const db = opts?.client ?? (await createSupabaseServiceClient());
   let sessionKey = "no-thread";
   try {
     const thread = await getActiveThread(businessId, db);
@@ -330,7 +424,8 @@ export async function generateImageForDashboard(
   }
 
   const result = await generateBusinessImage(businessId, prompt, {
-    aspectRatio,
+    aspectRatio: opts?.aspectRatio,
+    ...(opts?.inputImageRef !== undefined ? { inputImageRef: opts.inputImageRef } : {}),
     session: { surface: "dashboard", key: sessionKey },
     surface: "generate_image_dashboard",
     client: db
@@ -357,11 +452,17 @@ export async function generateImageForSms(
   businessId: string,
   prompt: string,
   toE164: string,
-  caption?: string,
-  client?: SupabaseClient
+  opts?: {
+    caption?: string;
+    /** Source image to edit: a photo the texter sent (stored inbound MMS ref). */
+    inputImageRef?: string;
+    client?: SupabaseClient;
+  }
 ): Promise<ToolResult> {
-  const db = client ?? (await createSupabaseServiceClient());
+  const db = opts?.client ?? (await createSupabaseServiceClient());
+  const caption = opts?.caption;
   const result = await generateBusinessImage(businessId, prompt, {
+    ...(opts?.inputImageRef !== undefined ? { inputImageRef: opts.inputImageRef } : {}),
     session: { surface: "sms", key: toE164 },
     surface: "generate_image_sms",
     client: db

@@ -130,7 +130,12 @@ export const TRIGGER_SCOPE_KEYS = [
   "event_title",
   "starts_at",
   "ends_at",
-  "calendar"
+  "calendar",
+  // First image attached to the triggering message: an inbound MMS photo
+  // (Telnyx media URL) or an inbound tenant-mailbox email attachment
+  // (`email-attachments:<path>` ref). "" on every other channel — used by
+  // generate_image's inputImageTemplate to edit the sender's photo.
+  "image"
 ] as const;
 
 /**
@@ -767,6 +772,16 @@ const nonBranchStepMembers = [
     id: stepId,
     type: z.literal("generate_image"),
     promptTemplate: z.string().min(1).max(2000),
+    /**
+     * Optional source image to EDIT instead of generating from scratch:
+     * a template resolving to {{trigger.image}} (the photo attached to the
+     * triggering MMS/email) or an earlier step's image var. Renders empty →
+     * the step generates from scratch; renders to an unusable reference →
+     * the step fails (silently ignoring the owner's source image would be
+     * worse). The worker only fetches platform-controlled sources (own
+     * storage buckets + Telnyx media CDN) — never arbitrary URLs.
+     */
+    inputImageTemplate: z.string().min(1).max(500).optional(),
     saveAs: varName,
     when: whenSchema.optional()
   }),
@@ -1027,7 +1042,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "email_extract":
       return step.matchTemplates ?? [];
     case "generate_image":
-      return [step.promptTemplate];
+      return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1742,6 +1757,20 @@ function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean
   // what the owner wants — send it without the image.
   if (/attaches an image from/.test(issue)) {
     delete step.mediaUrlVar;
+    return true;
+  }
+  // A generate_image whose source-image template references an unproduced
+  // var: keep the generation, drop the edit source — only when the bad var
+  // is confined to inputImageTemplate (a broken promptTemplate still drops
+  // the step; an image prompt without its subject would be nonsense).
+  const badVar = /uses \{\{vars\.(\w+)\}\} before/.exec(issue)?.[1];
+  if (
+    badVar &&
+    typeof step.inputImageTemplate === "string" &&
+    step.inputImageTemplate.includes(`vars.${badVar}`) &&
+    !(typeof step.promptTemplate === "string" && step.promptTemplate.includes(`vars.${badVar}`))
+  ) {
+    delete step.inputImageTemplate;
     return true;
   }
   // Multiple SMS recipients: keep the strongest single source.
