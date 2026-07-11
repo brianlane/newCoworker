@@ -572,6 +572,35 @@ export type FlowStep =
       fromConnectionId?: string;
       when?: StepCondition;
     }
+  | {
+      id: string;
+      /**
+       * Share a business document with the lead: mint an expiring tokenized
+       * link (business_document_shares) for `documentId` and deliver it via
+       * SMS or email. The worker re-checks at execution that the document is
+       * ready, client-audience, and NOT expired — the AiFlow-side half of
+       * the document-expiration guarantee (an expired doc fails the step
+       * loudly, never silently sends a stale link).
+       */
+      type: "share_document";
+      /** business_documents row id. */
+      documentId: string;
+      /** Editor display hint captured when the document was picked. */
+      documentTitle?: string;
+      /** Recipient template: phone for via "sms", email for via "email". */
+      to: string;
+      /** Delivery channel; defaults to "sms". */
+      via?: "sms" | "email";
+      /**
+       * Message sent with the link; the literal `{{share_url}}` token marks
+       * where the minted link goes (substituted by the worker AFTER var
+       * rendering). Without the token the link is appended.
+       */
+      messageTemplate?: string;
+      /** Save the minted link into {{vars.<saveAs>}} for later steps. */
+      saveAs?: string;
+      when?: StepCondition;
+    }
   | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
   | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
   | {

@@ -1,6 +1,7 @@
 import { BusinessBasicsForms } from "@/components/dashboard/BusinessBasicsForms";
 import { BusinessProfileForm } from "@/components/dashboard/BusinessProfileForm";
 import { OwnerProfileForm } from "@/components/dashboard/OwnerProfileForm";
+import { ServicesManager } from "@/components/dashboard/ServicesManager";
 import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
 
@@ -33,6 +34,8 @@ export default async function BusinessSettingsPage() {
           initialHours={parseBusinessHours(business.business_hours ?? null)}
         />
       )}
+
+      {business && <ServicesManager />}
     </SettingsPageShell>
   );
 }

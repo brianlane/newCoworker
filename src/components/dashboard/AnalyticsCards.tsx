@@ -22,7 +22,8 @@ import {
 import type {
   AnalyticsDayDetail,
   DailyUsagePoint,
-  DayDetailText
+  DayDetailText,
+  PeriodChange
 } from "@/lib/analytics/dashboard-analytics";
 import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
 
@@ -89,6 +90,32 @@ function BarColumn({
   );
 }
 
+/**
+ * "▲ 12% vs prior 30 days" delta line (BizBlasts period_comparison port).
+ * A zero baseline shows the raw previous→current movement instead of a
+ * meaningless percentage; flat metrics render muted.
+ */
+export function PeriodDeltaLine({ change }: { change: PeriodChange }) {
+  const arrow = change.direction === "up" ? "▲" : change.direction === "down" ? "▼" : "—";
+  const tone =
+    change.direction === "up"
+      ? "text-claw-green"
+      : change.direction === "down"
+        ? "text-amber-300"
+        : "text-parchment/40";
+  const body =
+    change.percent !== null
+      ? `${Math.abs(change.percent)}%`
+      : change.direction === "flat"
+        ? "no change"
+        : `${change.current.toLocaleString()} from ${change.previous.toLocaleString()}`;
+  return (
+    <p className={`text-[11px] mt-1 ${tone}`}>
+      {arrow} {body} <span className="text-parchment/35">vs prior 30 days</span>
+    </p>
+  );
+}
+
 export function DailyVolumeCard({
   label,
   unit,
@@ -97,7 +124,8 @@ export function DailyVolumeCard({
   value,
   colorClass,
   dayHref,
-  selectedDate
+  selectedDate,
+  change
 }: {
   label: string;
   /** e.g. "calls", "texts", "min" — appended to the total. */
@@ -110,6 +138,8 @@ export function DailyVolumeCard({
   dayHref?: (date: string) => string;
   /** Day currently drilled into (highlighted across all three charts). */
   selectedDate?: string | null;
+  /** Optional delta vs the prior window (period comparison). */
+  change?: PeriodChange | null;
 }) {
   const max = Math.max(...days.map(value), 0);
   return (
@@ -118,6 +148,7 @@ export function DailyVolumeCard({
       <p className="text-2xl font-bold text-parchment">
         {total.toLocaleString()} <span className="text-sm font-normal text-parchment/50">{unit}</span>
       </p>
+      {change ? <PeriodDeltaLine change={change} /> : null}
       <div className="flex items-end gap-px h-16 mt-3">
         {days.map((p) => (
           <BarColumn
@@ -552,15 +583,112 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
   );
 }
 
+export type TrendWeek = { label: string; calls: number; sms: number };
+
+export type TrendForecastView = {
+  projected30d: number;
+  direction: "up" | "down" | "stable";
+  anomaly: "quiet" | "busy" | null;
+};
+
+/**
+ * Long-window trend + 30-day activity forecast, fed by the nightly
+ * analytics_daily_snapshots (BizBlasts AnalyticsSnapshot / forecast port).
+ * Renders weekly aggregate bars — snapshots survive retention pruning, so
+ * this window can extend past the raw-transcript history.
+ */
+export function TrendForecastCard({
+  weeks,
+  calls,
+  texts
+}: {
+  weeks: TrendWeek[];
+  calls: TrendForecastView | null;
+  texts: TrendForecastView | null;
+}) {
+  const max = Math.max(...weeks.map((w) => w.calls + w.sms), 1);
+  const directionWord = (d: TrendForecastView["direction"]) =>
+    d === "up" ? "trending up" : d === "down" ? "trending down" : "steady";
+  const anomaly = calls?.anomaly ?? texts?.anomaly ?? null;
+  return (
+    <Card>
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+        Trend &amp; forecast
+      </p>
+      <div className="flex items-end gap-1 h-16 mt-3">
+        {weeks.map((w) => (
+          <div
+            key={w.label}
+            className="flex-1 flex flex-col justify-end h-full min-w-0"
+            title={`Week of ${w.label}: ${w.calls.toLocaleString()} calls · ${w.sms.toLocaleString()} texts`}
+          >
+            <div
+              className="rounded-t bg-claw-green/60"
+              style={{ height: `${Math.max((w.sms / max) * 100, w.sms > 0 ? 3 : 0)}%` }}
+            />
+            <div
+              className="bg-signal-teal/70"
+              style={{ height: `${Math.max((w.calls / max) * 100, w.calls > 0 ? 3 : 0)}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between mt-1 text-[10px] text-parchment/35">
+        <span>{weeks[0]?.label ?? ""}</span>
+        <span>{weeks[weeks.length - 1]?.label ?? ""}</span>
+      </div>
+      <p className="text-xs text-parchment/60 mt-3 leading-relaxed">
+        Next 30 days on the current trend:{" "}
+        {calls ? (
+          <>
+            ≈<span className="text-parchment/90">{calls.projected30d.toLocaleString()}</span>{" "}
+            calls ({directionWord(calls.direction)})
+          </>
+        ) : (
+          "not enough call history yet"
+        )}
+        {" · "}
+        {texts ? (
+          <>
+            ≈<span className="text-parchment/90">{texts.projected30d.toLocaleString()}</span>{" "}
+            texts ({directionWord(texts.direction)})
+          </>
+        ) : (
+          "not enough text history yet"
+        )}
+      </p>
+      {anomaly ? (
+        <p className="text-xs text-amber-300/90 mt-2">
+          {anomaly === "quiet"
+            ? "Heads up: this week is running well below your usual volume."
+            : "Heads up: this week is running well above your usual volume."}
+        </p>
+      ) : null}
+      <p className="text-[10px] text-parchment/35 mt-2">
+        <span className="text-signal-teal/80">■</span> calls{" "}
+        <span className="text-claw-green/80 ml-2">■</span> texts · weekly totals from nightly
+        snapshots
+      </p>
+    </Card>
+  );
+}
+
 export function AnswerRateCard({
   answered,
   missed,
-  rate
+  rate,
+  previousRate
 }: {
   answered: number;
   missed: number;
   rate: number | null;
+  /** Prior-window rate for the percentage-point delta line; null hides it. */
+  previousRate?: number | null;
 }) {
+  const deltaPts =
+    rate !== null && previousRate !== null && previousRate !== undefined
+      ? Math.round((rate - previousRate) * 1000) / 10
+      : null;
   return (
     <Card>
       <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
@@ -578,6 +706,20 @@ export function AnswerRateCard({
           >
             {Math.round(rate * 100)}%
           </p>
+          {deltaPts !== null ? (
+            <p
+              className={`text-[11px] mt-1 ${
+                deltaPts > 0
+                  ? "text-claw-green"
+                  : deltaPts < 0
+                    ? "text-amber-300"
+                    : "text-parchment/40"
+              }`}
+            >
+              {deltaPts > 0 ? "▲" : deltaPts < 0 ? "▼" : "—"} {Math.abs(deltaPts)} pts{" "}
+              <span className="text-parchment/35">vs prior 30 days</span>
+            </p>
+          ) : null}
           <p className="text-xs text-parchment/50 mt-1">
             {answered.toLocaleString()} answered · {missed.toLocaleString()} turned away
           </p>

@@ -41,6 +41,8 @@ import { sshExecPinned } from "@/lib/hostinger/ssh-pinned";
 import { getActiveVpsSshKeyForBusiness, type VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getBusiness, type BusinessRow } from "@/lib/db/businesses";
+import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
+import { buildDocumentsDigestMd } from "@/lib/documents/core";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { logger } from "@/lib/logger";
 
@@ -82,6 +84,8 @@ export type VaultSyncDeps = {
   fetchConfig?: (businessId: string) => Promise<ConfigRow | null>;
   /** Override the businesses-row lookup. */
   fetchBusiness?: (businessId: string) => Promise<BusinessRow | null>;
+  /** Override the business_documents lookup (tests + admin tooling). */
+  fetchDocuments?: (businessId: string) => Promise<BusinessDocumentRow[]>;
   /** Override the SSH key lookup. */
   fetchSshKey?: (businessId: string) => Promise<VpsSshKeyRow | null>;
   /** Override the IP resolver (tests skip the Hostinger API roundtrip). */
@@ -104,27 +108,34 @@ export const DEFAULT_AGENT_INSTRUCTIONS_FALLBACK =
 
 /**
  * Build the concatenated `instructions` string in the same field order
- * `deploy-client.sh` uses (identity → profile → soul → website → memory).
- * Empty / whitespace-only sections are skipped so the joined output never
- * has stray double-newlines.
+ * `deploy-client.sh` uses (identity → profile → soul → website → documents
+ * → memory). Empty / whitespace-only sections are skipped so the joined
+ * output never has stray double-newlines.
  *
  * `profile_md` is the rendered Business-profile block (hours / address /
  * contact) derived from the businesses row — see
  * src/lib/business-profile/profile.ts. It sits right after identity so the
  * structured facts read as part of "who the business is".
  *
+ * `documentsMd` is the client-audience documents digest (titles+summaries
+ * only — see buildDocumentsDigestMd). Provision-time vaults have no
+ * documents yet, so deploy-client.sh needs no change; the digest lands on
+ * the first post-upload sync.
+ *
  * Exported for test parity — the same composition runs both at provision
  * time (in bash) and on every dashboard save (here in TS), and a
  * regression in either path silently breaks the agent's grounding.
  */
 export function buildAgentInstructions(
-  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "profile_md">
+  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "profile_md">,
+  documentsMd: string = ""
 ): string {
   const parts = [
     config.identity_md,
     config.profile_md,
     config.soul_md,
     config.website_md,
+    documentsMd,
     config.memory_md
   ]
     .map((s) => (typeof s === "string" ? s.trim() : ""))
@@ -237,7 +248,8 @@ export function buildSyncVaultCommand(
   config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "profile_md">,
   projectId: string,
   instructions: string,
-  now: Date
+  now: Date,
+  documentsMd: string = ""
 ): string {
   // The `?? ""` fallbacks here and in `enc` are defense-in-depth nets for
   // a misshapen ConfigRow; ConfigRow's `text` columns are NON-NULL at the
@@ -253,6 +265,7 @@ export function buildSyncVaultCommand(
   const memoryB64 = enc(config.memory_md ?? "");
   const websiteB64 = enc(config.website_md ?? "");
   const profileB64 = enc(config.profile_md ?? "");
+  const documentsB64 = enc(documentsMd ?? "");
   /* c8 ignore stop */
   const instructionsB64 = enc(instructions);
   // JSON.stringify keeps the mongosh literal robust against any oddball
@@ -268,6 +281,7 @@ export function buildSyncVaultCommand(
     `printf %s '${memoryB64}'  | base64 -d > /opt/rowboat/vault/memory.md`,
     `printf %s '${websiteB64}' | base64 -d > /opt/rowboat/vault/website.md`,
     `printf %s '${profileB64}' | base64 -d > /opt/rowboat/vault/profile.md`,
+    `printf %s '${documentsB64}' | base64 -d > /opt/rowboat/vault/documents.md`,
     `INST_FILE=$(mktemp)`,
     `printf %s '${instructionsB64}' | base64 -d > "$INST_FILE"`,
     `SEED_FILE=$(mktemp --suffix=.js)`,
@@ -332,16 +346,26 @@ export async function syncVaultToVps(
   /* c8 ignore start -- production default-deps; unit tests inject explicit deps */
   const fetchConfig = deps.fetchConfig ?? getBusinessConfig;
   const fetchBusiness = deps.fetchBusiness ?? getBusiness;
+  const fetchDocuments = deps.fetchDocuments ?? listBusinessDocuments;
   const fetchSshKey = deps.fetchSshKey ?? getActiveVpsSshKeyForBusiness;
   const resolveIp = deps.resolveIp ?? defaultResolveIp;
   const exec = deps.exec ?? sshExec;
   const now = (deps.now ?? (() => new Date()))();
   /* c8 ignore stop */
 
-  const [biz, config, key] = await Promise.all([
+  const [biz, config, key, documents] = await Promise.all([
     fetchBusiness(businessId),
     fetchConfig(businessId),
-    fetchSshKey(businessId)
+    fetchSshKey(businessId),
+    // Documents must never block a vault sync — a table/read failure just
+    // syncs the vault without the digest.
+    fetchDocuments(businessId).catch((err: unknown) => {
+      logger.warn("syncVaultToVps: document list failed; syncing without digest", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return [] as BusinessDocumentRow[];
+    })
   ]);
 
   if (!biz) return { ok: false, reason: "no_business" };
@@ -360,13 +384,14 @@ export async function syncVaultToVps(
   const publicIp = await resolveIp(biz.hostinger_vps_id);
   if (!publicIp) return { ok: false, reason: "no_public_ip" };
 
-  const instructions = buildAgentInstructions(config);
+  const documentsMd = buildDocumentsDigestMd(documents, now);
+  const instructions = buildAgentInstructions(config, documentsMd);
   // Single resolution point: the value we report in `result.projectId`
   // (used as the drift signal in `syncVaultToVpsAndLog`'s log) is the
   // EXACT same string we ask mongosh to update. See the doc on
   // `buildSyncVaultCommand` for the Bugbot Low motivation.
   const projectId = resolveSyncProjectId(businessId, config);
-  const command = buildSyncVaultCommand(config, projectId, instructions, now);
+  const command = buildSyncVaultCommand(config, projectId, instructions, now, documentsMd);
 
   let result: SshExecResult;
   try {

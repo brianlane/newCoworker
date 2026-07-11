@@ -23,13 +23,20 @@ export function starterVaultBudgetStatus(
    * until they opt in.
    */
   websiteMd: string = "",
-  maxTokens: number = STARTER_VAULT_MAX_ESTIMATED_TOKENS
+  maxTokens: number = STARTER_VAULT_MAX_ESTIMATED_TOKENS,
+  /**
+   * Client-audience documents digest (titles+summaries, capped at 4k chars —
+   * `DOCUMENTS_DIGEST_MAX_CHARS`). Synced into the vault as documents.md, so
+   * it counts against the same KVM2 prefill budget. Optional for older callers.
+   */
+  documentsMd: string = ""
 ): { estimatedTotal: number; maxTokens: number; overBudget: boolean } {
   const estimatedTotal =
     estimateTokenCountRough(soulMd) +
     estimateTokenCountRough(identityMd) +
     estimateTokenCountRough(memoryMd) +
-    estimateTokenCountRough(websiteMd);
+    estimateTokenCountRough(websiteMd) +
+    estimateTokenCountRough(documentsMd);
   return {
     estimatedTotal,
     maxTokens,

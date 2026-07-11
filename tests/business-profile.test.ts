@@ -10,6 +10,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/configs", () => ({ patchBusinessConfig: vi.fn() }));
+vi.mock("@/lib/services/db", () => ({ listBusinessServices: vi.fn(async () => []) }));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -29,6 +30,7 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
+import { listBusinessServices } from "@/lib/services/db";
 import { logger } from "@/lib/logger";
 
 describe("isValidHoursTime", () => {
@@ -171,6 +173,34 @@ describe("renderBusinessProfileMd", () => {
     expect(md).toContain("- Business name: Acme");
     expect(md).not.toContain("### Business hours");
   });
+
+  it("renders the services catalog with duration and price, omitting unset parts", () => {
+    const md = renderBusinessProfileMd({
+      name: "Clip Joint",
+      services: [
+        { name: "Haircut", durationMinutes: 30, priceText: "$40", description: "Classic cut" },
+        { name: "Consultation", durationMinutes: null, priceText: "", description: null },
+        { name: "  ", durationMinutes: 60, priceText: "$1" },
+        { name: "Zero duration", durationMinutes: 0, priceText: "$5" }
+      ]
+    });
+    expect(md).toContain("### Services (name — duration — price)");
+    expect(md).toContain("use its listed duration");
+    expect(md).toContain("- Haircut — 30 min — $40 — Classic cut");
+    expect(md).toContain("- Consultation");
+    expect(md).not.toContain("- Consultation —");
+    // Blank names are dropped; zero durations render without a duration part.
+    expect(md).not.toContain("-  —");
+    expect(md).toContain("- Zero duration — $5");
+  });
+
+  it("renders a services-only profile and omits the section when services is empty", () => {
+    const servicesOnly = renderBusinessProfileMd({ name: "", services: [{ name: "Haircut" }] });
+    expect(servicesOnly).toContain("### Services");
+    expect(servicesOnly).toContain("- Haircut");
+    const none = renderBusinessProfileMd({ name: "Acme", services: [] });
+    expect(none).not.toContain("### Services");
+  });
 });
 
 describe("refreshBusinessProfileMd", () => {
@@ -233,6 +263,54 @@ describe("refreshBusinessProfileMd", () => {
       "refreshBusinessProfileMd: business missing not found"
     );
     expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+
+  it("renders ACTIVE services from the catalog into the profile", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({ id: "biz-4", name: "Clip Joint" } as never);
+    vi.mocked(listBusinessServices).mockResolvedValue([
+      {
+        id: "s1",
+        business_id: "biz-4",
+        name: "Haircut",
+        description: "Classic cut",
+        duration_minutes: 30,
+        price_text: "$40",
+        active: true,
+        position: 0,
+        created_at: "",
+        updated_at: ""
+      },
+      {
+        id: "s2",
+        business_id: "biz-4",
+        name: "Retired promo",
+        description: "",
+        duration_minutes: null,
+        price_text: "$1",
+        active: false,
+        position: 1,
+        created_at: "",
+        updated_at: ""
+      }
+    ]);
+    const md = await refreshBusinessProfileMd("biz-4");
+    expect(md).toContain("- Haircut — 30 min — $40 — Classic cut");
+    expect(md).not.toContain("Retired promo");
+  });
+
+  it("renders without the services section when the catalog read fails (Error and non-Error)", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({ id: "biz-5", name: "Acme" } as never);
+    vi.mocked(listBusinessServices).mockRejectedValueOnce(new Error("table missing"));
+    const md = await refreshBusinessProfileMd("biz-5");
+    expect(md).toContain("- Business name: Acme");
+    expect(md).not.toContain("### Services");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("services list failed"),
+      expect.objectContaining({ error: "table missing" })
+    );
+    vi.mocked(listBusinessServices).mockRejectedValueOnce("string failure");
+    const md2 = await refreshBusinessProfileMd("biz-5");
+    expect(md2).toContain("- Business name: Acme");
   });
 });
 

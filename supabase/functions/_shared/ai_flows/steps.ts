@@ -63,6 +63,17 @@ export type BrowseActionPlanned = {
 export const MAX_WAIT_MINUTES = 43200;
 
 /**
+ * The literal token a share_document message uses to place the minted link.
+ * NOT a scope reference: the worker substitutes it AFTER the link exists, so
+ * the planner must shield it from renderTemplate (which resolves unknown
+ * references to "").
+ */
+export const SHARE_URL_TOKEN = "{{share_url}}";
+const SHARE_URL_RE = /\{\{\s*share_url\s*\}\}/g;
+/** Render-safe stand-in for the token while the var renderer runs. */
+const SHARE_URL_SENTINEL = "\u0000SHARE_URL\u0000";
+
+/**
  * What a math step saves when an operand doesn't parse (or a divide hits
  * zero). A named sentinel — not "" — so when/branch conditions can test it.
  */
@@ -245,6 +256,27 @@ export type StepAction =
        * The worker skips the send with an actions_taken note instead of
        * failing the run — a lead-data gap is not a flow-config bug.
        */
+      skipReason?: string;
+    }
+  | {
+      /**
+       * Share a business document: the WORKER validates the doc (ready,
+       * client-audience, not expired), mints a business_document_shares
+       * link, substitutes it for the `{{share_url}}` token in `message`
+       * (appending when absent), stamps `saveAs`, then delivers via the
+       * same SMS/email machinery as send_sms/send_email.
+       */
+      kind: "share_document";
+      documentId: string;
+      /** Editor display hint — the owner-notice fallback title when the doc row is gone. */
+      documentTitle?: string;
+      /** Rendered recipient: E.164-ish for "sms", email address for "email". */
+      to: string;
+      via: "sms" | "email";
+      /** Rendered message with the {{share_url}} token still unsubstituted. */
+      message: string;
+      saveAs?: string;
+      /** Templated recipient resolved to nothing usable → skip, not fail. */
       skipReason?: string;
     }
   | {
@@ -655,6 +687,67 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(mediaUrl ? { mediaUrl } : {})
         }
       };
+    }
+    case "share_document": {
+      const via = step.via ?? "sms";
+      // Shield the {{share_url}} placement token from the var renderer (it
+      // is substituted by the worker AFTER the link is minted), then render
+      // everything else normally.
+      const shielded = (step.messageTemplate ?? "").replace(SHARE_URL_RE, SHARE_URL_SENTINEL);
+      const message = renderTemplate(shielded, scope)
+        .split(SHARE_URL_SENTINEL)
+        .join(SHARE_URL_TOKEN)
+        .trim();
+      const toRaw = renderTemplate(step.to, scope).trim();
+      // Same lead-data-gap semantics as send_sms: a TEMPLATED recipient that
+      // resolved to nothing usable plans a SKIP; a literal bad recipient is a
+      // hard config failure.
+      const fromTemplateVar = step.to.includes("{{");
+      const emptyish =
+        !toRaw || ["none", "n/a", "na", "null", "unknown"].includes(toRaw.toLowerCase());
+      const base = {
+        kind: "share_document" as const,
+        documentId: step.documentId,
+        ...(step.documentTitle ? { documentTitle: step.documentTitle } : {}),
+        via,
+        message,
+        ...(step.saveAs ? { saveAs: step.saveAs } : {})
+      };
+      if (emptyish) {
+        if (fromTemplateVar) {
+          return { ok: true, action: { ...base, to: "", skipReason: "no_recipient" } };
+        }
+        return { ok: false, error: "share_document: recipient is empty after templating" };
+      }
+      if (via === "sms") {
+        const to = isE164(toRaw) ? toRaw : normalizeNanpToE164(toRaw);
+        if (!to) {
+          if (fromTemplateVar) {
+            return {
+              ok: true,
+              action: { ...base, to: "", skipReason: "unparseable_recipient_phone" }
+            };
+          }
+          return {
+            ok: false,
+            error: `share_document: recipient "${toRaw}" is not a valid phone number`
+          };
+        }
+        return { ok: true, action: { ...base, to } };
+      }
+      if (!toRaw.includes("@")) {
+        if (fromTemplateVar) {
+          return {
+            ok: true,
+            action: { ...base, to: "", skipReason: "unparseable_recipient_email" }
+          };
+        }
+        return {
+          ok: false,
+          error: `share_document: recipient "${toRaw}" is not an email address`
+        };
+      }
+      return { ok: true, action: { ...base, to: toRaw } };
     }
     case "send_email": {
       const to = renderTemplate(step.to, scope).trim();

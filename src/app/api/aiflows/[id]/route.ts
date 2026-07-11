@@ -8,7 +8,8 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { deleteAiFlow, getAiFlow, updateAiFlow } from "@/lib/ai-flows/db";
-import { AiFlowValidationError } from "@/lib/ai-flows/schema";
+import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 
 const idSchema = z.string().uuid();
 
@@ -51,6 +52,15 @@ export async function PATCH(request: Request, { params }: Ctx) {
     if (!idSchema.safeParse(id).success) return errorResponse("VALIDATION_ERROR", "id is invalid");
     const body = patchSchema.parse(await request.json());
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
+    if (body.definition !== undefined) {
+      // share_document steps must reference a real, ready, client-audience,
+      // non-expired document (shape validation alone can't know that).
+      const parsedDefinition = parseAiFlowDefinition(body.definition);
+      const documentIssues = await validateShareDocumentSteps(body.businessId, parsedDefinition);
+      if (documentIssues.length > 0) {
+        return errorResponse("VALIDATION_ERROR", documentIssues.join("; "));
+      }
+    }
     const row = await updateAiFlow({
       businessId: body.businessId,
       id,

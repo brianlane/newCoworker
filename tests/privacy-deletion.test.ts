@@ -149,9 +149,28 @@ describe("deleteEndUserData — central-only tenants", () => {
       "sms_owner_reply_prompts",
       "voice_call_transcripts",
       "email_log",
+      "business_document_shares",
       "ai_reply_reasoning",
       "sms_links"
     ]);
+  });
+
+  it("erases document share links keyed to the person's numbers AND email", async () => {
+    const db = makeCentralDb({
+      "business_document_shares#1": { data: [{ id: "s1" }], error: null },
+      "business_document_shares#2": { data: [{ id: "s2" }, { id: "s3" }], error: null }
+    });
+    const res = await deleteEndUserData(
+      BIZ,
+      { e164: E164, email: EMAIL },
+      { client: db as never }
+    );
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.business_document_shares).toEqual({
+      table: "business_document_shares",
+      central: 3,
+      box: null
+    });
   });
 
   it("erases the person's AI reasoning records centrally across every linked number", async () => {
@@ -215,6 +234,8 @@ describe("deleteEndUserData — central-only tenants", () => {
     ["sms_outbound_log", /sms_outbound_log: boom/, { e164: E164 }],
     ["scheduled_sms", /scheduled_sms: boom/, { e164: E164 }],
     ["ai_reply_reasoning", /ai_reply_reasoning: boom/, { e164: E164 }],
+    ["business_document_shares", /business_document_shares: boom/, { e164: E164 }],
+    ["business_document_shares", /business_document_shares: boom/, { email: EMAIL }],
     ["sms_links", /sms_links: boom/, { e164: E164 }],
     ["sms_owner_reply_prompts", /sms_owner_reply_prompts: boom/, { e164: E164 }],
     ["voice_call_transcripts", /voice_call_transcripts: boom/, { e164: E164 }],

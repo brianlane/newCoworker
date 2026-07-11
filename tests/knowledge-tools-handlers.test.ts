@@ -8,6 +8,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/db/configs", () => ({ getBusinessConfig: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
+vi.mock("@/lib/documents/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/documents/db")>()),
+  listBusinessDocuments: vi.fn()
+}));
 vi.mock("@/lib/gemini-generate-content", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/gemini-generate-content")>()),
   geminiGenerateTextDetailed: vi.fn()
@@ -17,10 +21,34 @@ vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
+import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
 import { GeminiEmptyError, geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
+
+function documentRow(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumentRow {
+  return {
+    id: "22222222-2222-4222-8222-222222222222",
+    business_id: BIZ,
+    title: "Price sheet",
+    category: "pricing",
+    audience: "both",
+    storage_path: "p",
+    mime_type: "application/pdf",
+    byte_size: 10,
+    content_md: "- Haircut: $40",
+    summary: "Service prices.",
+    status: "ready",
+    error_detail: null,
+    expires_at: null,
+    expiring_soon_notified_at: null,
+    expired_notified_at: null,
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z",
+    ...overrides
+  };
+}
 
 const gemini = vi.mocked(geminiGenerateTextDetailed);
 const meter = vi.mocked(meterGeminiSpendForBusiness);
@@ -40,6 +68,7 @@ beforeEach(() => {
   delete process.env.GEMINI_ROWBOAT_MODEL;
   meter.mockResolvedValue(undefined);
   vi.mocked(getBusiness).mockResolvedValue({ name: "Amy Laidlaw Team" } as never);
+  vi.mocked(listBusinessDocuments).mockResolvedValue([]);
   vi.mocked(getBusinessConfig).mockResolvedValue({
     identity_md: "identity",
     soul_md: "soul",
@@ -114,6 +143,66 @@ describe("lookupBusinessKnowledge", () => {
     expect(result).toEqual({ ok: false, detail: "knowledge_empty" });
     expect(gemini).not.toHaveBeenCalled();
     expect(meter).not.toHaveBeenCalled();
+  });
+
+  it("packs a relevant document's full content into the context (clients default)", async () => {
+    vi.mocked(listBusinessDocuments).mockResolvedValue([documentRow()]);
+    gemini.mockResolvedValue(geminiOk("Haircuts are $40.", null));
+    const result = await lookupBusinessKnowledge(BIZ, "how much is a haircut price?");
+    expect(result.ok).toBe(true);
+    const call = gemini.mock.calls[0][0];
+    expect(call.userText).toContain("# document: Price sheet");
+    expect(call.userText).toContain("- Haircut: $40");
+  });
+
+  it("hides staff-only documents from client surfaces but shows them to the dashboard", async () => {
+    vi.mocked(listBusinessDocuments).mockResolvedValue([
+      documentRow({ title: "Internal SOP", audience: "staff", content_md: "escalation ladder" })
+    ]);
+    gemini.mockResolvedValue(geminiOk("answer", null));
+
+    await lookupBusinessKnowledge(BIZ, "what is the escalation ladder SOP?");
+    expect(gemini.mock.calls[0][0].userText).not.toContain("Internal SOP");
+
+    await lookupBusinessKnowledge(BIZ, "what is the escalation ladder SOP?", {
+      audience: "staff"
+    });
+    expect(gemini.mock.calls[1][0].userText).toContain("# document: Internal SOP");
+  });
+
+  it("excludes expired documents from the context", async () => {
+    vi.mocked(listBusinessDocuments).mockResolvedValue([
+      documentRow({ expires_at: "2020-01-01T00:00:00Z" })
+    ]);
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "haircut price?");
+    expect(gemini.mock.calls[0][0].userText).not.toContain("Price sheet");
+  });
+
+  it("mentions non-included documents by title+summary", async () => {
+    vi.mocked(listBusinessDocuments).mockResolvedValue([
+      documentRow({ id: "d2", title: "Holiday hours", summary: "Seasonal schedule.", content_md: "closed" })
+    ]);
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "what is the haircut price?");
+    const call = gemini.mock.calls[0][0];
+    expect(call.userText).toContain("# other documents on file");
+    expect(call.userText).toContain("Holiday hours: Seasonal schedule.");
+  });
+
+  it("answers from the vault alone when the document read fails", async () => {
+    vi.mocked(listBusinessDocuments).mockRejectedValue(new Error("table missing"));
+    gemini.mockResolvedValue(geminiOk("vault answer", null));
+    const result = await lookupBusinessKnowledge(BIZ, "hours?");
+    expect(result).toEqual({ ok: true, data: { answer: "vault answer" } });
+    expect(gemini.mock.calls[0][0].userText).toContain("# identity.md");
+  });
+
+  it("tolerates a non-Error document read failure", async () => {
+    vi.mocked(listBusinessDocuments).mockRejectedValue("string failure");
+    gemini.mockResolvedValue(geminiOk("vault answer", null));
+    const result = await lookupBusinessKnowledge(BIZ, "hours?");
+    expect(result.ok).toBe(true);
   });
 
   it("maps a missing API key to summarizer_unavailable", async () => {

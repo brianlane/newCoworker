@@ -58,6 +58,10 @@ const PROSE_KEYS: ReadonlySet<string> = new Set([
   "description",
   "emailSubject",
   "integrationLabel",
+  // share_document: the message copy and the document's display title are
+  // both author prose (the documentId itself is neutralized structurally).
+  "messageTemplate",
+  "documentTitle",
   // A branch step's question is author prose (its arm labels blank via "label").
   "question",
   // Trigger condition (`value`) and per-step gate (`equals`/`contains`/
@@ -185,6 +189,13 @@ export function scrubDefinition(
           // own endpoint in the editor.
           delete step.path;
           delete step.bodyTemplate;
+          break;
+        case "share_document":
+          // The document id is tenant-specific; blank to the schema-valid nil
+          // so a duplicating owner re-picks one of THEIR documents in the
+          // editor (the save-time validator + the runtime engine both refuse
+          // an unknown document, so the nil can never silently share).
+          step.documentId = NIL_UUID;
           break;
         case "branch": {
           // `def` is a parsed AiFlowDefinition, so arms/else are always arrays.

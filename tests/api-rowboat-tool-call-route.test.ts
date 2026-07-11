@@ -438,7 +438,10 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       "sms",
       "business_knowledge_lookup"
     );
-    expect(vi.mocked(lookupBusinessKnowledge)).toHaveBeenCalledWith(BIZ, "What are your hours?");
+    // Customer surfaces read as the clients audience (staff docs excluded).
+    expect(vi.mocked(lookupBusinessKnowledge)).toHaveBeenCalledWith(BIZ, "What are your hours?", {
+      audience: "clients"
+    });
   });
 
   it("rejects invalid business_knowledge_lookup args", async () => {
@@ -773,6 +776,10 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       expect((await res.json()).ok, name).toBe(true);
       expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(BIZ, "dashboard", toolKey);
     }
+    // The dashboard twin reads as the staff audience (sees internal docs).
+    expect(vi.mocked(lookupBusinessKnowledge)).toHaveBeenLastCalledWith(BIZ, "hours?", {
+      audience: "staff"
+    });
   });
 
   it("returns internal_error (HTTP 200) when a handler throws", async () => {
