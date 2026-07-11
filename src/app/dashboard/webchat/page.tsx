@@ -93,7 +93,7 @@ export default async function DashboardWebchatPage() {
       <div className="flex items-start justify-between gap-4">
         {header}
         <a
-          href="/dashboard/settings"
+          href="/dashboard/settings/channels"
           className="text-sm text-claw-green hover:underline shrink-0 mt-1"
         >
           Widget settings →
@@ -105,7 +105,7 @@ export default async function DashboardWebchatPage() {
           <div className="text-center py-8">
             <p className="text-parchment/60">No web chats yet.</p>
             <p className="text-xs text-parchment/40 mt-2">
-              Enable the widget under Settings and paste the snippet into your website —
+              Enable the widget under Settings → Channels and paste the snippet into your website —
               visitor conversations will appear here.
             </p>
           </div>
