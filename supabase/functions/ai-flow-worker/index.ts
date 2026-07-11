@@ -74,6 +74,7 @@ import {
   buildApprovalGateOptions
 } from "../_shared/ai_flows/approval_options.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
+import { deleteShortLinks, shortenSmsBodyUrls } from "../_shared/sms_short_links.ts";
 import {
   formatInTimeZone,
   nextTimeOfDayMs,
@@ -3384,11 +3385,6 @@ async function sendSmsStep(
     };
   }
 
-  // No auto-appended opt-out footer on AiFlow sends. The "Reply STOP to opt out."
-  // suffix corrupts control replies (e.g. the literal "Y" a partner system expects)
-  // and was never part of these message bodies. We still normalize to GSM-safe text
-  // and cap length via prepareSmsBody; STOP/HELP handling lives in the inbound path.
-  const text = prepareSmsBody(bodyText);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -3409,6 +3405,36 @@ async function sendSmsStep(
     });
     if (error) console.error("release_sms_outbound_slot", error);
   };
+
+  // Tracked short links: rewrite long URLs in lead-facing texts to /s/<code>
+  // redirects so link clicks are measurable per flow (sms_links table).
+  // Teammate notifications keep raw URLs — tracking is for lead engagement,
+  // and dashboard links read clearer unshortened. Runs AFTER the quota
+  // reserve so a quota-skipped step never mints link rows, and every failed
+  // send below cleans its rows up — no live redirects for texts nobody got.
+  // Strictly fail-safe: any error leaves the original URL and the send
+  // proceeds.
+  let outboundBody = bodyText;
+  let shortenedLinks: Awaited<ReturnType<typeof shortenSmsBodyUrls>>["links"] = [];
+  if (!internalAgentSend) {
+    const shortened = await shortenSmsBodyUrls(supabase, {
+      businessId: run.business_id,
+      text: bodyText,
+      source: "ai_flow",
+      baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+      toE164,
+      flowId: run.flow_id,
+      runId: run.id
+    });
+    outboundBody = shortened.text;
+    shortenedLinks = shortened.links;
+  }
+
+  // No auto-appended opt-out footer on AiFlow sends. The "Reply STOP to opt out."
+  // suffix corrupts control replies (e.g. the literal "Y" a partner system expects)
+  // and was never part of these message bodies. We still normalize to GSM-safe text
+  // and cap length via prepareSmsBody; STOP/HELP handling lives in the inbound path.
+  const text = prepareSmsBody(outboundBody);
 
   try {
     const send = await telnyxSendSms({
@@ -3431,6 +3457,9 @@ async function sendSmsStep(
     });
     if (!send.ok) {
       await release();
+      // The text never went out — remove its tracked links so no live
+      // /s/<code> redirect survives for a message nobody received.
+      await deleteShortLinks(supabase, shortenedLinks);
       const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
       // A Telnyx 4xx is PERMANENT for this exact payload (invalid 'to'
       // number, blocked destination, rejected content) — retrying resends
@@ -3473,6 +3502,7 @@ async function sendSmsStep(
     return { kind: "ok", result: { to: toE164, messageId } };
   } catch (e) {
     await release();
+    await deleteShortLinks(supabase, shortenedLinks);
     throw e;
   }
 }
@@ -3524,7 +3554,6 @@ async function sendGroupSmsStep(
     };
   }
 
-  const text = prepareSmsBody(action.body);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
     { p_business_id: run.business_id }
@@ -3537,6 +3566,21 @@ async function sendGroupSmsStep(
     }
     return { kind: "ok", skipped: true, result: { skipped: reserve?.reason ?? "quota" } };
   }
+
+  // Group replies are lead-facing too: same tracked-short-link rewrite as the
+  // 1:1 path (to_e164 stays null — one body, many recipients). Runs after the
+  // reserve, with failed-send cleanup below, so no link row outlives a text
+  // that never went out. Fail-safe.
+  const groupShortened = await shortenSmsBodyUrls(supabase, {
+    businessId: run.business_id,
+    text: action.body,
+    source: "ai_flow",
+    baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+    flowId: run.flow_id,
+    runId: run.id
+  });
+
+  const text = prepareSmsBody(groupShortened.text);
 
   const release = async () => {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
@@ -3577,6 +3621,8 @@ async function sendGroupSmsStep(
     }
     if (!send.ok) {
       await release();
+      // The group text never went out — remove its tracked links.
+      await deleteShortLinks(supabase, groupShortened.links);
       const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
       // Same permanent-4xx rule as the 1:1 send above (408/429 stay
       // transient): retrying an invalid recipient or rejected payload can
@@ -3615,6 +3661,7 @@ async function sendGroupSmsStep(
     return { kind: "ok", result: { to: recipients, group: true, messageId } };
   } catch (e) {
     await release();
+    await deleteShortLinks(supabase, groupShortened.links);
     throw e;
   }
 }
