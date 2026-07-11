@@ -11,6 +11,10 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
+import {
+  deleteShortLinks,
+  shortenSmsBodyUrls
+} from "../../../../../../supabase/functions/_shared/sms_short_links";
 
 /**
  * `send_follow_up_sms` — sends an SMS to the caller (or another number the
@@ -92,8 +96,24 @@ export async function POST(request: Request) {
     const config = await getTelnyxMessagingForBusiness(envelope.businessId, undefined, {
       resolveRcs: true
     });
+
+    // Tracked short links: rewrite long URLs to /s/<code> redirects so link
+    // clicks are measurable (sms_links table). Fail-safe — any error leaves
+    // the original URL in place and the send proceeds — and a failed send
+    // below deletes the minted rows so no live redirect survives for a text
+    // nobody received.
+    const linksDb = await createSupabaseServiceClient();
+    const shortened = await shortenSmsBodyUrls(linksDb, {
+      businessId: envelope.businessId,
+      text: args.body,
+      source: "voice_follow_up",
+      baseUrl: process.env.NEXT_PUBLIC_APP_URL,
+      toE164: toPhone
+    });
+    const smsBody = shortened.text;
+
     try {
-      const { id: messageId, channel } = await sendTelnyxSms(config, toPhone, args.body, {
+      const { id: messageId, channel } = await sendTelnyxSms(config, toPhone, smsBody, {
         meterBusinessId: envelope.businessId
       });
       // Best-effort durable log so the text renders in the dashboard thread.
@@ -104,7 +124,9 @@ export async function POST(request: Request) {
           business_id: envelope.businessId,
           to_e164: toPhone,
           from_e164: config.fromE164 ?? null,
-          body: args.body,
+          // Log the body as sent (post-shortening) so Text history matches
+          // what the customer received.
+          body: smsBody,
           source: "voice_follow_up",
           run_id: null,
           flow_id: null,
@@ -120,6 +142,8 @@ export async function POST(request: Request) {
       }
       return voiceToolResponse({ ok: true, data: { messageId, toE164: toPhone } });
     } catch (err) {
+      // The text never went out — remove its tracked links (best-effort).
+      await deleteShortLinks(linksDb, shortened.links);
       const message = err instanceof Error ? err.message : String(err);
       const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);
       logger.warn("voice-tools/sms: send failed", {

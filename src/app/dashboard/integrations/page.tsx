@@ -8,6 +8,7 @@ import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connecti
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
+import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { Card } from "@/components/ui/Card";
@@ -16,6 +17,7 @@ import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailI
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
 import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
+import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { Inbox } from "lucide-react";
 
@@ -55,6 +57,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
     businessId ? await listCustomIntegrations(businessId) : [];
   const vagaroConnection = businessId ? await getPublicVagaroConnection(businessId) : null;
   const calendlyConnection = businessId ? await getPublicCalendlyConnection(businessId) : null;
+  const caldavConnection = businessId ? await getPublicCaldavConnection(businessId) : null;
   const apiKeys = businessId && canManageApiKeys ? await listApiKeys(businessId) : [];
   const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
 
@@ -133,6 +136,10 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               <CalendlyIntegrationCard
                 businessId={businessId}
                 initialConnection={calendlyConnection}
+              />
+              <CaldavIntegrationCard
+                businessId={businessId}
+                initialConnection={caldavConnection}
               />
             </div>
           </section>

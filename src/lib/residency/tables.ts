@@ -31,6 +31,13 @@
  *   (lifetime refund-once, subscription caps, Stripe ids) — cross-tenant
  *   control plane, not the tenant's customer data. The tenant's customer
  *   memory lives in `contacts`.
+ *
+ * - `sms_links` (tracked short links) STAYS CENTRAL like `sms_opt_outs`:
+ *   the public /s/<code> redirect must keep resolving links embedded in
+ *   texts customers already received, even when the tenant's box is down
+ *   or mid-migration. The PII it carries (recipient number + original URL)
+ *   is covered by retention pruning and end-user erasure
+ *   (src/lib/privacy/{retention,deletion}.ts), both central-only for it.
  */
 
 /**

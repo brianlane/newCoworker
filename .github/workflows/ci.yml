@@ -145,3 +145,39 @@ jobs:
 
       - name: npm audit (prod deps, high+)
         run: npm audit --omit=dev --audit-level=high
+
+  # Live-AI end-to-end suite (tests/e2e/): real Gemini calls exercising the
+  # reply-reasoning trailer round trip and full AiFlow executions where the
+  # model makes the branch decisions — the contract class that unit tests
+  # cannot cover (the Truly Insurance trailer leak of 2026-07-11 shipped
+  # through 100%-coverage unit tests because only the live model mangles
+  # markers). Gated on every other job in this workflow so the paid model
+  # calls only run once a commit is otherwise green, and superseded pushes
+  # are cancelled by the workflow-level concurrency group before reaching it.
+  e2e:
+    name: E2E (live AI + AiFlows)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [quality, typecheck, test, deno-check, security]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run live e2e suite
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error::GOOGLE_API_KEY secret is not available to this run — the e2e suite cannot call Gemini."
+            exit 1
+          fi
+          npm run test:e2e

@@ -10,7 +10,13 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["tests/**/*.test.ts"],
-    exclude: ["tests/integration/**", "**/gemini-summarize-connectivity-live.test.ts"],
+    // tests/e2e/** are live-model tests (real Gemini) with their own config
+    // (vitest.e2e.config.ts) and CI job — the unit run stays hermetic.
+    exclude: [
+      "tests/integration/**",
+      "tests/e2e/**",
+      "**/gemini-summarize-connectivity-live.test.ts"
+    ],
     // Strip live credentials (sourced .env) from the unit-test process so no
     // test can reach a real external service — see tests/setup-env.ts.
     setupFiles: ["tests/setup-env.ts"],

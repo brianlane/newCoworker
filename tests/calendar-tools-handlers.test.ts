@@ -20,6 +20,10 @@ vi.mock("@/lib/calendar-tools/vagaro", () => ({
   findVagaroSlots: vi.fn(),
   bookVagaroAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/caldav", () => ({
+  getCaldavBusyBlocks: vi.fn(),
+  bookCaldavAppointment: vi.fn()
+}));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 
 import {
@@ -37,6 +41,7 @@ import {
   findCalendlySlots
 } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -60,6 +65,11 @@ const VAGARO_CONN = {
   provider: "vagaro",
   connectionId: "vagaro-row-1",
   providerConfigKey: "vagaro"
+} as never;
+const CALDAV_CONN = {
+  provider: "caldav",
+  connectionId: "caldav-row-1",
+  providerConfigKey: "caldav-direct"
 } as never;
 
 beforeEach(() => {
@@ -208,6 +218,63 @@ describe("findCalendarSlots", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("computes slots from CalDAV busy blocks with the shared aligned walk", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(getBusinessTimezone).mockResolvedValue("UTC");
+    vi.mocked(getCaldavBusyBlocks).mockResolvedValue({
+      ok: true,
+      busy: [
+        {
+          start: new Date("2026-06-12T09:00:00.000Z"),
+          end: new Date("2026-06-12T10:00:00.000Z")
+        }
+      ]
+    } as never);
+    const result = await findCalendarSlots(BIZ, {
+      earliest: "2026-06-12T09:00:00.000Z",
+      latest: "2026-06-12T12:00:00.000Z",
+      durationMinutes: 30,
+      purpose: "estimate"
+    });
+    expect(result.ok).toBe(true);
+    const data = result.data as {
+      slots: Array<{ startIso: string }>;
+      timezone: string;
+      purpose: string | null;
+      durationMinutes: number;
+    };
+    expect(data.slots[0]?.startIso).toBe("2026-06-12T10:00:00.000Z");
+    expect(data.timezone).toBe("UTC");
+    expect(data.purpose).toBe("estimate");
+    expect(data.durationMinutes).toBe(30);
+    expect(vi.mocked(getCaldavBusyBlocks)).toHaveBeenCalledWith(
+      BIZ,
+      new Date("2026-06-12T09:00:00.000Z"),
+      new Date("2026-06-12T12:00:00.000Z")
+    );
+    // Direct CalDAV never touches Nango or the shared workspace calendar.
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(getSharedCalendar)).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the CalDAV failure result untouched", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(getCaldavBusyBlocks).mockResolvedValue({
+      ok: false,
+      result: { ok: false, detail: "calendar_not_connected" }
+    } as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("echoes a null purpose on the CalDAV path when none was asked", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(getCaldavBusyBlocks).mockResolvedValue({ ok: true, busy: [] } as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result.ok).toBe(true);
+    expect((result.data as { purpose: string | null }).purpose).toBeNull();
   });
 
   it("delegates a Vagaro connection to findVagaroSlots with the window, serviceId, and resolved timezone", async () => {
@@ -551,6 +618,57 @@ describe("bookCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("delegates a CalDAV connection to bookCaldavAppointment and fires the goal on a confirmed create", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    const delegated = { ok: true, data: { eventId: "newcoworker-1", provider: "caldav" } };
+    vi.mocked(bookCaldavAppointment).mockResolvedValue(delegated as never);
+    const result = await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "joe@acme.com", notes: "gate code 1234" },
+      "+15551230000"
+    );
+    expect(result).toBe(delegated);
+    expect(vi.mocked(bookCaldavAppointment)).toHaveBeenCalledWith(BIZ, {
+      startIso: ARGS.startIso,
+      endIso: ARGS.endIso,
+      summary: ARGS.summary,
+      description:
+        "gate code 1234\nAttendee: Joe Plumber\nPhone: +15551230000\nEmail: joe@acme.com"
+    });
+    expect(vi.mocked(fireGoalEvent)).toHaveBeenCalledWith(BIZ, "+15551230000", {
+      kind: "appointment_booked"
+    });
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
+  });
+
+  it("an ok CalDAV result WITHOUT an event id fires no goal event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(bookCaldavAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: null, provider: "caldav" }
+    } as never);
+    await bookCalendarAppointment(BIZ, ARGS);
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+  });
+
+  it("a failed CalDAV booking fires no goal event and omits empty description lines", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(bookCaldavAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_book_failed"
+    } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS);
+    expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+    expect(vi.mocked(bookCaldavAppointment)).toHaveBeenCalledWith(BIZ, {
+      startIso: ARGS.startIso,
+      endIso: ARGS.endIso,
+      summary: ARGS.summary,
+      description: "Attendee: Joe Plumber"
+    });
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
   });
 
   it("delegates a Vagaro connection to bookVagaroAppointment with the raw args + fallback phone", async () => {

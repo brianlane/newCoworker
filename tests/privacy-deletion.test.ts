@@ -150,7 +150,8 @@ describe("deleteEndUserData — central-only tenants", () => {
       "voice_call_transcripts",
       "email_log",
       "business_document_shares",
-      "ai_reply_reasoning"
+      "ai_reply_reasoning",
+      "sms_links"
     ]);
   });
 
@@ -184,7 +185,8 @@ describe("deleteEndUserData — central-only tenants", () => {
         ],
         error: null
       },
-      ai_reply_reasoning: { data: [{ id: "r1" }, { id: "r2" }], error: null }
+      ai_reply_reasoning: { data: [{ id: "r1" }, { id: "r2" }], error: null },
+      sms_links: { data: [{ id: "l1" }], error: null }
     });
     const res = await deleteEndUserData(BIZ, { e164: E164 }, { client: db as never });
     const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
@@ -193,6 +195,9 @@ describe("deleteEndUserData — central-only tenants", () => {
       central: 2,
       box: null
     });
+    // Tracked short links sent to any linked number are erased too
+    // (central-only by design — see residency/tables.ts).
+    expect(byTable.sms_links).toEqual({ table: "sms_links", central: 1, box: null });
   });
 
   it("an EMAIL-ONLY erasure still deletes reasoning through the contact's numbers", async () => {
@@ -212,10 +217,11 @@ describe("deleteEndUserData — central-only tenants", () => {
       central: 1,
       box: null
     });
-    // A contact-less email erasure has no numbers → no reasoning pass.
+    // A contact-less email erasure has no numbers → no reasoning/link pass.
     const none = makeCentralDb({});
     const res2 = await deleteEndUserData(BIZ, { email: EMAIL }, { client: none as never });
     expect(res2.tables.some((t) => t.table === "ai_reply_reasoning")).toBe(false);
+    expect(res2.tables.some((t) => t.table === "sms_links")).toBe(false);
   });
 
   it.each([
@@ -230,6 +236,7 @@ describe("deleteEndUserData — central-only tenants", () => {
     ["ai_reply_reasoning", /ai_reply_reasoning: boom/, { e164: E164 }],
     ["business_document_shares", /business_document_shares: boom/, { e164: E164 }],
     ["business_document_shares", /business_document_shares: boom/, { email: EMAIL }],
+    ["sms_links", /sms_links: boom/, { e164: E164 }],
     ["sms_owner_reply_prompts", /sms_owner_reply_prompts: boom/, { e164: E164 }],
     ["voice_call_transcripts", /voice_call_transcripts: boom/, { e164: E164 }],
     ["email_log#1", /email_log \(to\): boom/, { email: EMAIL }],

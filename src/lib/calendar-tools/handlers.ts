@@ -4,6 +4,7 @@ import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { logger } from "@/lib/logger";
 
@@ -266,6 +267,26 @@ export async function findCalendarSlots(
     }
 
     let busy: Array<{ start: Date; end: Date }> = [];
+
+    if (conn.provider === "caldav") {
+      // Direct CalDAV: one REPORT against the connected event calendar; the
+      // shared slot walk below aligns candidates like every other provider.
+      const caldavBusy = await getCaldavBusyBlocks(businessId, windowStart, windowEnd);
+      if (!caldavBusy.ok) return caldavBusy.result;
+      busy = caldavBusy.busy;
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      const slots = computeFreeSlots(windowStart, windowEnd, busy, durationMs, 3, timezone);
+      return {
+        ok: true,
+        data: {
+          slots,
+          timezone,
+          purpose: args.purpose ?? null,
+          durationMinutes: args.durationMinutes
+        }
+      };
+    }
+
     // Read-only: never creates the shared calendar from the search path.
     const shared = await getSharedCalendar(businessId);
 
@@ -407,6 +428,34 @@ export async function bookCalendarAppointment(
         startIso: args.startIso,
         endIso: args.endIso
       });
+    }
+
+    if (conn.provider === "caldav") {
+      // Real booking on the owner's CalDAV calendar (direct, no Nango).
+      const caldavPhone = args.attendeePhone ?? fallbackPhone ?? "";
+      const caldavDescription = [
+        args.notes ?? "",
+        `Attendee: ${args.attendeeName}`,
+        caldavPhone ? `Phone: ${caldavPhone}` : "",
+        args.attendeeEmail ? `Email: ${args.attendeeEmail}` : ""
+      ]
+        .filter((line) => line && line.trim().length > 0)
+        .join("\n");
+      const caldavResult = await bookCaldavAppointment(businessId, {
+        startIso: args.startIso,
+        endIso: args.endIso,
+        summary: args.summary,
+        description: caldavDescription
+      });
+      // Same confirmed-event rule as the other real-booking providers: only
+      // a response carrying an event id counts as booked for goals.
+      const caldavEventId = (caldavResult.data as { eventId?: unknown } | undefined)?.eventId;
+      if (caldavResult.ok && caldavEventId) {
+        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+          kind: "appointment_booked"
+        });
+      }
+      return caldavResult;
     }
 
     const phoneFallback = args.attendeePhone ?? fallbackPhone ?? "";

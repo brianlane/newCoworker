@@ -118,6 +118,52 @@ describe("splitReplyReasoning", () => {
     });
   });
 
+  describe("markerless trailer JSON (caught live by the e2e suite, 2026-07-11)", () => {
+    // The model sometimes replaces the marker word with free-form reasoning
+    // text — `[[<summary>]] {"intent":...}` — which no marker matcher can
+    // see. The trailer JSON itself is the second net: no customer-facing
+    // reply legitimately contains `{"intent":"`.
+    it("strips the exact live-caught shape: bracket blob + bare trailer JSON", () => {
+      const raw =
+        "I understand. I'll have your broker reach out to you directly to discuss your options. " +
+        "[[Dwight's truck is parked and he's paying for it. He needs insurance and his policy expired.]] " +
+        '{"intent":"find new insurance","why":"Dwight needs new insurance because his old policy was not renewed.","handoff":true}';
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe(
+        "I understand. I'll have your broker reach out to you directly to discuss your options."
+      );
+      expect(res.reasoning).toEqual({
+        intent: "find new insurance",
+        rationale: "Dwight needs new insurance because his old policy was not renewed.",
+        escalated: true
+      });
+    });
+
+    it("strips a unicode-bracket blob in front of the JSON", () => {
+      const raw =
+        "See you tomorrow at 2pm!\n" +
+        '\u27E6confirming the booking\u27E7 {"intent":"confirming","why":"Time agreed.","handoff":false}';
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("See you tomorrow at 2pm!");
+      expect(res.reasoning?.intent).toBe("confirming");
+    });
+
+    it("strips bare trailer JSON with no marker or blob at all", () => {
+      const raw =
+        'Happy to help with that.\n{"intent":"wants_quote","why":"Asked about pricing.","handoff":false}';
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Happy to help with that.");
+      expect(res.reasoning?.intent).toBe("wants_quote");
+    });
+
+    it("keeps the sentence when the bare JSON is glued onto it", () => {
+      const raw = 'Sounds good! {"intent":"confirming","why":"They agreed.","handoff":false}';
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Sounds good!");
+      expect(res.reasoning?.intent).toBe("confirming");
+    });
+  });
+
   it("malformed trailers strip but parse to null", () => {
     for (const bad of [
       "not json",

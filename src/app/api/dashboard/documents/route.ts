@@ -20,6 +20,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import {
   countBusinessDocuments,
+  deleteBusinessDocument,
   insertBusinessDocument,
   listBusinessDocuments,
   patchBusinessDocument
@@ -127,17 +128,52 @@ export async function POST(request: Request) {
       return errorResponse("INTERNAL_SERVER_ERROR", "Document upload failed");
     }
 
-    const row = await insertBusinessDocument({
-      id: documentId,
-      business_id: businessId.data,
-      title,
-      category,
-      audience: audience.data,
-      storage_path: storagePath,
-      mime_type: mimeType,
-      byte_size: file.size,
-      expires_at: expiresAt
-    });
+    // Best-effort compensation: an aborted upload must not leave an
+    // orphaned object (no row pointing at it) in the bucket.
+    const removeUploadedObject = async (): Promise<void> => {
+      const { error: removeError } = await db.storage
+        .from(BUSINESS_DOCS_BUCKET)
+        .remove([storagePath]);
+      if (removeError) {
+        logger.warn("documents/upload: orphan object cleanup failed", {
+          businessId: businessId.data,
+          storagePath,
+          error: removeError.message
+        });
+      }
+    };
+
+    let row;
+    try {
+      row = await insertBusinessDocument({
+        id: documentId,
+        business_id: businessId.data,
+        title,
+        category,
+        audience: audience.data,
+        storage_path: storagePath,
+        mime_type: mimeType,
+        byte_size: file.size,
+        expires_at: expiresAt
+      });
+    } catch (err) {
+      await removeUploadedObject();
+      throw err;
+    }
+
+    // Serial re-check closes the pre-insert cap race: concurrent uploads can
+    // each pass the count above, so anyone who lands past the cap rolls
+    // their own row back. Over-rollback on a photo-finish tie is acceptable
+    // (both retry; the owner never ends up over their plan's limit).
+    const afterInsert = await countBusinessDocuments(businessId.data);
+    if (afterInsert > limit) {
+      await deleteBusinessDocument(businessId.data, documentId);
+      await removeUploadedObject();
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
+      );
+    }
 
     const ingested = await ingestDocument({
       businessId: businessId.data,
