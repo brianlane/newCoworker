@@ -1,6 +1,7 @@
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
+import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 
 /**
  * Provider-config key groupings for voice tools.
@@ -27,11 +28,19 @@ const FALLBACK_CALENDAR_KEYS = ["calendly", "google", "outlook"] as const;
  * The calendar-tools Calendly cores pick their HTTP transport off this.
  */
 export const CALENDLY_DIRECT_KEY = "calendly-direct";
+
+/**
+ * Synthetic providerConfigKey marking a DIRECT CalDAV connection (owner
+ * pasted server URL + app-specific password on the dashboard, stored in
+ * `caldav_connections`). There is no Nango CalDAV path — this is the only
+ * key for the provider.
+ */
+export const CALDAV_DIRECT_KEY = "caldav-direct";
 export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "outlook"] as const;
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
 export type ResolvedVoiceConnection = {
-  provider: "google" | "microsoft" | "calendly" | "vagaro";
+  provider: "google" | "microsoft" | "calendly" | "vagaro" | "caldav";
   providerConfigKey: string;
   connectionId: string;
 };
@@ -113,6 +122,18 @@ export async function resolveCalendarConnection(
   const rows = await listWorkspaceOAuthConnections(businessId);
   const native = firstMatch(rows, NATIVE_CALENDAR_KEYS);
   if (native) return native;
+
+  // Direct CalDAV (iCloud app-specific password etc.) sits after the
+  // dedicated Google/Outlook calendars but ahead of Calendly: it supports
+  // REAL free/busy + booking, while Calendly can only hand out links.
+  const directCaldavId = await getActiveCaldavConnectionId(businessId);
+  if (directCaldavId) {
+    return {
+      provider: "caldav",
+      providerConfigKey: CALDAV_DIRECT_KEY,
+      connectionId: directCaldavId
+    };
+  }
 
   // Direct (PAT) Calendly occupies the same priority slot as the Nango
   // "calendly" key: after the dedicated Google/Outlook calendars, before
