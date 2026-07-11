@@ -17,6 +17,11 @@ vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (...a: unknown[]) => recordSystemLog(...a)
 }));
 
+const enqueueAiFlowRun = vi.fn();
+vi.mock("@/lib/ai-flows/db", () => ({
+  enqueueAiFlowRun: (...a: unknown[]) => enqueueAiFlowRun(...a)
+}));
+
 import {
   DEFAULT_BACKLOG_SOURCE,
   MAX_BACKLOG_ROWS,
@@ -37,6 +42,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(BASE_MS);
   processWebhookFlowEvent.mockResolvedValue(ENQUEUED);
+  enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
 });
 
 afterEach(() => {
@@ -314,6 +320,68 @@ describe("importLeadBacklog", () => {
       }),
       DB
     );
+  });
+
+  it("targeted mode enqueues the chosen flow per row (scope, dedupe, drip) and skips trigger matching", async () => {
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-1" }).mockResolvedValueOnce(null);
+    const summary = await importLeadBacklog(
+      "biz-1",
+      [
+        { name: "Jane", phone: "+16025551234" },
+        { lead_id: "L-9", name: "Bob" }
+      ],
+      { flowId: "flow-target" },
+      DB as never
+    );
+
+    expect(processWebhookFlowEvent).not.toHaveBeenCalled();
+    expect(enqueueAiFlowRun).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        businessId: "biz-1",
+        flowId: "flow-target",
+        dedupeKey: 'webhook:digest({"name":"Jane","phone":"+16025551234"})',
+        trigger: expect.objectContaining({
+          channel: "webhook",
+          from: "backlog_import",
+          windowText: "name: Jane\nphone: +16025551234"
+        })
+      }),
+      DB
+    );
+    // Row 2: explicit id key, drip slot 1 (row 1 enqueued), null = duplicate.
+    expect(enqueueAiFlowRun).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        dedupeKey: "webhook:backlog_import:L-9",
+        earliestClaimAt: new Date(BASE_MS + 60_000).toISOString()
+      }),
+      DB
+    );
+    expect(summary.enqueued).toBe(1);
+    expect(summary.duplicates).toBe(1);
+    expect(summary.flowsEvaluated).toBe(1);
+    expect(summary.rows.map((r) => r.status)).toEqual(["enqueued", "duplicate"]);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({ target_flow_id: "flow-target" })
+      }),
+      DB
+    );
+  });
+
+  it("targeted mode reports a throwing enqueue as a row error and continues", async () => {
+    enqueueAiFlowRun
+      .mockRejectedValueOnce(new Error("insert failed"))
+      .mockResolvedValueOnce({ id: "run-2" });
+    const summary = await importLeadBacklog(
+      "biz-1",
+      [{ a: "1" }, { a: "2" }],
+      { flowId: "flow-target" },
+      DB as never
+    );
+    expect(summary.errors).toEqual([{ row: 2, message: "insert failed" }]);
+    expect(summary.rows.map((r) => r.status)).toEqual(["error", "enqueued"]);
   });
 
   it("uses the default service client when none is injected", async () => {

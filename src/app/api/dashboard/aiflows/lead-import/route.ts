@@ -1,15 +1,17 @@
 /**
- * Lead-backlog import endpoint (the AiFlows "Import a lead backlog" card).
+ * Lead-backlog import endpoint (the "Import a lead backlog" page).
  *
  * POST /api/dashboard/aiflows/lead-import?businessId=<uuid>&mode=preview
  *   body: { csv: string }
- *   → { headers, totalRows, sampleRows, webhookFlowsEnabled } — a dry run so
- *     the UI can warn "0 webhook flows enabled — nothing will fire" and show
- *     the parsed sheet before the owner commits.
+ *   → { headers, totalRows, sampleRows, webhookFlowsEnabled, flows } — a dry
+ *     run so the UI can show the parsed sheet and offer the target-flow
+ *     dropdown (enabled, batch-runnable flows) before the owner commits.
  *
  * POST /api/dashboard/aiflows/lead-import?businessId=<uuid>
- *   body: { csv: string, source?: string, dripIntervalSeconds?: number }
- *   → { summary } — each row becomes a webhook flow event (dedupe per row),
+ *   body: { csv, source?, dripIntervalSeconds?, flowId? }
+ *   → { summary }. Without flowId each row trigger-matches every enabled
+ *     webhook flow (the live-bridge path); with flowId each row enqueues a
+ *     run of THAT flow directly (no webhook trigger required). Runs are
  *     drip-released via earliest_claim_at (src/lib/ai-flows/lead-backlog.ts).
  *
  * The body is always CSV text: .xlsx files are converted to CSV in the
@@ -26,6 +28,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import { importLeadBacklog, parseLeadBacklog } from "@/lib/ai-flows/lead-backlog";
 import { countEnabledWebhookFlows } from "@/lib/ai-flows/webhook-events";
+import { getAiFlow, listAiFlows } from "@/lib/ai-flows/db";
 
 export const dynamic = "force-dynamic";
 // A full 500-row import runs synchronously (one flow-match + enqueue round
@@ -48,7 +51,9 @@ const querySchema = z.object({
 const bodySchema = z.object({
   csv: z.string().min(1),
   source: z.string().min(1).max(120).optional(),
-  dripIntervalSeconds: z.number().int().min(0).max(3600).optional()
+  dripIntervalSeconds: z.number().int().min(0).max(3600).optional(),
+  /** Target flow to run per row; omitted = trigger-match webhook flows. */
+  flowId: z.string().uuid().optional()
 });
 
 export async function POST(request: Request) {
@@ -79,17 +84,42 @@ export async function POST(request: Request) {
     if (!parsed.ok) return errorResponse("VALIDATION_ERROR", parsed.error);
 
     if (query.mode === "preview") {
+      const flows = await listAiFlows(query.businessId);
       return successResponse({
         headers: parsed.headers,
         totalRows: parsed.rows.length,
         sampleRows: parsed.rows.slice(0, PREVIEW_SAMPLE_ROWS),
-        webhookFlowsEnabled: await countEnabledWebhookFlows(query.businessId)
+        webhookFlowsEnabled: await countEnabledWebhookFlows(query.businessId),
+        // Target-flow dropdown options: enabled flows the batch worker can
+        // run (voice flows live on the real-time call path, so they can't
+        // be a target).
+        flows: flows
+          .filter((f) => f.enabled && f.definition.trigger.channel !== "voice")
+          .map((f) => ({ id: f.id, name: f.name }))
       });
+    }
+
+    if (body.flowId) {
+      // Same gating as the Run-now route: the flow must exist for THIS
+      // business, be enabled, and not be a voice flow (the batch worker has
+      // no handler for call steps).
+      const flow = await getAiFlow(query.businessId, body.flowId);
+      if (!flow) return errorResponse("NOT_FOUND", "Flow not found", 404);
+      if (!flow.enabled) {
+        return errorResponse("VALIDATION_ERROR", "Enable the flow before importing into it.");
+      }
+      if (flow.definition.trigger.channel === "voice") {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Voice flows run on the live call path and can't be a lead-import target."
+        );
+      }
     }
 
     const summary = await importLeadBacklog(query.businessId, parsed.rows, {
       source: body.source,
-      dripIntervalSeconds: body.dripIntervalSeconds
+      dripIntervalSeconds: body.dripIntervalSeconds,
+      flowId: body.flowId
     });
     return successResponse({ summary });
   } catch (err) {

@@ -2,12 +2,17 @@
  * Lead-backlog import: a spreadsheet of backlog leads → one webhook flow
  * event per row.
  *
- * The owner uploads an Excel/CSV sheet on the AiFlows page; the client
+ * The owner uploads an Excel/CSV sheet on the import-leads page; the client
  * converts .xlsx to CSV text and POSTs it to
  * /api/dashboard/aiflows/lead-import, which parses here (`parseLeadBacklog`)
- * and feeds each row through `processWebhookFlowEvent` — the SAME path a
- * Zapier/Make bridge event takes — so every enabled `webhook`-channel flow
- * trigger-matches the row with zero flow changes.
+ * and, per row, either:
+ *   - feeds it through `processWebhookFlowEvent` — the SAME path a
+ *     Zapier/Make bridge event takes — so every enabled `webhook`-channel
+ *     flow trigger-matches the row with zero flow changes, or
+ *   - when the owner picked a TARGET FLOW (`flowId`), enqueues a run of that
+ *     one flow directly, no webhook trigger required — the same "just run
+ *     this flow with this input" contract as the Run-now button, with the
+ *     row's fields as the trigger scope.
  *
  * Drip pacing: row N's runs carry `earliest_claim_at = now + N * interval`,
  * which the worker's claim RPC honors (the quiet-hours deferral mechanism),
@@ -25,6 +30,8 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { parseCsv } from "@/lib/csv/csv";
 import { processWebhookFlowEvent, webhookEventKey } from "@/lib/ai-flows/webhook-events";
+import { webhookTriggerScope } from "@/lib/ai-flows/trigger-eval";
+import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -98,6 +105,12 @@ export type LeadBacklogImportOptions = {
   source?: string;
   /** Seconds between consecutive rows' release; 0 = all immediate. */
   dripIntervalSeconds?: number;
+  /**
+   * Target flow: enqueue a run of THIS flow per row instead of trigger-
+   * matching webhook flows, so no webhook trigger is required. The route
+   * validates the flow (exists, enabled, not voice) before calling here.
+   */
+  flowId?: string;
 };
 
 /** The row's explicit id-column key, namespaced by the source label so a
@@ -194,14 +207,33 @@ export async function importLeadBacklog(
 
     // Rows apply independently — a transient failure on one row is reported
     // and the rest still land, matching the contacts CSV import's semantics.
+    const eventId = rowEventId(rows[i], data, source, seenKeys);
     let result;
     try {
-      result = await processWebhookFlowEvent(
-        businessId,
-        { source, data, eventId: rowEventId(rows[i], data, source, seenKeys) },
-        db,
-        earliestClaimAt ? { earliestClaimAt } : undefined
-      );
+      if (options.flowId) {
+        // Targeted mode: enqueue the chosen flow directly. Same scope shape
+        // and dedupe key as the webhook path, so switching modes (or later
+        // adding a webhook trigger) never re-fires an already-imported lead
+        // into the same flow.
+        const run = await enqueueAiFlowRun(
+          {
+            businessId,
+            flowId: options.flowId,
+            trigger: webhookTriggerScope({ source, data, eventId }),
+            dedupeKey: `webhook:${eventId}`,
+            ...(earliestClaimAt ? { earliestClaimAt } : {})
+          },
+          db
+        );
+        result = { enqueued: run ? 1 : 0, flowsEvaluated: 1, flowsMatched: 1 };
+      } else {
+        result = await processWebhookFlowEvent(
+          businessId,
+          { source, data, eventId },
+          db,
+          earliestClaimAt ? { earliestClaimAt } : undefined
+        );
+      }
     } catch (e) {
       summary.errors.push({
         row: fileRow,
@@ -240,6 +272,7 @@ export async function importLeadBacklog(
       message: `Lead backlog import: ${summary.enqueued}/${summary.totalRows} rows enqueued`,
       payload: {
         source_label: source,
+        ...(options.flowId ? { target_flow_id: options.flowId } : {}),
         drip_interval_seconds: intervalS,
         total_rows: summary.totalRows,
         enqueued: summary.enqueued,

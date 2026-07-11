@@ -17,7 +17,16 @@ vi.mock("@/lib/ai-flows/lead-backlog", async (importOriginal) => {
 });
 
 vi.mock("@/lib/ai-flows/webhook-events", () => ({
-  countEnabledWebhookFlows: vi.fn()
+  countEnabledWebhookFlows: vi.fn(),
+  // The real lead-backlog module (kept for parseLeadBacklog) imports this.
+  webhookEventKey: vi.fn(() => "digest")
+}));
+
+vi.mock("@/lib/ai-flows/db", () => ({
+  getAiFlow: vi.fn(),
+  listAiFlows: vi.fn(),
+  // The real lead-backlog module imports this.
+  enqueueAiFlowRun: vi.fn()
 }));
 
 import { POST } from "@/app/api/dashboard/aiflows/lead-import/route";
@@ -25,9 +34,11 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { rateLimit } from "@/lib/rate-limit";
 import { importLeadBacklog } from "@/lib/ai-flows/lead-backlog";
 import { countEnabledWebhookFlows } from "@/lib/ai-flows/webhook-events";
+import { getAiFlow, listAiFlows } from "@/lib/ai-flows/db";
 
 const OWNER = { userId: "u-1", email: "owner@example.com", isAdmin: false };
 const BIZ = "11111111-1111-4111-8111-111111111111";
+const FLOW = "22222222-2222-4222-8222-222222222222";
 const CSV = "Full Name,Phone\nJane,+16025551234\nBob,+16025555678";
 const SUMMARY = {
   totalRows: 2,
@@ -55,6 +66,16 @@ beforeEach(() => {
   vi.mocked(requireBusinessRole).mockResolvedValue(OWNER as never);
   vi.mocked(importLeadBacklog).mockResolvedValue(SUMMARY);
   vi.mocked(countEnabledWebhookFlows).mockResolvedValue(1);
+  vi.mocked(getAiFlow).mockResolvedValue({
+    id: FLOW,
+    enabled: true,
+    definition: { trigger: { channel: "webhook" } }
+  } as never);
+  vi.mocked(listAiFlows).mockResolvedValue([
+    { id: FLOW, name: "Lead intake", enabled: true, definition: { trigger: { channel: "webhook" } } },
+    { id: "f-off", name: "Disabled", enabled: false, definition: { trigger: { channel: "sms" } } },
+    { id: "f-voice", name: "Voice", enabled: true, definition: { trigger: { channel: "voice" } } }
+  ] as never);
 });
 
 describe("POST /api/dashboard/aiflows/lead-import", () => {
@@ -114,7 +135,7 @@ describe("POST /api/dashboard/aiflows/lead-import", () => {
     expect(importLeadBacklog).not.toHaveBeenCalled();
   });
 
-  it("preview mode returns the parsed shape + enabled webhook flow count without importing", async () => {
+  it("preview mode returns the parsed shape, webhook flow count, and target-flow options without importing", async () => {
     const res = await POST(req({ csv: CSV }, `businessId=${BIZ}&mode=preview`));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -125,7 +146,9 @@ describe("POST /api/dashboard/aiflows/lead-import", () => {
         { full_name: "Jane", phone: "+16025551234" },
         { full_name: "Bob", phone: "+16025555678" }
       ],
-      webhookFlowsEnabled: 1
+      webhookFlowsEnabled: 1,
+      // Disabled and voice flows are not offered as targets.
+      flows: [{ id: FLOW, name: "Lead intake" }]
     });
     expect(countEnabledWebhookFlows).toHaveBeenCalledWith(BIZ);
     expect(importLeadBacklog).not.toHaveBeenCalled();
@@ -142,8 +165,55 @@ describe("POST /api/dashboard/aiflows/lead-import", () => {
         { full_name: "Jane", phone: "+16025551234" },
         { full_name: "Bob", phone: "+16025555678" }
       ],
-      { source: "old_sheet", dripIntervalSeconds: 300 }
+      { source: "old_sheet", dripIntervalSeconds: 300, flowId: undefined }
     );
+    expect(getAiFlow).not.toHaveBeenCalled();
+  });
+
+  it("passes a validated target flowId through to the import", async () => {
+    const res = await POST(req({ csv: CSV, flowId: FLOW }));
+    expect(res.status).toBe(200);
+    expect(getAiFlow).toHaveBeenCalledWith(BIZ, FLOW);
+    expect(importLeadBacklog).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({ flowId: FLOW })
+    );
+  });
+
+  it("404s a target flow that does not exist for this business", async () => {
+    vi.mocked(getAiFlow).mockResolvedValue(null);
+    const res = await POST(req({ csv: CSV, flowId: FLOW }));
+    expect(res.status).toBe(404);
+    expect(importLeadBacklog).not.toHaveBeenCalled();
+  });
+
+  it("400s a disabled target flow", async () => {
+    vi.mocked(getAiFlow).mockResolvedValue({
+      id: FLOW,
+      enabled: false,
+      definition: { trigger: { channel: "sms" } }
+    } as never);
+    const res = await POST(req({ csv: CSV, flowId: FLOW }));
+    expect(res.status).toBe(400);
+    expect(importLeadBacklog).not.toHaveBeenCalled();
+  });
+
+  it("400s a voice target flow (runs on the live call path, not the batch worker)", async () => {
+    vi.mocked(getAiFlow).mockResolvedValue({
+      id: FLOW,
+      enabled: true,
+      definition: { trigger: { channel: "voice", fromE164: "+14155551234" } }
+    } as never);
+    const res = await POST(req({ csv: CSV, flowId: FLOW }));
+    expect(res.status).toBe(400);
+    expect(importLeadBacklog).not.toHaveBeenCalled();
+  });
+
+  it("400s a non-uuid flowId", async () => {
+    const res = await POST(req({ csv: CSV, flowId: "nope" }));
+    expect(res.status).toBe(400);
+    expect(importLeadBacklog).not.toHaveBeenCalled();
   });
 
   it("400s an out-of-range dripIntervalSeconds", async () => {
