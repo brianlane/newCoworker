@@ -24,6 +24,7 @@ import { getAiFlow } from "@/lib/ai-flows/db";
 import {
   MAX_REPLAY_EMAILS,
   flowHasTenantEmailTrigger,
+  flowUpsertsBeforeOutreach,
   replayInboundEmails
 } from "@/lib/email/replay";
 
@@ -73,6 +74,18 @@ export async function POST(request: Request) {
       return errorResponse(
         "VALIDATION_ERROR",
         "This flow doesn't start from the AI email inbox, so it can't replay inbox emails."
+      );
+    }
+    // The no-double-text guarantee lives in the worker's upsert_customer
+    // step: a backfill run halts there when the lead is already a contact.
+    // A flow that texts BEFORE filing the lead (or never files it) can't be
+    // protected, so it isn't a valid replay target.
+    if (!flowUpsertsBeforeOutreach(flow.definition)) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "This flow reaches out before saving the lead as a contact, so a replay can't guarantee " +
+          "already-contacted leads won't be texted again. Add a 'Save customer' step before the " +
+          "first message and try again."
       );
     }
 

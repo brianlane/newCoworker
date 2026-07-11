@@ -17,7 +17,7 @@ import { listEmailLog } from "@/lib/db/email-log";
 import { listSendFromOptions } from "@/lib/email/mailbox-options";
 import { findContactsByEmails, type EmailContactLink } from "@/lib/db/contact-emails";
 import { listAiFlows } from "@/lib/ai-flows/db";
-import { flowHasTenantEmailTrigger } from "@/lib/email/replay";
+import { flowHasTenantEmailTrigger, flowUpsertsBeforeOutreach } from "@/lib/email/replay";
 import { EmailsList } from "@/components/dashboard/EmailsList";
 
 export const dynamic = "force-dynamic";
@@ -72,8 +72,15 @@ export default async function DashboardEmailsPage() {
     // action.
     listAiFlows(business.id).catch(() => [])
   ]);
+  // Same gate as the replay route: only flows that file the lead before any
+  // outreach can guarantee a replay never re-texts an existing contact.
   const replayFlows = flows
-    .filter((f) => f.enabled && flowHasTenantEmailTrigger(f.definition))
+    .filter(
+      (f) =>
+        f.enabled &&
+        flowHasTenantEmailTrigger(f.definition) &&
+        flowUpsertsBeforeOutreach(f.definition)
+    )
     .map((f) => ({ id: f.id, name: f.name }));
 
   // Link addresses to contact profiles (contacts.email match) so the reading

@@ -89,6 +89,56 @@ export function flowHasTenantEmailTrigger(definition: unknown): boolean {
   return (def?.triggers ?? []).some((t) => t?.channel === "tenant_email");
 }
 
+/** Steps that reach a customer/teammate — the sends a backfill must guard. */
+const OUTREACH_STEP_TYPES = new Set([
+  "send_sms",
+  "send_email",
+  "route_to_team",
+  "share_document",
+  "outbound_call"
+]);
+
+type StepLike = {
+  type?: unknown;
+  branches?: Array<{ steps?: StepLike[] }>;
+  else?: StepLike[];
+};
+
+/**
+ * True when every path through the flow files the lead (`upsert_customer`)
+ * BEFORE any outreach step. The worker's backfill halt lives inside
+ * `upsert_customer` — it can only protect sends that come after it — so
+ * replaying into a flow that texts first (or never files the lead at all)
+ * would break the "never double-text an existing contact" guarantee. The
+ * route rejects such flows up front.
+ *
+ * Branch arms are checked with the upsert-seen state at the branch point;
+ * an upsert INSIDE one arm deliberately does not credit steps after the
+ * branch (the other arm may have skipped it) — conservative by design.
+ * notify_owner is not outreach (owner-facing, same exemption as budgets).
+ */
+export function flowUpsertsBeforeOutreach(definition: unknown): boolean {
+  const walk = (steps: StepLike[] | undefined, upsertSeenAtEntry: boolean): boolean => {
+    let upsertSeen = upsertSeenAtEntry;
+    for (const step of steps ?? []) {
+      if (step.type === "upsert_customer") {
+        upsertSeen = true;
+        continue;
+      }
+      if (typeof step.type === "string" && OUTREACH_STEP_TYPES.has(step.type) && !upsertSeen) {
+        return false;
+      }
+      for (const arm of step.branches ?? []) {
+        if (!walk(arm.steps, upsertSeen)) return false;
+      }
+      if (!walk(step.else, upsertSeen)) return false;
+    }
+    return true;
+  };
+  const def = definition as { steps?: StepLike[] } | null;
+  return walk(def?.steps, false);
+}
+
 /**
  * One condition list per tenant_email trigger in the flow's set (OR across
  * lists, AND within one) — the same parse `loadTenantEmailFlows` does on the
@@ -274,23 +324,37 @@ export async function replayInboundEmails(
         db
       );
       if (!run) {
-        summary.duplicates += 1;
-        summary.outcomes.push({ emailLogId: id, status: "duplicate" });
         // A run for this message already exists (earlier replay whose stamp
-        // failed, or the live webhook) — find it and re-stamp the log row so
-        // it stops reading as unmatched. Best-effort like the stamp itself.
+        // failed, or the live webhook). Look it up: a live/finished run means
+        // the mail is genuinely handled — re-stamp the log row so it stops
+        // reading as unmatched. A FAILED (or key-holding canceled) run still
+        // owns the dedupe key without having recovered anything, so report
+        // it as an error and leave the row unstamped rather than pretending
+        // the replay succeeded.
         const { data: existingRun, error: findErr } = await db
           .from("ai_flow_runs")
-          .select("id")
+          .select("id, status")
           .eq("business_id", businessId)
           .eq("flow_id", flowId)
           .eq("dedupe_key", `email:${messageId}`)
           .maybeSingle();
+        const existing = existingRun as { id?: string; status?: string } | null;
+        if (!findErr && existing?.id && (existing.status === "failed" || existing.status === "canceled")) {
+          summary.errors += 1;
+          summary.outcomes.push({
+            emailLogId: id,
+            status: "error",
+            reason:
+              "an earlier run for this email failed and still holds its slot — check the flow's runs page"
+          });
+          continue;
+        }
+        summary.duplicates += 1;
+        summary.outcomes.push({ emailLogId: id, status: "duplicate" });
         if (findErr) {
           console.error("replayInboundEmails duplicate lookup", findErr.message);
-        } else {
-          const existingId = (existingRun as { id?: string } | null)?.id;
-          if (existingId) await stampEmailLog(id, existingId);
+        } else if (existing?.id) {
+          await stampEmailLog(id, existing.id);
         }
         continue;
       }

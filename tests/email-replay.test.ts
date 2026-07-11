@@ -18,6 +18,7 @@ vi.mock("@/lib/db/system-logs", () => ({
 import {
   MAX_REPLAY_EMAILS,
   flowHasTenantEmailTrigger,
+  flowUpsertsBeforeOutreach,
   replayInboundEmails
 } from "@/lib/email/replay";
 import {
@@ -105,6 +106,75 @@ describe("flowHasTenantEmailTrigger", () => {
   it("rejects flows with no tenant_email trigger anywhere", () => {
     expect(flowHasTenantEmailTrigger({ trigger: { channel: "webhook" } })).toBe(false);
     expect(flowHasTenantEmailTrigger(null)).toBe(false);
+  });
+});
+
+describe("flowUpsertsBeforeOutreach", () => {
+  it("accepts upsert-then-text and rejects text-then-upsert", () => {
+    expect(
+      flowUpsertsBeforeOutreach({
+        steps: [{ type: "extract_text" }, { type: "upsert_customer" }, { type: "send_sms" }]
+      })
+    ).toBe(true);
+    expect(
+      flowUpsertsBeforeOutreach({
+        steps: [{ type: "send_sms" }, { type: "upsert_customer" }]
+      })
+    ).toBe(false);
+  });
+
+  it("rejects a flow with outreach and no upsert at all", () => {
+    expect(flowUpsertsBeforeOutreach({ steps: [{ type: "send_email" }] })).toBe(false);
+  });
+
+  it("accepts a flow with no outreach steps (nothing to guard)", () => {
+    expect(
+      flowUpsertsBeforeOutreach({ steps: [{ type: "extract_text" }, { type: "notify_owner" }] })
+    ).toBe(true);
+    expect(flowUpsertsBeforeOutreach(null)).toBe(true);
+  });
+
+  it("checks branch arms and else paths with the state at the branch point", () => {
+    // Upsert before the branch protects sends inside every arm.
+    expect(
+      flowUpsertsBeforeOutreach({
+        steps: [
+          { type: "upsert_customer" },
+          {
+            type: "branch",
+            branches: [{ steps: [{ type: "send_sms" }] }],
+            else: [{ type: "send_email" }]
+          }
+        ]
+      })
+    ).toBe(true);
+    // A send inside an arm with no prior upsert fails.
+    expect(
+      flowUpsertsBeforeOutreach({
+        steps: [
+          {
+            type: "branch",
+            branches: [{ steps: [{ type: "send_sms" }] }]
+          }
+        ]
+      })
+    ).toBe(false);
+    // An else-path send with no prior upsert fails.
+    expect(
+      flowUpsertsBeforeOutreach({
+        steps: [{ type: "branch", branches: [], else: [{ type: "route_to_team" }] }]
+      })
+    ).toBe(false);
+    // Conservative: an upsert INSIDE one arm does not credit steps after the
+    // branch (the other arm may have skipped it).
+    expect(
+      flowUpsertsBeforeOutreach({
+        steps: [
+          { type: "branch", branches: [{ steps: [{ type: "upsert_customer" }] }] },
+          { type: "send_sms" }
+        ]
+      })
+    ).toBe(false);
   });
 });
 
@@ -284,13 +354,33 @@ describe("replayInboundEmails", () => {
   it("re-stamps the log row on a dedupe hit using the existing run's id", async () => {
     const { db, updates } = replayDb({
       emailLog: { data: [ROW], error: null },
-      runLookup: { data: { id: "run-live" }, error: null }
+      runLookup: { data: { id: "run-live", status: "done" }, error: null }
     });
     enqueueAiFlowRun.mockResolvedValue(null);
     const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
     expect(summary.duplicates).toBe(1);
     expect(summary.outcomes[0]).toEqual({ emailLogId: "mail-1", status: "duplicate" });
     expect(updates).toEqual([{ flow_id: "flow-1", run_id: "run-live" }]);
+  });
+
+  it("reports a key-holding failed run as an error and leaves the row unstamped", async () => {
+    for (const status of ["failed", "canceled"]) {
+      const { db, updates } = replayDb({
+        emailLog: { data: [ROW], error: null },
+        runLookup: { data: { id: "run-dead", status }, error: null }
+      });
+      enqueueAiFlowRun.mockResolvedValue(null);
+      const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
+      expect(summary.errors).toBe(1);
+      expect(summary.duplicates).toBe(0);
+      expect(summary.outcomes[0]).toEqual({
+        emailLogId: "mail-1",
+        status: "error",
+        reason:
+          "an earlier run for this email failed and still holds its slot — check the flow's runs page"
+      });
+      expect(updates).toEqual([]);
+    }
   });
 
   it("leaves a dedupe hit unstamped when the existing run can't be found", async () => {

@@ -137,6 +137,22 @@ describe("POST /api/dashboard/emails/replay", () => {
     expect(replayInboundEmails).not.toHaveBeenCalled();
   });
 
+  it("rejects a flow that reaches out before filing the lead", async () => {
+    vi.mocked(getAiFlow).mockResolvedValue({
+      id: FLOW,
+      enabled: true,
+      definition: {
+        trigger: { channel: "tenant_email" },
+        steps: [{ type: "send_sms" }, { type: "upsert_customer" }]
+      }
+    } as never);
+    const res = await POST(req({ flowId: FLOW, emailLogIds: [MAIL] }));
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { message: string } };
+    expect(json.error.message).toMatch(/before saving the lead/);
+    expect(replayInboundEmails).not.toHaveBeenCalled();
+  });
+
   it("accepts a flow whose EXTRA triggers include tenant_email", async () => {
     vi.mocked(getAiFlow).mockResolvedValue({
       id: FLOW,
