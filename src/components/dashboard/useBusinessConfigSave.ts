@@ -48,20 +48,62 @@ export function useBusinessConfigSave() {
 }
 
 /**
- * Native leave-page prompt while an editor holds unsaved changes (tenant
- * feedback: prompt edits were silently lost by navigating away). Covers tab
- * close, reload, and hard navigation; browsers show their own generic
- * wording, the string itself is ignored.
+ * Leave-page protection while an editor holds unsaved changes (tenant
+ * feedback: prompt/flow edits were silently lost by navigating away).
+ *
+ * Two layers, because they cover disjoint exits:
+ *  - `beforeunload` for tab close, reload, and full-page navigation
+ *    (browsers show their own generic wording; the string is ignored).
+ *  - a capture-phase click interceptor for SAME-ORIGIN anchor clicks —
+ *    Next.js `<Link>` navigations (the dashboard sidebar!) are client-side
+ *    route changes that never fire beforeunload, and the App Router has no
+ *    supported route-change veto, so the click itself is the only reliable
+ *    chokepoint. New-tab/download/modified clicks pass through untouched
+ *    (they don't unload this page), and cross-origin links are left to the
+ *    beforeunload layer so the user isn't prompted twice.
  */
 export function useUnsavedChangesWarning(dirty: boolean): void {
   useEffect(() => {
     if (!dirty) return;
-    const handler = (e: BeforeUnloadEvent) => {
+    const beforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
       // Chrome still requires returnValue for the prompt to appear.
       e.returnValue = "";
     };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
+    const onClickCapture = (e: MouseEvent) => {
+      if (e.defaultPrevented || e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      // The click target can be a Text node (bare link labels), which has no
+      // closest() — climb to its parent element first or the guard silently
+      // lets the navigation through.
+      const node = e.target as Node | null;
+      const el = node instanceof Element ? node : (node?.parentElement ?? null);
+      const anchor = el?.closest("a[href]");
+      if (!anchor) return;
+      const target = anchor.getAttribute("target");
+      if (target && target !== "_self") return;
+      if (anchor.hasAttribute("download")) return;
+      const href = anchor.getAttribute("href") ?? "";
+      if (!href || href.startsWith("#")) return;
+      let url: URL;
+      try {
+        url = new URL(href, window.location.href);
+      } catch {
+        return;
+      }
+      if (url.origin !== window.location.origin) return;
+      if (!window.confirm("You have unsaved changes. Leave this page and discard them?")) {
+        // Runs in the capture phase at document level, so this lands before
+        // the Link's own handler — preventDefault stops the route change.
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", onClickCapture, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", onClickCapture, true);
+    };
   }, [dirty]);
 }
