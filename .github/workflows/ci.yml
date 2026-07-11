@@ -165,7 +165,11 @@ jobs:
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Budget: gate poll (≤20m) + npm ci (~1m) + live suite (~1m nominal,
+    # up to ~15m if every serial test rode its full 120s timeout). 40m keeps
+    # a worst-case gate from cancelling the job AFTER it opened — which
+    # would burn the paid Gemini calls without recording a verdict.
+    timeout-minutes: 40
     needs: [quality, typecheck, test, deno-check, security]
     permissions:
       contents: read
