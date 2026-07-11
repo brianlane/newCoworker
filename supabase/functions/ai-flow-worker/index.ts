@@ -406,10 +406,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // Owner disabled the flow after this run was queued (or mid-flight): stop.
   // Disabling must halt already-queued/approval-resumed runs, not just new
   // triggers, so they can't keep sending SMS / browsing / calling integrations.
-  // EXCEPTION: test runs ("Test with a contact") execute on disabled flows by
+  // EXCEPTION: test runs ("Test with a contact") execute on DISABLED flows by
   // design — testing a draft before switching it on is the point, and every
-  // side-effecting action is simulated anyway.
-  if (!flow?.enabled && !isTestModeTrigger(asRecord(run.context.trigger))) {
+  // side-effecting action is simulated anyway. A missing flow row (deleted)
+  // still cancels either way.
+  if (!flow || (!flow.enabled && !isTestModeTrigger(asRecord(run.context.trigger)))) {
     try {
       // Free the trigger's dedupe slot before canceling: if the owner
       // re-enables the flow while the scheduled occurrence is still due or
@@ -460,13 +461,17 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   }
   const def: AiFlowDefinition = definition;
 
+  const testMode = isTestModeTrigger(asRecord(run.context.trigger));
   const scope: Scope = {
     vars: asRecord(run.context.vars),
     trigger: asRecord(run.context.trigger),
     captureScreenshots: def.options?.captureStepScreenshots === true,
-    ...(def.timeWindow ? { timeWindow: def.timeWindow } : {})
+    // A test run must finish in seconds: its sends are simulated anyway, so
+    // the business-hours gate (which would defer the run to the next open
+    // slot) is skipped entirely.
+    ...(def.timeWindow && !testMode ? { timeWindow: def.timeWindow } : {})
   };
-  if (isTestModeTrigger(scope.trigger)) scope.testMode = true;
+  if (testMode) scope.testMode = true;
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
   // route_to_team actually records a claim — an absent var would otherwise trim
@@ -1351,7 +1356,9 @@ async function upsertCustomerStep(
         ...(action.email ? { email: action.email } : {})
       },
       sourceFlowId: run.flow_id,
-      dedupeKey: `ce:created:${run.business_id}:${action.e164}`
+      // Keyed to THIS run (idempotent across step retries) rather than the
+      // phone forever — a deleted-then-refiled contact is a new creation.
+      dedupeKey: `ce:created:${action.e164}:${run.id}`
     });
   }
   return {
@@ -5192,6 +5199,8 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
       time?: string;
       timezone?: string;
       conditions: import("../_shared/ai_flows/types.ts").TriggerCondition[];
+      /** definition.drip stagger, when configured. */
+      dripIntervalMinutes?: number;
     };
     const flows: BirthdayFlow[] = [];
     for (const row of rows) {
@@ -5206,7 +5215,11 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
           ti,
           time: trig.time,
           timezone: trig.timezone,
-          conditions: Array.isArray(trig.conditions) ? trig.conditions : []
+          conditions: Array.isArray(trig.conditions) ? trig.conditions : [],
+          ...(typeof row.definition.drip?.intervalMinutes === "number" &&
+          row.definition.drip.intervalMinutes >= 1
+            ? { dripIntervalMinutes: row.definition.drip.intervalMinutes }
+            : {})
         });
       }
     }
@@ -5276,6 +5289,34 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
               continue;
             }
           }
+          // Drip pacing (definition.drip): read the flow's latest scheduled
+          // slot ONCE, then step forward locally for each contact enqueued
+          // this pass — many contacts sharing a birthday is exactly the
+          // burst drip exists for. Best-effort: a read failure paces from
+          // now.
+          let nextDripMs: number | null = null;
+          if (flow.dripIntervalMinutes !== undefined) {
+            nextDripMs = nowMs;
+            try {
+              const { data: lastRow } = await supabase
+                .from("ai_flow_runs")
+                .select("earliest_claim_at")
+                .eq("flow_id", flow.id)
+                .eq("status", "queued")
+                .not("earliest_claim_at", "is", null)
+                .order("earliest_claim_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              const lastIso = (lastRow as { earliest_claim_at?: string | null } | null)
+                ?.earliest_claim_at;
+              const lastMs = lastIso ? Date.parse(lastIso) : NaN;
+              if (Number.isFinite(lastMs)) {
+                nextDripMs = Math.max(nowMs, lastMs + flow.dripIntervalMinutes * 60_000);
+              }
+            } catch (e) {
+              console.error("birthday sweep drip", e);
+            }
+          }
           for (const contact of contacts) {
             if (!birthdayDue(contact.birthday, nowMs, tz, flow.time)) continue;
             const localYear = localYearIn(nowMs, tz);
@@ -5319,7 +5360,10 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
                 }
               },
               current_step: 0,
-              dedupe_key: dedupeKey
+              dedupe_key: dedupeKey,
+              ...(nextDripMs !== null
+                ? { earliest_claim_at: new Date(nextDripMs).toISOString() }
+                : {})
             });
             // 23505 = this year's firing already enqueued — expected.
             if (insErr && (insErr as { code?: string }).code !== "23505") {
@@ -5327,6 +5371,9 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
               continue;
             }
             if (!insErr) {
+              if (nextDripMs !== null && flow.dripIntervalMinutes !== undefined) {
+                nextDripMs += flow.dripIntervalMinutes * 60_000;
+              }
               await systemLog(supabase, {
                 businessId,
                 source: "aiflow",

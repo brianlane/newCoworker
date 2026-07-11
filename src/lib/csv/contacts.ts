@@ -278,7 +278,10 @@ export async function importContactsCsv(
               ...(name ? { name } : {}),
               ...(email ? { email } : {})
             },
-            dedupeKey: `ce:created:${businessId}:${phone}`
+            // Timestamped like the dashboard add: a re-imported number after
+            // a delete is a NEW creation and must refire (the insert above
+            // only succeeds once per actual creation).
+            dedupeKey: `ce:created:${phone}:${Date.now()}`
           });
         }
       }

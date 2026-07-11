@@ -158,7 +158,10 @@ export async function POST(request: Request) {
         ...(row.display_name ? { name: row.display_name } : {}),
         ...(row.email ? { email: row.email } : {})
       },
-      dedupeKey: `ce:created:${parsed.businessId}:${row.customer_e164}`
+      // Timestamped: the (flow, dedupe_key) index never expires, and a
+      // deleted-then-re-added number is a NEW creation that must refire.
+      // One HTTP request = one creation, so uniqueness per event holds.
+      dedupeKey: `ce:created:${row.customer_e164}:${Date.now()}`
     });
 
     return successResponse({ customer: summarize(row) }, 201);
