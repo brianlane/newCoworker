@@ -146,6 +146,7 @@ export async function GET(
         lastChannel: memory.last_channel,
         tags: memory.tags,
         ownerEmployeeId: memory.owner_employee_id,
+        birthday: memory.birthday,
         createdAt: memory.created_at,
         updatedAt: memory.updated_at
       },

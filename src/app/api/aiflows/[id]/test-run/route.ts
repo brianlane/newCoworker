@@ -18,14 +18,15 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { enqueueAiFlowRun, getAiFlow } from "@/lib/ai-flows/db";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { TEST_MODE_TRIGGER_KEY } from "../../../../../../supabase/functions/_shared/ai_flows/test_mode";
 
 const idSchema = z.string().uuid();
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  /** The contact to run the test as (E.164 or a short service code). */
-  contactE164: z.string().regex(/^(\+[1-9]\d{6,15}|\d{3,8})$/),
+  /** The contact to run the test as (any phone shape the Add form accepts). */
+  contactE164: z.string().min(3).max(40),
   /** Optional sample message text ({{trigger.windowText}}). */
   input: z.string().max(4000).optional()
 });
@@ -50,7 +51,14 @@ export async function POST(request: Request, { params }: Ctx) {
       );
     }
 
-    const contact = await getCustomerMemory(body.businessId, body.contactE164);
+    // Coerce loose input ("(602) 555-1234") to the stored canonical shape
+    // the same way the Add-customer form does, so a valid number never
+    // misses its contact row over formatting.
+    const normalized = normalizeContactNumber(body.contactE164);
+    if (!normalized.ok) {
+      return errorResponse("VALIDATION_ERROR", `contact phone: ${normalized.reason}`);
+    }
+    const contact = await getCustomerMemory(body.businessId, normalized.value);
     if (!contact) return errorResponse("NOT_FOUND", "Contact not found");
 
     // Synthesize the trigger the way an inbound SMS from this contact would
