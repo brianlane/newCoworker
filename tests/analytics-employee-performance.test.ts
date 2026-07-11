@@ -140,7 +140,9 @@ describe("getEmployeePerformance", () => {
         active: true,
         offered: 4,
         claimed: 3,
-        claimRate: 3 / 4,
+        // Rate counts OFFER-MATCHED claims only (the direct claim with no
+        // offer row doesn't inflate it past 100%).
+        claimRate: 2 / 4,
         medianClaimMs: 30 * 60_000,
         forwardedCalls: 2
       },
