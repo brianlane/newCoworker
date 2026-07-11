@@ -100,7 +100,13 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
       }
     }
     const parts = [`${ok} ${action === "redeploy" ? "redeployed" : `${action}d`}`];
-    if (skipped > 0) parts.push(`${skipped} skipped (already in that state)`);
+    if (skipped > 0) {
+      parts.push(
+        action === "redeploy"
+          ? `${skipped} skipped (not offline)`
+          : `${skipped} skipped (already in that state)`
+      );
+    }
     if (failures.length > 0) parts.push(`failed: ${failures.join("; ")}`);
     setReport(parts.join(" · "));
     setRunning(null);

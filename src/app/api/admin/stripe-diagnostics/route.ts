@@ -9,7 +9,7 @@ import { z } from "zod";
 import Stripe from "stripe";
 import { requireAdmin } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { getSubscription } from "@/lib/db/subscriptions";
+import { getSubscription, stripeSubscriptionPeriodCache } from "@/lib/db/subscriptions";
 import { getStripe } from "@/lib/stripe/client";
 import { logger } from "@/lib/logger";
 
@@ -74,16 +74,22 @@ export async function GET(request: Request) {
 
     let subscription: Record<string, unknown> | null = null;
     let schedule: Record<string, unknown> | null = null;
+    let scheduleId: string | null = null;
     if (row.stripe_subscription_id) {
       try {
         const sub = await stripe.subscriptions.retrieve(row.stripe_subscription_id);
-        const firstItem = sub.items.data[0];
+        // Same period resolution the billing cache uses: handles legacy
+        // top-level period fields AND basil-era per-item periods aggregated
+        // across every item — first-item-only can be blank or wrong.
+        const period = stripeSubscriptionPeriodCache(sub);
         subscription = {
           id: sub.id,
           status: sub.status,
           cancelAtPeriodEnd: sub.cancel_at_period_end,
-          currentPeriodStart: isoFromUnix(firstItem?.current_period_start),
-          currentPeriodEnd: isoFromUnix(firstItem?.current_period_end),
+          currentPeriodStart:
+            "stripe_current_period_start" in period ? period.stripe_current_period_start : null,
+          currentPeriodEnd:
+            "stripe_current_period_end" in period ? period.stripe_current_period_end : null,
           items: sub.items.data.map((item) => ({
             priceId: item.price.id,
             nickname: item.price.nickname ?? null,
@@ -94,26 +100,34 @@ export async function GET(request: Request) {
             quantity: item.quantity ?? 1
           }))
         };
-        const scheduleId =
-          typeof sub.schedule === "string" ? sub.schedule : sub.schedule?.id ?? null;
-        if (scheduleId) {
-          const sched = await stripe.subscriptionSchedules.retrieve(scheduleId);
-          schedule = {
-            id: sched.id,
-            status: sched.status,
-            endBehavior: sched.end_behavior,
-            phases: sched.phases.map((phase) => ({
-              start: isoFromUnix(phase.start_date),
-              end: isoFromUnix(phase.end_date),
-              prices: phase.items.map((item) =>
-                typeof item.price === "string" ? item.price : item.price.id
-              )
-            }))
-          };
-        }
+        scheduleId = typeof sub.schedule === "string" ? sub.schedule : sub.schedule?.id ?? null;
       } catch (err) {
         subscription = {
           id: row.stripe_subscription_id,
+          error: err instanceof Error ? err.message : String(err)
+        };
+      }
+    }
+    // Separate try/catch: a schedule-retrieve failure must not clobber the
+    // subscription payload that already loaded successfully.
+    if (scheduleId) {
+      try {
+        const sched = await stripe.subscriptionSchedules.retrieve(scheduleId);
+        schedule = {
+          id: sched.id,
+          status: sched.status,
+          endBehavior: sched.end_behavior,
+          phases: sched.phases.map((phase) => ({
+            start: isoFromUnix(phase.start_date),
+            end: isoFromUnix(phase.end_date),
+            prices: phase.items.map((item) =>
+              typeof item.price === "string" ? item.price : item.price.id
+            )
+          }))
+        };
+      } catch (err) {
+        schedule = {
+          id: scheduleId,
           error: err instanceof Error ? err.message : String(err)
         };
       }

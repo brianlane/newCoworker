@@ -14,7 +14,16 @@ type Diagnostics = {
     graceEndsAt: string | null;
     wipedAt: string | null;
   } | null;
-  customer: Record<string, unknown> | null;
+  customer: {
+    id?: string;
+    email?: string | null;
+    name?: string | null;
+    created?: string | null;
+    delinquent?: boolean | null;
+    currency?: string | null;
+    deleted?: boolean;
+    error?: string;
+  } | null;
   subscription: {
     id?: string;
     status?: string;
@@ -35,6 +44,7 @@ type Diagnostics = {
     status?: string;
     endBehavior?: string;
     phases?: Array<{ start: string | null; end: string | null; prices: string[] }>;
+    error?: string;
   } | null;
   invoices: Array<{
     id: string;
@@ -114,6 +124,35 @@ export function StripeDiagnosticsPanel({ businessId }: { businessId: string }) {
 
           <div>
             <h3 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-1">
+              Stripe customer
+            </h3>
+            {!data.customer ? (
+              <p className="text-xs text-parchment/40">None linked.</p>
+            ) : data.customer.error ? (
+              <p className="text-xs text-spark-orange">Stripe error: {data.customer.error}</p>
+            ) : data.customer.deleted ? (
+              <p className="text-xs text-spark-orange">
+                Customer <span className="font-mono">{data.customer.id}</span> was deleted in
+                Stripe.
+              </p>
+            ) : (
+              <p className="text-xs text-parchment/70">
+                <span className="font-mono">{data.customer.id}</span>
+                {data.customer.email && ` · ${data.customer.email}`}
+                {data.customer.name && ` · ${data.customer.name}`}
+                {data.customer.created && ` · since ${data.customer.created.slice(0, 10)}`}
+                {data.customer.delinquent && (
+                  <>
+                    {" "}
+                    <Badge variant="error">delinquent</Badge>
+                  </>
+                )}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <h3 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-1">
               Stripe subscription
             </h3>
             {!data.subscription ? (
@@ -150,10 +189,17 @@ export function StripeDiagnosticsPanel({ businessId }: { businessId: string }) {
               <h3 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-1">
                 Commitment schedule
               </h3>
+              {data.schedule.error ? (
+                <p className="text-xs text-spark-orange">
+                  Stripe error retrieving schedule{" "}
+                  <span className="font-mono">{data.schedule.id}</span>: {data.schedule.error}
+                </p>
+              ) : (
               <p className="text-xs text-parchment/70 font-mono">
                 {data.schedule.id} · {data.schedule.status} · end_behavior=
                 {data.schedule.endBehavior}
               </p>
+              )}
               <ul className="text-xs text-parchment/50 list-disc list-inside">
                 {(data.schedule.phases ?? []).map((phase, i) => (
                   <li key={i}>
