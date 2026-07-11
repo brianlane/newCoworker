@@ -129,7 +129,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "insert", "eq", "or", "limit"]) {
+    for (const m of ["select", "insert", "eq", "or", "order", "range", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -248,6 +248,41 @@ describe("enqueueContactEventRuns", () => {
       }
     };
     expect(await enqueueContactEventRuns(thrown, BIZ, input())).toBe(0);
+    err.mockRestore();
+  });
+
+  it("pages through the flow listing so flows past one page still fire", async () => {
+    // Page 1 is exactly full (forces a second fetch); the matching flow sits
+    // on page 2.
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      flowRow(`f${i}`, { channel: "sms", conditions: [] })
+    );
+    const page2 = [flowRow("f-match", { channel: "tag_changed", conditions: [] })];
+    const { db, calls } = makeDb([
+      { data: page1, error: null },
+      { data: page2, error: null },
+      { data: null, error: null } // f-match insert
+    ]);
+    expect(await enqueueContactEventRuns(db, BIZ, input())).toBe(1);
+    const ranges = calls.filter((c) => c.name === "range");
+    expect(ranges.map((c) => c.args)).toEqual([
+      [0, 99],
+      [100, 199]
+    ]);
+  });
+
+  it("keeps flows already listed when a LATER page fails", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const page1 = [
+      flowRow("f-match", { channel: "tag_changed", conditions: [] }),
+      ...Array.from({ length: 99 }, (_, i) => flowRow(`f${i}`, { channel: "sms", conditions: [] }))
+    ];
+    const { db } = makeDb([
+      { data: page1, error: null },
+      { data: null, error: { message: "later page down" } },
+      { data: null, error: null } // f-match insert
+    ]);
+    expect(await enqueueContactEventRuns(db, BIZ, input())).toBe(1);
     err.mockRestore();
   });
 

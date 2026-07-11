@@ -58,8 +58,8 @@ export type ContactEventInput = {
   dedupeKey: string;
 };
 
-/** Most flows one event evaluates against (defense against tag-storm loops). */
-const MAX_FLOWS_PER_EVENT = 50;
+/** Flow-listing page size (paged so no enabled flow is silently skipped). */
+const FLOW_PAGE = 100;
 
 /**
  * The "key: value" text conditions and extract_text see (same convention as
@@ -130,20 +130,30 @@ export async function enqueueContactEventRuns(
   input: ContactEventInput
 ): Promise<number> {
   try {
-    const { data, error } = await supabase
-      .from("ai_flows")
-      .select("id, definition")
-      .eq("business_id", businessId)
-      .eq("enabled", true)
-      .or(
-        `definition->trigger->>channel.eq.${input.kind},definition->triggers.not.is.null`
-      )
-      .limit(MAX_FLOWS_PER_EVENT);
-    if (error) {
-      console.error("contact_events: flow lookup", error);
-      return 0;
+    // Paged listing (like the calendar poller's) so a tenant with many
+    // enabled flows never has a matching automation silently dropped. A
+    // later page failing keeps the flows already in hand.
+    const rows: Array<{ id: string; definition?: unknown }> = [];
+    for (let offset = 0; ; offset += FLOW_PAGE) {
+      const { data, error } = await supabase
+        .from("ai_flows")
+        .select("id, definition")
+        .eq("business_id", businessId)
+        .eq("enabled", true)
+        .or(
+          `definition->trigger->>channel.eq.${input.kind},definition->triggers.not.is.null`
+        )
+        .order("id", { ascending: true })
+        .range(offset, offset + FLOW_PAGE - 1);
+      if (error) {
+        console.error("contact_events: flow lookup", error);
+        if (rows.length === 0) return 0;
+        break;
+      }
+      const batch = (data ?? []) as typeof rows;
+      rows.push(...batch);
+      if (batch.length < FLOW_PAGE) break;
     }
-    const rows = (data ?? []) as Array<{ id: string; definition?: unknown }>;
     const scope = contactEventTriggerScope(input);
     const windowText = String(scope.windowText);
     let enqueued = 0;

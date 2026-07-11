@@ -5226,25 +5226,37 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
           .maybeSingle();
         const businessTz =
           (bizRow as { timezone?: string | null } | null)?.timezone || "UTC";
-        const { data: contactData, error: contactErr } = await supabase
-          .from("contacts")
-          .select("id, customer_e164, display_name, email, tags, birthday")
-          .eq("business_id", businessId)
-          .not("birthday", "is", null)
-          .limit(500);
-        if (contactErr) {
-          console.error("birthday sweep contacts", contactErr);
-          continue;
-        }
-        const contacts = (contactData ?? []) as Array<{
+        // Paged so a directory with many birthdays never silently stops at
+        // one page; a later page failing keeps the contacts already listed.
+        type BirthdayContact = {
           id: string;
           customer_e164: string;
           display_name: string | null;
           email: string | null;
           tags: string[] | null;
           birthday: string | null;
-        }>;
-        if (contacts.length === 0) continue;
+        };
+        const CONTACT_PAGE = 500;
+        const contacts: BirthdayContact[] = [];
+        let contactListingFailed = false;
+        for (let offset = 0; ; offset += CONTACT_PAGE) {
+          const { data: contactData, error: contactErr } = await supabase
+            .from("contacts")
+            .select("id, customer_e164, display_name, email, tags, birthday")
+            .eq("business_id", businessId)
+            .not("birthday", "is", null)
+            .order("id", { ascending: true })
+            .range(offset, offset + CONTACT_PAGE - 1);
+          if (contactErr) {
+            console.error("birthday sweep contacts", contactErr);
+            contactListingFailed = contacts.length === 0;
+            break;
+          }
+          const batch = (contactData ?? []) as BirthdayContact[];
+          contacts.push(...batch);
+          if (batch.length < CONTACT_PAGE) break;
+        }
+        if (contactListingFailed || contacts.length === 0) continue;
 
         for (const flow of group) {
           const tz = flow.timezone || businessTz;
