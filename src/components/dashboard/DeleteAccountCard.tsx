@@ -14,7 +14,8 @@ type Impact = {
     smsOutbound: number;
     emails: number;
     aiflows: number;
-    teamMembers: number;
+    employees: number;
+    dashboardMembers: number;
   };
   hasVps: boolean;
   didE164: string | null;
@@ -143,7 +144,12 @@ export function DeleteAccountCard() {
                 <li>{impact.counts.smsInbound + impact.counts.smsOutbound} text messages</li>
                 <li>{impact.counts.emails} emails</li>
                 <li>{impact.counts.aiflows} AiFlows</li>
-                <li>{impact.counts.teamMembers} team members</li>
+                <li>{impact.counts.employees} employees on your team roster</li>
+                {impact.counts.dashboardMembers > 0 && (
+                  <li>
+                    {impact.counts.dashboardMembers} invited dashboard logins lose access
+                  </li>
+                )}
                 {impact.didE164 && <li>Your coworker&apos;s number {impact.didE164} is released</li>}
                 {impact.hasVps && <li>Your dedicated server is shut down</li>}
               </ul>

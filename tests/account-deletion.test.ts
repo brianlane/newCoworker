@@ -72,7 +72,8 @@ describe("getAccountDeletionImpact", () => {
       sms_outbound_log: 55,
       email_log: 7,
       ai_flows: 2,
-      ai_flow_team_members: 4
+      ai_flow_team_members: 4,
+      business_members: 2
     });
 
     const impact = await getAccountDeletionImpact(BIZ, db as never);
@@ -86,7 +87,8 @@ describe("getAccountDeletionImpact", () => {
         smsOutbound: 55,
         emails: 7,
         aiflows: 2,
-        teamMembers: 4
+        employees: 4,
+        dashboardMembers: 2
       },
       hasVps: true,
       didE164: "+16025550100"

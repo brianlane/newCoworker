@@ -22,7 +22,10 @@ export type AccountDeletionCounts = {
   smsOutbound: number;
   emails: number;
   aiflows: number;
-  teamMembers: number;
+  /** Employees page roster (ai_flow_team_members — AiFlow routing). */
+  employees: number;
+  /** Dashboard logins invited via Settings → Team (business_members). */
+  dashboardMembers: number;
 };
 
 export type AccountDeletionImpact = {
@@ -41,7 +44,8 @@ const COUNT_TABLES: Array<{ key: keyof AccountDeletionCounts; table: string }> =
   { key: "smsOutbound", table: "sms_outbound_log" },
   { key: "emails", table: "email_log" },
   { key: "aiflows", table: "ai_flows" },
-  { key: "teamMembers", table: "ai_flow_team_members" }
+  { key: "employees", table: "ai_flow_team_members" },
+  { key: "dashboardMembers", table: "business_members" }
 ];
 
 /**
@@ -65,7 +69,8 @@ export async function getAccountDeletionImpact(
     smsOutbound: 0,
     emails: 0,
     aiflows: 0,
-    teamMembers: 0
+    employees: 0,
+    dashboardMembers: 0
   };
 
   await Promise.all(
