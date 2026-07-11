@@ -16,11 +16,13 @@ import {
   ANALYTICS_SEGMENT_CALL_LIMIT,
   ANALYTICS_WINDOW_DAYS,
   analyticsWindowStart,
+  computePeriodChange,
   getAnalyticsDayDetail,
   getAnswerRateStats,
   getDailyUsageSeries,
   getHourCallsDetail,
   getInboundCallStats,
+  getPreviousPeriodTotals,
   getSentimentCallsDetail,
   hourInTimeZone,
   isValidAnalyticsDay
@@ -71,6 +73,160 @@ describe("analyticsWindowStart", () => {
   it("returns midnight UTC of the day (days - 1) ago so every card shares one boundary", () => {
     expect(analyticsWindowStart(NOW, 3).toISOString()).toBe("2026-07-02T00:00:00.000Z");
     expect(analyticsWindowStart(NOW, 1).toISOString()).toBe("2026-07-04T00:00:00.000Z");
+  });
+});
+
+describe("computePeriodChange", () => {
+  it("computes signed percent and direction", () => {
+    expect(computePeriodChange(30, 20)).toEqual({
+      current: 30,
+      previous: 20,
+      percent: 50,
+      direction: "up"
+    });
+    expect(computePeriodChange(15, 20)).toEqual({
+      current: 15,
+      previous: 20,
+      percent: -25,
+      direction: "down"
+    });
+    expect(computePeriodChange(20, 20)).toEqual({
+      current: 20,
+      previous: 20,
+      percent: 0,
+      direction: "flat"
+    });
+  });
+
+  it("returns a null percent on a zero baseline and rounds to one decimal", () => {
+    expect(computePeriodChange(5, 0)).toEqual({
+      current: 5,
+      previous: 0,
+      percent: null,
+      direction: "up"
+    });
+    expect(computePeriodChange(1, 3).percent).toBe(-66.7);
+  });
+});
+
+describe("getPreviousPeriodTotals", () => {
+  it("totals the prior window: calls/minutes from transcripts, texts, refusals", async () => {
+    const { client, chains } = makeClient({
+      daily_usage: {
+        data: [{ sms_sent: 4 }, { sms_sent: null }, { sms_sent: 6 }],
+        error: null
+      },
+      voice_call_transcripts: {
+        data: [
+          // 120s inbound + 60s outbound + one in-progress inbound (0s).
+          {
+            started_at: "2026-06-10T10:00:00Z",
+            ended_at: "2026-06-10T10:02:00Z",
+            direction: "inbound"
+          },
+          {
+            started_at: "2026-06-12T10:00:00Z",
+            ended_at: "2026-06-12T10:01:00Z",
+            direction: "outbound"
+          },
+          { started_at: "2026-06-14T10:00:00Z", ended_at: null, direction: "inbound" }
+        ],
+        error: null
+      },
+      system_logs: { data: null, count: 3, error: null }
+    });
+
+    const totals = await getPreviousPeriodTotals("biz-1", { client, days: 30, now: NOW });
+    expect(totals).toEqual({
+      calls: 3,
+      sms: 10,
+      voiceMinutes: 3,
+      answered: 2,
+      missed: 3,
+      answerRate: 2 / 5,
+      clipped: false
+    });
+
+    // Prior window: [2·30 days ago, 30 days ago) with day-aligned bounds.
+    const prevStart = analyticsWindowStart(NOW, 60);
+    const currStart = analyticsWindowStart(NOW, 30);
+    const usage = chains.daily_usage as {
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+    };
+    expect(usage.gte).toHaveBeenCalledWith("usage_date", prevStart.toISOString().slice(0, 10));
+    expect(usage.lt).toHaveBeenCalledWith("usage_date", currStart.toISOString().slice(0, 10));
+    const transcripts = chains.voice_call_transcripts as {
+      gte: ReturnType<typeof vi.fn>;
+      lt: ReturnType<typeof vi.fn>;
+    };
+    expect(transcripts.gte).toHaveBeenCalledWith("started_at", prevStart.toISOString());
+    expect(transcripts.lt).toHaveBeenCalledWith("started_at", currStart.toISOString());
+    const logs = chains.system_logs as { eq: ReturnType<typeof vi.fn> };
+    expect(logs.eq).toHaveBeenCalledWith("event", "voice_call_blocked");
+  });
+
+  it("reports a null answer rate for a quiet prior window and flags clipping", async () => {
+    const quiet = makeClient({
+      daily_usage: { data: null, error: null },
+      voice_call_transcripts: { data: [], error: null },
+      // Null count (PostgREST head-count quirk) coalesces to 0 refusals.
+      system_logs: { data: null, count: null, error: null }
+    });
+    const quietTotals = await getPreviousPeriodTotals("biz-1", {
+      client: quiet.client,
+      now: NOW
+    });
+    expect(quietTotals.answerRate).toBeNull();
+    expect(quietTotals).toMatchObject({ calls: 0, sms: 0, missed: 0 });
+
+    const full = Array.from({ length: ANALYTICS_CALL_SCAN_LIMIT }, () => ({
+      started_at: "2026-06-10T10:00:00Z",
+      ended_at: null,
+      direction: "outbound"
+    }));
+    const capped = makeClient({
+      daily_usage: { data: [], error: null },
+      voice_call_transcripts: { data: full, error: null },
+      system_logs: { data: null, count: 0, error: null }
+    });
+    const cappedTotals = await getPreviousPeriodTotals("biz-1", {
+      client: capped.client,
+      now: NOW
+    });
+    expect(cappedTotals.clipped).toBe(true);
+  });
+
+  it("throws on sms / blocked-count query errors", async () => {
+    const smsErr = makeClient({
+      daily_usage: { data: null, error: { message: "sms down" } },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: null, count: 0, error: null }
+    });
+    await expect(
+      getPreviousPeriodTotals("biz-1", { client: smsErr.client, now: NOW })
+    ).rejects.toThrow("getPreviousPeriodTotals sms: sms down");
+
+    const blockedErr = makeClient({
+      daily_usage: { data: [], error: null },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: null, count: null, error: { message: "logs down" } }
+    });
+    await expect(
+      getPreviousPeriodTotals("biz-1", { client: blockedErr.client, now: NOW })
+    ).rejects.toThrow("getPreviousPeriodTotals blocked: logs down");
+  });
+
+  it("defaults to the shared client, window, and now", async () => {
+    const { client } = makeClient({
+      daily_usage: { data: [], error: null },
+      voice_call_transcripts: { data: [], error: null },
+      system_logs: { data: null, count: 0, error: null }
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client as never);
+    const totals = await getPreviousPeriodTotals("biz-1");
+    expect(totals.calls).toBe(0);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });
 
