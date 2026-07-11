@@ -151,17 +151,45 @@ jobs:
   # model makes the branch decisions — the contract class that unit tests
   # cannot cover (the Truly Insurance trailer leak of 2026-07-11 shipped
   # through 100%-coverage unit tests because only the live model mangles
-  # markers). Gated on every other job in this workflow so the paid model
-  # calls only run once a commit is otherwise green, and superseded pushes
-  # are cancelled by the workflow-level concurrency group before reaching it.
+  # markers).
+  #
+  # Runs LAST, twice-gated so the paid model calls fire only on an
+  # otherwise-mergeable commit:
+  #   1. `needs`: the five jobs in THIS workflow (free, event-driven);
+  #   2. the e2e-gate step: polls until every OTHER check on the SHA —
+  #      cross-workflow (Analyze/CodeQL/audit) and app-reported (Cursor
+  #      Bugbot, GitGuardian, Vercel) — is literally SUCCESS (a NEUTRAL
+  #      Bugbot means open findings and keeps the gate closed) AND every
+  #      review thread is resolved. See .github/scripts/e2e-gate.sh.
+  # Superseded pushes are cancelled by the workflow-level concurrency group.
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # Budget: gate poll (≤20m) + npm ci (~1m) + live suite (~1m nominal,
+    # up to ~15m if every serial test rode its full 120s timeout). 40m keeps
+    # a worst-case gate from cancelling the job AFTER it opened — which
+    # would burn the paid Gemini calls without recording a verdict.
+    timeout-minutes: 40
     needs: [quality, typecheck, test, deno-check, security]
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+      pull-requests: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Push events (post-merge main) skip the PR-shaped gate: Bugbot/Vercel/
+      # threads exist on the PR, which already enforced all of this pre-merge.
+      - name: Wait for every other check to pass and all threads to resolve
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/e2e-gate.sh
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
