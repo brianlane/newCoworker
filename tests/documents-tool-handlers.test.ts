@@ -103,7 +103,7 @@ beforeEach(() => {
   vi.mocked(getBusiness).mockResolvedValue({ name: "Clip Joint" } as never);
   vi.mocked(insertCoworkerLog).mockResolvedValue({} as never);
   optOut.mockResolvedValue({ ok: true, optedOut: false });
-  vi.mocked(revokeDocumentShare).mockResolvedValue(undefined);
+  vi.mocked(revokeDocumentShare).mockResolvedValue(1);
   smsConfig.mockResolvedValue({ apiKey: "k" } as never);
   smsSend.mockResolvedValue({ id: "msg-1" } as never);
   emailSend.mockResolvedValue({ ok: true, messageId: "em-1", provider: "google" } as never);

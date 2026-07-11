@@ -62,31 +62,37 @@ export type BusinessServicePatch = Partial<
   Pick<BusinessServiceRow, "name" | "description" | "duration_minutes" | "price_text" | "active" | "position">
 >;
 
+/** Returns the number of rows updated (0 = no such service for this business). */
 export async function patchBusinessService(
   businessId: string,
   serviceId: string,
   patch: BusinessServicePatch,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("business_services")
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq("business_id", businessId)
-    .eq("id", serviceId);
+    .eq("id", serviceId)
+    .select("id");
   if (error) throw new Error(`patchBusinessService: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
 }
 
+/** Returns the number of rows deleted (0 = no such service for this business). */
 export async function deleteBusinessService(
   businessId: string,
   serviceId: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("business_services")
     .delete()
     .eq("business_id", businessId)
-    .eq("id", serviceId);
+    .eq("id", serviceId)
+    .select("id");
   if (error) throw new Error(`deleteBusinessService: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
 }

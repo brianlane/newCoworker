@@ -204,18 +204,27 @@ export async function listDocumentShares(
   return (data ?? []) as BusinessDocumentShareRow[];
 }
 
+/**
+ * Revoke a share link. `documentId` (when given) scopes the revoke to that
+ * document, so a caller acting on one document's panel can't kill another
+ * document's link by id. Returns the number of rows revoked (0 = no match).
+ */
 export async function revokeDocumentShare(
   businessId: string,
   shareId: string,
+  documentId?: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const base = db
     .from("business_document_shares")
     .update({ revoked_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .eq("id", shareId);
+  const query = documentId ? base.eq("document_id", documentId) : base;
+  const { data, error } = await query.select("id");
   if (error) throw new Error(`revokeDocumentShare: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
 }
 
 /**

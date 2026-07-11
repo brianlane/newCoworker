@@ -69,8 +69,12 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (body.data.summary !== undefined) patch.summary = body.data.summary.trim();
     if (body.data.contentMd !== undefined) {
       patch.content_md = body.data.contentMd;
-      // A manual content edit makes a previously failed ingest usable.
-      if (body.data.contentMd.trim()) patch.status = "ready";
+      // A manual content edit makes a previously failed ingest usable —
+      // and clears its stale failure text.
+      if (body.data.contentMd.trim()) {
+        patch.status = "ready";
+        patch.error_detail = null;
+      }
     }
     if (body.data.expiresAt !== undefined) {
       if (body.data.expiresAt === null || body.data.expiresAt.trim() === "") {

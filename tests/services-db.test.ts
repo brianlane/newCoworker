@@ -76,9 +76,9 @@ describe("insertBusinessService", () => {
 });
 
 describe("patchBusinessService", () => {
-  it("scopes the update (explicit client)", async () => {
-    const c = chain({ error: null });
-    await patchBusinessService(BIZ, SVC, { price_text: "$99" }, makeDb(c));
+  it("scopes the update and reports the matched-row count (explicit client)", async () => {
+    const c = chain({ data: [{ id: SVC }], error: null });
+    expect(await patchBusinessService(BIZ, SVC, { price_text: "$99" }, makeDb(c))).toBe(1);
     expect(c.update).toHaveBeenCalledWith(
       expect.objectContaining({ price_text: "$99", updated_at: expect.any(String) })
     );
@@ -86,22 +86,34 @@ describe("patchBusinessService", () => {
     expect(c.eq).toHaveBeenCalledWith("id", SVC);
   });
 
+  it("reports 0 when no row matched (stale/foreign id)", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await patchBusinessService(BIZ, SVC, { active: false }, makeDb(c))).toBe(0);
+    const cNull = chain({ data: null, error: null });
+    expect(await patchBusinessService(BIZ, SVC, { active: false }, makeDb(cNull))).toBe(0);
+  });
+
   it("throws on error (default client)", async () => {
-    const c = chain({ error: { message: "upd" } });
+    const c = chain({ data: null, error: { message: "upd" } });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await expect(patchBusinessService(BIZ, SVC, { active: false })).rejects.toThrow(/upd/);
   });
 });
 
 describe("deleteBusinessService", () => {
-  it("deletes scoped rows (explicit client)", async () => {
-    const c = chain({ error: null });
-    await deleteBusinessService(BIZ, SVC, makeDb(c));
+  it("deletes scoped rows and reports the count (explicit client)", async () => {
+    const c = chain({ data: [{ id: SVC }], error: null });
+    expect(await deleteBusinessService(BIZ, SVC, makeDb(c))).toBe(1);
     expect(c.delete).toHaveBeenCalled();
   });
 
+  it("reports 0 when no row matched", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await deleteBusinessService(BIZ, SVC, makeDb(c))).toBe(0);
+  });
+
   it("throws on error (default client)", async () => {
-    const c = chain({ error: { message: "del" } });
+    const c = chain({ data: null, error: { message: "del" } });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await expect(deleteBusinessService(BIZ, SVC)).rejects.toThrow(/del/);
   });

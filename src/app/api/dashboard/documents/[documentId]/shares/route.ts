@@ -63,7 +63,10 @@ export async function POST(request: Request, context: RouteContext) {
     }
     if (!user.isAdmin) await requireBusinessRole(body.data.businessId, "manage_settings");
 
-    await revokeDocumentShare(body.data.businessId, body.data.shareId);
+    // Scoped to the document in the URL: a shareId belonging to a different
+    // document is a 404, never a cross-document revoke.
+    const revoked = await revokeDocumentShare(body.data.businessId, body.data.shareId, documentId);
+    if (revoked === 0) return errorResponse("NOT_FOUND", "Share link not found", 404);
     return successResponse({ revoked: true });
   } catch (err) {
     return handleRouteError(err);

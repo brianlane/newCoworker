@@ -81,8 +81,9 @@ export async function POST(request: Request) {
     if (existing.length >= MAX_SERVICES) {
       return errorResponse("VALIDATION_ERROR", `Service limit reached (${MAX_SERVICES}).`);
     }
+    const serviceId = randomUUID();
     const service = await insertBusinessService({
-      id: randomUUID(),
+      id: serviceId,
       business_id: auth.businessId,
       name: body.name,
       description: body.description ?? "",
@@ -91,6 +92,13 @@ export async function POST(request: Request) {
       active: body.active ?? true,
       position: existing.length
     });
+    // Serial re-check closes the pre-insert cap race (same pattern as the
+    // documents upload): whoever lands past the cap rolls their own row back.
+    const afterInsert = await listBusinessServices(auth.businessId);
+    if (afterInsert.length > MAX_SERVICES) {
+      await deleteBusinessService(auth.businessId, serviceId);
+      return errorResponse("VALIDATION_ERROR", `Service limit reached (${MAX_SERVICES}).`);
+    }
     await refreshGrounding(auth.businessId);
     return successResponse({ service }, 201);
   } catch (err) {
@@ -119,7 +127,8 @@ export async function PATCH(request: Request) {
     if (Object.keys(patch).length === 0) {
       return errorResponse("VALIDATION_ERROR", "Nothing to update");
     }
-    await patchBusinessService(auth.businessId, body.id, patch);
+    const updated = await patchBusinessService(auth.businessId, body.id, patch);
+    if (updated === 0) return errorResponse("NOT_FOUND", "Service not found", 404);
     await refreshGrounding(auth.businessId);
     return successResponse({ updated: true });
   } catch (err) {
@@ -138,7 +147,8 @@ export async function DELETE(request: Request) {
     const auth = await requireActiveBusinessId();
     if (!auth.ok) return auth.response;
     const body = deleteSchema.parse(await request.json());
-    await deleteBusinessService(auth.businessId, body.id);
+    const deleted = await deleteBusinessService(auth.businessId, body.id);
+    if (deleted === 0) return errorResponse("NOT_FOUND", "Service not found", 404);
     await refreshGrounding(auth.businessId);
     return successResponse({ deleted: true });
   } catch (err) {

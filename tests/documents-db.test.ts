@@ -234,14 +234,23 @@ describe("listDocumentShares", () => {
 });
 
 describe("revokeDocumentShare", () => {
-  it("stamps revoked_at (explicit client)", async () => {
-    const c = chain({ error: null });
-    await revokeDocumentShare(BIZ, "s1", makeDb(c));
+  it("stamps revoked_at and reports the matched count (explicit client)", async () => {
+    const c = chain({ data: [{ id: "s1" }], error: null });
+    expect(await revokeDocumentShare(BIZ, "s1", undefined, makeDb(c))).toBe(1);
     expect(c.update).toHaveBeenCalledWith({ revoked_at: expect.any(String) });
+    expect(c.eq).not.toHaveBeenCalledWith("document_id", expect.anything());
+  });
+
+  it("scopes to the document when given and reports 0 on a cross-document id", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await revokeDocumentShare(BIZ, "s1", DOC, makeDb(c))).toBe(0);
+    expect(c.eq).toHaveBeenCalledWith("document_id", DOC);
+    const cNull = chain({ data: null, error: null });
+    expect(await revokeDocumentShare(BIZ, "s1", DOC, makeDb(cNull))).toBe(0);
   });
 
   it("throws on error (default client)", async () => {
-    const c = chain({ error: { message: "rvk" } });
+    const c = chain({ data: null, error: { message: "rvk" } });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await expect(revokeDocumentShare(BIZ, "s1")).rejects.toThrow(/rvk/);
   });
