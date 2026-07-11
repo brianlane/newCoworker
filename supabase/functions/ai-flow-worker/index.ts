@@ -91,6 +91,7 @@ import {
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
 import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_mode.ts";
+import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import {
   birthdayDedupeKey,
@@ -1062,7 +1063,7 @@ async function runStep(
     case "recall_url":
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
-      return upsertCustomerStep(supabase, run, action);
+      return upsertCustomerStep(supabase, run, scope, action);
     case "update_contact":
       return updateContactStep(supabase, run, scope, action);
     case "classify":
@@ -1341,12 +1342,15 @@ async function recordLeadCustomerProfile(
 async function upsertCustomerStep(
   supabase: Supabase,
   run: RunRow,
+  scope: Scope,
   action: Extract<StepAction, { kind: "upsert_customer" }>
 ): Promise<StepOutcome> {
   // Existence pre-check (alias-aware) so the contact_created trigger below
   // fires only for genuinely NEW contacts, never enrichments. Best-effort: a
-  // read failure just means no trigger fires this pass.
+  // read failure just means no trigger fires this pass — except on backfill
+  // runs, where it fails SAFE (treated as existing, run ends) below.
   let existedBefore = true;
+  let precheckFailed = false;
   try {
     const { data: existing, error: existErr } = await supabase
       .from("contacts")
@@ -1354,9 +1358,34 @@ async function upsertCustomerStep(
       .eq("business_id", run.business_id)
       .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
       .maybeSingle();
-    if (!existErr) existedBefore = existing != null;
+    if (existErr) precheckFailed = true;
+    else existedBefore = existing != null;
   } catch (e) {
     console.error("upsert_customer existence pre-check", e);
+    precheckFailed = true;
+  }
+  // Email-replay backfill: the lead already has a contact row, so the
+  // original run (or the owner) already reached out — finalize as done here
+  // rather than continuing to send_sms/wait_for_reply and double-texting.
+  // A failed pre-check counts as existing (fail safe: skipping one lead
+  // beats spamming one). New leads fall through and run the full flow.
+  if (isBackfillSkipExistingTrigger(scope.trigger) && (existedBefore || precheckFailed)) {
+    appendActionTaken(
+      scope,
+      `backfill: ${action.e164} already exists as a contact — no outreach sent`
+    );
+    return {
+      kind: "ok",
+      skipped: true,
+      endRun: true,
+      result: {
+        skipped: "backfill_contact_exists",
+        customer_e164: action.e164,
+        ...(precheckFailed
+          ? { note: "existence check failed; treated as existing (fail safe)" }
+          : {})
+      }
+    };
   }
   await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
   if (!existedBefore) {
