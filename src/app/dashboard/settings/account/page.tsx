@@ -5,8 +5,6 @@ import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountCredentialsForms } from "@/components/dashboard/AccountCredentialsForms";
-import { SidebarCustomizer } from "@/components/dashboard/SidebarCustomizer";
-import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
 
@@ -88,8 +86,6 @@ export default async function AccountSettingsPage() {
       </Card>
 
       <AccountCredentialsForms email={user.email ?? ""} />
-
-      <SidebarCustomizer initialLayout={await getSidebarLayout(user.userId)} />
     </SettingsPageShell>
   );
 }
