@@ -13,6 +13,7 @@ import {
   updateBusinessOwnerEmail,
   updateBusinessOwnerEmailIfPending,
   updateBusinessPhone,
+  updateBusinessProfileFields,
   updateBusinessStatus,
   updateBusinessBranding,
   updateBusinessTimezone,
@@ -795,5 +796,61 @@ describe("db/businesses", () => {
     });
     await expect(getBusinessTimezone("uuid-biz-1", db as never)).resolves.toBe("UTC");
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateBusinessProfileFields writes only the provided keys", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessProfileFields("uuid-biz-1", {
+      address: "1 Main St",
+      business_hours: { mon: { open: "09:00", close: "17:00" } }
+    });
+    expect(db.update).toHaveBeenCalledWith({
+      address: "1 Main St",
+      business_hours: { mon: { open: "09:00", close: "17:00" } }
+    });
+
+    await updateBusinessProfileFields(
+      "uuid-biz-1",
+      { phone: "+16025550147", business_type: "plumbing" },
+      db as never
+    );
+    expect(db.update).toHaveBeenCalledWith({
+      phone: "+16025550147",
+      business_type: "plumbing"
+    });
+  });
+
+  it("updateBusinessProfileFields is a no-op for an empty patch (no DB round-trip)", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessProfileFields("uuid-biz-1", {});
+    expect(db.update).not.toHaveBeenCalled();
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("updateBusinessProfileFields supports explicit nulls (clearing a field) and throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessProfileFields("uuid-biz-1", {
+      address: null,
+      phone: null,
+      business_type: null,
+      business_hours: null
+    });
+    expect(db.update).toHaveBeenCalledWith({
+      address: null,
+      phone: null,
+      business_type: null,
+      business_hours: null
+    });
+
+    const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    await expect(
+      updateBusinessProfileFields("uuid-biz-1", { address: "x" }, failing as never)
+    ).rejects.toThrow("updateBusinessProfileFields");
   });
 });

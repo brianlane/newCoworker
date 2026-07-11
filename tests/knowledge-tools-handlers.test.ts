@@ -76,6 +76,30 @@ describe("lookupBusinessKnowledge", () => {
     expect(meter.mock.calls[0][0].inputChars).toBeGreaterThan(0);
   });
 
+  it("includes the rendered Business-profile block in the context when profile_md is set", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "memory",
+      profile_md: "## Business profile\n- Monday: 9:00 AM to 5:00 PM"
+    } as never);
+    gemini.mockResolvedValue(geminiOk("Open Mondays 9-5.", null));
+    const result = await lookupBusinessKnowledge(BIZ, "Are you open Monday?");
+    expect(result.ok).toBe(true);
+    const call = gemini.mock.calls[0][0];
+    expect(call.userText).toContain("# profile.md");
+    expect(call.userText).toContain("Monday: 9:00 AM to 5:00 PM");
+    // Profile sits between identity and soul, mirroring the instructions
+    // composition order.
+    expect(call.userText.indexOf("# profile.md")).toBeGreaterThan(
+      call.userText.indexOf("# identity.md")
+    );
+    expect(call.userText.indexOf("# profile.md")).toBeLessThan(
+      call.userText.indexOf("# soul.md")
+    );
+  });
+
   it("meters with null usage when the response carried no usageMetadata", async () => {
     gemini.mockResolvedValue(geminiOk("answer", null));
     const result = await lookupBusinessKnowledge(BIZ, "hours?");

@@ -14,9 +14,10 @@
  *   the edits in chat or voice/SMS replies.
  *
  *   This module closes that loop: every write to `business_configs` that
- *   matters for the agent's grounding re-pushes the four markdown files
- *   over SSH and atomically re-runs the same Mongo update the deploy
- *   script does. Idempotent on every call.
+ *   matters for the agent's grounding re-pushes the vault markdown files
+ *   (soul, identity, memory, website, profile) over SSH and atomically
+ *   re-runs the same Mongo update the deploy script does. Idempotent on
+ *   every call.
  *
  * Why SSH (vs. an HTTP /sync endpoint on the VPS):
  *   - The VPS doesn't expose a public mutation API; only the per-tenant
@@ -103,16 +104,29 @@ export const DEFAULT_AGENT_INSTRUCTIONS_FALLBACK =
 
 /**
  * Build the concatenated `instructions` string in the same field order
- * `deploy-client.sh` uses (identity → soul → website → memory). Empty /
- * whitespace-only sections are skipped so the joined output never has
- * stray double-newlines.
+ * `deploy-client.sh` uses (identity → profile → soul → website → memory).
+ * Empty / whitespace-only sections are skipped so the joined output never
+ * has stray double-newlines.
+ *
+ * `profile_md` is the rendered Business-profile block (hours / address /
+ * contact) derived from the businesses row — see
+ * src/lib/business-profile/profile.ts. It sits right after identity so the
+ * structured facts read as part of "who the business is".
  *
  * Exported for test parity — the same composition runs both at provision
  * time (in bash) and on every dashboard save (here in TS), and a
  * regression in either path silently breaks the agent's grounding.
  */
-export function buildAgentInstructions(config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md">): string {
-  const parts = [config.identity_md, config.soul_md, config.website_md, config.memory_md]
+export function buildAgentInstructions(
+  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "profile_md">
+): string {
+  const parts = [
+    config.identity_md,
+    config.profile_md,
+    config.soul_md,
+    config.website_md,
+    config.memory_md
+  ]
     .map((s) => (typeof s === "string" ? s.trim() : ""))
     .filter((s) => s.length > 0);
   if (parts.length === 0) return DEFAULT_AGENT_INSTRUCTIONS_FALLBACK;
@@ -220,7 +234,7 @@ export function resolveSyncProjectId(
  * sentinel) without needing to spin a real SSH listener.
  */
 export function buildSyncVaultCommand(
-  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md">,
+  config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "profile_md">,
   projectId: string,
   instructions: string,
   now: Date
@@ -238,6 +252,7 @@ export function buildSyncVaultCommand(
   const identityB64 = enc(config.identity_md ?? "");
   const memoryB64 = enc(config.memory_md ?? "");
   const websiteB64 = enc(config.website_md ?? "");
+  const profileB64 = enc(config.profile_md ?? "");
   /* c8 ignore stop */
   const instructionsB64 = enc(instructions);
   // JSON.stringify keeps the mongosh literal robust against any oddball
@@ -252,6 +267,7 @@ export function buildSyncVaultCommand(
     `printf %s '${identityB64}' | base64 -d > /opt/rowboat/vault/identity.md`,
     `printf %s '${memoryB64}'  | base64 -d > /opt/rowboat/vault/memory.md`,
     `printf %s '${websiteB64}' | base64 -d > /opt/rowboat/vault/website.md`,
+    `printf %s '${profileB64}' | base64 -d > /opt/rowboat/vault/profile.md`,
     `INST_FILE=$(mktemp)`,
     `printf %s '${instructionsB64}' | base64 -d > "$INST_FILE"`,
     `SEED_FILE=$(mktemp --suffix=.js)`,

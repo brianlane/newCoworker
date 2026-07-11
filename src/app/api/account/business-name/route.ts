@@ -12,6 +12,8 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { updateBusinessName } from "@/lib/db/businesses";
+import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const schema = z.object({
   name: z.string().trim().min(1, "Business name is required").max(120, "Business name is too long")
@@ -46,6 +48,12 @@ export async function POST(request: Request) {
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
 
     await updateBusinessName((biz as { id: string }).id, name, db);
+    // The business name appears in the rendered Business-profile block; keep
+    // the canonical profile_md fresh and push it to the live agent. Both are
+    // best-effort AFTER the committed rename — a refresh/sync hiccup must
+    // not fail the save the user already made.
+    await refreshBusinessProfileMdAndLog((biz as { id: string }).id, db);
+    void syncVaultToVpsAndLog((biz as { id: string }).id);
     return successResponse({ name });
   } catch (err) {
     return handleRouteError(err);

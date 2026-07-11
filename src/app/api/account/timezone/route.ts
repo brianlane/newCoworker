@@ -13,6 +13,8 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isValidIanaTimezone, updateBusinessTimezone } from "@/lib/db/businesses";
+import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const schema = z.object({
   timezone: z.union([z.string().trim().min(1).max(64), z.null()])
@@ -46,6 +48,11 @@ export async function POST(request: Request) {
     if (!biz) return errorResponse("NOT_FOUND", "No business found for this account");
 
     await updateBusinessTimezone((biz as { id: string }).id, timezone, db);
+    // The timezone appears in the rendered Business-profile block; keep the
+    // canonical profile_md fresh and push it to the live agent. Best-effort
+    // after the committed write — never fail the user's successful save.
+    await refreshBusinessProfileMdAndLog((biz as { id: string }).id, db);
+    void syncVaultToVpsAndLog((biz as { id: string }).id);
     return successResponse({ timezone });
   } catch (err) {
     return handleRouteError(err);

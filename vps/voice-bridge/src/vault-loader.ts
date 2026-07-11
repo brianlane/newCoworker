@@ -9,6 +9,8 @@
  *   identity.md  — business facts (name, owner, hours, services)
  *   memory.md    — lossless long-form memory
  *   website.md   — optional summarized public-website briefing
+ *   profile.md   — optional structured business profile (hours/address/contact)
+ *                  rendered from the Settings → Business profile card
  *
  * We cap each section aggressively. Gemini Live currently accepts fairly
  * long system prompts, but oversized prompts eat into the context window
@@ -23,10 +25,11 @@ export type VaultSnapshot = {
   identity: string;
   memory: string;
   website: string;
+  profile: string;
   /** Sum of characters after truncation — useful for logs. */
   totalChars: number;
   /** Files that actually had non-empty content after trimming. */
-  presentFiles: Array<"soul" | "identity" | "memory" | "website">;
+  presentFiles: Array<"soul" | "identity" | "memory" | "website" | "profile">;
 };
 
 export type VaultLoaderOptions = {
@@ -42,7 +45,8 @@ const FILES = [
   { key: "soul", name: "soul.md" },
   { key: "identity", name: "identity.md" },
   { key: "memory", name: "memory.md" },
-  { key: "website", name: "website.md" }
+  { key: "website", name: "website.md" },
+  { key: "profile", name: "profile.md" }
 ] as const;
 
 function truncate(text: string, maxChars: number): string {
@@ -63,6 +67,7 @@ export async function loadVaultForPrompt(
     identity: "",
     memory: "",
     website: "",
+    profile: "",
     totalChars: 0,
     presentFiles: []
   };
@@ -109,6 +114,12 @@ export function composeVaultPromptSection(snapshot: VaultSnapshot): string {
   ];
   if (snapshot.identity) {
     sections.push("=== identity.md (who the business is) ===", snapshot.identity);
+  }
+  if (snapshot.profile) {
+    sections.push(
+      "=== profile.md (structured business profile: hours, address, contact) ===",
+      snapshot.profile
+    );
   }
   if (snapshot.soul) {
     sections.push("=== soul.md (tone and operating rules) ===", snapshot.soul);

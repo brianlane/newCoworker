@@ -41,6 +41,7 @@ const FULL_CONFIG = {
   identity_md: "# identity\nAcme Co",
   memory_md: "# memory\nthings i know",
   website_md: "# website\npublic site summary",
+  profile_md: "## Business profile\n- Address: 1 Main St",
   rowboat_project_id: BIZ,
   updated_at: "2026-05-03T00:00:00Z"
 };
@@ -98,20 +99,29 @@ afterEach(() => {
 });
 
 describe("buildAgentInstructions", () => {
-  it("joins identity → soul → website → memory in deploy-client.sh order so the bash and TS paths produce identical prompts", () => {
+  it("joins identity → profile → soul → website → memory in deploy-client.sh order so the bash and TS paths produce identical prompts", () => {
     const out = buildAgentInstructions(FULL_CONFIG);
-    // The exact order matters: deploy-client.sh:422 uses
-    // [$id, $soul, $web, $mem] and the agent's grounding depends on
-    // identity coming first. Pin it as a regression boundary.
+    // The exact order matters: deploy-client.sh uses
+    // [$id, $profile, $soul, $web, $mem] and the agent's grounding depends
+    // on identity coming first. Pin it as a regression boundary.
     const idxIdentity = out.indexOf("# identity");
+    const idxProfile = out.indexOf("## Business profile");
     const idxSoul = out.indexOf("# soul");
     const idxWebsite = out.indexOf("# website");
     const idxMemory = out.indexOf("# memory");
     expect(idxIdentity).toBeGreaterThanOrEqual(0);
-    expect(idxIdentity).toBeLessThan(idxSoul);
+    expect(idxIdentity).toBeLessThan(idxProfile);
+    expect(idxProfile).toBeLessThan(idxSoul);
     expect(idxSoul).toBeLessThan(idxWebsite);
     expect(idxWebsite).toBeLessThan(idxMemory);
     expect(out).toContain("\n\n");
+  });
+
+  it("tolerates rows without profile_md (pre-migration reads) by simply omitting the profile section", () => {
+    const { profile_md: _omit, ...withoutProfile } = FULL_CONFIG;
+    const out = buildAgentInstructions(withoutProfile);
+    expect(out).toContain("# identity");
+    expect(out).not.toContain("## Business profile");
   });
 
   it("skips blank/whitespace-only sections so the joined output never has stray empty stanzas", () => {
@@ -130,7 +140,8 @@ describe("buildAgentInstructions", () => {
       soul_md: "",
       identity_md: "",
       memory_md: "",
-      website_md: ""
+      website_md: "",
+      profile_md: ""
     });
     expect(out).toBe(DEFAULT_AGENT_INSTRUCTIONS_FALLBACK);
   });
@@ -143,7 +154,8 @@ describe("buildAgentInstructions", () => {
       soul_md: null as unknown as string,
       identity_md: undefined as unknown as string,
       memory_md: 42 as unknown as string,
-      website_md: ""
+      website_md: "",
+      profile_md: false as unknown as string
     });
     expect(out).toBe(DEFAULT_AGENT_INSTRUCTIONS_FALLBACK);
   });
@@ -198,6 +210,7 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/soul.md");
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/memory.md");
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/website.md");
+    expect(cmd).toContain("base64 -d > /opt/rowboat/vault/profile.md");
   });
 
   it("updates EVERY agent (not just agents.0) across BOTH draftWorkflow and liveWorkflow so Coworker + OwnerCoworker stay in lockstep and owner-dashboard memory edits reach the agent the owner talks to", () => {

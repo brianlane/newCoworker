@@ -137,6 +137,9 @@ export async function lookupBusinessKnowledge(
   const parts: string[] = [];
   if (business?.name) parts.push(`Business name: ${business.name}`);
   if (config?.identity_md) parts.push(`# identity.md\n${config.identity_md}`);
+  // Structured business profile (hours/address/contact) rendered from the
+  // businesses row — the canonical answer source for "when are you open?".
+  if (config?.profile_md) parts.push(`# profile.md\n${config.profile_md}`);
   if (config?.soul_md) parts.push(`# soul.md\n${config.soul_md}`);
   if (config?.website_md) parts.push(`# website.md\n${config.website_md}`);
   if (config?.memory_md) parts.push(`# memory.md\n${config.memory_md}`);
