@@ -14,7 +14,7 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { updateBusinessProfileFields } from "@/lib/db/businesses";
-import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
+import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import {
   BUSINESS_HOURS_DAYS,
   isValidHoursTime,
@@ -102,7 +102,9 @@ export async function POST(request: Request) {
       db
     );
 
-    const profileMd = await refreshBusinessProfileMd(businessId, db);
+    // Best-effort after the committed column write: a refresh failure logs
+    // and returns null instead of failing the save the user already made.
+    const profileMd = await refreshBusinessProfileMdAndLog(businessId, db);
     // Fire-and-forget: the Supabase write is canonical; a slow/unreachable
     // VPS must not block the settings save (see sync-vault module header).
     void syncVaultToVpsAndLog(businessId);

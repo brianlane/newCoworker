@@ -12,7 +12,7 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { updateBusinessName } from "@/lib/db/businesses";
-import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
+import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const schema = z.object({
@@ -49,8 +49,10 @@ export async function POST(request: Request) {
 
     await updateBusinessName((biz as { id: string }).id, name, db);
     // The business name appears in the rendered Business-profile block; keep
-    // the canonical profile_md fresh and push it to the live agent.
-    await refreshBusinessProfileMd((biz as { id: string }).id, db);
+    // the canonical profile_md fresh and push it to the live agent. Both are
+    // best-effort AFTER the committed rename — a refresh/sync hiccup must
+    // not fail the save the user already made.
+    await refreshBusinessProfileMdAndLog((biz as { id: string }).id, db);
     void syncVaultToVpsAndLog((biz as { id: string }).id);
     return successResponse({ name });
   } catch (err) {

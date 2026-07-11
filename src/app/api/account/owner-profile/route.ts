@@ -10,7 +10,7 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { updateBusinessProfileFields } from "@/lib/db/businesses";
-import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
+import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const schema = z.object({
@@ -70,8 +70,9 @@ export async function POST(request: Request) {
     if (wroteAnything) {
       // Both facts appear in the rendered profile block the agent is
       // grounded on — re-render and push so the coworker stops using the
-      // old primary-contact name/number immediately.
-      await refreshBusinessProfileMd(businessId, db);
+      // old primary-contact name/number immediately. Best-effort: never
+      // fails the committed writes (and never masks writeError below).
+      await refreshBusinessProfileMdAndLog(businessId, db);
       void syncVaultToVpsAndLog(businessId);
     }
     if (writeError) throw writeError;

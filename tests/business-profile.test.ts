@@ -10,6 +10,9 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/configs", () => ({ patchBusinessConfig: vi.fn() }));
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+}));
 
 import {
   BUSINESS_HOURS_DAYS,
@@ -19,10 +22,14 @@ import {
   parseBusinessHours,
   renderBusinessProfileMd
 } from "@/lib/business-profile/profile";
-import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
+import {
+  refreshBusinessProfileMd,
+  refreshBusinessProfileMdAndLog
+} from "@/lib/business-profile/refresh";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
+import { logger } from "@/lib/logger";
 
 describe("isValidHoursTime", () => {
   it("accepts 24h HH:MM values", () => {
@@ -226,5 +233,40 @@ describe("refreshBusinessProfileMd", () => {
       "refreshBusinessProfileMd: business missing not found"
     );
     expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+});
+
+describe("refreshBusinessProfileMdAndLog", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({} as never);
+  });
+
+  it("returns the rendered markdown on success", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({ id: "biz-1", name: "Acme" } as never);
+    const md = await refreshBusinessProfileMdAndLog("biz-1");
+    expect(md).toContain("- Business name: Acme");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("returns null and logs at warn on failure (never fails the caller's committed save)", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({ id: "biz-1", name: "Acme" } as never);
+    vi.mocked(patchBusinessConfig).mockRejectedValueOnce(new Error("rls denied"));
+    const md = await refreshBusinessProfileMdAndLog("biz-1");
+    expect(md).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "business profile refresh failed (profile_md may be stale)",
+      expect.objectContaining({ businessId: "biz-1", error: "rls denied" })
+    );
+  });
+
+  it("stringifies non-Error throwables in the warn log", async () => {
+    vi.mocked(getBusiness).mockRejectedValueOnce("raw failure string");
+    const md = await refreshBusinessProfileMdAndLog("biz-1");
+    expect(md).toBeNull();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "business profile refresh failed (profile_md may be stale)",
+      expect.objectContaining({ error: "raw failure string" })
+    );
   });
 });

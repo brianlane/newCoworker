@@ -13,7 +13,7 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isValidIanaTimezone, updateBusinessTimezone } from "@/lib/db/businesses";
-import { refreshBusinessProfileMd } from "@/lib/business-profile/refresh";
+import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const schema = z.object({
@@ -49,8 +49,9 @@ export async function POST(request: Request) {
 
     await updateBusinessTimezone((biz as { id: string }).id, timezone, db);
     // The timezone appears in the rendered Business-profile block; keep the
-    // canonical profile_md fresh and push it to the live agent.
-    await refreshBusinessProfileMd((biz as { id: string }).id, db);
+    // canonical profile_md fresh and push it to the live agent. Best-effort
+    // after the committed write — never fail the user's successful save.
+    await refreshBusinessProfileMdAndLog((biz as { id: string }).id, db);
     void syncVaultToVpsAndLog((biz as { id: string }).id);
     return successResponse({ timezone });
   } catch (err) {

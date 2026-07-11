@@ -114,7 +114,8 @@ export function DeleteAccountCard() {
     <Card>
       <h2 className="text-sm font-semibold text-parchment mb-2">Delete account</h2>
       <p className="text-xs text-parchment/40 mb-4">
-        Permanently removes your business, its data, and your login. This cannot be undone.
+        Permanently removes this business and all of its data. If it&apos;s the only business
+        your login can access, the login is removed too. This cannot be undone.
       </p>
 
       {!expanded ? (
