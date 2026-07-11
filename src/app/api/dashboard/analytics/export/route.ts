@@ -58,7 +58,7 @@ export async function GET(request: Request) {
     let csv: string;
     let filename: string;
     if (kind === "flows") {
-      csv = flowFunnelsCsv(await getFlowFunnels(businessId, { client: db }));
+      csv = flowFunnelsCsv((await getFlowFunnels(businessId, { client: db })).rows);
       filename = "flow-performance-30d.csv";
     } else {
       const series = await getDailyUsageSeries(businessId, { client: db });

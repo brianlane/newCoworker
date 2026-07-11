@@ -503,7 +503,7 @@ export type FlowFunnelView = {
  * the BizBlasts campaign-performance concept on AiFlow data. Row links to
  * the flow's editor; the runs page holds the per-run detail.
  */
-export function FlowFunnelCard({ rows }: { rows: FlowFunnelView[] }) {
+export function FlowFunnelCard({ rows, clipped }: { rows: FlowFunnelView[]; clipped?: boolean }) {
   return (
     <Card>
       <div className="flex items-baseline justify-between gap-3">
@@ -551,6 +551,7 @@ export function FlowFunnelCard({ rows }: { rows: FlowFunnelView[] }) {
       <p className="text-[10px] text-parchment/35 mt-3">
         Link clicks count tracked short links in flow texts; goals count runs an external
         milestone (reply, booking, claim, tag) fast-forwarded to a goal step.
+        {clipped ? " High volume this window — counts cover the most recent activity only." : ""}
       </p>
     </Card>
   );

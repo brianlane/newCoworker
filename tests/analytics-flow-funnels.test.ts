@@ -3,13 +3,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
+vi.mock("@/lib/residency/read", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/residency/read")>();
+  return {
+    ...actual,
+    isVpsReadMode: vi.fn(async () => false),
+    readMovedRows: vi.fn(async () => [])
+  };
+});
 
 import {
+  FLOW_FUNNEL_CANDIDATE_LIMIT,
   FLOW_FUNNEL_FLOW_LIMIT,
   FLOW_FUNNEL_SCAN_LIMIT,
   getFlowFunnels,
   runReachedGoal
 } from "@/lib/analytics/flow-funnels";
+import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const NOW = new Date("2026-07-04T12:00:00Z");
@@ -33,6 +43,8 @@ function makeClient(resultsByTable: Record<string, QueryResult>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(isVpsReadMode).mockResolvedValue(false);
+  vi.mocked(readMovedRows).mockResolvedValue([]);
 });
 
 describe("runReachedGoal", () => {
@@ -47,7 +59,7 @@ describe("runReachedGoal", () => {
 });
 
 describe("getFlowFunnels", () => {
-  it("aggregates runs, texts, clicks, and goals per flow, most-run first", async () => {
+  it("aggregates runs, texts, clicks, and goals per flow, busiest first", async () => {
     const { client, chains } = makeClient({
       ai_flows: {
         data: [
@@ -79,8 +91,9 @@ describe("getFlowFunnels", () => {
         error: null
       }
     });
-    const rows = await getFlowFunnels("biz-1", { client, now: NOW, days: 30 });
-    expect(rows).toEqual([
+    const funnels = await getFlowFunnels("biz-1", { client, now: NOW, days: 30 });
+    expect(funnels.clipped).toBe(false);
+    expect(funnels.rows).toEqual([
       {
         flowId: "flow-busy",
         flowName: "Lead follow-up",
@@ -103,7 +116,7 @@ describe("getFlowFunnels", () => {
       }
     ]);
     const flows = chains.ai_flows as { limit: ReturnType<typeof vi.fn> };
-    expect(flows.limit).toHaveBeenCalledWith(FLOW_FUNNEL_FLOW_LIMIT);
+    expect(flows.limit).toHaveBeenCalledWith(FLOW_FUNNEL_CANDIDATE_LIMIT);
     const runsChain = chains.ai_flow_runs as {
       gte: ReturnType<typeof vi.fn>;
       limit: ReturnType<typeof vi.fn>;
@@ -117,6 +130,80 @@ describe("getFlowFunnels", () => {
     expect(links.not).toHaveBeenCalledWith("flow_id", "is", null);
   });
 
+  it("ranks by run count across MANY flows (an old busy flow beats new idle ones) and caps the list", async () => {
+    const flows = Array.from({ length: FLOW_FUNNEL_FLOW_LIMIT + 10 }, (_, i) => ({
+      // Newest first, like the query returns; the OLDEST one is the busy one.
+      id: `flow-${i}`,
+      name: `Flow ${i}`,
+      enabled: true
+    }));
+    const busyId = `flow-${FLOW_FUNNEL_FLOW_LIMIT + 9}`; // last = oldest
+    const { client } = makeClient({
+      ai_flows: { data: flows, error: null },
+      ai_flow_runs: { data: [{ flow_id: busyId, context: null }], error: null },
+      sms_outbound_log: { data: [], error: null },
+      sms_links: { data: [], error: null }
+    });
+    const funnels = await getFlowFunnels("biz-1", { client, now: NOW });
+    expect(funnels.rows).toHaveLength(FLOW_FUNNEL_FLOW_LIMIT);
+    expect(funnels.rows[0].flowId).toBe(busyId);
+  });
+
+  it("flags clipping when any source scan fills its cap", async () => {
+    const fullRuns = Array.from({ length: FLOW_FUNNEL_SCAN_LIMIT }, () => ({
+      flow_id: "flow-1",
+      context: null
+    }));
+    const { client } = makeClient({
+      ai_flows: { data: [{ id: "flow-1", name: "F", enabled: true }], error: null },
+      ai_flow_runs: { data: fullRuns, error: null },
+      sms_outbound_log: { data: [], error: null },
+      sms_links: { data: [], error: null }
+    });
+    const funnels = await getFlowFunnels("biz-1", { client, now: NOW });
+    expect(funnels.clipped).toBe(true);
+  });
+
+  it("routes ai_flows and sms_outbound_log through the box for vps-mode tenants", async () => {
+    vi.mocked(isVpsReadMode).mockResolvedValue(true);
+    vi.mocked(readMovedRows).mockImplementation(async (_biz: string, req: { table: string }) => {
+      if (req.table === "ai_flows") {
+        return [{ id: "flow-1", name: "Boxed flow", enabled: true }] as never;
+      }
+      // Box sends include a null flow_id (no "is not null" in the data-api
+      // grammar) — filtered client-side.
+      return [{ flow_id: "flow-1" }, { flow_id: null }] as never;
+    });
+    const { client, chains } = makeClient({
+      ai_flow_runs: { data: [{ flow_id: "flow-1", context: null }], error: null },
+      sms_links: { data: [], error: null }
+    });
+    const funnels = await getFlowFunnels("biz-1", { client, now: NOW });
+    expect(funnels.rows).toEqual([
+      {
+        flowId: "flow-1",
+        flowName: "Boxed flow",
+        enabled: true,
+        runs: 1,
+        textsSent: 1,
+        linksClicked: 0,
+        linkClicks: 0,
+        goalsReached: 0
+      }
+    ]);
+    // Central reads happened only for the engine/central tables.
+    expect(chains.ai_flows).toBeUndefined();
+    expect(chains.sms_outbound_log).toBeUndefined();
+    expect(vi.mocked(readMovedRows)).toHaveBeenCalledWith(
+      "biz-1",
+      expect.objectContaining({ table: "ai_flows" })
+    );
+    expect(vi.mocked(readMovedRows)).toHaveBeenCalledWith(
+      "biz-1",
+      expect.objectContaining({ table: "sms_outbound_log" })
+    );
+  });
+
   it("handles null pages and defaults client/now/days", async () => {
     const { client } = makeClient({
       ai_flows: { data: null, error: null },
@@ -125,7 +212,7 @@ describe("getFlowFunnels", () => {
       sms_links: { data: null, error: null }
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client as never);
-    expect(await getFlowFunnels("biz-1")).toEqual([]);
+    expect(await getFlowFunnels("biz-1")).toEqual({ rows: [], clipped: false });
   });
 
   it.each([

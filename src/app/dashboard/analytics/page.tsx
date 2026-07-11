@@ -381,7 +381,9 @@ export default async function DashboardAnalyticsPage(props: {
         <TrendForecastCard weeks={trendWeeks} calls={callForecast} texts={textForecast} />
       )}
 
-      {flowFunnels && flowFunnels.length > 0 && <FlowFunnelCard rows={flowFunnels} />}
+      {flowFunnels && flowFunnels.rows.length > 0 && (
+        <FlowFunnelCard rows={flowFunnels.rows} clipped={flowFunnels.clipped} />
+      )}
 
       <p className="text-xs text-parchment/40">
         Export CSV:{" "}
