@@ -49,10 +49,16 @@ while true; do
     map(select(.name as $n | $excluded | index($n) | not))
     | map(select(.status != "completed" or .conclusion != "success"))
     | .[] | "\(.name): \(.status)/\(.conclusion // "-")"' <<<"$check_runs")
+  # Terminal non-success conclusions fail the gate immediately — including
+  # "skipped", which never flips on its own (per the merge policy a skipped
+  # check is NOT passing; waiting on it would just burn the timeout). The
+  # one deliberately-poll-able non-success state is NEUTRAL: Cursor Bugbot
+  # sits neutral while it has open threads and flips to SUCCESS in place
+  # once they're resolved.
   hard_failed=$(jq -r --argjson excluded "$EXCLUDED_CHECKS" '
     map(select(.name as $n | $excluded | index($n) | not))
     | map(select(.conclusion as $c
-        | ["failure", "cancelled", "timed_out", "action_required"] | index($c)))
+        | ["failure", "cancelled", "timed_out", "action_required", "skipped"] | index($c)))
     | .[] | .name' <<<"$check_runs")
   if [ -n "$hard_failed" ]; then
     echo "::error::e2e gate: check(s) failed — $(tr '\n' ' ' <<<"$hard_failed")"
@@ -74,17 +80,23 @@ while true; do
   [ -n "$status_pending" ] && blockers+="statuses not green:"$'\n'"$status_pending"$'\n'
 
   # --- Review threads: every conversation resolved (merge-policy item 2) ---
+  # Cursor-paginated: a PR can carry more than one page of threads, and an
+  # unresolved thread beyond page one must still hold the gate.
   owner="${REPO%%/*}"
   name="${REPO##*/}"
-  unresolved=$(gh api graphql \
+  unresolved=$(gh api graphql --paginate \
     -F owner="$owner" -F name="$name" -F pr="$PR" \
-    -f query='query($owner: String!, $name: String!, $pr: Int!) {
+    -f query='query($owner: String!, $name: String!, $pr: Int!, $endCursor: String) {
       repository(owner: $owner, name: $name) {
         pullRequest(number: $pr) {
-          reviewThreads(first: 100) { nodes { isResolved } }
+          reviewThreads(first: 100, after: $endCursor) {
+            pageInfo { hasNextPage endCursor }
+            nodes { isResolved }
+          }
         }
       }
-    }' -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length')
+    }' -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length' \
+    | jq -s 'add // 0')
   [ "$unresolved" -gt 0 ] && blockers+="unresolved review threads: ${unresolved}"$'\n'
 
   if [ -z "$blockers" ]; then
