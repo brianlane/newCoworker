@@ -206,6 +206,7 @@ export default async function CustomerDetailPage({ params }: Props) {
         initialType={headerBadge}
         initialTags={memory.tags ?? []}
         initialOwnerEmployeeId={memory.owner_employee_id}
+        initialBirthday={memory.birthday}
         teamMembers={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
       />
 

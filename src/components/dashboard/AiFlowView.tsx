@@ -24,6 +24,10 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   tenant_email: "Inbound email (AI coworker's mailbox)",
   webhook: "Webhook (Zapier, Make, or API)",
   calendar: "Calendar event",
+  contact_created: "Contact created",
+  tag_changed: "Tag added / removed on a contact",
+  owner_assigned: "Contact assigned an owner",
+  birthday: "Contact's birthday",
   voice: "Voice call routing"
 };
 
@@ -149,10 +153,36 @@ function TriggerView({ trigger, heading = "Trigger" }: { trigger: FlowTrigger; h
                   ? (trigger.followMinutes ?? 0) > 0
                     ? `${formatDurationMinutes(trigger.followMinutes ?? 0)} after an event ends (its actual end time)`
                     : "Right when an event ends (its actual end time)"
-                  : "When a new event is added"
+                  : trigger.on === "event_canceled"
+                    ? "When an event is canceled"
+                    : "When a new event is added"
             }
           />
           <Row label="Watches" value={CALENDAR_SOURCE_LABELS[trigger.calendar ?? "both"]} />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+      {trigger.channel === "contact_created" && (
+        <ConditionsView conditions={trigger.conditions} />
+      )}
+      {trigger.channel === "tag_changed" && (
+        <>
+          <Row
+            label="Fires when"
+            value={`The tag ${trigger.tag ? `"${trigger.tag}" ` : "(any) "}is ${trigger.change ?? "added"}`}
+          />
+          <ConditionsView conditions={trigger.conditions} />
+        </>
+      )}
+      {trigger.channel === "owner_assigned" && (
+        <ConditionsView conditions={trigger.conditions} />
+      )}
+      {trigger.channel === "birthday" && (
+        <>
+          <Row
+            label="Sends at"
+            value={`${trigger.time ?? "09:00"}${trigger.timezone ? ` (${trigger.timezone})` : " (business timezone)"}`}
+          />
           <ConditionsView conditions={trigger.conditions} />
         </>
       )}
@@ -489,6 +519,15 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
         <>
           {step.minutes !== undefined ? (
             <Row label="Waits" value={formatDurationMinutes(step.minutes)} />
+          ) : step.untilDateTemplate !== undefined ? (
+            <Row label="Waits until" value={step.untilDateTemplate} mono />
+          ) : step.relativeToTemplate !== undefined ? (
+            <Row
+              label="Waits"
+              value={`${formatDurationMinutes(Math.abs(step.offsetMinutes ?? 0))} ${
+                (step.offsetMinutes ?? 0) < 0 ? "before" : "after"
+              } ${step.relativeToTemplate}`}
+            />
           ) : (
             <Row label="Waits until" value={`${step.untilTime ?? "?"} (${step.timezone ?? "?"})`} />
           )}
@@ -503,6 +542,17 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             label="Gives up after"
             value={`${formatDurationMinutes(step.timeoutMinutes ?? 1440)} (reply becomes "no_reply")`}
           />
+        </>
+      );
+    case "math":
+      return (
+        <>
+          <Row
+            label="Calculates"
+            value={`${step.operation}: ${step.left}${step.right !== undefined ? ` and ${step.right}` : ""}`}
+            mono
+          />
+          <Row label="Saves the result as" value={step.saveAs} mono />
         </>
       );
     case "goal":

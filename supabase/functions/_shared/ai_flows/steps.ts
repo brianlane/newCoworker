@@ -63,6 +63,80 @@ export type BrowseActionPlanned = {
 export const MAX_WAIT_MINUTES = 43200;
 
 /**
+ * What a math step saves when an operand doesn't parse (or a divide hits
+ * zero). A named sentinel — not "" — so when/branch conditions can test it.
+ */
+export const MATH_NOT_A_NUMBER = "not_a_number";
+
+/** Loose numeric parse: strips currency symbols/commas/spaces ("$1,200" → 1200). */
+function parseLooseNumber(raw: string): number | null {
+  const cleaned = raw.trim().replace(/[$€£,\s]/g, "");
+  if (!cleaned || !/^[-+]?(\d+\.?\d*|\.\d+)$/.test(cleaned)) return null;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** ISO datetime parse to epoch ms, or null. */
+function parseIsoMs(raw: string): number | null {
+  const ms = Date.parse(raw.trim());
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Format a finite number without float noise ("0.30000000000000004" → "0.3"). */
+function formatNumber(n: number): string {
+  return Number(n.toFixed(6)).toString();
+}
+
+/**
+ * Compute a math step's result from its RENDERED operands. Pure; every
+ * unusable input lands on the MATH_NOT_A_NUMBER sentinel instead of throwing
+ * — a data gap is not a flow bug, and branches can test the sentinel.
+ */
+export function computeMath(
+  operation:
+    | "add"
+    | "subtract"
+    | "multiply"
+    | "divide"
+    | "round"
+    | "date_add_minutes"
+    | "date_diff_days",
+  left: string,
+  right: string
+): string {
+  switch (operation) {
+    case "round": {
+      const l = parseLooseNumber(left);
+      return l === null ? MATH_NOT_A_NUMBER : formatNumber(Math.round(l));
+    }
+    case "add":
+    case "subtract":
+    case "multiply":
+    case "divide": {
+      const l = parseLooseNumber(left);
+      const r = parseLooseNumber(right);
+      if (l === null || r === null) return MATH_NOT_A_NUMBER;
+      if (operation === "add") return formatNumber(l + r);
+      if (operation === "subtract") return formatNumber(l - r);
+      if (operation === "multiply") return formatNumber(l * r);
+      return r === 0 ? MATH_NOT_A_NUMBER : formatNumber(l / r);
+    }
+    case "date_add_minutes": {
+      const l = parseIsoMs(left);
+      const r = parseLooseNumber(right);
+      if (l === null || r === null) return MATH_NOT_A_NUMBER;
+      return new Date(l + r * 60_000).toISOString();
+    }
+    case "date_diff_days": {
+      const l = parseIsoMs(left);
+      const r = parseIsoMs(right);
+      if (l === null || r === null) return MATH_NOT_A_NUMBER;
+      return formatNumber(Math.trunc((r - l) / 86_400_000));
+    }
+  }
+}
+
+/**
  * What a wait_for_reply step's saveAs var holds when the lead never texted
  * back (timeout, or no usable phone to wait on). A named sentinel — not "" —
  * because when-conditions (equals/notEquals) require a non-empty value.
@@ -83,6 +157,13 @@ export type StepAction =
       minutes?: number;
       untilTime?: string;
       timezone?: string;
+      /**
+       * Date-anchored wake instant (untilDateTemplate / relativeToTemplate
+       * already rendered + offset applied by the planner). `null` = the
+       * template rendered to something unparseable — the worker skips with a
+       * note instead of failing (fail-open, like a bad timezone).
+       */
+      untilIso?: string | null;
       marker: string;
     }
   | {
@@ -745,6 +826,19 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (scope.vars?.[marker]) {
         return { ok: true, action: { kind: "set_vars", vars: {} } };
       }
+      // Date-anchored modes resolve HERE (the planner has the scope): render
+      // the template, parse, apply the offset. An unparseable render passes
+      // `untilIso: null` so the worker fails OPEN (skip with a note) — a
+      // lead-data gap must not brick the run.
+      let untilIso: string | null | undefined;
+      const dateTemplate = step.untilDateTemplate ?? step.relativeToTemplate;
+      if (dateTemplate !== undefined) {
+        const rendered = renderTemplate(dateTemplate, scope).trim();
+        const parsedMs = rendered ? Date.parse(rendered) : NaN;
+        untilIso = Number.isFinite(parsedMs)
+          ? new Date(parsedMs + (step.offsetMinutes ?? 0) * 60_000).toISOString()
+          : null;
+      }
       return {
         ok: true,
         action: {
@@ -754,6 +848,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             : {}),
           ...(step.untilTime ? { untilTime: step.untilTime } : {}),
           ...(step.timezone ? { timezone: step.timezone } : {}),
+          ...(untilIso !== undefined ? { untilIso } : {}),
           marker
         }
       };
@@ -899,6 +994,19 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         };
       }
       return { ok: true, action: { kind: "update_contact", e164, addTags, removeTags } };
+    }
+    case "math": {
+      // Pure compute: render the operands, do the arithmetic, save the
+      // result — the worker just applies set_vars.
+      const left = renderTemplate(step.left, scope).trim();
+      const right = renderTemplate(step.right ?? "", scope).trim();
+      return {
+        ok: true,
+        action: {
+          kind: "set_vars",
+          vars: { [step.saveAs]: computeMath(step.operation, left, right) }
+        }
+      };
     }
     case "goal": {
       // Checkpoint marker: reaching it inline is a no-op; a goal-event jump

@@ -289,6 +289,50 @@ export async function enqueueAiFlowRun(
   client?: SupabaseClient
 ): Promise<AiFlowRunRow | null> {
   const db = await resolveDb(client);
+  // Drip pacing (definition.drip): stagger this run intervalMinutes after
+  // the flow's latest already-scheduled run, so a bulk enqueue (backlog
+  // import, webhook burst) trickles instead of bursting. An explicit
+  // earliestClaimAt from the caller wins (the backlog import computes its
+  // own spacing). Best-effort: a read failure enqueues immediately — pacing
+  // is a nicety, losing the lead is not. Two perfectly concurrent enqueues
+  // may land on the same slot; the spacing is approximate by design.
+  let dripClaimAt: string | null = null;
+  if (!input.earliestClaimAt) {
+    try {
+      const { data: flowRow } = await db
+        .from("ai_flows")
+        .select("definition")
+        .eq("id", input.flowId)
+        .maybeSingle();
+      const drip = (flowRow as { definition?: { drip?: { intervalMinutes?: number } } } | null)
+        ?.definition?.drip;
+      const intervalMinutes = drip?.intervalMinutes;
+      if (typeof intervalMinutes === "number" && intervalMinutes >= 1) {
+        const { data: lastRow } = await db
+          .from("ai_flow_runs")
+          .select("earliest_claim_at")
+          .eq("flow_id", input.flowId)
+          .eq("status", "queued")
+          .not("earliest_claim_at", "is", null)
+          .order("earliest_claim_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        const lastIso = (lastRow as { earliest_claim_at?: string | null } | null)
+          ?.earliest_claim_at;
+        const lastMs = lastIso ? Date.parse(lastIso) : NaN;
+        const nowMs = Date.now();
+        const nextMs = Number.isFinite(lastMs)
+          ? Math.max(nowMs, lastMs + intervalMinutes * 60_000)
+          : nowMs;
+        // The FIRST dripped run goes now; each subsequent one steps out from
+        // the latest scheduled slot.
+        dripClaimAt = nextMs > nowMs ? new Date(nextMs).toISOString() : new Date(nowMs).toISOString();
+      }
+    } catch (e) {
+      console.error("enqueueAiFlowRun drip", e);
+    }
+  }
+  const earliestClaimAt = input.earliestClaimAt ?? dripClaimAt;
   const { data, error } = await db
     .from("ai_flow_runs")
     .insert({
@@ -298,7 +342,7 @@ export async function enqueueAiFlowRun(
       context: { trigger: input.trigger },
       current_step: 0,
       dedupe_key: input.dedupeKey ?? null,
-      ...(input.earliestClaimAt ? { earliest_claim_at: input.earliestClaimAt } : {})
+      ...(earliestClaimAt ? { earliest_claim_at: earliestClaimAt } : {})
     })
     .select(RUN_COLS)
     .single();

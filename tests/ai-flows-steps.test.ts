@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { planStep, type StepScope } from "../supabase/functions/_shared/ai_flows/steps";
+import {
+  MATH_NOT_A_NUMBER,
+  computeMath,
+  planStep,
+  type StepScope
+} from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
 describe("planStep: sleep", () => {
@@ -32,6 +37,112 @@ describe("planStep: sleep", () => {
       vars: { __slept_z1: "1" }
     });
     expect(plan).toEqual({ ok: true, action: { kind: "set_vars", vars: {} } });
+  });
+});
+
+describe("computeMath", () => {
+  it("number ops with loose parsing and float-noise-free formatting", () => {
+    expect(computeMath("add", "$1,200", "300")).toBe("1500");
+    expect(computeMath("subtract", "10", "4.5")).toBe("5.5");
+    expect(computeMath("multiply", "0.1", "3")).toBe("0.3");
+    expect(computeMath("divide", "9", "2")).toBe("4.5");
+    expect(computeMath("round", "4.6", "")).toBe("5");
+  });
+
+  it("saves the sentinel on unparseable operands and divide-by-zero", () => {
+    expect(computeMath("add", "ten", "1")).toBe(MATH_NOT_A_NUMBER);
+    expect(computeMath("add", "1", "")).toBe(MATH_NOT_A_NUMBER);
+    expect(computeMath("divide", "1", "0")).toBe(MATH_NOT_A_NUMBER);
+    expect(computeMath("round", "", "")).toBe(MATH_NOT_A_NUMBER);
+    // A 400-digit "number" passes the shape check but overflows to Infinity.
+    expect(computeMath("round", "9".repeat(400), "")).toBe(MATH_NOT_A_NUMBER);
+  });
+
+  it("date ops: add minutes and whole-day diffs (negative when right is earlier)", () => {
+    expect(computeMath("date_add_minutes", "2026-07-10T12:00:00Z", "90")).toBe(
+      "2026-07-10T13:30:00.000Z"
+    );
+    expect(computeMath("date_diff_days", "2026-07-10T00:00:00Z", "2026-08-09T12:00:00Z")).toBe(
+      "30"
+    );
+    expect(computeMath("date_diff_days", "2026-08-09T00:00:00Z", "2026-07-10T00:00:00Z")).toBe(
+      "-30"
+    );
+    expect(computeMath("date_add_minutes", "not-a-date", "90")).toBe(MATH_NOT_A_NUMBER);
+    expect(computeMath("date_add_minutes", "2026-07-10T12:00:00Z", "soon")).toBe(
+      MATH_NOT_A_NUMBER
+    );
+    expect(computeMath("date_diff_days", "junk", "2026-07-10T00:00:00Z")).toBe(MATH_NOT_A_NUMBER);
+  });
+});
+
+describe("planStep: math", () => {
+  it("renders operands against the scope and saves the computed result", () => {
+    const plan = planStep(
+      {
+        id: "m1",
+        type: "math",
+        operation: "add",
+        left: "{{vars.lead_score}}",
+        right: "10",
+        saveAs: "lead_score"
+      } as FlowStep,
+      { vars: { lead_score: "15" } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "set_vars", vars: { lead_score: "25" } }
+    });
+  });
+
+  it("round ignores the (absent) right operand", () => {
+    const plan = planStep(
+      { id: "m2", type: "math", operation: "round", left: "4.4", saveAs: "n" } as FlowStep,
+      { vars: {} }
+    );
+    expect(plan).toEqual({ ok: true, action: { kind: "set_vars", vars: { n: "4" } } });
+  });
+});
+
+describe("planStep: sleep date-anchored modes", () => {
+  it("untilDateTemplate renders + parses to untilIso", () => {
+    const plan = planStep(
+      { id: "z3", type: "sleep", untilDateTemplate: "{{vars.renewal_date}}" } as FlowStep,
+      { vars: { renewal_date: "2026-08-01T12:00:00Z" } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "sleep", untilIso: "2026-08-01T12:00:00.000Z", marker: "__slept_z3" }
+    });
+  });
+
+  it("relativeToTemplate applies the signed offset (negative = before)", () => {
+    const plan = planStep(
+      {
+        id: "z4",
+        type: "sleep",
+        relativeToTemplate: "{{trigger.starts_at}}",
+        offsetMinutes: -120
+      } as FlowStep,
+      { vars: {}, trigger: { starts_at: "2026-08-01T12:00:00Z" } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "sleep", untilIso: "2026-08-01T10:00:00.000Z", marker: "__slept_z4" }
+    });
+  });
+
+  it("an unparseable/empty render passes untilIso: null (worker fails open)", () => {
+    const junk = planStep(
+      { id: "z5", type: "sleep", untilDateTemplate: "{{vars.renewal_date}}" } as FlowStep,
+      { vars: { renewal_date: "next spring" } }
+    );
+    expect(junk.ok && junk.action.kind === "sleep" && junk.action.untilIso).toBeNull();
+    const empty = planStep(
+      { id: "z6", type: "sleep", untilDateTemplate: "{{vars.renewal_date}}" } as FlowStep,
+      { vars: {} }
+    );
+    expect(empty.ok && empty.action.kind === "sleep" && empty.action.untilIso).toBeNull();
   });
 });
 

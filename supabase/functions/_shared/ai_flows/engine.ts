@@ -823,13 +823,22 @@ function isExecutableTrigger(trigger: Record<string, unknown> | undefined): bool
       if (
         trigger.on !== "event_created" &&
         trigger.on !== "event_start" &&
-        trigger.on !== "event_end"
+        trigger.on !== "event_end" &&
+        trigger.on !== "event_canceled"
       ) {
         return false;
       }
       if (trigger.on === "event_start" && typeof trigger.leadMinutes !== "number") return false;
       break;
     }
+    // Contact-event channels (push: enqueueContactEventRuns) and the
+    // birthday sweep: just the AND-ed condition list.
+    case "contact_created":
+    case "tag_changed":
+    case "owner_assigned":
+    case "birthday":
+      if (!Array.isArray(trigger.conditions)) return false;
+      break;
     case "schedule": {
       const daily = typeof trigger.time === "string" && typeof trigger.timezone === "string";
       const interval = typeof trigger.everyMinutes === "number";

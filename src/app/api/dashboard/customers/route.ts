@@ -28,6 +28,7 @@ import {
   MAX_LIST_LIMIT
 } from "@/lib/customer-memory/db";
 import { CONTACT_TYPES, type CustomerMemoryRow } from "@/lib/customer-memory/types";
+import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 
 export const dynamic = "force-dynamic";
 
@@ -146,6 +147,18 @@ export async function POST(request: Request) {
       email: parsed.email ?? null,
       pinnedMd: parsed.pinnedMd ?? null,
       ...(parsed.type ? { type: parsed.type } : {})
+    });
+
+    // contact_created triggers: a manual add may start flows watching for
+    // new contacts. Best-effort inside fireContactEvent; never fails the add.
+    await fireContactEvent(parsed.businessId, {
+      kind: "contact_created",
+      contact: {
+        e164: row.customer_e164,
+        ...(row.display_name ? { name: row.display_name } : {}),
+        ...(row.email ? { email: row.email } : {})
+      },
+      dedupeKey: `ce:created:${parsed.businessId}:${row.customer_e164}`
     });
 
     return successResponse({ customer: summarize(row) }, 201);

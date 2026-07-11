@@ -38,6 +38,7 @@ export const FLOW_STEP_TYPES = [
   "wait_for_reply",
   "branch",
   "goal",
+  "math",
   "route_to_team",
   "browse_action",
   "recall_url",
@@ -292,7 +293,7 @@ const calendarTriggerSchema = z
   .object({
     channel: z.literal("calendar"),
     calendar: z.enum(["primary", "shared", "both"]).optional(),
-    on: z.enum(["event_created", "event_start", "event_end"]),
+    on: z.enum(["event_created", "event_start", "event_end", "event_canceled"]),
     // min 1: the due window is [start - leadMinutes, start), so a zero lead
     // would be an empty window that can never fire.
     leadMinutes: z.number().int().min(1).max(1440).optional(),
@@ -376,6 +377,53 @@ const voiceTriggerSchema = z
     }
   });
 
+/**
+ * Contact-event trigger: a NEW contact landed on the Contacts page (created
+ * from the dashboard, a CSV/lead import, or a flow's upsert_customer step).
+ * Conditions run over a "key: value" text of the contact's fields;
+ * `from_matches` tests the contact's phone.
+ */
+const contactCreatedTriggerSchema = z.object({
+  channel: z.literal("contact_created"),
+  conditions: z.array(conditionSchema).max(20)
+});
+
+/**
+ * Contact-event trigger: a tag was added to / removed from a contact
+ * (dashboard edits and update_contact flow steps both fire it). `tag`
+ * narrows to one tag (case-insensitive); omitted matches any. `change`
+ * defaults to "added". The flow whose own update_contact step wrote the tag
+ * never retriggers itself (loop guard).
+ */
+const tagChangedTriggerSchema = z.object({
+  channel: z.literal("tag_changed"),
+  tag: z.string().min(1).max(40).optional(),
+  change: z.enum(["added", "removed"]).optional(),
+  conditions: z.array(conditionSchema).max(20)
+});
+
+/**
+ * Contact-event trigger: a roster member became the contact's owner (a
+ * route_to_team claim auto-assigned it, or a manual assignment on the
+ * contact page).
+ */
+const ownerAssignedTriggerSchema = z.object({
+  channel: z.literal("owner_assigned"),
+  conditions: z.array(conditionSchema).max(20)
+});
+
+/**
+ * Birthday trigger: fires once per year per contact whose stored birthday is
+ * today, at/after local `time` (default 09:00) in `timezone` (default: the
+ * business timezone). Swept by the worker's cron tick.
+ */
+const birthdayTriggerSchema = z.object({
+  channel: z.literal("birthday"),
+  time: hhmm.optional(),
+  timezone: timezone.optional(),
+  conditions: z.array(conditionSchema).max(20)
+});
+
 const triggerSchema = z.discriminatedUnion("channel", [
   smsTriggerSchema,
   manualTriggerSchema,
@@ -384,6 +432,10 @@ const triggerSchema = z.discriminatedUnion("channel", [
   tenantEmailTriggerSchema,
   webhookTriggerSchema,
   calendarTriggerSchema,
+  contactCreatedTriggerSchema,
+  tagChangedTriggerSchema,
+  ownerAssignedTriggerSchema,
+  birthdayTriggerSchema,
   voiceTriggerSchema
 ]);
 
@@ -493,6 +545,21 @@ export type GoalEventKind = (typeof GOAL_EVENT_KINDS)[number];
 
 /** Max watched milestones on one goal step. */
 export const MAX_GOAL_EVENTS = 4;
+
+/**
+ * The operations a `math` step supports. Mirrors the runtime union in
+ * _shared/ai_flows/types.ts.
+ */
+export const MATH_OPERATIONS = [
+  "add",
+  "subtract",
+  "multiply",
+  "divide",
+  "round",
+  "date_add_minutes",
+  "date_diff_days"
+] as const;
+export type MathOperation = (typeof MATH_OPERATIONS)[number];
 
 /** Max named arms on one branch step (plus the implicit else path). */
 export const MAX_BRANCH_ARMS = 4;
@@ -659,16 +726,36 @@ const nonBranchStepMembers = [
     saveAs: varName.optional(),
     when: whenSchema.optional()
   }),
-  // Pause the run then continue: relative minutes OR a next local wall-clock
-  // time. "Exactly one mode" is enforced in validateDefinitionSemantics (a
-  // discriminatedUnion member can't hold a superRefine). 43200 min = 30 days —
-  // generous, but bounded so a typo can't park a run for years.
+  // Pause the run then continue. Exactly one mode (enforced in
+  // validateDefinitionSemantics — a discriminatedUnion member can't hold a
+  // superRefine): relative minutes, a next local wall-clock time, an ISO
+  // date/datetime rendered from a template ("wake on {{vars.renewal_date}}"),
+  // or a template datetime plus a signed offset ("2 hours before the
+  // appointment": relativeToTemplate {{trigger.starts_at}}, offsetMinutes
+  // -120). 43200 min = 30 days — generous, but bounded so a typo can't park
+  // a run for years.
   z.object({
     id: stepId,
     type: z.literal("sleep"),
     minutes: z.number().int().min(1).max(43200).optional(),
     untilTime: hhmm.optional(),
     timezone: timezone.optional(),
+    untilDateTemplate: z.string().min(1).max(300).optional(),
+    relativeToTemplate: z.string().min(1).max(300).optional(),
+    offsetMinutes: z.number().int().min(-43200).max(43200).optional(),
+    when: whenSchema.optional()
+  }),
+  // Arithmetic on numbers and dates: left <operation> right → {{vars.saveAs}},
+  // usable by later when/branch conditions (lead scoring, "renewal within 30
+  // days"). Unparseable operands (or divide-by-zero) save the sentinel
+  // "not_a_number" instead of failing the run.
+  z.object({
+    id: stepId,
+    type: z.literal("math"),
+    operation: z.enum(MATH_OPERATIONS),
+    left: z.string().min(1).max(300),
+    right: z.string().min(1).max(300).optional(),
+    saveAs: varName,
     when: whenSchema.optional()
   }),
   // Park the run until the phone in phoneVar texts back (reply lands in
@@ -995,6 +1082,13 @@ export const aiFlowDefinitionSchema = z.object({
   triggers: z.array(triggerSchema).max(4).optional(),
   steps: z.array(stepSchema).min(1).max(25),
   timeWindow: flowTimeWindowSchema.optional(),
+  // Drip pacing for bulk enqueues: consecutive runs start at least
+  // intervalMinutes apart (earliest_claim_at stagger at enqueue time).
+  drip: z
+    .object({
+      intervalMinutes: z.number().int().min(1).max(1440)
+    })
+    .optional(),
   options: z
     .object({
       suppressDefaultReply: z.boolean().optional(),
@@ -1020,6 +1114,10 @@ export const TRIGGER_CHANNELS = [
   "tenant_email",
   "webhook",
   "calendar",
+  "contact_created",
+  "tag_changed",
+  "owner_assigned",
+  "birthday",
   "voice"
 ] as const;
 
@@ -1072,6 +1170,12 @@ function templateStringsForStep(step: FlowStep): string[] {
       return step.actions.map((a) => a.valueTemplate ?? "");
     case "email_extract":
       return step.matchTemplates ?? [];
+    // math operands and sleep's date templates reference vars/trigger fields,
+    // so they get the same scope checking as any other template.
+    case "math":
+      return [step.left, step.right ?? ""];
+    case "sleep":
+      return [step.untilDateTemplate ?? "", step.relativeToTemplate ?? ""];
     case "generate_image":
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "extract_url":
@@ -1083,8 +1187,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "update_contact":
     // classify carries var NAMES, category tokens, and a plain-text question.
     case "classify":
-    // sleep / wait_for_reply carry only var NAMES and durations — no templates.
-    case "sleep":
+    // wait_for_reply carries only var NAMES and durations — no templates.
     case "wait_for_reply":
     // goal carries a display label and literal event kinds/tags — no templates.
     case "goal":
@@ -1479,17 +1582,46 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
-    // sleep: exactly one wait mode — relative minutes OR untilTime (which
-    // needs its timezone). Half a daily mode or both modes would silently
-    // pick one at run time, so reject at author time instead.
+    // sleep: exactly one wait mode — relative minutes, untilTime (+ its
+    // timezone), an untilDate template, or a relativeTo template (+ its
+    // offset). Mixing modes (or half a mode) would silently pick one at run
+    // time, so reject at author time instead.
     if (step.type === "sleep") {
       const relative = step.minutes !== undefined;
       const daily = step.untilTime !== undefined || step.timezone !== undefined;
-      if (relative && daily) {
-        issues.push(`Step "${step.id}" sets both minutes and untilTime; use exactly one.`);
-      } else if (!relative && (step.untilTime === undefined || step.timezone === undefined)) {
+      const untilDate = step.untilDateTemplate !== undefined;
+      const relativeTo =
+        step.relativeToTemplate !== undefined || step.offsetMinutes !== undefined;
+      const modes = [relative, daily, untilDate, relativeTo].filter(Boolean).length;
+      if (modes > 1) {
         issues.push(
-          `Step "${step.id}" needs a wait: set minutes, or untilTime together with timezone.`
+          `Step "${step.id}" mixes wait modes; use exactly one of minutes, untilTime, untilDateTemplate, or relativeToTemplate.`
+        );
+      } else if (modes === 0) {
+        issues.push(
+          `Step "${step.id}" needs a wait: set minutes, untilTime + timezone, untilDateTemplate, or relativeToTemplate + offsetMinutes.`
+        );
+      } else if (daily && (step.untilTime === undefined || step.timezone === undefined)) {
+        issues.push(`Step "${step.id}" needs both untilTime and timezone for a time-of-day wait.`);
+      } else if (relativeTo && step.relativeToTemplate === undefined) {
+        issues.push(
+          `Step "${step.id}" sets offsetMinutes but no relativeToTemplate to offset from.`
+        );
+      } else if (relativeTo && step.offsetMinutes === undefined) {
+        issues.push(
+          `Step "${step.id}" needs offsetMinutes with relativeToTemplate (negative = before it).`
+        );
+      }
+    }
+
+    // math: every operation except `round` needs its right operand.
+    if (step.type === "math") {
+      if (step.operation === "round" && step.right !== undefined) {
+        issues.push(`Step "${step.id}" rounds its left value; remove the unused right operand.`);
+      }
+      if (step.operation !== "round" && step.right === undefined) {
+        issues.push(
+          `Step "${step.id}" needs a right operand for "${step.operation}".`
         );
       }
     }
@@ -1732,6 +1864,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs);
     } else if (step.type === "generate_image") {
       vars.add(step.saveAs);
+    } else if (step.type === "math") {
+      vars.add(step.saveAs);
     }
   };
 
@@ -1791,11 +1925,17 @@ function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean
     delete step.attachScreenshot;
     return true;
   }
-  // sleep with both modes: keep the relative wait (self-contained; untilTime
-  // also needs its timezone to be trustworthy).
-  if (/sets both minutes and untilTime/.test(issue)) {
-    delete step.untilTime;
-    delete step.timezone;
+  // sleep mixing wait modes: keep the relative wait when present (it's
+  // self-contained), else the time-of-day pair; the date-anchored modes are
+  // dropped either way (their templates may reference broken vars).
+  if (/mixes wait modes/.test(issue)) {
+    if (step.minutes !== undefined) {
+      delete step.untilTime;
+      delete step.timezone;
+    }
+    delete step.untilDateTemplate;
+    delete step.relativeToTemplate;
+    delete step.offsetMinutes;
     return true;
   }
   // Double pin: agentName is the AI-authorable one; refs come from the editor.
@@ -2076,13 +2216,30 @@ export function summarizeDefinition(def: AiFlowDefinition): string {
             ? t.followMinutes !== undefined && t.followMinutes > 0
               ? `${formatDurationMinutes(t.followMinutes)} after a calendar event ends`
               : "When a calendar event ends"
-            : "When a calendar event is created";
+            : t.on === "event_canceled"
+              ? "When a calendar event is canceled"
+              : "When a calendar event is created";
       trigPart =
         t.conditions.length === 0
           ? what
           : `${what} (matching ${t.conditions.length} condition(s))`;
       break;
     }
+    case "contact_created":
+      trigPart =
+        t.conditions.length === 0
+          ? "When a contact is created"
+          : `When a contact is created (matching ${t.conditions.length} condition(s))`;
+      break;
+    case "tag_changed":
+      trigPart = `When the tag ${t.tag ? `"${t.tag}" ` : ""}is ${t.change ?? "added"}`;
+      break;
+    case "owner_assigned":
+      trigPart = "When a contact is assigned an owner";
+      break;
+    case "birthday":
+      trigPart = `On a contact's birthday (at ${t.time ?? "09:00"})`;
+      break;
     case "voice":
       trigPart =
         t.direction === "outbound"

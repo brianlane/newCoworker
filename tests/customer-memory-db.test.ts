@@ -82,6 +82,7 @@ function memory(overrides: Partial<CustomerMemoryRow> = {}): CustomerMemoryRow {
     alias_e164s: [],
     tags: [],
     owner_employee_id: null,
+    birthday: null,
     created_at: "2026-05-01T00:00:00Z",
     updated_at: "2026-05-01T00:00:00Z",
     ...overrides
@@ -920,6 +921,30 @@ describe("updateCustomerOwnerFields", () => {
     await expect(
       updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "x" }, client)
     ).rejects.toThrow(/updateCustomerOwnerFields: rls/);
+  });
+
+  it("sets and clears the birthday (null = cleared), omits it when absent", async () => {
+    const set = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { birthday: "1990-07-10" }, set.client);
+    const setPatch = set.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(setPatch).toHaveProperty("birthday", "1990-07-10");
+
+    const clear = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { birthday: null }, clear.client);
+    const clearPatch = clear.fromCalls[0]!.calls.find((c) => c.name === "update")
+      ?.args[0] as Record<string, unknown>;
+    expect(clearPatch.birthday).toBeNull();
+
+    const skip = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "Joe" }, skip.client);
+    const skipPatch = skip.fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(skipPatch).not.toHaveProperty("birthday");
   });
 
   it("writes sms_reply_mode when re-modding a contact, omits it when absent", async () => {

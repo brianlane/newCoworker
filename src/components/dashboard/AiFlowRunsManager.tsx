@@ -602,12 +602,23 @@ export function AiFlowRunsManager({
                         </span>
                       )}
                     </span>
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
-                        STATUS_STYLES[r.status] ?? "bg-parchment/10 text-parchment/50"
-                      }`}
-                    >
-                      {statusLabel(r.status)}
+                    <span className="flex items-center gap-1.5">
+                      {(r.context.trigger as { test_mode?: unknown } | undefined)?.test_mode ===
+                        true && (
+                        <span
+                          title="Test run: side effects were simulated — nothing was actually sent"
+                          className="rounded-full bg-purple-400/15 px-2 py-0.5 text-[10px] font-semibold text-purple-300"
+                        >
+                          TEST
+                        </span>
+                      )}
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                          STATUS_STYLES[r.status] ?? "bg-parchment/10 text-parchment/50"
+                        }`}
+                      >
+                        {statusLabel(r.status)}
+                      </span>
                     </span>
                   </button>
                   {routingSummary(r.context) && (

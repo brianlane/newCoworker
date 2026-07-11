@@ -31,6 +31,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   http_call: "Call another service (API)",
   branch: "Branch (if / else paths)",
   goal: "Goal (skip ahead when reached)",
+  math: "Calculate (numbers & dates)",
   sleep: "Wait before continuing",
   wait_for_reply: "Wait for their reply",
   route_to_team: "Hand off to team/employees",
@@ -67,6 +68,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Splits the workflow into paths: each path has a condition (checked top to bottom, first match wins) and its own steps; no match runs the \"none matched\" path.",
   goal:
     "A checkpoint tied to a milestone (they reply, an appointment is booked, a tag is added, or a teammate claims the lead). The moment the milestone happens, the workflow jumps straight here - skipping any follow-ups in between - so people who already converted stop getting nudges.",
+  math:
+    "Does arithmetic on numbers and dates from earlier steps (add, subtract, multiply, divide, round, date math) and saves the result - use it for lead scoring or \"renewal within 30 days\" style branching.",
   route_to_team: "Offers the lead to a teammate to claim, and falls back to you if no one does.",
   browse_action: "Clicks buttons or types into fields on a web page on your behalf.",
   recall_url:
