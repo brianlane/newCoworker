@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp } from "lucide-react";
+import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import type { SidebarLayoutItem } from "@/lib/dashboard/sidebar-prefs";
@@ -10,14 +10,21 @@ import type { SidebarLayoutItem } from "@/lib/dashboard/sidebar-prefs";
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
 
 /**
- * Settings → sidebar customization (BizBlasts-style): reorder nav entries
- * with up/down controls and hide pages you never use. Locked entries
- * (Settings, Notifications) can move but not hide.
+ * Settings → Sidebar (BizBlasts-style): drag rows to reorder the nav and
+ * hide pages you never use. The up/down buttons stay as the keyboard- and
+ * touch-accessible fallback (HTML5 drag-and-drop doesn't fire on most
+ * touch devices). Locked entries (Settings, Notifications) can move but
+ * not hide.
  */
 export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLayoutItem[] }) {
   const router = useRouter();
   const [items, setItems] = useState(initialLayout);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  // Index of the row being dragged; ref (not state) for the drop math so a
+  // re-render mid-drag can't stale it, plus state for the visual treatment.
+  const dragIndexRef = useRef<number | null>(null);
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [overIndex, setOverIndex] = useState<number | null>(null);
 
   function move(index: number, delta: -1 | 1) {
     setItems((prev) => {
@@ -27,6 +34,45 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
       [next[index], next[target]] = [next[target], next[index]];
       return next;
     });
+  }
+
+  function moveTo(from: number, to: number) {
+    setItems((prev) => {
+      if (from === to || from < 0 || from >= prev.length || to < 0 || to >= prev.length) {
+        return prev;
+      }
+      const next = [...prev];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+  }
+
+  function handleDragStart(index: number, e: React.DragEvent<HTMLLIElement>) {
+    dragIndexRef.current = index;
+    setDraggingIndex(index);
+    // Firefox requires data for a drag to start; the value is unused.
+    e.dataTransfer.setData("text/plain", items[index].key);
+    e.dataTransfer.effectAllowed = "move";
+  }
+
+  function handleDragOver(index: number, e: React.DragEvent<HTMLLIElement>) {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    if (overIndex !== index) setOverIndex(index);
+  }
+
+  function handleDrop(index: number, e: React.DragEvent<HTMLLIElement>) {
+    e.preventDefault();
+    const from = dragIndexRef.current;
+    if (from !== null) moveTo(from, index);
+    resetDrag();
+  }
+
+  function resetDrag() {
+    dragIndexRef.current = null;
+    setDraggingIndex(null);
+    setOverIndex(null);
   }
 
   function setVisible(index: number, visible: boolean) {
@@ -62,15 +108,33 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
     <Card>
       <h2 className="text-sm font-semibold text-parchment mb-1">Sidebar</h2>
       <p className="text-xs text-parchment/40 mb-4">
-        Reorder the navigation and hide pages you don&apos;t use. Settings and Notifications
-        always stay visible.
+        Drag to reorder the navigation (or use the arrows) and hide pages you don&apos;t use.
+        Settings and Notifications always stay visible.
       </p>
       <ul className="space-y-1 mb-4" data-testid="sidebar-customizer-list">
         {items.map((item, index) => (
           <li
             key={item.key}
-            className="flex items-center gap-2 rounded-lg border border-parchment/10 px-3 py-1.5"
+            draggable
+            onDragStart={(e) => handleDragStart(index, e)}
+            onDragOver={(e) => handleDragOver(index, e)}
+            onDrop={(e) => handleDrop(index, e)}
+            onDragEnd={resetDrag}
+            className={`flex items-center gap-2 rounded-lg border px-3 py-1.5 transition-colors ${
+              draggingIndex === index
+                ? "border-signal-teal/60 opacity-50"
+                : overIndex === index && draggingIndex !== null
+                  ? "border-signal-teal/60 bg-signal-teal/5"
+                  : "border-parchment/10"
+            }`}
           >
+            <span
+              className="cursor-grab active:cursor-grabbing text-parchment/30 hover:text-parchment/60"
+              aria-hidden="true"
+              title="Drag to reorder"
+            >
+              <GripVertical className="h-4 w-4" />
+            </span>
             <div className="flex flex-col">
               <button
                 type="button"
@@ -92,7 +156,7 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
               </button>
             </div>
             <span
-              className={`flex-1 text-sm ${item.visible ? "text-parchment" : "text-parchment/35 line-through"}`}
+              className={`flex-1 text-sm select-none ${item.visible ? "text-parchment" : "text-parchment/35 line-through"}`}
             >
               {item.label}
             </span>
