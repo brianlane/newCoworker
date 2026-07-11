@@ -212,6 +212,11 @@ serve(async (req: Request) => {
   // "URGENT <task_type>" headline — silence (blocked texts / degraded chat /
   // refused callers) must never be the only signal a cap was hit.
   const missedToday = Number(record.log_payload?.missed_calls_today ?? 0);
+  // Needs-human escalations (see _shared/needs_human.ts): the texting
+  // coworker hit something it couldn't handle and handed the conversation
+  // to the owner — say who and why, not "URGENT sms_needs_human".
+  const needsHumanLabel = String(record.log_payload?.contact_label ?? "a texter");
+  const needsHumanReason = String(record.log_payload?.reason ?? "").trim();
   const summary =
     record.task_type === "sms_cap_reached"
       ? "Monthly SMS limit reached; outbound texting is paused. Buy an SMS pack from Billing to resume."
@@ -219,7 +224,9 @@ serve(async (req: Request) => {
         ? "AI chat budget reached; replies switched to the slower local model. Buy a Gemini pack from Billing to restore."
         : record.task_type === "missed_call_spike"
           ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
-          : `URGENT ${record.task_type}`;
+          : record.task_type === "sms_needs_human"
+            ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? ` — ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
+            : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
   // `https://example.com//dashboard` if the env var was set with one.

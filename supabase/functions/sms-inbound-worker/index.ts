@@ -37,6 +37,7 @@ import {
   splitReplyReasoning
 } from "../_shared/reply_reasoning.ts";
 import { loadFlowRunContext } from "../_shared/ai_flows/run_context.ts";
+import { escalateToHuman } from "../_shared/needs_human.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -1112,6 +1113,23 @@ serve(async (req: Request) => {
             model: turnPlan.stateless ? "local" : "gemini"
           });
           if (reasoningErr) console.error("ai_reply_reasoning insert", reasoningErr);
+          // Needs-human escalation: the model flagged that a person must take
+          // this over (handoff semantics exclude routine bookings). Tags the
+          // contact "Needs Human", fires the tag hooks, and pages the owner —
+          // once per open escalation (the tag is the open/closed state).
+          // Best-effort: never touches the reply that already carries the
+          // model's own "someone will follow up" text.
+          if (split.reasoning.escalated) {
+            await escalateToHuman(supabase, {
+              businessId: job.business_id,
+              contactE164: fromE164,
+              reason: split.reasoning.rationale,
+              intent: split.reasoning.intent,
+              inboundPreview: userText.slice(0, 300),
+              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+              bearer: serviceKey
+            });
+          }
         }
 
         if (cap.overCap) {

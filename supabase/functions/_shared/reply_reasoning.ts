@@ -71,7 +71,9 @@ export const REASONING_PROMPT_INSTRUCTION =
   `\n\nAfter your reply, on its own final line, append exactly: ` +
   `${REASONING_MARKER}{"intent":"<the texter's goal, snake_case, max 5 words>",` +
   `"why":"<one short sentence: why you replied this way>",` +
-  `"handoff":<true if this reply books, escalates, or hands the person to a human, else false>}` +
+  `"handoff":<true ONLY when a human must take this conversation over or follow up — ` +
+  `they asked for a person, you could not answer or do what they needed, or the topic ` +
+  `is outside what you know. A booking or question you fully handled is NOT a handoff. Else false>}` +
   ` — this line is stripped before the texter sees your message; never mention it.`;
 
 export type ReplyReasoning = {
