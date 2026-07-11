@@ -75,6 +75,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s11","type":"update_contact","phoneVar":"lead_phone","removeTags":["New Lead"],"addTags":["Contacted"]}   // move the contact between lead-status tags on the Contacts page (removals apply before additions; at least one of addTags/removeTags)',
   '  {"id":"s12","type":"classify","textVar":"reply_text","question":"The lead was asked why they are shopping","categories":[{"value":"wants_a_call","description":"asks to talk/book/call"},{"value":"not_interested","description":"declines or asks to stop"}],"saveAs":"intent"}   // sort a message into EXACTLY ONE category value (2-8, snake_case); nothing-fits lands as "unclear" — pair with a branch step whose arms match each value (and an unclear/else path)',
   '  {"id":"s13","type":"generate_image","promptTemplate":"A clean flyer for {{vars.listing_address}}...","saveAs":"flyer_url"}   // create an AI-generated image and save a link to it as {{vars.flyer_url}}; ONLY include this step when the user explicitly asks for an image to be created (it is expensive and draws from the shared AI budget). Deliver it with a later send_sms carrying "mediaUrlVar":"flyer_url" (goes out as a picture message) or by templating the URL into a send_email body. To EDIT a photo instead of creating from scratch, add "inputImageTemplate":"{{trigger.image}}" — that is the photo attached to the triggering text (MMS) or coworker-mailbox email — and describe the change in promptTemplate (e.g. "Show this face aged 20 years"); {{trigger.image}} is empty when no photo was attached, in which case the step generates from scratch',
+  '  {"id":"s14","type":"share_document","documentId":"<uuid copied EXACTLY from the AVAILABLE DOCUMENTS list>","to":"{{vars.lead_phone}}","via":"sms","messageTemplate":"Here is our price sheet: {{share_url}}","saveAs":"price_sheet_url"}   // text ("via":"sms", to = a phone) or email ("via":"email", to = an email address) the lead an expiring link to one of the business uploaded documents (price sheet, menu, brochure, policy). Use this — never paste document contents into a send_sms body — whenever the user says to send their price sheet / menu / brochure / packet. The literal token {{share_url}} in messageTemplate marks where the link goes (omit it and the link is appended); optional "saveAs" exposes the link to later steps. ONLY emit this step when the user message contains an AVAILABLE DOCUMENTS list with a matching document — copy its documentId EXACTLY; NEVER invent or placeholder the uuid, and when no listed document matches, leave the step out entirely',
   "",
   "Voice steps (ONLY under a voice trigger; a voice flow uses exactly ONE",
   "trigger and only these steps — never mix them with the steps above):",
@@ -202,8 +203,41 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "here — use the literal phone/name fields instead."
 ].join("\n");
 
-export function buildFlowCompileUserText(description: string): string {
-  return `Automation description:\n${description.trim()}`;
+/** One business document the compiler may bind a share_document step to. */
+export type CompileDocumentOption = {
+  id: string;
+  title: string;
+  summary: string;
+};
+
+/**
+ * Render the AVAILABLE DOCUMENTS block for the compile/repair user text.
+ * Only client-eligible, ready documents belong here (the route filters);
+ * an explicit "(none on file)" line tells the model to omit share_document
+ * steps rather than invent a uuid — the same NEVER-invent contract as
+ * email connection ids.
+ */
+export function buildAvailableDocumentsBlock(documents: CompileDocumentOption[]): string {
+  if (documents.length === 0) {
+    return "AVAILABLE DOCUMENTS: (none on file — do not emit share_document steps)";
+  }
+  const lines = documents.map(
+    (d) => `- documentId: ${d.id} — "${d.title}"${d.summary ? `: ${d.summary}` : ""}`
+  );
+  return ["AVAILABLE DOCUMENTS (for share_document steps; copy documentId exactly):", ...lines].join(
+    "\n"
+  );
+}
+
+export function buildFlowCompileUserText(
+  description: string,
+  documents: CompileDocumentOption[] = []
+): string {
+  return [
+    buildAvailableDocumentsBlock(documents),
+    "",
+    `Automation description:\n${description.trim()}`
+  ].join("\n");
 }
 
 /**
@@ -216,6 +250,7 @@ export function buildFlowRepairUserText(input: {
   description: string;
   candidateJson: string;
   issues: string[];
+  documents?: CompileDocumentOption[];
 }): string {
   return [
     "Your previous automation definition FAILED validation. Fix ONLY the",
@@ -227,6 +262,8 @@ export function buildFlowRepairUserText(input: {
     "",
     "Your previous (invalid) definition:",
     input.candidateJson,
+    "",
+    buildAvailableDocumentsBlock(input.documents ?? []),
     "",
     "Original automation description:",
     input.description.trim()

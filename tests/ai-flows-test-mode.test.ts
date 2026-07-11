@@ -113,6 +113,46 @@ describe("simulateTestAction", () => {
     ).toEqual({ simulated: "browse_action", url: "https://x", actions: ["click_text: Accept"] });
   });
 
+  it("share_document mints nothing but stamps a placeholder link into saveAs", () => {
+    const s = scope();
+    expect(
+      simulateTestAction(
+        {
+          kind: "share_document",
+          documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          via: "sms",
+          to: "+16025550111",
+          message: "here: {{share_url}}",
+          saveAs: "doc_url"
+        } as StepAction,
+        s
+      )
+    ).toEqual({
+      simulated: "share_document",
+      documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      via: "sms",
+      to: "+16025550111",
+      message: "here: {{share_url}}"
+    });
+    expect(s.vars.doc_url).toBe("https://example.invalid/test-share-link");
+
+    // Without saveAs nothing is stamped; an empty recipient renders honestly.
+    const s2 = scope();
+    expect(
+      simulateTestAction(
+        {
+          kind: "share_document",
+          documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          via: "email",
+          to: "",
+          message: ""
+        } as StepAction,
+        s2
+      )
+    ).toMatchObject({ to: "(no recipient)" });
+    expect(Object.keys(s2.vars)).toHaveLength(0);
+  });
+
   it("generate_image leaves the saveAs var empty so MMS degrades like a live failure", () => {
     const s = scope();
     expect(

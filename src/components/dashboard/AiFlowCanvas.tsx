@@ -26,6 +26,7 @@ import {
   Bell,
   Calculator,
   Copy,
+  FileText,
   Flag,
   GitBranch,
   Globe,
@@ -90,6 +91,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   update_contact: "read",
   classify: "branch",
   generate_image: "read",
+  share_document: "comm",
   ring_handoff: "voice",
   voice_ai_intake: "voice",
   voice_transfer: "voice",
@@ -127,6 +129,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   update_contact: <Tag className="h-4 w-4" />,
   classify: <HelpCircle className="h-4 w-4" />,
   generate_image: <ImageIcon className="h-4 w-4" />,
+  share_document: <FileText className="h-4 w-4" />,
   ring_handoff: <Phone className="h-4 w-4" />,
   voice_ai_intake: <Phone className="h-4 w-4" />,
   voice_transfer: <Phone className="h-4 w-4" />,
@@ -214,6 +217,8 @@ function stepSubtitle(step: FlowStep): string {
         .join(" / ")}`;
     case "generate_image":
       return `saves {{vars.${step.saveAs}}}`;
+    case "share_document":
+      return `${step.documentTitle ?? "document"} → ${step.to}`;
     case "ring_handoff":
     case "voice_transfer":
       return step.toRef?.label ?? step.toE164 ?? "";

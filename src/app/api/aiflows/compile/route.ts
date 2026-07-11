@@ -21,8 +21,11 @@ import {
   buildFlowCompileUserText,
   buildFlowRepairUserText,
   extractFlowJson,
-  humanizeCompileIssues
+  humanizeCompileIssues,
+  type CompileDocumentOption
 } from "@/lib/ai-flows/compile";
+import { listBusinessDocuments } from "@/lib/documents/db";
+import { documentEligibleFor } from "@/lib/documents/core";
 import {
   AiFlowValidationError,
   parseAiFlowDefinition,
@@ -58,7 +61,22 @@ export async function POST(request: Request) {
     // balanced default ("medium") rather than the preview's "high" (dynamic),
     // which previously ate the whole output budget on hidden thinking.
     const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.5-flash";
-    const userText = buildFlowCompileUserText(body.description);
+    // Documents the model may bind share_document steps to: client-eligible
+    // + ready only (flow recipients are customers). A read failure just
+    // compiles without the block — same NEVER-invent contract applies.
+    let compileDocuments: CompileDocumentOption[] = [];
+    try {
+      const docs = await listBusinessDocuments(body.businessId);
+      compileDocuments = docs
+        .filter((d) => documentEligibleFor(d, "clients"))
+        .map((d) => ({ id: d.id, title: d.title, summary: d.summary }));
+    } catch (docErr) {
+      logger.warn("aiflow compile: document list failed; compiling without documents", {
+        businessId: body.businessId,
+        error: docErr instanceof Error ? docErr.message : String(docErr)
+      });
+    }
+    const userText = buildFlowCompileUserText(body.description, compileDocuments);
     let raw: string;
     let usage: GeminiUsage | null;
     try {
@@ -153,7 +171,8 @@ export async function POST(request: Request) {
         const repairText = buildFlowRepairUserText({
           description: body.description,
           candidateJson: JSON.stringify(candidate),
-          issues: err.issues
+          issues: err.issues,
+          documents: compileDocuments
         });
         const { text: repairedRaw, usage: repairUsage } = await geminiGenerateTextDetailed({
           apiKey,

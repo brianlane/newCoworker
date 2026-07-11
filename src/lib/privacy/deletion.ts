@@ -423,6 +423,37 @@ export async function deleteEndUserData(
     results.push({ table: "email_log", central: central.sent + central.received, box });
   }
 
+  // ── business_document_shares (document links sent to the person) ────────
+  // `shared_with` stores the recipient identifier (phone or email) the link
+  // was delivered to — PII. Deleting the row also kills the live link (the
+  // download route 404s on a missing share), which is the correct erasure
+  // semantic. Central-only table; spans every linked number like
+  // ai_reply_reasoning below.
+  {
+    let central = 0;
+    if (linkedNumbers.size > 0) {
+      const { data, error } = await db
+        .from("business_document_shares")
+        .delete()
+        .eq("business_id", businessId)
+        .in("shared_with", [...linkedNumbers])
+        .select("id");
+      if (error) throw new EndUserDeletionError(`business_document_shares: ${error.message}`);
+      central += count(data);
+    }
+    if (email) {
+      const { data, error } = await db
+        .from("business_document_shares")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("shared_with", emailPattern!)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`business_document_shares: ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "business_document_shares", central, box: null });
+  }
+
   // ── ai_reply_reasoning (per-reply AI decision records; central-only) ────
   // Keyed by whichever number the person texted from, so the delete spans
   // every linked number captured pre-delete — the e164 request's primary +

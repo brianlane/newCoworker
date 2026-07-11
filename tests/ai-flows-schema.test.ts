@@ -2789,3 +2789,97 @@ describe("generate_image step + send_sms mediaUrlVar", () => {
     expect(summarizeDefinition(def)).toBe("On demand: generate_image -> notify_owner");
   });
 });
+
+describe("share_document steps", () => {
+  const DOC_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+  function withShareStep(step: Record<string, unknown>) {
+    const input = JSON.parse(JSON.stringify(validInput));
+    input.steps.push(step);
+    return input;
+  }
+
+  it("accepts a full share_document step and registers its saveAs for later steps", () => {
+    const def = parseAiFlowDefinition(
+      withShareStep({
+        id: "s7",
+        type: "share_document",
+        documentId: DOC_ID,
+        documentTitle: "Price sheet",
+        to: "{{vars.seller_phone}}",
+        via: "sms",
+        messageTemplate: "Here it is: {{share_url}}",
+        saveAs: "price_sheet_url"
+      })
+    );
+    expect(def.steps).toHaveLength(7);
+    // The saveAs var is in scope for a later step.
+    const withConsumer = withShareStep({
+      id: "s7",
+      type: "share_document",
+      documentId: DOC_ID,
+      to: "{{vars.seller_phone}}",
+      saveAs: "price_sheet_url"
+    });
+    withConsumer.steps.push({
+      id: "s8",
+      type: "notify_owner",
+      message: "sent {{vars.price_sheet_url}}"
+    });
+    expect(() => parseAiFlowDefinition(withConsumer)).not.toThrow();
+  });
+
+  it("rejects a non-uuid documentId at the shape layer", () => {
+    expect(() =>
+      parseAiFlowDefinition(
+        withShareStep({
+          id: "s7",
+          type: "share_document",
+          documentId: "not-a-uuid",
+          to: "{{trigger.from}}"
+        })
+      )
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("scope-checks the recipient template like any other step", () => {
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(
+        withShareStep({
+          id: "s7",
+          type: "share_document",
+          documentId: DOC_ID,
+          to: "{{vars.never_produced}}"
+        })
+      )
+    );
+    expect(issues.some((i) => /never_produced/.test(i))).toBe(true);
+  });
+
+  it("allows the {{share_url}} placement token but still flags unknown scopes in the message", () => {
+    const clean = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(
+        withShareStep({
+          id: "s7",
+          type: "share_document",
+          documentId: DOC_ID,
+          to: "{{trigger.from}}",
+          messageTemplate: "Link: {{ share_url }} for {{vars.seller_phone}}"
+        })
+      )
+    );
+    expect(clean).toEqual([]);
+    const dirty = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(
+        withShareStep({
+          id: "s7",
+          type: "share_document",
+          documentId: DOC_ID,
+          to: "{{trigger.from}}",
+          messageTemplate: "Link: {{mystery.token}}"
+        })
+      )
+    );
+    expect(dirty.some((i) => /unknown template scope "mystery"/.test(i))).toBe(true);
+  });
+});

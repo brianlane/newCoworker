@@ -1,11 +1,109 @@
 import { describe, expect, it } from "vitest";
 import {
   MATH_NOT_A_NUMBER,
+  SHARE_URL_TOKEN,
   computeMath,
   planStep,
   type StepScope
 } from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
+
+describe("planStep: share_document", () => {
+  const DOC_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const base = { id: "sd1", type: "share_document" as const, documentId: DOC_ID };
+
+  it("renders the recipient and shields the {{share_url}} token from the var renderer", () => {
+    const plan = planStep(
+      {
+        ...base,
+        to: "{{vars.lead_phone}}",
+        messageTemplate: "Hi {{vars.lead_name}} — here it is: {{ share_url }}",
+        saveAs: "doc_url"
+      } as FlowStep,
+      { vars: { lead_phone: "(555) 123-4567", lead_name: "Sam" } }
+    );
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "share_document",
+        documentId: DOC_ID,
+        via: "sms",
+        to: "+15551234567",
+        message: `Hi Sam — here it is: ${SHARE_URL_TOKEN}`,
+        saveAs: "doc_url"
+      }
+    });
+  });
+
+  it("keeps an already-E.164 recipient and defaults the message to empty", () => {
+    const plan = planStep({ ...base, to: "+15559990000" } as FlowStep, { vars: {} });
+    expect(plan.ok && plan.action.kind === "share_document" && plan.action.to).toBe("+15559990000");
+    expect(plan.ok && plan.action.kind === "share_document" && plan.action.message).toBe("");
+  });
+
+  it("plans a SKIP when a templated recipient resolves to nothing usable", () => {
+    for (const value of ["", "none", "N/A"]) {
+      const plan = planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
+        vars: { lead_phone: value }
+      });
+      expect(plan.ok && plan.action.kind === "share_document" && plan.action.skipReason).toBe(
+        "no_recipient"
+      );
+    }
+  });
+
+  it("hard-fails a LITERAL empty recipient (flow-config bug, not a lead-data gap)", () => {
+    const plan = planStep({ ...base, to: "none" } as FlowStep, { vars: {} });
+    expect(plan).toEqual({
+      ok: false,
+      error: "share_document: recipient is empty after templating"
+    });
+  });
+
+  it("skips an unparseable templated phone but hard-fails a literal one", () => {
+    const templated = planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
+      vars: { lead_phone: "call me maybe" }
+    });
+    expect(
+      templated.ok && templated.action.kind === "share_document" && templated.action.skipReason
+    ).toBe("unparseable_recipient_phone");
+    const literal = planStep({ ...base, to: "not-a-phone" } as FlowStep, { vars: {} });
+    expect(literal.ok).toBe(false);
+    if (!literal.ok) expect(literal.error).toContain("not a valid phone number");
+  });
+
+  it("email delivery accepts an @-bearing recipient and rejects the rest", () => {
+    const ok = planStep(
+      { ...base, via: "email" as const, to: "{{vars.lead_email}}" } as FlowStep,
+      { vars: { lead_email: "lead@example.com" } }
+    );
+    expect(ok).toEqual({
+      ok: true,
+      action: {
+        kind: "share_document",
+        documentId: DOC_ID,
+        via: "email",
+        to: "lead@example.com",
+        message: ""
+      }
+    });
+    const templatedBad = planStep(
+      { ...base, via: "email" as const, to: "{{vars.lead_email}}" } as FlowStep,
+      { vars: { lead_email: "no-at-sign" } }
+    );
+    expect(
+      templatedBad.ok &&
+        templatedBad.action.kind === "share_document" &&
+        templatedBad.action.skipReason
+    ).toBe("unparseable_recipient_email");
+    const literalBad = planStep(
+      { ...base, via: "email" as const, to: "no-at-sign" } as FlowStep,
+      { vars: {} }
+    );
+    expect(literalBad.ok).toBe(false);
+    if (!literalBad.ok) expect(literalBad.error).toContain("not an email address");
+  });
+});
 
 describe("planStep: sleep", () => {
   it("plans a relative wait with the re-entry marker, capping minutes at 30 days", () => {
