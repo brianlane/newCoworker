@@ -182,10 +182,14 @@ describe("missingSheetFields", () => {
     ]);
   });
 
-  it("phone shape tolerates formatting characters", () => {
+  it("phone shape tolerates formatting characters but NOT decimals", () => {
     expect(
       missingSheetFields(["lead_phone"], ["weird"], [{ weird: "(602) 555-1234" }])
     ).toEqual([]);
+    // A billing amount must not read as a phone number.
+    expect(missingSheetFields(["lead_phone"], ["cost"], [{ cost: "0.004000" }])).toEqual([
+      "lead_phone"
+    ]);
   });
 
   it("stays quiet on fields with only generic tokens", () => {

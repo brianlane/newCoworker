@@ -189,11 +189,12 @@ export function missingSheetFields(
   const headerTokens = headers.map((h) => tokensOf(h));
   const sample = rows.slice(0, FIT_SAMPLE_ROWS);
 
-  // Phone values get formatting characters stripped ("(602) 555-1234");
-  // emails must keep their dots, so they test raw.
+  // Phone values get formatting characters stripped ("(602) 555-1234").
+  // Deliberately NOT dots: stripping them would turn monetary decimals like
+  // "0.004000" into 7-digit "phones" and mute the warning on billing sheets.
   const anyPhoneValue = (): boolean =>
     sample.some((row) =>
-      Object.values(row).some((v) => PHONE_VALUE_RE.test(v.replace(/[\s().-]/g, "")))
+      Object.values(row).some((v) => PHONE_VALUE_RE.test(v.replace(/[\s()-]/g, "")))
     );
   const anyEmailValue = (): boolean =>
     sample.some((row) => Object.values(row).some((v) => EMAIL_VALUE_RE.test(v.trim())));
