@@ -5,6 +5,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  SEO_MAX_BYTES,
   SEO_MAX_REDIRECTS,
   SEO_SCORE_WEIGHTS,
   analyzeWebsiteSeo,
@@ -12,6 +13,7 @@ import {
   industryKeywordsFor,
   overallSeoScore,
   parseAiRecommendations,
+  readBodyBounded,
   ruleBasedSuggestions,
   scoreSeoSignals,
   type SeoSignals
@@ -76,6 +78,51 @@ describe("industryKeywordsFor", () => {
     expect(industryKeywordsFor("quantum consulting")).toEqual([]);
     expect(industryKeywordsFor(null)).toEqual([]);
     expect(industryKeywordsFor("  ")).toEqual([]);
+  });
+
+  it("does not cross-match substrings (student ≠ dentist, repair ≠ air, carpet ≠ car)", () => {
+    expect(industryKeywordsFor("student tutoring")).toEqual([]);
+    expect(industryKeywordsFor("appliance repair")).toEqual([]);
+    expect(industryKeywordsFor("carpet installation")).toEqual([]);
+    expect(industryKeywordsFor("dental office")).toContain("dentist");
+    expect(industryKeywordsFor("car detailing")).toContain("auto repair");
+  });
+});
+
+describe("readBodyBounded", () => {
+  function streamOf(chunks: string[], cancelError?: Error) {
+    const encoder = new TextEncoder();
+    let i = 0;
+    return {
+      getReader: () => ({
+        read: async () =>
+          i < chunks.length
+            ? { done: false, value: encoder.encode(chunks[i++]) }
+            : { done: true, value: undefined },
+        cancel: async () => {
+          if (cancelError) throw cancelError;
+        }
+      })
+    };
+  }
+
+  it("streams up to the byte cap and cancels the remainder", async () => {
+    const big = "x".repeat(600_000);
+    const res = { body: streamOf([big, big, big]) } as unknown as Response;
+    const text = await readBodyBounded(res);
+    expect(text).toHaveLength(SEO_MAX_BYTES);
+  });
+
+  it("reads a small streamed body fully and tolerates a rejecting cancel", async () => {
+    const res = {
+      body: streamOf(["<html>", "hi", "</html>"], new Error("already closed"))
+    } as unknown as Response;
+    expect(await readBodyBounded(res)).toBe("<html>hi</html>");
+  });
+
+  it("falls back to text() for streamless responses", async () => {
+    const res = { body: null, text: async () => "plain" } as unknown as Response;
+    expect(await readBodyBounded(res)).toBe("plain");
   });
 });
 
@@ -339,6 +386,25 @@ describe("analyzeWebsiteSeo", () => {
         lookup: PUBLIC_LOOKUP
       })
     ).toMatchObject({ ok: false, error: "fetch_failed" });
+
+    // A redirect onto a non-web scheme must die before any further hop.
+    const fileScheme = fetchSequence([response(302, "", { location: "file:///etc/passwd" })]);
+    expect(
+      await analyzeWebsiteSeo("https://x.example.com", {
+        fetchImpl: fileScheme.impl,
+        lookup: PUBLIC_LOOKUP
+      })
+    ).toMatchObject({ ok: false, error: "fetch_failed", detail: "non-http redirect" });
+    expect(fileScheme.calls).toHaveLength(1);
+
+    // A malformed Location header fails structured, not thrown.
+    const badLocation = fetchSequence([response(302, "", { location: "https://[oops" })]);
+    expect(
+      await analyzeWebsiteSeo("https://x.example.com", {
+        fetchImpl: badLocation.impl,
+        lookup: PUBLIC_LOOKUP
+      })
+    ).toMatchObject({ ok: false, error: "fetch_failed", detail: "malformed redirect location" });
   });
 
   it("aborts a hung homepage fetch at the timeout", async () => {

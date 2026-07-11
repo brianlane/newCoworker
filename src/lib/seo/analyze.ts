@@ -42,16 +42,22 @@ export type SeoFactor = keyof typeof SEO_SCORE_WEIGHTS;
  * match). Used for the keyword-presence signal only — no rank estimation.
  */
 export const INDUSTRY_KEYWORDS: Array<{ match: RegExp; keywords: string[] }> = [
-  { match: /hair|salon|barber/i, keywords: ["haircut", "hair styling", "hair color", "salon"] },
-  { match: /massage|spa|wellness/i, keywords: ["massage", "relaxation", "spa", "wellness"] },
-  { match: /auto|mechanic|car/i, keywords: ["auto repair", "mechanic", "brake repair", "oil change"] },
-  { match: /dent/i, keywords: ["dentist", "dental care", "teeth cleaning"] },
-  { match: /landscap|lawn|garden/i, keywords: ["landscaping", "lawn care", "yard maintenance"] },
-  { match: /clean/i, keywords: ["cleaning service", "house cleaning", "deep cleaning"] },
-  { match: /fitness|train|gym/i, keywords: ["personal trainer", "fitness", "workout"] },
-  { match: /photo/i, keywords: ["photographer", "photography", "portrait"] },
-  { match: /plumb/i, keywords: ["plumber", "plumbing", "drain cleaning", "pipe repair"] },
-  { match: /hvac|heating|cooling|air/i, keywords: ["hvac", "air conditioning", "heating", "ac repair"] }
+  // Word-boundary anchored so substrings can't cross-match ("student" must
+  // not pick dentist keywords, "repair" must not read as "air", "carpet"
+  // is not "car").
+  { match: /\bhair\b|\bsalon\b|\bbarber/i, keywords: ["haircut", "hair styling", "hair color", "salon"] },
+  { match: /\bmassage\b|\bspa\b|\bwellness\b/i, keywords: ["massage", "relaxation", "spa", "wellness"] },
+  { match: /\bauto\b|\bmechanic\b|\bcar\b/i, keywords: ["auto repair", "mechanic", "brake repair", "oil change"] },
+  { match: /\bdent(al|ist)?\b/i, keywords: ["dentist", "dental care", "teeth cleaning"] },
+  { match: /\blandscap|\blawn\b|\bgarden/i, keywords: ["landscaping", "lawn care", "yard maintenance"] },
+  { match: /\bclean(ing|er|ers)?\b/i, keywords: ["cleaning service", "house cleaning", "deep cleaning"] },
+  { match: /\bfitness\b|\btrainer?\b|\btraining\b|\bgym\b/i, keywords: ["personal trainer", "fitness", "workout"] },
+  { match: /\bphoto/i, keywords: ["photographer", "photography", "portrait"] },
+  { match: /\bplumb/i, keywords: ["plumber", "plumbing", "drain cleaning", "pipe repair"] },
+  {
+    match: /\bhvac\b|\bheating\b|\bcooling\b|\bair\s*condition/i,
+    keywords: ["hvac", "air conditioning", "heating", "ac repair"]
+  }
 ];
 
 export function industryKeywordsFor(businessType: string | null | undefined): string[] {
@@ -233,8 +239,36 @@ export type SeoAnalyzeOptions = {
 };
 
 /**
+ * Read at most SEO_MAX_BYTES of the body, cancelling the stream once the
+ * cap is hit so a giant page never buffers fully (Bugbot: `.text()` +
+ * slice capped the RESULT, not the download). Streamless responses (test
+ * fakes, some polyfills) fall back to text() + slice.
+ */
+export async function readBodyBounded(res: Response): Promise<string> {
+  const body = (res as { body?: ReadableStream<Uint8Array> | null }).body;
+  if (!body || typeof body.getReader !== "function") {
+    return (await res.text()).slice(0, SEO_MAX_BYTES);
+  }
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let out = "";
+  while (out.length < SEO_MAX_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    out += decoder.decode(value, { stream: true });
+  }
+  try {
+    await reader.cancel();
+  } catch {
+    // Already-closed streams reject cancel; the bytes are read either way.
+  }
+  return out.slice(0, SEO_MAX_BYTES);
+}
+
+/**
  * Bounded, SSRF-guarded homepage fetch: DNS allowlist on every redirect hop
- * (same posture as the ingest crawler), manual redirects, byte cap.
+ * (same posture as the ingest crawler), manual redirects, byte cap enforced
+ * while streaming.
  */
 async function fetchHomepage(
   startUrl: string,
@@ -279,13 +313,25 @@ async function fetchHomepage(
       if (!location || hop === SEO_MAX_REDIRECTS) {
         return { ok: false, error: "fetch_failed", detail: `redirect loop (${res.status})` };
       }
-      current = new URL(location, current).toString();
+      let next: URL;
+      try {
+        next = new URL(location, current);
+      } catch {
+        return { ok: false, error: "fetch_failed", detail: "malformed redirect location" };
+      }
+      // Same scheme posture as the ingest crawler: a redirect onto a
+      // non-web scheme (file:, gopher:, …) must not reach the next hop's
+      // hostname check, let alone a fetch.
+      if (next.protocol !== "http:" && next.protocol !== "https:") {
+        return { ok: false, error: "fetch_failed", detail: "non-http redirect" };
+      }
+      current = next.toString();
       continue;
     }
     if (!res.ok) {
       return { ok: false, error: "fetch_failed", detail: `status ${res.status}` };
     }
-    const html = (await res.text()).slice(0, SEO_MAX_BYTES);
+    const html = await readBodyBounded(res);
     return { html, finalUrl: current };
   }
   /* c8 ignore next 2 -- unreachable: the loop always returns */

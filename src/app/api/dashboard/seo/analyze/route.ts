@@ -96,18 +96,22 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", message);
     }
 
-    const { error: saveErr } = await db
+    const { data: saved, error: saveErr } = await db
       .from("business_configs")
       .update({
         seo_report: result.report,
         seo_report_at: result.report.analyzedAt,
         updated_at: new Date().toISOString()
       })
-      .eq("business_id", businessId);
-    if (saveErr) {
+      .eq("business_id", businessId)
+      .select("business_id");
+    if (saveErr || !Array.isArray(saved) || saved.length === 0) {
+      // No config row yet (unprovisioned business) or a write blip: the
+      // caller still gets the freshly computed report, it just won't be
+      // there on the next page load.
       logger.warn("seo-analyze: report persist failed (returning it anyway)", {
         businessId,
-        error: saveErr.message
+        error: saveErr?.message ?? "no business_configs row matched"
       });
     }
 
