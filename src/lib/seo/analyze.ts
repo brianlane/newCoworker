@@ -252,9 +252,13 @@ export async function readBodyBounded(res: Response): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let out = "";
-  while (out.length < SEO_MAX_BYTES) {
+  // Cap on RAW bytes received, not decoded string length — multibyte HTML
+  // must not stretch the download budget.
+  let bytesRead = 0;
+  while (bytesRead < SEO_MAX_BYTES) {
     const { done, value } = await reader.read();
     if (done) break;
+    bytesRead += value.byteLength;
     out += decoder.decode(value, { stream: true });
   }
   try {
@@ -309,6 +313,13 @@ async function fetchHomepage(
       clearTimeout(timeout);
     }
     if (res.status >= 300 && res.status < 400) {
+      // Drain/cancel the redirect body so chained hops don't pin
+      // connections for the whole audit.
+      try {
+        await (res as { body?: { cancel?: () => Promise<void> } }).body?.cancel?.();
+      } catch {
+        // Best-effort; a stubborn body just gets GC'd.
+      }
       const location = res.headers.get("location");
       if (!location || hop === SEO_MAX_REDIRECTS) {
         return { ok: false, error: "fetch_failed", detail: `redirect loop (${res.status})` };
@@ -331,8 +342,23 @@ async function fetchHomepage(
     if (!res.ok) {
       return { ok: false, error: "fetch_failed", detail: `status ${res.status}` };
     }
+    // Belt-and-braces: if the runtime followed a redirect despite
+    // redirect:"manual" (some fetch polyfills do), re-validate the host the
+    // bytes actually came from before reading the body.
+    const landedUrl = (res as { url?: string }).url || current;
+    if (landedUrl !== current) {
+      try {
+        await assertSafeHostname(new URL(landedUrl).hostname, lookup);
+      } catch (err) {
+        return {
+          ok: false,
+          error: "private_address",
+          detail: (err as Error).message
+        };
+      }
+    }
     const html = await readBodyBounded(res);
-    return { html, finalUrl: current };
+    return { html, finalUrl: landedUrl };
   }
   /* c8 ignore next 2 -- unreachable: the loop always returns */
   return { ok: false, error: "fetch_failed", detail: "redirect loop" };

@@ -32,6 +32,12 @@ export type GeminiGenerateTextParams = {
    * Gemini 3 models — Gemini 2.5 rejects it (those use a numeric budget).
    */
   thinkingLevel?: "minimal" | "low" | "medium" | "high";
+  /**
+   * Optional binary attachments appended to the user turn as `inlineData`
+   * parts (e.g. a PDF for document ingestion). Callers are responsible for
+   * keeping the payload within Gemini's inline limits (~20 MB request).
+   */
+  inlineParts?: Array<{ mimeType: string; dataBase64: string }>;
   signal?: AbortSignal;
 };
 
@@ -130,7 +136,17 @@ export async function geminiGenerateTextDetailed(
     signal: params.signal,
     body: JSON.stringify({
       systemInstruction: { parts: [{ text: params.systemInstruction }] },
-      contents: [{ role: "user", parts: [{ text: params.userText }] }],
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: params.userText },
+            ...(params.inlineParts ?? []).map((p) => ({
+              inlineData: { mimeType: p.mimeType, data: p.dataBase64 }
+            }))
+          ]
+        }
+      ],
       generationConfig: {
         temperature,
         maxOutputTokens,

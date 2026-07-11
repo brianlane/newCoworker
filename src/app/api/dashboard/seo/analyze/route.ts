@@ -18,6 +18,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { analyzeWebsiteSeo } from "@/lib/seo/analyze";
+import { resolveWebsiteSummaryGeminiModel } from "@/lib/website-ingest";
 import { geminiGenerateTextDetailed } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
@@ -57,7 +58,9 @@ export async function POST(request: Request) {
     }
 
     const apiKey = (process.env.GOOGLE_API_KEY ?? "").trim();
-    const model = (process.env.GEMINI_SUMMARY_MODEL ?? "").trim() || "gemini-3-flash-preview";
+    // Same resolver as website ingest: env model with retired-id coercion,
+    // so a stale GEMINI_SUMMARY_MODEL can't silently blank the AI advice.
+    const model = resolveWebsiteSummaryGeminiModel();
     const result = await analyzeWebsiteSeo(websiteUrl, {
       businessType: (business as { business_type: string | null }).business_type,
       // AI advice is optional: without a key the deterministic report ships.

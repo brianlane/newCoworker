@@ -113,6 +113,30 @@ describe("readBodyBounded", () => {
     expect(text).toHaveLength(SEO_MAX_BYTES);
   });
 
+  it("caps on RAW bytes, so multibyte content cannot stretch the budget", async () => {
+    // "é" is 2 bytes UTF-8: 600k chars = 1.2MB — over the cap in one chunk,
+    // so the second chunk must never be read.
+    const twoByte = "é".repeat(600_000);
+    let reads = 0;
+    const encoder = new TextEncoder();
+    const res = {
+      body: {
+        getReader: () => ({
+          read: async () => {
+            reads += 1;
+            return reads === 1
+              ? { done: false, value: encoder.encode(twoByte) }
+              : { done: false, value: encoder.encode("never") };
+          },
+          cancel: async () => {}
+        })
+      }
+    } as unknown as Response;
+    const text = await readBodyBounded(res);
+    expect(reads).toBe(1);
+    expect(text).not.toContain("never");
+  });
+
   it("reads a small streamed body fully and tolerates a rejecting cancel", async () => {
     const res = {
       body: streamOf(["<html>", "hi", "</html>"], new Error("already closed"))
@@ -332,11 +356,17 @@ describe("analyzeWebsiteSeo", () => {
     }
   });
 
-  it("follows revalidated redirects and reports the final URL", async () => {
-    const { impl, calls } = fetchSequence([
-      response(301, "", { location: "https://www.x.example.com/" }),
-      response(200, GOOD_HTML)
-    ]);
+  it("follows revalidated redirects (draining their bodies) and reports the final URL", async () => {
+    let redirectBodyCancelled = false;
+    const redirect = {
+      ...response(301, "", { location: "https://www.x.example.com/" }),
+      body: {
+        cancel: async () => {
+          redirectBodyCancelled = true;
+        }
+      }
+    } as unknown as FakeResponse;
+    const { impl, calls } = fetchSequence([redirect, response(200, GOOD_HTML)]);
     const result = await analyzeWebsiteSeo("https://x.example.com", {
       fetchImpl: impl,
       lookup: PUBLIC_LOOKUP
@@ -345,6 +375,53 @@ describe("analyzeWebsiteSeo", () => {
     if (!result.ok) return;
     expect(result.report.url).toBe("https://www.x.example.com/");
     expect(calls).toHaveLength(2);
+    expect(redirectBodyCancelled).toBe(true);
+  });
+
+  it("tolerates a redirect body whose cancel rejects", async () => {
+    const redirect = {
+      ...response(302, "", { location: "https://www.x.example.com/" }),
+      body: {
+        cancel: async () => {
+          throw new Error("already consumed");
+        }
+      }
+    } as unknown as FakeResponse;
+    const { impl } = fetchSequence([redirect, response(200, GOOD_HTML)]);
+    const result = await analyzeWebsiteSeo("https://x.example.com", {
+      fetchImpl: impl,
+      lookup: PUBLIC_LOOKUP
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it("re-validates the landed URL when the runtime auto-followed a redirect", async () => {
+    // Same public host → accepted, and the landed URL becomes the report URL.
+    const followedOk = {
+      ...response(200, GOOD_HTML),
+      url: "https://www.x.example.com/home"
+    } as unknown as FakeResponse;
+    const okResult = await analyzeWebsiteSeo("https://x.example.com", {
+      fetchImpl: fetchSequence([followedOk]).impl,
+      lookup: PUBLIC_LOOKUP
+    });
+    expect(okResult.ok).toBe(true);
+    if (okResult.ok) expect(okResult.report.url).toBe("https://www.x.example.com/home");
+
+    // Landed on a host that never passed the allowlist → refused unread.
+    const lookupByHost = async (hostname: string) =>
+      hostname === "x.example.com"
+        ? [{ address: "93.184.216.34", family: 4 }]
+        : [{ address: "10.0.0.5", family: 4 }];
+    const followedPrivate = {
+      ...response(200, GOOD_HTML),
+      url: "https://internal.example.com/"
+    } as unknown as FakeResponse;
+    const badResult = await analyzeWebsiteSeo("https://x.example.com", {
+      fetchImpl: fetchSequence([followedPrivate]).impl,
+      lookup: lookupByHost
+    });
+    expect(badResult).toMatchObject({ ok: false, error: "private_address" });
   });
 
   it("refuses invalid URLs, private hosts, dns failures, and redirect abuse", async () => {

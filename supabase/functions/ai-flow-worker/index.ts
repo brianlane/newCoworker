@@ -56,7 +56,12 @@ import {
 } from "../_shared/ai_flows/engine.ts";
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
-import { MAX_WAIT_MINUTES, planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
+import {
+  MAX_WAIT_MINUTES,
+  SHARE_URL_TOKEN,
+  planStep,
+  type StepAction
+} from "../_shared/ai_flows/steps.ts";
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import {
   normalizeBrowseUrl,
@@ -897,7 +902,13 @@ async function stoppedMidExecutionLog(
  * everything that CONTACTS someone. Reads/waits/branches run any time — only
  * the outward touch waits for business hours.
  */
-const COMM_STEP_TYPES = new Set<string>(["send_sms", "send_email", "notify_owner", "route_to_team"]);
+const COMM_STEP_TYPES = new Set<string>([
+  "send_sms",
+  "send_email",
+  "notify_owner",
+  "route_to_team",
+  "share_document"
+]);
 
 type StepOutcome =
   // skipNextStep: set by an approval gate decided "skip" — the step directly
@@ -1033,6 +1044,8 @@ async function runStep(
       return sendSmsStep(supabase, run, index, scope, action);
     case "send_email":
       return sendEmailStep(supabase, run, index, scope, action);
+    case "share_document":
+      return shareDocumentStep(supabase, run, index, scope, action);
     case "notify_owner":
       return notifyOwnerStep(supabase, run, action);
     case "http_call":
@@ -3246,6 +3259,179 @@ async function generateImageStep(
   scope.vars[action.saveAs] = signed.signedUrl;
   appendActionTaken(scope, "generated an image");
   return { kind: "ok", result: { vars: { [action.saveAs]: signed.signedUrl }, path } };
+}
+
+/** base64url-encode raw bytes (share tokens; no padding). */
+function base64UrlEncode(bytes: Uint8Array): string {
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+async function sha256Hex(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/** Share links minted by flows live this long (mirrors the app-side default). */
+const SHARE_DOCUMENT_TTL_DAYS = 30;
+
+/**
+ * share_document: validate the referenced business document, mint a
+ * tokenized share link, then deliver it through the SAME machinery as
+ * send_sms / send_email (opt-outs, monthly SMS reservation, logging all
+ * apply). The eligibility re-check here is the AiFlow-side half of the
+ * document-expiration guarantee: a document that expired (or was switched
+ * to staff-only, or deleted) AFTER the flow was authored fails the step
+ * loudly — with an owner notice — instead of silently sending a stale link.
+ */
+async function shareDocumentStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "share_document" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    appendActionTaken(
+      scope,
+      "skipped sharing the document — no valid recipient was extracted"
+    );
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+
+  const { data: doc, error: docError } = await supabase
+    .from("business_documents")
+    .select("id, title, audience, status, expires_at, mime_type")
+    .eq("business_id", run.business_id)
+    .eq("id", action.documentId)
+    .maybeSingle();
+  if (docError) throw new Error(`share_document: document read failed: ${docError.message}`);
+
+  // Eligibility gate. Flow recipients are customers, so only ready,
+  // client-audience, non-expired documents may go out.
+  const expired =
+    Boolean(doc?.expires_at) && Date.parse(doc!.expires_at as string) <= Date.now();
+  const failReason = !doc
+    ? "document_deleted"
+    : doc.status !== "ready"
+      ? "document_not_ready"
+      : doc.audience === "staff"
+        ? "document_staff_only"
+        : expired
+          ? "document_expired"
+          : null;
+  if (failReason) {
+    const title = doc?.title ?? action.documentTitle ?? "a document";
+    // Owner notice (best-effort, idempotent per run): a flow quietly
+    // skipping its document share is exactly the silent-staleness failure
+    // the expiration feature exists to prevent.
+    try {
+      await sendOwnerSms(
+        supabase,
+        run,
+        failReason === "document_expired"
+          ? `Your automation tried to share "${title}", but that document has expired, so nothing was sent. Update or replace it under Dashboard → Memory → Documents.`
+          : `Your automation tried to share "${title}", but that document is ${
+              failReason === "document_deleted"
+                ? "no longer on file"
+                : failReason === "document_staff_only"
+                  ? "marked internal-only"
+                  : "not ready"
+            }, so nothing was sent. Review the flow under Dashboard → AiFlows.`,
+        `aiflow-sharedoc:${run.id}:${index}`
+      );
+    } catch (e) {
+      console.error("share_document owner notice failed", e);
+    }
+    return { kind: "fail", error: `share_document: ${failReason}` };
+  }
+
+  const appBase = (Deno.env.get("AIFLOW_PLATFORM_URL") ?? "").replace(/\/+$/, "");
+  if (!appBase) {
+    return { kind: "fail", error: "share_document: AIFLOW_PLATFORM_URL is not configured" };
+  }
+
+  const tokenBytes = new Uint8Array(32);
+  crypto.getRandomValues(tokenBytes);
+  const token = base64UrlEncode(tokenBytes);
+  const expiresAt = new Date(
+    Date.now() + SHARE_DOCUMENT_TTL_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
+  const { data: shareRow, error: insertError } = await supabase
+    .from("business_document_shares")
+    .insert({
+      business_id: run.business_id,
+      document_id: action.documentId,
+      token_sha256: await sha256Hex(token),
+      shared_with: action.to.slice(0, 200),
+      channel: "flow",
+      expires_at: expiresAt
+    })
+    .select("id")
+    .single();
+  if (insertError) {
+    throw new Error(`share_document: share insert failed: ${insertError.message}`);
+  }
+  const shareId = (shareRow as { id: string }).id;
+  const url = `${appBase}/api/public/docs/${token}`;
+  if (action.saveAs) scope.vars[action.saveAs] = url;
+
+  // A link the recipient never received must not stay live: on any
+  // undelivered outcome the share is revoked (best-effort — it still dies
+  // at its TTL if the revoke itself fails).
+  const revokeUndelivered = async (): Promise<void> => {
+    const { error: revokeError } = await supabase
+      .from("business_document_shares")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("id", shareId);
+    if (revokeError) {
+      console.error("share_document: undelivered-share revoke failed", revokeError.message);
+    }
+  };
+
+  // Place the link: explicit {{share_url}} token wins; otherwise append.
+  const title = doc!.title as string;
+  let body: string;
+  if (action.message.includes(SHARE_URL_TOKEN)) {
+    body = action.message.split(SHARE_URL_TOKEN).join(url);
+  } else if (action.message) {
+    body = `${action.message} ${url}`;
+  } else {
+    body = `Here is "${title}": ${url}`;
+  }
+
+  const delivered =
+    action.via === "email"
+      ? await deliverFlowEmail(supabase, run, index, scope, {
+          to: action.to,
+          subject: `Document: ${title}`,
+          body,
+          attachScreenshot: false
+        })
+      : await sendSmsStep(supabase, run, index, scope, {
+          kind: "send_sms",
+          to: action.to,
+          body
+        });
+  if (delivered.kind !== "ok" || delivered.skipped) {
+    await revokeUndelivered();
+    return delivered;
+  }
+  appendActionTaken(scope, `shared the document "${title}" with ${action.to}`);
+  return {
+    kind: "ok",
+    result: {
+      document: title,
+      url,
+      via: action.via,
+      to: action.to,
+      link_expires_at: expiresAt,
+      ...(delivered.result ?? {})
+    }
+  };
 }
 
 async function sendSmsStep(

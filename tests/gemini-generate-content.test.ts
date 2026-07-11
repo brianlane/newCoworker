@@ -161,6 +161,31 @@ describe("geminiGenerateText", () => {
     expect(parsed.generationConfig).toMatchObject({ temperature: 0.3, maxOutputTokens: 99 });
   });
 
+  it("appends inlineParts as inlineData parts on the user turn (PDF ingestion)", async () => {
+    const fetchStub = vi.fn(
+      async (): Promise<Response> =>
+        new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: "ok" }] } }] }),
+          { status: 200, headers: { "content-type": "application/json" } }
+        )
+    );
+    vi.stubGlobal("fetch", fetchStub);
+
+    await geminiGenerateText({
+      apiKey: "k",
+      model: "m",
+      systemInstruction: "sys",
+      userText: "user",
+      inlineParts: [{ mimeType: "application/pdf", dataBase64: "UERG" }]
+    });
+    const [, init] = fetchStub.mock.calls[0] as unknown as [string, RequestInit];
+    const parsed = JSON.parse(String(init?.body ?? "{}"));
+    expect(parsed.contents[0].parts).toEqual([
+      { text: "user" },
+      { inlineData: { mimeType: "application/pdf", data: "UERG" } }
+    ]);
+  });
+
   it("uses default generationConfig temperature and maxOutputTokens", async () => {
     const fetchStub = vi.fn(
       async (): Promise<Response> =>

@@ -9,7 +9,10 @@ import {
 
 async function makeVault(
   files: Partial<
-    Record<"soul.md" | "identity.md" | "memory.md" | "website.md" | "profile.md", string>
+    Record<
+      "soul.md" | "identity.md" | "memory.md" | "website.md" | "profile.md" | "documents.md",
+      string
+    >
   >
 ): Promise<string> {
   const dir = await fs.mkdtemp(join(os.tmpdir(), "vault-test-"));
@@ -68,6 +71,15 @@ describe("loadVaultForPrompt", () => {
     expect(snap.presentFiles).toEqual(["profile"]);
   });
 
+  it("loads documents.md (client documents digest) when present", async () => {
+    const dir = await vault({
+      "documents.md": "# documents.md\n- **Price sheet** (pricing): Prices."
+    });
+    const snap = await loadVaultForPrompt({ vaultPath: dir });
+    expect(snap.documents).toMatch(/Price sheet/);
+    expect(snap.presentFiles).toEqual(["documents"]);
+  });
+
   it("truncates oversized per-file content with a visible marker", async () => {
     const big = "x".repeat(10_000);
     const dir = await vault({ "memory.md": big });
@@ -93,15 +105,16 @@ describe("loadVaultForPrompt", () => {
 });
 
 describe("composeVaultPromptSection", () => {
-  it("orders sections identity -> profile -> soul -> website -> memory with guardrail preamble", () => {
+  it("orders sections identity -> profile -> soul -> website -> documents -> memory with guardrail preamble", () => {
     const output = composeVaultPromptSection({
       soul: "soul body",
       identity: "identity body",
       memory: "memory body",
       website: "website body",
       profile: "profile body",
+      documents: "documents body",
       totalChars: 0,
-      presentFiles: ["soul", "identity", "memory", "website", "profile"]
+      presentFiles: ["soul", "identity", "memory", "website", "profile", "documents"]
     });
 
     const idxPreamble = output.indexOf("Below is your business-specific");
@@ -109,13 +122,17 @@ describe("composeVaultPromptSection", () => {
     const idxProfile = output.indexOf("profile.md");
     const idxSoul = output.indexOf("soul.md");
     const idxWebsite = output.indexOf("website.md");
+    const idxDocuments = output.indexOf("documents.md");
     const idxMemory = output.indexOf("memory.md");
     expect(idxPreamble).toBeGreaterThanOrEqual(0);
     expect(idxIdentity).toBeGreaterThan(idxPreamble);
     expect(idxProfile).toBeGreaterThan(idxIdentity);
     expect(idxSoul).toBeGreaterThan(idxProfile);
     expect(idxWebsite).toBeGreaterThan(idxSoul);
-    expect(idxMemory).toBeGreaterThan(idxWebsite);
+    expect(idxDocuments).toBeGreaterThan(idxWebsite);
+    expect(idxMemory).toBeGreaterThan(idxDocuments);
+    // The documents section carries the share-on-request guidance.
+    expect(output).toContain("document_share");
   });
 
   it("omits missing sections entirely", () => {
@@ -125,6 +142,7 @@ describe("composeVaultPromptSection", () => {
       memory: "",
       website: "",
       profile: "",
+      documents: "",
       totalChars: 5,
       presentFiles: ["identity"]
     });
@@ -133,5 +151,6 @@ describe("composeVaultPromptSection", () => {
     expect(output).not.toMatch(/website.md/);
     expect(output).not.toMatch(/memory.md/);
     expect(output).not.toMatch(/profile.md/);
+    expect(output).not.toMatch(/documents.md/);
   });
 });

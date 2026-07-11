@@ -36,11 +36,13 @@ import {
   ANALYTICS_WINDOW_DAYS,
   analyticsWindowStart,
   CALL_SENTIMENT_KEYS,
+  computePeriodChange,
   getAnalyticsDayDetail,
   getAnswerRateStats,
   getDailyUsageSeries,
   getHourCallsDetail,
   getInboundCallStats,
+  getPreviousPeriodTotals,
   getSentimentCallsDetail,
   isValidAnalyticsDay,
   type DayDetailCall
@@ -190,11 +192,14 @@ export default async function DashboardAnalyticsPage(props: {
   // Every fetcher shares the page's `now` so the cards, the drill-down
   // clamps, and the chart highlights all describe the same window even if
   // UTC midnight passes mid-request.
-  const [usage, answerRate, callStats, snapshotSeries, dayDetail, sentimentDetail, hourDetail] =
+  const [usage, answerRate, callStats, previousPeriod, snapshotSeries, dayDetail, sentimentDetail, hourDetail] =
     await Promise.all([
       getDailyUsageSeries(business.id, { client: db, now }).catch(() => null),
       getAnswerRateStats(business.id, { client: db, now }).catch(() => null),
       getInboundCallStats(business.id, { client: db, timeZone, now }).catch(() => null),
+      // Prior-window totals feed the "vs prior 30 days" deltas; a lookup blip
+      // just hides the delta lines.
+      getPreviousPeriodTotals(business.id, { client: db, now }).catch(() => null),
       // Long-window trend from the nightly snapshots (survives retention
       // pruning); a blip or an empty table just hides the trend card.
       getSnapshotSeries(business.id, 84, { client: db, now }).catch(() => null),
@@ -213,6 +218,14 @@ export default async function DashboardAnalyticsPage(props: {
         : Promise.resolve(null)
     ]);
   const segmentDetail = sentimentDetail ?? hourDetail;
+
+  // Deltas only when NEITHER window's transcript scan hit its row cap — a
+  // capped scan undercounts, so a percentage against it would be wrong, not
+  // merely incomplete (the answer-rate card suppresses for the same reason).
+  const comparablePeriod =
+    previousPeriod && !previousPeriod.clipped && usage && !usage.clipped
+      ? previousPeriod
+      : null;
 
   // Trend & forecast card: only once enough snapshot history exists for the
   // math to mean anything (FORECAST_MIN_DAYS).
@@ -291,6 +304,11 @@ export default async function DashboardAnalyticsPage(props: {
               colorClass="bg-signal-teal/70"
               dayHref={(date) => `/dashboard/analytics?day=${date}#day-detail`}
               selectedDate={selectedDay}
+              change={
+                comparablePeriod
+                  ? computePeriodChange(usage.totals.calls, comparablePeriod.calls)
+                  : null
+              }
             />
             <DailyVolumeCard
               label="Texts (30 days)"
@@ -301,6 +319,11 @@ export default async function DashboardAnalyticsPage(props: {
               colorClass="bg-claw-green/70"
               dayHref={(date) => `/dashboard/analytics?day=${date}#day-detail`}
               selectedDate={selectedDay}
+              change={
+                comparablePeriod
+                  ? computePeriodChange(usage.totals.sms, comparablePeriod.sms)
+                  : null
+              }
             />
             <DailyVolumeCard
               label="Voice minutes (30 days)"
@@ -311,6 +334,11 @@ export default async function DashboardAnalyticsPage(props: {
               colorClass="bg-amber-300/60"
               dayHref={(date) => `/dashboard/analytics?day=${date}#day-detail`}
               selectedDate={selectedDay}
+              change={
+                comparablePeriod
+                  ? computePeriodChange(usage.totals.voiceMinutes, comparablePeriod.voiceMinutes)
+                  : null
+              }
             />
           </div>
           <p className="text-xs text-parchment/40 -mt-3">
@@ -349,6 +377,7 @@ export default async function DashboardAnalyticsPage(props: {
             answered={answerRate.answered}
             missed={answerRate.missed}
             rate={answerRate.rate}
+            previousRate={previousPeriod?.answerRate ?? null}
           />
         ) : (
           <Card>

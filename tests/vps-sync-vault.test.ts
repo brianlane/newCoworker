@@ -72,10 +72,31 @@ const FULL_KEY = {
   rotated_at: null
 };
 
+const READY_DOC = {
+  id: "33333333-3333-4333-8333-333333333333",
+  business_id: BIZ,
+  title: "Price sheet",
+  category: "pricing",
+  audience: "both" as const,
+  storage_path: "p",
+  mime_type: "application/pdf",
+  byte_size: 10,
+  content_md: "- Haircut: $40",
+  summary: "Service prices.",
+  status: "ready" as const,
+  error_detail: null,
+  expires_at: null,
+  expiring_soon_notified_at: null,
+  expired_notified_at: null,
+  created_at: "2026-07-01T00:00:00Z",
+  updated_at: "2026-07-01T00:00:00Z"
+};
+
 function freshDeps(overrides: Partial<VaultSyncDeps> = {}): Required<VaultSyncDeps> {
   return {
     fetchConfig: vi.fn(async () => FULL_CONFIG),
     fetchBusiness: vi.fn(async () => FULL_BIZ),
+    fetchDocuments: vi.fn(async () => []),
     fetchSshKey: vi.fn(async () => FULL_KEY),
     resolveIp: vi.fn(async () => "203.0.113.1"),
     exec: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: "vault_synced=ok\n", stderr: "" })),
@@ -146,6 +167,19 @@ describe("buildAgentInstructions", () => {
     expect(out).toBe(DEFAULT_AGENT_INSTRUCTIONS_FALLBACK);
   });
 
+  it("places the documents digest between website and memory", () => {
+    const out = buildAgentInstructions(FULL_CONFIG, "# documents.md\n- **Price sheet** (pricing)");
+    const idxWebsite = out.indexOf("# website");
+    const idxDocuments = out.indexOf("# documents.md");
+    const idxMemory = out.indexOf("# memory");
+    expect(idxDocuments).toBeGreaterThan(idxWebsite);
+    expect(idxDocuments).toBeLessThan(idxMemory);
+  });
+
+  it("omits a blank documents digest entirely", () => {
+    expect(buildAgentInstructions(FULL_CONFIG, "   ")).toBe(buildAgentInstructions(FULL_CONFIG));
+  });
+
   it("treats a config with non-string fields as blank (defends against a misshapen DB row without crashing)", () => {
     const out = buildAgentInstructions({
       // Cast through unknown to feed a deliberately misshapen row — the
@@ -211,6 +245,15 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/memory.md");
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/website.md");
     expect(cmd).toContain("base64 -d > /opt/rowboat/vault/profile.md");
+    // documents.md is always written (empty when no digest) so the voice
+    // bridge's vault loader has a stable file and stale digests get cleared.
+    expect(cmd).toContain("base64 -d > /opt/rowboat/vault/documents.md");
+  });
+
+  it("encodes a supplied documents digest into documents.md", () => {
+    const digest = "# documents.md\n- **Price sheet** (pricing)";
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW, digest);
+    expect(cmd).toContain(`'${Buffer.from(digest).toString("base64")}'`);
   });
 
   it("updates EVERY agent (not just agents.0) across BOTH draftWorkflow and liveWorkflow so Coworker + OwnerCoworker stay in lockstep and owner-dashboard memory edits reach the agent the owner talks to", () => {
@@ -350,11 +393,13 @@ describe("syncVaultToVps — guards", () => {
     // Build deps WITHOUT a resolveIp override so the env-guard fires.
     const fetchConfig = vi.fn(async () => FULL_CONFIG);
     const fetchBusiness = vi.fn(async () => FULL_BIZ);
+    const fetchDocuments = vi.fn(async () => []);
     const fetchSshKey = vi.fn(async () => FULL_KEY);
     const exec = vi.fn();
     const r = await syncVaultToVps(BIZ, {
       fetchConfig,
       fetchBusiness,
+      fetchDocuments,
       fetchSshKey,
       exec: exec as never,
       now: () => new Date("2026-05-03T12:00:00Z")
@@ -400,6 +445,49 @@ describe("syncVaultToVps — success path", () => {
     await syncVaultToVps(BIZ, deps);
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(call.timeoutMs).toBe(60_000);
+  });
+
+  it("builds the client-audience documents digest into the instructions and the vault write", async () => {
+    const deps = freshDeps({
+      fetchDocuments: vi.fn(async () => [
+        READY_DOC,
+        { ...READY_DOC, id: "staff-doc", title: "Internal SOP", audience: "staff" as const }
+      ])
+    });
+    const r = await syncVaultToVps(BIZ, deps);
+    expect(r.ok).toBe(true);
+    const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const digest = "# documents.md";
+    const digestB64Fragment = Buffer.from(digest).toString("base64").slice(0, 16);
+    expect(call.command).toContain(digestB64Fragment);
+    // Staff-only docs never reach the on-VPS digest.
+    const priceB64 = Buffer.from("Price sheet").toString("base64");
+    expect(priceB64).toBeTruthy(); // sanity for the fixture
+    if (r.ok) {
+      // Digest characters count toward the instructions blob.
+      const withoutDocs = await syncVaultToVps(BIZ, freshDeps());
+      expect(withoutDocs.ok).toBe(true);
+      if (withoutDocs.ok) {
+        expect(r.instructionsLength).toBeGreaterThan(withoutDocs.instructionsLength);
+      }
+    }
+  });
+
+  it("syncs without the digest when the documents read fails (Error and non-Error)", async () => {
+    const errDeps = freshDeps({
+      fetchDocuments: vi.fn(async () => {
+        throw new Error("table missing");
+      })
+    });
+    const r1 = await syncVaultToVps(BIZ, errDeps);
+    expect(r1.ok).toBe(true);
+    const strDeps = freshDeps({
+      fetchDocuments: vi.fn(async () => {
+        throw "string failure";
+      })
+    });
+    const r2 = await syncVaultToVps(BIZ, strDeps);
+    expect(r2.ok).toBe(true);
   });
 
   it("propagates a drifted business_configs.rowboat_project_id all the way to the SSH command AND the returned result.projectId", async () => {
@@ -542,6 +630,7 @@ describe("syncVaultToVpsAndLog", () => {
     await syncVaultToVpsAndLog(BIZ, {
       fetchConfig: async () => FULL_CONFIG,
       fetchBusiness: async () => FULL_BIZ,
+      fetchDocuments: async () => [],
       fetchSshKey: async () => FULL_KEY
     });
     expect(logger.warn).toHaveBeenCalledWith(

@@ -87,6 +87,18 @@ export function formatHoursTime(time: string): string {
   return `${hour12}:${mStr} ${suffix}`;
 }
 
+/**
+ * One catalog service rendered into the profile block (from
+ * `business_services`, active rows only). Structured so the agent quotes
+ * exact prices and the calendar tools get real appointment durations.
+ */
+export type BusinessServiceFact = {
+  name: string;
+  description?: string | null;
+  durationMinutes?: number | null;
+  priceText?: string | null;
+};
+
 export type BusinessProfileFacts = {
   name: string;
   /** Owner / primary contact display name (businesses.owner_name). */
@@ -97,6 +109,8 @@ export type BusinessProfileFacts = {
   address?: string | null;
   timezone?: string | null;
   hours?: BusinessHours | null;
+  /** Active services catalog (Settings → Services). */
+  services?: BusinessServiceFact[] | null;
 };
 
 /** Industry slug → human label; unknown slugs fall back to a humanized slug. */
@@ -146,10 +160,34 @@ export function renderBusinessProfileMd(facts: BusinessProfileFacts): string {
     }
   }
 
-  if (lines.length === 0 && hoursLines.length === 0) return "";
+  // Structured services (BizBlasts-style catalog): "Name — 60 min — $99 —
+  // description". Duration and price only render when set, so half-filled
+  // rows stay honest instead of claiming a zero price.
+  const serviceLines: string[] = [];
+  for (const service of facts.services ?? []) {
+    const svcName = service.name.trim();
+    if (!svcName) continue;
+    const parts = [svcName];
+    if (service.durationMinutes && service.durationMinutes > 0) {
+      parts.push(`${service.durationMinutes} min`);
+    }
+    const price = service.priceText?.trim();
+    if (price) parts.push(price);
+    const description = service.description?.trim();
+    if (description) parts.push(description);
+    serviceLines.push(`- ${parts.join(" — ")}`);
+  }
+
+  if (lines.length === 0 && hoursLines.length === 0 && serviceLines.length === 0) return "";
 
   const sections = ["## Business profile"];
   if (lines.length > 0) sections.push(lines.join("\n"));
   if (hoursLines.length > 0) sections.push("### Business hours\n" + hoursLines.join("\n"));
+  if (serviceLines.length > 0) {
+    sections.push(
+      "### Services (name — duration — price)\nWhen booking an appointment for one of these services, use its listed duration.\n" +
+        serviceLines.join("\n")
+    );
+  }
   return sections.join("\n\n");
 }

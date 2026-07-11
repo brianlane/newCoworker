@@ -46,6 +46,7 @@ export const FLOW_STEP_TYPES = [
   "update_contact",
   "classify",
   "generate_image",
+  "share_document",
   // Voice-channel steps (real-time call routing, executed by the Telnyx voice
   // webhook state machine; NOT the async ai-flow-worker). Only valid under a
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
@@ -706,6 +707,32 @@ const nonBranchStepMembers = [
   }),
   z.object({
     id: stepId,
+    /**
+     * Share a business document with the lead: mint an expiring tokenized
+     * link for `documentId` and deliver it via SMS or email. The runtime
+     * re-checks the document is ready, client-audience, and not expired —
+     * a stale price sheet is never sent even if the flow was authored while
+     * it was fresh. `{{share_url}}` in messageTemplate marks where the link
+     * goes; without it the link is appended. `saveAs` exposes the link to
+     * later steps.
+     */
+    type: z.literal("share_document"),
+    /** business_documents row id (picked in the builder / bound by AI-assist). */
+    documentId: z.string().uuid(),
+    /** Editor display hint captured when the document was picked. */
+    documentTitle: z.string().min(1).max(200).optional(),
+    /** Recipient template: phone for via "sms", email address for via "email". */
+    to: z.string().min(1).max(320),
+    /** Delivery channel; defaults to "sms". */
+    via: z.enum(["sms", "email"]).optional(),
+    /** Message sent with the link; {{share_url}} marks placement. */
+    messageTemplate: z.string().min(1).max(1600).optional(),
+    /** Save the minted link into {{vars.<saveAs>}} for later steps. */
+    saveAs: varName.optional(),
+    when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
     type: z.literal("approval_gate"),
     prompt: z.string().min(1).max(500),
     when: whenSchema.optional()
@@ -1133,6 +1160,14 @@ export class AiFlowValidationError extends Error {
 
 const TEMPLATE_REF_RE = /\{\{\s*([\w.]+)\s*\}\}/g;
 
+/**
+ * The literal token a share_document messageTemplate uses to place the
+ * minted link. NOT a scope reference — the worker substitutes it after
+ * template rendering — so the scope checker strips it first (and the
+ * runtime planner shares this regex).
+ */
+export const SHARE_URL_TOKEN_RE = /\{\{\s*share_url\s*\}\}/g;
+
 /** Parse `{{scope.key}}` references out of a template string. */
 export function collectTemplateRefs(text: string): { scope: string; key: string }[] {
   const refs: { scope: string; key: string }[] = [];
@@ -1153,6 +1188,11 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.to ?? "", step.body, step.quietHours?.emailSubject ?? ""];
     case "send_email":
       return [step.to, ...(step.cc ?? []), ...(step.bcc ?? []), step.subject, step.body];
+    // The {{share_url}} placement token is substituted by the worker after
+    // rendering (it is not a scope reference), so strip it before the
+    // scope check; everything else in the message is a normal template.
+    case "share_document":
+      return [step.to, (step.messageTemplate ?? "").replace(SHARE_URL_TOKEN_RE, "")];
     case "notify_owner":
       return [step.message];
     case "approval_gate":
@@ -1865,6 +1905,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "generate_image") {
       vars.add(step.saveAs);
     } else if (step.type === "math") {
+      vars.add(step.saveAs);
+    } else if (step.type === "share_document" && step.saveAs) {
       vars.add(step.saveAs);
     }
   };

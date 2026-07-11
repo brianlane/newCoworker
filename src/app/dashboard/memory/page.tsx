@@ -7,6 +7,7 @@ import { getBusinessConfig } from "@/lib/db/configs";
 import { Card } from "@/components/ui/Card";
 import { MemoryEditor } from "@/components/dashboard/MemoryEditor";
 import { SeoInsightsCard, type SeoReportView } from "@/components/dashboard/SeoInsightsCard";
+import { DocumentsManager } from "@/components/dashboard/DocumentsManager";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,7 @@ export default async function MemoryPage() {
               ((config as { seo_report?: SeoReportView | null }).seo_report ?? null)
             }
           />
+          <DocumentsManager businessId={businessId!} />
         </>
       )}
     </div>
