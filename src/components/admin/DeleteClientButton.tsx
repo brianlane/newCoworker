@@ -17,6 +17,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
+import { DeletionImpactPreview } from "@/components/admin/DeletionImpactPreview";
 
 export function DeleteClientButton({ businessId, businessName }: { businessId: string; businessName: string }) {
   const router = useRouter();
@@ -57,6 +58,7 @@ export function DeleteClientButton({ businessId, businessName }: { businessId: s
           billing, tears down the VPS, wipes tenant data, and disables the owner&apos;s login.
           No grace period, no refund. This cannot be undone.
         </p>
+        <DeletionImpactPreview businessId={businessId} />
         <div className="flex gap-2">
           <Button size="sm" variant="danger" onClick={handleDelete} loading={loading}>
             Confirm force-cancel
