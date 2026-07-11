@@ -2854,13 +2854,15 @@ function inputImageBase64(bytes: Uint8Array): string {
 }
 
 /**
- * generate_image step: spend-gated Gemini image generation. Uploads the image
- * to the private generated-images bucket, signs a 7-day URL into vars[saveAs]
- * (consumed by send_sms mediaUrlVar / send_email bodies), and meters the flat
- * per-image price into the shared AI budget. A missing API key or an empty
- * model response FAILS the step (unlike extraction there is no fallback that
- * can stand in for an image). AiFlow runs are exempt from the conversational
- * per-session image limit — flows are owner-authored and explicitly enabled.
+ * generate_image step: spend-gated Gemini image generation (or editing, when
+ * inputImage is set). Uploads the image to the private generated-images
+ * bucket, signs a 32-day URL into vars[saveAs] (consumed by send_sms
+ * mediaUrlVar / send_email bodies; the TTL outlives the 30-day max deferral),
+ * and meters the flat per-image price into the shared AI budget. A missing
+ * API key or an empty model response FAILS the step (unlike extraction there
+ * is no fallback that can stand in for an image). AiFlow runs are exempt from
+ * the conversational per-session image limit — flows are owner-authored and
+ * explicitly enabled.
  */
 async function generateImageStep(
   supabase: Supabase,
