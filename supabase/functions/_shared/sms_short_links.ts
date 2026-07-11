@@ -34,6 +34,9 @@ export interface ShortLinkSupabase {
   // the interface structurally.
   from(table: string): {
     insert(row: Record<string, unknown>): PromiseLike<{ error: DbError }>;
+    delete(): {
+      in(column: string, values: string[]): PromiseLike<{ error: DbError }>;
+    };
   };
 }
 
@@ -173,6 +176,33 @@ async function insertShortLink(
   }
   console.warn("sms_short_links: exhausted code attempts, leaving URL unshortened");
   return null;
+}
+
+/**
+ * Best-effort removal of tracked links whose send never went out (carrier
+ * rejection, quota release, transport error) — otherwise the rows would sit
+ * as live /s/<code> redirects for messages nobody received. Never throws:
+ * cleanup is strictly subordinate to the caller's own error handling.
+ */
+export async function deleteShortLinks(
+  db: ShortLinkSupabase,
+  links: readonly ShortenedLink[]
+): Promise<void> {
+  if (links.length === 0) return;
+  try {
+    const { error } = await db
+      .from("sms_links")
+      .delete()
+      .in("short_code", links.map((l) => l.shortCode));
+    if (error) {
+      console.warn("sms_short_links: cleanup delete failed", error.message);
+    }
+  } catch (err) {
+    console.warn(
+      "sms_short_links: cleanup delete threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
 
 /**

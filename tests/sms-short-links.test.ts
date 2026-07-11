@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SHORT_CODE_LENGTH,
+  deleteShortLinks,
   extractShortenableUrls,
   generateShortCode,
   shortLinkUrl,
@@ -26,8 +27,9 @@ function bytes(start: number): RandomBytes {
 
 type InsertOutcome = { error: { message: string; code?: string } | null };
 
-function stubDb(outcomes: InsertOutcome[]) {
+function stubDb(outcomes: InsertOutcome[], deleteOutcome: InsertOutcome = { error: null }) {
   const inserts: Array<Record<string, unknown>> = [];
+  const deletes: Array<{ column: string; values: string[] }> = [];
   let call = 0;
   const db: ShortLinkSupabase = {
     from: (table: string) => ({
@@ -37,10 +39,17 @@ function stubDb(outcomes: InsertOutcome[]) {
         const outcome = outcomes[Math.min(call, outcomes.length - 1)];
         call += 1;
         return Promise.resolve(outcome);
-      }
+      },
+      delete: () => ({
+        in: (column: string, values: string[]) => {
+          expect(table).toBe("sms_links");
+          deletes.push({ column, values });
+          return Promise.resolve(deleteOutcome);
+        }
+      })
     })
   };
-  return { db, inserts };
+  return { db, inserts, deletes };
 }
 
 const ok: InsertOutcome = { error: null };
@@ -227,7 +236,8 @@ describe("shortenSmsBodyUrls", () => {
     for (const thrown of [new Error("network down"), "string failure"]) {
       const db: ShortLinkSupabase = {
         from: () => ({
-          insert: () => Promise.reject(thrown)
+          insert: () => Promise.reject(thrown),
+          delete: () => ({ in: () => Promise.resolve({ error: null }) })
         })
       };
       const res = await shortenSmsBodyUrls(db, { ...staticOpts, randomBytes: bytes(0), text: longUrl });
@@ -248,5 +258,41 @@ describe("shortenSmsBodyUrls", () => {
     const res = await shortenSmsBodyUrls(db, { ...staticOpts, randomBytes: bytes(0), text: "no links here" });
     expect(res).toEqual({ text: "no links here", links: [] });
     expect(inserts).toHaveLength(0);
+  });
+});
+
+describe("deleteShortLinks", () => {
+  const links = [
+    { shortCode: "abcdefgh", originalUrl: "https://x.co/1" },
+    { shortCode: "ijklmnop", originalUrl: "https://x.co/2" }
+  ];
+
+  it("deletes the given codes and no-ops on an empty list", async () => {
+    const { db, deletes } = stubDb([ok]);
+    await deleteShortLinks(db, links);
+    expect(deletes).toEqual([{ column: "short_code", values: ["abcdefgh", "ijklmnop"] }]);
+
+    const { db: db2, deletes: deletes2 } = stubDb([ok]);
+    await deleteShortLinks(db2, []);
+    expect(deletes2).toHaveLength(0);
+  });
+
+  it("never throws: delete errors and thrown failures only warn", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { db } = stubDb([ok], { error: { message: "denied" } });
+    await deleteShortLinks(db, links);
+    expect(warn).toHaveBeenCalledWith("sms_short_links: cleanup delete failed", "denied");
+
+    for (const thrown of [new Error("net down"), "string failure"]) {
+      const throwing: ShortLinkSupabase = {
+        from: () => ({
+          insert: () => Promise.resolve({ error: null }),
+          delete: () => ({ in: () => Promise.reject(thrown) })
+        })
+      };
+      await deleteShortLinks(throwing, links);
+    }
+    expect(warn).toHaveBeenCalledWith("sms_short_links: cleanup delete threw", "net down");
+    expect(warn).toHaveBeenCalledWith("sms_short_links: cleanup delete threw", "string failure");
   });
 });
