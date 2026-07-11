@@ -439,6 +439,23 @@ export async function deleteEndUserData(
     results.push({ table: "ai_reply_reasoning", central: count(data), box: null });
   }
 
+  // ── sms_links (tracked short links; central-only by design) ────────────
+  // Rows persist the recipient number + the original URL from the message
+  // body, so they are in scope for erasure. Same linked-number span as
+  // ai_reply_reasoning. The table stays central (see residency/tables.ts):
+  // the public /s/<code> redirect must keep resolving even when a tenant
+  // box is down.
+  if (linkedNumbers.size > 0) {
+    const { data, error } = await db
+      .from("sms_links")
+      .delete()
+      .eq("business_id", businessId)
+      .in("to_e164", [...linkedNumbers])
+      .select("id");
+    if (error) throw new EndUserDeletionError(`sms_links: ${error.message}`);
+    results.push({ table: "sms_links", central: count(data), box: null });
+  }
+
   const identifierFingerprint = fingerprintIdentifier(e164, email);
   const totalCentral = results.reduce((s, r) => s + r.central, 0);
   const totalBox = results.reduce((s, r) => s + (r.box ?? 0), 0);

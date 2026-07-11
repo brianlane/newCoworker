@@ -64,7 +64,31 @@ export function shortLinkUrl(baseUrl: string, code: string): string {
 // http(s) runs up to whitespace/angle-quote; trailing sentence punctuation is
 // stripped below so "…see https://x.com/a." doesn't capture the period.
 const URL_RE = /https?:\/\/[^\s<>"']+/gi;
-const TRAILING_PUNCTUATION_RE = /[).,!?;:\]]+$/;
+
+/**
+ * Trim sentence punctuation from a matched URL's tail without mutilating
+ * URLs that legitimately end in ")": a closing paren is only stripped while
+ * the URL holds more ")" than "(" — so "(see https://x.com/a)" loses the
+ * wrapper paren but a Wikipedia-style ".../Foo_(bar)" keeps its own.
+ */
+export function trimTrailingUrlPunctuation(raw: string): string {
+  let url = raw;
+  for (;;) {
+    if (/[.,!?;:\]]$/.test(url)) {
+      url = url.slice(0, -1);
+      continue;
+    }
+    if (url.endsWith(")")) {
+      const opens = url.split("(").length - 1;
+      const closes = url.split(")").length - 1;
+      if (closes > opens) {
+        url = url.slice(0, -1);
+        continue;
+      }
+    }
+    return url;
+  }
+}
 
 /**
  * Distinct shortenable URLs in a message body, longest first.
@@ -82,7 +106,7 @@ export function extractShortenableUrls(text: string, baseUrl: string): string[] 
   const minLength = base.length + SHORT_CODE_LENGTH + 3 + 4;
   const seen = new Set<string>();
   for (const match of text.matchAll(URL_RE)) {
-    const url = match[0].replace(TRAILING_PUNCTUATION_RE, "");
+    const url = trimTrailingUrlPunctuation(match[0]);
     if (url.length <= minLength) continue;
     if (url.startsWith(`${base}/s/`)) continue;
     seen.add(url);

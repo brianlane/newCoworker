@@ -264,6 +264,20 @@ export async function pruneExpiredContent(
     results.push({ table: "ai_reply_reasoning", central: centralCount(data), box: null });
   }
 
+  // ── sms_links (central-only: tracked short links carry the recipient ───
+  // number + original URL; aged links go stale with their texts. Expired
+  // codes then 303 to the homepage — by design).
+  {
+    const { data, error } = await db
+      .from("sms_links")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: sms_links: ${error.message}`);
+    results.push({ table: "sms_links", central: centralCount(data), box: null });
+  }
+
   // ── sms_owner_reply_prompts (answered only) ────────────────────────────
   {
     const { data, error } = await db

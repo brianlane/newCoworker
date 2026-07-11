@@ -80,6 +80,15 @@ describe("extractShortenableUrls", () => {
     expect(extractShortenableUrls(`(${longUrl})`, BASE)).toEqual([longUrl]);
   });
 
+  it("keeps a balanced closing paren that belongs to the URL", () => {
+    const wiki = "https://en.wikipedia.org/wiki/Phoenix,_Arizona_(disambiguation_page)";
+    expect(extractShortenableUrls(`see ${wiki} for info`, BASE)).toEqual([wiki]);
+    // Wrapping parens around a paren-carrying URL: only the wrapper falls.
+    expect(extractShortenableUrls(`(see ${wiki})`, BASE)).toEqual([wiki]);
+    // Punctuation AFTER the balanced paren still falls: "...(bar))." → "(bar)".
+    expect(extractShortenableUrls(`Really (${wiki}).`, BASE)).toEqual([wiki]);
+  });
+
   it("skips URLs short enough that shortening would not shrink them", () => {
     expect(extractShortenableUrls("see https://x.co/a for info", BASE)).toEqual([]);
   });
