@@ -401,7 +401,10 @@ export default async function SettingsPage() {
         </form>
       </Card>
 
-      {!viewAs && isOwner && <DeleteAccountCard />}
+      {/* Shown during admin view-as too — admins see everything the owner
+          sees. Impersonation stays read-only at the API layer: the DELETE
+          route refuses view-as, so the card is preview-only for admins. */}
+      {isOwner && <DeleteAccountCard />}
     </div>
   );
 }
