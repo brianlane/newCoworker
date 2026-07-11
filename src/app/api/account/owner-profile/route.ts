@@ -35,7 +35,10 @@ export async function POST(request: Request) {
     const body = schema.parse(await request.json());
 
     const db = await createSupabaseServiceClient();
-    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
+    // Owner-only (`manage_billing` = owner in the role policy): this card
+    // edits the OWNER's contact identity (alerts, handoff line, profile_md)
+    // — a manager must not be able to rewrite it.
+    const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     const { data: biz } = await db
       .from("businesses")
       .select("id")
