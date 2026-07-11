@@ -31,11 +31,16 @@ type Scripted = { data?: unknown; error?: unknown } | (() => never);
 
 function makeDb(results: Scripted[]) {
   const log: { table: string; calls: CallLog[] }[] = [];
+  const rpcCalls: Array<{ fn: string; args: unknown }> = [];
   let idx = 0;
   const next = () => {
     const r = results[idx++] ?? { data: null, error: null };
     if (typeof r === "function") r();
     return r as { data?: unknown; error?: unknown };
+  };
+  const rpc = async (fn: string, args: unknown) => {
+    rpcCalls.push({ fn, args });
+    return next();
   };
   const from = (table: string) => {
     const calls: CallLog[] = [];
@@ -66,7 +71,7 @@ function makeDb(results: Scripted[]) {
     };
     return builder;
   };
-  return { db: { from } as never, log };
+  return { db: { from, rpc } as never, log, rpcCalls };
 }
 
 function contactRow(overrides: Record<string, unknown> = {}) {
@@ -256,22 +261,18 @@ describe("importContactsCsv", () => {
     });
   });
 
+  const ONE_MATCH = {
+    data: [{ id: "match-1", customer_e164: "+16025559999", type: "customer" }],
+    error: null
+  };
+
   it("folds a new number into the single existing customer sharing its email", async () => {
-    const { db, log } = makeDb([
+    const { db, log, rpcCalls } = makeDb([
       { data: null, error: null }, // phone lookup: nothing
-      {
-        // email scan: exactly one customer match, alias list already started
-        data: [
-          {
-            id: "match-1",
-            customer_e164: "+16025559999",
-            alias_e164s: ["+16025558888"],
-            type: "customer"
-          }
-        ],
-        error: null
-      },
-      { data: null, error: null } // fold update ok
+      ONE_MATCH, // email scan: exactly one customer match
+      { data: null, error: null }, // temp-row insert ok
+      { data: null, error: null }, // merge rpc ok
+      { data: null, error: null } // survivor patch ok
     ]);
     const summary = await importContactsCsv(
       BIZ,
@@ -286,68 +287,81 @@ describe("importContactsCsv", () => {
       "jo\\_hn@example.com"
     ]);
     expect(log[1].calls.find((c) => c.name === "limit")?.args).toEqual([2]);
-    // The fold updates the MATCHED profile and appends the new number as an
-    // alias (deduped), so future texts from it resolve there.
-    const update = log[2].calls.find((c) => c.name === "update");
-    expect(update?.args[0]).toMatchObject({
+    // Race-free fold: insert the number as a real row, then the merge RPC
+    // locks both rows, records it in alias_e164s, and deletes the temp row.
+    expect(log[2].calls.find((c) => c.name === "insert")?.args[0]).toMatchObject({
+      customer_e164: "+16025551234"
+    });
+    expect(rpcCalls).toEqual([
+      {
+        fn: "merge_customer_memories",
+        args: {
+          p_business_id: BIZ,
+          p_from_e164: "+16025551234",
+          p_into_e164: "+16025559999"
+        }
+      }
+    ]);
+    // The CSV cells then land on the SURVIVOR (deliberate owner edits).
+    const patchUpdate = log[3].calls.find((c) => c.name === "update");
+    expect(patchUpdate?.args[0]).toMatchObject({
       display_name: "Jane Doe",
       name_source: "manual",
-      email: "jo_hn@example.com",
-      alias_e164s: ["+16025558888", "+16025551234"]
+      email: "jo_hn@example.com"
     });
-    expect(log[2].calls.find((c) => c.name === "eq")?.args).toEqual(["id", "match-1"]);
-    // Not a creation: no contact_created event.
+    expect(log[3].calls.find((c) => c.name === "eq")?.args).toEqual(["id", "match-1"]);
+    // The number was absorbed, not created: no contact_created event.
     expect(fireContactEvent).not.toHaveBeenCalled();
   });
 
-  it("does not double-append an alias the profile already carries", async () => {
-    const { db, log } = makeDb([
-      { data: null, error: null },
-      {
-        data: [
-          {
-            id: "match-1",
-            customer_e164: "+16025559999",
-            alias_e164s: ["+16025551234"],
-            type: "customer"
-          }
-        ],
-        error: null
-      },
-      { data: null, error: null }
-    ]);
-    await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
-    const update = log[2].calls.find((c) => c.name === "update");
-    expect((update?.args[0] as { alias_e164s: string[] }).alias_e164s).toEqual([
-      "+16025551234"
-    ]);
-  });
-
-  it("treats a null fold-scan page as no match and folds onto a null alias list", async () => {
-    // Null scan page → plain create.
-    const { db: db1 } = makeDb([
+  it("treats a null fold-scan page as no match and creates normally", async () => {
+    const { db } = makeDb([
       { data: null, error: null },
       { data: null, error: null }, // fold scan: null page
       { data: null, error: null } // insert
     ]);
-    const s1 = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db1);
-    expect(s1).toMatchObject({ created: 1, updated: 0 });
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 1, updated: 0 });
+  });
 
-    // Single match whose alias list is null → alias array starts fresh.
-    const { db: db2, log } = makeDb([
+  it("falls back to the raced-update path when the fold's insert hits a unique violation", async () => {
+    const { db, log, rpcCalls } = makeDb([
+      { data: null, error: null }, // phone lookup: nothing yet
+      ONE_MATCH, // email scan
+      { data: null, error: { code: "23505", message: "duplicate key" } }, // insert races
+      { data: { id: "raced-row" }, error: null }, // re-lookup finds the winner
+      { data: null, error: null } // update applies the row's fields
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 0, updated: 1, skipped: 0 });
+    // No merge once the number turned out to already have a primary row.
+    expect(rpcCalls).toEqual([]);
+    expect(log[4].calls.find((c) => c.name === "eq")?.args).toEqual(["id", "raced-row"]);
+  });
+
+  it("keeps the row as a standalone create when the merge RPC fails mid-fold", async () => {
+    const { db } = makeDb([
       { data: null, error: null },
-      {
-        data: [{ id: "m1", customer_e164: "+16025559999", alias_e164s: null, type: "customer" }],
-        error: null
-      },
-      { data: null, error: null }
+      ONE_MATCH,
+      { data: null, error: null }, // insert ok
+      { data: null, error: { message: "target vanished" } } // merge fails
     ]);
-    const s2 = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db2);
-    expect(s2).toMatchObject({ created: 0, updated: 1 });
-    const update = log[2].calls.find((c) => c.name === "update");
-    expect((update?.args[0] as { alias_e164s: string[] }).alias_e164s).toEqual([
-      "+16025551234"
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 1, updated: 0, skipped: 0 });
+    expect(summary.errors).toEqual([]);
+    // It IS a creation in this outcome — the trigger hook fires.
+    expect(fireContactEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a hard insert error inside the fold", async () => {
+    const { db } = makeDb([
+      { data: null, error: null },
+      ONE_MATCH,
+      { data: null, error: { code: "999", message: "insert down" } }
     ]);
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(summary.errors).toEqual([{ row: 2, message: "insert down" }]);
   });
 
   it("creates instead of folding when the email is ambiguous (2+ matches)", async () => {
@@ -355,8 +369,8 @@ describe("importContactsCsv", () => {
       { data: null, error: null },
       {
         data: [
-          { id: "m1", customer_e164: "+16025559998", alias_e164s: [], type: "customer" },
-          { id: "m2", customer_e164: "+16025559999", alias_e164s: [], type: "customer" }
+          { id: "m1", customer_e164: "+16025559998", type: "customer" },
+          { id: "m2", customer_e164: "+16025559999", type: "customer" }
         ],
         error: null
       },
@@ -371,7 +385,7 @@ describe("importContactsCsv", () => {
     const { db } = makeDb([
       { data: null, error: null },
       {
-        data: [{ id: "m1", customer_e164: "+16025559999", alias_e164s: null, type: "company" }],
+        data: [{ id: "m1", customer_e164: "+16025559999", type: "company" }],
         error: null
       },
       { data: null, error: null }
@@ -396,16 +410,15 @@ describe("importContactsCsv", () => {
     expect(log[1].calls.some((c) => c.name === "insert")).toBe(true);
   });
 
-  it("reports fold scan and fold update errors per row", async () => {
+  it("reports fold scan and survivor-patch errors per row", async () => {
     const { db } = makeDb([
       { data: null, error: null }, // row 1 lookup
       { data: null, error: { message: "scan down" } }, // row 1 fold scan fails
       { data: null, error: null }, // row 2 lookup
-      {
-        data: [{ id: "m1", customer_e164: "+16025559999", alias_e164s: [], type: "customer" }],
-        error: null
-      },
-      { data: null, error: { message: "fold down" } } // row 2 fold update fails
+      ONE_MATCH,
+      { data: null, error: null }, // row 2 temp insert ok
+      { data: null, error: null }, // row 2 merge ok
+      { data: null, error: { message: "patch down" } } // row 2 survivor patch fails
     ]);
     const summary = await importContactsCsv(
       BIZ,
@@ -415,7 +428,7 @@ describe("importContactsCsv", () => {
     expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 2 });
     expect(summary.errors).toEqual([
       { row: 2, message: "scan down" },
-      { row: 3, message: "fold down" }
+      { row: 3, message: "patch down" }
     ]);
   });
 
