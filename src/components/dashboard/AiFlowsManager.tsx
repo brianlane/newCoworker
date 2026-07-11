@@ -736,12 +736,14 @@ export function AiFlowsManager({
   // Dirty = the draft drifted from its opened/saved snapshot, OR there's an
   // ungenerated "Generate with AI" description sitting in the box (typing a
   // prompt and leaving loses it just the same — the exact miss from Truly's
-  // first test of this guard).
+  // first test of this guard). The AI box only renders for NEW flows
+  // (editor.id === null), so leftover prompt text must not dirty an edit
+  // session where the box isn't even visible.
   const editorDirty =
     editor !== null &&
     (editorBaseline === null ||
       JSON.stringify(editor) !== editorBaseline ||
-      aiPrompt.trim().length > 0);
+      (editor.id === null && aiPrompt.trim().length > 0));
   useUnsavedChangesWarning(editorDirty);
   // Best-effort salvage notes from the last AI generate (shown until the next).
   const [aiWarnings, setAiWarnings] = useState<string[]>([]);
@@ -1047,6 +1049,7 @@ export function AiFlowsManager({
       setEditor(null);
       setEditorBaseline(null);
       setAiWarnings([]);
+      setAiPrompt("");
       setSelectedNode(null);
       await reload();
     } finally {
@@ -1257,8 +1260,10 @@ export function AiFlowsManager({
                 }
                 setEditor(null);
                 setEditorBaseline(null);
-                // Salvage notes belong to the draft being abandoned.
+                // Salvage notes and the AI description belong to the draft
+                // being abandoned.
                 setAiWarnings([]);
+                setAiPrompt("");
                 setSelectedNode(null);
               }}
               className="text-sm text-parchment/50 hover:text-parchment"
