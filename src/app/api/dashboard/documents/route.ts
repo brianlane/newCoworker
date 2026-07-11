@@ -25,7 +25,11 @@ import {
   listBusinessDocuments,
   patchBusinessDocument
 } from "@/lib/documents/db";
-import { BUSINESS_DOCS_BUCKET, documentLimitForTier } from "@/lib/documents/core";
+import {
+  BUSINESS_DOCS_BUCKET,
+  documentLimitForTier,
+  parseExpirationInput
+} from "@/lib/documents/core";
 import { ingestDocument, isSupportedDocumentMime } from "@/lib/documents/ingest";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
@@ -94,9 +98,10 @@ export async function POST(request: Request) {
     const expiresRaw = String(form.get("expiresAt") ?? "").trim();
     let expiresAt: string | null = null;
     if (expiresRaw) {
-      const ms = Date.parse(expiresRaw);
-      if (!Number.isFinite(ms)) return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
-      expiresAt = new Date(ms).toISOString();
+      // Date-only inputs mean "usable through that day" (end-of-day), not
+      // the preceding UTC midnight — see parseExpirationInput.
+      expiresAt = parseExpirationInput(expiresRaw);
+      if (!expiresAt) return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
     }
 
     if (!user.isAdmin) await requireBusinessRole(businessId.data, "manage_settings");

@@ -48,6 +48,25 @@ export function isDocumentExpired(
 }
 
 /**
+ * Parse an owner-supplied expiration input into the stored ISO instant.
+ *
+ * A DATE-ONLY value ("2026-08-01" — what the dashboard date input and chat
+ * phrasing produce) means "usable through that day", so it maps to the END
+ * of that calendar day (23:59:59.999 UTC) — never the preceding midnight,
+ * which would expire the document the prior evening in US timezones. A full
+ * datetime is taken literally. Returns null when unparseable.
+ */
+export function parseExpirationInput(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    const ms = Date.parse(`${trimmed}T23:59:59.999Z`);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
+  const ms = Date.parse(trimmed);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+
+/**
  * The single eligibility rule every reader applies: a document is usable by
  * a surface only when it is ready, not expired, and its audience covers the
  * surface. Client channels (voice/SMS/webchat/flows) see 'clients'/'both';

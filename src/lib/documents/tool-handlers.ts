@@ -35,7 +35,7 @@ import {
   revokeDocumentShare,
   type BusinessDocumentRow
 } from "./db";
-import { isDocumentExpired, resolveDocumentReference } from "./core";
+import { isDocumentExpired, parseExpirationInput, resolveDocumentReference } from "./core";
 import { mintDocumentShare, type DocumentShareChannel } from "./share";
 import { rewriteDocumentContent } from "./ingest";
 
@@ -331,9 +331,9 @@ export async function setDocumentExpirationTool(
 
   let expiresIso: string | null = null;
   if (args.expiresAt !== null && args.expiresAt.trim() !== "") {
-    const ms = Date.parse(args.expiresAt);
-    if (!Number.isFinite(ms)) return { ok: false, detail: "invalid_date" };
-    expiresIso = new Date(ms).toISOString();
+    // Date-only inputs ("expire Jan 2") mean "usable through that day".
+    expiresIso = parseExpirationInput(args.expiresAt);
+    if (!expiresIso) return { ok: false, detail: "invalid_date" };
   }
 
   await patchBusinessDocument(businessId, doc.id, {

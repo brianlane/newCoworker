@@ -22,7 +22,8 @@ import {
 import {
   BUSINESS_DOCS_BUCKET,
   DOCUMENT_CONTENT_MD_MAX_CHARS,
-  DOCUMENT_SUMMARY_MAX_CHARS
+  DOCUMENT_SUMMARY_MAX_CHARS,
+  parseExpirationInput
 } from "@/lib/documents/core";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
@@ -80,11 +81,12 @@ export async function PATCH(request: Request, context: RouteContext) {
       if (body.data.expiresAt === null || body.data.expiresAt.trim() === "") {
         patch.expires_at = null;
       } else {
-        const ms = Date.parse(body.data.expiresAt);
-        if (!Number.isFinite(ms)) {
+        // Date-only inputs mean "usable through that day" (end-of-day).
+        const parsed = parseExpirationInput(body.data.expiresAt);
+        if (!parsed) {
           return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
         }
-        patch.expires_at = new Date(ms).toISOString();
+        patch.expires_at = parsed;
       }
       // Changing the date re-arms the sweep's reminders.
       patch.expiring_soon_notified_at = null;

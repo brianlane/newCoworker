@@ -13,6 +13,7 @@ import {
   documentEligibleFor,
   documentLimitForTier,
   isDocumentExpired,
+  parseExpirationInput,
   renderDocumentsContext,
   resolveDocumentReference,
   scoreDocumentRelevance,
@@ -73,6 +74,22 @@ describe("isDocumentExpired", () => {
 
   it("defaults the clock to now", () => {
     expect(isDocumentExpired(doc({ expires_at: "1999-01-01T00:00:00Z" }))).toBe(true);
+  });
+});
+
+describe("parseExpirationInput", () => {
+  it("maps a date-only value to the END of that day (never the preceding midnight)", () => {
+    expect(parseExpirationInput("2026-08-01")).toBe("2026-08-01T23:59:59.999Z");
+    expect(parseExpirationInput("  2026-08-01  ")).toBe("2026-08-01T23:59:59.999Z");
+  });
+
+  it("takes a full datetime literally", () => {
+    expect(parseExpirationInput("2026-08-01T09:30:00Z")).toBe("2026-08-01T09:30:00.000Z");
+  });
+
+  it("returns null for unparseable input (including invalid calendar dates)", () => {
+    expect(parseExpirationInput("next Tuesday-ish")).toBeNull();
+    expect(parseExpirationInput("2026-99-99")).toBeNull();
   });
 });
 
