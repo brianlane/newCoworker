@@ -17,18 +17,17 @@
  */
 import { z } from "zod";
 import { createClient } from "@supabase/supabase-js";
-import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
+import {
+  listAccessibleBusinesses,
+  resolveActiveBusinessIdForAction
+} from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
 import { getSubscription } from "@/lib/db/subscriptions";
-import {
-  deleteBusiness,
-  getBusiness,
-  listBusinessIdsByOwnerEmail
-} from "@/lib/db/businesses";
+import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import {
   DELETE_CONFIRM_PHRASE,
   resolveAccountDeletionEligibility
@@ -134,39 +133,62 @@ export async function DELETE(request: Request) {
             });
           }
         }
+      } else {
+        // Mirrors admin delete-client: a non-numeric id (e.g. a corrupted
+        // row) means we can't stop the VM through Hostinger — surface it
+        // loudly so an operator can chase the orphan before it bills on.
+        logger.warn("account.delete: hostinger_vps_id is non-numeric; cannot stop VM", {
+          businessId,
+          hostingerVpsId: business.hostinger_vps_id
+        });
       }
     }
 
-    // Delete the auth user BEFORE the business row (so a transient auth
-    // failure leaves everything intact for a retry), but only when this is
-    // the owner's LAST business — multi-business owners keep their login.
-    const ownedIds = await listBusinessIdsByOwnerEmail(user.email, db);
-    const otherBusinesses = ownedIds.filter((id) => id !== businessId);
-    if (otherBusinesses.length === 0) {
-      const { error } = await db.auth.admin.deleteUser(user.userId);
-      if (error && !/not found|does not exist/i.test(error.message ?? "")) {
-        logger.error("account.delete: auth user delete failed; business row preserved", {
+    // Does the owner keep other businesses? Case-insensitive owner match via
+    // listAccessibleBusinesses (owner_email is not lowercased by schema; an
+    // exact-case eq here could miss owned rows and delete the login while a
+    // business still exists under a differently-cased email).
+    const otherOwned = (await listAccessibleBusinesses(user, db)).filter(
+      (b) => b.role === "owner" && b.businessId !== businessId
+    );
+
+    // Delete the business row FIRST, then the auth user. If the auth delete
+    // fails afterwards, the leftover login is harmless (it owns nothing and
+    // the user asked for deletion themselves) — whereas the reverse order
+    // would lock the owner out while their data still exists, with no way
+    // to sign in and retry.
+    await deleteBusiness(businessId, db);
+
+    let authUserDeleted = false;
+    if (otherOwned.length === 0) {
+      try {
+        const { error } = await db.auth.admin.deleteUser(user.userId);
+        if (!error || /not found|does not exist/i.test(error.message ?? "")) {
+          authUserDeleted = true;
+        } else {
+          logger.error("account.delete: auth user delete failed after business delete", {
+            businessId,
+            supabaseUserId: user.userId,
+            error: error.message
+          });
+        }
+      } catch (err) {
+        logger.error("account.delete: auth user delete threw after business delete", {
           businessId,
           supabaseUserId: user.userId,
-          error: error.message
+          error: err instanceof Error ? err.message : String(err)
         });
-        return errorResponse(
-          "INTERNAL_SERVER_ERROR",
-          "Account deletion failed; please retry or contact support",
-          500
-        );
       }
     }
 
-    await deleteBusiness(businessId, db);
     logger.info("account.delete: self-serve deletion complete", {
       businessId,
       ownerEmail: user.email,
-      authUserDeleted: otherBusinesses.length === 0,
-      remainingBusinesses: otherBusinesses.length
+      authUserDeleted,
+      remainingBusinesses: otherOwned.length
     });
 
-    return successResponse({ deleted: true, authUserDeleted: otherBusinesses.length === 0 });
+    return successResponse({ deleted: true, authUserDeleted });
   } catch (err) {
     return handleRouteError(err);
   }

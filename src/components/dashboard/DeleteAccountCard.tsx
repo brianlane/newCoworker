@@ -138,8 +138,11 @@ export function DeleteAccountCard() {
           {blocked ? (
             <div className="text-xs text-parchment/60 space-y-2">
               <p>
-                You have an active subscription. Cancel it first — cancellation takes a data
-                backup and handles billing properly.
+                {eligibility !== null &&
+                !eligibility.eligible &&
+                eligibility.reason === "past_due_subscription"
+                  ? "Your subscription has a past-due balance. Settle or cancel it in Billing first — deletion is available once billing is resolved."
+                  : "You have an active subscription. Cancel it first — cancellation takes a data backup and handles billing properly."}
               </p>
               <a href="/dashboard/billing" className="text-signal-teal hover:underline">
                 Go to Billing →
