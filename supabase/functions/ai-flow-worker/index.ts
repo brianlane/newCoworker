@@ -2831,8 +2831,28 @@ async function resolveFlowInputImage(
   const telnyxHost =
     parsed.hostname === "telnyx.com" || parsed.hostname.endsWith(".telnyx.com");
   if (!(telnyxHost || (ownHost && parsed.hostname === ownHost))) return null;
+  // An own-host signed URL must additionally point at an object THIS run may
+  // read: this business's generated-images prefix, or an inbound tenant-mail
+  // attachment. Without this, a signed URL for another tenant's object on
+  // the same project host would pass the host check.
+  if (!telnyxHost) {
+    const objMatch = /^\/storage\/v1\/object\/(?:sign|authenticated|public)\/([^/]+)\/(.+)$/.exec(
+      parsed.pathname
+    );
+    if (!objMatch) return null;
+    const bucket = objMatch[1];
+    const objectPath = decodeURIComponent(objMatch[2]);
+    const allowed =
+      (bucket === GENERATED_IMAGES_BUCKET &&
+        objectPath.toLowerCase().startsWith(`${businessId.toLowerCase()}/`)) ||
+      (bucket === "email-attachments" && objectPath.startsWith("inbound/"));
+    if (!allowed) return null;
+  }
   try {
-    const res = await fetch(ref);
+    // NEVER follow redirects: a permitted first hop must not be able to
+    // bounce the fetch to an internal/metadata endpoint (SSRF). Telnyx media
+    // and our own signed URLs serve bytes directly; any 3xx is a refusal.
+    const res = await fetch(ref, { redirect: "manual" });
     if (!res.ok) return null;
     const bytes = new Uint8Array(await res.arrayBuffer());
     const contentType = (res.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();

@@ -956,22 +956,24 @@ serve(async (req: Request) => {
 
     // Inbound MMS photo → stored edit source. Only when the reply path is
     // actually about to run (download + store cost nothing on suppressed
-    // jobs, which return before reaching here). Best-effort: on a capture
-    // failure the model simply never learns a photo existed.
+    // jobs, which return before reaching here). Best-effort — but the model
+    // is ALWAYS told a photo arrived, so an edit request after a capture
+    // failure gets an honest "please resend" instead of a hallucinated edit.
     if (inboundImages.length > 0) {
       const imageRef = await storeInboundImageForEditing(
         supabase,
         job.business_id,
         inboundImages[0]
       );
-      if (imageRef) {
-        customerPreamble +=
-          `\n\nThe texter attached a photo to this message. Its image reference is ` +
+      customerPreamble += imageRef
+        ? `\n\nThe texter attached a photo to this message. Its image reference is ` +
           `"${imageRef}". If they ask you to edit it, restyle it, or create an image ` +
           `based on it, call generate_image with inputImageRef set to exactly that ` +
           `value (and their request as the prompt). Do not mention the reference ` +
-          `string itself to the texter.`;
-      }
+          `string itself to the texter.`
+        : `\n\nThe texter attached a photo to this message, but it could not be ` +
+          `processed. If they ask you to edit it or do anything with it, do NOT call ` +
+          `generate_image — apologize and ask them to send the photo again.`;
     }
 
     let convId: string | undefined;
