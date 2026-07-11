@@ -14,6 +14,10 @@ vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn()
 }));
 
+vi.mock("@/lib/sms/opt-outs", () => ({
+  checkSmsOptOut: vi.fn()
+}));
+
 const { insertMock, fromMock } = vi.hoisted(() => {
   const insertMock = vi.fn();
   const fromMock = vi.fn(() => ({ insert: insertMock }));
@@ -28,6 +32,7 @@ import { POST } from "@/app/api/voice/tools/sms/route";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -56,6 +61,7 @@ describe("POST /api/voice/tools/sms", () => {
       fromE164: "+15550001111"
     });
     vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "msg_1", channel: "sms" });
+    vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: true, optedOut: false });
     insertMock.mockResolvedValue({ error: null });
   });
 
@@ -119,6 +125,51 @@ describe("POST /api/voice/tools/sms", () => {
     const res = await POST(req({ businessId: BIZ, args: { body: "hi" } }));
     const body = await res.json();
     expect(body).toEqual({ ok: false, detail: "no_destination" });
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("refuses to text a number on the STOP list (recipient_opted_out)", async () => {
+    vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: true, optedOut: true });
+    const res = await POST(
+      req({ businessId: BIZ, callerE164: "+15555550100", args: { body: "hi" } })
+    );
+    const body = await res.json();
+    expect(body).toEqual({ ok: false, detail: "recipient_opted_out" });
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+    expect(checkSmsOptOut).toHaveBeenCalledWith(BIZ, "+15555550100");
+  });
+
+  it("fails CLOSED when the opt-out check errors (never 'couldn't check, send anyway')", async () => {
+    vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: false, error: "db down" });
+    const res = await POST(
+      req({ businessId: BIZ, callerE164: "+15555550100", args: { body: "hi" } })
+    );
+    const body = await res.json();
+    expect(body).toEqual({ ok: false, detail: "opt_out_check_failed" });
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("canonicalizes a formatted model-supplied number before the opt-out check and the send", async () => {
+    const res = await POST(
+      req({ businessId: BIZ, args: { toE164: "(602) 555-0147", body: "hi" } })
+    );
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    // Both the STOP-list check and Telnyx get the canonical E.164 form —
+    // formatting must never let a stopped number slip past the exact match.
+    expect(checkSmsOptOut).toHaveBeenCalledWith(BIZ, "+16025550147");
+    expect(sendTelnyxSms).toHaveBeenCalledWith(expect.anything(), "+16025550147", "hi", {
+      meterBusinessId: BIZ
+    });
+  });
+
+  it("refuses an unnormalizable destination instead of sending it unchecked", async () => {
+    const res = await POST(
+      req({ businessId: BIZ, args: { toE164: "not-a-number-at-all", body: "hi" } })
+    );
+    const body = await res.json();
+    expect(body).toEqual({ ok: false, detail: "invalid_destination" });
+    expect(checkSmsOptOut).not.toHaveBeenCalled();
     expect(sendTelnyxSms).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
+import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -70,6 +71,31 @@ export async function POST(request: Request) {
     }
 
     const db = await createSupabaseServiceClient();
+
+    // STOP-list gate (fail closed): a customer who texted STOP must not be
+    // reachable even via a manual owner send — same rule the Edge send
+    // paths enforce. A read error refuses the send rather than risking a
+    // compliance violation.
+    const optOut = await checkSmsOptOut(businessId, toE164, db);
+    if (!optOut.ok) {
+      logger.error("dashboard-sms-send: opt-out check failed; refusing (fail closed)", {
+        businessId,
+        error: optOut.error
+      });
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        "Could not verify this number's opt-out status; please retry",
+        500
+      );
+    }
+    if (optOut.optedOut) {
+      return errorResponse(
+        "CONFLICT",
+        "This number opted out of texts (replied STOP). They can text START to opt back in.",
+        409
+      );
+    }
+
     // resolveRcs: owner-composed messages are customer-facing, so RCS-eligible
     // tenants (Standard+, agent approved) send RCS-first with SMS fallback.
     const config = await getTelnyxMessagingForBusiness(businessId, db, { resolveRcs: true });

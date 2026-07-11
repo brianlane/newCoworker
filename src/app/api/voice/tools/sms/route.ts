@@ -8,6 +8,8 @@ import {
 } from "@/lib/voice-tools/common";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { checkSmsOptOut } from "@/lib/sms/opt-outs";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
 
 /**
@@ -56,12 +58,36 @@ export async function POST(request: Request) {
     return voiceToolValidationError(parsed.error.issues[0]?.message ?? "invalid args");
   }
   const args = parsed.data;
-  const toPhone = args.toE164 ?? envelope.callerE164 ?? "";
-  if (!toPhone) {
+  const toPhoneRaw = args.toE164 ?? envelope.callerE164 ?? "";
+  if (!toPhoneRaw) {
     return voiceToolResponse({ ok: false, detail: "no_destination" });
   }
+  // Canonicalize BEFORE the opt-out check and the send: STOP rows are stored
+  // as canonical E.164 by the inbound keyword handler, so a model-supplied
+  // "602 555 0147" must not slip past the exact-match RPC just because of
+  // formatting. An unnormalizable destination is refused rather than sent
+  // unchecked.
+  const normalized = normalizeContactNumber(toPhoneRaw);
+  if (!normalized.ok) {
+    return voiceToolResponse({ ok: false, detail: "invalid_destination" });
+  }
+  const toPhone = normalized.value;
 
   try {
+    // STOP-list gate (fail closed, matching the Edge send paths): a caller
+    // who previously texted STOP must not receive agent follow-ups either.
+    const optOut = await checkSmsOptOut(envelope.businessId, toPhone);
+    if (!optOut.ok) {
+      logger.error("voice-tools/sms: opt-out check failed; refusing (fail closed)", {
+        businessId: envelope.businessId,
+        error: optOut.error
+      });
+      return voiceToolResponse({ ok: false, detail: "opt_out_check_failed" });
+    }
+    if (optOut.optedOut) {
+      return voiceToolResponse({ ok: false, detail: "recipient_opted_out" });
+    }
+
     // Customer-facing follow-up: eligible tenants send RCS-first w/ SMS fallback.
     const config = await getTelnyxMessagingForBusiness(envelope.businessId, undefined, {
       resolveRcs: true

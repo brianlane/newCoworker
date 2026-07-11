@@ -374,6 +374,107 @@ describe("notifications/dispatch", () => {
     expect(opts.html).not.toContain("//dashboard");
   });
 
+  it("resolveNotificationTargets defaults categories ON for rows read before the categories migration", async () => {
+    // PREFS_ON has no category_* fields (legacy row shape).
+    const t = await resolveNotificationTargets(BIZ);
+    expect(t.categories).toEqual({
+      category_leads: true,
+      category_team: true,
+      category_system: true
+    });
+  });
+
+  it("resolveNotificationTargets surfaces stored category flags", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      category_leads: false,
+      category_team: true,
+      category_system: false
+    } as never);
+    const t = await resolveNotificationTargets(BIZ);
+    expect(t.categories).toEqual({
+      category_leads: false,
+      category_team: true,
+      category_system: false
+    });
+  });
+
+  it("suppresses every channel (with skipped rows) when the event's category is off", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      category_leads: false
+    } as never);
+    const result = await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "New lead captured",
+      kind: "voice_capture"
+    });
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+    const rows = vi.mocked(insertNotification).mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((r) => r.status === "skipped")).toBe(true);
+    expect(
+      rows.every(
+        (r) => (r.payload as Record<string, unknown>).reason === "category_leads_disabled"
+      )
+    ).toBe(true);
+    expect(result.results.map((r) => r.channel).sort()).toEqual(["dashboard", "email", "sms"]);
+  });
+
+  it("delivers category-gated kinds normally when the category is on", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      category_team: true
+    } as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+    vi.mocked(sendTelnyxSms).mockResolvedValue("ok" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "Routed to Dana",
+      kind: "sms_team_notify"
+    });
+    expect(sendOwnerEmail).toHaveBeenCalled();
+    expect(sendTelnyxSms).toHaveBeenCalled();
+  });
+
+  it("never category-gates generic urgent alerts, even with every category off", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      category_leads: false,
+      category_team: false,
+      category_system: false
+    } as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+    vi.mocked(sendTelnyxSms).mockResolvedValue("ok" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT",
+      kind: "urgent_alert"
+    });
+    expect(sendOwnerEmail).toHaveBeenCalled();
+    expect(sendTelnyxSms).toHaveBeenCalled();
+  });
+
+  it("gates system-category kinds on category_system", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      category_system: false
+    } as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "Port update",
+      kind: "byon_port"
+    });
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
+    const rows = vi.mocked(insertNotification).mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(
+      rows.every(
+        (r) => (r.payload as Record<string, unknown>).reason === "category_system_disabled"
+      )
+    ).toBe(true);
+  });
+
   it("uses fallback dashboardUrl + empty RESEND_API_KEY when env vars unset", async () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.RESEND_API_KEY;

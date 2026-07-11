@@ -37,6 +37,10 @@ vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn()
 }));
 
+vi.mock("@/lib/sms/opt-outs", () => ({
+  checkSmsOptOut: vi.fn()
+}));
+
 vi.mock("@/lib/email/owner-mailbox", () => ({
   sendFromOwnerMailbox: vi.fn()
 }));
@@ -63,6 +67,7 @@ vi.mock("@/lib/notifications/dispatch", () => ({
 }));
 
 import { POST } from "@/app/api/rowboat/tool-call/route";
+import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import {
@@ -112,6 +117,7 @@ beforeEach(() => {
   vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
   vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({} as never);
   vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "msg-1", channel: "sms" } as never);
+  vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: true, optedOut: false });
 });
 
 describe("POST /api/rowboat/tool-call auth", () => {
@@ -361,6 +367,24 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
     const res = await POST(makeRequest(content));
     expect((await res.json()).detail).toBe("invalid_args:note empty");
+  });
+
+  it("refuses send_sms for a number on the STOP list", async () => {
+    vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: true, optedOut: true });
+    const content = makeContent("send_sms", { toE164: "+15551230000", body: "On my way" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toEqual({ ok: false, detail: "recipient_opted_out" });
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("fails send_sms CLOSED when the opt-out check errors", async () => {
+    vi.mocked(checkSmsOptOut).mockResolvedValue({ ok: false, error: "db down" });
+    const content = makeContent("send_sms", { toE164: "+15551230000", body: "On my way" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect(await res.json()).toEqual({ ok: false, detail: "opt_out_check_failed" });
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
   });
 
   it("sends an SMS through the metered Telnyx helper", async () => {

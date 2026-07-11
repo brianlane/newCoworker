@@ -10,6 +10,9 @@ import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountSettingsForms } from "@/components/dashboard/AccountSettingsForms";
+import { SidebarCustomizer } from "@/components/dashboard/SidebarCustomizer";
+import { SmsOptOutsCard } from "@/components/dashboard/SmsOptOutsCard";
+import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
 import { BusinessProfileForm } from "@/components/dashboard/BusinessProfileForm";
 import { OwnerProfileForm } from "@/components/dashboard/OwnerProfileForm";
 import { DeleteAccountCard } from "@/components/dashboard/DeleteAccountCard";
@@ -231,6 +234,8 @@ export default async function SettingsPage() {
         email={user.email}
       />
 
+      <SidebarCustomizer initialLayout={await getSidebarLayout(user.userId)} />
+
       {/* ============ Business ============ */}
       <SectionHeading
         id="business"
@@ -340,6 +345,8 @@ export default async function SettingsPage() {
           Manage notifications →
         </a>
       </Card>
+
+      {business && <SmsOptOutsCard businessId={business.id} />}
 
       {/* ============ Team (enterprise) ============ */}
       {business && isEnterprise && (

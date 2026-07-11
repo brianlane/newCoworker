@@ -13,6 +13,7 @@ import {
   E164_RE
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
@@ -440,6 +441,18 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       const parsed = sendSmsArgsSchema.safeParse(args);
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      // STOP-list gate (fail closed, matching the Edge send paths).
+      const optOut = await checkSmsOptOut(businessId, parsed.data.toE164);
+      if (!optOut.ok) {
+        logger.error("rowboat/tool-call: opt-out check failed; refusing (fail closed)", {
+          businessId,
+          error: optOut.error
+        });
+        return { ok: false, detail: "opt_out_check_failed" };
+      }
+      if (optOut.optedOut) {
+        return { ok: false, detail: "recipient_opted_out" };
       }
       // Assistant → customer message: eligible tenants go RCS-first w/ SMS fallback.
       const config = await getTelnyxMessagingForBusiness(businessId, undefined, {
