@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
+import { DeletionImpactPreview } from "@/components/admin/DeletionImpactPreview";
 
 export function ForceRefundButton({
   businessId,
@@ -59,6 +60,7 @@ export function ForceRefundButton({
           30-day grace window? This cancels Stripe + Hostinger billing, tears down the VPS,
           and stamps the customer&apos;s lifetime refund as used.
         </p>
+        <DeletionImpactPreview businessId={businessId} />
         <div className="flex gap-2">
           <Button size="sm" variant="danger" onClick={handle} loading={loading}>
             Confirm force-refund

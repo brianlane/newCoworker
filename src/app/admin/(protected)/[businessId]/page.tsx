@@ -19,6 +19,8 @@ import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
+import { NudgeOwnerButton } from "@/components/admin/NudgeOwnerButton";
+import { StripeDiagnosticsPanel } from "@/components/admin/StripeDiagnosticsPanel";
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
 import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
@@ -352,6 +354,19 @@ export default async function BusinessDetailPage({
             <SkipPaymentButton businessId={businessId} />
           )}
         </div>
+        {/* Nudge the owner about unfinished onboarding (checkout, website,
+            unpaid offers) — the API computes the open items server-side. */}
+        <div className="mt-4">
+          <NudgeOwnerButton businessId={businessId} />
+        </div>
+      </Card>
+
+      {/* Live-Stripe diagnostics (loaded on demand) */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Stripe diagnostics
+        </h2>
+        <StripeDiagnosticsPanel businessId={businessId} />
       </Card>
 
       {/* VPS Info */}
