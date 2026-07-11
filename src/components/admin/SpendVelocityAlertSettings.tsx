@@ -30,6 +30,9 @@ export function SpendVelocityAlertSettings({
   const save = async (next?: { enabled?: boolean }) => {
     setBusy(true);
     setStatus(null);
+    // Snapshot for rollback: an optimistic toggle that fails to persist
+    // must revert, or the card lies about whether the watchdog is active.
+    const prevEnabled = enabled;
     const thresholdMicros = Math.round(Number(dollars) * 1_000_000);
     const windowMinutes = Math.round(Number(minutes));
     if (!Number.isFinite(thresholdMicros) || thresholdMicros <= 0) {
@@ -63,6 +66,9 @@ export function SpendVelocityAlertSettings({
       setMinutes(String(json.data.config.windowMinutes));
       setStatus("Saved.");
     } catch (e) {
+      // Revert the optimistic toggle so the checkbox reflects what the
+      // watchdog is ACTUALLY doing (Bugbot Medium on PR #504).
+      setEnabled(prevEnabled);
       setStatus(e instanceof Error ? e.message : "Save failed");
     } finally {
       setBusy(false);

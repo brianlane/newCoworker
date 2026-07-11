@@ -128,20 +128,27 @@ serve(async (req: Request) => {
 
   let sent = 0;
   let failed = 0;
+  let raced = 0;
   for (const breach of breaches) {
-    const { data: claim, error: claimErr } = await supabase
-      .from("chat_spend_velocity_alerts")
-      .insert({
-        business_id: breach.businessId,
-        delta_micros: breach.deltaMicros,
-        threshold_micros: config.thresholdMicros,
-        window_minutes: config.windowMinutes
-      })
-      .select("id")
-      .single();
+    // ATOMIC claim (unique on business + window-length time bucket): two
+    // overlapping invocations can't both pass — the loser gets NULL and
+    // skips. See spend_velocity_try_claim_alert in the migration.
+    const { data: claimId, error: claimErr } = await supabase.rpc(
+      "spend_velocity_try_claim_alert",
+      {
+        p_business_id: breach.businessId,
+        p_delta_micros: breach.deltaMicros,
+        p_threshold_micros: config.thresholdMicros,
+        p_window_minutes: config.windowMinutes
+      }
+    );
     if (claimErr) {
       console.error("spend-velocity: alert claim failed", breach.businessId, claimErr);
       failed += 1;
+      continue;
+    }
+    if (claimId === null || claimId === undefined) {
+      raced += 1;
       continue;
     }
 
@@ -150,7 +157,7 @@ serve(async (req: Request) => {
       const { error: releaseErr } = await supabase
         .from("chat_spend_velocity_alerts")
         .delete()
-        .eq("id", claim.id);
+        .eq("id", claimId);
       if (releaseErr) {
         console.error("spend-velocity: claim release failed", breach.businessId, releaseErr);
       }
@@ -161,35 +168,48 @@ serve(async (req: Request) => {
       });
     };
 
-    if (!adminTo || !resendKey) {
-      console.warn("spend-velocity: alert email unconfigured (ADMIN_ALERT_EMAIL / RESEND_API_KEY)");
-      await release(adminTo ? "resend_key_missing" : "admin_email_missing");
-      continue;
-    }
+    // EVERYTHING between claim and confirmed send lives inside this try:
+    // a thrown fetch/DB exception must release the claim, otherwise the
+    // dedupe row silently swallows the alert until the window ends
+    // (Bugbot High on PR #504).
+    try {
+      if (!adminTo || !resendKey) {
+        console.warn(
+          "spend-velocity: alert email unconfigured (ADMIN_ALERT_EMAIL / RESEND_API_KEY)"
+        );
+        await release(adminTo ? "resend_key_missing" : "admin_email_missing");
+        continue;
+      }
 
-    const { data: biz } = await supabase
-      .from("businesses")
-      .select("name")
-      .eq("id", breach.businessId)
-      .maybeSingle();
-    const email = formatSpendVelocityEmail({
-      breach,
-      config,
-      businessName: (biz?.name as string | undefined) ?? null
-    });
+      const { data: biz } = await supabase
+        .from("businesses")
+        .select("name")
+        .eq("id", breach.businessId)
+        .maybeSingle();
+      const email = formatSpendVelocityEmail({
+        breach,
+        config,
+        businessName: (biz?.name as string | undefined) ?? null
+      });
 
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${resendKey}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ from, to: [adminTo], subject: email.subject, text: email.text })
-    });
-    if (!res.ok) {
-      const body = await res.text();
-      console.error("spend-velocity: resend failed", res.status, body.slice(0, 300));
-      await release(`resend_http_${res.status}`);
+      const res = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${resendKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ from, to: [adminTo], subject: email.subject, text: email.text })
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        console.error("spend-velocity: resend failed", res.status, body.slice(0, 300));
+        await release(`resend_http_${res.status}`);
+        continue;
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("spend-velocity: send threw", breach.businessId, message);
+      await release(`send_exception:${message.slice(0, 120)}`);
       continue;
     }
     sent += 1;
@@ -235,7 +255,8 @@ serve(async (req: Request) => {
       businesses: current.length,
       breaches: breaches.length,
       sent,
-      failed
+      failed,
+      raced
     }),
     { status: 200, headers: { "Content-Type": "application/json" } }
   );
