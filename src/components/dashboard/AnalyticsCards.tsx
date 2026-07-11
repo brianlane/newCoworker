@@ -406,6 +406,7 @@ export type EngagementView = {
     lastInteractionAt: string | null;
     totalInteractions: number;
   }>;
+  clipped: boolean;
 };
 
 const SEGMENT_META: Array<{
@@ -439,6 +440,12 @@ export function EngagementCard({ view }: { view: EngagementView }) {
           </span>
         ))}
       </div>
+      {view.clipped ? (
+        <p className="text-[11px] text-amber-300/80 mt-2">
+          Large directory — segment counts cover the first{" "}
+          {view.total.toLocaleString()} customers scanned.
+        </p>
+      ) : null}
       {view.quietCustomers.length > 0 ? (
         <div className="mt-4">
           <p className="text-xs text-parchment/50 mb-2">

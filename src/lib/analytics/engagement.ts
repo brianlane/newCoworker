@@ -65,6 +65,8 @@ export type EngagementOverview = {
   total: number;
   /** Most-engaged-ever quiet customers first — the win-back shortlist. */
   quietCustomers: QuietCustomer[];
+  /** True when the directory scan filled its cap — counts are partial. */
+  clipped: boolean;
 };
 
 /** Quiet-list display cap. */
@@ -119,6 +121,7 @@ export async function getEngagementOverview(
   return {
     counts,
     total: rows.length,
-    quietCustomers: quiet.slice(0, QUIET_CUSTOMER_LIMIT)
+    quietCustomers: quiet.slice(0, QUIET_CUSTOMER_LIMIT),
+    clipped: rows.length >= ENGAGEMENT_SCAN_LIMIT
   };
 }

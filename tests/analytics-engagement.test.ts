@@ -147,6 +147,20 @@ describe("getEngagementOverview", () => {
     const { client } = makeClient({ data: rows, error: null });
     const overview = await getEngagementOverview("biz-1", { client, now: NOW });
     expect(overview.quietCustomers).toHaveLength(QUIET_CUSTOMER_LIMIT);
+    expect(overview.clipped).toBe(false);
+  });
+
+  it("flags a scan that filled the directory cap as clipped", async () => {
+    const rows = Array.from({ length: ENGAGEMENT_SCAN_LIMIT }, (_, i) => ({
+      customer_e164: `+1555${String(i).padStart(7, "0")}`,
+      display_name: null,
+      created_at: daysAgo(1),
+      last_interaction_at: null,
+      total_interaction_count: 0
+    }));
+    const { client } = makeClient({ data: rows, error: null });
+    const overview = await getEngagementOverview("biz-1", { client, now: NOW });
+    expect(overview.clipped).toBe(true);
   });
 
   it("handles a null page, throws on error, and defaults client/now", async () => {
@@ -155,7 +169,8 @@ describe("getEngagementOverview", () => {
     expect(overview).toEqual({
       counts: { new: 0, active: 0, cooling: 0, quiet: 0 },
       total: 0,
-      quietCustomers: []
+      quietCustomers: [],
+      clipped: false
     });
 
     const errClient = makeClient({ data: null, error: { message: "scan down" } });
