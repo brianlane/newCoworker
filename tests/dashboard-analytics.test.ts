@@ -118,15 +118,16 @@ describe("getPreviousPeriodTotals", () => {
       },
       voice_call_transcripts: {
         data: [
-          // 120s inbound + 60s outbound + one in-progress inbound (0s).
+          // Two 90s calls on DIFFERENT days: per-day rounding (2 + 2) — the
+          // series-total aggregation — not round(180/60) = 3.
           {
             started_at: "2026-06-10T10:00:00Z",
-            ended_at: "2026-06-10T10:02:00Z",
+            ended_at: "2026-06-10T10:01:30Z",
             direction: "inbound"
           },
           {
             started_at: "2026-06-12T10:00:00Z",
-            ended_at: "2026-06-12T10:01:00Z",
+            ended_at: "2026-06-12T10:01:30Z",
             direction: "outbound"
           },
           { started_at: "2026-06-14T10:00:00Z", ended_at: null, direction: "inbound" }
@@ -140,7 +141,7 @@ describe("getPreviousPeriodTotals", () => {
     expect(totals).toEqual({
       calls: 3,
       sms: 10,
-      voiceMinutes: 3,
+      voiceMinutes: 4,
       answered: 2,
       missed: 3,
       answerRate: 2 / 5,
@@ -195,6 +196,9 @@ describe("getPreviousPeriodTotals", () => {
       now: NOW
     });
     expect(cappedTotals.clipped).toBe(true);
+    // A capped scan undercounts answered while missed stays exact — the
+    // rate is suppressed rather than skewed.
+    expect(cappedTotals.answerRate).toBeNull();
   });
 
   it("throws on sms / blocked-count query errors", async () => {

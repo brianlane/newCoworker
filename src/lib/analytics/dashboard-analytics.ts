@@ -865,22 +865,37 @@ export async function getPreviousPeriodTotals(
     (sum, row) => sum + Number(row.sms_sent ?? 0),
     0
   );
-  let seconds = 0;
+  // Minutes are rounded PER DAY and then summed — the exact aggregation the
+  // current-window series total uses — so the delta never disagrees with the
+  // card purely over rounding.
+  const secondsByDate = new Map<string, number>();
   let answered = 0;
   for (const row of callRows) {
-    seconds += callSeconds(row.started_at, row.ended_at);
+    const date = utcYmd(new Date(row.started_at));
+    secondsByDate.set(
+      date,
+      (secondsByDate.get(date) ?? 0) + callSeconds(row.started_at, row.ended_at)
+    );
     if (row.direction === "inbound") answered += 1;
+  }
+  let voiceMinutes = 0;
+  for (const daySeconds of secondsByDate.values()) {
+    voiceMinutes += Math.round(daySeconds / 60);
   }
   const missed = blockedRes.count ?? 0;
   const inboundTotal = answered + missed;
+  const clipped = callRows.length >= ANALYTICS_CALL_SCAN_LIMIT;
   return {
     calls: callRows.length,
     sms,
-    voiceMinutes: Math.round(seconds / 60),
+    voiceMinutes,
     answered,
     missed,
-    answerRate: inboundTotal === 0 ? null : answered / inboundTotal,
-    clipped: callRows.length >= ANALYTICS_CALL_SCAN_LIMIT
+    // A capped scan undercounts `answered` while `missed` stays exact, which
+    // would SKEW the rate rather than merely shrink it — suppress the rate
+    // (and therefore the delta line) instead of showing a wrong one.
+    answerRate: clipped || inboundTotal === 0 ? null : answered / inboundTotal,
+    clipped
   };
 }
 
