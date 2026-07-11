@@ -7,6 +7,7 @@ import {
   Users,
   Phone,
   Bell,
+  PanelLeft,
   AlertTriangle,
   ChevronRight,
   type LucideIcon
@@ -18,8 +19,9 @@ export const dynamic = "force-dynamic";
 
 /**
  * Settings hub (BizBlasts-style): a navigation grid of category cards, each
- * opening its own settings page. The cards mirror the sub-page routes under
- * /dashboard/settings/*.
+ * opening its own settings page. One flat, ordered list — Danger Zone is
+ * deliberately the LAST card so destructive actions sit at the bottom of
+ * the page.
  */
 type HubEntry = {
   href: string;
@@ -28,13 +30,15 @@ type HubEntry = {
   icon: LucideIcon;
   enterpriseOnly?: boolean;
   danger?: boolean;
+  /** Muted icon treatment for shortcuts that live outside the settings tree. */
+  shortcut?: boolean;
 };
 
 const HUB_ENTRIES: HubEntry[] = [
   {
     href: "/dashboard/settings/account",
     title: "Account",
-    description: "Plan, billing summary, login email, password, and sidebar layout",
+    description: "Plan, billing summary, login email, and password",
     icon: User
   },
   {
@@ -61,6 +65,26 @@ const HUB_ENTRIES: HubEntry[] = [
     description: "Dashboard access, white-label branding, and dedicated support",
     icon: Users,
     enterpriseOnly: true
+  },
+  {
+    href: "/dashboard/settings/sidebar",
+    title: "Sidebar",
+    description: "Reorder the navigation and hide pages you don't use",
+    icon: PanelLeft
+  },
+  {
+    href: "/dashboard/settings/number",
+    title: "Bring your own number",
+    description: "Transfer an existing business number to your coworker",
+    icon: Phone,
+    shortcut: true
+  },
+  {
+    href: "/dashboard/notifications",
+    title: "Notifications",
+    description: "Alert channels, categories, and delivery history",
+    icon: Bell,
+    shortcut: true
   },
   {
     href: "/dashboard/settings/danger",
@@ -102,7 +126,9 @@ export default async function SettingsHubPage() {
                     className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg ${
                       entry.danger
                         ? "bg-spark-orange/10 text-spark-orange"
-                        : "bg-signal-teal/10 text-signal-teal"
+                        : entry.shortcut
+                          ? "bg-parchment/5 text-parchment/60"
+                          : "bg-signal-teal/10 text-signal-teal"
                     }`}
                   >
                     <Icon className="h-5 w-5" />
@@ -125,46 +151,6 @@ export default async function SettingsHubPage() {
             </Link>
           );
         })}
-      </div>
-
-      {/* Frequent shortcuts that live outside the settings tree. */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <Link href="/dashboard/settings/number" className="block group">
-          <Card className="h-full hover:border-signal-teal/50 transition-colors cursor-pointer">
-            <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-parchment/5 text-parchment/60">
-                <Phone className="h-5 w-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="text-sm font-semibold text-parchment group-hover:text-signal-teal transition-colors">
-                  Bring your own number
-                </h2>
-                <p className="text-xs text-parchment/40 mt-1">
-                  Transfer an existing business number to your coworker
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-parchment/25 group-hover:text-parchment/60 group-hover:translate-x-0.5 transition-all mt-0.5" />
-            </div>
-          </Card>
-        </Link>
-        <Link href="/dashboard/notifications" className="block group">
-          <Card className="h-full hover:border-signal-teal/50 transition-colors cursor-pointer">
-            <div className="flex items-start gap-4">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-parchment/5 text-parchment/60">
-                <Bell className="h-5 w-5" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h2 className="text-sm font-semibold text-parchment group-hover:text-signal-teal transition-colors">
-                  Notifications
-                </h2>
-                <p className="text-xs text-parchment/40 mt-1">
-                  Alert channels, categories, and delivery history
-                </p>
-              </div>
-              <ChevronRight className="h-4 w-4 shrink-0 text-parchment/25 group-hover:text-parchment/60 group-hover:translate-x-0.5 transition-all mt-0.5" />
-            </div>
-          </Card>
-        </Link>
       </div>
     </div>
   );
