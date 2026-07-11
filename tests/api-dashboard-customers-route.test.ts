@@ -363,7 +363,9 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
       id: "x",
       business_id: BIZ,
       customer_e164: CUSTOMER,
-      tags: ["VIP", "New Lead"]
+      // The stored spelling carries legacy whitespace: the diff must
+      // normalize BOTH sides, or " VIP " would look like a new tag.
+      tags: [" VIP ", "New Lead"]
     } as never);
     const res = await DETAIL_PATCH(
       // Keeps VIP (case changed), drops New Lead, adds Engaged.

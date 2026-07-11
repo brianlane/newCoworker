@@ -650,6 +650,8 @@ describe("bookCalendarAppointment", () => {
       ok: true,
       data: { eventId: null, htmlLink: null, provider: "google", calendar: "primary" }
     });
+    // No confirmed event id → no appointment_booked goal event.
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       data: { description: string; attendees?: unknown };
     };

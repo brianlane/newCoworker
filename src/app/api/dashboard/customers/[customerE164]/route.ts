@@ -230,7 +230,12 @@ export async function PATCH(
     // Diffed against the same normalization the write used; best-effort inside
     // fireGoalEvent, so a goal failure never fails the save.
     if (body.tags !== undefined) {
-      const before = new Set((existing.tags ?? []).map((t) => t.toLowerCase()));
+      // Both sides of the diff go through the SAME normalization the write
+      // used — comparing raw stored tags would make a legacy spelling or
+      // stray whitespace look "new" and fire a spurious goal jump.
+      const before = new Set(
+        normalizeContactTags(existing.tags ?? []).map((t) => t.toLowerCase())
+      );
       for (const tag of normalizeContactTags(body.tags)) {
         if (before.has(tag.toLowerCase())) continue;
         await fireGoalEvent(businessId, customerE164, { kind: "tag_added", tag });

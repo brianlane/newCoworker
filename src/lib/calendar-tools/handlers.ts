@@ -498,11 +498,15 @@ export async function bookCalendarAppointment(
 
     // Goal Events: a real booking may fast-forward the lead's parked/queued
     // AiFlow runs to an "appointment booked" goal (skipping follow-up sends
-    // between here and there). Best-effort inside fireGoalEvent; the Calendly
-    // path above is exempt — a scheduling LINK is not a booking.
-    await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
-      kind: "appointment_booked"
-    });
+    // between here and there). Only a CONFIRMED create fires it — a provider
+    // response without an event id is not a booking. Best-effort inside
+    // fireGoalEvent; the Calendly path above is exempt — a scheduling LINK is
+    // not a booking.
+    if (eventId) {
+      await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+        kind: "appointment_booked"
+      });
+    }
 
     return {
       ok: true,

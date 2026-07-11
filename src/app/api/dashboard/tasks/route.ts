@@ -46,7 +46,6 @@ const querySchema = z.object({
 /** Most leads one response carries; newest activity first. */
 const MAX_TASKS = 60;
 const MAX_RUNS = 200;
-const MAX_REASONING_ROWS = 180;
 const REASONING_PER_TASK = 3;
 
 type RunRow = {
@@ -269,28 +268,35 @@ export async function GET(request: Request) {
       }
     }
 
-    // 6) Latest response reasoning per lead.
+    // 6) Latest response reasoning per lead. Fetched PER CONTACT (small,
+    // index-served lookups in parallel) rather than one globally-capped
+    // query: a single chatty lead would otherwise exhaust the cap and starve
+    // every other card's reasoning section.
     const reasoningByPhone = new Map<string, TaskReasoningView[]>();
     const allPhones = [...contactsByPhone.keys()];
     if (allPhones.length > 0) {
-      const { data: reasonData, error: reasonErr } = await db
-        .from("ai_reply_reasoning")
-        .select("contact_e164, intent, rationale, escalated, reply_preview, created_at")
-        .eq("business_id", businessId)
-        .in("contact_e164", allPhones)
-        .order("created_at", { ascending: false })
-        .limit(MAX_REASONING_ROWS);
-      if (reasonErr) throw new Error(`tasks: reasoning: ${reasonErr.message}`);
-      for (const row of (reasonData ?? []) as Array<{
-        contact_e164: string;
-        intent: string;
-        rationale: string;
-        escalated: boolean;
-        reply_preview: string | null;
-        created_at: string;
-      }>) {
+      const perContact = await Promise.all(
+        allPhones.map(async (phone) => {
+          const { data, error } = await db
+            .from("ai_reply_reasoning")
+            .select("contact_e164, intent, rationale, escalated, reply_preview, created_at")
+            .eq("business_id", businessId)
+            .eq("contact_e164", phone)
+            .order("created_at", { ascending: false })
+            .limit(REASONING_PER_TASK);
+          if (error) throw new Error(`tasks: reasoning: ${error.message}`);
+          return (data ?? []) as Array<{
+            contact_e164: string;
+            intent: string;
+            rationale: string;
+            escalated: boolean;
+            reply_preview: string | null;
+            created_at: string;
+          }>;
+        })
+      );
+      for (const row of perContact.flat()) {
         const list = reasoningByPhone.get(row.contact_e164) ?? [];
-        if (list.length >= REASONING_PER_TASK) continue;
         list.push({
           intent: row.intent,
           rationale: row.rationale,
