@@ -26,9 +26,13 @@
 # Expected env: GH_TOKEN, REPO ("owner/name"), SHA, PR (number).
 set -euo pipefail
 
-# The gate must never wait on itself, and the dependabot labeler only runs
-# (by design) on dependabot PRs — it reports "skipped" everywhere else.
-EXCLUDED_CHECKS='["E2E (live AI + AiFlows)", "label-dependabot"]'
+# The gate must never wait on itself, and the dependabot automation jobs
+# (labeler + auto-merge evaluator) skip BY DESIGN on non-dependabot PRs —
+# their "skipped" check runs are plumbing, not merge signals. auto-merge in
+# particular lands mid-run (workflow_run after CI/CodeQL/Dependency Audit
+# complete), so without the exclusion it would hard-fail every human PR's
+# gate and every re-run.
+EXCLUDED_CHECKS='["E2E (live AI + AiFlows)", "label-dependabot", "auto-merge"]'
 
 GATE_TIMEOUT_MINS="${GATE_TIMEOUT_MINS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
