@@ -41,6 +41,29 @@ export const REASONING_MARKER = "[[reasoning]]";
 const MARKER_PATTERN = /[⟦\[]{1,2}\s*reasoning\s*[⟧\]}]{0,2}/i;
 
 /**
+ * Second net: the trailer JSON itself, for trailers that escaped WITHOUT a
+ * recognizable marker. Caught live by the e2e suite on its first run — the
+ * model emitted `[[<free-form summary>]] {"intent":...}`, replacing the
+ * marker word with actual reasoning text, which the marker matcher cannot
+ * see. No customer-facing reply legitimately contains `{"intent":"`.
+ */
+const TRAILER_JSON_PATTERN = /\{\s*"intent"\s*:\s*"/;
+
+/**
+ * Where the trailer starts on this line, or -1. A recognizable marker wins;
+ * otherwise a trailer-JSON body counts, extended left over a bracket blob
+ * glued in front of it (the live-caught `[[summary]] {"intent":...}` shape).
+ */
+function trailerCutIndex(line: string): number {
+  const marker = MARKER_PATTERN.exec(line);
+  if (marker) return marker.index;
+  const json = line.search(TRAILER_JSON_PATTERN);
+  if (json === -1) return -1;
+  const blob = Math.max(line.lastIndexOf("[[", json), line.lastIndexOf("\u27E6", json));
+  return blob !== -1 ? blob : json;
+}
+
+/**
  * Appended to the model's per-turn instructions. Kept terse: the trailer is
  * machine-read, and a long spec would crowd the actual conversation prompt.
  */
@@ -99,25 +122,29 @@ function parseTrailer(payload: string): ReplyReasoning | null {
 }
 
 /**
- * Strip every marker-carrying line from the reply and parse the LAST one.
- * A marker mid-line strips from the marker to the end of that line (a model
- * that glued the trailer onto its last sentence keeps the sentence).
+ * Strip every trailer-carrying line from the reply and parse the LAST one.
+ * A trailer mid-line strips from its start to the end of that line (a model
+ * that glued the trailer onto its last sentence keeps the sentence). Lines
+ * are trailer-carrying when they hold a marker variant OR a bare trailer
+ * JSON body (see TRAILER_JSON_PATTERN).
  */
 export function splitReplyReasoning(raw: string): SplitReplyResult {
-  if (!MARKER_PATTERN.test(raw)) {
+  if (!MARKER_PATTERN.test(raw) && !TRAILER_JSON_PATTERN.test(raw)) {
     return { reply: raw, reasoning: null };
   }
   const keptLines: string[] = [];
   let reasoning: ReplyReasoning | null = null;
   for (const line of raw.split("\n")) {
-    const match = MARKER_PATTERN.exec(line);
-    if (!match) {
+    const at = trailerCutIndex(line);
+    if (at === -1) {
       keptLines.push(line);
       continue;
     }
-    const before = line.slice(0, match.index).trimEnd();
+    const before = line.slice(0, at).trimEnd();
     if (before) keptLines.push(before);
-    const parsed = parseTrailer(line.slice(match.index + match[0].length));
+    // parseTrailer scans for the outermost {...} span, so passing the cut
+    // (marker/blob included) parses the same JSON for every variant.
+    const parsed = parseTrailer(line.slice(at));
     if (parsed) reasoning = parsed;
   }
   // Collapse the blank tail the removed trailer line usually leaves behind.
