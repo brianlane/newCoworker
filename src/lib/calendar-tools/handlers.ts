@@ -390,7 +390,10 @@ export async function bookCalendarAppointment(
     if (conn.provider === "vagaro") {
       // Real booking on the merchant's Vagaro book (direct API, no Nango).
       const vagaroResult = await bookVagaroAppointment(businessId, args, fallbackPhone);
-      if (vagaroResult.ok) {
+      // Same confirmed-event rule as the Google/Microsoft paths: only a
+      // response carrying an appointment id counts as booked for goals.
+      const vagaroEventId = (vagaroResult.data as { eventId?: unknown } | undefined)?.eventId;
+      if (vagaroResult.ok && vagaroEventId) {
         await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
           kind: "appointment_booked"
         });

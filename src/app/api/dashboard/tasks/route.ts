@@ -294,41 +294,44 @@ export async function GET(request: Request) {
     // 6) Latest response reasoning per lead. Fetched PER CONTACT (small,
     // index-served lookups in parallel) rather than one globally-capped
     // query: a single chatty lead would otherwise exhaust the cap and starve
-    // every other card's reasoning section.
+    // every other card's reasoning section. Alias-aware: replies to a
+    // merged-away number stored their reasoning under that alias, so each
+    // card reads its primary AND its aliases (keyed back to the primary).
     const reasoningByPhone = new Map<string, TaskReasoningView[]>();
     const allPhones = [...contactsByPhone.keys()];
     if (allPhones.length > 0) {
-      const perContact = await Promise.all(
+      await Promise.all(
         allPhones.map(async (phone) => {
+          const numbers = [phone, ...(contactsByPhone.get(phone)?.alias_e164s ?? [])];
           const { data, error } = await db
             .from("ai_reply_reasoning")
-            .select("contact_e164, intent, rationale, escalated, reply_preview, created_at")
+            .select("intent, rationale, escalated, reply_preview, created_at")
             .eq("business_id", businessId)
-            .eq("contact_e164", phone)
+            .in("contact_e164", numbers)
             .order("created_at", { ascending: false })
             .limit(REASONING_PER_TASK);
           if (error) throw new Error(`tasks: reasoning: ${error.message}`);
-          return (data ?? []) as Array<{
-            contact_e164: string;
+          const rows = (data ?? []) as Array<{
             intent: string;
             rationale: string;
             escalated: boolean;
             reply_preview: string | null;
             created_at: string;
           }>;
+          if (rows.length > 0) {
+            reasoningByPhone.set(
+              phone,
+              rows.map((row) => ({
+                intent: row.intent,
+                rationale: row.rationale,
+                escalated: row.escalated,
+                replyPreview: row.reply_preview,
+                at: row.created_at
+              }))
+            );
+          }
         })
       );
-      for (const row of perContact.flat()) {
-        const list = reasoningByPhone.get(row.contact_e164) ?? [];
-        list.push({
-          intent: row.intent,
-          rationale: row.rationale,
-          escalated: row.escalated,
-          replyPreview: row.reply_preview,
-          at: row.created_at
-        });
-        reasoningByPhone.set(row.contact_e164, list);
-      }
     }
 
     // Display names (owner/employee overlays + manual labels win).

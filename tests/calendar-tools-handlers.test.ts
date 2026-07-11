@@ -578,6 +578,16 @@ describe("bookCalendarAppointment", () => {
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
   });
 
+  it("a success-shaped Vagaro response WITHOUT an appointment id fires no goal event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({
+      ok: true,
+      data: { provider: "vagaro" }
+    } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+  });
+
   it("delegates a Calendly connection to createCalendlyBookingLink", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
     const delegated = {
