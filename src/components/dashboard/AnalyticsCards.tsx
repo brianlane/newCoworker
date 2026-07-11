@@ -428,6 +428,161 @@ export function SegmentDetailCard({
   );
 }
 
+export type EngagementView = {
+  counts: { new: number; active: number; cooling: number; quiet: number };
+  total: number;
+  quietCustomers: Array<{
+    e164: string;
+    name: string | null;
+    lastInteractionAt: string | null;
+    totalInteractions: number;
+  }>;
+  clipped: boolean;
+};
+
+const SEGMENT_META: Array<{
+  key: keyof EngagementView["counts"];
+  label: string;
+  dotClass: string;
+}> = [
+  { key: "active", label: "Active (30d)", dotClass: "bg-claw-green" },
+  { key: "cooling", label: "Cooling (30–90d)", dotClass: "bg-amber-300" },
+  { key: "quiet", label: "Quiet (90d+)", dotClass: "bg-red-300" },
+  { key: "new", label: "New", dotClass: "bg-signal-teal" }
+];
+
+/**
+ * Customer engagement segments + the quiet ("win-back") shortlist —
+ * BizBlasts RFM/churn port in engagement terms. Quiet customers order by
+ * lifetime interactions so the most valuable lapsed relationships lead.
+ */
+export function EngagementCard({ view }: { view: EngagementView }) {
+  return (
+    <Card>
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+        Customer engagement
+      </p>
+      <div className="flex flex-wrap gap-x-5 gap-y-1 mt-2">
+        {SEGMENT_META.map((seg) => (
+          <span key={seg.key} className="text-sm text-parchment/70">
+            <span className={`inline-block w-2 h-2 rounded-full mr-1.5 ${seg.dotClass}`} />
+            {view.counts[seg.key].toLocaleString()}{" "}
+            <span className="text-parchment/45">{seg.label}</span>
+          </span>
+        ))}
+      </div>
+      {view.clipped ? (
+        <p className="text-[11px] text-amber-300/80 mt-2">
+          Large directory — segment counts cover the first{" "}
+          {view.total.toLocaleString()} customers scanned.
+        </p>
+      ) : null}
+      {view.quietCustomers.length > 0 ? (
+        <div className="mt-4">
+          <p className="text-xs text-parchment/50 mb-2">
+            Gone quiet — your best win-back candidates:
+          </p>
+          <ul className="space-y-1.5">
+            {view.quietCustomers.map((c) => (
+              <li key={c.e164} className="text-sm flex items-baseline justify-between gap-3">
+                <Link
+                  href={`/dashboard/customers/${encodeURIComponent(c.e164)}`}
+                  className="text-parchment/85 hover:text-parchment hover:underline truncate"
+                >
+                  {c.name ?? c.e164}
+                </Link>
+                <span className="text-xs text-parchment/40 whitespace-nowrap">
+                  {c.totalInteractions.toLocaleString()} interactions
+                  {c.lastInteractionAt ? (
+                    <>
+                      {" · last "}
+                      <LocalDateTime iso={c.lastInteractionAt} style="date" />
+                    </>
+                  ) : (
+                    " · never talked"
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="text-xs text-parchment/40 mt-3">
+          Nobody has gone quiet — every customer has been in touch recently.
+        </p>
+      )}
+    </Card>
+  );
+}
+
+export type EmployeePerformanceView = {
+  memberId: string;
+  name: string;
+  active: boolean;
+  offered: number;
+  claimed: number;
+  claimRate: number | null;
+  medianClaimMs: number | null;
+  forwardedCalls: number;
+};
+
+/** "42 min" / "3.5 h" / "2 d" for the turnaround column. */
+function humanizeMs(ms: number): string {
+  const minutes = ms / 60_000;
+  if (minutes < 60) return `${Math.max(1, Math.round(minutes))} min`;
+  const hours = minutes / 60;
+  if (hours < 24) return `${Math.round(hours * 10) / 10} h`;
+  return `${Math.round(hours / 24)} d`;
+}
+
+/**
+ * Owner-only roster leaderboard (BizBlasts StaffPerformanceService port):
+ * lead offers/claims from AiFlow routing + calls the voice line forwarded.
+ * Turnaround is approximate by design (see employee-performance.ts).
+ */
+export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceView[] }) {
+  return (
+    <Card>
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+        Team performance (30 days) — owner view
+      </p>
+      <div className="mt-3 space-y-2">
+        <div className="grid grid-cols-5 gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
+          <span>Teammate</span>
+          <span className="text-right">Leads offered</span>
+          <span className="text-right">Claimed</span>
+          <span className="text-right">Typical turnaround</span>
+          <span className="text-right">Calls forwarded</span>
+        </div>
+        {rows.map((row) => (
+          <div key={row.memberId} className="grid grid-cols-5 gap-2 text-sm items-baseline">
+            <span className="text-parchment/85 truncate">
+              {row.name}
+              {row.active ? "" : <span className="text-parchment/35"> (inactive)</span>}
+            </span>
+            <span className="text-right text-parchment/70">{row.offered.toLocaleString()}</span>
+            <span className="text-right text-parchment/70">
+              {row.claimed.toLocaleString()}
+              {row.claimRate !== null ? (
+                <span className="text-parchment/40"> ({Math.round(row.claimRate * 100)}%)</span>
+              ) : null}
+            </span>
+            <span className="text-right text-parchment/70">
+              {row.medianClaimMs !== null ? humanizeMs(row.medianClaimMs) : "—"}
+            </span>
+            <span className="text-right text-parchment/70">
+              {row.forwardedCalls.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-parchment/35 mt-3">
+        Turnaround approximates run start → claim settle and can include follow-up steps.
+      </p>
+    </Card>
+  );
+}
+
 export type TrendWeek = { label: string; calls: number; sms: number };
 
 export type TrendForecastView = {
