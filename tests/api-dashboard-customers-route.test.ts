@@ -25,6 +25,7 @@ vi.mock("@/lib/db/employees", () => ({
 }));
 
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
+vi.mock("@/lib/ai-flows/contact-event-hooks", () => ({ fireContactEvent: vi.fn() }));
 
 import { GET as LIST_GET } from "@/app/api/dashboard/customers/route";
 import {
@@ -44,6 +45,7 @@ import {
 import { rateLimit } from "@/lib/rate-limit";
 import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CUSTOMER = "+15551234567";
@@ -378,6 +380,67 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
       kind: "tag_added",
       tag: "Engaged"
     });
+    // tag_changed triggers fire for the ADD and the REMOVE (not the keep).
+    expect(fireContactEvent).toHaveBeenCalledTimes(2);
+    expect(fireContactEvent).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ kind: "tag_changed", tag: "Engaged", change: "added" })
+    );
+    expect(fireContactEvent).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ kind: "tag_changed", tag: "New Lead", change: "removed" })
+    );
+  });
+
+  it("fires owner_assigned only when the owner actually changes to someone new", async () => {
+    const MEMBER = "22222222-2222-4222-8222-222222222222";
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getTeamMember).mockResolvedValue({ id: MEMBER, name: "Dania" } as never);
+    // Already owned by the same member → no event.
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      owner_employee_id: MEMBER
+    } as never);
+    await DETAIL_PATCH(patchReq({ ownerEmployeeId: MEMBER }), params(encodeURIComponent(CUSTOMER)));
+    expect(fireContactEvent).not.toHaveBeenCalled();
+    // Newly assigned → event with the member's name.
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER,
+      owner_employee_id: null
+    } as never);
+    await DETAIL_PATCH(patchReq({ ownerEmployeeId: MEMBER }), params(encodeURIComponent(CUSTOMER)));
+    expect(fireContactEvent).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ kind: "owner_assigned", ownerName: "Dania" })
+    );
+  });
+
+  it("forwards a birthday set/clear to updateCustomerOwnerFields", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ birthday: "1990-07-10" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, CUSTOMER, {
+      birthday: "1990-07-10"
+    });
+    // Junk shapes are rejected at the schema layer — BEFORE the contact
+    // lookup, so no getCustomerMemory mock is queued for this call.
+    const bad = await DETAIL_PATCH(
+      patchReq({ birthday: "July 10" }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(bad.status).toBe(400);
   });
 
   it("an alias URL writes (and fires goals) against the surviving row's PRIMARY number", async () => {

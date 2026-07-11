@@ -24,6 +24,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bell,
+  Calculator,
   Copy,
   Flag,
   GitBranch,
@@ -81,6 +82,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   wait_for_reply: "wait",
   branch: "branch",
   goal: "goal",
+  math: "read",
   route_to_team: "comm",
   browse_action: "read",
   recall_url: "read",
@@ -117,6 +119,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   wait_for_reply: <Hourglass className="h-4 w-4" />,
   branch: <GitBranch className="h-4 w-4" />,
   goal: <Flag className="h-4 w-4" />,
+  math: <Calculator className="h-4 w-4" />,
   route_to_team: <Users className="h-4 w-4" />,
   browse_action: <Globe className="h-4 w-4" />,
   recall_url: <Link2 className="h-4 w-4" />,
@@ -160,7 +163,13 @@ function stepSubtitle(step: FlowStep): string {
     case "sleep":
       return step.minutes !== undefined
         ? `waits ${formatDurationMinutes(step.minutes)}`
-        : `until ${step.untilTime ?? "?"} (${step.timezone ?? "?"})`;
+        : step.untilDateTemplate !== undefined
+          ? `until ${step.untilDateTemplate}`
+          : step.relativeToTemplate !== undefined
+            ? `${formatDurationMinutes(Math.abs(step.offsetMinutes ?? 0))} ${
+                (step.offsetMinutes ?? 0) < 0 ? "before" : "after"
+              } ${step.relativeToTemplate}`
+            : `until ${step.untilTime ?? "?"} (${step.timezone ?? "?"})`;
     case "wait_for_reply":
       // The timeout IS the follow-up cadence — without it the canvas can't
       // show "nudge after 2 hours, again after 24" at a glance.
@@ -171,6 +180,8 @@ function stepSubtitle(step: FlowStep): string {
       return `${step.label} · ${step.events
         .map((e) => (e.kind === "tag_added" ? `tag "${e.tag ?? ""}"` : GOAL_EVENT_SHORT[e.kind]))
         .join(" / ")}`;
+    case "math":
+      return `${step.operation}: ${step.left}${step.right !== undefined ? ` · ${step.right}` : ""} → {{vars.${step.saveAs}}}`;
     case "extract_url":
       return `saves {{vars.${step.saveAs}}}`;
     case "extract_text":
@@ -244,7 +255,17 @@ function triggerHeadline(trigger: FlowTrigger): string {
           ? (trigger.followMinutes ?? 0) > 0
             ? `${formatDurationMinutes(trigger.followMinutes ?? 0)} after a calendar event ends`
             : "When a calendar event ends"
-          : "Calendar event created";
+          : trigger.on === "event_canceled"
+            ? "Calendar event canceled"
+            : "Calendar event created";
+    case "contact_created":
+      return "Contact created";
+    case "tag_changed":
+      return `Tag ${trigger.tag ? `"${trigger.tag}" ` : ""}${trigger.change ?? "added"}`;
+    case "owner_assigned":
+      return "Contact assigned an owner";
+    case "birthday":
+      return `Contact's birthday (at ${trigger.time ?? "09:00"})`;
     case "voice":
       return trigger.direction === "outbound" ? "Outbound call (AI talks)" : "Inbound call";
   }

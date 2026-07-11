@@ -563,6 +563,20 @@ describe("isExecutableDefinition", () => {
     };
     expect(flowTriggers(multi)).toEqual([valid.trigger, { channel: "manual" }]);
   });
+  it("accepts the contact-event / birthday channels and event_canceled (conditions required)", () => {
+    for (const channel of ["contact_created", "tag_changed", "owner_assigned", "birthday"]) {
+      expect(isExecutableDefinition({ ...valid, trigger: { channel, conditions: [] } })).toBe(
+        true
+      );
+      expect(isExecutableDefinition({ ...valid, trigger: { channel } })).toBe(false);
+    }
+    expect(
+      isExecutableDefinition({
+        ...valid,
+        trigger: { channel: "calendar", on: "event_canceled", conditions: [] }
+      })
+    ).toBe(true);
+  });
   it("accepts the non-SMS trigger channels", () => {
     expect(isExecutableDefinition({ ...valid, trigger: { channel: "manual" } })).toBe(true);
     expect(

@@ -257,6 +257,26 @@ describe("salvageFlowDefinition: semantic repair loop", () => {
     expect(sleep.type === "sleep" && sleep.untilTime).toBeUndefined();
   });
 
+  it("mends a sleep mixing time-of-day and date modes by dropping the date templates", () => {
+    const res = salvageFlowDefinition({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "z",
+          type: "sleep",
+          untilTime: "08:30",
+          timezone: "America/Phoenix",
+          untilDateTemplate: "2026-08-01"
+        },
+        { id: "n", type: "notify_owner", message: "later" }
+      ]
+    });
+    const sleep = res!.definition.steps[0];
+    expect(sleep.type === "sleep" && sleep.untilTime).toBe("08:30");
+    expect(sleep.type === "sleep" && sleep.untilDateTemplate).toBeUndefined();
+  });
+
   it("mends a route_to_team pinned to both agentName and agentRef by keeping the name", () => {
     const res = salvageFlowDefinition({
       version: 1,

@@ -128,7 +128,8 @@ export type CalendarTrigger = {
   channel: "calendar";
   /** Which calendar(s) to watch. Default "both". */
   calendar?: "primary" | "shared" | "both";
-  on: "event_created" | "event_start" | "event_end";
+  /** event_canceled fires when a watched event is cancelled/deleted. */
+  on: "event_created" | "event_start" | "event_end" | "event_canceled";
   /** event_start only: run this many minutes before the event starts. */
   leadMinutes?: number;
   /**
@@ -178,6 +179,57 @@ export type VoiceTrigger = {
   everyMinutes?: number;
 };
 
+/**
+ * Contact-event trigger: a NEW contact landed on the Contacts page (created
+ * from the dashboard, a CSV/lead import, or a flow's upsert_customer step).
+ * Push-based: the write sites call enqueueContactEventRuns (see
+ * _shared/ai_flows/contact_events.ts). Conditions evaluate over a "key:
+ * value" text of the contact's fields; `from` is the contact's phone.
+ */
+export type ContactCreatedTrigger = {
+  channel: "contact_created";
+  conditions: TriggerCondition[];
+};
+
+/**
+ * Contact-event trigger: a tag was added to / removed from a contact —
+ * dashboard edits and update_contact flow steps both fire it. `tag` narrows
+ * to one tag (case-insensitive); omitted matches any tag. `change` defaults
+ * to "added". Loop-guarded: the flow whose own update_contact step wrote the
+ * tag never retriggers itself.
+ */
+export type TagChangedTrigger = {
+  channel: "tag_changed";
+  tag?: string;
+  change?: "added" | "removed";
+  conditions: TriggerCondition[];
+};
+
+/**
+ * Contact-event trigger: a roster member became the contact's owner (a
+ * route_to_team claim auto-assigned it, or a manual assignment from the
+ * contact page).
+ */
+export type OwnerAssignedTrigger = {
+  channel: "owner_assigned";
+  conditions: TriggerCondition[];
+};
+
+/**
+ * Birthday trigger: fires once per year per contact whose stored birthday
+ * (contacts.birthday) is today in `timezone` (default: the business
+ * timezone), at/after local `time` (default 09:00). Swept by the worker's
+ * cron tick; exactly-once via dedupe key `bday:<contactId>:<year>`.
+ */
+export type BirthdayTrigger = {
+  channel: "birthday";
+  /** Local send time, 24h "HH:MM". Default "09:00". */
+  time?: string;
+  /** IANA zone for `time`. Default: the business timezone. */
+  timezone?: string;
+  conditions: TriggerCondition[];
+};
+
 export type FlowTrigger =
   | SmsTrigger
   | ManualTrigger
@@ -186,6 +238,10 @@ export type FlowTrigger =
   | TenantEmailTrigger
   | WebhookTrigger
   | CalendarTrigger
+  | ContactCreatedTrigger
+  | TagChangedTrigger
+  | OwnerAssignedTrigger
+  | BirthdayTrigger
   | VoiceTrigger;
 
 export type ExtractField = {
@@ -776,7 +832,13 @@ export type FlowStep =
        * Pause the run, then continue with the NEXT step. Exactly one mode:
        *   - minutes: relative wait (1..43200 = 30 days);
        *   - untilTime ("HH:MM") + timezone: wait until the next occurrence of
-       *     that local wall-clock time.
+       *     that local wall-clock time;
+       *   - untilDateTemplate: a template rendering to an ISO date/datetime
+       *     (e.g. "{{vars.renewal_date}}") — wake then (a past/unparseable
+       *     render fails OPEN: the step skips with a note);
+       *   - relativeToTemplate + offsetMinutes: a template rendering to an
+       *     ISO datetime plus a signed offset — negative = BEFORE it (the
+       *     GHL "2 hours before the appointment" wait).
        * Implemented as an earliest_claim_at deferral (same machinery as SMS
        * quiet hours): nothing is sent, no attempt is burned, and the worker
        * re-claims the run when the time arrives. A context marker
@@ -787,6 +849,38 @@ export type FlowStep =
       minutes?: number;
       untilTime?: string;
       timezone?: string;
+      untilDateTemplate?: string;
+      relativeToTemplate?: string;
+      offsetMinutes?: number;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * Arithmetic on numbers and dates: compute `left <operation> right`
+       * and save the result into {{vars.<saveAs>}} — usable by later `when`
+       * guards and branch conditions (lead scoring, "renewal within 30
+       * days"). left/right are templates rendered against the run scope.
+       * Number ops parse loose numerics ("$1,200" → 1200); date ops parse
+       * ISO datetimes. An unparseable operand (or divide-by-zero) saves the
+       * sentinel "not_a_number" instead of failing the run — a data gap is
+       * not a flow bug, and branches can test for it.
+       */
+      type: "math";
+      operation:
+        | "add"
+        | "subtract"
+        | "multiply"
+        | "divide"
+        | "round"
+        // left = ISO datetime, right = minutes → ISO datetime.
+        | "date_add_minutes"
+        // Whole days from left (ISO) to right (ISO); negative when right is earlier.
+        | "date_diff_days";
+      left: string;
+      /** Unused by `round`. */
+      right?: string;
+      saveAs: string;
       when?: StepCondition;
     }
   | {
@@ -919,6 +1013,19 @@ export type AiFlowOptions = {
   captureStepScreenshots?: boolean;
 };
 
+/**
+ * Flow-level drip pacing (GHL "Drip"): consecutive enqueues for this flow
+ * are spaced `intervalMinutes` apart via earliest_claim_at, so a bulk
+ * enrollment (lead-backlog import, webhook burst) trickles through the send
+ * steps instead of bursting. Applied at enqueue time by the Node-side
+ * enqueueAiFlowRun (the bulk paths); a single inbound SMS is never "bulk"
+ * and keeps firing immediately.
+ */
+export type FlowDrip = {
+  /** Minutes between consecutive run starts (1..1440). */
+  intervalMinutes: number;
+};
+
 export type AiFlowDefinition = {
   version: typeof AI_FLOW_DEFINITION_VERSION;
   trigger: FlowTrigger;
@@ -932,6 +1039,8 @@ export type AiFlowDefinition = {
   steps: FlowStep[];
   /** Flow-level business-hours gate on communication steps. */
   timeWindow?: FlowTimeWindow;
+  /** Flow-level drip pacing for bulk enqueues. */
+  drip?: FlowDrip;
   options?: AiFlowOptions;
 };
 

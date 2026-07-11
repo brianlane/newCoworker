@@ -56,6 +56,9 @@ export default async function AiFlowViewPage({ params }: Props) {
     const recentRuns = await listAiFlowRuns(businessId, { flowId, limit: 100 });
     const runIds = recentRuns
       .filter((r) => r.created_at >= flow.updated_at)
+      // Test runs simulate their sends — their step outcomes would inflate
+      // the "ran N×" counts with sends that never happened.
+      .filter((r) => (r.context?.trigger as { test_mode?: unknown } | undefined)?.test_mode !== true)
       .map((r) => r.id);
     if (runIds.length > 0) {
       const { data: stepRows } = await db

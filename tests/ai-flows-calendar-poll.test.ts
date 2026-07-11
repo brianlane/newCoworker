@@ -17,6 +17,7 @@ import {
   CALENDAR_POLL_MAX_EVENTS,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
+  eventCanceledDue,
   eventCreatedDue,
   eventEndDue,
   eventStartDue,
@@ -170,6 +171,39 @@ describe("eventCreatedDue", () => {
   });
 });
 
+describe("eventCanceledDue", () => {
+  const now = Date.parse("2026-07-08T12:00:00Z");
+  it("fires only for cancelled events modified within the lookback", () => {
+    expect(
+      eventCanceledDue({ cancelled: true, updatedIso: "2026-07-08T11:50:00Z" }, now)
+    ).toBe(true);
+    // Not cancelled → never.
+    expect(
+      eventCanceledDue({ cancelled: false, updatedIso: "2026-07-08T11:50:00Z" }, now)
+    ).toBe(false);
+    // Cancelled long ago (outside the lookback) → a re-enabled flow doesn't replay it.
+    expect(
+      eventCanceledDue({ cancelled: true, updatedIso: "2026-07-08T09:00:00Z" }, now)
+    ).toBe(false);
+    // No/junk modification timestamp → never.
+    expect(eventCanceledDue({ cancelled: true }, now)).toBe(false);
+    expect(eventCanceledDue({ cancelled: true, updatedIso: "junk" }, now)).toBe(false);
+  });
+  it("the other modes skip cancelled events", () => {
+    expect(
+      eventStartDue(
+        { startIso: "2026-07-08T12:10:00Z", cancelled: true },
+        30,
+        now
+      )
+    ).toBe(false);
+    expect(eventEndDue({ endIso: "2026-07-08T11:55:00Z", cancelled: true }, 0, now)).toBe(false);
+    expect(
+      eventCreatedDue({ createdIso: "2026-07-08T11:55:00Z", cancelled: true }, now)
+    ).toBe(false);
+  });
+});
+
 describe("calendarDedupeKey", () => {
   it("keys created mode per event and start mode per occurrence", () => {
     expect(calendarDedupeKey("event_created", { id: "e1" })).toBe("cal:e1");
@@ -183,6 +217,7 @@ describe("calendarDedupeKey", () => {
       calendarDedupeKey("event_end", { id: "e1", endIso: "2026-07-08T13:00:00Z" })
     ).toBe("cal:e1:end:2026-07-08T13:00:00Z");
     expect(calendarDedupeKey("event_end", { id: "e1" })).toBe("cal:e1:end:");
+    expect(calendarDedupeKey("event_canceled", { id: "e1" })).toBe("cal:e1:cancelled");
   });
 });
 
@@ -217,14 +252,29 @@ describe("normalizeGoogleEvent", () => {
       startIso: "2026-07-09T00:00:00Z",
       endIso: "2026-07-09T15:00:00Z",
       createdIso: "2026-07-08T10:00:00Z",
+      updatedIso: undefined,
+      cancelled: false,
       calendar: "primary"
     });
   });
-  it("drops cancelled and id-less events, defaults missing fields", () => {
-    expect(normalizeGoogleEvent({ id: "g1", status: "cancelled" }, "primary")).toBeNull();
+  it("keeps cancelled events (flagged, with updatedIso), drops id-less ones, defaults missing fields", () => {
+    // Cancelled events are KEPT so event_canceled mode can fire; every other
+    // due-check skips them explicitly.
+    expect(
+      normalizeGoogleEvent(
+        { id: "g1", status: "cancelled", updated: "2026-07-08T12:00:00Z" },
+        "primary"
+      )
+    ).toMatchObject({ id: "g1", cancelled: true, updatedIso: "2026-07-08T12:00:00Z" });
     expect(normalizeGoogleEvent({}, "primary")).toBeNull();
     const bare = normalizeGoogleEvent({ id: "g2" }, "shared");
-    expect(bare).toMatchObject({ id: "g2", title: "", attendees: [], calendar: "shared" });
+    expect(bare).toMatchObject({
+      id: "g2",
+      title: "",
+      attendees: [],
+      calendar: "shared",
+      cancelled: false
+    });
     expect(bare?.startIso).toBeUndefined();
   });
 });
@@ -277,10 +327,19 @@ describe("normalizeGraphEvent", () => {
       calendar: "shared"
     });
   });
-  it("drops cancelled and id-less events, defaults a missing subject", () => {
-    expect(normalizeGraphEvent({ id: "m1", isCancelled: true }, "primary")).toBeNull();
+  it("keeps cancelled events (flagged, with updatedIso), drops id-less ones, defaults a missing subject", () => {
+    expect(
+      normalizeGraphEvent(
+        { id: "m1", isCancelled: true, lastModifiedDateTime: "2026-07-08T12:00:00Z" },
+        "primary"
+      )
+    ).toMatchObject({ id: "m1", cancelled: true, updatedIso: "2026-07-08T12:00:00Z" });
     expect(normalizeGraphEvent({}, "primary")).toBeNull();
-    expect(normalizeGraphEvent({ id: "m3" }, "primary")).toMatchObject({ id: "m3", title: "" });
+    expect(normalizeGraphEvent({ id: "m3" }, "primary")).toMatchObject({
+      id: "m3",
+      title: "",
+      cancelled: false
+    });
   });
   it("marks Outlook all-day events", () => {
     expect(normalizeGraphEvent({ id: "m4", isAllDay: true }, "primary")).toMatchObject({
@@ -410,7 +469,9 @@ describe("pollCalendarTriggers", () => {
             start: { dateTime: isoIn(60) }
           },
           { id: "ev-old", summary: "Old", created: isoIn(-60) },
-          { id: "ev-cancelled", status: "cancelled" }
+          // Cancelled events are now KEPT (flagged) for the canceled mode;
+          // created-mode's due-check skips them.
+          { id: "ev-cancelled", status: "cancelled", created: isoIn(-2) }
         ]
       }
     } as never);
@@ -421,7 +482,7 @@ describe("pollCalendarTriggers", () => {
         flowRow("f-miss", createdTrigger({ conditions: [{ type: "contains", value: "nope" }] }))
       ])
     );
-    expect(res).toEqual({ flows: 2, businesses: 1, events: 2, enqueued: 1 });
+    expect(res).toEqual({ flows: 2, businesses: 1, events: 3, enqueued: 1 });
     // One Google list call for the primary calendar (shared doesn't exist).
     expect(nangoProxyForBusiness).toHaveBeenCalledTimes(1);
     const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
@@ -447,6 +508,118 @@ describe("pollCalendarTriggers", () => {
         event: "ai_flow_run_enqueued_calendar",
         message: expect.stringContaining("New calendar event")
       })
+    );
+  });
+
+  it("event_canceled (Google): lists with showDeleted, fires for fresh cancellations only", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            id: "ev-c1",
+            summary: "Roof estimate",
+            status: "cancelled",
+            updated: isoIn(-2)
+          },
+          // Cancelled long ago → outside the lookback, never replayed.
+          { id: "ev-c-old", status: "cancelled", updated: isoIn(-60) },
+          // Still live → canceled mode ignores it.
+          { id: "ev-live", summary: "Live", updated: isoIn(-2) }
+        ]
+      }
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
+    );
+    expect(res.enqueued).toBe(1);
+    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    expect(endpoint).toContain("showDeleted=true");
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "f-cancel", dedupeKey: "cal:ev-c1:cancelled" }),
+      expect.anything()
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_run_enqueued_calendar",
+        message: expect.stringContaining("Canceled calendar event")
+      })
+    );
+  });
+
+  it("event_canceled (Microsoft): filters by lastModifiedDateTime and isCancelled", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(microsoftConn as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        value: [
+          {
+            id: "ms-c1",
+            subject: "Estimate",
+            isCancelled: true,
+            lastModifiedDateTime: isoIn(-2)
+          },
+          { id: "ms-live", subject: "Live", lastModifiedDateTime: isoIn(-2) }
+        ]
+      }
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
+    );
+    expect(res.enqueued).toBe(1);
+    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    expect(endpoint).toContain("lastModifiedDateTime%20ge%20");
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({ flowId: "f-cancel", dedupeKey: "cal:ms-c1:cancelled" }),
+      expect.anything()
+    );
+  });
+
+  it("event_canceled: tolerates empty payloads and targets the shared calendar path (Graph)", async () => {
+    // Google, primary, no items key at all.
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    let res = await pollCalendarTriggers(
+      dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
+    );
+    expect(res.enqueued).toBe(0);
+
+    // Graph, SHARED calendar (calendarId path), no value key.
+    vi.clearAllMocks();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(microsoftConn as never);
+    vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue({ id: "run-1" } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
+    res = await pollCalendarTriggers(
+      dbWith([
+        flowRow("f-cancel", {
+          channel: "calendar",
+          on: "event_canceled",
+          calendar: "shared",
+          conditions: []
+        })
+      ])
+    );
+    expect(res.enqueued).toBe(0);
+    const endpoint = vi.mocked(nangoProxyForBusiness).mock.calls[0][2].endpoint as string;
+    expect(endpoint).toContain("/v1.0/me/calendars/shared-cal/events");
+  });
+
+  it("event_canceled: a null proxy response reads as not connected (both providers)", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("calendar_not_connected") })
+    );
+
+    vi.clearAllMocks();
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(microsoftConn as never);
+    vi.mocked(getSharedCalendar).mockResolvedValue(null);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("calendar_not_connected") })
     );
   });
 

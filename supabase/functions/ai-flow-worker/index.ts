@@ -35,6 +35,7 @@ import {
   CLASSIFY_UNCLEAR,
   parseClassifyChoice,
   buildNowScope,
+  evaluateSmsTrigger,
   evaluateStepCondition,
   extractLeadIdentity,
   extractLinkByText,
@@ -56,7 +57,7 @@ import {
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import { MAX_WAIT_MINUTES, planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
-import { resolveContactRef } from "../_shared/ai_flows/contact_ref.ts";
+import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import {
   normalizeBrowseUrl,
   parseActionResponse,
@@ -83,6 +84,14 @@ import {
 } from "../_shared/ai_flows/quiet_hours.ts";
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
+import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_mode.ts";
+import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
+import {
+  birthdayDedupeKey,
+  birthdayDue,
+  contactAge,
+  localYearIn
+} from "../_shared/ai_flows/birthday.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   capMicrosForTier,
@@ -279,6 +288,10 @@ type Scope = {
   // outside the window defer the run to the next open slot. Derived from the
   // definition each claim; never persisted in run.context (buildContext omits it).
   timeWindow?: FlowTimeWindow;
+  // Test run ("Test with a contact"): side-effecting actions are simulated and
+  // waits resolve instantly. Derived from trigger.test_mode each claim (the
+  // trigger scope persists verbatim, so the flag survives parks/resumes).
+  testMode?: boolean;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -307,6 +320,8 @@ serve(async (req: Request): Promise<Response> => {
   // with run execution keeps the tick from stretching by that long
   // (kickTriggerPoll never throws).
   await enqueueDueScheduledRuns(supabase);
+  // Birthday-trigger sweep (once per contact per year; dedupe-key bounded).
+  await enqueueDueBirthdayRuns(supabase);
   // Scheduled outbound voice calls run on the call path (not the run engine),
   // so they get their own sweep. It calls telnyx-voice-originate with the shared
   // INTERNAL_CRON_SECRET bearer (the same secret this worker is authed with),
@@ -391,7 +406,11 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // Owner disabled the flow after this run was queued (or mid-flight): stop.
   // Disabling must halt already-queued/approval-resumed runs, not just new
   // triggers, so they can't keep sending SMS / browsing / calling integrations.
-  if (!flow?.enabled) {
+  // EXCEPTION: test runs ("Test with a contact") execute on DISABLED flows by
+  // design — testing a draft before switching it on is the point, and every
+  // side-effecting action is simulated anyway. A missing flow row (deleted)
+  // still cancels either way.
+  if (!flow || (!flow.enabled && !isTestModeTrigger(asRecord(run.context.trigger)))) {
     try {
       // Free the trigger's dedupe slot before canceling: if the owner
       // re-enables the flow while the scheduled occurrence is still due or
@@ -442,12 +461,17 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   }
   const def: AiFlowDefinition = definition;
 
+  const testMode = isTestModeTrigger(asRecord(run.context.trigger));
   const scope: Scope = {
     vars: asRecord(run.context.vars),
     trigger: asRecord(run.context.trigger),
     captureScreenshots: def.options?.captureStepScreenshots === true,
-    ...(def.timeWindow ? { timeWindow: def.timeWindow } : {})
+    // A test run must finish in seconds: its sends are simulated anyway, so
+    // the business-hours gate (which would defer the run to the next open
+    // slot) is skipped entirely.
+    ...(def.timeWindow && !testMode ? { timeWindow: def.timeWindow } : {})
   };
+  if (testMode) scope.testMode = true;
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
   // route_to_team actually records a claim — an absent var would otherwise trim
@@ -956,6 +980,18 @@ async function runStep(
         `unknown step type "${step.type}" — this ai-flow-worker deploy is older than the flow definition; redeploy the worker from main`
     };
   }
+  // Test run: side-effecting actions are simulated (their rendered output IS
+  // the step result) and waits resolve instantly; read-only/pure actions run
+  // for real so extraction, branching, and goals behave exactly like a live
+  // run. Checked before the plan-error path so a test run surfaces the same
+  // "missing input" failures a live run would.
+  if (scope.testMode && plan.ok) {
+    const simulated = simulateTestAction(plan.action, scope);
+    if (simulated) {
+      appendActionTaken(scope, `TEST run: simulated ${plan.action.kind}`);
+      return { kind: "ok", result: simulated };
+    }
+  }
   if (!plan.ok) {
     // When the self-number scrub emptied THIS step's phone var earlier in the
     // run, an unusable-phone failure here is the scrub's doing — text the
@@ -1060,12 +1096,31 @@ function sleepStep(
   } else if (action.untilTime && action.timezone) {
     const target = parseHHMM(action.untilTime);
     resumeAtMs = target === null ? null : nextTimeOfDayMs(nowMs, action.timezone, target);
+  } else if (action.untilIso !== undefined) {
+    // Date-anchored wait (untilDateTemplate / relativeToTemplate): the
+    // planner already rendered + offset the instant. null = unparseable
+    // render → fail open below. A PAST instant means there is nothing to
+    // wait for — continue immediately rather than deferring a whole tick.
+    const targetMs = action.untilIso === null ? NaN : Date.parse(action.untilIso);
+    if (Number.isFinite(targetMs) && targetMs <= nowMs) {
+      scope.vars[action.marker] = "1";
+      return {
+        kind: "ok",
+        result: { slept: "target_in_past", until: action.untilIso }
+      };
+    }
+    resumeAtMs = Number.isFinite(targetMs) ? targetMs : null;
   }
   if (resumeAtMs === null) {
     return {
       kind: "ok",
       skipped: true,
-      result: { skipped: "sleep_invalid_config", untilTime: action.untilTime, timezone: action.timezone }
+      result: {
+        skipped: "sleep_invalid_config",
+        untilTime: action.untilTime,
+        timezone: action.timezone,
+        ...(action.untilIso !== undefined ? { untilIso: action.untilIso } : {})
+      }
     };
   }
   // Bound the wait (the planner caps minutes; untilTime is < 24h by nature).
@@ -1274,7 +1329,55 @@ async function upsertCustomerStep(
   run: RunRow,
   action: Extract<StepAction, { kind: "upsert_customer" }>
 ): Promise<StepOutcome> {
+  // Existence pre-check (alias-aware) so the contact_created trigger below
+  // fires only for genuinely NEW contacts, never enrichments. Best-effort: a
+  // read failure just means no trigger fires this pass.
+  let existedBefore = true;
+  try {
+    const { data: existing, error: existErr } = await supabase
+      .from("contacts")
+      .select("id")
+      .eq("business_id", run.business_id)
+      .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
+      .maybeSingle();
+    if (!existErr) existedBefore = existing != null;
+  } catch (e) {
+    console.error("upsert_customer existence pre-check", e);
+  }
   await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
+  if (!existedBefore) {
+    // contact_created triggers: a flow that files a brand-new lead may start
+    // OTHER flows (loop-guarded against this one). Fired only when the row
+    // verifiably EXISTS now — enrichCustomerProfile is best-effort and can
+    // exit without creating anything (staff-contact guard, RPC failure), and
+    // a "new contact" event for a lead that was never filed would start
+    // automations on a phantom. A verify-read failure just skips the event.
+    try {
+      const { data: createdRow, error: verifyErr } = await supabase
+        .from("contacts")
+        .select("id")
+        .eq("business_id", run.business_id)
+        .or(`customer_e164.eq.${action.e164},alias_e164s.cs.{${action.e164}}`)
+        .maybeSingle();
+      if (!verifyErr && createdRow != null) {
+        await enqueueContactEventRuns(supabase, run.business_id, {
+          kind: "contact_created",
+          contact: {
+            e164: action.e164,
+            ...(action.name ? { name: action.name } : {}),
+            ...(action.email ? { email: action.email } : {})
+          },
+          sourceFlowId: run.flow_id,
+          // Keyed to THIS run (idempotent across step retries) rather than
+          // the phone forever — a deleted-then-refiled contact is a new
+          // creation.
+          dedupeKey: `ce:created:${action.e164}:${run.id}`
+        });
+      }
+    } catch (e) {
+      console.error("upsert_customer contact_created verify", e);
+    }
+  }
   return {
     kind: "ok",
     result: {
@@ -1469,6 +1572,24 @@ async function updateContactStep(
     for (const number of contactNumbers) {
       await applyGoalEvent(supabase, run.business_id, number, { kind: "tag_added", tag });
     }
+  }
+  // tag_changed triggers: added AND removed tags may start OTHER flows (the
+  // state-machine chain the channel exists for). sourceFlowId loop-guards
+  // this flow from retriggering itself; the dedupe key is idempotent across
+  // step retries. Skipped entirely on test runs (this path is unreachable
+  // then — update_contact is simulated), so no extra guard needed.
+  for (const [changed, change] of [
+    ...added.map((t) => [t, "added"] as const),
+    ...removed.map((t) => [t, "removed"] as const)
+  ]) {
+    await enqueueContactEventRuns(supabase, run.business_id, {
+      kind: "tag_changed",
+      contact: { e164: action.e164, tags: next },
+      tag: changed,
+      change,
+      sourceFlowId: run.flow_id,
+      dedupeKey: `ce:tag:${run.id}:${changed.toLowerCase()}:${change}`
+    });
   }
   appendActionTaken(
     scope,
@@ -4443,6 +4564,21 @@ async function assignContactOwnerOnClaim(
         business_id: run.business_id,
         member_id: memberId
       });
+      // owner_assigned triggers: the claim just gave this lead an owner —
+      // that may start other flows (e.g. an intro text from the new owner).
+      // Loop-guarded against the claiming flow; idempotent per run.
+      const claimedName =
+        typeof (scope.vars.claimed_agent as unknown) === "string" &&
+        scope.vars.claimed_agent !== "none"
+          ? String(scope.vars.claimed_agent)
+          : "";
+      await enqueueContactEventRuns(supabase, run.business_id, {
+        kind: "owner_assigned",
+        contact: { e164: leadPhone },
+        ...(claimedName ? { ownerName: claimedName } : {}),
+        sourceFlowId: run.flow_id,
+        dedupeKey: `ce:owner:${run.id}`
+      });
     }
   } catch (e) {
     console.error("assignContactOwnerOnClaim", e);
@@ -5041,6 +5177,237 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
     }
   } catch (e) {
     console.error("enqueueDueScheduledRuns", e);
+  }
+}
+
+/**
+ * Birthday-trigger sweep: for every enabled flow with a `birthday` trigger,
+ * fire once per contact per year when the local date (trigger timezone,
+ * default business timezone) matches the contact's stored birthday and the
+ * local time has reached the trigger's send time. Exactly-once via the
+ * `bday:<contactId>:<year>` dedupe key. Failure-isolated like the schedule
+ * sweep — never throws.
+ */
+async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
+  try {
+    const PAGE = 200;
+    const rows: Array<{ id: string; business_id: string; definition: unknown }> = [];
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await supabase
+        .from("ai_flows")
+        .select("id, business_id, definition")
+        .eq("enabled", true)
+        .or("definition->trigger->>channel.eq.birthday,definition->triggers.not.is.null")
+        .order("id", { ascending: true })
+        .range(offset, offset + PAGE - 1);
+      if (error) {
+        console.error("birthday sweep flow listing", error);
+        if (rows.length === 0) return;
+        break;
+      }
+      const batch = (data ?? []) as typeof rows;
+      rows.push(...batch);
+      if (batch.length < PAGE) break;
+    }
+    type BirthdayFlow = {
+      id: string;
+      business_id: string;
+      ti: number;
+      time?: string;
+      timezone?: string;
+      conditions: import("../_shared/ai_flows/types.ts").TriggerCondition[];
+      /** definition.drip stagger, when configured. */
+      dripIntervalMinutes?: number;
+    };
+    const flows: BirthdayFlow[] = [];
+    for (const row of rows) {
+      if (!isExecutableDefinition(row.definition)) continue;
+      const triggers = flowTriggers(row.definition);
+      for (let ti = 0; ti < triggers.length; ti++) {
+        const trig = triggers[ti];
+        if (trig.channel !== "birthday") continue;
+        flows.push({
+          id: row.id,
+          business_id: row.business_id,
+          ti,
+          time: trig.time,
+          timezone: trig.timezone,
+          conditions: Array.isArray(trig.conditions) ? trig.conditions : [],
+          ...(typeof row.definition.drip?.intervalMinutes === "number" &&
+          row.definition.drip.intervalMinutes >= 1
+            ? { dripIntervalMinutes: row.definition.drip.intervalMinutes }
+            : {})
+        });
+      }
+    }
+    if (flows.length === 0) return;
+
+    const byBusiness = new Map<string, BirthdayFlow[]>();
+    for (const f of flows) {
+      byBusiness.set(f.business_id, [...(byBusiness.get(f.business_id) ?? []), f]);
+    }
+    const nowMs = Date.now();
+    for (const [businessId, group] of byBusiness) {
+      try {
+        const { data: bizRow } = await supabase
+          .from("businesses")
+          .select("timezone")
+          .eq("id", businessId)
+          .maybeSingle();
+        const businessTz =
+          (bizRow as { timezone?: string | null } | null)?.timezone || "UTC";
+        // Paged so a directory with many birthdays never silently stops at
+        // one page; a later page failing keeps the contacts already listed.
+        type BirthdayContact = {
+          id: string;
+          customer_e164: string;
+          display_name: string | null;
+          email: string | null;
+          tags: string[] | null;
+          birthday: string | null;
+        };
+        const CONTACT_PAGE = 500;
+        const contacts: BirthdayContact[] = [];
+        let contactListingFailed = false;
+        for (let offset = 0; ; offset += CONTACT_PAGE) {
+          const { data: contactData, error: contactErr } = await supabase
+            .from("contacts")
+            .select("id, customer_e164, display_name, email, tags, birthday")
+            .eq("business_id", businessId)
+            .not("birthday", "is", null)
+            .order("id", { ascending: true })
+            .range(offset, offset + CONTACT_PAGE - 1);
+          if (contactErr) {
+            console.error("birthday sweep contacts", contactErr);
+            contactListingFailed = contacts.length === 0;
+            break;
+          }
+          const batch = (contactData ?? []) as BirthdayContact[];
+          contacts.push(...batch);
+          if (batch.length < CONTACT_PAGE) break;
+        }
+        if (contactListingFailed || contacts.length === 0) continue;
+
+        for (const flow of group) {
+          const tz = flow.timezone || businessTz;
+          // from_matches saved-person refs resolve ONCE per flow (not per
+          // contact) to live identity values; a resolution failure fails
+          // CLOSED for this flow only — mirrors the calendar poller.
+          let refValues: ReadonlyMap<string, string[]> | undefined;
+          if (flow.conditions.some((c) => c.type === "from_matches" && c.ref)) {
+            try {
+              refValues = await resolveFromMatchesRefValues(
+                supabase,
+                businessId,
+                flow.conditions
+              );
+            } catch (e) {
+              console.error("birthday sweep ref resolution", e);
+              continue;
+            }
+          }
+          // Drip pacing (definition.drip): read the flow's latest scheduled
+          // slot ONCE, then step forward locally for each contact enqueued
+          // this pass — many contacts sharing a birthday is exactly the
+          // burst drip exists for. Best-effort: a read failure paces from
+          // now.
+          let nextDripMs: number | null = null;
+          if (flow.dripIntervalMinutes !== undefined) {
+            nextDripMs = nowMs;
+            try {
+              const { data: lastRow } = await supabase
+                .from("ai_flow_runs")
+                .select("earliest_claim_at")
+                .eq("flow_id", flow.id)
+                .eq("status", "queued")
+                .not("earliest_claim_at", "is", null)
+                .order("earliest_claim_at", { ascending: false })
+                .limit(1)
+                .maybeSingle();
+              const lastIso = (lastRow as { earliest_claim_at?: string | null } | null)
+                ?.earliest_claim_at;
+              const lastMs = lastIso ? Date.parse(lastIso) : NaN;
+              if (Number.isFinite(lastMs)) {
+                nextDripMs = Math.max(nowMs, lastMs + flow.dripIntervalMinutes * 60_000);
+              }
+            } catch (e) {
+              console.error("birthday sweep drip", e);
+            }
+          }
+          for (const contact of contacts) {
+            if (!birthdayDue(contact.birthday, nowMs, tz, flow.time)) continue;
+            const localYear = localYearIn(nowMs, tz);
+            const age = contactAge(contact.birthday, localYear);
+            const dedupeKey =
+              flow.ti === 0
+                ? birthdayDedupeKey(contact.id, localYear)
+                : `${birthdayDedupeKey(contact.id, localYear)}:t${flow.ti}`;
+            const windowText = [
+              `event: birthday`,
+              contact.display_name ? `name: ${contact.display_name}` : "",
+              `phone: ${contact.customer_e164}`,
+              contact.email ? `email: ${contact.email}` : "",
+              (contact.tags ?? []).length > 0 ? `tags: ${(contact.tags ?? []).join(", ")}` : "",
+              age !== null ? `age: ${age}` : ""
+            ]
+              .filter((l) => l.length > 0)
+              .join("\n");
+            // Trigger conditions run over the contact text (from = the
+            // contact's phone); an empty list matches every birthday.
+            if (flow.conditions.length > 0) {
+              const res = evaluateSmsTrigger(
+                { channel: "sms", conditions: flow.conditions },
+                { messages: [{ text: windowText, from: contact.customer_e164, atMs: nowMs }] },
+                refValues
+              );
+              if (!res.matched) continue;
+            }
+            const { error: insErr } = await supabase.from("ai_flow_runs").insert({
+              flow_id: flow.id,
+              business_id: businessId,
+              status: "queued",
+              context: {
+                trigger: {
+                  channel: "birthday",
+                  windowText,
+                  url: null,
+                  from: contact.customer_e164,
+                  contact_name: contact.display_name ?? "",
+                  ...(age !== null ? { age: String(age) } : {})
+                }
+              },
+              current_step: 0,
+              dedupe_key: dedupeKey,
+              ...(nextDripMs !== null
+                ? { earliest_claim_at: new Date(nextDripMs).toISOString() }
+                : {})
+            });
+            // 23505 = this year's firing already enqueued — expected.
+            if (insErr && (insErr as { code?: string }).code !== "23505") {
+              console.error("birthday enqueue", insErr);
+              continue;
+            }
+            if (!insErr) {
+              if (nextDripMs !== null && flow.dripIntervalMinutes !== undefined) {
+                nextDripMs += flow.dripIntervalMinutes * 60_000;
+              }
+              await systemLog(supabase, {
+                businessId,
+                source: "aiflow",
+                level: "info",
+                event: "ai_flow_run_enqueued_birthday",
+                message: `Birthday run enqueued for ${contact.display_name || contact.customer_e164}`,
+                payload: { flow_id: flow.id, contact_id: contact.id, dedupe_key: dedupeKey }
+              });
+            }
+          }
+        }
+      } catch (e) {
+        console.error("birthday sweep business", e);
+      }
+    }
+  } catch (e) {
+    console.error("enqueueDueBirthdayRuns", e);
   }
 }
 

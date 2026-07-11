@@ -238,11 +238,18 @@ export type CalendarEventInput = {
   endIso?: string;
   /** ISO creation timestamp (drives the event_created lookback filter). */
   createdIso?: string;
+  /** ISO last-modified timestamp (drives the event_canceled lookback filter). */
+  updatedIso?: string;
   /**
    * All-day event: its "start" is a calendar-local date, not a moment in
    * time, so event_start reminders skip it (event_created still fires).
    */
   allDay?: boolean;
+  /**
+   * Cancelled/deleted event: only the event_canceled mode fires for it (the
+   * other modes skip — a cancelled event neither starts nor ends).
+   */
+  cancelled?: boolean;
   /** Which watched calendar the event came from. */
   calendar: "primary" | "shared";
 };

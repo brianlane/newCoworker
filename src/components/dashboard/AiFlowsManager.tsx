@@ -9,6 +9,7 @@ import {
   ENGINE_PROVIDED_VARS,
   FLOW_STEP_TYPES,
   GOAL_EVENT_KINDS,
+  MATH_OPERATIONS,
   MAX_BRANCH_ARMS,
   MAX_GOAL_EVENTS,
   VOICE_STEP_TYPES,
@@ -94,6 +95,10 @@ const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
   tenant_email: "Inbound email (AI coworker's mailbox)",
   webhook: "Webhook (Zapier, Make, or API)",
   calendar: "Calendar event",
+  contact_created: "Contact created",
+  tag_changed: "Tag added / removed on a contact",
+  owner_assigned: "Contact assigned an owner",
+  birthday: "Contact's birthday",
   voice: "Voice call routing"
 };
 
@@ -131,8 +136,8 @@ type EditorState = {
   emailConnectionId: string;
   /** Calendar trigger: which calendar(s) to watch. */
   calendarSource: "primary" | "shared" | "both";
-  /** Calendar trigger: fire on new events, or ahead of an event's start. */
-  calendarOn: "event_created" | "event_start" | "event_end";
+  /** Calendar trigger: fire on new events, ahead of a start, after an end, or on cancel. */
+  calendarOn: "event_created" | "event_start" | "event_end" | "event_canceled";
   /** Calendar trigger (event_start): minutes before the start to run. */
   calendarLeadMinutes: number;
   /** Calendar trigger (event_end): minutes after the ACTUAL end to run (0 = right away). */
@@ -145,6 +150,16 @@ type EditorState = {
   voiceDirection: "inbound" | "outbound";
   /** Outbound voice only: auto-dial on the schedule fields above (else manual). */
   voiceOutboundScheduled: boolean;
+  /** tag_changed trigger: the tag to watch ("" = any tag). */
+  tagChangedTag: string;
+  /** tag_changed trigger: fire when the tag is added or removed. */
+  tagChangedChange: "added" | "removed";
+  /** birthday trigger: local send time (24h HH:MM). */
+  birthdayTime: string;
+  /** birthday trigger: IANA zone ("" = the business timezone). */
+  birthdayTimezone: string;
+  /** Flow-level drip pacing: minutes between bulk-enqueued runs (null = off). */
+  dripIntervalMinutes: number | null;
   /**
    * Multi-trigger (OR) support: the OTHER triggers in the flow's set, as
    * stored FlowTrigger objects — the per-channel fields above always hold the
@@ -191,6 +206,11 @@ function emptyEditor(): EditorState {
     voiceFromRef: null,
     voiceDirection: "inbound",
     voiceOutboundScheduled: false,
+    tagChangedTag: "",
+    tagChangedChange: "added",
+    birthdayTime: "09:00",
+    birthdayTimezone: "",
+    dripIntervalMinutes: null,
     extraTriggers: [],
     editingTriggerIndex: 0,
     timeWindow: null,
@@ -240,6 +260,10 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
   | "voiceFromRef"
   | "voiceDirection"
   | "voiceOutboundScheduled"
+  | "tagChangedTag"
+  | "tagChangedChange"
+  | "birthdayTime"
+  | "birthdayTimezone"
 > {
   const base = {
     channel: trigger.channel,
@@ -258,7 +282,11 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
     voiceFromE164: "",
     voiceFromRef: null as PickerRef | null,
     voiceDirection: "inbound" as const,
-    voiceOutboundScheduled: false
+    voiceOutboundScheduled: false,
+    tagChangedTag: "",
+    tagChangedChange: "added" as const,
+    birthdayTime: "09:00",
+    birthdayTimezone: ""
   };
   switch (trigger.channel) {
     case "sms":
@@ -289,6 +317,24 @@ function triggerToEditorFields(trigger: FlowTrigger): Pick<
       return { ...base, conditions: trigger.conditions };
     case "webhook":
       return { ...base, conditions: trigger.conditions };
+    case "contact_created":
+      return { ...base, conditions: trigger.conditions };
+    case "tag_changed":
+      return {
+        ...base,
+        conditions: trigger.conditions,
+        tagChangedTag: trigger.tag ?? "",
+        tagChangedChange: trigger.change ?? "added"
+      };
+    case "owner_assigned":
+      return { ...base, conditions: trigger.conditions };
+    case "birthday":
+      return {
+        ...base,
+        conditions: trigger.conditions,
+        birthdayTime: trigger.time ?? "09:00",
+        birthdayTimezone: trigger.timezone ?? ""
+      };
     case "calendar":
       return {
         ...base,
@@ -337,6 +383,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
     timeWindow: def.timeWindow ?? null,
+    dripIntervalMinutes: def.drip?.intervalMinutes ?? null,
     steps: def.steps
   };
 }
@@ -354,6 +401,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
     timeWindow: def.timeWindow ?? null,
+    dripIntervalMinutes: def.drip?.intervalMinutes ?? null,
     steps: def.steps
   };
 }
@@ -439,6 +487,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, phoneVar: examples.contactVar, saveAs: "reply_text", timeoutMinutes: 300 };
     case "goal":
       return { id, type, label: "Appointment booked", events: [{ kind: "appointment_booked" }] };
+    case "math":
+      return { id, type, operation: "add", left: "{{vars.lead_score}}", right: "10", saveAs: "lead_score" };
     case "branch":
       // Authored via the visual canvas builder; the classic form never offers
       // this type (NON_VOICE_STEP_TYPES filters it) but the switch stays
@@ -556,6 +606,24 @@ function editorTrigger(s: EditorState): FlowTrigger {
       return { channel: "tenant_email", conditions: sanitizeConditions(s.conditions) };
     case "webhook":
       return { channel: "webhook", conditions: sanitizeConditions(s.conditions) };
+    case "contact_created":
+      return { channel: "contact_created", conditions: sanitizeConditions(s.conditions) };
+    case "tag_changed":
+      return {
+        channel: "tag_changed",
+        ...(s.tagChangedTag.trim() ? { tag: s.tagChangedTag.trim() } : {}),
+        ...(s.tagChangedChange === "removed" ? { change: "removed" as const } : {}),
+        conditions: sanitizeConditions(s.conditions)
+      };
+    case "owner_assigned":
+      return { channel: "owner_assigned", conditions: sanitizeConditions(s.conditions) };
+    case "birthday":
+      return {
+        channel: "birthday",
+        ...(s.birthdayTime && s.birthdayTime !== "09:00" ? { time: s.birthdayTime } : {}),
+        ...(s.birthdayTimezone.trim() ? { timezone: s.birthdayTimezone.trim() } : {}),
+        conditions: sanitizeConditions(s.conditions)
+      };
     case "calendar":
       return {
         channel: "calendar",
@@ -688,6 +756,9 @@ function toDefinition(s: EditorState): AiFlowDefinition {
     ...(rest.length > 0 ? { triggers: rest } : {}),
     steps: s.steps.map(sanitizeStepForSave),
     ...(s.timeWindow ? { timeWindow: s.timeWindow } : {}),
+    ...(s.dripIntervalMinutes && s.dripIntervalMinutes >= 1
+      ? { drip: { intervalMinutes: Math.round(s.dripIntervalMinutes) } }
+      : {}),
     options: {
       suppressDefaultReply: s.suppressDefaultReply,
       captureStepScreenshots: s.captureStepScreenshots
@@ -761,6 +832,10 @@ export function AiFlowsManager({
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
   const [runNotice, setRunNotice] = useState<string | null>(null);
+  // "Test with a contact": which row's test panel is open + its inputs.
+  const [testFor, setTestFor] = useState<string | null>(null);
+  const [testContact, setTestContact] = useState("");
+  const [testInput, setTestInput] = useState("");
   // Place-call panel (outbound voice flows): which flow's panel is open + the
   // optional one-off callee override.
   const [callFor, setCallFor] = useState<string | null>(null);
@@ -1124,6 +1199,38 @@ export function AiFlowsManager({
     }
   };
 
+  /**
+   * Start a TEST run: real engine, simulated side effects, waits resolve
+   * instantly. Works on disabled flows (testing a draft is the point).
+   */
+  const testRun = async (row: AiFlowRow) => {
+    setBusy(true);
+    setRunNotice(null);
+    try {
+      const res = await fetch(`/api/aiflows/${row.id}/test-run`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          contactE164: testContact.trim(),
+          input: testInput.trim() || undefined
+        })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message: string } };
+      if (!json.ok) {
+        setRunNotice(json.error?.message ?? "Test failed to start");
+        return;
+      }
+      setRunNotice(
+        "Test run queued — nothing is actually sent. See View runs for what each step WOULD have done."
+      );
+      setTestInput("");
+      setTestFor(null);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /** Place one outbound call for a voice flow with direction "outbound". */
   const placeCall = async (row: AiFlowRow) => {
     setBusy(true);
@@ -1197,6 +1304,7 @@ export function AiFlowsManager({
         extraTriggers: def.triggers ?? [],
         editingTriggerIndex: 0,
         timeWindow: def.timeWindow ?? null,
+        dripIntervalMinutes: def.drip?.intervalMinutes ?? null,
         steps: def.steps
       }));
       // A generated draft is unsaved AI work — dirty until saved.
@@ -1642,13 +1750,16 @@ export function AiFlowsManager({
                           ? "event_start"
                           : ev.target.value === "event_end"
                             ? "event_end"
-                            : "event_created"
+                            : ev.target.value === "event_canceled"
+                              ? "event_canceled"
+                              : "event_created"
                     })
                   }
                 >
                   <option value="event_created">A new event is added to the calendar</option>
                   <option value="event_start">An event is about to start</option>
                   <option value="event_end">An event has ended</option>
+                  <option value="event_canceled">An event is canceled</option>
                 </select>
               </div>
               {editor.calendarOn === "event_start" && (
@@ -1718,6 +1829,85 @@ export function AiFlowsManager({
                 bookings go to). The shared NewCoworker calendar is where your AI coworker books
                 appointments; it&apos;s created with the first booking. Conditions below match the
                 event&apos;s title, description, location, and attendees.
+              </p>
+            </div>
+          )}
+          {editor.channel === "contact_created" && (
+            <p className="text-[11px] text-parchment/40">
+              Runs when a NEW contact lands on your Contacts page — added by hand, imported,
+              or filed by another workflow&apos;s &quot;Save / update a customer contact&quot; step.
+              Conditions below match the contact&apos;s name, phone, email, and tags.
+            </p>
+          )}
+          {editor.channel === "tag_changed" && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelClass}>Tag to watch (empty = any tag)</label>
+                  <input
+                    className={inputClass}
+                    value={editor.tagChangedTag}
+                    placeholder="Appointment Scheduled"
+                    onChange={(ev) => setEditor({ ...editor, tagChangedTag: ev.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>When it is</label>
+                  <select
+                    className={inputClass}
+                    value={editor.tagChangedChange}
+                    onChange={(ev) =>
+                      setEditor({
+                        ...editor,
+                        tagChangedChange: ev.target.value === "removed" ? "removed" : "added"
+                      })
+                    }
+                  >
+                    <option value="added">Added to the contact</option>
+                    <option value="removed">Removed from the contact</option>
+                  </select>
+                </div>
+              </div>
+              <p className="text-[11px] text-parchment/40">
+                Fires for dashboard tag edits AND tags other workflows set — chain workflows
+                off your lead statuses. A workflow never retriggers itself through its own tag
+                changes.
+              </p>
+            </div>
+          )}
+          {editor.channel === "owner_assigned" && (
+            <p className="text-[11px] text-parchment/40">
+              Runs when a contact gets an owning team member — a teammate claims the lead, or
+              you assign one on the contact page.
+            </p>
+          )}
+          {editor.channel === "birthday" && (
+            <div className="space-y-2">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className={labelClass}>Send at (24h HH:MM)</label>
+                  <input
+                    className={inputClass}
+                    value={editor.birthdayTime}
+                    placeholder="09:00"
+                    onChange={(ev) => setEditor({ ...editor, birthdayTime: ev.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className={labelClass}>Time zone (empty = business timezone)</label>
+                  <input
+                    className={inputClass}
+                    value={editor.birthdayTimezone}
+                    placeholder="America/Phoenix"
+                    onChange={(ev) =>
+                      setEditor({ ...editor, birthdayTimezone: ev.target.value })
+                    }
+                  />
+                </div>
+              </div>
+              <p className="text-[11px] text-parchment/40">
+                Fires once per year for every contact whose birthday (set on their contact
+                page) is today. Contacts without a birthday never fire.
               </p>
             </div>
           )}
@@ -1876,7 +2066,11 @@ export function AiFlowsManager({
             editor.channel === "email" ||
             editor.channel === "tenant_email" ||
             editor.channel === "webhook" ||
-            editor.channel === "calendar") &&
+            editor.channel === "calendar" ||
+            editor.channel === "contact_created" ||
+            editor.channel === "tag_changed" ||
+            editor.channel === "owner_assigned" ||
+            editor.channel === "birthday") &&
             editor.conditions.map((c, i) => (
             <div key={i} className="flex items-center gap-2">
               <select
@@ -1960,7 +2154,11 @@ export function AiFlowsManager({
             editor.channel === "email" ||
             editor.channel === "tenant_email" ||
             editor.channel === "webhook" ||
-            editor.channel === "calendar") && (
+            editor.channel === "calendar" ||
+            editor.channel === "contact_created" ||
+            editor.channel === "tag_changed" ||
+            editor.channel === "owner_assigned" ||
+            editor.channel === "birthday") && (
             <button
               onClick={() =>
                 setEditor({ ...editor, conditions: [...editor.conditions, { type: "contains", value: "" }] })
@@ -2067,6 +2265,45 @@ export function AiFlowsManager({
           value={editor.timeWindow}
           onChange={(tw) => setEditor({ ...editor, timeWindow: tw })}
         />
+
+        <section className="space-y-2">
+          <label className="flex items-center gap-2 text-sm text-parchment/70">
+            <input
+              type="checkbox"
+              checked={editor.dripIntervalMinutes !== null}
+              onChange={(ev) =>
+                setEditor({
+                  ...editor,
+                  dripIntervalMinutes: ev.target.checked ? 5 : null
+                })
+              }
+            />
+            Drip: space out bulk runs instead of sending all at once
+          </label>
+          {editor.dripIntervalMinutes !== null && (
+            <div className="pl-6">
+              <label className={labelClass}>Minutes between runs (1–1440)</label>
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                className={inputClass}
+                value={editor.dripIntervalMinutes}
+                onChange={(ev) =>
+                  setEditor({
+                    ...editor,
+                    dripIntervalMinutes: Math.min(1440, Math.max(1, Number(ev.target.value) || 1))
+                  })
+                }
+              />
+              <p className="mt-1 text-[11px] text-parchment/40">
+                When many leads enroll at once (an import, a webhook burst), runs start this
+                far apart so the flow trickles instead of bursting. A single inbound text
+                still runs immediately.
+              </p>
+            </div>
+          )}
+        </section>
 
         <section className="space-y-2">
           {editor.channel === "sms" && (
@@ -2200,6 +2437,21 @@ export function AiFlowsManager({
                     Run now
                   </button>
                 )}
+                {/* Test with a contact: works on DISABLED flows too (testing a
+                    draft is the point); every side effect is simulated. */}
+                {row.definition.trigger.channel !== "voice" && (
+                  <button
+                    onClick={() => {
+                      setRunNotice(null);
+                      setTestContact("");
+                      setTestInput("");
+                      setTestFor(testFor === row.id ? null : row.id);
+                    }}
+                    className="text-xs text-signal-teal hover:underline"
+                  >
+                    Test
+                  </button>
+                )}
                 {/* Outbound voice flows are started on demand here — the call is
                     placed and metered by telnyx-voice-originate. */}
                 {row.enabled &&
@@ -2259,6 +2511,37 @@ export function AiFlowsManager({
                 >
                   {busy ? "Starting…" : "Start run"}
                 </button>
+              </div>
+            )}
+            {testFor === row.id && (
+              <div className="space-y-2 border-t border-parchment/10 pt-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    className={inputClass}
+                    value={testContact}
+                    onChange={(ev) => setTestContact(ev.target.value)}
+                    placeholder="Contact phone to test as (E.164, e.g. +16025551234)"
+                  />
+                  <input
+                    className={inputClass}
+                    value={testInput}
+                    onChange={(ev) => setTestInput(ev.target.value)}
+                    placeholder="Optional sample message text"
+                  />
+                  <button
+                    onClick={() => testRun(row)}
+                    disabled={busy || !testContact.trim()}
+                    className="shrink-0 rounded-md bg-signal-teal px-3 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
+                  >
+                    {busy ? "Starting…" : "Start test"}
+                  </button>
+                </div>
+                <p className="text-[11px] text-parchment/40">
+                  A test run plays the whole flow through instantly with NOTHING actually sent
+                  — texts, emails, team offers, and contact updates are recorded as &quot;what
+                  would have happened&quot; on the runs page. The contact must exist on your
+                  Contacts page.
+                </p>
               </div>
             )}
             {callFor === row.id && (
@@ -3491,29 +3774,51 @@ function StepFields({
     );
   }
   if (step.type === "sleep") {
-    const dailyMode = step.minutes === undefined;
+    const sleepMode =
+      step.minutes !== undefined
+        ? "minutes"
+        : step.untilDateTemplate !== undefined
+          ? "untilDate"
+          : step.relativeToTemplate !== undefined || step.offsetMinutes !== undefined
+            ? "relativeTo"
+            : "until";
+    const setMode = (mode: string) => {
+      const cleared = {
+        minutes: undefined,
+        untilTime: undefined,
+        timezone: undefined,
+        untilDateTemplate: undefined,
+        relativeToTemplate: undefined,
+        offsetMinutes: undefined
+      };
+      if (mode === "minutes") patchStep(index, { ...cleared, minutes: 300 });
+      else if (mode === "until")
+        patchStep(index, { ...cleared, untilTime: "08:30", timezone: browserTimezone() });
+      else if (mode === "untilDate")
+        patchStep(index, { ...cleared, untilDateTemplate: "{{vars.renewal_date}}" });
+      else
+        patchStep(index, {
+          ...cleared,
+          relativeToTemplate: "{{trigger.starts_at}}",
+          offsetMinutes: -120
+        });
+    };
     return (
       <div className="space-y-2">
         <div>
           <label className={labelClass}>Wait mode</label>
           <select
             className={inputClass}
-            value={dailyMode ? "until" : "minutes"}
-            onChange={(ev) =>
-              ev.target.value === "until"
-                ? patchStep(index, {
-                    minutes: undefined,
-                    untilTime: step.untilTime ?? "08:30",
-                    timezone: step.timezone ?? browserTimezone()
-                  })
-                : patchStep(index, { minutes: 300, untilTime: undefined, timezone: undefined })
-            }
+            value={sleepMode}
+            onChange={(ev) => setMode(ev.target.value)}
           >
             <option value="minutes">Wait a set amount of time</option>
             <option value="until">Wait until a time of day</option>
+            <option value="untilDate">Wait until a date from the flow&apos;s data</option>
+            <option value="relativeTo">Wait relative to a date (before / after)</option>
           </select>
         </div>
-        {dailyMode ? (
+        {sleepMode === "until" && (
           <div className="grid grid-cols-2 gap-2">
             <Field
               label="Continue at (24h HH:MM)"
@@ -3526,7 +3831,8 @@ function StepFields({
               onChange={(v) => patchStep(index, { timezone: v.trim() })}
             />
           </div>
-        ) : (
+        )}
+        {sleepMode === "minutes" && (
           <Field
             label="Minutes to wait (e.g. 300 = 5 hours; max 43200 = 30 days)"
             value={String(step.minutes ?? 300)}
@@ -3538,9 +3844,97 @@ function StepFields({
             }}
           />
         )}
+        {sleepMode === "untilDate" && (
+          <Field
+            label="Continue on this date (a variable or ISO date)"
+            value={step.untilDateTemplate ?? ""}
+            onChange={(v) => patchStep(index, { untilDateTemplate: v })}
+            help="e.g. {{vars.renewal_date}} — a date an earlier step extracted. An unreadable date skips the wait instead of failing."
+          />
+        )}
+        {sleepMode === "relativeTo" && (
+          <div className="grid grid-cols-2 gap-2">
+            <Field
+              label="Anchor date/time (variable or ISO)"
+              value={step.relativeToTemplate ?? ""}
+              onChange={(v) => patchStep(index, { relativeToTemplate: v })}
+              help="e.g. {{trigger.starts_at}} for a calendar-triggered flow."
+            />
+            <Field
+              label="Offset minutes (negative = before)"
+              value={String(step.offsetMinutes ?? -120)}
+              onChange={(v) => {
+                const n = Number(v);
+                patchStep(index, {
+                  offsetMinutes: Number.isFinite(n) ? Math.round(n) : undefined
+                });
+              }}
+            />
+          </div>
+        )}
         <p className="text-[11px] text-parchment/40">
           The workflow pauses here, then continues with the next step. Nothing is sent while
           waiting.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "math") {
+    const OP_LABELS: Record<(typeof MATH_OPERATIONS)[number], string> = {
+      add: "Add (left + right)",
+      subtract: "Subtract (left − right)",
+      multiply: "Multiply (left × right)",
+      divide: "Divide (left ÷ right)",
+      round: "Round (left to the nearest whole number)",
+      date_add_minutes: "Date + minutes (left date, right minutes)",
+      date_diff_days: "Days between dates (left → right)"
+    };
+    return (
+      <div className="space-y-2">
+        <div>
+          <label className={labelClass}>Operation</label>
+          <select
+            className={inputClass}
+            value={step.operation}
+            onChange={(ev) => {
+              const operation = ev.target.value as (typeof MATH_OPERATIONS)[number];
+              patchStep(index, {
+                operation,
+                ...(operation === "round" ? { right: undefined } : { right: step.right ?? "0" })
+              });
+            }}
+          >
+            {MATH_OPERATIONS.map((op) => (
+              <option key={op} value={op}>
+                {OP_LABELS[op]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <Field
+            label="Left value"
+            value={step.left}
+            onChange={(v) => patchStep(index, { left: v })}
+            help="A number, a date, or a variable like {{vars.quote_amount}}."
+          />
+          {step.operation !== "round" && (
+            <Field
+              label="Right value"
+              value={step.right ?? ""}
+              onChange={(v) => patchStep(index, { right: v })}
+            />
+          )}
+        </div>
+        <Field
+          label="Save the result as"
+          value={step.saveAs}
+          onChange={(v) => patchStep(index, { saveAs: v })}
+        />
+        <p className="text-[11px] text-parchment/40">
+          Use the result in later conditions and branches (e.g. lead scoring, &quot;renewal
+          within 30 days&quot;). A value that isn&apos;t a number/date saves
+          &quot;not_a_number&quot; instead of failing the workflow.
         </p>
       </div>
     );

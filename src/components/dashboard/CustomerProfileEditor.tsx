@@ -19,6 +19,8 @@ type Props = {
   initialType: ContactType;
   initialTags: string[];
   initialOwnerEmployeeId: string | null;
+  /** "YYYY-MM-DD" birth date (drives the AiFlow birthday trigger), or null. */
+  initialBirthday: string | null;
   /** Roster for the owner picker (id + name; inactive members included). */
   teamMembers: { id: string; name: string }[];
 };
@@ -36,6 +38,11 @@ export function CustomerProfileEditor(props: Props) {
   const [tags, setTags] = useState<string[]>(props.initialTags);
   const [tagDraft, setTagDraft] = useState("");
   const [ownerId, setOwnerId] = useState<string>(props.initialOwnerEmployeeId ?? "");
+  // The DATE column may come back with a time suffix from PostgREST; keep
+  // only the date part the <input type="date"> understands.
+  const [birthday, setBirthday] = useState<string>(
+    (props.initialBirthday ?? "").slice(0, 10)
+  );
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string | null>(null);
@@ -47,8 +54,15 @@ export function CustomerProfileEditor(props: Props) {
   const typeChanged = props.initialType !== type;
   const tagsChanged = props.initialTags.join("\u0000") !== tags.join("\u0000");
   const ownerChanged = (props.initialOwnerEmployeeId ?? "") !== ownerId;
+  const birthdayChanged = ((props.initialBirthday ?? "").slice(0, 10)) !== birthday;
   const dirty =
-    nameChanged || pinnedChanged || emailChanged || typeChanged || tagsChanged || ownerChanged;
+    nameChanged ||
+    pinnedChanged ||
+    emailChanged ||
+    typeChanged ||
+    tagsChanged ||
+    ownerChanged ||
+    birthdayChanged;
 
   function addTag() {
     const tag = tagDraft.trim().slice(0, MAX_CONTACT_TAG_LENGTH);
@@ -74,6 +88,7 @@ export function CustomerProfileEditor(props: Props) {
       if (typeChanged) body.type = type;
       if (tagsChanged) body.tags = tags;
       if (ownerChanged) body.ownerEmployeeId = ownerId || null;
+      if (birthdayChanged) body.birthday = birthday || null;
       const res = await fetch(
         `/api/dashboard/customers/${encodeURIComponent(
           props.customerE164
@@ -222,6 +237,20 @@ export function CustomerProfileEditor(props: Props) {
           </option>
         ))}
       </select>
+
+      <label className="block text-xs text-parchment/70 mb-1 mt-4">
+        Birthday
+        <span className="ml-1 text-parchment/40">
+          (optional; workflows with a &quot;Contact&apos;s birthday&quot; trigger fire on it once
+          a year)
+        </span>
+      </label>
+      <input
+        type="date"
+        value={birthday}
+        onChange={(e) => setBirthday(e.target.value)}
+        className="w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-claw-green/60"
+      />
 
       <label className="block text-xs text-parchment/70 mb-1 mt-4">
         Email

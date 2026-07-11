@@ -64,6 +64,12 @@ export const CALENDAR_CREATED_LOOKBACK_MINUTES = 15;
 export const CALENDAR_END_LOOKBACK_MINUTES = 15;
 
 /**
+ * How long a cancellation stays due past its modification time. Same
+ * missed-tick coverage rationale as the created lookback.
+ */
+export const CALENDAR_CANCELED_LOOKBACK_MINUTES = 15;
+
+/**
  * Cap on events read per (calendar, query) per poll. Calendars are orders of
  * magnitude quieter than mailboxes, so a single capped page suffices; a full
  * page is flagged with an overflow warning instead of paging further.
@@ -93,7 +99,7 @@ type CalendarFlow = {
   business_id: string;
   /** Which calendar(s) the flow watches ("both" expands to primary+shared). */
   sources: CalendarSource[];
-  on: "event_created" | "event_start" | "event_end";
+  on: "event_created" | "event_start" | "event_end" | "event_canceled";
   leadMinutes: number;
   /** event_end only: minutes after the event's actual end (0 = right at it). */
   followMinutes: number;
@@ -109,10 +115,12 @@ export type CalendarPollResult = {
 
 /** Whether an event_start flow is due for `ev` at `nowMs` (pure, for tests). */
 export function eventStartDue(
-  ev: Pick<CalendarEventInput, "startIso" | "allDay">,
+  ev: Pick<CalendarEventInput, "startIso" | "allDay" | "cancelled">,
   leadMinutes: number,
   nowMs: number
 ): boolean {
+  // A cancelled event never "starts"; only event_canceled fires for it.
+  if (ev.cancelled) return false;
   // An all-day event's "start" is a calendar-local date, not a moment in
   // time — a minutes-before reminder would fire at an arbitrary wall-clock
   // time, so start-mode skips all-day events (created mode still fires).
@@ -127,10 +135,12 @@ export function eventStartDue(
 
 /** Whether an event_end flow is due for `ev` at `nowMs` (pure, for tests). */
 export function eventEndDue(
-  ev: Pick<CalendarEventInput, "endIso" | "allDay">,
+  ev: Pick<CalendarEventInput, "endIso" | "allDay" | "cancelled">,
   followMinutes: number,
   nowMs: number
 ): boolean {
+  // A cancelled event never "ends"; only event_canceled fires for it.
+  if (ev.cancelled) return false;
   // An all-day event's "end" is a calendar-local date, not a moment in time —
   // skipped for the same reason event_start skips all-day events.
   if (ev.allDay) return false;
@@ -145,13 +155,30 @@ export function eventEndDue(
 
 /** Whether an event_created flow should fire for `ev` at `nowMs` (pure). */
 export function eventCreatedDue(
-  ev: Pick<CalendarEventInput, "createdIso">,
+  ev: Pick<CalendarEventInput, "createdIso" | "cancelled">,
   nowMs: number
 ): boolean {
+  // Created-then-immediately-cancelled events never fire created mode.
+  if (ev.cancelled) return false;
   if (!ev.createdIso) return false;
   const createdMs = Date.parse(ev.createdIso);
   if (!Number.isFinite(createdMs)) return false;
   return createdMs >= nowMs - CALENDAR_CREATED_LOOKBACK_MINUTES * 60_000;
+}
+
+/** Whether an event_canceled flow should fire for `ev` at `nowMs` (pure). */
+export function eventCanceledDue(
+  ev: Pick<CalendarEventInput, "cancelled" | "updatedIso">,
+  nowMs: number
+): boolean {
+  // Only cancelled events, and only within the lookback of the moment they
+  // were modified (= cancelled) — a flow re-enabled a week later must not
+  // replay every historical cancellation.
+  if (!ev.cancelled) return false;
+  if (!ev.updatedIso) return false;
+  const updatedMs = Date.parse(ev.updatedIso);
+  if (!Number.isFinite(updatedMs)) return false;
+  return updatedMs >= nowMs - CALENDAR_CANCELED_LOOKBACK_MINUTES * 60_000;
 }
 
 /** Run-dedupe key for a due event (per-occurrence in start/end modes). */
@@ -163,6 +190,8 @@ export function calendarDedupeKey(
   // The `end:` segment keeps an end firing distinct from a start firing when
   // one flow (or two flows sharing an event) uses both modes.
   if (on === "event_end") return `cal:${ev.id}:end:${ev.endIso ?? ""}`;
+  // One firing per cancellation (an event cancelled once stays cancelled).
+  if (on === "event_canceled") return `cal:${ev.id}:cancelled`;
   return `cal:${ev.id}`;
 }
 
@@ -175,6 +204,7 @@ type GoogleEvent = {
   description?: string;
   location?: string;
   created?: string;
+  updated?: string;
   organizer?: { email?: string };
   attendees?: Array<{ email?: string; displayName?: string }>;
   start?: { dateTime?: string; date?: string };
@@ -192,7 +222,7 @@ export function normalizeGoogleEvent(
   raw: GoogleEvent,
   calendar: CalendarSource
 ): CalendarEventInput | null {
-  if (typeof raw.id !== "string" || raw.status === "cancelled") return null;
+  if (typeof raw.id !== "string") return null;
   return {
     id: raw.id,
     // A date-only start marks an all-day event (its ISO form below is a
@@ -208,6 +238,10 @@ export function normalizeGoogleEvent(
     startIso: googleTimeIso(raw.start),
     endIso: googleTimeIso(raw.end),
     createdIso: raw.created,
+    updatedIso: raw.updated,
+    // Kept (not dropped) so the event_canceled mode can fire; every other
+    // due-check skips cancelled events explicitly.
+    cancelled: raw.status === "cancelled",
     calendar
   };
 }
@@ -222,6 +256,7 @@ type GraphEvent = {
   bodyPreview?: string;
   location?: { displayName?: string };
   createdDateTime?: string;
+  lastModifiedDateTime?: string;
   organizer?: { emailAddress?: { address?: string } };
   attendees?: Array<{ emailAddress?: { name?: string; address?: string } }>;
   start?: { dateTime?: string; timeZone?: string };
@@ -244,7 +279,7 @@ export function normalizeGraphEvent(
   raw: GraphEvent,
   calendar: CalendarSource
 ): CalendarEventInput | null {
-  if (typeof raw.id !== "string" || raw.isCancelled === true) return null;
+  if (typeof raw.id !== "string") return null;
   return {
     id: raw.id,
     allDay: raw.isAllDay === true,
@@ -262,6 +297,10 @@ export function normalizeGraphEvent(
     startIso: graphTimeIso(raw.start),
     endIso: graphTimeIso(raw.end),
     createdIso: raw.createdDateTime,
+    updatedIso: raw.lastModifiedDateTime,
+    // Kept (not dropped) so the event_canceled mode can fire; every other
+    // due-check skips cancelled events explicitly.
+    cancelled: raw.isCancelled === true,
     calendar
   };
 }
@@ -269,7 +308,7 @@ export function normalizeGraphEvent(
 // ── Provider fetchers ───────────────────────────────────────────────────────
 
 const GRAPH_EVENT_SELECT =
-  "id,subject,bodyPreview,location,organizer,attendees,start,end,createdDateTime,isCancelled,isAllDay";
+  "id,subject,bodyPreview,location,organizer,attendees,start,end,createdDateTime,lastModifiedDateTime,isCancelled,isAllDay";
 
 // calendarView does not support $select on createdDateTime (Graph rejects the
 // request); the upcoming query never reads it, so select everything else.
@@ -330,6 +369,47 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null);
+  return { events: items, overflowed: items.length >= CALENDAR_POLL_MAX_EVENTS };
+}
+
+/**
+ * Recently CANCELLED events (event_canceled candidates): everything modified
+ * since the lookback, filtered to the cancelled ones. Google surfaces
+ * cancellations in the events list only with showDeleted=true (they come
+ * back as thin tombstones — id + status, sometimes without a title); Graph
+ * keeps declined/cancelled events listed with isCancelled=true until they
+ * are hard-deleted, so a hard Graph delete is not observable here.
+ */
+async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<CalendarFetch> {
+  const sinceIso = new Date(sinceMs).toISOString();
+  if (t.provider === "google") {
+    const calId = encodeURIComponent(t.calendarId ?? "primary");
+    const res = await nangoProxyForBusiness(t.businessId, t.link, {
+      endpoint:
+        `/calendar/v3/calendars/${calId}/events?updatedMin=${encodeURIComponent(sinceIso)}` +
+        `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=true`,
+      method: "GET"
+    });
+    if (!res) throw new Error("calendar_not_connected");
+    const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
+      .map((e) => normalizeGoogleEvent(e, t.source))
+      .filter((e): e is CalendarEventInput => e !== null && e.cancelled === true);
+    return { events: items, overflowed: items.length >= CALENDAR_POLL_MAX_EVENTS };
+  }
+  const base = t.calendarId
+    ? `/v1.0/me/calendars/${encodeURIComponent(t.calendarId)}/events`
+    : "/v1.0/me/calendar/events";
+  const res = await nangoProxyForBusiness(t.businessId, t.link, {
+    endpoint:
+      `${base}?$filter=${encodeURIComponent(`lastModifiedDateTime ge ${sinceIso}`)}` +
+      `&$top=${CALENDAR_POLL_MAX_EVENTS}&$select=${GRAPH_EVENT_SELECT}`,
+    method: "GET",
+    headers: GRAPH_UTC_HEADERS
+  });
+  if (!res) throw new Error("calendar_not_connected");
+  const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
+    .map((e) => normalizeGraphEvent(e, t.source))
+    .filter((e): e is CalendarEventInput => e !== null && e.cancelled === true);
   return { events: items, overflowed: items.length >= CALENDAR_POLL_MAX_EVENTS };
 }
 
@@ -405,7 +485,12 @@ function calendarFlowsFrom(
     for (let ti = 0; ti < triggers.length; ti++) {
       const trig = triggers[ti];
       if (trig?.channel !== "calendar") continue;
-      if (trig.on !== "event_created" && trig.on !== "event_start" && trig.on !== "event_end") {
+      if (
+        trig.on !== "event_created" &&
+        trig.on !== "event_start" &&
+        trig.on !== "event_end" &&
+        trig.on !== "event_canceled"
+      ) {
         continue;
       }
       const leadMinutes = typeof trig.leadMinutes === "number" ? trig.leadMinutes : 0;
@@ -553,6 +638,16 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
             push(fetched.events);
             overflowed ||= fetched.overflowed;
           }
+          // canceled-mode flows share one recently-modified listing filtered
+          // to cancellations.
+          if (group.some((f) => f.on === "event_canceled" && f.sources.includes(source))) {
+            const fetched = await fetchRecentlyCancelled(
+              target,
+              nowMs - CALENDAR_CANCELED_LOOKBACK_MINUTES * 60_000
+            );
+            push(fetched.events);
+            overflowed ||= fetched.overflowed;
+          }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           await recordSystemLog({
@@ -612,7 +707,9 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
                 ? eventStartDue(ev, flow.leadMinutes, nowMs)
                 : flow.on === "event_end"
                   ? eventEndDue(ev, flow.followMinutes, nowMs)
-                  : eventCreatedDue(ev, nowMs);
+                  : flow.on === "event_canceled"
+                    ? eventCanceledDue(ev, nowMs)
+                    : eventCreatedDue(ev, nowMs);
             if (!due) continue;
             const scope = calendarTriggerScope(ev);
             if (
@@ -645,7 +742,9 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
                   ? `Upcoming calendar event "${ev.title}" triggered a run`
                   : flow.on === "event_end"
                     ? `Completed calendar event "${ev.title}" triggered a run`
-                    : `New calendar event "${ev.title}" triggered a run`,
+                    : flow.on === "event_canceled"
+                      ? `Canceled calendar event "${ev.title}" triggered a run`
+                      : `New calendar event "${ev.title}" triggered a run`,
               payload: {
                 flow_id: flow.id,
                 event_id: ev.id,

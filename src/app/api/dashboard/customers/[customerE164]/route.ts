@@ -40,6 +40,7 @@ import {
 } from "@/lib/customer-memory/types";
 import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 
 export const dynamic = "force-dynamic";
 
@@ -66,7 +67,13 @@ const patchBodySchema = z
     // Replace-the-set semantics; normalized (trim/de-dup/cap) before write.
     tags: z.array(z.string().max(MAX_CONTACT_TAG_LENGTH)).max(MAX_CONTACT_TAGS).optional(),
     // Assign (uuid, validated against the roster below) or clear (null).
-    ownerEmployeeId: z.string().uuid().nullable().optional()
+    ownerEmployeeId: z.string().uuid().nullable().optional(),
+    // Birth date ("YYYY-MM-DD") for the AiFlow birthday trigger; null clears.
+    birthday: z
+      .string()
+      .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
+      .nullable()
+      .optional()
   })
   .refine(
     (b) =>
@@ -76,10 +83,11 @@ const patchBodySchema = z
       b.type !== undefined ||
       b.smsReplyMode !== undefined ||
       b.tags !== undefined ||
-      b.ownerEmployeeId !== undefined,
+      b.ownerEmployeeId !== undefined ||
+      b.birthday !== undefined,
     {
       message:
-        "Provide at least one of displayName, pinnedMd, email, type, smsReplyMode, tags, ownerEmployeeId"
+        "Provide at least one of displayName, pinnedMd, email, type, smsReplyMode, tags, ownerEmployeeId, birthday"
     }
   );
 
@@ -138,6 +146,7 @@ export async function GET(
         lastChannel: memory.last_channel,
         tags: memory.tags,
         ownerEmployeeId: memory.owner_employee_id,
+        birthday: memory.birthday,
         createdAt: memory.created_at,
         updatedAt: memory.updated_at
       },
@@ -189,7 +198,8 @@ export async function PATCH(
         body.email === undefined &&
         body.type === undefined &&
         body.tags === undefined &&
-        body.ownerEmployeeId === undefined;
+        body.ownerEmployeeId === undefined &&
+        body.birthday === undefined;
       if (!onlyReplyMode) return errorResponse("NOT_FOUND", "Customer not found");
       await setContactSmsReplyMode(businessId, customerE164, body.smsReplyMode!);
       return successResponse({ ok: true });
@@ -229,30 +239,67 @@ export async function PATCH(
       ...(body.type !== undefined ? { type: body.type } : {}),
       ...(body.smsReplyMode !== undefined ? { smsReplyMode: body.smsReplyMode } : {}),
       ...(body.tags !== undefined ? { tags: body.tags } : {}),
-      ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: body.ownerEmployeeId } : {})
+      ...(body.ownerEmployeeId !== undefined ? { ownerEmployeeId: body.ownerEmployeeId } : {}),
+      ...(body.birthday !== undefined ? { birthday: body.birthday } : {})
     });
 
-    // Goal Events: tags the edit ADDED (vs. the pre-edit row) may fast-forward
-    // this lead's parked/queued AiFlow runs to a matching "tag added" goal.
-    // Diffed against the same normalization the write used; best-effort inside
-    // fireGoalEvent, so a goal failure never fails the save.
+    // Goal Events + tag_changed triggers: tags the edit ADDED or REMOVED (vs.
+    // the pre-edit row) may fast-forward parked runs to a "tag added" goal
+    // and/or start flows watching for the change. Diffed against the same
+    // normalization the write used; best-effort inside both hooks, so a
+    // trigger failure never fails the save.
     if (body.tags !== undefined) {
       // Both sides of the diff go through the SAME normalization the write
       // used — comparing raw stored tags would make a legacy spelling or
-      // stray whitespace look "new" and fire a spurious goal jump.
-      const before = new Set(
-        normalizeContactTags(existing.tags ?? []).map((t) => t.toLowerCase())
-      );
+      // stray whitespace look "new" and fire a spurious event.
+      const nextTags = normalizeContactTags(body.tags);
+      const previousTags = normalizeContactTags(existing.tags ?? []);
+      const before = new Set(previousTags.map((t) => t.toLowerCase()));
+      const after = new Set(nextTags.map((t) => t.toLowerCase()));
+      const eventStamp = Date.now();
       // Runs match goal events by the exact number they were triggered with,
       // which after a profile merge may be an ALIAS — fire for every linked
       // number so a parked run keyed on the old number still jumps.
       const goalNumbers = [canonicalE164, ...(existing.alias_e164s ?? [])];
-      for (const tag of normalizeContactTags(body.tags)) {
+      for (const tag of nextTags) {
         if (before.has(tag.toLowerCase())) continue;
         for (const number of goalNumbers) {
           await fireGoalEvent(businessId, number, { kind: "tag_added", tag });
         }
+        await fireContactEvent(businessId, {
+          kind: "tag_changed",
+          contact: { e164: canonicalE164, tags: nextTags },
+          tag,
+          change: "added",
+          dedupeKey: `ce:tag:${canonicalE164}:${tag.toLowerCase()}:added:${eventStamp}`
+        });
       }
+      for (const tag of previousTags) {
+        if (after.has(tag.toLowerCase())) continue;
+        await fireContactEvent(businessId, {
+          kind: "tag_changed",
+          contact: { e164: canonicalE164, tags: nextTags },
+          tag,
+          change: "removed",
+          dedupeKey: `ce:tag:${canonicalE164}:${tag.toLowerCase()}:removed:${eventStamp}`
+        });
+      }
+    }
+
+    // owner_assigned triggers: a manual owner pick (not a clear) may start
+    // flows — but only when the owner actually CHANGED to someone new.
+    if (
+      body.ownerEmployeeId !== undefined &&
+      body.ownerEmployeeId !== null &&
+      body.ownerEmployeeId !== existing.owner_employee_id
+    ) {
+      const member = await getTeamMember(businessId, body.ownerEmployeeId).catch(() => null);
+      await fireContactEvent(businessId, {
+        kind: "owner_assigned",
+        contact: { e164: canonicalE164 },
+        ...(member?.name ? { ownerName: member.name } : {}),
+        dedupeKey: `ce:owner:${canonicalE164}:${body.ownerEmployeeId}:${Date.now()}`
+      });
     }
 
     return successResponse({ ok: true });

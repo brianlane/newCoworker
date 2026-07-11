@@ -275,6 +275,178 @@ describe("validateDefinitionSemantics", () => {
   });
 });
 
+describe("contact-event / birthday triggers + calendar event_canceled", () => {
+  const stepsOnly = [{ id: "s1", type: "notify_owner", message: "hi {{trigger.from}}" }];
+
+  it("parses every new trigger channel", () => {
+    for (const trigger of [
+      { channel: "contact_created", conditions: [] },
+      { channel: "tag_changed", tag: "Engaged", change: "removed", conditions: [] },
+      { channel: "tag_changed", conditions: [{ type: "contains", value: "vip" }] },
+      { channel: "owner_assigned", conditions: [] },
+      { channel: "birthday", time: "10:30", timezone: "America/Phoenix", conditions: [] },
+      { channel: "calendar", on: "event_canceled", conditions: [] }
+    ]) {
+      const def = parseAiFlowDefinition({ version: 1, trigger, steps: stepsOnly });
+      expect(def.trigger.channel).toBe(trigger.channel);
+    }
+  });
+
+  it("rejects out-of-range tag/change/time values at the shape layer", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "tag_changed", change: "renamed", conditions: [] },
+        steps: stepsOnly
+      })
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "birthday", time: "9am", conditions: [] },
+        steps: stepsOnly
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("summarizes the new channels", () => {
+    const summarize = (trigger: Record<string, unknown>) =>
+      summarizeDefinition(
+        parseAiFlowDefinition({ version: 1, trigger, steps: stepsOnly })
+      );
+    expect(summarize({ channel: "contact_created", conditions: [] })).toContain(
+      "When a contact is created"
+    );
+    expect(
+      summarize({ channel: "tag_changed", tag: "Won", conditions: [] })
+    ).toContain('When the tag "Won" is added');
+    expect(summarize({ channel: "tag_changed", change: "removed", conditions: [] })).toContain(
+      "is removed"
+    );
+    expect(summarize({ channel: "owner_assigned", conditions: [] })).toContain(
+      "assigned an owner"
+    );
+    expect(summarize({ channel: "birthday", conditions: [] })).toContain(
+      "On a contact's birthday (at 09:00)"
+    );
+    expect(
+      summarize({ channel: "calendar", on: "event_canceled", conditions: [] })
+    ).toContain("canceled");
+    expect(
+      summarize({
+        channel: "contact_created",
+        conditions: [{ type: "contains", value: "vip" }]
+      })
+    ).toContain("matching 1 condition(s)");
+  });
+});
+
+describe("sleep wait modes (untilDate / relativeTo)", () => {
+  const flowWith = (sleep: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "calendar", on: "event_start", leadMinutes: 30, conditions: [] },
+    steps: [
+      { id: "e1", type: "extract_text", fields: [{ name: "renewal_date" }] },
+      { id: "z1", type: "sleep", ...sleep },
+      { id: "n1", type: "notify_owner", message: "time!" }
+    ]
+  });
+
+  it("accepts the untilDate and relativeTo modes", () => {
+    expect(() =>
+      parseAiFlowDefinition(flowWith({ untilDateTemplate: "{{vars.renewal_date}}" }))
+    ).not.toThrow();
+    expect(() =>
+      parseAiFlowDefinition(
+        flowWith({ relativeToTemplate: "{{trigger.starts_at}}", offsetMinutes: -120 })
+      )
+    ).not.toThrow();
+  });
+
+  it("rejects mixed modes, half a relativeTo pair, and templates out of scope", () => {
+    const issuesOf = (sleep: Record<string, unknown>) =>
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(flowWith(sleep)));
+    expect(
+      issuesOf({ minutes: 60, untilDateTemplate: "{{vars.renewal_date}}" }).some((i) =>
+        i.includes("mixes wait modes")
+      )
+    ).toBe(true);
+    expect(
+      issuesOf({ offsetMinutes: -120 }).some((i) => i.includes("no relativeToTemplate"))
+    ).toBe(true);
+    expect(
+      issuesOf({ relativeToTemplate: "{{trigger.starts_at}}" }).some((i) =>
+        i.includes("needs offsetMinutes")
+      )
+    ).toBe(true);
+    expect(
+      issuesOf({ untilDateTemplate: "{{vars.never_extracted}}" }).some((i) =>
+        i.includes("never_extracted")
+      )
+    ).toBe(true);
+  });
+});
+
+describe("math step", () => {
+  const flowWith = (math: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "sms", conditions: [] },
+    steps: [
+      { id: "e1", type: "extract_text", fields: [{ name: "quote_amount" }] },
+      { id: "m1", type: "math", ...math },
+      // The result var is in scope for later steps.
+      { id: "n1", type: "notify_owner", message: "score {{vars.score}}" }
+    ]
+  });
+
+  it("parses, registers saveAs for later steps, and enforces the right-operand rules", () => {
+    expect(() =>
+      parseAiFlowDefinition(
+        flowWith({ operation: "add", left: "{{vars.quote_amount}}", right: "10", saveAs: "score" })
+      )
+    ).not.toThrow();
+    const issuesOf = (math: Record<string, unknown>) =>
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(flowWith(math)));
+    expect(
+      issuesOf({ operation: "add", left: "1", saveAs: "score" }).some((i) =>
+        i.includes("needs a right operand")
+      )
+    ).toBe(true);
+    expect(
+      issuesOf({ operation: "round", left: "1.5", right: "2", saveAs: "score" }).some((i) =>
+        i.includes("remove the unused right operand")
+      )
+    ).toBe(true);
+  });
+
+  it("scope-checks the operand templates", () => {
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(
+        flowWith({ operation: "add", left: "{{vars.missing_var}}", right: "1", saveAs: "score" })
+      )
+    );
+    expect(issues.some((i) => i.includes("missing_var"))).toBe(true);
+  });
+});
+
+describe("definition drip pacing", () => {
+  it("parses drip and bounds the interval", () => {
+    const base = {
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] },
+      steps: [{ id: "s1", type: "notify_owner", message: "lead" }]
+    };
+    const def = parseAiFlowDefinition({ ...base, drip: { intervalMinutes: 5 } });
+    expect(def.drip?.intervalMinutes).toBe(5);
+    expect(() =>
+      parseAiFlowDefinition({ ...base, drip: { intervalMinutes: 0 } })
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition({ ...base, drip: { intervalMinutes: 2000 } })
+    ).toThrow(AiFlowValidationError);
+  });
+});
+
 describe("goal step (GHL-style Goal Events)", () => {
   const goalFlow = (goalStep: Record<string, unknown>) => ({
     version: 1,

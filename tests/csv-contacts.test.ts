@@ -6,6 +6,7 @@ const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
+vi.mock("@/lib/ai-flows/contact-event-hooks", () => ({ fireContactEvent: vi.fn() }));
 
 import {
   CONTACTS_EXPORT_HEADERS,
@@ -14,6 +15,7 @@ import {
   exportContactsCsv,
   importContactsCsv
 } from "../src/lib/csv/contacts";
+import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { parseCsv } from "../src/lib/csv/csv";
 
 /**
@@ -228,6 +230,17 @@ describe("importContactsCsv", () => {
       db
     );
     expect(summary).toMatchObject({ totalRows: 1, created: 1, updated: 0, skipped: 0 });
+    // A created row fires the contact_created trigger hook (best-effort).
+    // The dedupe key is timestamped per creation (a re-imported number after
+    // a delete must refire), so match its shape rather than an exact value.
+    expect(fireContactEvent).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        kind: "contact_created",
+        contact: { e164: "+16025551234", name: "Jane", email: "jane@example.com" },
+        dedupeKey: expect.stringMatching(/^ce:created:\+16025551234:\d+$/)
+      })
+    );
     expect(summary.errors).toEqual([]);
     const insert = log[1].calls.find((c) => c.name === "insert");
     expect(insert?.args[0]).toMatchObject({

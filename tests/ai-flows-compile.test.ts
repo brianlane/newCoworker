@@ -7,7 +7,7 @@ import {
   extractFlowJson,
   humanizeCompileIssues
 } from "@/lib/ai-flows/compile";
-import { FLOW_STEP_TYPES } from "@/lib/ai-flows/schema";
+import { FLOW_STEP_TYPES, TRIGGER_CHANNELS } from "@/lib/ai-flows/schema";
 
 describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
   it("documents the schema contract", () => {
@@ -25,16 +25,9 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
   });
 
   it("covers every trigger channel including voice (inbound + outbound)", () => {
-    for (const channel of [
-      "sms",
-      "manual",
-      "schedule",
-      "tenant_email",
-      "email",
-      "webhook",
-      "calendar",
-      "voice"
-    ]) {
+    // Iterates the schema's own list so adding a channel FAILS this test
+    // until the generator prompt documents it.
+    for (const channel of TRIGGER_CHANNELS) {
       expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain(`"channel":"${channel}"`);
     }
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"direction":"outbound"');

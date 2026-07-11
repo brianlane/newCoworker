@@ -29,6 +29,7 @@ import {
   type SmsReplyMode
 } from "@/lib/customer-memory/types";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
+import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
 import { parseCsv, serializeCsv } from "./csv";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -266,6 +267,22 @@ export async function importContactsCsv(
           }
         } else {
           summary.created += 1;
+          // contact_created triggers: an import-created contact may start
+          // flows watching for new contacts (drip pacing spaces bulk
+          // enrollments out). Best-effort inside fireContactEvent — a
+          // trigger failure never fails the row.
+          await fireContactEvent(businessId, {
+            kind: "contact_created",
+            contact: {
+              e164: phone,
+              ...(name ? { name } : {}),
+              ...(email ? { email } : {})
+            },
+            // Timestamped like the dashboard add: a re-imported number after
+            // a delete is a NEW creation and must refire (the insert above
+            // only succeeds once per actual creation).
+            dedupeKey: `ce:created:${phone}:${Date.now()}`
+          });
         }
       }
     } catch (e) {

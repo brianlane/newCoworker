@@ -409,6 +409,106 @@ describe("enqueueAiFlowRun", () => {
   });
 });
 
+describe("enqueueAiFlowRun drip pacing", () => {
+  const input = {
+    businessId: "biz-1",
+    flowId: "flow-1",
+    trigger: { channel: "webhook", windowText: "lead", url: null, from: "meta" },
+    dedupeKey: "webhook:e1"
+  };
+
+  /**
+   * Per-table stub: ai_flows resolves the definition read, the ai_flow_runs
+   * SELECT (drip last-slot lookup) resolves `lastRow`, and the ai_flow_runs
+   * INSERT resolves RUN_ROW. `.not` is only used by the drip lookup.
+   */
+  function makeDripDb(opts: {
+    drip?: { intervalMinutes: number } | null;
+    lastRow?: { earliest_claim_at: string | null } | null;
+    flowReadThrows?: boolean;
+  }) {
+    const inserts: Record<string, unknown>[] = [];
+    const flowsBuilder: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) flowsBuilder[m] = vi.fn(() => flowsBuilder);
+    flowsBuilder.maybeSingle = vi.fn(async () => {
+      if (opts.flowReadThrows) throw new Error("flows read down");
+      return {
+        data: { definition: { drip: opts.drip ?? undefined } },
+        error: null
+      };
+    });
+    const runsBuilder: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "not", "order", "limit"]) {
+      runsBuilder[m] = vi.fn(() => runsBuilder);
+    }
+    runsBuilder.maybeSingle = vi.fn(async () => ({ data: opts.lastRow ?? null, error: null }));
+    runsBuilder.insert = vi.fn((row: Record<string, unknown>) => {
+      inserts.push(row);
+      return {
+        select: () => ({ single: async () => ({ data: RUN_ROW, error: null }) })
+      };
+    });
+    return {
+      inserts,
+      db: {
+        from: vi.fn((table: string) => (table === "ai_flows" ? flowsBuilder : runsBuilder))
+      }
+    };
+  }
+
+  it("staggers a dripped flow's run after the latest scheduled slot", async () => {
+    const lastIso = new Date(Date.now() + 10 * 60_000).toISOString();
+    const { db, inserts } = makeDripDb({
+      drip: { intervalMinutes: 5 },
+      lastRow: { earliest_claim_at: lastIso }
+    });
+    await enqueueAiFlowRun(input, db as never);
+    const claimAt = Date.parse(inserts[0].earliest_claim_at as string);
+    expect(claimAt).toBe(Date.parse(lastIso) + 5 * 60_000);
+  });
+
+  it("the first dripped run starts now (no scheduled predecessor)", async () => {
+    const before = Date.now();
+    const { db, inserts } = makeDripDb({ drip: { intervalMinutes: 5 }, lastRow: null });
+    await enqueueAiFlowRun(input, db as never);
+    const claimAt = Date.parse(inserts[0].earliest_claim_at as string);
+    expect(claimAt).toBeGreaterThanOrEqual(before);
+    expect(claimAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("a predecessor already in the past never schedules backwards", async () => {
+    const before = Date.now();
+    const { db, inserts } = makeDripDb({
+      drip: { intervalMinutes: 5 },
+      lastRow: { earliest_claim_at: new Date(before - 60 * 60_000).toISOString() }
+    });
+    await enqueueAiFlowRun(input, db as never);
+    expect(Date.parse(inserts[0].earliest_claim_at as string)).toBeGreaterThanOrEqual(before);
+  });
+
+  it("no drip configured → no stagger (and no earliest_claim_at)", async () => {
+    const { db, inserts } = makeDripDb({ drip: null });
+    await enqueueAiFlowRun(input, db as never);
+    expect(inserts[0]).not.toHaveProperty("earliest_claim_at");
+  });
+
+  it("an explicit earliestClaimAt wins over drip (the caller computed its own spacing)", async () => {
+    const at = "2026-07-11T09:00:00.000Z";
+    const { db, inserts } = makeDripDb({ drip: { intervalMinutes: 5 } });
+    await enqueueAiFlowRun({ ...input, earliestClaimAt: at }, db as never);
+    expect(inserts[0].earliest_claim_at).toBe(at);
+  });
+
+  it("a drip read failure enqueues immediately (pacing is best-effort)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, inserts } = makeDripDb({ flowReadThrows: true });
+    await enqueueAiFlowRun(input, db as never);
+    expect(inserts[0]).not.toHaveProperty("earliest_claim_at");
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+});
+
 describe("listAiFlowRuns", () => {
   it("applies flowId + status filters and clamps a large limit", async () => {
     const { db, builder } = makeDb({ array: [RUN_ROW] });

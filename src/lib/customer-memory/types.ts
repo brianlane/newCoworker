@@ -81,6 +81,8 @@ export type CustomerMemoryRow = {
   tags: string[];
   /** Roster member (ai_flow_team_members.id) who owns this contact; null = unowned. */
   owner_employee_id: string | null;
+  /** Optional birth date ("YYYY-MM-DD"); month/day fire the AiFlow birthday trigger. */
+  birthday: string | null;
   created_at: string;
   updated_at: string;
 };
