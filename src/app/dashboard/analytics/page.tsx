@@ -46,14 +46,22 @@ import {
   type DayDetailCall
 } from "@/lib/analytics/dashboard-analytics";
 import {
+  FORECAST_MIN_DAYS,
+  forecastActivity,
+  getSnapshotSeries,
+  type SnapshotSeriesPoint
+} from "@/lib/analytics/snapshots";
+import {
   AnswerRateCard,
   DailyVolumeCard,
   DayDetailCard,
   PeakHoursCard,
   SegmentDetailCard,
   SentimentMixCard,
+  TrendForecastCard,
   type DayDetailCallDisplayRow,
-  type DayDetailTextDisplayRow
+  type DayDetailTextDisplayRow,
+  type TrendWeek
 } from "@/components/dashboard/AnalyticsCards";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { callerLabel } from "@/components/dashboard/voice-transcript-helpers";
@@ -182,11 +190,14 @@ export default async function DashboardAnalyticsPage(props: {
   // Every fetcher shares the page's `now` so the cards, the drill-down
   // clamps, and the chart highlights all describe the same window even if
   // UTC midnight passes mid-request.
-  const [usage, answerRate, callStats, dayDetail, sentimentDetail, hourDetail] =
+  const [usage, answerRate, callStats, snapshotSeries, dayDetail, sentimentDetail, hourDetail] =
     await Promise.all([
       getDailyUsageSeries(business.id, { client: db, now }).catch(() => null),
       getAnswerRateStats(business.id, { client: db, now }).catch(() => null),
       getInboundCallStats(business.id, { client: db, timeZone, now }).catch(() => null),
+      // Long-window trend from the nightly snapshots (survives retention
+      // pruning); a blip or an empty table just hides the trend card.
+      getSnapshotSeries(business.id, 84, { client: db, now }).catch(() => null),
       selectedDay
         ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
         : Promise.resolve(null),
@@ -202,6 +213,34 @@ export default async function DashboardAnalyticsPage(props: {
         : Promise.resolve(null)
     ]);
   const segmentDetail = sentimentDetail ?? hourDetail;
+
+  // Trend & forecast card: only once enough snapshot history exists for the
+  // math to mean anything (FORECAST_MIN_DAYS).
+  const showTrend = (snapshotSeries?.coveredDays ?? 0) >= FORECAST_MIN_DAYS;
+  const trendWeeks: TrendWeek[] = [];
+  let callForecast = null;
+  let textForecast = null;
+  if (showTrend && snapshotSeries) {
+    const points = snapshotSeries.points;
+    for (let i = 0; i < points.length; i += 7) {
+      const week = points.slice(i, i + 7);
+      trendWeeks.push({
+        label: new Date(`${week[0].date}T00:00:00Z`).toLocaleDateString("en-US", {
+          month: "short",
+          day: "numeric",
+          timeZone: "UTC"
+        }),
+        calls: week.reduce((s: number, p: SnapshotSeriesPoint) => s + p.calls, 0),
+        sms: week.reduce((s: number, p: SnapshotSeriesPoint) => s + p.smsSent, 0)
+      });
+    }
+    // Forecast over the covered tail only — leading zero-filled days from
+    // before snapshots began would fake a growth trend.
+    const firstCovered = points.findIndex((p) => p.calls > 0 || p.smsSent > 0 || p.voiceMinutes > 0);
+    const tail = firstCovered >= 0 ? points.slice(firstCovered) : points;
+    callForecast = forecastActivity(tail.map((p) => p.calls));
+    textForecast = forecastActivity(tail.map((p) => p.smsSent));
+  }
 
   // Name known callers (owner / roster / manual overrides) across every
   // drill-down list, mirroring the call-history page. One lookup covers the
@@ -333,6 +372,10 @@ export default async function DashboardAnalyticsPage(props: {
           </Card>
         )}
       </div>
+
+      {showTrend && (
+        <TrendForecastCard weeks={trendWeeks} calls={callForecast} texts={textForecast} />
+      )}
 
       {callStats && (
         <PeakHoursCard

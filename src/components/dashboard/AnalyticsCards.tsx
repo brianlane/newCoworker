@@ -397,6 +397,96 @@ export function SegmentDetailCard({
   );
 }
 
+export type TrendWeek = { label: string; calls: number; sms: number };
+
+export type TrendForecastView = {
+  projected30d: number;
+  direction: "up" | "down" | "stable";
+  anomaly: "quiet" | "busy" | null;
+};
+
+/**
+ * Long-window trend + 30-day activity forecast, fed by the nightly
+ * analytics_daily_snapshots (BizBlasts AnalyticsSnapshot / forecast port).
+ * Renders weekly aggregate bars — snapshots survive retention pruning, so
+ * this window can extend past the raw-transcript history.
+ */
+export function TrendForecastCard({
+  weeks,
+  calls,
+  texts
+}: {
+  weeks: TrendWeek[];
+  calls: TrendForecastView | null;
+  texts: TrendForecastView | null;
+}) {
+  const max = Math.max(...weeks.map((w) => w.calls + w.sms), 1);
+  const directionWord = (d: TrendForecastView["direction"]) =>
+    d === "up" ? "trending up" : d === "down" ? "trending down" : "steady";
+  const anomaly = calls?.anomaly ?? texts?.anomaly ?? null;
+  return (
+    <Card>
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+        Trend &amp; forecast
+      </p>
+      <div className="flex items-end gap-1 h-16 mt-3">
+        {weeks.map((w) => (
+          <div
+            key={w.label}
+            className="flex-1 flex flex-col justify-end h-full min-w-0"
+            title={`Week of ${w.label}: ${w.calls.toLocaleString()} calls · ${w.sms.toLocaleString()} texts`}
+          >
+            <div
+              className="rounded-t bg-claw-green/60"
+              style={{ height: `${Math.max((w.sms / max) * 100, w.sms > 0 ? 3 : 0)}%` }}
+            />
+            <div
+              className="bg-signal-teal/70"
+              style={{ height: `${Math.max((w.calls / max) * 100, w.calls > 0 ? 3 : 0)}%` }}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-between mt-1 text-[10px] text-parchment/35">
+        <span>{weeks[0]?.label ?? ""}</span>
+        <span>{weeks[weeks.length - 1]?.label ?? ""}</span>
+      </div>
+      <p className="text-xs text-parchment/60 mt-3 leading-relaxed">
+        Next 30 days on the current trend:{" "}
+        {calls ? (
+          <>
+            ≈<span className="text-parchment/90">{calls.projected30d.toLocaleString()}</span>{" "}
+            calls ({directionWord(calls.direction)})
+          </>
+        ) : (
+          "not enough call history yet"
+        )}
+        {" · "}
+        {texts ? (
+          <>
+            ≈<span className="text-parchment/90">{texts.projected30d.toLocaleString()}</span>{" "}
+            texts ({directionWord(texts.direction)})
+          </>
+        ) : (
+          "not enough text history yet"
+        )}
+      </p>
+      {anomaly ? (
+        <p className="text-xs text-amber-300/90 mt-2">
+          {anomaly === "quiet"
+            ? "Heads up: this week is running well below your usual volume."
+            : "Heads up: this week is running well above your usual volume."}
+        </p>
+      ) : null}
+      <p className="text-[10px] text-parchment/35 mt-2">
+        <span className="text-signal-teal/80">■</span> calls{" "}
+        <span className="text-claw-green/80 ml-2">■</span> texts · weekly totals from nightly
+        snapshots
+      </p>
+    </Card>
+  );
+}
+
 export function AnswerRateCard({
   answered,
   missed,
