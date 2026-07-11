@@ -148,4 +148,28 @@ describe("POST /api/voice/tools/sms", () => {
     expect(body).toEqual({ ok: false, detail: "opt_out_check_failed" });
     expect(sendTelnyxSms).not.toHaveBeenCalled();
   });
+
+  it("canonicalizes a formatted model-supplied number before the opt-out check and the send", async () => {
+    const res = await POST(
+      req({ businessId: BIZ, args: { toE164: "(602) 555-0147", body: "hi" } })
+    );
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    // Both the STOP-list check and Telnyx get the canonical E.164 form —
+    // formatting must never let a stopped number slip past the exact match.
+    expect(checkSmsOptOut).toHaveBeenCalledWith(BIZ, "+16025550147");
+    expect(sendTelnyxSms).toHaveBeenCalledWith(expect.anything(), "+16025550147", "hi", {
+      meterBusinessId: BIZ
+    });
+  });
+
+  it("refuses an unnormalizable destination instead of sending it unchecked", async () => {
+    const res = await POST(
+      req({ businessId: BIZ, args: { toE164: "not-a-number-at-all", body: "hi" } })
+    );
+    const body = await res.json();
+    expect(body).toEqual({ ok: false, detail: "invalid_destination" });
+    expect(checkSmsOptOut).not.toHaveBeenCalled();
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
 });
