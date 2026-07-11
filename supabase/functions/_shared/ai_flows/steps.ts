@@ -268,6 +268,8 @@ export type StepAction =
        */
       kind: "share_document";
       documentId: string;
+      /** Editor display hint — the owner-notice fallback title when the doc row is gone. */
+      documentTitle?: string;
       /** Rendered recipient: E.164-ish for "sms", email address for "email". */
       to: string;
       via: "sms" | "email";
@@ -706,6 +708,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const base = {
         kind: "share_document" as const,
         documentId: step.documentId,
+        ...(step.documentTitle ? { documentTitle: step.documentTitle } : {}),
         via,
         message,
         ...(step.saveAs ? { saveAs: step.saveAs } : {})

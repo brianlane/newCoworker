@@ -16,6 +16,7 @@ describe("planStep: share_document", () => {
     const plan = planStep(
       {
         ...base,
+        documentTitle: "Price sheet",
         to: "{{vars.lead_phone}}",
         messageTemplate: "Hi {{vars.lead_name}} — here it is: {{ share_url }}",
         saveAs: "doc_url"
@@ -27,6 +28,7 @@ describe("planStep: share_document", () => {
       action: {
         kind: "share_document",
         documentId: DOC_ID,
+        documentTitle: "Price sheet",
         via: "sms",
         to: "+15551234567",
         message: `Hi Sam — here it is: ${SHARE_URL_TOKEN}`,
