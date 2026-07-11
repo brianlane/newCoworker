@@ -16,6 +16,8 @@ import { Card } from "@/components/ui/Card";
 import { listEmailLog } from "@/lib/db/email-log";
 import { listSendFromOptions } from "@/lib/email/mailbox-options";
 import { findContactsByEmails, type EmailContactLink } from "@/lib/db/contact-emails";
+import { listAiFlows } from "@/lib/ai-flows/db";
+import { flowHasTenantEmailTrigger } from "@/lib/email/replay";
 import { EmailsList } from "@/components/dashboard/EmailsList";
 
 export const dynamic = "force-dynamic";
@@ -61,11 +63,18 @@ export default async function DashboardEmailsPage() {
     );
   }
 
-  const [rows, fromOptions] = await Promise.all([
+  const [rows, fromOptions, flows] = await Promise.all([
     listEmailLog(business.id, { limit: 100 }),
     // Best-effort: on any failure the composer falls back to coworker-only send.
-    listSendFromOptions(business.id).catch(() => [])
+    listSendFromOptions(business.id).catch(() => []),
+    // Replay targets ("Replay through flow" on unmatched inbox mail): enabled
+    // flows that read the AI mailbox. Best-effort — no flows just hides the
+    // action.
+    listAiFlows(business.id).catch(() => [])
   ]);
+  const replayFlows = flows
+    .filter((f) => f.enabled && flowHasTenantEmailTrigger(f.definition))
+    .map((f) => ({ id: f.id, name: f.name }));
 
   // Link addresses to contact profiles (contacts.email match) so the reading
   // pane's From/To/Cc lines navigate to the contact page. Best-effort — on
@@ -96,6 +105,7 @@ export default async function DashboardEmailsPage() {
         businessId={business.id}
         fromOptions={fromOptions}
         emailContacts={emailContacts}
+        replayFlows={replayFlows}
       />
     </div>
   );
