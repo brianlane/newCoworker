@@ -97,6 +97,7 @@ import {
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
+import { loadBusinessFlowActivity } from "../../../../../supabase/functions/_shared/ai_flows/run_context";
 
 export const dynamic = "force-dynamic";
 
@@ -500,6 +501,25 @@ export async function POST(request: Request) {
       logger.warn("dashboard chat: customer memory preamble lookup failed", {
         businessId: body.businessId,
         error: memErr instanceof Error ? memErr.message : String(memErr)
+      });
+    }
+
+    // AiFlow context bridge (owner-facing variant): a digest of recent
+    // automation runs so "did anyone reply to the Privyr flow?" gets a
+    // grounded answer instead of a guess. Same failure posture as the
+    // customer preamble: degraded awareness, never a failed turn.
+    try {
+      const db = await createSupabaseServiceClient();
+      const flowActivity = await loadBusinessFlowActivity(db, body.businessId);
+      if (flowActivity) {
+        customerPreamble = customerPreamble
+          ? `${customerPreamble}\n\n${flowActivity}`
+          : flowActivity;
+      }
+    } catch (flowErr) {
+      logger.warn("dashboard chat: flow activity preamble lookup failed", {
+        businessId: body.businessId,
+        error: flowErr instanceof Error ? flowErr.message : String(flowErr)
       });
     }
 

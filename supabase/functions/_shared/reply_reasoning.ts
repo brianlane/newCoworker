@@ -5,7 +5,7 @@
  * The worker appends REASONING_PROMPT_INSTRUCTION to the per-turn preamble,
  * asking the model to end its reply with ONE trailer line:
  *
- *   ⟦reasoning⟧{"intent":"wants_quote","why":"...","handoff":false}
+ *   [[reasoning]]{"intent":"wants_quote","why":"...","handoff":false}
  *
  * `splitReplyReasoning` then strips every trailer-marked line from the reply
  * (the customer must NEVER see it — including echoes a customer might try to
@@ -17,8 +17,28 @@
  * the Deno worker and any Node surface.
  */
 
-/** Sentinel that opens a reasoning trailer line. Unusual on purpose. */
-export const REASONING_MARKER = "\u27E6reasoning\u27E7";
+/**
+ * Sentinel that opens a reasoning trailer line.
+ *
+ * Plain ASCII on purpose. The first version used the Unicode brackets
+ * ⟦reasoning⟧ (un-typeable by customers), but production showed models do
+ * NOT reproduce exotic brackets byte-perfectly — one live reply came back as
+ * `⟦reasoning}{...}⟧` (closer swapped for `}` and the `⟧` displaced to the
+ * end of the line), the exact match found nothing, and the whole trailer was
+ * texted to the customer. Doubled square brackets are trivial for any model
+ * to emit verbatim, and the tolerant matcher below scrubs the near-misses.
+ */
+export const REASONING_MARKER = "[[reasoning]]";
+
+/**
+ * Tolerant marker detector used for STRIPPING (never for teaching — the
+ * prompt always shows the canonical marker). Accepts every observed and
+ * plausible mangling: `[[reasoning]]`, `[reasoning]`, `⟦reasoning⟧`,
+ * `⟦reasoning}` (the production leak), with optional inner whitespace and
+ * any case. Stripping is deliberately over-eager: a false positive costs a
+ * clipped line; a false negative texts internal reasoning to a customer.
+ */
+const MARKER_PATTERN = /[⟦\[]{1,2}\s*reasoning\s*[⟧\]}]{0,2}/i;
 
 /**
  * Appended to the model's per-turn instructions. Kept terse: the trailer is
@@ -50,16 +70,23 @@ const MAX_RATIONALE_LENGTH = 400;
 
 /**
  * Parse one trailer payload (the text after the marker on its line). Accepts
- * only the documented shape; anything else is null.
+ * only the documented shape; anything else is null. Parses the outermost
+ * `{...}` span rather than the raw payload because marker debris can bracket
+ * the JSON (the production leak carried a displaced `⟧` after the closing
+ * brace).
  */
 function parseTrailer(payload: string): ReplyReasoning | null {
+  const start = payload.indexOf("{");
+  const end = payload.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
   let parsed: unknown;
   try {
-    parsed = JSON.parse(payload.trim());
+    parsed = JSON.parse(payload.slice(start, end + 1));
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  // A valid-JSON string that starts with "{" and ends with "}" can only be
+  // an object, so no shape guard is needed between parse and field checks.
   const rec = parsed as Record<string, unknown>;
   const intent = typeof rec.intent === "string" ? rec.intent.trim() : "";
   const why = typeof rec.why === "string" ? rec.why.trim() : "";
@@ -77,20 +104,20 @@ function parseTrailer(payload: string): ReplyReasoning | null {
  * that glued the trailer onto its last sentence keeps the sentence).
  */
 export function splitReplyReasoning(raw: string): SplitReplyResult {
-  if (!raw.includes(REASONING_MARKER)) {
+  if (!MARKER_PATTERN.test(raw)) {
     return { reply: raw, reasoning: null };
   }
   const keptLines: string[] = [];
   let reasoning: ReplyReasoning | null = null;
   for (const line of raw.split("\n")) {
-    const at = line.indexOf(REASONING_MARKER);
-    if (at === -1) {
+    const match = MARKER_PATTERN.exec(line);
+    if (!match) {
       keptLines.push(line);
       continue;
     }
-    const before = line.slice(0, at).trimEnd();
+    const before = line.slice(0, match.index).trimEnd();
     if (before) keptLines.push(before);
-    const parsed = parseTrailer(line.slice(at + REASONING_MARKER.length));
+    const parsed = parseTrailer(line.slice(match.index + match[0].length));
     if (parsed) reasoning = parsed;
   }
   // Collapse the blank tail the removed trailer line usually leaves behind.

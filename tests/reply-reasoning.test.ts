@@ -21,6 +21,12 @@ describe("REASONING_PROMPT_INSTRUCTION", () => {
     expect(REASONING_PROMPT_INSTRUCTION).toContain('"why"');
     expect(REASONING_PROMPT_INSTRUCTION).toContain('"handoff"');
   });
+
+  it("the canonical marker is plain ASCII (models must reproduce it byte-perfectly)", () => {
+    // The original ⟦reasoning⟧ marker leaked to a customer when the model
+    // mangled the exotic brackets. Never reintroduce non-ASCII here.
+    expect(REASONING_MARKER).toMatch(/^[ -~]+$/);
+  });
 });
 
 describe("splitReplyReasoning", () => {
@@ -74,9 +80,48 @@ describe("splitReplyReasoning", () => {
     expect(res.reasoning?.intent).toBe("second");
   });
 
+  describe("mangled-marker tolerance (production leak, Truly Insurance 2026-07-11)", () => {
+    // The model rewrote ⟦reasoning⟧ as `⟦reasoning}` and displaced the `⟧`
+    // to the very end of the line; the old exact-match stripper found
+    // nothing and the whole trailer was texted to the customer. Every
+    // variant here must strip AND parse.
+    const JSON_BODY =
+      '{"intent":"renew_insurance_policy","why":"Their policy lapsed; asking for contact details.","handoff":false}';
+
+    it("strips the exact leaked shape: mangled opener + displaced closer", () => {
+      const raw =
+        "Thanks for reaching out to Truly Insurance. I'll help get you connected.\n\n" +
+        "What's the best way to reach you by phone or email?\n" +
+        `\u27E6reasoning}${JSON_BODY}\u27E7`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe(
+        "Thanks for reaching out to Truly Insurance. I'll help get you connected.\n\n" +
+          "What's the best way to reach you by phone or email?"
+      );
+      expect(res.reasoning).toEqual({
+        intent: "renew_insurance_policy",
+        rationale: "Their policy lapsed; asking for contact details.",
+        escalated: false
+      });
+    });
+
+    it.each([
+      ["legacy unicode marker", `\u27E6reasoning\u27E7${JSON_BODY}`],
+      ["single ASCII brackets", `[reasoning]${JSON_BODY}`],
+      ["canonical doubled brackets", `[[reasoning]]${JSON_BODY}`],
+      ["unclosed opener", `[[reasoning${JSON_BODY}`],
+      ["inner whitespace and case", `[[ Reasoning ]] ${JSON_BODY}`]
+    ])("strips and parses the %s variant", (_label, trailer) => {
+      const res = splitReplyReasoning(`Sounds good, see you then!\n${trailer}`);
+      expect(res.reply).toBe("Sounds good, see you then!");
+      expect(res.reasoning?.intent).toBe("renew_insurance_policy");
+    });
+  });
+
   it("malformed trailers strip but parse to null", () => {
     for (const bad of [
       "not json",
+      '{"intent": nope}',
       "[1,2]",
       "null",
       '"just a string"',

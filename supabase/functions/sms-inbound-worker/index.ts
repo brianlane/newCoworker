@@ -36,6 +36,7 @@ import {
   REASONING_PROMPT_INSTRUCTION,
   splitReplyReasoning
 } from "../_shared/reply_reasoning.ts";
+import { loadFlowRunContext } from "../_shared/ai_flows/run_context.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -944,6 +945,13 @@ serve(async (req: Request) => {
         memoryRow == null
           ? null
           : buildCustomerPreambleForEdge(memoryRow as unknown as EdgeCustomerMemoryRow);
+      // AiFlow context bridge: when an automation recently handled this
+      // texter (asked them a question, collected their details), the model
+      // must continue THAT conversation, not restart intake. Production
+      // showed the post-flow turn asking a lead for their phone number —
+      // over SMS (Truly Insurance, 2026-07-11). Best-effort: null on any
+      // failure, and the reply proceeds with plain memory context.
+      const flowContext = await loadFlowRunContext(supabase, job.business_id, fromE164);
       // The texter's E.164 is ALWAYS stated, even on first contact with no
       // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
       // caller context, so the customer tools require an explicit `phone`
@@ -955,9 +963,9 @@ serve(async (req: Request) => {
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
       const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${conversationQualityLine}\n\n${dateLine}\n\n${phoneLine}`;
-      customerPreamble = memoryPreamble
-        ? `${dateAndPhoneLines}\n\n${memoryPreamble}`
-        : dateAndPhoneLines;
+      customerPreamble = [dateAndPhoneLines, memoryPreamble, flowContext]
+        .filter((part): part is string => Boolean(part))
+        .join("\n\n");
       // Decision-engine capture (PRD Ch. 6): ask the model to end its reply
       // with a machine-read reasoning trailer. splitReplyReasoning strips it
       // before caching/sending, so the customer never sees it. Customer path
