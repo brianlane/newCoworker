@@ -34,6 +34,11 @@ import {
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
+import {
+  notificationCategoryEnabled,
+  resolveNotificationCategory,
+  type CategoryPreferenceFlags
+} from "@/lib/notifications/categories";
 import { logger } from "@/lib/logger";
 
 export type NotificationKind = "urgent_alert" | "voice_capture" | "digest" | string;
@@ -72,6 +77,8 @@ export type ResolvedTargets = {
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
   unsubscribed: boolean;
+  /** Per-event-category filters (see lib/notifications/categories.ts). */
+  categories: CategoryPreferenceFlags;
 };
 
 /**
@@ -95,6 +102,13 @@ export async function resolveNotificationTargets(
   let dashboardAlerts = true;
   let unsubscribed = false;
   let ownerEmail: string | null = null;
+  // Category filters default ON (fail toward delivering) so a prefs read
+  // hiccup can never silently drop an urgent alert.
+  let categories: CategoryPreferenceFlags = {
+    category_leads: true,
+    category_team: true,
+    category_system: true
+  };
 
   try {
     const prefs = await getOrCreateNotificationPreferences(businessId);
@@ -105,6 +119,13 @@ export async function resolveNotificationTargets(
     emailDigest = prefs.email_digest;
     dashboardAlerts = prefs.dashboard_alerts;
     unsubscribed = prefs.unsubscribed_at !== null;
+    categories = {
+      // ?? true: rows read before the 20260823000000 migration ran (or
+      // stale PostgREST schema cache) simply keep every category on.
+      category_leads: prefs.category_leads ?? true,
+      category_team: prefs.category_team ?? true,
+      category_system: prefs.category_system ?? true
+    };
   } catch (err) {
     logger.warn("resolveNotificationTargets: preferences lookup failed", {
       businessId,
@@ -129,7 +150,8 @@ export async function resolveNotificationTargets(
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
-    unsubscribed
+    unsubscribed,
+    categories
   };
 }
 
@@ -181,6 +203,21 @@ export async function dispatchUrgentNotification(
   const kind = input.kind;
   const payload: Record<string, unknown> = { summary, ...(input.payload ?? {}) };
   const results: DispatchChannelResult[] = [];
+
+  // Category gate (BizBlasts-style per-event-type prefs): when the owner
+  // switched this event's category off, no channel fires — but every channel
+  // still gets a `skipped` history row so the dashboard list reflects what
+  // was suppressed and why. "general" is never gated.
+  const category = resolveNotificationCategory(kind);
+  if (!notificationCategoryEnabled(category, targets.categories)) {
+    const reason = `category_${category}_disabled`;
+    for (const channel of ["dashboard", "email", "sms"] as const) {
+      results.push(
+        await recordRow(input.businessId, channel, "skipped", summary, kind, payload, reason)
+      );
+    }
+    return { results };
+  }
 
   // 1) Dashboard channel — only suppressed if the toggle is off (or unsubscribed-from-all).
   if (targets.dashboardEnabled && !targets.unsubscribed) {

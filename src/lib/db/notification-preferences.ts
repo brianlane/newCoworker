@@ -13,6 +13,12 @@ export type NotificationPreferencesRow = {
   sms_warm_transfer: boolean;
   /** Alert the owner when a coworker hits its per-session image-generation limit. */
   image_limit_alerts: boolean;
+  /** Category filter: new-lead captures (see lib/notifications/categories.ts). */
+  category_leads: boolean;
+  /** Category filter: team-notify pings. */
+  category_team: boolean;
+  /** Category filter: platform/system events (number ports, etc.). */
+  category_system: boolean;
   phone_number: string | null;
   alert_email: string | null;
   /** Optional daily-digest recipient override; null = alert_email → owner_email chain. */
@@ -98,6 +104,9 @@ export type NotificationPreferencesUpdate = Partial<
     | "dashboard_alerts"
     | "sms_warm_transfer"
     | "image_limit_alerts"
+    | "category_leads"
+    | "category_team"
+    | "category_system"
     | "phone_number"
     | "alert_email"
     | "digest_email_daily"
@@ -114,6 +123,9 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   dashboard_alerts: true,
   sms_warm_transfer: true,
   image_limit_alerts: true,
+  category_leads: true,
+  category_team: true,
+  category_system: true,
   phone_number: null,
   alert_email: null,
   digest_email_daily: null,
@@ -211,6 +223,9 @@ export async function updateNotificationPreferences(
     "dashboard_alerts",
     "sms_warm_transfer",
     "image_limit_alerts",
+    "category_leads",
+    "category_team",
+    "category_system",
     "phone_number",
     "alert_email",
     "digest_email_daily",

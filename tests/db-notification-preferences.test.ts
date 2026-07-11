@@ -44,6 +44,9 @@ describe("db/notification-preferences", () => {
     expect(row.dashboard_alerts).toBe(true);
     expect(row.sms_warm_transfer).toBe(true);
     expect(row.image_limit_alerts).toBe(true);
+    expect(row.category_leads).toBe(true);
+    expect(row.category_team).toBe(true);
+    expect(row.category_system).toBe(true);
     expect(row.phone_number).toBeNull();
     expect(row.alert_email).toBeNull();
     expect(row.digest_email_daily).toBeNull();
@@ -703,6 +706,43 @@ describe("db/notification-preferences", () => {
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ image_limit_alerts: true, unsubscribed_at: null })
     );
+  });
+
+  it("updateNotificationPreferences persists category flags WITHOUT clearing unsubscribed_at (categories are filters, not channels)", async () => {
+    const startingPrefs = {
+      ...PREFS,
+      category_leads: true,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, category_leads: false, category_system: true },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const row = await updateNotificationPreferences("biz-1", {
+      category_leads: false,
+      category_system: true
+    });
+    expect(row.category_leads).toBe(false);
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.category_leads).toBe(false);
+    expect(payload.category_system).toBe(true);
+    // Flipping a CATEGORY back on must not silently re-subscribe someone
+    // who hit "Unsubscribe from all" — only channel toggles do that.
+    expect(payload.unsubscribed_at).toBeUndefined();
   });
 
   it("updateNotificationPreferences clears unsubscribed_at when re-enabling the weekly digest", async () => {

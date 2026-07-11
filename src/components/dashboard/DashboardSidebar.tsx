@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { Sidebar } from "@/components/ui/Sidebar";
+import { SIDEBAR_ITEMS } from "@/lib/dashboard/sidebar-items";
+import type { SidebarLayoutItem } from "@/lib/dashboard/sidebar-prefs";
 import {
   LayoutDashboard,
   MessageSquare,
@@ -18,43 +20,39 @@ import {
   CreditCard,
   ArrowDownUp,
   BarChart3,
-  Globe
+  Globe,
+  type LucideIcon
 } from "lucide-react";
 
-const ownerNavItems = [
-  { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
-  // Standard/Enterprise perk — the page itself renders an upgrade card for
-  // Starter tenants, so the link stays visible as an upsell.
-  { label: "Analytics", href: "/dashboard/analytics", icon: BarChart3 },
-  { label: "Chat", href: "/dashboard/chat", icon: MessageSquare },
-  { label: "Calls", href: "/dashboard/calls", icon: Phone },
-  { label: "Texts", href: "/dashboard/messages", icon: MessageCircle },
-  // Website chat widget conversations (Standard+ perk — like Analytics, the
-  // page renders an upgrade card for Starter tenants, so the link stays
-  // visible as an upsell).
-  { label: "Web chat", href: "/dashboard/webchat", icon: Globe },
-  // AiFlow email activity (sends + trigger emails) from email_log — the
-  // email counterpart of the Texts/Calls history pages.
-  { label: "Emails", href: "/dashboard/emails", icon: Mail },
-  // Cross-channel customers view (Phase 4 of the customer memory plan):
-  // unified per-customer profile across SMS + voice. Sits between the
-  // channel-specific dashboards and the business-level Memory page so
-  // owners can find a person without remembering which channel they
-  // came in on.
-  { label: "Contacts", href: "/dashboard/customers", icon: Users },
-  // Team roster shared with AiFlow route_to_team: who leads rotate through,
-  // their schedules/preferred times, and time off (which supersedes routing).
-  { label: "Employees", href: "/dashboard/employees", icon: UserCog },
-  { label: "Memory", href: "/dashboard/memory", icon: Brain },
-  // CSV in/out for contacts + employees (modeled on BizBlasts /manage/csv):
-  // bring a directory over from another tool, or take a backup.
-  { label: "Import / Export", href: "/dashboard/import-export", icon: ArrowDownUp },
-  { label: "Integrations", href: "/dashboard/integrations", icon: Plug },
-  { label: "AiFlows", href: "/dashboard/aiflows", icon: Workflow },
-  { label: "Billing", href: "/dashboard/billing", icon: CreditCard },
-  { label: "Settings", href: "/dashboard/settings", icon: Settings },
-  { label: "Notifications", href: "/dashboard/notifications", icon: Bell }
-];
+/**
+ * Icons keyed by the catalog keys in src/lib/dashboard/sidebar-items.ts —
+ * labels/hrefs/ordering live there (shared with the per-user customization
+ * prefs); only the visual layer stays in this client component.
+ */
+const NAV_ICONS: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  analytics: BarChart3,
+  chat: MessageSquare,
+  calls: Phone,
+  messages: MessageCircle,
+  webchat: Globe,
+  emails: Mail,
+  customers: Users,
+  employees: UserCog,
+  memory: Brain,
+  "import-export": ArrowDownUp,
+  integrations: Plug,
+  aiflows: Workflow,
+  billing: CreditCard,
+  settings: Settings,
+  notifications: Bell
+};
+
+const defaultNavItems = SIDEBAR_ITEMS.map((item) => ({
+  label: item.label,
+  href: item.href,
+  icon: NAV_ICONS[item.key] ?? LayoutDashboard
+}));
 
 const POLL_INTERVAL_MS = 60_000;
 
@@ -123,18 +121,31 @@ function useUnreadNotificationCount(businessId: string | null): number {
 export function DashboardSidebar({
   userEmail,
   businessId,
-  brand
+  brand,
+  layout
 }: {
   userEmail?: string | null;
   businessId?: string | null;
   /** White-label branding (enterprise); null/undefined = platform branding. */
   brand?: import("@/components/ui/Sidebar").SidebarBrand | null;
+  /** Per-user layout (order + visibility); omitted = default catalog order. */
+  layout?: SidebarLayoutItem[] | null;
 }) {
   const unread = useUnreadNotificationCount(businessId ?? null);
 
+  const items = layout
+    ? layout
+        .filter((item) => item.visible)
+        .map((item) => ({
+          label: item.label,
+          href: item.href,
+          icon: NAV_ICONS[item.key] ?? LayoutDashboard
+        }))
+    : defaultNavItems;
+
   return (
     <Sidebar
-      items={ownerNavItems}
+      items={items}
       userEmail={userEmail}
       brand={brand}
       renderTrailing={(item) => {

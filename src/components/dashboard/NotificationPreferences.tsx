@@ -48,6 +48,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
   const [smsWarmTransfer, setSmsWarmTransfer] = useState(initial.sms_warm_transfer);
   const [imageLimitAlerts, setImageLimitAlerts] = useState(initial.image_limit_alerts);
+  const [categoryLeads, setCategoryLeads] = useState(initial.category_leads ?? true);
+  const [categoryTeam, setCategoryTeam] = useState(initial.category_team ?? true);
+  const [categorySystem, setCategorySystem] = useState(initial.category_system ?? true);
   const [phone, setPhone] = useState(initial.phone_number ?? "");
   const [alertEmail, setAlertEmail] = useState(initial.alert_email ?? "");
   const [digestEmailDaily, setDigestEmailDaily] = useState(initial.digest_email_daily ?? "");
@@ -66,6 +69,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setDashboardAlerts(initial.dashboard_alerts);
     setSmsWarmTransfer(initial.sms_warm_transfer);
     setImageLimitAlerts(initial.image_limit_alerts);
+    setCategoryLeads(initial.category_leads ?? true);
+    setCategoryTeam(initial.category_team ?? true);
+    setCategorySystem(initial.category_system ?? true);
     setPhone(initial.phone_number ?? "");
     setAlertEmail(initial.alert_email ?? "");
     setDigestEmailDaily(initial.digest_email_daily ?? "");
@@ -81,6 +87,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setDashboardAlerts(prefs.dashboard_alerts);
     setSmsWarmTransfer(prefs.sms_warm_transfer);
     setImageLimitAlerts(prefs.image_limit_alerts);
+    setCategoryLeads(prefs.category_leads ?? true);
+    setCategoryTeam(prefs.category_team ?? true);
+    setCategorySystem(prefs.category_system ?? true);
     setPhone(prefs.phone_number ?? "");
     setAlertEmail(prefs.alert_email ?? "");
     setDigestEmailDaily(prefs.digest_email_daily ?? "");
@@ -104,6 +113,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           dashboard_alerts: dashboardAlerts,
           sms_warm_transfer: smsWarmTransfer,
           image_limit_alerts: imageLimitAlerts,
+          category_leads: categoryLeads,
+          category_team: categoryTeam,
+          category_system: categorySystem,
           phone_number: phone.trim() || null,
           alert_email: alertEmail.trim() || "",
           digest_email_daily: digestEmailDaily.trim() || "",
@@ -220,6 +232,36 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Alert you when a coworker hits its image generation limit (3 per conversation)."
           checked={imageLimitAlerts}
           onChange={setImageLimitAlerts}
+          disabled={loading || unsubscribing}
+        />
+      </div>
+
+      <div className="space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-parchment">Alert categories</h3>
+          <p className="text-xs text-parchment/45">
+            Choose which kinds of events reach you. Generic urgent alerts always come through.
+          </p>
+        </div>
+        <ToggleRow
+          label="New leads"
+          description="When your coworker captures a new lead's contact details."
+          checked={categoryLeads}
+          onChange={setCategoryLeads}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Team activity"
+          description="When your coworker notifies or routes work to a team member."
+          checked={categoryTeam}
+          onChange={setCategoryTeam}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="System events"
+          description="Platform events like number-port progress."
+          checked={categorySystem}
+          onChange={setCategorySystem}
           disabled={loading || unsubscribing}
         />
       </div>

@@ -12,6 +12,7 @@ import {
   resolveActiveBusinessContext,
   type AccessibleBusiness
 } from "@/lib/dashboard/active-business";
+import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
 import { can } from "@/lib/authz/policy";
 import { effectiveBranding, type Branding } from "@/lib/plans/branding";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
@@ -122,12 +123,18 @@ export default async function DashboardLayout({ children }: { children: React.Re
     }
   }
 
+  // Per-user nav customization (order + visibility). Keyed to the SIGNED-IN
+  // user (not the tenant), so an admin in view-as sees their own layout.
+  // Degrades to the default catalog on any read hiccup inside the helper.
+  const sidebarLayout = await getSidebarLayout(user.userId);
+
   return (
     <div className="flex h-dvh bg-deep-ink">
       <DashboardSidebar
         userEmail={viewAs ? ownerEmail : user.email}
         businessId={businessId}
         brand={brand}
+        layout={sidebarLayout}
       />
       <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
         <BusinessSwitcher

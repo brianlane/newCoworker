@@ -8,6 +8,7 @@ import {
 } from "@/lib/voice-tools/common";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { logger } from "@/lib/logger";
 
 /**
@@ -62,6 +63,20 @@ export async function POST(request: Request) {
   }
 
   try {
+    // STOP-list gate (fail closed, matching the Edge send paths): a caller
+    // who previously texted STOP must not receive agent follow-ups either.
+    const optOut = await checkSmsOptOut(envelope.businessId, toPhone);
+    if (!optOut.ok) {
+      logger.error("voice-tools/sms: opt-out check failed; refusing (fail closed)", {
+        businessId: envelope.businessId,
+        error: optOut.error
+      });
+      return voiceToolResponse({ ok: false, detail: "opt_out_check_failed" });
+    }
+    if (optOut.optedOut) {
+      return voiceToolResponse({ ok: false, detail: "recipient_opted_out" });
+    }
+
     // Customer-facing follow-up: eligible tenants send RCS-first w/ SMS fallback.
     const config = await getTelnyxMessagingForBusiness(envelope.businessId, undefined, {
       resolveRcs: true
