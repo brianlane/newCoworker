@@ -51,10 +51,12 @@ import {
   getSnapshotSeries,
   type SnapshotSeriesPoint
 } from "@/lib/analytics/snapshots";
+import { getFlowFunnels } from "@/lib/analytics/flow-funnels";
 import {
   AnswerRateCard,
   DailyVolumeCard,
   DayDetailCard,
+  FlowFunnelCard,
   PeakHoursCard,
   SegmentDetailCard,
   SentimentMixCard,
@@ -190,7 +192,7 @@ export default async function DashboardAnalyticsPage(props: {
   // Every fetcher shares the page's `now` so the cards, the drill-down
   // clamps, and the chart highlights all describe the same window even if
   // UTC midnight passes mid-request.
-  const [usage, answerRate, callStats, snapshotSeries, dayDetail, sentimentDetail, hourDetail] =
+  const [usage, answerRate, callStats, snapshotSeries, flowFunnels, dayDetail, sentimentDetail, hourDetail] =
     await Promise.all([
       getDailyUsageSeries(business.id, { client: db, now }).catch(() => null),
       getAnswerRateStats(business.id, { client: db, now }).catch(() => null),
@@ -198,6 +200,8 @@ export default async function DashboardAnalyticsPage(props: {
       // Long-window trend from the nightly snapshots (survives retention
       // pruning); a blip or an empty table just hides the trend card.
       getSnapshotSeries(business.id, 84, { client: db, now }).catch(() => null),
+      // Per-flow funnel; a blip hides the card.
+      getFlowFunnels(business.id, { client: db, now }).catch(() => null),
       selectedDay
         ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
         : Promise.resolve(null),
@@ -376,6 +380,25 @@ export default async function DashboardAnalyticsPage(props: {
       {showTrend && (
         <TrendForecastCard weeks={trendWeeks} calls={callForecast} texts={textForecast} />
       )}
+
+      {flowFunnels && flowFunnels.length > 0 && <FlowFunnelCard rows={flowFunnels} />}
+
+      <p className="text-xs text-parchment/40">
+        Export CSV:{" "}
+        <a
+          href={`/api/dashboard/analytics/export?businessId=${business.id}&kind=daily`}
+          className="text-signal-teal hover:underline"
+        >
+          daily volume
+        </a>
+        {" · "}
+        <a
+          href={`/api/dashboard/analytics/export?businessId=${business.id}&kind=flows`}
+          className="text-signal-teal hover:underline"
+        >
+          flow performance
+        </a>
+      </p>
 
       {callStats && (
         <PeakHoursCard

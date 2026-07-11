@@ -487,6 +487,75 @@ export function TrendForecastCard({
   );
 }
 
+export type FlowFunnelView = {
+  flowId: string;
+  flowName: string;
+  enabled: boolean;
+  runs: number;
+  textsSent: number;
+  linksClicked: number;
+  linkClicks: number;
+  goalsReached: number;
+};
+
+/**
+ * Per-flow conversion funnel (runs → texts → link clicks → goals reached) —
+ * the BizBlasts campaign-performance concept on AiFlow data. Row links to
+ * the flow's editor; the runs page holds the per-run detail.
+ */
+export function FlowFunnelCard({ rows }: { rows: FlowFunnelView[] }) {
+  return (
+    <Card>
+      <div className="flex items-baseline justify-between gap-3">
+        <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+          Flow performance (30 days)
+        </p>
+        <Link
+          href="/dashboard/aiflows/runs"
+          className="text-[11px] text-signal-teal hover:underline whitespace-nowrap"
+        >
+          All runs →
+        </Link>
+      </div>
+      <div className="mt-3 space-y-2">
+        <div className="grid grid-cols-5 gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
+          <span>Flow</span>
+          <span className="text-right">Runs</span>
+          <span className="text-right">Texts</span>
+          <span className="text-right">Link clicks</span>
+          <span className="text-right">Goals</span>
+        </div>
+        {rows.map((row) => (
+          <div key={row.flowId} className="grid grid-cols-5 gap-2 text-sm items-baseline">
+            <Link
+              href={`/dashboard/aiflows/${row.flowId}`}
+              className="text-parchment/85 hover:text-parchment hover:underline truncate"
+            >
+              {row.flowName}
+              {row.enabled ? "" : <span className="text-parchment/35"> (off)</span>}
+            </Link>
+            <span className="text-right text-parchment/70">{row.runs.toLocaleString()}</span>
+            <span className="text-right text-parchment/70">{row.textsSent.toLocaleString()}</span>
+            <span className="text-right text-parchment/70">
+              {row.linkClicks.toLocaleString()}
+              {row.linksClicked > 0 ? (
+                <span className="text-parchment/40"> ({row.linksClicked} links)</span>
+              ) : null}
+            </span>
+            <span className="text-right text-parchment/70">
+              {row.goalsReached.toLocaleString()}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[10px] text-parchment/35 mt-3">
+        Link clicks count tracked short links in flow texts; goals count runs an external
+        milestone (reply, booking, claim, tag) fast-forwarded to a goal step.
+      </p>
+    </Card>
+  );
+}
+
 export function AnswerRateCard({
   answered,
   missed,
