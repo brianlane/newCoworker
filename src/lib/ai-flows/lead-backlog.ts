@@ -212,15 +212,17 @@ export async function importLeadBacklog(
     try {
       if (options.flowId) {
         // Targeted mode: enqueue the chosen flow directly. Same scope shape
-        // and dedupe key as the webhook path, so switching modes (or later
-        // adding a webhook trigger) never re-fires an already-imported lead
-        // into the same flow.
+        // and dedupe key as the webhook path — the key goes through
+        // webhookEventKey (trim + 180-char cap) exactly like
+        // processWebhookFlowEvent does — so switching modes (or later adding
+        // a webhook trigger) never re-fires an already-imported lead into
+        // the same flow.
         const run = await enqueueAiFlowRun(
           {
             businessId,
             flowId: options.flowId,
             trigger: webhookTriggerScope({ source, data, eventId }),
-            dedupeKey: `webhook:${eventId}`,
+            dedupeKey: `webhook:${webhookEventKey({ source, data, eventId })}`,
             ...(earliestClaimAt ? { earliestClaimAt } : {})
           },
           db

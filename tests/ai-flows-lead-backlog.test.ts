@@ -8,8 +8,12 @@ vi.mock("@/lib/supabase/server", () => ({
 const processWebhookFlowEvent = vi.fn();
 vi.mock("@/lib/ai-flows/webhook-events", () => ({
   processWebhookFlowEvent: (...a: unknown[]) => processWebhookFlowEvent(...a),
-  // Deterministic stand-in for the real sha256 payload digest.
-  webhookEventKey: (e: { data: unknown }) => `digest(${JSON.stringify(e.data)})`
+  // Faithful stand-in for the real key: explicit event id (trimmed, capped)
+  // wins; otherwise a deterministic payload digest.
+  webhookEventKey: (e: { data: unknown; eventId?: string }) =>
+    e.eventId && e.eventId.trim()
+      ? e.eventId.trim().slice(0, 180)
+      : `digest(${JSON.stringify(e.data)})`
 }));
 
 const recordSystemLog = vi.fn();
@@ -368,6 +372,18 @@ describe("importLeadBacklog", () => {
       }),
       DB
     );
+  });
+
+  it("targeted mode normalizes the dedupe key exactly like the webhook path (180-char cap)", async () => {
+    const longId = "x".repeat(300);
+    await importLeadBacklog(
+      "biz-1",
+      [{ lead_id: longId, name: "a" }],
+      { flowId: "flow-target" },
+      DB as never
+    );
+    const key = (enqueueAiFlowRun.mock.calls[0][0] as { dedupeKey: string }).dedupeKey;
+    expect(key).toBe(`webhook:${`backlog_import:${longId}`.slice(0, 180)}`);
   });
 
   it("targeted mode reports a throwing enqueue as a row error and continues", async () => {
