@@ -266,11 +266,18 @@ describe("runSnapshotSweep", () => {
 
   it("stringifies non-Error tenant failures", async () => {
     vi.mocked(listBusinesses).mockResolvedValue([{ id: "b1" }] as never);
-    const throwing = {
-      from: vi.fn(() => {
-        throw "string failure";
-      })
-    } as never;
+    // Reject through the AWAITED chain (never throw synchronously from
+    // `from()`): a sync throw during Promise.all argument construction would
+    // strand the already-started sibling reads as unhandled rejections.
+    const rejectingChain: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "neq", "gte", "lt", "order", "limit", "maybeSingle"]) {
+      rejectingChain[m] = vi.fn(() => rejectingChain);
+    }
+    (rejectingChain as { then: unknown }).then = (
+      _onF: unknown,
+      onR: (e: unknown) => unknown
+    ) => Promise.reject("string failure").then(undefined, onR);
+    const throwing = { from: vi.fn(() => rejectingChain) } as never;
     const result = await runSnapshotSweep({ client: throwing, now: NOW });
     expect(result.errors).toEqual([{ businessId: "b1", message: "string failure" }]);
   });
