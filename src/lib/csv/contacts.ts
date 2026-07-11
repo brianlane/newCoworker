@@ -266,11 +266,15 @@ export async function importContactsCsv(
       // guards: exactly one email match, both sides classified customer (a
       // row that re-types the contact is a signal they are NOT the same
       // person). Race-free by construction: the number is inserted as a
-      // normal row FIRST (the primary-key conflict arbitrates any concurrent
-      // inbound auto-create), then folded into the matched profile with the
-      // battle-tested merge_customer_memories RPC — which locks both rows,
-      // records the number in alias_e164s, and deletes the temp row — so the
-      // same E.164 can never end up primary on one row AND alias on another.
+      // BARE row FIRST (the primary-key conflict arbitrates any concurrent
+      // inbound auto-create, and a bare row means the merge can't
+      // double-apply CSV content), then the CSV cells land on the SURVIVOR,
+      // and only then the battle-tested merge_customer_memories RPC folds
+      // the temp row in — locking both rows, recording the number in
+      // alias_e164s, and deleting the temp row. Ordering matters: every
+      // failure before the merge aborts cleanly (the bare temp row is a
+      // harmless standalone contact a re-import updates), so there is no
+      // half-merged state the summary can't describe.
       const tryEmailFold = async (): Promise<
         "no_match" | "raced" | "folded" | "created_unfolded"
       > => {
@@ -290,25 +294,34 @@ export async function importContactsCsv(
         }>;
         if (rows.length !== 1 || rows[0].type !== "customer") return "no_match";
 
-        const { error: insErr } = await insertRow();
+        const { error: insErr } = await db.from("contacts").insert({
+          business_id: businessId,
+          customer_e164: phone
+        });
         if (insErr) {
           if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
           return "raced";
         }
+        // CSV cells are deliberate owner edits — apply to the survivor
+        // BEFORE the merge so a patch failure aborts the fold cleanly.
+        const { error: patchErr } = await db.from("contacts").update(patch).eq("id", rows[0].id);
+        if (patchErr) throw new Error(patchErr.message);
         const { error: mergeErr } = await db.rpc("merge_customer_memories", {
           p_business_id: businessId,
           p_from_e164: phone,
           p_into_e164: rows[0].customer_e164
         });
         if (mergeErr) {
-          // The fold target changed under us (deleted/merged mid-import).
-          // The inserted row is a perfectly good standalone contact — keep it.
+          // The fold target changed under us (deleted/merged mid-import) —
+          // promote the bare temp row to a full standalone contact instead.
+          const { error: promoteErr } = await db
+            .from("contacts")
+            .update(patch)
+            .eq("business_id", businessId)
+            .eq("customer_e164", phone);
+          if (promoteErr) throw new Error(promoteErr.message);
           return "created_unfolded";
         }
-        // The CSV cells are deliberate owner edits: apply them to the
-        // surviving profile (plain update by id — no race surface).
-        const { error: patchErr } = await db.from("contacts").update(patch).eq("id", rows[0].id);
-        if (patchErr) throw new Error(patchErr.message);
         return "folded";
       };
 

@@ -270,9 +270,9 @@ describe("importContactsCsv", () => {
     const { db, log, rpcCalls } = makeDb([
       { data: null, error: null }, // phone lookup: nothing
       ONE_MATCH, // email scan: exactly one customer match
-      { data: null, error: null }, // temp-row insert ok
-      { data: null, error: null }, // merge rpc ok
-      { data: null, error: null } // survivor patch ok
+      { data: null, error: null }, // bare temp-row insert ok
+      { data: null, error: null }, // survivor patch ok
+      { data: null, error: null } // merge rpc ok
     ]);
     const summary = await importContactsCsv(
       BIZ,
@@ -287,11 +287,21 @@ describe("importContactsCsv", () => {
       "jo\\_hn@example.com"
     ]);
     expect(log[1].calls.find((c) => c.name === "limit")?.args).toEqual([2]);
-    // Race-free fold: insert the number as a real row, then the merge RPC
-    // locks both rows, records it in alias_e164s, and deletes the temp row.
-    expect(log[2].calls.find((c) => c.name === "insert")?.args[0]).toMatchObject({
+    // Race-free fold: the number lands as a BARE row (PK arbitrates
+    // concurrent auto-creates; no CSV content for the merge to double-apply).
+    expect(log[2].calls.find((c) => c.name === "insert")?.args[0]).toEqual({
+      business_id: BIZ,
       customer_e164: "+16025551234"
     });
+    // CSV cells land on the SURVIVOR before the merge…
+    const patchUpdate = log[3].calls.find((c) => c.name === "update");
+    expect(patchUpdate?.args[0]).toMatchObject({
+      display_name: "Jane Doe",
+      name_source: "manual",
+      email: "jo_hn@example.com"
+    });
+    expect(log[3].calls.find((c) => c.name === "eq")?.args).toEqual(["id", "match-1"]);
+    // …then the merge RPC records the alias and deletes the temp row.
     expect(rpcCalls).toEqual([
       {
         fn: "merge_customer_memories",
@@ -302,14 +312,6 @@ describe("importContactsCsv", () => {
         }
       }
     ]);
-    // The CSV cells then land on the SURVIVOR (deliberate owner edits).
-    const patchUpdate = log[3].calls.find((c) => c.name === "update");
-    expect(patchUpdate?.args[0]).toMatchObject({
-      display_name: "Jane Doe",
-      name_source: "manual",
-      email: "jo_hn@example.com"
-    });
-    expect(log[3].calls.find((c) => c.name === "eq")?.args).toEqual(["id", "match-1"]);
     // The number was absorbed, not created: no contact_created event.
     expect(fireContactEvent).not.toHaveBeenCalled();
   });
@@ -340,17 +342,37 @@ describe("importContactsCsv", () => {
   });
 
   it("keeps the row as a standalone create when the merge RPC fails mid-fold", async () => {
-    const { db } = makeDb([
+    const { db, log } = makeDb([
       { data: null, error: null },
       ONE_MATCH,
-      { data: null, error: null }, // insert ok
-      { data: null, error: { message: "target vanished" } } // merge fails
+      { data: null, error: null }, // bare insert ok
+      { data: null, error: null }, // survivor patch ok
+      { data: null, error: { message: "target vanished" } }, // merge fails
+      { data: null, error: null } // temp-row promotion ok
     ]);
     const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
     expect(summary).toMatchObject({ created: 1, updated: 0, skipped: 0 });
     expect(summary.errors).toEqual([]);
+    // The bare temp row is promoted to a full contact with the CSV fields.
+    const promote = log[4].calls.find((c) => c.name === "update");
+    expect(promote?.args[0]).toMatchObject({ email: "a@b.co" });
+    expect(log[4].calls.map((c) => c.name)).toContain("eq");
     // It IS a creation in this outcome — the trigger hook fires.
     expect(fireContactEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces a promotion error after a failed merge", async () => {
+    const { db } = makeDb([
+      { data: null, error: null },
+      ONE_MATCH,
+      { data: null, error: null }, // bare insert ok
+      { data: null, error: null }, // survivor patch ok
+      { data: null, error: { message: "target vanished" } }, // merge fails
+      { data: null, error: { message: "promote down" } } // promotion fails
+    ]);
+    const summary = await importContactsCsv(BIZ, "phone,email\n+16025551234,a@b.co", db);
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(summary.errors).toEqual([{ row: 2, message: "promote down" }]);
   });
 
   it("surfaces a hard insert error inside the fold", async () => {
@@ -416,9 +438,8 @@ describe("importContactsCsv", () => {
       { data: null, error: { message: "scan down" } }, // row 1 fold scan fails
       { data: null, error: null }, // row 2 lookup
       ONE_MATCH,
-      { data: null, error: null }, // row 2 temp insert ok
-      { data: null, error: null }, // row 2 merge ok
-      { data: null, error: { message: "patch down" } } // row 2 survivor patch fails
+      { data: null, error: null }, // row 2 bare temp insert ok
+      { data: null, error: { message: "patch down" } } // row 2 survivor patch fails (pre-merge)
     ]);
     const summary = await importContactsCsv(
       BIZ,
