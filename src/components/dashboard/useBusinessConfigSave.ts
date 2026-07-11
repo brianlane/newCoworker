@@ -73,7 +73,12 @@ export function useUnsavedChangesWarning(dirty: boolean): void {
     const onClickCapture = (e: MouseEvent) => {
       if (e.defaultPrevented || e.button !== 0) return;
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      const anchor = (e.target as Element | null)?.closest?.("a[href]");
+      // The click target can be a Text node (bare link labels), which has no
+      // closest() — climb to its parent element first or the guard silently
+      // lets the navigation through.
+      const node = e.target as Node | null;
+      const el = node instanceof Element ? node : (node?.parentElement ?? null);
+      const anchor = el?.closest("a[href]");
       if (!anchor) return;
       const target = anchor.getAttribute("target");
       if (target && target !== "_self") return;
