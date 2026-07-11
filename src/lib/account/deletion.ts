@@ -8,7 +8,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
-import type { SubscriptionRow } from "@/lib/db/subscriptions";
+import { isCanceledInGrace, type SubscriptionRow } from "@/lib/db/subscriptions";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -96,16 +96,23 @@ export async function getAccountDeletionImpact(
 
 export type AccountDeletionEligibility =
   | { eligible: true }
-  | { eligible: false; reason: "active_subscription" | "past_due_subscription" };
+  | {
+      eligible: false;
+      reason: "active_subscription" | "past_due_subscription" | "canceled_in_grace";
+    };
 
 /**
  * A paying (or payment-owing) tenant must go through the cancellation
  * lifecycle first — it owns Stripe teardown, the data backup, and the grace
- * window. Never-paid accounts (no row / pending) and already-canceled
- * accounts may hard-delete.
+ * window. A canceled subscription still inside its retention grace window is
+ * ALSO refused: the grace sweep owns the eventual wipe, and a hard delete
+ * here would skip the backup/reactivation guarantees the owner was promised
+ * at cancel time. Eligible: no row, pending (never paid), or canceled with
+ * the grace window over (or already wiped).
  */
 export function resolveAccountDeletionEligibility(
-  subscription: Pick<SubscriptionRow, "status"> | null
+  subscription: Pick<SubscriptionRow, "status" | "grace_ends_at" | "wiped_at"> | null,
+  now: Date = new Date()
 ): AccountDeletionEligibility {
   if (!subscription) return { eligible: true };
   if (subscription.status === "active") {
@@ -113,6 +120,9 @@ export function resolveAccountDeletionEligibility(
   }
   if (subscription.status === "past_due") {
     return { eligible: false, reason: "past_due_subscription" };
+  }
+  if (isCanceledInGrace(subscription, now)) {
+    return { eligible: false, reason: "canceled_in_grace" };
   }
   return { eligible: true };
 }

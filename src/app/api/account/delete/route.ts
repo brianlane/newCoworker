@@ -144,12 +144,12 @@ export async function DELETE(request: Request) {
       }
     }
 
-    // Does the owner keep other businesses? Case-insensitive owner match via
-    // listAccessibleBusinesses (owner_email is not lowercased by schema; an
-    // exact-case eq here could miss owned rows and delete the login while a
-    // business still exists under a differently-cased email).
-    const otherOwned = (await listAccessibleBusinesses(user, db)).filter(
-      (b) => b.role === "owner" && b.businessId !== businessId
+    // Does this login keep access to ANY other business — owned (matched
+    // case-insensitively; owner_email is not lowercased by schema) or via a
+    // business_members role? If so the auth user must survive: deleting it
+    // would kick a manager/staff member out of every other tenant too.
+    const otherAccessible = (await listAccessibleBusinesses(user, db)).filter(
+      (b) => b.businessId !== businessId
     );
 
     // Delete the business row FIRST, then the auth user. If the auth delete
@@ -160,7 +160,7 @@ export async function DELETE(request: Request) {
     await deleteBusiness(businessId, db);
 
     let authUserDeleted = false;
-    if (otherOwned.length === 0) {
+    if (otherAccessible.length === 0) {
       try {
         const { error } = await db.auth.admin.deleteUser(user.userId);
         if (!error || /not found|does not exist/i.test(error.message ?? "")) {
@@ -185,7 +185,7 @@ export async function DELETE(request: Request) {
       businessId,
       ownerEmail: user.email,
       authUserDeleted,
-      remainingBusinesses: otherOwned.length
+      remainingBusinesses: otherAccessible.length
     });
 
     return successResponse({ deleted: true, authUserDeleted });

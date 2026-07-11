@@ -22,7 +22,22 @@ type Impact = {
 
 type Eligibility =
   | { eligible: true }
-  | { eligible: false; reason: "active_subscription" | "past_due_subscription" };
+  | {
+      eligible: false;
+      reason: "active_subscription" | "past_due_subscription" | "canceled_in_grace";
+    };
+
+const BLOCKED_COPY: Record<
+  "active_subscription" | "past_due_subscription" | "canceled_in_grace",
+  string
+> = {
+  active_subscription:
+    "You have an active subscription. Cancel it first — cancellation takes a data backup and handles billing properly.",
+  past_due_subscription:
+    "Your subscription has a past-due balance. Settle or cancel it in Billing first — deletion is available once billing is resolved.",
+  canceled_in_grace:
+    "Your cancellation is still in its data-retention grace window. Your data (and the option to reactivate) is kept until the window ends, then everything is wiped automatically — no further action needed."
+};
 
 const CONFIRM_PHRASE = "DELETE";
 
@@ -138,15 +153,17 @@ export function DeleteAccountCard() {
           {blocked ? (
             <div className="text-xs text-parchment/60 space-y-2">
               <p>
-                {eligibility !== null &&
-                !eligibility.eligible &&
-                eligibility.reason === "past_due_subscription"
-                  ? "Your subscription has a past-due balance. Settle or cancel it in Billing first — deletion is available once billing is resolved."
-                  : "You have an active subscription. Cancel it first — cancellation takes a data backup and handles billing properly."}
+                {eligibility !== null && !eligibility.eligible
+                  ? BLOCKED_COPY[eligibility.reason]
+                  : null}
               </p>
-              <a href="/dashboard/billing" className="text-signal-teal hover:underline">
-                Go to Billing →
-              </a>
+              {eligibility !== null &&
+                !eligibility.eligible &&
+                eligibility.reason !== "canceled_in_grace" && (
+                  <a href="/dashboard/billing" className="text-signal-teal hover:underline">
+                    Go to Billing →
+                  </a>
+                )}
             </div>
           ) : (
             <div className="space-y-3">

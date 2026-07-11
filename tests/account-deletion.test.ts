@@ -141,27 +141,72 @@ describe("getAccountDeletionImpact", () => {
 });
 
 describe("resolveAccountDeletionEligibility", () => {
+  const NOW = new Date("2026-07-10T00:00:00Z");
+  const base = { grace_ends_at: null, wiped_at: null };
+
   it("allows deletion when there is no subscription row (never paid)", () => {
     expect(resolveAccountDeletionEligibility(null)).toEqual({ eligible: true });
   });
 
-  it("allows deletion for pending and canceled subscriptions", () => {
-    expect(resolveAccountDeletionEligibility({ status: "pending" })).toEqual({ eligible: true });
-    expect(resolveAccountDeletionEligibility({ status: "canceled" })).toEqual({ eligible: true });
+  it("allows deletion for pending and fully-canceled subscriptions", () => {
+    expect(resolveAccountDeletionEligibility({ status: "pending", ...base }, NOW)).toEqual({
+      eligible: true
+    });
+    expect(resolveAccountDeletionEligibility({ status: "canceled", ...base }, NOW)).toEqual({
+      eligible: true
+    });
   });
 
   it("refuses active subscriptions (cancellation lifecycle owns teardown)", () => {
-    expect(resolveAccountDeletionEligibility({ status: "active" })).toEqual({
+    expect(resolveAccountDeletionEligibility({ status: "active", ...base }, NOW)).toEqual({
       eligible: false,
       reason: "active_subscription"
     });
   });
 
   it("refuses past_due subscriptions (billing must resolve first)", () => {
-    expect(resolveAccountDeletionEligibility({ status: "past_due" })).toEqual({
+    expect(resolveAccountDeletionEligibility({ status: "past_due", ...base }, NOW)).toEqual({
       eligible: false,
       reason: "past_due_subscription"
     });
+  });
+
+  it("refuses canceled subscriptions still inside the retention grace window", () => {
+    expect(
+      resolveAccountDeletionEligibility(
+        { status: "canceled", grace_ends_at: "2026-07-20T00:00:00Z", wiped_at: null },
+        NOW
+      )
+    ).toEqual({ eligible: false, reason: "canceled_in_grace" });
+  });
+
+  it("allows deletion once the grace window has elapsed or the wipe already ran", () => {
+    expect(
+      resolveAccountDeletionEligibility(
+        { status: "canceled", grace_ends_at: "2026-07-01T00:00:00Z", wiped_at: null },
+        NOW
+      )
+    ).toEqual({ eligible: true });
+    expect(
+      resolveAccountDeletionEligibility(
+        {
+          status: "canceled",
+          grace_ends_at: "2026-07-20T00:00:00Z",
+          wiped_at: "2026-07-05T00:00:00Z"
+        },
+        NOW
+      )
+    ).toEqual({ eligible: true });
+  });
+
+  it("defaults `now` to the wallclock when omitted", () => {
+    expect(
+      resolveAccountDeletionEligibility({
+        status: "canceled",
+        grace_ends_at: "2999-01-01T00:00:00Z",
+        wiped_at: null
+      })
+    ).toEqual({ eligible: false, reason: "canceled_in_grace" });
   });
 });
 
