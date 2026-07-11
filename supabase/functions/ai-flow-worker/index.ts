@@ -82,7 +82,7 @@ import {
   timeWindowDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
-import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
+import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   capMicrosForTier,
@@ -921,8 +921,14 @@ async function runStep(
   // Per-step `when` guard: skip (don't run) when the condition is unmet. This is
   // how a flow branches — e.g. a buyer vs. seller send_sms, only one of which
   // fires. Evaluated before recording "running" so a skipped step is never shown
-  // as having started.
-  if (step.when && !evaluateStepCondition(step.when, scope)) {
+  // as having started. EXCEPTION: a goal step the run JUMPED to (its
+  // `__goal_<id>` var is stamped) ignores its guard — the milestone already
+  // fired, and letting a stale condition skip the checkpoint would resume the
+  // very follow-ups the jump exists to stop.
+  const jumpedToGoal =
+    step.type === "goal" && typeof scope.vars[goalReachedVar(step.id)] === "string" &&
+    scope.vars[goalReachedVar(step.id)] !== "";
+  if (step.when && !jumpedToGoal && !evaluateStepCondition(step.when, scope)) {
     return { kind: "ok", skipped: true, result: { skipped: "when_unmet", when: step.when } };
   }
   // Flow-level time window (definition.timeWindow): a communication step

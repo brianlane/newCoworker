@@ -217,6 +217,21 @@ export async function GET(request: Request) {
         if (!contactsByPhone.has(c.customer_e164)) contactsByPhone.set(c.customer_e164, c);
       }
     }
+    // A lead can be in motion with NO contact row yet (the flow hasn't filed
+    // them, or the profile is keyed on a merged-away number). Their runs must
+    // still get a card — synthesize a bare contact so the workflow position
+    // shows even before the CRM entry exists.
+    for (const [phone, leadRuns] of runsByLead) {
+      if (contactsByPhone.has(phone)) continue;
+      contactsByPhone.set(phone, {
+        customer_e164: phone,
+        display_name: null,
+        summary_md: null,
+        tags: [],
+        owner_employee_id: null,
+        updated_at: leadRuns[0]?.updated_at ?? new Date().toISOString()
+      });
+    }
 
     // 4) Roster names for owner badges.
     const { data: memberData } = await db
