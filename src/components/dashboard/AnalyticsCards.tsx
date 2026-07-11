@@ -108,7 +108,7 @@ export function PeriodDeltaLine({ change }: { change: PeriodChange }) {
       ? `${Math.abs(change.percent)}%`
       : change.direction === "flat"
         ? "no change"
-        : `from ${change.previous.toLocaleString()}`;
+        : `${change.current.toLocaleString()} from ${change.previous.toLocaleString()}`;
   return (
     <p className={`text-[11px] mt-1 ${tone}`}>
       {arrow} {body} <span className="text-parchment/35">vs prior 30 days</span>

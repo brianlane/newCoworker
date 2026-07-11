@@ -208,6 +208,14 @@ export default async function DashboardAnalyticsPage(props: {
     ]);
   const segmentDetail = sentimentDetail ?? hourDetail;
 
+  // Deltas only when NEITHER window's transcript scan hit its row cap — a
+  // capped scan undercounts, so a percentage against it would be wrong, not
+  // merely incomplete (the answer-rate card suppresses for the same reason).
+  const comparablePeriod =
+    previousPeriod && !previousPeriod.clipped && usage && !usage.clipped
+      ? previousPeriod
+      : null;
+
   // Name known callers (owner / roster / manual overrides) across every
   // drill-down list, mirroring the call-history page. One lookup covers the
   // day's calls + texts and the sentiment/hour segment.
@@ -258,8 +266,8 @@ export default async function DashboardAnalyticsPage(props: {
               dayHref={(date) => `/dashboard/analytics?day=${date}#day-detail`}
               selectedDate={selectedDay}
               change={
-                previousPeriod
-                  ? computePeriodChange(usage.totals.calls, previousPeriod.calls)
+                comparablePeriod
+                  ? computePeriodChange(usage.totals.calls, comparablePeriod.calls)
                   : null
               }
             />
@@ -273,8 +281,8 @@ export default async function DashboardAnalyticsPage(props: {
               dayHref={(date) => `/dashboard/analytics?day=${date}#day-detail`}
               selectedDate={selectedDay}
               change={
-                previousPeriod
-                  ? computePeriodChange(usage.totals.sms, previousPeriod.sms)
+                comparablePeriod
+                  ? computePeriodChange(usage.totals.sms, comparablePeriod.sms)
                   : null
               }
             />
@@ -288,8 +296,8 @@ export default async function DashboardAnalyticsPage(props: {
               dayHref={(date) => `/dashboard/analytics?day=${date}#day-detail`}
               selectedDate={selectedDay}
               change={
-                previousPeriod
-                  ? computePeriodChange(usage.totals.voiceMinutes, previousPeriod.voiceMinutes)
+                comparablePeriod
+                  ? computePeriodChange(usage.totals.voiceMinutes, comparablePeriod.voiceMinutes)
                   : null
               }
             />
