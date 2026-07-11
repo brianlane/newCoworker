@@ -36,8 +36,9 @@ export default async function ImportLeadsPage() {
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">Import leads</h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Upload an Excel or CSV backlog of leads and run each row through your
-            webhook-triggered AiFlows — the same way a live Zapier/Make lead arrives.
+            Upload an Excel or CSV backlog of leads and run an AiFlow on each row — pick
+            one flow, or let rows trigger-match your webhook-triggered flows the same way
+            a live Zapier/Make lead arrives.
           </p>
         </div>
         <Link
