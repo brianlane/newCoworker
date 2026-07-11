@@ -512,6 +512,35 @@ describe("analyzeWebsiteSeo", () => {
     }
   });
 
+  it("fails structured when the body read itself dies (Error and non-Error)", async () => {
+    for (const thrown of [new Error("aborted mid-body"), "stream reset"]) {
+      const res = {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        body: {
+          getReader: () => ({
+            read: async () => {
+              throw thrown;
+            },
+            cancel: async () => {}
+          })
+        }
+      } as unknown as Response;
+      const impl = vi.fn(async () => res) as unknown as typeof fetch;
+      expect(
+        await analyzeWebsiteSeo("https://x.example.com", {
+          fetchImpl: impl,
+          lookup: PUBLIC_LOOKUP
+        })
+      ).toMatchObject({
+        ok: false,
+        error: "fetch_failed",
+        detail: thrown instanceof Error ? thrown.message : String(thrown)
+      });
+    }
+  });
+
   it("maps HTTP errors, network throws, and empty bodies", async () => {
     const { impl } = fetchSequence([response(503, "down")]);
     expect(

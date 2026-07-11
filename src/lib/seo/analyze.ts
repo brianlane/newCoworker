@@ -279,6 +279,24 @@ async function fetchHomepage(
   fetchImpl: typeof fetch,
   lookup?: DnsLookup
 ): Promise<{ html: string; finalUrl: string } | SeoAnalyzeFailure> {
+  // ONE budget for the whole audit fetch — every redirect hop AND the body
+  // read share it, so chained redirects or a trickling body can't stretch
+  // the wall-clock cost past the cap.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), SEO_FETCH_TIMEOUT_MS);
+  try {
+    return await fetchHomepageHops(startUrl, fetchImpl, controller.signal, lookup);
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function fetchHomepageHops(
+  startUrl: string,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+  lookup?: DnsLookup
+): Promise<{ html: string; finalUrl: string } | SeoAnalyzeFailure> {
   let current = startUrl;
   for (let hop = 0; hop <= SEO_MAX_REDIRECTS; hop += 1) {
     const parsed = new URL(current);
@@ -294,13 +312,11 @@ async function fetchHomepage(
         detail: message
       };
     }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), SEO_FETCH_TIMEOUT_MS);
     let res: Response;
     try {
       res = await fetchImpl(current, {
         redirect: "manual",
-        signal: controller.signal,
+        signal,
         headers: { "User-Agent": "newcoworker-bot/1.0 (seo-insights)" }
       });
     } catch (err) {
@@ -309,8 +325,6 @@ async function fetchHomepage(
         error: "fetch_failed",
         detail: err instanceof Error ? err.message : String(err)
       };
-    } finally {
-      clearTimeout(timeout);
     }
     if (res.status >= 300 && res.status < 400) {
       // Drain/cancel the redirect body so chained hops don't pin
@@ -357,7 +371,18 @@ async function fetchHomepage(
         };
       }
     }
-    const html = await readBodyBounded(res);
+    // The shared abort budget also covers the body read: a trickling body
+    // rejects the reader mid-stream, which must fail structured.
+    let html: string;
+    try {
+      html = await readBodyBounded(res);
+    } catch (err) {
+      return {
+        ok: false,
+        error: "fetch_failed",
+        detail: err instanceof Error ? err.message : String(err)
+      };
+    }
     return { html, finalUrl: landedUrl };
   }
   /* c8 ignore next 2 -- unreachable: the loop always returns */
