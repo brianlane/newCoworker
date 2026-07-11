@@ -178,9 +178,13 @@ export async function GET(request: Request) {
 
     // 3) Contacts: everyone with an active run, plus (scope-dependent) every
     //    tagged contact — a lead can be mid-lifecycle with no queued run.
+    //    Alias-aware: a run's lead phone may be a merged-away number whose
+    //    surviving contact row is keyed on a different primary — those runs
+    //    are re-keyed onto the primary so one lead is always ONE card.
     const phones = [...runsByLead.keys()];
     type ContactRow = {
       customer_e164: string;
+      alias_e164s: string[] | null;
       display_name: string | null;
       summary_md: string | null;
       tags: string[] | null;
@@ -189,16 +193,34 @@ export async function GET(request: Request) {
     };
     const contactsByPhone = new Map<string, ContactRow>();
     const CONTACT_COLUMNS =
-      "customer_e164, display_name, summary_md, tags, owner_employee_id, updated_at";
+      "customer_e164, alias_e164s, display_name, summary_md, tags, owner_employee_id, updated_at";
     if (phones.length > 0) {
+      // E.164 values are strictly `+digits`, so they are safe inside the
+      // PostgREST filter string. `ov` = array overlap on alias_e164s.
+      const list = phones.join(",");
       const { data, error } = await db
         .from("contacts")
         .select(CONTACT_COLUMNS)
         .eq("business_id", businessId)
-        .in("customer_e164", phones);
+        .or(`customer_e164.in.(${list}),alias_e164s.ov.{${list}}`);
       if (error) throw new Error(`tasks: contacts: ${error.message}`);
+      const aliasToPrimary = new Map<string, string>();
       for (const c of (data ?? []) as ContactRow[]) {
         contactsByPhone.set(c.customer_e164, c);
+        for (const alias of c.alias_e164s ?? []) {
+          aliasToPrimary.set(alias, c.customer_e164);
+        }
+      }
+      // Re-key runs grouped under an alias onto the surviving primary,
+      // newest-first so the "collected info" facet reads the latest run.
+      for (const [phone, leadRuns] of [...runsByLead]) {
+        const primary = aliasToPrimary.get(phone);
+        if (!primary || primary === phone) continue;
+        const merged = [...(runsByLead.get(primary) ?? []), ...leadRuns].sort((a, b) =>
+          a.updated_at < b.updated_at ? 1 : -1
+        );
+        runsByLead.set(primary, merged);
+        runsByLead.delete(phone);
       }
     }
     {
@@ -224,6 +246,7 @@ export async function GET(request: Request) {
       if (contactsByPhone.has(phone)) continue;
       contactsByPhone.set(phone, {
         customer_e164: phone,
+        alias_e164s: null,
         display_name: null,
         summary_md: null,
         tags: [],

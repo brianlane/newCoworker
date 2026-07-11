@@ -205,7 +205,14 @@ export async function PATCH(
       }
     }
 
-    await updateCustomerOwnerFields(businessId, customerE164, {
+    // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
+    // it alias-aware to the surviving row. Write (and fire goal events)
+    // against that row's PRIMARY number — updateCustomerOwnerFields filters
+    // on customer_e164 only, so the alias spelling would update nothing
+    // while events fired anyway.
+    const canonicalE164 = existing.customer_e164;
+
+    await updateCustomerOwnerFields(businessId, canonicalE164, {
       // A non-empty name the owner types is a deliberate label → 'manual' (wins
       // over the derived owner/employee overlay). CLEARING the name (null/empty)
       // resets provenance to 'auto' so a later auto-capture isn't mistaken for an
@@ -238,7 +245,7 @@ export async function PATCH(
       );
       for (const tag of normalizeContactTags(body.tags)) {
         if (before.has(tag.toLowerCase())) continue;
-        await fireGoalEvent(businessId, customerE164, { kind: "tag_added", tag });
+        await fireGoalEvent(businessId, canonicalE164, { kind: "tag_added", tag });
       }
     }
 

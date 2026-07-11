@@ -380,6 +380,31 @@ describe("PATCH /api/dashboard/customers/:e164", () => {
     });
   });
 
+  it("an alias URL writes (and fires goals) against the surviving row's PRIMARY number", async () => {
+    const PRIMARY = "+15550009999";
+    vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
+    // The URL segment is a merged-away alias; the alias-aware lookup resolves
+    // to the surviving row keyed on PRIMARY.
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce({
+      id: "x",
+      business_id: BIZ,
+      customer_e164: PRIMARY,
+      tags: []
+    } as never);
+    const res = await DETAIL_PATCH(
+      patchReq({ tags: ["Engaged"] }),
+      params(encodeURIComponent(CUSTOMER))
+    );
+    expect(res.status).toBe(200);
+    expect(updateCustomerOwnerFields).toHaveBeenCalledWith(BIZ, PRIMARY, {
+      tags: ["Engaged"]
+    });
+    expect(fireGoalEvent).toHaveBeenCalledWith(BIZ, PRIMARY, {
+      kind: "tag_added",
+      tag: "Engaged"
+    });
+  });
+
   it("non-tag edits fire no goal events", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ userId: "u", email: "o@o.com", isAdmin: true });
     vi.mocked(getCustomerMemory).mockResolvedValueOnce({
