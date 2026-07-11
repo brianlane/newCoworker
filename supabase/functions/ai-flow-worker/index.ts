@@ -2784,7 +2784,15 @@ const INPUT_MIME_BY_EXT: Record<string, string> = {
 async function resolveFlowInputImage(
   supabase: Supabase,
   businessId: string,
-  ref: string
+  ref: string,
+  /**
+   * The run's own platform-written {{trigger.image}} value. An
+   * `email-attachments:` ref is accepted ONLY when it matches this exactly —
+   * the platform wrote it into the run context for THIS tenant's inbound
+   * mail, so no DB lookup (and no enqueue-vs-log race) is needed, and a
+   * crafted literal path to another tenant's attachment reads nothing.
+   */
+  trustedTriggerImage: string
 ): Promise<{ bytes: Uint8Array; mimeType: string } | null> {
   const finish = (bytes: Uint8Array, mimeType: string) => {
     if (bytes.length === 0 || bytes.length > MAX_INPUT_IMAGE_BYTES) return null;
@@ -2792,20 +2800,15 @@ async function resolveFlowInputImage(
   };
 
   // Inbound tenant-mailbox attachment. The path carries no business prefix,
-  // so tenancy is verified against email_log: the attachment's storage_path
-  // must appear on one of THIS business's inbound mail rows — a crafted ref
-  // to another tenant's (message-id-derived, guessable) path reads nothing.
+  // so tenancy comes from the run context itself: the ref must be the exact
+  // value the platform wrote into THIS run's {{trigger.image}} when the
+  // tenant's own mailbox received the mail. A crafted literal ref to another
+  // tenant's (message-id-derived, guessable) path reads nothing, and there
+  // is no dependency on the email_log write landing before the run starts.
   if (ref.startsWith("email-attachments:")) {
+    if (ref !== trustedTriggerImage) return null;
     const path = ref.slice("email-attachments:".length);
     if (!path.startsWith("inbound/")) return null;
-    const { data: ownerRow, error: ownerErr } = await supabase
-      .from("email_log")
-      .select("id")
-      .eq("business_id", businessId)
-      .contains("attachments", JSON.stringify([{ storage_path: path }]))
-      .limit(1)
-      .maybeSingle();
-    if (ownerErr || !ownerRow) return null;
     const { data, error } = await supabase.storage.from("email-attachments").download(path);
     if (error || !data) return null;
     const bytes = new Uint8Array(await data.arrayBuffer());
@@ -2951,7 +2954,14 @@ async function generateImageStep(
   // scratch instead of editing the owner's chosen photo would be worse.
   let inputImage: { bytes: Uint8Array; mimeType: string } | null = null;
   if (action.inputImage) {
-    inputImage = await resolveFlowInputImage(supabase, run.business_id, action.inputImage);
+    const trustedTriggerImage =
+      typeof scope.trigger?.image === "string" ? scope.trigger.image : "";
+    inputImage = await resolveFlowInputImage(
+      supabase,
+      run.business_id,
+      action.inputImage,
+      trustedTriggerImage
+    );
     if (!inputImage) {
       return {
         kind: "fail",
