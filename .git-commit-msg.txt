@@ -1,7 +1,0 @@
-Bugbot fixes: task cards for contact-less leads; jumped goals ignore their when guard
-
-A lead in motion with no contacts row now gets a synthesized card (the runs
-must not vanish from /dashboard/tasks), and a goal step the run jumped to
-bypasses its optional when guard — the milestone already fired, so a stale
-condition must not skip the checkpoint and resume the follow-ups the jump
-exists to stop.
