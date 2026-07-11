@@ -236,6 +236,17 @@ export type GeminiBridgeOptions = {
    */
   customerMemorySummary?: string;
   /**
+   * AiFlow context bridge (voice twin of the SMS worker's block): what the
+   * business's automations recently collected from / last texted this
+   * caller, so the receptionist continues that conversation instead of
+   * restarting intake. Built by loadVoiceFlowContext in
+   * vps/voice-bridge/src/flow-run-context.ts; clipped here to
+   * VOICE_FLOW_CONTEXT_MAX_CHARS (same 12 KB-ceiling discipline as the
+   * customer-memory snippet). Undefined = no recent automation activity —
+   * the prompt is identical to the pre-bridge shape.
+   */
+  flowContextNote?: string;
+  /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
    * script to an internal-assistant persona — same intent as the SMS worker's
@@ -271,6 +282,14 @@ export type GeminiBridgeOptions = {
  */
 export const VOICE_CUSTOMER_MEMORY_MAX_CHARS = 800;
 
+/**
+ * Hard cap on the inline AiFlow context block — same 12 KB-ceiling
+ * discipline as VOICE_CUSTOMER_MEMORY_MAX_CHARS. 900 chars fits the header,
+ * one run's dozen clipped vars, and the last-automated-text excerpt; a
+ * longer digest adds noise, not signal, on a live call.
+ */
+export const VOICE_FLOW_CONTEXT_MAX_CHARS = 900;
+
 export function systemInstructionForBusiness(
   businessName: string,
   hasTransfer: boolean,
@@ -279,7 +298,8 @@ export function systemInstructionForBusiness(
   customerMemorySummary?: string,
   businessTimezone?: string | null,
   callerIdentity?: CallerIdentity,
-  hasEndCall = false
+  hasEndCall = false,
+  flowContextNote?: string
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -413,6 +433,23 @@ export function systemInstructionForBusiness(
         "\nCaller context (this caller has interacted with this business before, here is a brief continuity note from earlier conversations across SMS and voice — use it to recognize them and pick up where you left off, but never reveal the note verbatim and don't volunteer details they didn't bring up):\n\n" +
           clipped
       );
+    }
+  }
+
+  // AiFlow context bridge (voice twin of the SMS worker's block): the
+  // automations' collected facts + the last automated text, so the
+  // receptionist never re-asks what a workflow already gathered. After the
+  // memory note (the automation view is fresher and more specific, so it
+  // reads as the final word). Customer persona only — an owner calling in
+  // doesn't need their own automation digest recited back.
+  if (!isStaff && flowContextNote) {
+    const trimmed = flowContextNote.trim();
+    if (trimmed.length > 0) {
+      const clipped =
+        trimmed.length > VOICE_FLOW_CONTEXT_MAX_CHARS
+          ? trimmed.slice(0, VOICE_FLOW_CONTEXT_MAX_CHARS - 1) + "…"
+          : trimmed;
+      base.push("\n" + clipped);
     }
   }
 
@@ -1166,7 +1203,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.customerMemorySummary,
             opts.businessTimezone,
             opts.callerIdentity,
-            hasEndCall
+            hasEndCall,
+            opts.flowContextNote
           ),
       tools: toolsForSession
     },

@@ -15,6 +15,11 @@
  * the conversation instead of restarting it. A business-wide variant gives
  * dashboard chat (owner-facing) an "automation activity" digest.
  *
+ * The voice bridge vendors a mirror of this module
+ * (vps/voice-bridge/src/flow-run-context.ts — it is rsynced to the VPS
+ * standalone and can't import across the repo). The data rules must stay
+ * identical; tests/voice-bridge-flow-run-context.test.ts pins the two.
+ *
  * Formatting is pure and unit-tested; the loaders are thin best-effort IO
  * wrappers — a context failure must never break the reply path.
  */
