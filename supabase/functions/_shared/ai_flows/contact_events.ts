@@ -161,7 +161,11 @@ export async function enqueueContactEventRuns(
     for (const row of rows) {
       if (input.sourceFlowId && row.id === input.sourceFlowId) continue; // loop guard
       const def = row.definition as
-        | { trigger?: EventTrigger; triggers?: EventTrigger[] }
+        | {
+            trigger?: EventTrigger;
+            triggers?: EventTrigger[];
+            drip?: { intervalMinutes?: number };
+          }
         | null;
       const triggers = [def?.trigger, ...(def?.triggers ?? [])];
       const matching = triggers.filter(
@@ -202,13 +206,45 @@ export async function enqueueContactEventRuns(
       }
       if (!matched) continue;
 
+      // Drip pacing (definition.drip): stagger this run after the flow's
+      // latest scheduled one — a tag storm or bulk import enrolls hundreds
+      // of contacts through THIS path, exactly the burst drip exists for.
+      // Best-effort: a read failure enqueues immediately (mirrors the
+      // Node-side enqueueAiFlowRun).
+      let earliestClaimAt: string | null = null;
+      const intervalMinutes = def?.drip?.intervalMinutes;
+      if (typeof intervalMinutes === "number" && intervalMinutes >= 1) {
+        try {
+          const { data: lastRow } = await supabase
+            .from("ai_flow_runs")
+            .select("earliest_claim_at")
+            .eq("flow_id", row.id)
+            .eq("status", "queued")
+            .not("earliest_claim_at", "is", null)
+            .order("earliest_claim_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          const lastIso = (lastRow as { earliest_claim_at?: string | null } | null)
+            ?.earliest_claim_at;
+          const lastMs = lastIso ? Date.parse(lastIso) : NaN;
+          const nowMs = Date.now();
+          const nextMs = Number.isFinite(lastMs)
+            ? Math.max(nowMs, lastMs + intervalMinutes * 60_000)
+            : nowMs;
+          earliestClaimAt = new Date(nextMs).toISOString();
+        } catch (e) {
+          console.error("contact_events: drip", e);
+        }
+      }
+
       const { error: runErr } = await supabase.from("ai_flow_runs").insert({
         flow_id: row.id,
         business_id: businessId,
         status: "queued",
         context: { trigger: scope },
         current_step: 0,
-        dedupe_key: input.dedupeKey
+        dedupe_key: input.dedupeKey,
+        ...(earliestClaimAt ? { earliest_claim_at: earliestClaimAt } : {})
       });
       // 23505 = an earlier delivery of the same event already enqueued it.
       if (runErr && (runErr as { code?: string }).code !== "23505") {

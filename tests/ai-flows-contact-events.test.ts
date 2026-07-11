@@ -129,7 +129,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "insert", "eq", "or", "order", "range", "limit"]) {
+    for (const m of ["select", "insert", "eq", "or", "not", "order", "range", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -248,6 +248,64 @@ describe("enqueueContactEventRuns", () => {
       }
     };
     expect(await enqueueContactEventRuns(thrown, BIZ, input())).toBe(0);
+    err.mockRestore();
+  });
+
+  it("applies the flow's drip stagger to contact-event enrollments", async () => {
+    const lastIso = new Date(Date.now() + 10 * 60_000).toISOString();
+    const dripFlow = {
+      id: "f-drip",
+      definition: {
+        version: 1,
+        trigger: { channel: "tag_changed", conditions: [] },
+        steps: [],
+        drip: { intervalMinutes: 5 }
+      }
+    };
+    const { db, calls } = makeDb([
+      { data: [dripFlow], error: null },
+      { data: { earliest_claim_at: lastIso }, error: null }, // latest scheduled slot
+      { data: null, error: null } // insert
+    ]);
+    expect(await enqueueContactEventRuns(db, BIZ, input())).toBe(1);
+    const insert = calls.find((c) => c.name === "insert")!.args[0] as Record<string, unknown>;
+    expect(Date.parse(insert.earliest_claim_at as string)).toBe(
+      Date.parse(lastIso) + 5 * 60_000
+    );
+
+    // No scheduled predecessor → the first dripped run starts now.
+    const first = makeDb([
+      { data: [dripFlow], error: null },
+      { data: null, error: null }, // no last slot
+      { data: null, error: null }
+    ]);
+    const before = Date.now();
+    expect(await enqueueContactEventRuns(first.db, BIZ, input())).toBe(1);
+    const firstInsert = first.calls.find((c) => c.name === "insert")!.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(Date.parse(firstInsert.earliest_claim_at as string)).toBeGreaterThanOrEqual(before);
+
+    // A drip read failure enqueues immediately (best-effort pacing).
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const broken = makeDb([{ data: [dripFlow], error: null }]);
+    // Make the drip lookup throw by removing maybeSingle mid-flight: simplest
+    // is a db whose second from() blows up.
+    let fromCount = 0;
+    const throwingDb = {
+      from: (table: string) => {
+        fromCount += 1;
+        if (fromCount === 2) throw new Error("drip read down");
+        return (broken.db as { from: (t: string) => unknown }).from(table);
+      }
+    };
+    expect(await enqueueContactEventRuns(throwingDb, BIZ, input())).toBe(1);
+    const brokenInsert = broken.calls.find((c) => c.name === "insert")!.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(brokenInsert).not.toHaveProperty("earliest_claim_at");
     err.mockRestore();
   });
 

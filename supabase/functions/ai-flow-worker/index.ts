@@ -57,7 +57,7 @@ import {
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import { MAX_WAIT_MINUTES, planStep, type StepAction } from "../_shared/ai_flows/steps.ts";
-import { resolveContactRef } from "../_shared/ai_flows/contact_ref.ts";
+import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import {
   normalizeBrowseUrl,
   parseActionResponse,
@@ -5260,6 +5260,22 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
 
         for (const flow of group) {
           const tz = flow.timezone || businessTz;
+          // from_matches saved-person refs resolve ONCE per flow (not per
+          // contact) to live identity values; a resolution failure fails
+          // CLOSED for this flow only — mirrors the calendar poller.
+          let refValues: ReadonlyMap<string, string[]> | undefined;
+          if (flow.conditions.some((c) => c.type === "from_matches" && c.ref)) {
+            try {
+              refValues = await resolveFromMatchesRefValues(
+                supabase,
+                businessId,
+                flow.conditions
+              );
+            } catch (e) {
+              console.error("birthday sweep ref resolution", e);
+              continue;
+            }
+          }
           for (const contact of contacts) {
             if (!birthdayDue(contact.birthday, nowMs, tz, flow.time)) continue;
             const localYear = localYearIn(nowMs, tz);
@@ -5283,7 +5299,8 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
             if (flow.conditions.length > 0) {
               const res = evaluateSmsTrigger(
                 { channel: "sms", conditions: flow.conditions },
-                { messages: [{ text: windowText, from: contact.customer_e164, atMs: nowMs }] }
+                { messages: [{ text: windowText, from: contact.customer_e164, atMs: nowMs }] },
+                refValues
               );
               if (!res.matched) continue;
             }
