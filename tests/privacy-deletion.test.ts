@@ -146,10 +146,10 @@ describe("deleteEndUserData — central-only tenants", () => {
       "sms_rowboat_threads",
       "sms_outbound_log",
       "scheduled_sms",
-      "ai_reply_reasoning",
       "sms_owner_reply_prompts",
       "voice_call_transcripts",
-      "email_log"
+      "email_log",
+      "ai_reply_reasoning"
     ]);
   });
 
@@ -176,11 +176,35 @@ describe("deleteEndUserData — central-only tenants", () => {
     });
   });
 
+  it("an EMAIL-ONLY erasure still deletes reasoning through the contact's numbers", async () => {
+    const db = makeCentralDb({
+      // contacts#1 = the email-axis linked-number scan; #2 = the email delete.
+      "contacts#1": {
+        data: [{ customer_e164: E164, alias_e164s: ["+15550008888"] }],
+        error: null
+      },
+      "contacts#2": { data: [{ id: "c1" }], error: null },
+      ai_reply_reasoning: { data: [{ id: "r1" }], error: null }
+    });
+    const res = await deleteEndUserData(BIZ, { email: EMAIL }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.ai_reply_reasoning).toEqual({
+      table: "ai_reply_reasoning",
+      central: 1,
+      box: null
+    });
+    // A contact-less email erasure has no numbers → no reasoning pass.
+    const none = makeCentralDb({});
+    const res2 = await deleteEndUserData(BIZ, { email: EMAIL }, { client: none as never });
+    expect(res2.tables.some((t) => t.table === "ai_reply_reasoning")).toBe(false);
+  });
+
   it.each([
     ["contacts#1", /contacts \(linked-number scan\): boom/, { e164: E164 }],
     ["contacts#2", /contacts \(e164\): boom/, { e164: E164 }],
     ["contacts#3", /contacts \(alias\): boom/, { e164: E164 }],
-    ["contacts#1", /contacts \(email\): boom/, { email: EMAIL }],
+    ["contacts#1", /contacts \(linked-number scan, email\): boom/, { email: EMAIL }],
+    ["contacts#2", /contacts \(email\): boom/, { email: EMAIL }],
     ["sms_rowboat_threads", /sms_rowboat_threads: boom/, { e164: E164 }],
     ["sms_outbound_log", /sms_outbound_log: boom/, { e164: E164 }],
     ["scheduled_sms", /scheduled_sms: boom/, { e164: E164 }],
