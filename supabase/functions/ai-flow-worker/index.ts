@@ -1460,9 +1460,15 @@ async function updateContactStep(
   if (updErr) throw new Error(`update_contact write: ${updErr.message}`);
   // Goal Events: each tag that actually landed may jump OTHER parked/queued
   // runs for this lead to a matching tag_added goal (this running run is
-  // untouched — its own goals are passed inline). Best-effort by design.
+  // untouched — its own goals are passed inline). Runs match by the EXACT
+  // number they were triggered with, which after a profile merge may be any
+  // of the row's numbers — fan out over all of them (contactNumbers already
+  // unions the targeted number, the primary, and the merge aliases).
+  // Best-effort by design.
   for (const tag of added) {
-    await applyGoalEvent(supabase, run.business_id, action.e164, { kind: "tag_added", tag });
+    for (const number of contactNumbers) {
+      await applyGoalEvent(supabase, run.business_id, number, { kind: "tag_added", tag });
+    }
   }
   appendActionTaken(
     scope,

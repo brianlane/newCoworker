@@ -2698,6 +2698,14 @@ serve(async (req: Request) => {
             participants: normalizedParticipants(payload),
             image: telnyxInboundImages(payload)[0]
           });
+          // Goal Events: Safe Mode changes only who ANSWERS the customer —
+          // their text is still a reply, so parked/queued runs jump to a
+          // "replied" goal exactly like on the normal path. (Safe Mode never
+          // runs the wait-resume, so there are no freshly-resumed runs to
+          // exempt.) Best-effort — never blocks the forward path.
+          if (from) {
+            await applyGoalEvent(supabase, businessId, from, { kind: "replied" });
+          }
           // Persist the inbound as an already-`done` job so it still appears in
           // the AiFlow correlation window + audit trail for FUTURE messages
           // (a multi-message "text then link" flow must see this part later).
