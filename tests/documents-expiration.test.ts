@@ -15,10 +15,12 @@ vi.mock("@/lib/documents/db", async (importOriginal) => ({
   patchBusinessDocument: vi.fn()
 }));
 vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.fn() }));
+vi.mock("@/lib/vps/sync-vault", () => ({ syncVaultToVpsAndLog: vi.fn(async () => {}) }));
 
 import { sweepDocumentExpirations } from "@/lib/documents/expiration";
 import { patchBusinessDocument, type BusinessDocumentRow } from "@/lib/documents/db";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-07-11T12:00:00Z");
@@ -72,10 +74,16 @@ describe("sweepDocumentExpirations", () => {
     ).rejects.toThrow(/scan boom/);
   });
 
-  it("notifies once about a just-expired document and stamps it", async () => {
+  it("notifies once about a just-expired document, stamps it, and re-syncs the vault digest", async () => {
     const expired = doc({ expires_at: "2026-07-10T00:00:00Z" });
     const result = await sweepDocumentExpirations({ client: makeDb([expired]), now: () => NOW });
-    expect(result).toMatchObject({ scanned: 1, expiredNotified: 1, expiringSoonNotified: 0 });
+    expect(result).toMatchObject({
+      scanned: 1,
+      expiredNotified: 1,
+      expiringSoonNotified: 0,
+      vaultSyncsTriggered: 1
+    });
+    expect(syncVaultToVpsAndLog).toHaveBeenCalledWith(BIZ);
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: BIZ,
@@ -91,14 +99,32 @@ describe("sweepDocumentExpirations", () => {
     );
   });
 
-  it("skips an expired document that was already notified", async () => {
+  it("skips an expired document that was already notified (digest already synced then)", async () => {
     const expired = doc({
       expires_at: "2026-07-10T00:00:00Z",
       expired_notified_at: "2026-07-10T02:00:00Z"
     });
     const result = await sweepDocumentExpirations({ client: makeDb([expired]), now: () => NOW });
     expect(result.expiredNotified).toBe(0);
+    expect(result.vaultSyncsTriggered).toBe(0);
     expect(dispatch).not.toHaveBeenCalled();
+    expect(syncVaultToVpsAndLog).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates vault syncs per business and still syncs when the alert channel fails", async () => {
+    const first = doc({ id: "doc-1", expires_at: "2026-07-10T00:00:00Z" });
+    const second = doc({ id: "doc-2", expires_at: "2026-07-09T00:00:00Z" });
+    dispatch.mockRejectedValueOnce(new Error("channel down")).mockResolvedValueOnce({ results: [] });
+    const result = await sweepDocumentExpirations({
+      client: makeDb([first, second]),
+      now: () => NOW
+    });
+    // Both docs belong to the same business — one sync, even though the
+    // first doc's notification failed (it retries tomorrow; the digest
+    // must not stay stale in the meantime).
+    expect(result.vaultSyncsTriggered).toBe(1);
+    expect(syncVaultToVpsAndLog).toHaveBeenCalledTimes(1);
+    expect(result.errors).toHaveLength(1);
   });
 
   it("notifies once about a document expiring within the window", async () => {

@@ -12,6 +12,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 import { patchBusinessDocument, type BusinessDocumentRow } from "./db";
 import { DOCUMENT_EXPIRING_SOON_DAYS, isDocumentExpired } from "./core";
@@ -21,6 +22,8 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export type ExpirationSweepDeps = {
   client?: SupabaseClient;
   dispatch?: typeof dispatchUrgentNotification;
+  /** Injectable vault re-sync (tests). Never throws (see syncVaultToVpsAndLog). */
+  syncVault?: typeof syncVaultToVpsAndLog;
   now?: () => Date;
 };
 
@@ -28,6 +31,8 @@ export type ExpirationSweepResult = {
   scanned: number;
   expiringSoonNotified: number;
   expiredNotified: number;
+  /** Businesses whose on-VPS documents.md digest was re-synced. */
+  vaultSyncsTriggered: number;
   errors: Array<{ documentId: string; message: string }>;
 };
 
@@ -46,9 +51,10 @@ function formatDate(iso: string): string {
 export async function sweepDocumentExpirations(
   deps: ExpirationSweepDeps = {}
 ): Promise<ExpirationSweepResult> {
-  /* c8 ignore start -- production defaults; unit tests inject client, and dispatch resolves to the (mocked) module import */
+  /* c8 ignore start -- production defaults; unit tests inject client, and dispatch/syncVault resolve to the (mocked) module imports */
   const db = deps.client ?? (await createSupabaseServiceClient());
   const dispatch = deps.dispatch ?? dispatchUrgentNotification;
+  const syncVault = deps.syncVault ?? syncVaultToVpsAndLog;
   /* c8 ignore stop */
   const now = (deps.now ?? (() => new Date()))();
   const soonCutoffMs = now.getTime() + DOCUMENT_EXPIRING_SOON_DAYS * 24 * 60 * 60 * 1000;
@@ -65,13 +71,23 @@ export async function sweepDocumentExpirations(
     scanned: docs.length,
     expiringSoonNotified: 0,
     expiredNotified: 0,
+    vaultSyncsTriggered: 0,
     errors: []
   };
+
+  // Businesses with a NEWLY-expired document: their on-VPS documents.md
+  // digest still lists the dead title, so the sweep re-syncs the vault for
+  // them below (the lookup/share tools already re-check live; the prompt
+  // digest is the only stale copy).
+  const staleDigestBusinesses = new Set<string>();
 
   for (const doc of docs) {
     try {
       if (isDocumentExpired(doc, now)) {
         if (doc.expired_notified_at) continue;
+        // Registered before the notify so an alert-channel failure still
+        // gets the digest refreshed (the notification retries tomorrow).
+        staleDigestBusinesses.add(doc.business_id);
         await dispatch({
           businessId: doc.business_id,
           summary: `Document "${doc.title}" has expired`,
@@ -126,6 +142,14 @@ export async function sweepDocumentExpirations(
         error: message
       });
     }
+  }
+
+  // Push the digest change to each affected VPS so the live agent prompt
+  // stops listing expired titles. syncVaultToVpsAndLog never throws (a slow
+  // or unreachable box logs and leaves the digest to the next sync).
+  for (const businessId of staleDigestBusinesses) {
+    await syncVault(businessId);
+    result.vaultSyncsTriggered += 1;
   }
 
   return result;
