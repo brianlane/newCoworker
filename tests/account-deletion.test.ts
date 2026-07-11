@@ -144,7 +144,7 @@ describe("getAccountDeletionImpact", () => {
 
 describe("resolveAccountDeletionEligibility", () => {
   const NOW = new Date("2026-07-10T00:00:00Z");
-  const base = { grace_ends_at: null, wiped_at: null };
+  const base = { grace_ends_at: null, wiped_at: null, stripe_subscription_id: null };
 
   it("allows deletion when there is no subscription row (never paid)", () => {
     expect(resolveAccountDeletionEligibility(null)).toEqual({ eligible: true });
@@ -176,22 +176,40 @@ describe("resolveAccountDeletionEligibility", () => {
   it("refuses canceled subscriptions still inside the retention grace window", () => {
     expect(
       resolveAccountDeletionEligibility(
-        { status: "canceled", grace_ends_at: "2026-07-20T00:00:00Z", wiped_at: null },
+        { ...base, status: "canceled", grace_ends_at: "2026-07-20T00:00:00Z" },
         NOW
       )
     ).toEqual({ eligible: false, reason: "canceled_in_grace" });
   });
 
+  it("refuses non-canceled rows that already carry a Stripe subscription id (checkout in flight)", () => {
+    expect(
+      resolveAccountDeletionEligibility(
+        { ...base, status: "pending", stripe_subscription_id: "sub_123" },
+        NOW
+      )
+    ).toEqual({ eligible: false, reason: "checkout_in_flight" });
+    // Fully-canceled rows keep their Stripe id but are still deletable —
+    // the cancellation lifecycle already tore Stripe down.
+    expect(
+      resolveAccountDeletionEligibility(
+        { ...base, status: "canceled", stripe_subscription_id: "sub_123" },
+        NOW
+      )
+    ).toEqual({ eligible: true });
+  });
+
   it("allows deletion once the grace window has elapsed or the wipe already ran", () => {
     expect(
       resolveAccountDeletionEligibility(
-        { status: "canceled", grace_ends_at: "2026-07-01T00:00:00Z", wiped_at: null },
+        { ...base, status: "canceled", grace_ends_at: "2026-07-01T00:00:00Z" },
         NOW
       )
     ).toEqual({ eligible: true });
     expect(
       resolveAccountDeletionEligibility(
         {
+          ...base,
           status: "canceled",
           grace_ends_at: "2026-07-20T00:00:00Z",
           wiped_at: "2026-07-05T00:00:00Z"
@@ -204,9 +222,9 @@ describe("resolveAccountDeletionEligibility", () => {
   it("defaults `now` to the wallclock when omitted", () => {
     expect(
       resolveAccountDeletionEligibility({
+        ...base,
         status: "canceled",
-        grace_ends_at: "2999-01-01T00:00:00Z",
-        wiped_at: null
+        grace_ends_at: "2999-01-01T00:00:00Z"
       })
     ).toEqual({ eligible: false, reason: "canceled_in_grace" });
   });

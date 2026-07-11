@@ -26,11 +26,11 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
-import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
 import {
   DELETE_CONFIRM_PHRASE,
-  resolveAccountDeletionEligibility
+  resolveAccountDeletionEligibility,
+  type AccountDeletionSubscriptionFields
 } from "@/lib/account/deletion";
 import {
   HostingerClient,
@@ -103,7 +103,7 @@ export async function DELETE(request: Request) {
     // error — a transient DB hiccup must block deletion, not allow it.
     const { data: subRow, error: subError } = await db
       .from("subscriptions")
-      .select("status, grace_ends_at, wiped_at")
+      .select("status, grace_ends_at, wiped_at, stripe_subscription_id")
       .eq("business_id", businessId)
       .order("created_at", { ascending: false })
       .limit(1)
@@ -120,7 +120,7 @@ export async function DELETE(request: Request) {
       );
     }
     const eligibility = resolveAccountDeletionEligibility(
-      (subRow as Pick<SubscriptionRow, "status" | "grace_ends_at" | "wiped_at"> | null) ?? null
+      (subRow as AccountDeletionSubscriptionFields | null) ?? null
     );
     if (!eligibility.eligible) {
       return errorResponse("CONFLICT", eligibility.reason, 409);

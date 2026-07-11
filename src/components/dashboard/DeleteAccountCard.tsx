@@ -21,23 +21,23 @@ type Impact = {
   didE164: string | null;
 };
 
-type Eligibility =
-  | { eligible: true }
-  | {
-      eligible: false;
-      reason: "active_subscription" | "past_due_subscription" | "canceled_in_grace";
-    };
+type BlockedReason =
+  | "active_subscription"
+  | "past_due_subscription"
+  | "canceled_in_grace"
+  | "checkout_in_flight";
 
-const BLOCKED_COPY: Record<
-  "active_subscription" | "past_due_subscription" | "canceled_in_grace",
-  string
-> = {
+type Eligibility = { eligible: true } | { eligible: false; reason: BlockedReason };
+
+const BLOCKED_COPY: Record<BlockedReason, string> = {
   active_subscription:
     "You have an active subscription. Cancel it first — cancellation takes a data backup and handles billing properly.",
   past_due_subscription:
     "Your subscription has a past-due balance. Settle or cancel it in Billing first — deletion is available once billing is resolved.",
   canceled_in_grace:
-    "Your cancellation is still in its data-retention grace window. Your data (and the option to reactivate) is kept until the window ends, then everything is wiped automatically — no further action needed."
+    "Your cancellation is still in its data-retention grace window. Your data (and the option to reactivate) is kept until the window ends, then everything is wiped automatically — no further action needed.",
+  checkout_in_flight:
+    "A recent checkout is still being finalized. Wait a few minutes for your subscription to activate, then cancel it in Billing before deleting the account."
 };
 
 const CONFIRM_PHRASE = "DELETE";

@@ -103,8 +103,18 @@ export type AccountDeletionEligibility =
   | { eligible: true }
   | {
       eligible: false;
-      reason: "active_subscription" | "past_due_subscription" | "canceled_in_grace";
+      reason:
+        | "active_subscription"
+        | "past_due_subscription"
+        | "canceled_in_grace"
+        | "checkout_in_flight";
     };
+
+/** The row fields the eligibility gate needs. */
+export type AccountDeletionSubscriptionFields = Pick<
+  SubscriptionRow,
+  "status" | "grace_ends_at" | "wiped_at" | "stripe_subscription_id"
+>;
 
 /**
  * A paying (or payment-owing) tenant must go through the cancellation
@@ -112,11 +122,15 @@ export type AccountDeletionEligibility =
  * window. A canceled subscription still inside its retention grace window is
  * ALSO refused: the grace sweep owns the eventual wipe, and a hard delete
  * here would skip the backup/reactivation guarantees the owner was promised
- * at cancel time. Eligible: no row, pending (never paid), or canceled with
- * the grace window over (or already wiped).
+ * at cancel time. A non-canceled row that already carries a
+ * `stripe_subscription_id` (a paid checkout whose webhook is still in
+ * flight — the same state `isCheckoutBlockingSubscription` blocks on) is
+ * refused too: deleting the tenant then could leave live Stripe billing
+ * behind. Eligible: no row, pending with no Stripe subscription (never
+ * paid), or canceled with the grace window over (or already wiped).
  */
 export function resolveAccountDeletionEligibility(
-  subscription: Pick<SubscriptionRow, "status" | "grace_ends_at" | "wiped_at"> | null,
+  subscription: AccountDeletionSubscriptionFields | null,
   now: Date = new Date()
 ): AccountDeletionEligibility {
   if (!subscription) return { eligible: true };
@@ -128,6 +142,9 @@ export function resolveAccountDeletionEligibility(
   }
   if (isCanceledInGrace(subscription, now)) {
     return { eligible: false, reason: "canceled_in_grace" };
+  }
+  if (subscription.status !== "canceled" && subscription.stripe_subscription_id !== null) {
+    return { eligible: false, reason: "checkout_in_flight" };
   }
   return { eligible: true };
 }

@@ -7,10 +7,10 @@ import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-busines
 import { getAuthUser } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import {
   getAccountDeletionImpact,
-  resolveAccountDeletionEligibility
+  resolveAccountDeletionEligibility,
+  type AccountDeletionSubscriptionFields
 } from "@/lib/account/deletion";
 import { logger } from "@/lib/logger";
 
@@ -38,7 +38,7 @@ export async function GET() {
       getAccountDeletionImpact(businessId, db),
       db
         .from("subscriptions")
-        .select("status, grace_ends_at, wiped_at")
+        .select("status, grace_ends_at, wiped_at, stripe_subscription_id")
         .eq("business_id", businessId)
         .order("created_at", { ascending: false })
         .limit(1)
@@ -58,8 +58,7 @@ export async function GET() {
     }
 
     const eligibility = resolveAccountDeletionEligibility(
-      (subLookup.data as Pick<SubscriptionRow, "status" | "grace_ends_at" | "wiped_at"> | null) ??
-        null
+      (subLookup.data as AccountDeletionSubscriptionFields | null) ?? null
     );
     return successResponse({ impact, eligibility });
   } catch (err) {
