@@ -38,6 +38,12 @@ export type AiFlowRow = {
    * can sort flows by activity and show "last run X ago".
    */
   last_run_at?: string | null;
+  /**
+   * When `enabled` last flipped (stamped by the trg_ai_flows_enabled_changed
+   * DB trigger only on an actual change). NULL = never toggled since
+   * creation — display falls back to created_at.
+   */
+  enabled_changed_at?: string | null;
 };
 
 export type AiFlowRunStatus =
@@ -112,7 +118,7 @@ const SCREENSHOT_BUCKET = "aiflow-screenshots";
 const SCREENSHOT_SIGNED_URL_TTL_S = 600;
 
 const FLOW_COLS =
-  "id,business_id,name,enabled,definition,created_by,created_at,updated_at";
+  "id,business_id,name,enabled,definition,created_by,created_at,updated_at,enabled_changed_at";
 const RUN_COLS =
   "id,flow_id,business_id,status,context,current_step,attempt_count,error_retry_count,earliest_claim_at,last_error,claimed_at,dedupe_key,awaiting_agent_e164,respond_by_at,created_at,updated_at";
 const STEP_COLS =
