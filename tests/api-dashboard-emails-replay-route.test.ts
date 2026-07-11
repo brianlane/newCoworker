@@ -150,7 +150,11 @@ describe("POST /api/dashboard/emails/replay", () => {
   it("replays and returns the summary", async () => {
     const res = await POST(req({ flowId: FLOW, emailLogIds: [MAIL] }));
     expect(res.status).toBe(200);
-    expect(replayInboundEmails).toHaveBeenCalledWith(BIZ, FLOW, { emailLogIds: [MAIL] });
+    expect(replayInboundEmails).toHaveBeenCalledWith(
+      BIZ,
+      { id: FLOW, definition: { trigger: { channel: "tenant_email" } } },
+      { emailLogIds: [MAIL] }
+    );
     const json = (await res.json()) as { data: { summary: typeof SUMMARY } };
     expect(json.data.summary).toEqual(SUMMARY);
   });

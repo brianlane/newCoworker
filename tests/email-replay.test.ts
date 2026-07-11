@@ -25,27 +25,40 @@ import {
   isBackfillSkipExistingTrigger
 } from "../supabase/functions/_shared/ai_flows/backfill";
 
+type Result = { data: unknown; error: { message: string } | null };
+
 /**
- * email_log stub: select chain (.select().eq().eq().eq().is().in()) resolves
- * `selectResult`; update chain (.update().eq().eq()) is thenable and resolves
- * `updateResult`, recording each patch for assertions.
+ * Table-aware db stub for the replay's four query shapes:
+ *  - email_log select  (.select().eq()×3.is().in() → `emailLog`)
+ *  - email_log update  (.update().eq().eq() thenable → `update`, patches recorded)
+ *  - ai_flow_runs select (.select().eq()×3.maybeSingle() → `runLookup`)
+ *  - contacts select     (from_matches ref resolution .maybeSingle() → `contacts`)
  */
-function emailLogDb(
-  selectResult: { data: unknown; error: unknown },
-  updateResult: { error: { message: string } | null } = { error: null }
-) {
+function replayDb(opts: {
+  emailLog: Result;
+  update?: { error: { message: string } | null };
+  runLookup?: Result;
+  contacts?: Result;
+}) {
   const updates: Record<string, unknown>[] = [];
-  const from = vi.fn(() => {
+  const from = vi.fn((table: string) => {
     const builder: Record<string, unknown> = {};
     builder.select = vi.fn(() => builder);
     builder.eq = vi.fn(() => builder);
     builder.is = vi.fn(() => builder);
-    builder.in = vi.fn(() => Promise.resolve(selectResult));
+    builder.in = vi.fn(() => Promise.resolve(opts.emailLog));
+    builder.maybeSingle = vi.fn(() =>
+      Promise.resolve(
+        table === "ai_flow_runs"
+          ? (opts.runLookup ?? { data: null, error: null })
+          : (opts.contacts ?? { data: null, error: null })
+      )
+    );
     builder.update = vi.fn((patch: Record<string, unknown>) => {
       updates.push(patch);
       const ub: Record<string, unknown> = {};
       ub.eq = vi.fn(() => ub);
-      ub.then = (resolve: (v: unknown) => void) => resolve(updateResult);
+      ub.then = (resolve: (v: unknown) => void) => resolve(opts.update ?? { error: null });
       return ub;
     });
     return builder;
@@ -64,6 +77,9 @@ const ROW = {
   provider_message_id: "<m1@ses>",
   created_at: "2026-07-11T19:49:54Z"
 };
+
+/** A tenant_email flow with no conditions — matches every message. */
+const FLOW = { id: "flow-1", definition: { trigger: { channel: "tenant_email" } } };
 
 beforeEach(() => {
   defaultClientSpy.mockReset();
@@ -108,8 +124,8 @@ describe("backfill trigger marker", () => {
 
 describe("replayInboundEmails", () => {
   it("returns an empty summary without touching the db when no ids are given", async () => {
-    const { db } = emailLogDb({ data: [], error: null });
-    const summary = await replayInboundEmails("biz-1", "flow-1", { emailLogIds: [] }, db);
+    const { db } = replayDb({ emailLog: { data: [], error: null } });
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: [] }, db);
     expect(summary).toEqual({
       total: 0,
       enqueued: 0,
@@ -122,22 +138,17 @@ describe("replayInboundEmails", () => {
   });
 
   it("throws when the email_log read fails", async () => {
-    const { db } = emailLogDb({ data: null, error: { message: "boom" } });
+    const { db } = replayDb({ emailLog: { data: null, error: { message: "boom" } } });
     await expect(
-      replayInboundEmails("biz-1", "flow-1", { emailLogIds: ["mail-1"] }, db)
+      replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db)
     ).rejects.toThrow("replayInboundEmails: boom");
   });
 
   it("enqueues a backfill run with the live path's dedupe key and stamps the row", async () => {
-    const { db, updates } = emailLogDb({ data: [ROW], error: null });
+    const { db, updates } = replayDb({ emailLog: { data: [ROW], error: null } });
     enqueueAiFlowRun.mockResolvedValue({ id: "run-9" });
 
-    const summary = await replayInboundEmails(
-      "biz-1",
-      "flow-1",
-      { emailLogIds: ["mail-1"] },
-      db
-    );
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
 
     expect(summary.enqueued).toBe(1);
     expect(summary.outcomes).toEqual([
@@ -168,33 +179,146 @@ describe("replayInboundEmails", () => {
   });
 
   it("uses the default service client when none is passed", async () => {
-    const { db } = emailLogDb({ data: [ROW], error: null });
+    const { db } = replayDb({ emailLog: { data: [ROW], error: null } });
     defaultClientSpy.mockResolvedValue(db);
     enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
-    const summary = await replayInboundEmails("biz-1", "flow-1", { emailLogIds: ["mail-1"] });
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] });
     expect(defaultClientSpy).toHaveBeenCalled();
     expect(summary.enqueued).toBe(1);
   });
 
-  it("counts an already-enqueued message (dedupe hit) as a duplicate", async () => {
-    const { db, updates } = emailLogDb({ data: [ROW], error: null });
+  it("skips a message the flow's trigger conditions don't match", async () => {
+    const { db } = replayDb({ emailLog: { data: [ROW], error: null } });
+    const flow = {
+      id: "flow-1",
+      definition: {
+        trigger: {
+          channel: "tenant_email",
+          conditions: [{ type: "contains", value: "zillow" }]
+        }
+      }
+    };
+    const summary = await replayInboundEmails("biz-1", flow, { emailLogIds: ["mail-1"] }, db);
+    expect(summary.skipped).toBe(1);
+    expect(summary.outcomes[0]).toEqual({
+      emailLogId: "mail-1",
+      status: "skipped",
+      reason: "the flow's trigger conditions don't match this email"
+    });
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("ORs across the flow's tenant_email triggers (extra-trigger conditions match)", async () => {
+    const { db } = replayDb({ emailLog: { data: [ROW], error: null } });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-9" });
+    const flow = {
+      id: "flow-1",
+      definition: {
+        trigger: {
+          channel: "tenant_email",
+          conditions: [{ type: "contains", value: "zillow" }]
+        },
+        triggers: [
+          { channel: "sms" },
+          { channel: "tenant_email", conditions: [{ type: "from_matches", value: "privyr.com" }] }
+        ]
+      }
+    };
+    const summary = await replayInboundEmails("biz-1", flow, { emailLogIds: ["mail-1"] }, db);
+    expect(summary.enqueued).toBe(1);
+  });
+
+  it("resolves from_matches contact refs against live rows (match fires)", async () => {
+    const { db } = replayDb({
+      emailLog: { data: [ROW], error: null },
+      contacts: {
+        data: { customer_e164: "+14165550001", alias_e164s: [], email: "alerts-noreply@privyr.com" },
+        error: null
+      }
+    });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-9" });
+    const flow = {
+      id: "flow-1",
+      definition: {
+        trigger: {
+          channel: "tenant_email",
+          conditions: [
+            {
+              type: "from_matches",
+              ref: { source: "contact", id: "22222222-2222-4222-8222-222222222222" }
+            }
+          ]
+        }
+      }
+    };
+    const summary = await replayInboundEmails("biz-1", flow, { emailLogIds: ["mail-1"] }, db);
+    expect(summary.enqueued).toBe(1);
+  });
+
+  it("fails CLOSED when a from_matches ref cannot be resolved", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = replayDb({
+      emailLog: { data: [ROW], error: null },
+      contacts: { data: null, error: { message: "boom" } }
+    });
+    const flow = {
+      id: "flow-1",
+      definition: {
+        trigger: {
+          channel: "tenant_email",
+          conditions: [
+            {
+              type: "from_matches",
+              ref: { source: "contact", id: "22222222-2222-4222-8222-222222222222" }
+            }
+          ]
+        }
+      }
+    };
+    const summary = await replayInboundEmails("biz-1", flow, { emailLogIds: ["mail-1"] }, db);
+    expect(summary.skipped).toBe(1);
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("re-stamps the log row on a dedupe hit using the existing run's id", async () => {
+    const { db, updates } = replayDb({
+      emailLog: { data: [ROW], error: null },
+      runLookup: { data: { id: "run-live" }, error: null }
+    });
     enqueueAiFlowRun.mockResolvedValue(null);
-    const summary = await replayInboundEmails(
-      "biz-1",
-      "flow-1",
-      { emailLogIds: ["mail-1"] },
-      db
-    );
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
     expect(summary.duplicates).toBe(1);
     expect(summary.outcomes[0]).toEqual({ emailLogId: "mail-1", status: "duplicate" });
-    expect(updates).toEqual([]);
+    expect(updates).toEqual([{ flow_id: "flow-1", run_id: "run-live" }]);
+  });
+
+  it("leaves a dedupe hit unstamped when the existing run can't be found", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const missing = replayDb({
+      emailLog: { data: [ROW], error: null },
+      runLookup: { data: null, error: null }
+    });
+    enqueueAiFlowRun.mockResolvedValue(null);
+    await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, missing.db);
+    expect(missing.updates).toEqual([]);
+
+    const failing = replayDb({
+      emailLog: { data: [ROW], error: null },
+      runLookup: { data: null, error: { message: "rls" } }
+    });
+    enqueueAiFlowRun.mockResolvedValue(null);
+    await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, failing.db);
+    expect(failing.updates).toEqual([]);
+    expect(errorSpy).toHaveBeenCalledWith("replayInboundEmails duplicate lookup", "rls");
+    errorSpy.mockRestore();
   });
 
   it("skips ids that are not unmatched inbound AI-mailbox rows", async () => {
-    const { db } = emailLogDb({ data: [], error: null });
+    const { db } = replayDb({ emailLog: { data: [], error: null } });
     const summary = await replayInboundEmails(
       "biz-1",
-      "flow-1",
+      FLOW,
       { emailLogIds: ["mail-gone"] },
       db
     );
@@ -208,16 +332,18 @@ describe("replayInboundEmails", () => {
   });
 
   it("skips a message with no subject and no body", async () => {
-    const { db } = emailLogDb({
-      data: [
-        { ...ROW, id: "mail-empty", subject: null, body_full: null, body_preview: "   " },
-        { ...ROW, id: "mail-null", subject: "  ", body_full: null, body_preview: null }
-      ],
-      error: null
+    const { db } = replayDb({
+      emailLog: {
+        data: [
+          { ...ROW, id: "mail-empty", subject: null, body_full: null, body_preview: "   " },
+          { ...ROW, id: "mail-null", subject: "  ", body_full: null, body_preview: null }
+        ],
+        error: null
+      }
     });
     const summary = await replayInboundEmails(
       "biz-1",
-      "flow-1",
+      FLOW,
       { emailLogIds: ["mail-empty", "mail-null"] },
       db
     );
@@ -235,37 +361,29 @@ describe("replayInboundEmails", () => {
   });
 
   it("tolerates a null data payload from the read", async () => {
-    const { db } = emailLogDb({ data: null, error: null });
-    const summary = await replayInboundEmails(
-      "biz-1",
-      "flow-1",
-      { emailLogIds: ["mail-1"] },
-      db
-    );
+    const { db } = replayDb({ emailLog: { data: null, error: null } });
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
     expect(summary.skipped).toBe(1);
   });
 
   it("falls back to body_preview, a log-row message id, and no sender/recipient", async () => {
-    const { db } = emailLogDb({
-      data: [
-        {
-          ...ROW,
-          id: "mail-2",
-          from_email: null,
-          to_email: null,
-          body_full: null,
-          provider_message_id: null
-        }
-      ],
-      error: null
+    const { db } = replayDb({
+      emailLog: {
+        data: [
+          {
+            ...ROW,
+            id: "mail-2",
+            from_email: null,
+            to_email: null,
+            body_full: null,
+            provider_message_id: null
+          }
+        ],
+        error: null
+      }
     });
     enqueueAiFlowRun.mockResolvedValue({ id: "run-2" });
-    const summary = await replayInboundEmails(
-      "biz-1",
-      "flow-1",
-      { emailLogIds: ["mail-2"] },
-      db
-    );
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-2"] }, db);
     expect(summary.enqueued).toBe(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -298,9 +416,9 @@ describe("replayInboundEmails", () => {
       { filename: "x", size_bytes: 1, storage_path: "inbound/m/1-x" },
       { filename: "pic.jpg", mime_type: "IMAGE/JPEG ", size_bytes: 9, storage_path: "inbound/m/2-pic.jpg" }
     ];
-    const { db } = emailLogDb({ data: [{ ...ROW, attachments }], error: null });
+    const { db } = replayDb({ emailLog: { data: [{ ...ROW, attachments }], error: null } });
     enqueueAiFlowRun.mockResolvedValue({ id: "run-3" });
-    await replayInboundEmails("biz-1", "flow-1", { emailLogIds: ["mail-1"] }, db);
+    await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: expect.objectContaining({ image: "email-attachments:inbound/m/2-pic.jpg" })
@@ -315,14 +433,14 @@ describe("replayInboundEmails", () => {
       { ...ROW, id: "mail-b", provider_message_id: "<b@ses>" },
       { ...ROW, id: "mail-c", provider_message_id: "<c@ses>" }
     ];
-    const { db } = emailLogDb({ data: rows, error: null });
+    const { db } = replayDb({ emailLog: { data: rows, error: null } });
     enqueueAiFlowRun
       .mockRejectedValueOnce(new Error("telnyx down"))
       .mockRejectedValueOnce("weird")
       .mockResolvedValueOnce({ id: "run-c" });
     const summary = await replayInboundEmails(
       "biz-1",
-      "flow-1",
+      FLOW,
       { emailLogIds: ["mail-a", "mail-b", "mail-c"] },
       db
     );
@@ -337,14 +455,12 @@ describe("replayInboundEmails", () => {
 
   it("treats a failed email_log stamp as best-effort (run stays enqueued)", async () => {
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const { db } = emailLogDb({ data: [ROW], error: null }, { error: { message: "rls" } });
+    const { db } = replayDb({
+      emailLog: { data: [ROW], error: null },
+      update: { error: { message: "rls" } }
+    });
     enqueueAiFlowRun.mockResolvedValue({ id: "run-9" });
-    const summary = await replayInboundEmails(
-      "biz-1",
-      "flow-1",
-      { emailLogIds: ["mail-1"] },
-      db
-    );
+    const summary = await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
     expect(summary.enqueued).toBe(1);
     expect(errorSpy).toHaveBeenCalledWith("replayInboundEmails stamp", "rls");
     errorSpy.mockRestore();
@@ -352,10 +468,10 @@ describe("replayInboundEmails", () => {
 
   it("dedupes repeated ids and caps a request at MAX_REPLAY_EMAILS", async () => {
     const ids = Array.from({ length: MAX_REPLAY_EMAILS + 20 }, (_, i) => `mail-${i}`);
-    const { db } = emailLogDb({ data: [], error: null });
+    const { db } = replayDb({ emailLog: { data: [], error: null } });
     const summary = await replayInboundEmails(
       "biz-1",
-      "flow-1",
+      FLOW,
       { emailLogIds: [...ids, "mail-0", "mail-1"] },
       db
     );

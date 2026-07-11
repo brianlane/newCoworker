@@ -76,9 +76,11 @@ export async function POST(request: Request) {
       );
     }
 
-    const summary = await replayInboundEmails(businessId, body.flowId, {
-      emailLogIds: body.emailLogIds
-    });
+    const summary = await replayInboundEmails(
+      businessId,
+      { id: flow.id, definition: flow.definition },
+      { emailLogIds: body.emailLogIds }
+    );
     return successResponse({ summary });
   } catch (err) {
     return handleRouteError(err);

@@ -22,10 +22,15 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { tenantEmailTriggerScope } from "@/lib/ai-flows/trigger-eval";
+import { evaluateTriggerConditions, tenantEmailTriggerScope } from "@/lib/ai-flows/trigger-eval";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import type { StoredAttachment } from "@/lib/db/email-log";
+import type { TriggerCondition } from "@/lib/ai-flows/schema";
+import {
+  resolveFromMatchesRefValues,
+  type ContactRefSupabase
+} from "../../../supabase/functions/_shared/ai_flows/contact_ref";
 import { BACKFILL_SKIP_EXISTING_TRIGGER_KEY } from "../../../supabase/functions/_shared/ai_flows/backfill";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -67,6 +72,11 @@ export type ReplayEmailsSummary = {
   outcomes: ReplayEmailOutcome[];
 };
 
+type DefinitionLike = {
+  trigger?: { channel?: unknown; conditions?: unknown };
+  triggers?: Array<{ channel?: unknown; conditions?: unknown }>;
+} | null;
+
 /**
  * True when the flow starts from a tenant_email trigger (primary OR one of
  * the extra `triggers`) — the route's gate: replaying AI-mailbox mail into a
@@ -74,12 +84,26 @@ export type ReplayEmailsSummary = {
  * structural-walk pattern as lead-backlog's flowHasWebhookTrigger.
  */
 export function flowHasTenantEmailTrigger(definition: unknown): boolean {
-  const def = definition as {
-    trigger?: { channel?: unknown };
-    triggers?: Array<{ channel?: unknown }>;
-  } | null;
+  const def = definition as DefinitionLike;
   if (def?.trigger?.channel === "tenant_email") return true;
   return (def?.triggers ?? []).some((t) => t?.channel === "tenant_email");
+}
+
+/**
+ * One condition list per tenant_email trigger in the flow's set (OR across
+ * lists, AND within one) — the same parse `loadTenantEmailFlows` does on the
+ * live inbound path, so replay honors exactly the filters the flow would
+ * have applied when the mail arrived.
+ */
+function tenantEmailConditionSets(definition: unknown): TriggerCondition[][] {
+  const def = definition as DefinitionLike;
+  const out: TriggerCondition[][] = [];
+  for (const trig of [def?.trigger, ...(def?.triggers ?? [])]) {
+    if (trig?.channel !== "tenant_email") continue;
+    const conds = trig.conditions;
+    out.push(Array.isArray(conds) ? (conds as TriggerCondition[]) : []);
+  }
+  return out;
 }
 
 type ReplayableEmailRow = {
@@ -107,18 +131,29 @@ function firstImageRef(attachments: StoredAttachment[] | null): string | undefin
   return hit ? `email-attachments:${hit.storage_path}` : undefined;
 }
 
+/** The replay target: id + raw definition (as loaded by the route's gate). */
+export type ReplayFlow = { id: string; definition: unknown };
+
 /**
- * Replay unmatched inbound AI-mailbox emails through `flowId` as backfill
+ * Replay unmatched inbound AI-mailbox emails through `flow` as backfill
  * runs. Rows apply independently — one failure never blocks the rest. The
  * caller (API route) has already verified the flow: exists for this
  * business, enabled, and carries a tenant_email trigger.
+ *
+ * Each email is re-evaluated against the flow's tenant_email trigger
+ * conditions exactly like the live inbound path (`processInboundTenantEmail`)
+ * would have — mail the flow intentionally filters out (wrong sender, no
+ * keyword match) is skipped, never force-fed into SMS outreach. A
+ * `from_matches` contact-ref resolution failure fails CLOSED (skip), same as
+ * live.
  */
 export async function replayInboundEmails(
   businessId: string,
-  flowId: string,
+  flow: ReplayFlow,
   input: ReplayEmailsInput,
   client?: SupabaseClient
 ): Promise<ReplayEmailsSummary> {
+  const flowId = flow.id;
   const ids = [...new Set(input.emailLogIds)].slice(0, MAX_REPLAY_EMAILS);
   if (ids.length === 0) {
     return { total: 0, enqueued: 0, duplicates: 0, skipped: 0, errors: 0, outcomes: [] };
@@ -150,6 +185,37 @@ export async function replayInboundEmails(
   if (error) throw new Error(`replayInboundEmails: ${error.message}`);
   const rows = new Map(((data ?? []) as ReplayableEmailRow[]).map((r) => [r.id, r]));
 
+  // Pre-resolve each condition list's from_matches contact refs ONCE for the
+  // whole batch (they reference saved people, not the mail). A resolution
+  // failure marks the list unusable → its conditions fail closed below,
+  // mirroring the live path's per-flow fail-closed.
+  const conditionSets = tenantEmailConditionSets(flow.definition);
+  const refValuesBySet: (Map<string, string[]> | null)[] = [];
+  for (const conditions of conditionSets) {
+    try {
+      refValuesBySet.push(
+        // Cast: the full supabase-js builder type recurses too deep for TS to
+        // check structurally against the resolver's minimal chain type.
+        await resolveFromMatchesRefValues(db as unknown as ContactRefSupabase, businessId, conditions)
+      );
+    } catch (e) {
+      console.error("replayInboundEmails from_matches ref resolution", e);
+      refValuesBySet.push(null);
+    }
+  }
+
+  // Best-effort: link the mail to its flow/run so the Emails page shows it as
+  // handled (and it stops qualifying for future replays). The run itself is
+  // already safe either way.
+  const stampEmailLog = async (id: string, runId: string): Promise<void> => {
+    const { error: stampErr } = await db
+      .from("email_log")
+      .update({ flow_id: flowId, run_id: runId })
+      .eq("business_id", businessId)
+      .eq("id", id);
+    if (stampErr) console.error("replayInboundEmails stamp", stampErr.message);
+  };
+
   for (const id of ids) {
     const row = rows.get(id);
     if (!row) {
@@ -175,18 +241,33 @@ export async function replayInboundEmails(
     // still stable across repeated replays.
     const messageId = row.provider_message_id ?? `log:${row.id}`;
     const imageRef = firstImageRef(row.attachments);
-    const trigger = {
-      ...tenantEmailTriggerScope({
-        id: messageId,
-        fromEmail: row.from_email ?? "",
-        subject,
-        bodyText,
-        receivedAt: row.created_at,
-        ...(row.to_email ? { toEmail: row.to_email } : {}),
-        ...(imageRef ? { imageRef } : {})
-      }),
-      [BACKFILL_SKIP_EXISTING_TRIGGER_KEY]: "1"
-    };
+    const scope = tenantEmailTriggerScope({
+      id: messageId,
+      fromEmail: row.from_email ?? "",
+      subject,
+      bodyText,
+      receivedAt: row.created_at,
+      ...(row.to_email ? { toEmail: row.to_email } : {}),
+      ...(imageRef ? { imageRef } : {})
+    });
+    // OR across the flow's tenant_email triggers, exactly like the live
+    // inbound path: the first matching condition list fires; a list whose
+    // refs failed to resolve is skipped (fails closed).
+    const matched = conditionSets.some((conditions, i) => {
+      const refValues = refValuesBySet[i];
+      if (refValues === null) return false;
+      return evaluateTriggerConditions(conditions, scope.windowText, scope.from, refValues);
+    });
+    if (!matched) {
+      summary.skipped += 1;
+      summary.outcomes.push({
+        emailLogId: id,
+        status: "skipped",
+        reason: "the flow's trigger conditions don't match this email"
+      });
+      continue;
+    }
+    const trigger = { ...scope, [BACKFILL_SKIP_EXISTING_TRIGGER_KEY]: "1" };
     try {
       const run = await enqueueAiFlowRun(
         { businessId, flowId, trigger, dedupeKey: `email:${messageId}` },
@@ -195,19 +276,27 @@ export async function replayInboundEmails(
       if (!run) {
         summary.duplicates += 1;
         summary.outcomes.push({ emailLogId: id, status: "duplicate" });
+        // A run for this message already exists (earlier replay whose stamp
+        // failed, or the live webhook) — find it and re-stamp the log row so
+        // it stops reading as unmatched. Best-effort like the stamp itself.
+        const { data: existingRun, error: findErr } = await db
+          .from("ai_flow_runs")
+          .select("id")
+          .eq("business_id", businessId)
+          .eq("flow_id", flowId)
+          .eq("dedupe_key", `email:${messageId}`)
+          .maybeSingle();
+        if (findErr) {
+          console.error("replayInboundEmails duplicate lookup", findErr.message);
+        } else {
+          const existingId = (existingRun as { id?: string } | null)?.id;
+          if (existingId) await stampEmailLog(id, existingId);
+        }
         continue;
       }
       summary.enqueued += 1;
       summary.outcomes.push({ emailLogId: id, status: "enqueued", runId: run.id });
-      // Stamp the run back onto the mail so the Emails page shows it as
-      // handled (and it stops qualifying for future replays). Best-effort:
-      // the run is already queued, so a stamp failure only logs.
-      const { error: stampErr } = await db
-        .from("email_log")
-        .update({ flow_id: flowId, run_id: run.id })
-        .eq("business_id", businessId)
-        .eq("id", id);
-      if (stampErr) console.error("replayInboundEmails stamp", stampErr.message);
+      await stampEmailLog(id, run.id);
     } catch (e) {
       summary.errors += 1;
       summary.outcomes.push({
