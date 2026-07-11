@@ -1258,6 +1258,12 @@ export function AiFlowsManager({
     }
   };
 
+  // Timestamps render in the OWNER's timezone, so they must not be part of
+  // the server-rendered markup (the server would bake in ITS zone and
+  // mismatch on hydration) — the status-times span mounts client-side only.
+  const [clockMounted, setClockMounted] = useState(false);
+  useEffect(() => setClockMounted(true), []);
+
   /** "Jul 10, 3:12 PM" — compact stamp for the list row's status times. */
   const shortWhen = (iso: string | null | undefined): string | null => {
     if (!iso) return null;
@@ -2432,13 +2438,16 @@ export function AiFlowsManager({
                   </span>
                   {/* Status times: when the flow last fired, and how long the
                       current on/off state has held (toggle time; falls back to
-                      created_at when never toggled). Hidden on narrow screens
-                      so the name keeps room. */}
-                  <span className="hidden shrink-0 whitespace-nowrap text-[10px] text-parchment/40 sm:inline">
-                    last triggered {shortWhen(row.last_run_at) ?? "never"} ·{" "}
-                    {row.enabled ? "on" : "off"} since{" "}
-                    {shortWhen(row.enabled_changed_at ?? row.created_at)}
-                  </span>
+                      created_at when never toggled). Client-mounted only (see
+                      clockMounted) and hidden on narrow screens so the name
+                      keeps room. */}
+                  {clockMounted && (
+                    <span className="hidden shrink-0 whitespace-nowrap text-[10px] text-parchment/40 sm:inline">
+                      last triggered {shortWhen(row.last_run_at) ?? "never"} ·{" "}
+                      {row.enabled ? "on" : "off"} since{" "}
+                      {shortWhen(row.enabled_changed_at ?? row.created_at)}
+                    </span>
+                  )}
                 </div>
                 <p className="mt-1 truncate text-xs text-parchment/50">
                   {summarizeDefinition(row.definition)}
