@@ -9,7 +9,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/documents/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/documents/db")>()),
   listBusinessDocuments: vi.fn(),
-  patchBusinessDocument: vi.fn()
+  patchBusinessDocument: vi.fn(),
+  revokeDocumentShare: vi.fn()
 }));
 vi.mock("@/lib/documents/share", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/documents/share")>()),
@@ -39,6 +40,7 @@ import {
 import {
   listBusinessDocuments,
   patchBusinessDocument,
+  revokeDocumentShare,
   type BusinessDocumentRow
 } from "@/lib/documents/db";
 import { mintDocumentShare } from "@/lib/documents/share";
@@ -101,6 +103,7 @@ beforeEach(() => {
   vi.mocked(getBusiness).mockResolvedValue({ name: "Clip Joint" } as never);
   vi.mocked(insertCoworkerLog).mockResolvedValue({} as never);
   optOut.mockResolvedValue({ ok: true, optedOut: false });
+  vi.mocked(revokeDocumentShare).mockResolvedValue(undefined);
   smsConfig.mockResolvedValue({ apiKey: "k" } as never);
   smsSend.mockResolvedValue({ id: "msg-1" } as never);
   emailSend.mockResolvedValue({ ok: true, messageId: "em-1", provider: "google" } as never);
@@ -199,20 +202,22 @@ describe("shareDocumentTool", () => {
     );
   });
 
-  it("fails closed when the opt-out check errors", async () => {
+  it("fails closed when the opt-out check errors — BEFORE any link is minted", async () => {
     optOut.mockResolvedValue({ ok: false, error: "rpc down" });
     const res = await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms");
     expect(res).toEqual({ ok: false, detail: "opt_out_check_failed" });
     expect(smsSend).not.toHaveBeenCalled();
+    expect(mint).not.toHaveBeenCalled();
   });
 
-  it("refuses an opted-out recipient", async () => {
+  it("refuses an opted-out recipient without minting a link", async () => {
     optOut.mockResolvedValue({ ok: true, optedOut: true });
     const res = await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms");
     expect(res).toEqual({ ok: false, detail: "recipient_opted_out" });
+    expect(mint).not.toHaveBeenCalled();
   });
 
-  it("maps quota errors and generic send failures distinctly", async () => {
+  it("maps quota errors and generic send failures distinctly, revoking the undelivered link", async () => {
     smsSend.mockRejectedValueOnce(new Error("Monthly SMS limit reached"));
     expect(
       (await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms")).detail
@@ -221,6 +226,19 @@ describe("shareDocumentTool", () => {
     expect(
       (await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms")).detail
     ).toBe("sms_send_failed");
+    expect(revokeDocumentShare).toHaveBeenCalledTimes(2);
+    expect(revokeDocumentShare).toHaveBeenCalledWith(BIZ, MINTED.shareId);
+  });
+
+  it("tolerates a failing revoke on an undelivered share (link still dies at TTL)", async () => {
+    smsSend.mockRejectedValueOnce(new Error("wire down"));
+    vi.mocked(revokeDocumentShare).mockRejectedValueOnce(new Error("db down"));
+    const res = await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms");
+    expect(res).toEqual({ ok: false, detail: "sms_send_failed" });
+    smsSend.mockRejectedValueOnce(new Error("wire down"));
+    vi.mocked(revokeDocumentShare).mockRejectedValueOnce("string failure");
+    const res2 = await shareDocumentTool(BIZ, { documentRef: "price", phone: PHONE }, "sms");
+    expect(res2.ok).toBe(false);
   });
 
   it("emails the link when an email is given", async () => {
@@ -264,7 +282,7 @@ describe("shareDocumentTool", () => {
     );
   });
 
-  it("propagates email failures", async () => {
+  it("propagates email failures and revokes the undelivered link", async () => {
     emailSend.mockResolvedValue({ ok: false, detail: "email_not_connected" } as never);
     const res = await shareDocumentTool(
       BIZ,
@@ -272,6 +290,7 @@ describe("shareDocumentTool", () => {
       "dashboard"
     );
     expect(res).toEqual({ ok: false, detail: "email_not_connected" });
+    expect(revokeDocumentShare).toHaveBeenCalledWith(BIZ, MINTED.shareId);
   });
 
   it("returns the link inline for the dashboard with no recipient", async () => {

@@ -3359,19 +3359,37 @@ async function shareDocumentStep(
   const expiresAt = new Date(
     Date.now() + SHARE_DOCUMENT_TTL_DAYS * 24 * 60 * 60 * 1000
   ).toISOString();
-  const { error: insertError } = await supabase.from("business_document_shares").insert({
-    business_id: run.business_id,
-    document_id: action.documentId,
-    token_sha256: await sha256Hex(token),
-    shared_with: action.to.slice(0, 200),
-    channel: "flow",
-    expires_at: expiresAt
-  });
+  const { data: shareRow, error: insertError } = await supabase
+    .from("business_document_shares")
+    .insert({
+      business_id: run.business_id,
+      document_id: action.documentId,
+      token_sha256: await sha256Hex(token),
+      shared_with: action.to.slice(0, 200),
+      channel: "flow",
+      expires_at: expiresAt
+    })
+    .select("id")
+    .single();
   if (insertError) {
     throw new Error(`share_document: share insert failed: ${insertError.message}`);
   }
+  const shareId = (shareRow as { id: string }).id;
   const url = `${appBase}/api/public/docs/${token}`;
   if (action.saveAs) scope.vars[action.saveAs] = url;
+
+  // A link the recipient never received must not stay live: on any
+  // undelivered outcome the share is revoked (best-effort — it still dies
+  // at its TTL if the revoke itself fails).
+  const revokeUndelivered = async (): Promise<void> => {
+    const { error: revokeError } = await supabase
+      .from("business_document_shares")
+      .update({ revoked_at: new Date().toISOString() })
+      .eq("id", shareId);
+    if (revokeError) {
+      console.error("share_document: undelivered-share revoke failed", revokeError.message);
+    }
+  };
 
   // Place the link: explicit {{share_url}} token wins; otherwise append.
   const title = doc!.title as string;
@@ -3397,7 +3415,10 @@ async function shareDocumentStep(
           to: action.to,
           body
         });
-  if (delivered.kind !== "ok") return delivered;
+  if (delivered.kind !== "ok" || delivered.skipped) {
+    await revokeUndelivered();
+    return delivered;
+  }
   appendActionTaken(scope, `shared the document "${title}" with ${action.to}`);
   return {
     kind: "ok",

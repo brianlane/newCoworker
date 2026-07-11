@@ -32,6 +32,7 @@ import { logger } from "@/lib/logger";
 import {
   listBusinessDocuments,
   patchBusinessDocument,
+  revokeDocumentShare,
   type BusinessDocumentRow
 } from "./db";
 import { isDocumentExpired, resolveDocumentReference } from "./core";
@@ -121,6 +122,21 @@ export async function shareDocumentTool(
 
   const channel: DocumentShareChannel = surface;
   const sharedWith = args.phone ?? args.email ?? (surface === "webchat" ? "webchat visitor" : "owner");
+
+  // Recipient validation happens BEFORE the link exists: an opted-out (or
+  // uncheckable) number must not leave an orphaned live capability behind.
+  if (surface !== "webchat" && args.phone) {
+    const optOut = await checkSmsOptOut(businessId, args.phone);
+    if (!optOut.ok) {
+      logger.error("documents/tool: opt-out check failed; refusing (fail closed)", {
+        businessId,
+        error: optOut.error
+      });
+      return { ok: false, detail: "opt_out_check_failed" };
+    }
+    if (optOut.optedOut) return { ok: false, detail: "recipient_opted_out" };
+  }
+
   const minted = await mintDocumentShare({
     businessId,
     document: resolved.document,
@@ -140,6 +156,20 @@ export async function shareDocumentTool(
     };
   }
 
+  // Failed delivery must not leave a live link nobody received. Best-effort:
+  // a revoke failure is logged, and the share still dies at its TTL.
+  const revokeUndelivered = async (): Promise<void> => {
+    try {
+      await revokeDocumentShare(businessId, minted.shareId);
+    } catch (err) {
+      logger.warn("documents/tool: undelivered-share revoke failed", {
+        businessId,
+        shareId: minted.shareId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
+
   const title = resolved.document.title;
   const logPayload: Record<string, unknown> = {
     source: `${surface}_tool_document_share`,
@@ -152,15 +182,6 @@ export async function shareDocumentTool(
 
   let delivered: "sms" | "email" | "inline" = "inline";
   if (surface !== "webchat" && args.phone) {
-    const optOut = await checkSmsOptOut(businessId, args.phone);
-    if (!optOut.ok) {
-      logger.error("documents/tool: opt-out check failed; refusing (fail closed)", {
-        businessId,
-        error: optOut.error
-      });
-      return { ok: false, detail: "opt_out_check_failed" };
-    }
-    if (optOut.optedOut) return { ok: false, detail: "recipient_opted_out" };
     const business = await getBusiness(businessId);
     const base = (args.message ?? "").trim() || `Here is "${title}"${business?.name ? ` from ${business.name}` : ""}`;
     const body = base.includes(minted.url) ? base : `${base}: ${minted.url}`;
@@ -172,6 +193,7 @@ export async function shareDocumentTool(
       const message = err instanceof Error ? err.message : String(err);
       const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);
       logger.warn("documents/tool: share sms send failed", { businessId, error: message });
+      await revokeUndelivered();
       return { ok: false, detail: isQuota ? "sms_quota_blocked" : "sms_send_failed" };
     }
   } else if (surface !== "webchat" && args.email) {
@@ -188,7 +210,10 @@ export async function shareDocumentTool(
       subject: `Document: ${title}`,
       bodyText
     });
-    if (!sent.ok) return { ok: false, detail: sent.detail };
+    if (!sent.ok) {
+      await revokeUndelivered();
+      return { ok: false, detail: sent.detail };
+    }
     await recordOutboundAssistantEmail({
       businessId,
       toEmail: args.email,

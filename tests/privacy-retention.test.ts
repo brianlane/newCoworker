@@ -47,7 +47,7 @@ function makeCentralDb(perTable: Partial<Record<string, TableResult>> = {}) {
   const from = vi.fn((table: string) => {
     const result = perTable[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
-    for (const m of ["delete", "eq", "lt", "in", "not"]) {
+    for (const m of ["delete", "eq", "lt", "in", "not", "or"]) {
       chain[m] = vi.fn().mockReturnValue(chain);
     }
     chain.select = vi.fn().mockResolvedValue(result);

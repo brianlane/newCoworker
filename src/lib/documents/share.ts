@@ -111,5 +111,12 @@ export async function resolveDocumentShareByToken(
     return { ok: false, detail: "document_unavailable" };
   }
   if (isDocumentExpired(document, now)) return { ok: false, detail: "document_expired" };
+  // Audience re-check at download time: a link minted from a customer-facing
+  // surface (sms/voice/webchat/flow) dies the moment the owner flips the
+  // document to internal-only. Dashboard-minted links survive — the owner
+  // explicitly chose to send that document to that recipient.
+  if (document.audience === "staff" && share.channel !== "dashboard") {
+    return { ok: false, detail: "document_unavailable" };
+  }
   return { ok: true, share, document };
 }

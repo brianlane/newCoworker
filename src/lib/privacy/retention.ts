@@ -275,7 +275,7 @@ export async function pruneExpiredContent(
       .delete()
       .eq("business_id", businessId)
       .lt("created_at", cutoffIso)
-      .lt("expires_at", nowIso)
+      .or(`expires_at.lt.${nowIso},revoked_at.not.is.null`)
       .select("id");
     if (error) throw new Error(`pruneExpiredContent: business_document_shares: ${error.message}`);
     results.push({ table: "business_document_shares", central: centralCount(data), box: null });

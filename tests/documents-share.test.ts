@@ -249,6 +249,22 @@ describe("resolveDocumentShareByToken", () => {
     });
   });
 
+  it("kills a customer-channel link the moment the document flips to internal-only", async () => {
+    vi.mocked(getDocumentShareByTokenSha).mockResolvedValue({ ...share, channel: "sms" } as never);
+    vi.mocked(getBusinessDocument).mockResolvedValue(doc({ audience: "staff" }));
+    expect(await resolveDocumentShareByToken("tok", NOW)).toEqual({
+      ok: false,
+      detail: "document_unavailable"
+    });
+    // A dashboard-minted link survives — the owner explicitly sent it.
+    vi.mocked(getDocumentShareByTokenSha).mockResolvedValue({
+      ...share,
+      channel: "dashboard"
+    } as never);
+    const res = await resolveDocumentShareByToken("tok", NOW);
+    expect(res.ok).toBe(true);
+  });
+
   it("resolves a healthy share (default clock)", async () => {
     vi.mocked(getDocumentShareByTokenSha).mockResolvedValue({
       ...share,
