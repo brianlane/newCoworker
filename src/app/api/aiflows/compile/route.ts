@@ -21,13 +21,18 @@ import {
   buildFlowCompileUserText,
   buildFlowRepairUserText,
   extractFlowJson,
-  humanizeCompileIssues
+  humanizeCompileIssues,
+  type CompileDocumentOption
 } from "@/lib/ai-flows/compile";
+import { listBusinessDocuments } from "@/lib/documents/db";
+import { documentEligibleFor } from "@/lib/documents/core";
 import {
   AiFlowValidationError,
   parseAiFlowDefinition,
-  salvageFlowDefinition
+  salvageFlowDefinition,
+  type AiFlowDefinition
 } from "@/lib/ai-flows/schema";
+import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
@@ -58,7 +63,22 @@ export async function POST(request: Request) {
     // balanced default ("medium") rather than the preview's "high" (dynamic),
     // which previously ate the whole output budget on hidden thinking.
     const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.5-flash";
-    const userText = buildFlowCompileUserText(body.description);
+    // Documents the model may bind share_document steps to: client-eligible
+    // + ready only (flow recipients are customers). A read failure just
+    // compiles without the block — same NEVER-invent contract applies.
+    let compileDocuments: CompileDocumentOption[] = [];
+    try {
+      const docs = await listBusinessDocuments(body.businessId);
+      compileDocuments = docs
+        .filter((d) => documentEligibleFor(d, "clients"))
+        .map((d) => ({ id: d.id, title: d.title, summary: d.summary }));
+    } catch (docErr) {
+      logger.warn("aiflow compile: document list failed; compiling without documents", {
+        businessId: body.businessId,
+        error: docErr instanceof Error ? docErr.message : String(docErr)
+      });
+    }
+    const userText = buildFlowCompileUserText(body.description, compileDocuments);
     let raw: string;
     let usage: GeminiUsage | null;
     try {
@@ -123,8 +143,22 @@ export async function POST(request: Request) {
       });
       return errorResponse("VALIDATION_ERROR", "AI did not return a usable automation");
     }
+    // Same layering as the CRUD routes: shape+semantics via
+    // parseAiFlowDefinition, then the DB-backed share_document check (the
+    // referenced document must exist, be ready, client-facing, unexpired) —
+    // so an invalid document binding feeds the self-repair loop instead of
+    // surfacing later as a save failure.
+    const parseAndValidate = async (input: unknown): Promise<AiFlowDefinition> => {
+      const definition = parseAiFlowDefinition(input);
+      const documentIssues = await validateShareDocumentSteps(body.businessId, definition);
+      if (documentIssues.length > 0) {
+        throw new AiFlowValidationError("Invalid AiFlow definition", documentIssues);
+      }
+      return definition;
+    };
+
     try {
-      const definition = parseAiFlowDefinition(candidate);
+      const definition = await parseAndValidate(candidate);
       return successResponse({ definition });
     } catch (err) {
       if (!(err instanceof AiFlowValidationError)) throw err;
@@ -153,7 +187,8 @@ export async function POST(request: Request) {
         const repairText = buildFlowRepairUserText({
           description: body.description,
           candidateJson: JSON.stringify(candidate),
-          issues: err.issues
+          issues: err.issues,
+          documents: compileDocuments
         });
         const { text: repairedRaw, usage: repairUsage } = await geminiGenerateTextDetailed({
           apiKey,
@@ -175,7 +210,7 @@ export async function POST(request: Request) {
         const repairedCandidate = extractFlowJson(repairedRaw);
         if (repairedCandidate !== null) {
           lastCandidate = repairedCandidate;
-          const definition = parseAiFlowDefinition(repairedCandidate);
+          const definition = await parseAndValidate(repairedCandidate);
           return successResponse({ definition });
         }
       } catch (repairErr) {
@@ -204,6 +239,14 @@ export async function POST(request: Request) {
       // explaining exactly what was changed.
       const salvaged = salvageFlowDefinition(lastCandidate);
       if (salvaged) {
+        // The salvage loads DISABLED for review — a bad document binding in
+        // it becomes a visible warning (and the save-time validator still
+        // blocks it) rather than a rejected compile.
+        const salvageDocumentIssues = await validateShareDocumentSteps(
+          body.businessId,
+          salvaged.definition
+        ).catch(() => []);
+        const warnings = [...salvaged.warnings, ...salvageDocumentIssues];
         void recordSystemLog({
           businessId: body.businessId,
           source: "app",
@@ -214,12 +257,12 @@ export async function POST(request: Request) {
             model,
             reason: "schema_after_repair",
             issues: repairIssues,
-            salvage_warnings: salvaged.warnings
+            salvage_warnings: warnings
           }
         });
         return successResponse({
           definition: salvaged.definition,
-          warnings: salvaged.warnings
+          warnings
         });
       }
       void recordSystemLog({

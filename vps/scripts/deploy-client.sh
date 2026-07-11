@@ -145,6 +145,11 @@ echo "$MEMORY_MD"   > /opt/rowboat/vault/memory.md
 echo "$WEBSITE_MD"  > /opt/rowboat/vault/website.md
 # profile.md: rendered Business-profile block (same empty-file convention).
 echo "$PROFILE_MD"  > /opt/rowboat/vault/profile.md
+# documents.md: client-facing documents digest. Always empty at provision
+# time (no uploads exist yet) — the post-upload vault sync
+# (src/lib/vps/sync-vault.ts) populates it. Touched here so the voice-bridge
+# vault loader has a stable file to stat.
+touch /opt/rowboat/vault/documents.md
 
 mkdir -p /opt/rowboat/memory/Organizations /opt/rowboat/memory/People /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects
 mkdir -p /opt/rowboat/memory/.newcoworker-seeds
@@ -669,7 +674,8 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_book_appointment",
         "send_email",
         "notify_team",
-        "generate_image"
+        "generate_image",
+        "document_share"
       ]
     },
     {
@@ -699,7 +705,8 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_book_appointment",
         "send_email",
         "notify_team",
-        "generate_image"
+        "generate_image",
+        "document_share"
       ]
     },
     {
@@ -729,7 +736,11 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
-        "dashboard_generate_image"
+        "dashboard_generate_image",
+        "dashboard_document_list",
+        "dashboard_document_share",
+        "dashboard_document_update",
+        "dashboard_document_set_expiration"
       ]
     },
     {
@@ -758,7 +769,11 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
-        "dashboard_generate_image"
+        "dashboard_generate_image",
+        "dashboard_document_list",
+        "dashboard_document_share",
+        "dashboard_document_update",
+        "dashboard_document_set_expiration"
       ]
     },
     {
@@ -784,7 +799,8 @@ WORKFLOW_JSON=$(jq -nc \
         "webchat_business_knowledge_lookup",
         "webchat_capture_lead",
         "webchat_calendar_find_slots",
-        "webchat_calendar_book_appointment"
+        "webchat_calendar_book_appointment",
+        "webchat_document_share"
       ]
     },
     {
@@ -807,7 +823,8 @@ WORKFLOW_JSON=$(jq -nc \
         "webchat_business_knowledge_lookup",
         "webchat_capture_lead",
         "webchat_calendar_find_slots",
-        "webchat_calendar_book_appointment"
+        "webchat_calendar_book_appointment",
+        "webchat_document_share"
       ]
     }
   ],
@@ -1034,6 +1051,29 @@ WORKFLOW_JSON=$(jq -nc \
         required: ["startIso", "endIso", "summary", "attendeeName"]
       }
     },
+    {
+      name: "document_share",
+      description: "Text the customer an expiring link to one of the business documents on file (price sheet, service menu, policy) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side — if the tool fails, say the team will follow up with a copy and never invent a link.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          document: {
+            type: "string",
+            description: "The document title (or part of it) as listed in your instructions."
+          },
+          phone: {
+            type: "string",
+            description: "E.164 phone of the customer to text the link to, e.g. +15551234567."
+          },
+          message: {
+            type: "string",
+            description: "Optional short intro sentence sent with the link."
+          }
+        },
+        required: ["document", "phone"]
+      }
+    },
     # Dashboard-surface twins (see the OwnerCoworker comment above). Same
     # dispatcher cores, separate Settings toggle per surface.
     {
@@ -1164,6 +1204,84 @@ WORKFLOW_JSON=$(jq -nc \
         required: ["note", "phone"]
       }
     },
+    # Dashboard-only document management tools. list/update/set_expiration
+    # exist ONLY on this surface — customers must never mutate business
+    # knowledge — and the platform dispatcher hard-refuses them elsewhere.
+    {
+      name: "dashboard_document_list",
+      description: "List the business documents on file (title, category, audience, status, expiration, summary) so the owner can reference them by name.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: "dashboard_document_share",
+      description: "Create an expiring share link for one of the business documents and deliver it. Provide phone to text it, email to email it, or neither to get the link back for the owner to copy. Works for internal documents too — the owner may share anything.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          document: {
+            type: "string",
+            description: "The document title (or part of it), or its id from dashboard_document_list."
+          },
+          phone: {
+            type: "string",
+            description: "Optional E.164 phone to text the link to."
+          },
+          email: {
+            type: "string",
+            description: "Optional email address to send the link to."
+          },
+          message: {
+            type: "string",
+            description: "Optional short intro sentence sent with the link."
+          }
+        },
+        required: ["document"]
+      }
+    },
+    {
+      name: "dashboard_document_update",
+      description: "Apply a plain-language edit the owner stated to one of the business documents (for example: haircuts are now 40 dollars). The edit is applied to the document knowledge content server-side; the original uploaded file is never changed. Only call when the owner explicitly asks for a document change.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          document: {
+            type: "string",
+            description: "The document title (or part of it), or its id from dashboard_document_list."
+          },
+          instruction: {
+            type: "string",
+            description: "The edit to apply, in the owner words."
+          }
+        },
+        required: ["document", "instruction"]
+      }
+    },
+    {
+      name: "dashboard_document_set_expiration",
+      description: "Set, extend, or clear the expiration date of a business document. Expired documents stop being quoted and shared automatically. Pass an ISO date to set, or omit expiresAt to clear it (never expires).",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          document: {
+            type: "string",
+            description: "The document title (or part of it), or its id from dashboard_document_list."
+          },
+          expiresAt: {
+            type: "string",
+            description: "ISO 8601 date or datetime when the document expires. Omit or pass empty to clear."
+          }
+        },
+        required: ["document"]
+      }
+    },
     # Website chat widget surface (WebchatCoworker/-Local). Same dispatcher
     # cores as the knowledge/calendar tools above plus the webchat-only
     # lead-capture core; separate Settings toggles under the webchat agent
@@ -1233,6 +1351,21 @@ WORKFLOW_JSON=$(jq -nc \
           timezone: { type: "string", description: "IANA timezone for the event times." }
         },
         required: ["startIso", "endIso", "summary", "attendeeName"]
+      }
+    },
+    {
+      name: "webchat_document_share",
+      description: "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, service menu, policy) when they ask for a copy. Returns the link — include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          document: {
+            type: "string",
+            description: "The document title (or part of it) as listed in your instructions."
+          }
+        },
+        required: ["document"]
       }
     },
     {

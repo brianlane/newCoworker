@@ -264,6 +264,23 @@ export async function pruneExpiredContent(
     results.push({ table: "ai_reply_reasoning", central: centralCount(data), box: null });
   }
 
+  // ── business_document_shares (dead links only; central-only) ───────────
+  // Share rows carry the recipient identifier (`shared_with` — PII). Only
+  // rows whose link can no longer serve (revoked, or past the link's own
+  // expiry) are pruned; a still-live link inside the retention window's
+  // tail is an active capability the owner can see and revoke, not history.
+  {
+    const { data, error } = await db
+      .from("business_document_shares")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .or(`expires_at.lt.${nowIso},revoked_at.not.is.null`)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: business_document_shares: ${error.message}`);
+    results.push({ table: "business_document_shares", central: centralCount(data), box: null });
+  }
+
   // ── sms_links (central-only: tracked short links carry the recipient ───
   // number + original URL; aged links go stale with their texts. Expired
   // codes then 303 to the homepage — by design).

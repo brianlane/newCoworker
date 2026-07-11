@@ -9,7 +9,8 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createAiFlow, listAiFlows } from "@/lib/ai-flows/db";
-import { AiFlowValidationError } from "@/lib/ai-flows/schema";
+import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 
 const businessIdSchema = z.string().uuid();
 
@@ -42,6 +43,13 @@ export async function POST(request: Request) {
     if (!user?.email) return errorResponse("UNAUTHORIZED", "Authentication required");
     const body = createSchema.parse(await request.json());
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
+    // share_document steps must reference a real, ready, client-audience,
+    // non-expired document (shape validation alone can't know that).
+    const parsedDefinition = parseAiFlowDefinition(body.definition);
+    const documentIssues = await validateShareDocumentSteps(body.businessId, parsedDefinition);
+    if (documentIssues.length > 0) {
+      return errorResponse("VALIDATION_ERROR", documentIssues.join("; "));
+    }
     const row = await createAiFlow({
       businessId: body.businessId,
       name: body.name,

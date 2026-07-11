@@ -1,5 +1,11 @@
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
+import { listBusinessDocuments } from "@/lib/documents/db";
+import {
+  renderDocumentsContext,
+  selectDocumentsForQuestion,
+  type DocumentAudienceView
+} from "@/lib/documents/core";
 import {
   GeminiEmptyError,
   geminiGenerateTextDetailed,
@@ -11,11 +17,18 @@ import { logger } from "@/lib/logger";
 /**
  * Channel-agnostic core for the `business_knowledge_lookup` tool: answers a
  * business-specific question from the vault (identity/soul/website/memory)
- * with a short Gemini completion.
+ * plus the business's uploaded documents, with a short Gemini completion.
  *
  * Shared by every surface that exposes the tool:
  *   - voice  → /api/voice/tools/knowledge (bridge adapter)
- *   - sms + dashboard → /api/rowboat/tool-call (Rowboat project webhook)
+ *   - sms + dashboard + webchat → /api/rowboat/tool-call (Rowboat webhook)
+ *
+ * Documents are audience-gated per surface: customer channels (voice / sms
+ * / webchat) read as `clients` and only see client-audience docs; the owner
+ * dashboard reads as `staff` and sees everything. Retrieval is two-stage —
+ * a deterministic term-overlap ranking picks which docs' full contents fit
+ * the prompt budget (no second model round-trip; the voice path runs under
+ * a 3s deadline), and the rest are surfaced as title+summary mentions.
  *
  * Kept server-side (instead of "let the model answer from its prompt") for
  * the same reasons as the original voice adapter: prompts are trimmed
@@ -127,11 +140,22 @@ async function askGemini(
 
 export async function lookupBusinessKnowledge(
   businessId: string,
-  question: string
+  question: string,
+  options: { audience?: DocumentAudienceView } = {}
 ): Promise<KnowledgeToolResult> {
-  const [config, business] = await Promise.all([
+  const audience = options.audience ?? "clients";
+  const [config, business, documents] = await Promise.all([
     getBusinessConfig(businessId),
-    getBusiness(businessId)
+    getBusiness(businessId),
+    // Documents must never break the base lookup: a table/read failure just
+    // answers from the vault alone.
+    listBusinessDocuments(businessId).catch((err) => {
+      logger.warn("knowledge-tools: document list failed; answering from vault only", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return [];
+    })
   ]);
 
   const parts: string[] = [];
@@ -143,6 +167,16 @@ export async function lookupBusinessKnowledge(
   if (config?.soul_md) parts.push(`# soul.md\n${config.soul_md}`);
   if (config?.website_md) parts.push(`# website.md\n${config.website_md}`);
   if (config?.memory_md) parts.push(`# memory.md\n${config.memory_md}`);
+
+  // Two-stage document retrieval: pack the most relevant eligible docs'
+  // full contents into whatever budget the vault left over; mention the
+  // rest by title+summary. Expired and wrong-audience docs are excluded by
+  // selectDocumentsForQuestion.
+  const vaultContext = parts.join("\n\n");
+  const docBudget = Math.max(0, PROMPT_MAX_CONTEXT_CHARS - vaultContext.length);
+  const selection = selectDocumentsForQuestion(documents, question, audience, docBudget);
+  const documentsContext = renderDocumentsContext(selection);
+  if (documentsContext) parts.push(documentsContext);
 
   const context = parts.join("\n\n").slice(0, PROMPT_MAX_CONTEXT_CHARS);
   if (!context.trim()) {

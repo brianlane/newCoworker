@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FLOW_COMPILE_SYSTEM_PROMPT,
+  buildAvailableDocumentsBlock,
   buildFlowAdaptUserText,
   buildFlowCompileUserText,
   buildFlowRepairUserText,
@@ -68,8 +69,34 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
 });
 
 describe("buildFlowCompileUserText", () => {
-  it("trims and labels the description", () => {
-    expect(buildFlowCompileUserText("  do a thing  ")).toBe("Automation description:\ndo a thing");
+  it("trims and labels the description, with an explicit no-documents line", () => {
+    const text = buildFlowCompileUserText("  do a thing  ");
+    expect(text).toContain("Automation description:\ndo a thing");
+    expect(text).toContain("AVAILABLE DOCUMENTS: (none on file — do not emit share_document steps)");
+  });
+
+  it("lists shareable documents with their exact ids", () => {
+    const text = buildFlowCompileUserText("send them the price sheet", [
+      { id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Price sheet", summary: "Prices." },
+      { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", title: "Menu", summary: "" }
+    ]);
+    expect(text).toContain("AVAILABLE DOCUMENTS (for share_document steps");
+    expect(text).toContain('- documentId: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa — "Price sheet": Prices.');
+    // Empty summaries render without a trailing colon segment.
+    expect(text).toContain('- documentId: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb — "Menu"');
+    expect(text).not.toContain('"Menu":');
+  });
+});
+
+describe("buildAvailableDocumentsBlock / share_document prompt contract", () => {
+  it("the system prompt documents share_document with the never-invent rule", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"share_document"');
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("{{share_url}}");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("AVAILABLE DOCUMENTS");
+  });
+
+  it("renders the none-on-file sentinel for an empty list", () => {
+    expect(buildAvailableDocumentsBlock([])).toContain("(none on file");
   });
 });
 
@@ -114,6 +141,18 @@ describe("buildFlowRepairUserText", () => {
     expect(text).toContain("- steps.0.minutes: too big");
     expect(text).toContain('{"version":1}');
     expect(text).toContain("wait then text");
+    // No documents supplied → the explicit none-on-file sentinel rides along.
+    expect(text).toContain("AVAILABLE DOCUMENTS: (none on file");
+  });
+
+  it("carries the documents list so a repaired draft can re-bind documentId", () => {
+    const text = buildFlowRepairUserText({
+      description: "send the price sheet",
+      candidateJson: "{}",
+      issues: ["bad"],
+      documents: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Price sheet", summary: "" }]
+    });
+    expect(text).toContain("documentId: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
   });
 });
 
