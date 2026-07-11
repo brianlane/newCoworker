@@ -3287,8 +3287,9 @@ async function sendSmsStep(
       // burning the whole retry budget: a Privyr digest email once yielded
       // lead_phone "+11459337300" (not a dialable NANP number) and the run
       // spent five retries on guaranteed 40310s before dying with a raw
-      // error blob. 5xx/network errors still throw and retry below.
-      if (send.status >= 400 && send.status < 500) {
+      // error blob. 408 (timeout) and 429 (rate limit) are transient and
+      // keep the retry path, as do 5xx/network errors.
+      if (send.status >= 400 && send.status < 500 && send.status !== 408 && send.status !== 429) {
         return {
           kind: "fail",
           error:
@@ -3426,9 +3427,10 @@ async function sendGroupSmsStep(
     if (!send.ok) {
       await release();
       const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
-      // Same permanent-4xx rule as the 1:1 send above: retrying an invalid
-      // recipient or rejected payload can only fail again.
-      if (send.status >= 400 && send.status < 500) {
+      // Same permanent-4xx rule as the 1:1 send above (408/429 stay
+      // transient): retrying an invalid recipient or rejected payload can
+      // only fail again.
+      if (send.status >= 400 && send.status < 500 && send.status !== 408 && send.status !== 429) {
         return {
           kind: "fail",
           error:
