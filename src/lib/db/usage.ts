@@ -163,17 +163,27 @@ export type BusinessMonthUsage = {
   peakConcurrentCalls: number;
 };
 
+export type UsageWindow = {
+  /** Inclusive UTC start day, YYYY-MM-DD. */
+  startYmd: string;
+  /** Exclusive UTC end day, YYYY-MM-DD; omit for an open-ended window. */
+  endYmdExclusive?: string;
+};
+
 /**
  * Per-business variant of {@link getFleetCalendarMonthUsageTotals}: the
  * same sources (SMS from `daily_usage`, voice from settled
  * `voice_settlements` seconds) grouped by business for the admin Usage
- * page and the margin engine. Same paging + ordering rationale.
+ * page and the margin engine. Same paging + ordering rationale. Defaults
+ * to the current UTC calendar month; pass `window` for a historical month.
  */
 export async function getFleetCalendarMonthUsageByBusiness(
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  window?: UsageWindow
 ): Promise<Map<string, BusinessMonthUsage>> {
   const db = client ?? (await createSupabaseServiceClient());
-  const monthStartYmd = calendarMonthStartUtcYmd();
+  const monthStartYmd = window?.startYmd ?? calendarMonthStartUtcYmd();
+  const monthEndYmd = window?.endYmdExclusive ?? null;
   const pageSize = 1000;
 
   const byBusiness = new Map<string, BusinessMonthUsage>();
@@ -187,10 +197,12 @@ export async function getFleetCalendarMonthUsageByBusiness(
   };
 
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await db
+    let query = db
       .from("daily_usage")
       .select("business_id, sms_sent, calls_made, peak_concurrent_calls")
-      .gte("usage_date", monthStartYmd)
+      .gte("usage_date", monthStartYmd);
+    if (monthEndYmd !== null) query = query.lt("usage_date", monthEndYmd);
+    const { data, error } = await query
       .order("id", { ascending: true })
       .range(from, from + pageSize - 1);
 
@@ -217,10 +229,12 @@ export async function getFleetCalendarMonthUsageByBusiness(
   }
 
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await db
+    let query = db
       .from("voice_settlements")
       .select("business_id, billable_seconds")
-      .gte("created_at", `${monthStartYmd}T00:00:00.000Z`)
+      .gte("created_at", `${monthStartYmd}T00:00:00.000Z`);
+    if (monthEndYmd !== null) query = query.lt("created_at", `${monthEndYmd}T00:00:00.000Z`);
+    const { data, error } = await query
       .order("created_at", { ascending: true })
       .order("call_control_id", { ascending: true })
       .range(from, from + pageSize - 1);

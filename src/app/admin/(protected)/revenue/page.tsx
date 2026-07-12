@@ -11,7 +11,9 @@ import {
   listPaymentProblems,
   type RevenueSubscription
 } from "@/lib/admin/revenue";
+import Link from "next/link";
 import { formatAdminLabel } from "@/lib/admin/dashboard";
+import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -26,10 +28,19 @@ function formatMoney(cents: number): string {
 }
 
 export default async function AdminRevenuePage() {
-  const [businesses, subscriptions, deals] = await Promise.all([
+  const [businesses, subscriptions, deals, margins] = await Promise.all([
     listBusinesses(),
     listAllSubscriptions(),
-    listActiveEnterpriseDeals()
+    listActiveEnterpriseDeals(),
+    // Margin data is best effort — the revenue analytics must render even
+    // if the cost side is unavailable.
+    loadFleetMargins().catch((err: unknown) => {
+      console.error(
+        "admin revenue: margin load failed",
+        err instanceof Error ? err.message : err
+      );
+      return null;
+    })
   ]);
 
   const revenueSubs: RevenueSubscription[] = subscriptions;
@@ -60,6 +71,11 @@ export default async function AdminRevenuePage() {
   const trendMax = Math.max(...trend.map((p) => p.totalCents), 1);
   const payingCount = payingBusinesses.length;
 
+  const avgMarginCents =
+    margins !== null && margins.totals.payingBusinesses > 0
+      ? Math.round(margins.totals.marginCents / margins.totals.payingBusinesses)
+      : null;
+
   return (
     <div className="space-y-6">
       <div>
@@ -70,7 +86,7 @@ export default async function AdminRevenuePage() {
       </div>
 
       {/* KPI row */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Est. MRR</p>
           <p className="text-3xl font-bold text-parchment">{formatMoney(mrr.totalCents)}</p>
@@ -78,6 +94,29 @@ export default async function AdminRevenuePage() {
             {formatMoney(mrr.subscriptionCents)} subs · {formatMoney(mrr.enterpriseDealCents)}{" "}
             enterprise
           </p>
+        </Card>
+        <Card>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Net Margin</p>
+          {margins === null ? (
+            <p className="text-3xl font-bold text-parchment/40">—</p>
+          ) : (
+            <>
+              <p
+                className={`text-3xl font-bold ${
+                  margins.totals.marginCents >= 0 ? "text-claw-green" : "text-spark-orange"
+                }`}
+              >
+                {formatMoney(margins.totals.marginCents)}
+              </p>
+              <p className="text-xs text-parchment/30 mt-1">
+                {margins.totals.marginPct !== null ? `${margins.totals.marginPct}% of revenue` : "no revenue"}
+                {" · "}
+                <Link href="/admin/costs" className="hover:text-signal-teal">
+                  cost detail
+                </Link>
+              </p>
+            </>
+          )}
         </Card>
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Paying Clients</p>
@@ -89,7 +128,10 @@ export default async function AdminRevenuePage() {
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">ARPU</p>
           <p className="text-3xl font-bold text-parchment">{formatMoney(arpuCents)}</p>
-          <p className="text-xs text-parchment/30 mt-1">per paying client / month</p>
+          <p className="text-xs text-parchment/30 mt-1">
+            per paying client / month
+            {avgMarginCents !== null && ` · ${formatMoney(avgMarginCents)} avg margin`}
+          </p>
         </Card>
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
@@ -144,24 +186,41 @@ export default async function AdminRevenuePage() {
             <p className="text-sm text-parchment/40 text-center py-4">No paying clients yet.</p>
           ) : (
             <ul className="divide-y divide-parchment/8">
-              {topClients.map((row) => (
-                <li key={row.businessId} className="py-2.5 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <a
-                      href={`/admin/${row.businessId}`}
-                      className="text-sm text-parchment font-medium hover:text-signal-teal truncate block"
-                    >
-                      {businessName.get(row.businessId) ?? `${row.businessId.slice(0, 8)}…`}
-                    </a>
-                    <p className="text-xs text-parchment/30">
-                      {formatAdminLabel(row.source)}
-                    </p>
-                  </div>
-                  <span className="text-sm text-claw-green font-semibold shrink-0">
-                    {formatMoney(row.cents)}/mo
-                  </span>
-                </li>
-              ))}
+              {topClients.map((row) => {
+                const marginCents = margins?.byBusiness.get(row.businessId)?.marginCents ?? null;
+                return (
+                  <li
+                    key={row.businessId}
+                    className="py-2.5 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <a
+                        href={`/admin/${row.businessId}`}
+                        className="text-sm text-parchment font-medium hover:text-signal-teal truncate block"
+                      >
+                        {businessName.get(row.businessId) ?? `${row.businessId.slice(0, 8)}…`}
+                      </a>
+                      <p className="text-xs text-parchment/30">
+                        {formatAdminLabel(row.source)}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <span className="text-sm text-claw-green font-semibold block">
+                        {formatMoney(row.cents)}/mo
+                      </span>
+                      {marginCents !== null && (
+                        <span
+                          className={`text-xs ${
+                            marginCents >= 0 ? "text-parchment/40" : "text-spark-orange"
+                          }`}
+                        >
+                          {formatMoney(marginCents)} margin
+                        </span>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Card>

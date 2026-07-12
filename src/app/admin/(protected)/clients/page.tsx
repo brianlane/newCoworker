@@ -16,6 +16,8 @@ import {
   whiteGloveOfferPayUrl
 } from "@/lib/db/white-glove-offers";
 import { listWhiteGloveIntakes, whiteGloveIntakeUrl } from "@/lib/white-glove/intake";
+import { loadFleetMargins } from "@/lib/admin/margin-data";
+import type { BusinessMarginEconomics } from "@/lib/admin/margin";
 
 export const dynamic = "force-dynamic";
 
@@ -24,6 +26,18 @@ export default async function AdminClientsPage() {
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
   const prospectOffers = await listProspectWhiteGloveOffers();
   const intakes = await listWhiteGloveIntakes();
+
+  // Per-tenant margin column (src/lib/admin/margin.ts) — best effort: a
+  // failed load renders "—" cells, never an errored page.
+  const marginByBusiness = await loadFleetMargins()
+    .then((data) => data.byBusiness)
+    .catch((err: unknown) => {
+      console.error(
+        "admin clients: margin load failed",
+        err instanceof Error ? err.message : err
+      );
+      return new Map<string, BusinessMarginEconomics>();
+    });
 
   // Churn-risk badge: businesses whose owner hasn't signed in for 90+ days
   // (see /admin/engagement). Best effort — an auth-directory read failure OR
@@ -87,7 +101,8 @@ export default async function AdminClientsPage() {
               status: b.status,
               isPaused: !!b.is_paused,
               subscriptionStatus: subscriptionMap.get(b.id)?.status ?? null,
-              ownerQuiet: quietOwners.has(b.id)
+              ownerQuiet: quietOwners.has(b.id),
+              marginCents: marginByBusiness.get(b.id)?.marginCents ?? null
             }))}
           />
         </Card>

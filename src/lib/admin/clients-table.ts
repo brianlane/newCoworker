@@ -21,6 +21,11 @@ export type AdminClientRow = {
    * src/lib/admin/user-engagement.ts) — surfaced as a churn-risk badge.
    */
   ownerQuiet: boolean;
+  /**
+   * This month's margin from the engine (src/lib/admin/margin.ts); null
+   * when the margin load failed (column renders as —).
+   */
+  marginCents: number | null;
 };
 
 /** Sentinel for "no subscription row" in the payment filter. */
@@ -65,7 +70,7 @@ export function filterClientRows(
   });
 }
 
-export type ClientsSortKey = "name" | "created" | "tier" | "payment" | "status";
+export type ClientsSortKey = "name" | "created" | "tier" | "payment" | "status" | "margin";
 export type ClientsSortDir = "asc" | "desc";
 
 function sortValue(row: AdminClientRow, key: ClientsSortKey): string | number {
@@ -82,6 +87,9 @@ function sortValue(row: AdminClientRow, key: ClientsSortKey): string | number {
       return row.subscriptionStatus ?? "";
     case "status":
       return row.status;
+    case "margin":
+      // Unknown margins sort below every real number in ascending order.
+      return row.marginCents ?? Number.MIN_SAFE_INTEGER;
   }
 }
 
@@ -104,7 +112,18 @@ export function sortClientRows(
 /** The visible rows as spreadsheet-ready CSV (header first). */
 export function clientsCsv(rows: AdminClientRow[]): string {
   return serializeCsv([
-    ["name", "owner_email", "tier", "payment", "status", "paused", "churn_risk", "created_at", "id"],
+    [
+      "name",
+      "owner_email",
+      "tier",
+      "payment",
+      "status",
+      "paused",
+      "churn_risk",
+      "margin_usd_per_month",
+      "created_at",
+      "id"
+    ],
     ...rows.map((row) => [
       row.name,
       row.ownerEmail,
@@ -113,6 +132,7 @@ export function clientsCsv(rows: AdminClientRow[]): string {
       row.status,
       row.isPaused,
       row.ownerQuiet,
+      row.marginCents !== null ? (row.marginCents / 100).toFixed(2) : "",
       row.createdAt,
       row.id
     ])

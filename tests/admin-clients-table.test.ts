@@ -20,6 +20,7 @@ function row(overrides: Partial<AdminClientRow> = {}): AdminClientRow {
     isPaused: false,
     subscriptionStatus: "active",
     ownerQuiet: false,
+    marginCents: 15000,
     ...overrides
   };
 }
@@ -103,6 +104,24 @@ describe("sortClientRows", () => {
     expect(sortClientRows(rows, "status", "asc").map((r) => r.id)).toEqual(["c", "b", "a"]);
   });
 
+  it("sorts by margin, unknown margins below every real number", () => {
+    const marginRows = [
+      row({ id: "loss", marginCents: -500 }),
+      row({ id: "unknown", marginCents: null }),
+      row({ id: "win", marginCents: 15000 })
+    ];
+    expect(sortClientRows(marginRows, "margin", "asc").map((r) => r.id)).toEqual([
+      "unknown",
+      "loss",
+      "win"
+    ]);
+    expect(sortClientRows(marginRows, "margin", "desc").map((r) => r.id)).toEqual([
+      "win",
+      "loss",
+      "unknown"
+    ]);
+  });
+
   it("does not mutate the input", () => {
     const input = [...rows];
     sortClientRows(rows, "name", "asc");
@@ -111,18 +130,26 @@ describe("sortClientRows", () => {
 });
 
 describe("clientsCsv", () => {
+  const HEADER =
+    "name,owner_email,tier,payment,status,paused,churn_risk,margin_usd_per_month,created_at,id";
+
   it("serializes header + rows with the payment sentinel and quoting", () => {
     const csv = clientsCsv([
       row({ name: 'Quote "Co", Inc', subscriptionStatus: null, isPaused: true, ownerQuiet: true })
     ]);
     const lines = csv.split("\r\n");
-    expect(lines[0]).toBe("name,owner_email,tier,payment,status,paused,churn_risk,created_at,id");
+    expect(lines[0]).toBe(HEADER);
     expect(lines[1]).toBe(
-      '"Quote ""Co"", Inc",owner@acme.com,standard,none,online,true,true,2026-07-01T00:00:00Z,b1'
+      '"Quote ""Co"", Inc",owner@acme.com,standard,none,online,true,true,150.00,2026-07-01T00:00:00Z,b1'
     );
   });
 
+  it("leaves the margin cell empty when unknown", () => {
+    const csv = clientsCsv([row({ marginCents: null })]);
+    expect(csv.split("\r\n")[1]).toContain(",online,false,false,,2026-07-01T00:00:00Z");
+  });
+
   it("produces only the header for zero rows", () => {
-    expect(clientsCsv([])).toBe("name,owner_email,tier,payment,status,paused,churn_risk,created_at,id");
+    expect(clientsCsv([])).toBe(HEADER);
   });
 });

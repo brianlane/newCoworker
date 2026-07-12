@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getBusiness } from "@/lib/db/businesses";
 import { getRecentLogs } from "@/lib/db/logs";
@@ -51,6 +52,7 @@ import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
+import { loadFleetMargins } from "@/lib/admin/margin-data";
 
 export const dynamic = "force-dynamic";
 
@@ -91,6 +93,19 @@ export default async function BusinessDetailPage({
   const teamMembers = await listBusinessMembers(businessId);
 
   if (!business) notFound();
+
+  // This tenant's economics from the margin engine (same numbers as
+  // /admin/costs and /admin/usage). Best effort — the page renders without
+  // the card if the load fails.
+  const economics = await loadFleetMargins()
+    .then((data) => data.byBusiness.get(businessId) ?? null)
+    .catch((err: unknown) => {
+      console.error(
+        "admin business: margin load failed",
+        err instanceof Error ? err.message : err
+      );
+      return null;
+    });
 
   // BYOS enrollment state (enterprise only): the active key row for the
   // byos-<businessId> sentinel box. Only SAFE fields cross into the client
@@ -151,6 +166,67 @@ export default async function BusinessDetailPage({
         initialForwardToE164={telnyxSettings?.forward_to_e164 ?? null}
         compact
       />
+
+      {economics && (
+        <Card>
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+            Economics (this month)
+          </h2>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div>
+              <p className="text-xs text-parchment/40 mb-0.5">Revenue rate</p>
+              <p className="text-xl font-bold text-parchment">
+                ${(economics.revenueCents / 100).toFixed(2)}
+                <span className="text-xs text-parchment/40 font-normal">/mo</span>
+              </p>
+              <p className="text-xs text-parchment/30">
+                {economics.revenueSource === "none"
+                  ? "not paying"
+                  : formatAdminLabel(economics.revenueSource)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-parchment/40 mb-0.5">Cost</p>
+              <p className="text-xl font-bold text-parchment">
+                ${(economics.costCents / 100).toFixed(2)}
+                <span className="text-xs text-parchment/40 font-normal">/mo</span>
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-parchment/40 mb-0.5">Margin</p>
+              <p
+                className={`text-xl font-bold ${
+                  economics.marginCents >= 0 ? "text-claw-green" : "text-spark-orange"
+                }`}
+              >
+                {economics.marginCents < 0 ? "−" : ""}$
+                {Math.abs(economics.marginCents / 100).toFixed(2)}
+                <span className="text-xs text-parchment/40 font-normal">/mo</span>
+              </p>
+            </div>
+          </div>
+          <ul className="divide-y divide-parchment/8">
+            {economics.lines.map((line) => (
+              <li key={line.key} className="py-1.5 flex items-center justify-between gap-3">
+                <span className="text-xs text-parchment/70">{line.label}</span>
+                <span className="flex items-center gap-2 shrink-0">
+                  <Badge variant={line.source === "actual" ? "success" : "neutral"}>
+                    {line.source}
+                  </Badge>
+                  <span className="text-xs text-parchment font-medium">
+                    ${(line.cents / 100).toFixed(2)}
+                  </span>
+                </span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-parchment/30 mt-3">
+            Engine: src/lib/admin/margin.ts — renewal-aware revenue, vendor actuals where synced
+            (see <Link href="/admin/costs" className="hover:text-signal-teal">Costs</Link>),
+            per-unit estimates otherwise. Nothing bills from this card.
+          </p>
+        </Card>
+      )}
 
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
