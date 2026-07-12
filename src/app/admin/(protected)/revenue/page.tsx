@@ -45,11 +45,19 @@ export default async function AdminRevenuePage() {
   const arpuCents = computeArpuCents({ subscriptions: revenueSubs, deals });
   const churn = computeChurnStats({ subscriptions: revenueSubs });
   const trend = computeMrrTrend({ subscriptions: revenueSubs, deals, months: 6 });
-  const topClients = computeTopBusinessRevenue({ subscriptions: revenueSubs, deals });
+  // Per-business revenue merged by businessId — its length is the UNIQUE
+  // paying-business count (a tenant with both a subscription and an
+  // enterprise deal counts once), and the top-10 slice feeds the list.
+  const payingBusinesses = computeTopBusinessRevenue({
+    subscriptions: revenueSubs,
+    deals,
+    limit: Number.MAX_SAFE_INTEGER
+  });
+  const topClients = payingBusinesses.slice(0, 10);
   const problems = listPaymentProblems(revenueSubs).slice(0, 20);
 
   const trendMax = Math.max(...trend.map((p) => p.totalCents), 1);
-  const payingCount = mrr.countedSubscriptions + deals.length;
+  const payingCount = payingBusinesses.length;
 
   return (
     <div className="space-y-6">

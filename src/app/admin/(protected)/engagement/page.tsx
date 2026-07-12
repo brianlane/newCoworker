@@ -22,8 +22,10 @@ export default async function AdminEngagementPage() {
   const rows = buildUserEngagementRows({ users, businesses, members });
   // The churn-risk KPI counts quiet OWNERS (per business) — the same set
   // that gets the churn-risk badge on /admin/clients, so the two surfaces
-  // always agree. Quiet staff/member/unlinked rows are shown separately.
-  const quietOwnerCount = quietOwnerBusinessIds(rows).size;
+  // always agree. On a clipped (partial) auth scan the clients page hides
+  // its badges, so this KPI goes unknown too rather than overstating risk
+  // for owners the scan never reached.
+  const quietOwnerCount = clipped ? null : quietOwnerBusinessIds(rows).size;
   const quietRowCount = rows.filter((r) => r.segment === "quiet").length;
 
   return (
@@ -71,13 +73,17 @@ export default async function AdminEngagementPage() {
           </p>
           <p
             className={`text-3xl font-bold ${
-              quietOwnerCount > 0 ? "text-spark-orange" : "text-parchment"
+              quietOwnerCount !== null && quietOwnerCount > 0
+                ? "text-spark-orange"
+                : "text-parchment"
             }`}
           >
-            {quietOwnerCount}
+            {quietOwnerCount ?? "–"}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
-            churn-risk businesses · {quietRowCount} quiet users total
+            {quietOwnerCount === null
+              ? "unknown — partial auth scan"
+              : `churn-risk businesses · ${quietRowCount} quiet users total`}
           </p>
         </Card>
       </div>
