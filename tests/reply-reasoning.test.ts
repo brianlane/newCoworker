@@ -183,6 +183,39 @@ describe("splitReplyReasoning", () => {
       });
     });
 
+    it("braces inside the trailer's strings don't fool the multi-line walk", () => {
+      const raw = [
+        "You got it!",
+        `${REASONING_MARKER}{`,
+        '  "intent": "confirming",',
+        '  "why": "They typed :} and {shrug} but agreed to the time.",',
+        '  "handoff": false',
+        "}",
+        "See you at 2pm sharp."
+      ].join("\n");
+      const res = splitReplyReasoning(raw);
+      // The walk must stop exactly at the real closing brace: the line
+      // AFTER the trailer is customer text and must survive.
+      expect(res.reply).toBe("You got it!\nSee you at 2pm sharp.");
+      expect(res.reasoning?.rationale).toBe(
+        "They typed :} and {shrug} but agreed to the time."
+      );
+    });
+
+    it("escaped quotes inside the trailer strings keep the walk in-string", () => {
+      const raw = [
+        "Noted!",
+        `${REASONING_MARKER}{`,
+        '  "intent": "gave_info",',
+        '  "why": "They said \\"call me {maybe}\\" earlier.",',
+        '  "handoff": false',
+        "}"
+      ].join("\n");
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Noted!");
+      expect(res.reasoning?.intent).toBe("gave_info");
+    });
+
     it("a pretty-printed trailer that never closes strips to the end (never leaks)", () => {
       const raw = [
         "See you soon!",

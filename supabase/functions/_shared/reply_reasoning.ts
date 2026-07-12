@@ -138,11 +138,25 @@ function isBareFence(line: string): boolean {
   return /^\s*```[a-z]*\s*$/i.test(line);
 }
 
-/** More `{` than `}` so far — the trailer JSON continues on later lines. */
+/**
+ * More `{` than `}` so far — the trailer JSON continues on later lines.
+ * String-aware: braces inside JSON string literals (a `}` in the `why`
+ * text, an escaped quote) don't count, so the multi-line walk neither
+ * stops early nor swallows customer text after the trailer.
+ */
 function unclosedBraces(chunk: string): boolean {
   let depth = 0;
+  let inString = false;
+  let escaped = false;
   for (const ch of chunk) {
-    if (ch === "{") depth += 1;
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth += 1;
     else if (ch === "}") depth -= 1;
   }
   return depth > 0;
