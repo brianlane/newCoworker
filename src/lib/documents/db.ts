@@ -245,6 +245,8 @@ export type DocumentSignatureRequestRow = {
   signer_ip: string | null;
   signer_user_agent: string | null;
   content_sha256: string | null;
+  /** Snapshot of content_md at signing — what the certificate renders. */
+  signed_content_md: string | null;
   expires_at: string;
   created_at: string;
 };
@@ -326,7 +328,12 @@ export async function completeSignatureRequest(
   requestId: string,
   fields: Pick<
     DocumentSignatureRequestRow,
-    "signature_name" | "signed_at" | "signer_ip" | "signer_user_agent" | "content_sha256"
+    | "signature_name"
+    | "signed_at"
+    | "signer_ip"
+    | "signer_user_agent"
+    | "content_sha256"
+    | "signed_content_md"
   >,
   client?: SupabaseClient
 ): Promise<number> {
@@ -363,6 +370,30 @@ export async function voidSignatureRequest(
   const query = documentId ? base.eq("document_id", documentId) : base;
   const { data, error } = await query.select("id");
   if (error) throw new Error(`voidSignatureRequest: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+/**
+ * Void EVERY still-signable request for a document. Used as the first
+ * phase of document deletion: after this sweep no request can transition
+ * to signed (the signing write requires status in sent/viewed), which
+ * closes the check-then-delete race against a concurrent signer. Returns
+ * the number of rows voided.
+ */
+export async function voidAllSignatureRequestsForDocument(
+  businessId: string,
+  documentId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("document_signature_requests")
+    .update({ status: "void" })
+    .eq("business_id", businessId)
+    .eq("document_id", documentId)
+    .in("status", ["sent", "viewed"])
+    .select("id");
+  if (error) throw new Error(`voidAllSignatureRequestsForDocument: ${error.message}`);
   return Array.isArray(data) ? data.length : 0;
 }
 

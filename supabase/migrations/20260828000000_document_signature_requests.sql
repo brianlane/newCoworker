@@ -42,6 +42,10 @@ create table if not exists document_signature_requests (
   signer_user_agent text,
   -- sha256 of business_documents.content_md at the moment of signing.
   content_sha256 text,
+  -- Full snapshot of content_md at signing: the certificate page renders
+  -- THIS (not the live document), so later edits can never change what the
+  -- signed record displays.
+  signed_content_md text,
   expires_at timestamptz not null,
   created_at timestamptz not null default now()
 );

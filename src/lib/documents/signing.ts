@@ -221,7 +221,10 @@ export async function signDocumentRequest(input: SignDocumentInput): Promise<Sig
     signed_at: signedAt,
     signer_ip: (input.signerIp ?? "").slice(0, 64) || null,
     signer_user_agent: (input.signerUserAgent ?? "").slice(0, 400) || null,
-    content_sha256: currentSha
+    content_sha256: currentSha,
+    // Snapshot what was signed: the certificate page renders this, so a
+    // later document edit can never change what the signed record shows.
+    signed_content_md: resolved.document.content_md
   });
   if (updated === 0) {
     // Zero rows means the request stopped being signable between resolve

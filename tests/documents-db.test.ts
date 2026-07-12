@@ -12,6 +12,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   completeSignatureRequest,
+  voidAllSignatureRequestsForDocument,
   countBusinessDocuments,
   deleteBusinessDocument,
   getBusinessDocument,
@@ -354,7 +355,8 @@ describe("completeSignatureRequest", () => {
     signed_at: "2026-07-11T12:00:00Z",
     signer_ip: "203.0.113.9",
     signer_user_agent: "UA",
-    content_sha256: "deadbeef"
+    content_sha256: "deadbeef",
+    signed_content_md: "## Terms"
   };
 
   it("signs conditionally on a signable status and reports the count (explicit client)", async () => {
@@ -399,6 +401,24 @@ describe("voidSignatureRequest", () => {
     const c = chain({ data: null, error: { message: "sig-void" } });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await expect(voidSignatureRequest(BIZ, "r1")).rejects.toThrow(/sig-void/);
+  });
+});
+
+describe("voidAllSignatureRequestsForDocument", () => {
+  it("voids only still-signable rows for the document and counts them (explicit client)", async () => {
+    const c = chain({ data: [{ id: "r1" }, { id: "r2" }], error: null });
+    expect(await voidAllSignatureRequestsForDocument(BIZ, DOC, makeDb(c))).toBe(2);
+    expect(c.update).toHaveBeenCalledWith({ status: "void" });
+    expect(c.eq).toHaveBeenCalledWith("document_id", DOC);
+    expect(c.in).toHaveBeenCalledWith("status", ["sent", "viewed"]);
+    const cNull = chain({ data: null, error: null });
+    expect(await voidAllSignatureRequestsForDocument(BIZ, DOC, makeDb(cNull))).toBe(0);
+  });
+
+  it("throws on error (default client)", async () => {
+    const c = chain({ data: null, error: { message: "sig-sweep" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(voidAllSignatureRequestsForDocument(BIZ, DOC)).rejects.toThrow(/sig-sweep/);
   });
 });
 

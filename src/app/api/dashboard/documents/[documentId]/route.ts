@@ -18,6 +18,7 @@ import {
   getBusinessDocument,
   listDocumentSignatureRequests,
   patchBusinessDocument,
+  voidAllSignatureRequestsForDocument,
   type BusinessDocumentPatch
 } from "@/lib/documents/db";
 import {
@@ -130,6 +131,19 @@ export async function DELETE(request: Request, context: RouteContext) {
     // Signed signature requests are retained legal evidence: deleting the
     // document would cascade them away. Refuse instead — the owner keeps
     // the audit trail (and the document its certificate references).
+    //
+    // Race-safe ordering: FIRST void every still-signable request (the
+    // signing write is conditional on status sent/viewed, so after this
+    // sweep no concurrent signer can complete), THEN re-check for signed
+    // rows. A signature that landed before the void survives the void
+    // untouched and is caught by the re-check — so a signed row can never
+    // slip through into the cascade.
+    const signedBefore = (await listDocumentSignatureRequests(businessId.data, documentId)).some(
+      (r) => r.status === "signed"
+    );
+    if (!signedBefore) {
+      await voidAllSignatureRequestsForDocument(businessId.data, documentId);
+    }
     const signatureRequests = await listDocumentSignatureRequests(businessId.data, documentId);
     if (signatureRequests.some((r) => r.status === "signed")) {
       return errorResponse(

@@ -85,6 +85,7 @@ function requestRow(
     signer_ip: null,
     signer_user_agent: null,
     content_sha256: null,
+    signed_content_md: null,
     expires_at: "2026-08-01T00:00:00Z",
     created_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -382,6 +383,7 @@ describe("signDocumentRequest", () => {
     expect(fields.signer_ip).toBe("203.0.113.9");
     expect(fields.signer_user_agent).toHaveLength(400);
     expect(fields.content_sha256).toBe(fingerprintDocumentContent(doc().content_md));
+    expect(fields.signed_content_md).toBe(doc().content_md);
     expect(insertCoworkerLog).toHaveBeenCalledWith(
       expect.objectContaining({
         business_id: BIZ,

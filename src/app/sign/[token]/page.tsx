@@ -36,6 +36,11 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
   await markSignatureRequestOpened(request);
 
   const signed = request.status === "signed";
+  // A signed certificate renders the SNAPSHOT taken at signing, never the
+  // live document — later edits must not change what the record displays.
+  const displayContent = signed
+    ? (request.signed_content_md ?? document.content_md)
+    : document.content_md;
 
   return (
     <main className="min-h-screen bg-deep-ink px-4 py-10 text-parchment">
@@ -66,7 +71,7 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
             </a>
           </div>
           <pre className="mt-3 max-h-[28rem] overflow-y-auto whitespace-pre-wrap font-sans text-sm leading-relaxed text-parchment/90">
-            {document.content_md}
+            {displayContent}
           </pre>
         </section>
 
