@@ -171,10 +171,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Pinned: `latest` (2.109.x) changed the `supabase status` output keys
+      # and handed the suite a non-service key ("permission denied for table
+      # businesses" on the first CI run). 2.78.1 is the version the suite was
+      # validated against locally; bump deliberately, not implicitly.
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v1
         with:
-          version: latest
+          version: 2.78.1
 
       - name: Start local Supabase (applies all migrations)
         run: supabase start -x studio,imgproxy,mailpit,realtime,storage-api
@@ -193,7 +197,13 @@ jobs:
 
       - name: Run worker integration suite
         run: |
-          export ITEST_SERVICE_ROLE_KEY=$(supabase status --output json | jq -r '.SERVICE_ROLE_KEY')
+          KEY=$(supabase status --output json | jq -r '.SERVICE_ROLE_KEY // .SECRET_KEY // empty')
+          if [ -z "$KEY" ] || [ "$KEY" = "null" ]; then
+            echo "::error::could not resolve the service key from supabase status; available keys:"
+            supabase status --output json | jq 'keys'
+            exit 1
+          fi
+          export ITEST_SERVICE_ROLE_KEY="$KEY"
           npm run test:worker-integration
 
       - name: Dump serve log on failure
