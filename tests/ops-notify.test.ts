@@ -25,7 +25,8 @@ import {
   sendOpsDidReleaseFailedEmail,
   sendOpsHardwareMigrationEmail,
   sendOpsTermAlignmentEmail,
-  sendOpsBillingPostureEmail
+  sendOpsBillingPostureEmail,
+  sendOpsMarginAlertEmail
 } from "@/lib/email/ops-notify";
 
 const input = {
@@ -519,6 +520,82 @@ describe("sendOpsBillingPostureEmail", () => {
     await expect(sendOpsBillingPostureEmail(postureInput)).resolves.toBeUndefined();
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops billing-posture email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+describe("sendOpsMarginAlertEmail", () => {
+  const marginInput = {
+    breaches: [
+      {
+        businessId: "biz-loss",
+        businessName: "Loss Leader LLC",
+        revenueCents: 18_900,
+        costCents: 19_400,
+        marginCents: -500
+      }
+    ],
+    thresholdCents: 0
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the digest to the ops inbox and logs the audit line", async () => {
+    await sendOpsMarginAlertEmail(marginInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("Margin alert: 1 paying tenant(s)"),
+      expect.objectContaining({
+        text: expect.stringContaining("Loss Leader LLC (biz-loss): margin -$5.00/mo")
+      })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops margin-alert email sent",
+      expect.objectContaining({ breaches: 1, toEmail: "team@newcoworker.com" })
+    );
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await sendOpsMarginAlertEmail(marginInput);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops margin-alert email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ breaches: 1 })
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsMarginAlertEmail(marginInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsMarginAlertEmail(marginInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops margin-alert email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsMarginAlertEmail(marginInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops margin-alert email failed",
       expect.objectContaining({ error: "smtp string failure" })
     );
   });

@@ -16,10 +16,15 @@ import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { fetchTelnyxBalance } from "@/lib/telnyx/balance";
 import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
 import { logger } from "@/lib/logger";
+import {
+  MARGIN_ALERT_SETTINGS_KEY,
+  parseMarginAlertConfig
+} from "@/lib/admin/margin-alert";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { CostSyncButton } from "@/components/admin/CostSyncButton";
+import { MarginAlertSettings } from "@/components/admin/MarginAlertSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -62,6 +67,9 @@ export default async function AdminCostsPage() {
     ]);
 
   const syncStatus = parsePlatformCostSyncStatus(syncStatusRaw);
+  const marginAlertConfig = parseMarginAlertConfig(
+    await getAdminPlatformSetting(MARGIN_ALERT_SETTINGS_KEY).catch(() => null)
+  );
 
   const lineTotals = sumMarginLinesByKey(margins.economics);
   const monthTelnyxRows = telnyxTrendRows.filter((r) => r.day >= margins.monthStartYmd);
@@ -481,7 +489,8 @@ export default async function AdminCostsPage() {
           )}
         </Card>
 
-        {/* Pool box burn */}
+        {/* Pool box burn + margin watchdog */}
+        <div className="space-y-4">
         <Card>
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
             Idle Pool Burn
@@ -522,6 +531,9 @@ export default async function AdminCostsPage() {
             </ul>
           )}
         </Card>
+
+        <MarginAlertSettings initialConfig={marginAlertConfig} />
+        </div>
       </div>
     </div>
   );

@@ -32,6 +32,10 @@ import {
   buildOpsBillingPostureEmail,
   type OpsBillingPostureInput
 } from "@/lib/email/templates/ops-billing-posture";
+import {
+  buildOpsMarginAlertEmail,
+  type OpsMarginAlertInput
+} from "@/lib/email/templates/ops-margin-alert";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -180,6 +184,34 @@ export async function sendOpsBillingPostureEmail(
   } catch (err) {
     logger.warn("ops billing-posture email failed", {
       findings: input.findings.length,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/** Fire-and-forget margin-alert digest (daily cost-sync watchdog); never throws. */
+export async function sendOpsMarginAlertEmail(
+  input: Omit<OpsMarginAlertInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops margin-alert email skipped: RESEND_API_KEY missing", {
+        breaches: input.breaches.length
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsMarginAlertEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops margin-alert email sent", {
+      breaches: input.breaches.length,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops margin-alert email failed", {
+      breaches: input.breaches.length,
       error: err instanceof Error ? err.message : String(err)
     });
   }
