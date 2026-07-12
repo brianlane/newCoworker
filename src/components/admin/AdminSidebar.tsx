@@ -7,6 +7,7 @@ import {
   Server,
   Settings,
   DollarSign,
+  Receipt,
   Activity
 } from "lucide-react";
 
@@ -14,6 +15,7 @@ const adminNavItems = [
   { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { label: "All Clients", href: "/admin/clients", icon: Users },
   { label: "Revenue", href: "/admin/revenue", icon: DollarSign },
+  { label: "Costs", href: "/admin/costs", icon: Receipt },
   { label: "Engagement", href: "/admin/engagement", icon: Activity },
   { label: "Provisioning", href: "/admin/provision", icon: Server },
   { label: "System", href: "/admin/system", icon: Settings }
