@@ -87,8 +87,12 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   const [uploadCategory, setUploadCategory] = useState("");
   const [uploadExpires, setUploadExpires] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
-  // Per-document expanded panel state.
+  // Per-document expanded panel state. The ref mirrors openId so async
+  // fetches can verify the SAME document is still expanded before applying
+  // results — a slow response must never show another document's signer or
+  // share PII under the wrong panel.
   const [openId, setOpenId] = useState<string | null>(null);
+  const openIdRef = useRef<string | null>(null);
   const [draftContent, setDraftContent] = useState("");
   const [draftExpires, setDraftExpires] = useState("");
   const [savingDoc, setSavingDoc] = useState(false);
@@ -156,9 +160,11 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   async function openDocument(doc: DocumentItem) {
     if (openId === doc.id) {
       setOpenId(null);
+      openIdRef.current = null;
       return;
     }
     setOpenId(doc.id);
+    openIdRef.current = doc.id;
     setDraftContent(doc.content_md);
     setDraftExpires(doc.expires_at ? doc.expires_at.slice(0, 10) : "");
     setShares([]);
@@ -172,7 +178,10 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
         { cache: "no-store" }
       );
       const json = (await res.json()) as { ok: boolean; data?: { shares?: ShareItem[] } };
-      if (json.ok && json.data?.shares) setShares(json.data.shares);
+      // Only apply if this document is STILL the expanded one (see openIdRef).
+      if (openIdRef.current === doc.id && json.ok && json.data?.shares) {
+        setShares(json.data.shares);
+      }
     } catch {
       /* shares panel stays empty */
     }
@@ -189,7 +198,11 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
         ok: boolean;
         data?: { requests?: SignatureRequestItem[] };
       };
-      if (json.ok && json.data?.requests) setSignatureRequests(json.data.requests);
+      // Only apply if this document is STILL the expanded one — a slow
+      // response must not render another document's signers.
+      if (openIdRef.current === docId && json.ok && json.data?.requests) {
+        setSignatureRequests(json.data.requests);
+      }
     } catch {
       /* signatures panel stays empty */
     }
