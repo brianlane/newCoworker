@@ -1271,6 +1271,23 @@ serve(async (req: Request) => {
         message: msg,
         payload: { job_id: job.id, attempt: job.attempt_count, max_attempts: MAX_ATTEMPTS }
       });
+      // A dead-lettered customer message means SILENCE: the texter asked
+      // something and will never get an answer unless a human steps in. Page
+      // the owner through the needs-human pipeline (tag + notification, with
+      // its own open-state dedupe) — a system-log row nobody watches is not
+      // an acceptable end state for a real conversation.
+      if (deadLetter && !isStaff) {
+        await escalateToHuman(supabase, {
+          businessId: job.business_id,
+          contactE164: fromE164,
+          reason:
+            "Their text never got a reply — the AI reply failed repeatedly and gave up. Reply to them yourself.",
+          intent: "no_reply_sent",
+          inboundPreview: userText.slice(0, 300),
+          notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+          bearer: serviceKey
+        });
+      }
       processed += 1;
       continue;
     }
@@ -1585,6 +1602,21 @@ serve(async (req: Request) => {
         message: msg,
         payload: { job_id: job.id, attempt: job.attempt_count, max_attempts: MAX_ATTEMPTS }
       });
+      // Same silence rule as the Rowboat dead letter above: the reply was
+      // composed but never delivered, and retries are exhausted — page the
+      // owner so a human answers the texter.
+      if (deadLetter && !isStaff) {
+        await escalateToHuman(supabase, {
+          businessId: job.business_id,
+          contactE164: fromE164,
+          reason:
+            "Their text never got a reply — the answer was written but could not be delivered after repeated attempts. Reply to them yourself.",
+          intent: "no_reply_sent",
+          inboundPreview: userText.slice(0, 300),
+          notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+          bearer: serviceKey
+        });
+      }
     }
     processed += 1;
   }

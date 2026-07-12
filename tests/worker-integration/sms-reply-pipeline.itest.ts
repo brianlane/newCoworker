@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { NEEDS_HUMAN_TAG } from "../../supabase/functions/_shared/needs_human";
 import { REASONING_MARKER } from "../../supabase/functions/_shared/reply_reasoning";
@@ -40,6 +40,22 @@ let rowboat: FakeRowboat;
 beforeAll(async () => {
   db = serviceDb();
   rowboat = await startFakeRowboat();
+});
+
+// Hard test-boundary isolation. Every tick claims EVERY pending job in the
+// shared local DB, and the fake's script queue is a global FIFO — so one
+// leftover pending job (a prior run's abort, or this suite's deliberate
+// retry-path scenario) shifts the queue and poisons every later test with
+// someone else's scripted turn (observed live: an escalation-test job
+// received a 500 scripted for the dead-letter test). Park all pending jobs
+// and drop unconsumed scripts before each test so every scenario starts
+// from a clean claimable set and an empty queue.
+beforeEach(async () => {
+  await db
+    .from("sms_inbound_jobs")
+    .update({ status: "dead_letter", last_error: "itest_isolation_sweep" })
+    .eq("status", "pending");
+  rowboat.clearScript();
 });
 
 afterAll(async () => {
@@ -199,6 +215,68 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
       "I understand — I'll have your broker reach out to you directly."
     );
     expect(rows[0].reply_preview).not.toMatch(/reasoning|\{"intent"|\u27E6|\u27E7/);
+  });
+
+  it("a dead-lettered customer message pages the owner (silence is never the end state)", async () => {
+    const { biz } = await seedLeadWithContext("IT dead-letter page");
+    // Seeded one claim away from the attempt ceiling (claim increments to
+    // MAX_ATTEMPTS=8). One worker attempt = initial call + stateless retry,
+    // so two scripted 500s exhaust it.
+    const { data, error } = await db
+      .from("sms_inbound_jobs")
+      .insert({
+        business_id: biz,
+        status: "pending",
+        attempt_count: 7,
+        payload: {
+          data: { payload: { from: { phone_number: LEAD }, text: "Is my policy active??" } }
+        }
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    const jobId = (data as { id: string }).id;
+    rowboat.scriptError(500);
+    rowboat.scriptError(500);
+    await tickSmsWorker();
+
+    const job = await getSmsJob(db, jobId);
+    expect(job.status).toBe("dead_letter");
+    expect(job.last_error).toContain("rowboat_http_500");
+
+    // The needs-human pipeline fired: tag + owner page with the silence copy.
+    expect(await getContactTags(db, biz, LEAD)).toContain(NEEDS_HUMAN_TAG);
+    const pages = await notificationRows(biz);
+    const dashboard = pages.find((n) => n.delivery_channel === "dashboard");
+    expect(dashboard?.status).toBe("sent");
+    expect(dashboard?.payload.taskType).toBe("sms_needs_human");
+    expect(String(dashboard?.payload.summary)).toContain("never got a reply");
+    expect(String(dashboard?.payload.summary)).toContain("Dwight Colclough");
+  });
+
+  it("a retryable failure below the ceiling does NOT page — the retry owns it", async () => {
+    const { biz } = await seedLeadWithContext("IT retry no-page");
+    const { data, error } = await db
+      .from("sms_inbound_jobs")
+      .insert({
+        business_id: biz,
+        status: "pending",
+        payload: { data: { payload: { from: { phone_number: LEAD }, text: "Hello?" } } }
+      })
+      .select("id")
+      .single();
+    if (error) throw new Error(error.message);
+    const jobId = (data as { id: string }).id;
+    rowboat.scriptError(500);
+    rowboat.scriptError(500);
+    await tickSmsWorker();
+
+    const job = await getSmsJob(db, jobId);
+    expect(job.status).toBe("pending"); // queued for the next tick's fresh sample
+    expect(await getContactTags(db, biz, LEAD)).not.toContain(NEEDS_HUMAN_TAG);
+    expect((await notificationRows(biz)).length).toBe(0);
+    // (The beforeEach isolation sweep parks this deliberately-pending job
+    // before the next scenario runs.)
   });
 
   it("a handoff turn escalates through the REAL notifications function, once per open state", async () => {

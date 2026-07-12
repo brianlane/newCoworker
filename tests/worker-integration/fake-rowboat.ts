@@ -37,6 +37,12 @@ export type FakeRowboat = {
   calls: RecordedChatCall[];
   /** Queue the assistant reply for the NEXT /chat call (FIFO). */
   scriptReply(content: string): void;
+  /** Queue an HTTP failure for the NEXT /chat call (FIFO, shared queue). */
+  scriptError(status: number): void;
+  /** Entries still queued — a test that leaves any behind is misaligned. */
+  pendingScripts(): number;
+  /** Drop leftover queued entries (test-boundary isolation). */
+  clearScript(): void;
   close(): Promise<void>;
 };
 
@@ -45,9 +51,11 @@ export const FAKE_ROWBOAT_PORT = Number(process.env.ITEST_FAKE_ROWBOAT_PORT ?? 8
 
 const DEFAULT_REPLY = "Thanks! A licensed broker will follow up shortly.";
 
+type ScriptedTurn = { content: string } | { status: number };
+
 export async function startFakeRowboat(port = FAKE_ROWBOAT_PORT): Promise<FakeRowboat> {
   const calls: RecordedChatCall[] = [];
-  const scripted: string[] = [];
+  const scripted: ScriptedTurn[] = [];
   let turn = 0;
 
   const server: Server = createServer((req, res) => {
@@ -69,11 +77,16 @@ export async function startFakeRowboat(port = FAKE_ROWBOAT_PORT): Promise<FakeRo
       }
       calls.push({ authorization: req.headers.authorization ?? null, body });
       turn += 1;
-      const content = scripted.shift() ?? DEFAULT_REPLY;
+      const next = scripted.shift() ?? { content: DEFAULT_REPLY };
+      if ("status" in next) {
+        res.writeHead(next.status, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: `scripted_${next.status}` }));
+        return;
+      }
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(
         JSON.stringify({
-          turn: { output: [{ role: "assistant", content }] },
+          turn: { output: [{ role: "assistant", content: next.content }] },
           conversationId: `fake-conv-${turn}`,
           state: { fake: true, turn }
         })
@@ -93,7 +106,14 @@ export async function startFakeRowboat(port = FAKE_ROWBOAT_PORT): Promise<FakeRo
     port,
     calls,
     scriptReply: (content: string) => {
-      scripted.push(content);
+      scripted.push({ content });
+    },
+    scriptError: (status: number) => {
+      scripted.push({ status });
+    },
+    pendingScripts: () => scripted.length,
+    clearScript: () => {
+      scripted.length = 0;
     },
     close: () =>
       new Promise<void>((resolve, reject) =>
