@@ -32,6 +32,15 @@ export type VpsInventoryRow = {
   acquired_at: string;
   assigned_at: string | null;
   notes: string | null;
+  /**
+   * Sunk-cost box that must lapse at its paid period end NO MATTER WHAT —
+   * even while assigned to a live tenant. The adopt path skips its
+   * auto-renew re-enable and the billing-posture cron skips its auto-heal
+   * (nagging ops to migrate the tenant instead). Example: srv1632631, KVM8
+   * hardware pooled under the kvm2 label whose $73.99/mo renewal must never
+   * be paid for a kvm2-priced tenant.
+   */
+  never_renew: boolean;
   updated_at: string;
 };
 
@@ -198,6 +207,25 @@ export async function retireVps(
     })
     .eq("vm_id", vmId);
   if (error) throw new Error(`retireVps: ${error.message}`);
+}
+
+/**
+ * Single-row lookup by Hostinger VM id. Null when the box was never tracked
+ * (pre-inventory purchases, --adopt-vm orphans). Used by the adopt path to
+ * honor `never_renew` regardless of how the adopt was initiated.
+ */
+export async function getVpsInventoryByVmId(
+  vmId: number,
+  client?: SupabaseClient
+): Promise<VpsInventoryRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_inventory")
+    .select("*")
+    .eq("vm_id", vmId)
+    .maybeSingle();
+  if (error) throw new Error(`getVpsInventoryByVmId: ${error.message}`);
+  return (data as VpsInventoryRow | null) ?? null;
 }
 
 /** Pool telemetry for the admin dashboard, newest-acquired first. */

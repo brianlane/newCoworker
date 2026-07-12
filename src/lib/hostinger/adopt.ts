@@ -50,6 +50,7 @@ import {
   updateVpsSshKeyHostKeyFingerprint,
   type VpsSshKeyRow
 } from "@/lib/db/vps-ssh-keys";
+import { getVpsInventoryByVmId } from "@/lib/db/vps-inventory";
 import {
   buildDefaultPostInstallScript,
   DEFAULT_TEMPLATE_ID,
@@ -84,6 +85,7 @@ export type AdoptVpsDeps = {
     reassignVpsSshKeyBusiness?: typeof reassignVpsSshKeyBusiness;
     rotateVpsSshKey?: typeof rotateVpsSshKey;
     updateVpsSshKeyHostKeyFingerprint?: typeof updateVpsSshKeyHostKeyFingerprint;
+    getVpsInventoryByVmId?: typeof getVpsInventoryByVmId;
   };
   /**
    * SSH auth probe: true when the key authenticates on the host. Production
@@ -156,6 +158,7 @@ export async function adoptVpsForBusiness(
   const dbRotate = deps.db?.rotateVpsSshKey ?? rotateVpsSshKey;
   const dbClearHostKeyPin =
     deps.db?.updateVpsSshKeyHostKeyFingerprint ?? updateVpsSshKeyHostKeyFingerprint;
+  const dbGetInventory = deps.db?.getVpsInventoryByVmId ?? getVpsInventoryByVmId;
 
   const vmId = input.virtualMachineId;
   const vpsSize = resolveVpsSize(input.tier, input.vpsSize);
@@ -387,7 +390,31 @@ export async function adoptVpsForBusiness(
   // auto-renew — otherwise Hostinger deletes the VM out from under them at
   // the paid period's end. Best-effort with a loud log: a failure here is
   // an ops follow-up (flip it in hPanel), not an adopt abort.
-  if (hostingerBillingSubscriptionId) {
+  //
+  // EXCEPTION: a box flagged `never_renew` in vps_inventory (sunk-cost
+  // hardware that must lapse no matter what — e.g. KVM8 srv1632631 pooled
+  // under the kvm2 label) keeps auto-renew OFF: re-enabling would start
+  // billing the platform for hardware the tenant's price doesn't cover. The
+  // daily billing-posture cron nags ops to migrate the tenant to its correct
+  // size (debug/migrate-vps-size.ts) before the paid period ends.
+  let neverRenew = false;
+  try {
+    neverRenew = (await dbGetInventory(vmId))?.never_renew === true;
+  } catch (err) {
+    // Fail toward tenant safety: with the flag unknowable, re-enable renewal
+    // so the box can't lapse under the tenant. The posture cron reads the
+    // flag on its next run and surfaces the conflict for a manual flip.
+    logger.warn("adoptVps: never_renew lookup failed — proceeding with auto-renew re-enable", {
+      virtualMachineId: vmId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  if (neverRenew) {
+    logger.warn(
+      "adoptVps: box is flagged never_renew — auto-renew stays OFF; migrate this tenant to its correct size before the paid period ends (the billing-posture cron will nag daily)",
+      { virtualMachineId: vmId, hostingerBillingSubscriptionId }
+    );
+  } else if (hostingerBillingSubscriptionId) {
     try {
       await client.enableBillingAutoRenewal(hostingerBillingSubscriptionId);
       logger.info("adoptVps: billing auto-renew re-enabled for adopted box", {

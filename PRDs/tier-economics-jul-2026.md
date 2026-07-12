@@ -172,7 +172,7 @@ Escalation is **manual by design**; the system advises, the operator moves:
 
 | VM | Plan | State | Disposition |
 | --- | --- | --- | --- |
-| srv1632631 | KVM 8 hardware, pooled as `kvm2` | pooled (available) — old Amy box (cutover done) | in `vps_inventory` as available with plan=`kvm2` on purpose (Jul 12) so a normal standard signup adopts it; auto-renew off — lapses Jul 30 unless adopted first (if adopted, renewal is the KVM8 $73.99/mo rate) |
+| srv1632631 | KVM 8 hardware, pooled as `kvm2` | pooled (available) — old Amy box (cutover done) | in `vps_inventory` as available with plan=`kvm2` on purpose (Jul 12) so a normal standard signup adopts it; **`never_renew` flag set** — the box lapses Jul 30 no matter what (adopt skips the renewal re-enable, posture cron skips the auto-heal and nags ops daily to migrate any adopted tenant to a real kvm2 via `debug/migrate-vps-size.ts` before the deadline) |
 | **srv1800980** | KVM 2 | **Amy PRODUCTION** | cutover complete Jul 5; in `vps_inventory` as assigned |
 | srv1800985 | KVM 2 | pooled (available) | adopt for a signup before Aug 2 or let it lapse |
 | srv1806097 | KVM 1 | **starter test tenant** | live testbed; lapses ~Aug 5 |
