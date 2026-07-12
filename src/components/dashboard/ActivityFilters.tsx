@@ -2,7 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
-import { ACTIVITY_KINDS, type ActivityKind } from "@/lib/db/activity";
+import type { ActivityKind } from "@/lib/db/activity";
+
+// Derived from the badge map (a pure-data client-safe module) rather than
+// importing the lib's ACTIVITY_KINDS const — src/lib/db/activity.ts pulls the
+// server-only Supabase client, which must not enter the client bundle. The
+// type-only import above is erased at compile time.
+const KINDS = Object.keys(ACTIVITY_BADGE) as ActivityKind[];
 
 /** Preset look-backs offered by the time filter, longest first trimmed to the
  * tier window (a starter tenant is never offered "Last 30 days"). */
@@ -50,7 +56,7 @@ export function ActivityFilters({
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by type">
-        {ACTIVITY_KINDS.map((kind) => {
+        {KINDS.map((kind) => {
           const active = kinds.includes(kind);
           return (
             <button
