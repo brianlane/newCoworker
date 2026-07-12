@@ -241,6 +241,47 @@ export async function replayInboundSms(
     inWindow.length > candidates.length || loaded.length >= CONTEXT_ROW_LIMIT;
   if (candidates.length === 0) return summary;
 
+  // Live parity: an inbound text consumed by a parked wait_for_reply run
+  // never reaches trigger evaluation (the flow owns that turn — see
+  // resumeAwaitingReplyRun in telnyx-sms-inbound), so a replay must not
+  // treat it as a fresh lead either. The consumption isn't stamped on the
+  // job row, but the resumed run persists it: waiting_reply.result="reply",
+  // waiting_reply.from=<sender>, and vars[save_as]=<the consumed text>.
+  // Rebuild that as a (sender, text) set and skip matching candidates.
+  // Conservative on purpose: if the same sender sent the identical text
+  // twice and one answered a wait, both are skipped — skipping a lead beats
+  // double-processing one. A read failure fails the request loudly (replay
+  // is an explicit owner action) rather than risking duplicates.
+  const senders = [...new Set(candidates.flatMap((c) => (c.from ? [c.from] : [])))];
+  const consumedByWait = new Set<string>();
+  if (senders.length > 0) {
+    const { data: waitRows, error: waitErr } = await db
+      .from("ai_flow_runs")
+      .select("context")
+      .eq("business_id", businessId)
+      .eq("context->waiting_reply->>result", "reply")
+      .in("context->waiting_reply->>from", senders)
+      // updated_at only moves forward, so every run that consumed a text
+      // inside the replay window is still >= loadFrom.
+      .gte("updated_at", loadFromIso)
+      .limit(1000);
+    if (waitErr) throw new Error(`replayInboundSms: wait-consumption read: ${waitErr.message}`);
+    for (const row of (waitRows ?? []) as Array<{ context: Record<string, unknown> | null }>) {
+      const waiting = row.context?.waiting_reply as
+        | { from?: unknown; save_as?: unknown }
+        | undefined;
+      const from = typeof waiting?.from === "string" ? waiting.from : "";
+      if (!from) continue;
+      const saveAs =
+        typeof waiting?.save_as === "string" && waiting.save_as.trim()
+          ? waiting.save_as
+          : "reply_text";
+      const vars = row.context?.vars as Record<string, unknown> | undefined;
+      const consumed = vars?.[saveAs];
+      if (typeof consumed === "string" && consumed) consumedByWait.add(`${from}\n${consumed}`);
+    }
+  }
+
   // Pre-resolve each trigger's from_matches contact refs ONCE for the whole
   // batch (they reference saved people, not the message). A resolution
   // failure marks that trigger unusable → it fails closed, mirroring the
@@ -268,6 +309,15 @@ export async function replayInboundSms(
     if (!sender) {
       summary.skipped += 1;
       summary.outcomes.push({ jobId: msg.jobId, status: "skipped", reason: "no usable sender" });
+      continue;
+    }
+    if (consumedByWait.has(`${sender}\n${msg.text.slice(0, 4000)}`)) {
+      summary.skipped += 1;
+      summary.outcomes.push({
+        jobId: msg.jobId,
+        status: "skipped",
+        reason: "this text answered a flow that was waiting for the sender's reply"
+      });
       continue;
     }
     // The sender's messages up to (and including) this one — drawn from

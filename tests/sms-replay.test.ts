@@ -26,24 +26,35 @@ import { BACKFILL_SKIP_EXISTING_TRIGGER_KEY } from "../supabase/functions/_share
 type Result = { data: unknown; error: { message: string } | null };
 
 /**
- * Table-aware db stub for the SMS replay's three query shapes:
- *  - sms_inbound_jobs select (.select().eq().gte().order().limit() → `jobs`)
- *  - ai_flow_runs select    (.maybeSingle() → `runLookup`)
- *  - contacts select        (from_matches ref resolution .maybeSingle() → `contacts`)
+ * Table-aware db stub for the SMS replay's four query shapes:
+ *  - sms_inbound_jobs select (.select().eq().is().gte().order().limit() → `jobs`)
+ *  - ai_flow_runs wait-consumption select (…in().gte().limit() → `waitRuns`)
+ *  - ai_flow_runs dedupe lookup (.maybeSingle() → `runLookup`)
+ *  - contacts select (from_matches ref resolution .maybeSingle() → `contacts`)
  */
-function replayDb(opts: { jobs: Result; runLookup?: Result; contacts?: Result }) {
+function replayDb(opts: {
+  jobs: Result;
+  waitRuns?: Result;
+  runLookup?: Result;
+  contacts?: Result;
+}) {
   const isFilters: [string, unknown][] = [];
   const from = vi.fn((table: string) => {
     const builder: Record<string, unknown> = {};
     builder.select = vi.fn(() => builder);
     builder.eq = vi.fn(() => builder);
+    builder.in = vi.fn(() => builder);
     builder.is = vi.fn((col: string, v: unknown) => {
       isFilters.push([col, v]);
       return builder;
     });
     builder.gte = vi.fn(() => builder);
     builder.order = vi.fn(() => builder);
-    builder.limit = vi.fn(() => Promise.resolve(opts.jobs));
+    builder.limit = vi.fn(() =>
+      Promise.resolve(
+        table === "ai_flow_runs" ? (opts.waitRuns ?? { data: [], error: null }) : opts.jobs
+      )
+    );
     builder.maybeSingle = vi.fn(() =>
       Promise.resolve(
         table === "ai_flow_runs"
@@ -296,6 +307,71 @@ describe("replayInboundSms", () => {
     const summary = await replayInboundSms("biz-1", FLOW, { lookbackHours: 24 }, db);
     expect(summary.skipped).toBe(2);
     expect(summary.outcomes.every((o) => o.reason === "no usable sender")).toBe(true);
+  });
+
+  it("skips a text that answered a parked wait_for_reply (live-parity turn ownership)", async () => {
+    const { db } = replayDb({
+      jobs: {
+        data: [
+          job("j-reply", { text: "yes, tomorrow works", atMsAgo: 30_000 }),
+          job("j-fresh", { text: "hi, I need a quote", atMsAgo: 60_000 })
+        ],
+        error: null
+      },
+      waitRuns: {
+        data: [
+          {
+            context: {
+              waiting_reply: { result: "reply", from: "+14165550001", save_as: "lead_reply" },
+              vars: { lead_reply: "yes, tomorrow works" }
+            }
+          },
+          // Defensive rows the scan must tolerate: no context, no from, a
+          // blank save_as falling back to reply_text, and a non-string value.
+          { context: null },
+          { context: { waiting_reply: { result: "reply", save_as: "x" }, vars: { x: "y" } } },
+          {
+            context: {
+              waiting_reply: { result: "reply", from: "+14165550001", save_as: "  " },
+              vars: { reply_text: 42 }
+            }
+          }
+        ],
+        error: null
+      }
+    });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
+    const summary = await replayInboundSms("biz-1", FLOW, { lookbackHours: 24 }, db);
+    expect(summary.skipped).toBe(1);
+    expect(summary.outcomes).toEqual([
+      { jobId: "j-fresh", status: "enqueued", runId: "run-1" },
+      {
+        jobId: "j-reply",
+        status: "skipped",
+        reason: "this text answered a flow that was waiting for the sender's reply"
+      }
+    ]);
+  });
+
+  it("tolerates a null wait-consumption payload", async () => {
+    const { db } = replayDb({
+      jobs: { data: [job("j1")], error: null },
+      waitRuns: { data: null, error: null }
+    });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
+    const summary = await replayInboundSms("biz-1", FLOW, { lookbackHours: 24 }, db);
+    expect(summary.enqueued).toBe(1);
+  });
+
+  it("fails loudly when the wait-consumption read fails", async () => {
+    const { db } = replayDb({
+      jobs: { data: [job("j1")], error: null },
+      waitRuns: { data: null, error: { message: "boom" } }
+    });
+    await expect(
+      replayInboundSms("biz-1", FLOW, { lookbackHours: 24 }, db)
+    ).rejects.toThrow("replayInboundSms: wait-consumption read: boom");
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
   });
 
   it("fails CLOSED when a from_matches ref cannot be resolved", async () => {
