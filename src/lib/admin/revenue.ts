@@ -188,22 +188,25 @@ export function computeChurnStats(params: {
 }
 
 /**
- * Average revenue per paying customer (cents): day-current MRR ÷ (counted
- * subscriptions + active enterprise deals). 0 when nobody pays.
+ * Average revenue per paying BUSINESS (cents): total per-business revenue ÷
+ * unique paying businesses — a tenant with both a subscription and an
+ * enterprise deal counts once, matching the Paying Clients KPI (both are
+ * derived from the same per-business merge). 0 when nobody pays.
  */
 export function computeArpuCents(params: {
   subscriptions: RevenueSubscription[];
   deals: RevenueDeal[];
   now?: Date;
 }): number {
-  const activeDeals = params.deals.filter((d) => d.status === "active");
-  const mrr = computeDayCurrentMrr({
-    subscriptions: dedupeNewestPerBusiness(params.subscriptions),
-    enterpriseDeals: activeDeals,
-    now: params.now
+  const perBusiness = computeTopBusinessRevenue({
+    subscriptions: params.subscriptions,
+    deals: params.deals,
+    now: params.now,
+    limit: Number.MAX_SAFE_INTEGER
   });
-  const payers = mrr.countedSubscriptions + activeDeals.length;
-  return payers > 0 ? Math.round(mrr.totalCents / payers) : 0;
+  if (perBusiness.length === 0) return 0;
+  const totalCents = perBusiness.reduce((sum, row) => sum + row.cents, 0);
+  return Math.round(totalCents / perBusiness.length);
 }
 
 export type BusinessRevenue = {

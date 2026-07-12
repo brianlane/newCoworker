@@ -224,13 +224,22 @@ describe("computeChurnStats", () => {
 });
 
 describe("computeArpuCents", () => {
-  it("averages MRR over counted subscriptions + active deals", () => {
+  it("averages revenue over unique paying businesses", () => {
     const arpu = computeArpuCents({
       subscriptions: [sub()],
       deals: [deal({ monthly_cents: 200_100 })],
       now: NOW
     });
     expect(arpu).toBe(Math.round((STANDARD_MONTHLY + 200_100) / 2));
+  });
+
+  it("counts a hybrid payer (subscription + deal on one business) once in the denominator", () => {
+    const arpu = computeArpuCents({
+      subscriptions: [sub({ business_id: "hybrid" })],
+      deals: [deal({ business_id: "hybrid", monthly_cents: 200_100 })],
+      now: NOW
+    });
+    expect(arpu).toBe(STANDARD_MONTHLY + 200_100);
   });
 
   it("is 0 when nobody pays", () => {
