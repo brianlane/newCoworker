@@ -3,6 +3,7 @@ import { listAllBusinessMembers } from "@/lib/db/business-members";
 import {
   buildUserEngagementRows,
   listPlatformAuthUsers,
+  quietOwnerBusinessIds,
   summarizeUserEngagement
 } from "@/lib/admin/user-engagement";
 import { Card } from "@/components/ui/Card";
@@ -19,7 +20,11 @@ export default async function AdminEngagementPage() {
 
   const summary = summarizeUserEngagement(users);
   const rows = buildUserEngagementRows({ users, businesses, members });
-  const quietCount = rows.filter((r) => r.segment === "quiet").length;
+  // The churn-risk KPI counts quiet OWNERS (per business) — the same set
+  // that gets the churn-risk badge on /admin/clients, so the two surfaces
+  // always agree. Quiet staff/member/unlinked rows are shown separately.
+  const quietOwnerCount = quietOwnerBusinessIds(rows).size;
+  const quietRowCount = rows.filter((r) => r.segment === "quiet").length;
 
   return (
     <div className="space-y-6">
@@ -52,15 +57,19 @@ export default async function AdminEngagementPage() {
           <p className="text-3xl font-bold text-signal-teal">{summary.active30d}</p>
         </Card>
         <Card>
-          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Quiet (90d+)</p>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+            Quiet Owners (90d+)
+          </p>
           <p
             className={`text-3xl font-bold ${
-              quietCount > 0 ? "text-spark-orange" : "text-parchment"
+              quietOwnerCount > 0 ? "text-spark-orange" : "text-parchment"
             }`}
           >
-            {quietCount}
+            {quietOwnerCount}
           </p>
-          <p className="text-xs text-parchment/30 mt-1">churn-risk rows</p>
+          <p className="text-xs text-parchment/30 mt-1">
+            churn-risk businesses · {quietRowCount} quiet users total
+          </p>
         </Card>
       </div>
 

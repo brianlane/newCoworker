@@ -94,7 +94,8 @@ export default async function AdminRevenuePage() {
             {churn.churnRatePct}%
           </p>
           <p className="text-xs text-parchment/30 mt-1">
-            {churn.canceledInWindow} canceled · {churn.activeNow} active
+            {churn.canceledInWindow} churned of {churn.activeNow + churn.canceledInWindow} at
+            period start
           </p>
         </Card>
       </div>
