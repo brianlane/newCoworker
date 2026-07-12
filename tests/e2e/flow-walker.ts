@@ -31,6 +31,7 @@ import {
   buildExtractionPrompt,
   evaluateStepCondition,
   extractPhones,
+  isPhoneFieldName,
   parseClassifyChoice,
   parseExtractionJson
 } from "../../supabase/functions/_shared/ai_flows/engine";
@@ -128,9 +129,9 @@ export async function walkFlow(
         const extracted = parseExtractionJson(raw, action.fields);
         const out: Record<string, string> = {};
         for (const f of action.fields) {
-          // Mirror the worker's regex fallback for phone-ish fields.
+          // Mirror the worker's regex fallback for phone fields.
           let val = extracted[f.name] ?? "";
-          if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+          if (!val && isPhoneFieldName(f.name)) {
             val = extractPhones(action.text)[0] ?? "";
           }
           out[f.name] = val;
@@ -156,6 +157,12 @@ export async function walkFlow(
           throw new Error(
             `walkFlow: step "${step.id}" planned unsupported action kind "${action.kind}"`
           );
+        }
+        // A simulated planner skip (e.g. no usable recipient) mirrors the
+        // worker: recorded as skipped, and never counted as a send.
+        if (typeof simulated.skipped === "string") {
+          record(step, "skipped", simulated);
+          break;
         }
         if (simulated.simulated === "send_sms") {
           sends.push({ to: String(simulated.to ?? ""), body: String(simulated.body ?? "") });

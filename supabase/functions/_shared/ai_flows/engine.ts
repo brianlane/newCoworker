@@ -217,17 +217,30 @@ export function hasUnresolvedPlaceholders(template: string, scope: Record<string
 
 // --- Phone / field extraction ------------------------------------------------
 
-const PHONE_RE = /(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g;
+// Digit-run boundaries ((?<!\d) / (?!\d)) so a 3-3-4 shape inside a LONGER
+// digit run — a USPS tracking number, an order id — never reads as a phone.
+// Production-shaped failure: "Tracking: 9400111202555842332999" used to yield
+// "+19400111202", and the fallback below would text that stranger.
+const PHONE_RE = /(?<!\d)(\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}(?!\d)/g;
 
 /**
  * Normalize a loose North-American phone string to E.164 (+1XXXXXXXXXX), or
- * null if it is not a plausible 10-digit (optionally +1) number.
+ * null if it is not a plausible NANP number: 10 digits (optionally +1), with
+ * both the area code and the exchange code starting 2-9 (the NANP N digit) —
+ * a 0/1 there is never a real number, so failing fast here beats a
+ * guaranteed Telnyx 40310 at send time.
  */
 export function normalizeNanpToE164(raw: string): string | null {
   const digits = raw.replace(/[^\d]/g, "");
-  if (digits.length === 10) return `+1${digits}`;
-  if (digits.length === 11 && digits.startsWith("1")) return `+${digits}`;
-  return null;
+  const ten =
+    digits.length === 10
+      ? digits
+      : digits.length === 11 && digits.startsWith("1")
+        ? digits.slice(1)
+        : null;
+  if (!ten) return null;
+  if (ten[0] === "0" || ten[0] === "1" || ten[3] === "0" || ten[3] === "1") return null;
+  return `+1${ten}`;
 }
 
 /** Extract candidate phone numbers from free text as E.164 (deduped, in order). */
@@ -237,13 +250,31 @@ export function extractPhones(text: string): string[] {
   const matches = text.match(PHONE_RE) ?? [];
   for (const raw of matches) {
     const e164 = normalizeNanpToE164(raw);
-    /* c8 ignore next -- PHONE_RE only matches 10/11-digit numbers, which always normalize */
+    // NANP-invalid shapes (0/1-leading area or exchange code) match the
+    // regex but are not real numbers — drop them.
     if (!e164) continue;
     if (seen.has(e164)) continue;
     seen.add(e164);
     out.push(e164);
   }
   return out;
+}
+
+// Whole tokens only (split on _ / digits / camelCase humps): the old bare
+// substring test /phone|mobile|cell|tel/i matched "hoTEL_name" and
+// "canCELLation_policy", stuffing a phone number into non-phone fields
+// whenever the model correctly extracted nothing.
+const PHONE_FIELD_TOKEN_RE = /^(?:(?:tele)?phones?|mobile|cell(?:phone)?|tel)$/i;
+
+/**
+ * Does this extraction field name denote a phone number? Drives the worker's
+ * regex fallback (fill an empty extraction from the first phone in the text)
+ * so it only ever fires on fields that actually want a phone.
+ */
+export function isPhoneFieldName(name: string): boolean {
+  return name
+    .split(/[^a-zA-Z]+|(?<=[a-z])(?=[A-Z])/)
+    .some((token) => PHONE_FIELD_TOKEN_RE.test(token));
 }
 
 // Conventional variable keys an extraction step might capture a lead's name /
@@ -370,7 +401,11 @@ export function buildClassifyPrompt(
   const lines = categories
     .map((c) => `- "${c.value}"${c.description ? `: ${c.description}` : ""}`)
     .join("\n");
-  const clipped = text.length > maxChars ? text.slice(0, maxChars) : text;
+  // Clip keeping the TAIL: windowText is oldest-first, so the message being
+  // classified is the NEWEST text at the end. Head-keeping used to clip a
+  // lead's "stop texting me" out of the prompt entirely whenever earlier
+  // window chatter exceeded the cap, misrouting the opt-out.
+  const clipped = text.length > maxChars ? text.slice(-maxChars) : text;
   return [
     "Classify the message below into EXACTLY ONE of these categories.",
     ...(question ? [`Context: ${question}`] : []),

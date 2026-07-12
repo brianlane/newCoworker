@@ -164,6 +164,140 @@ describe("splitReplyReasoning", () => {
     });
   });
 
+  describe("multi-line trailers (pretty-printed / fenced) — the e2e-proven leak class", () => {
+    const PRETTY_JSON = [
+      "{",
+      '  "intent": "gave_renewal_info",',
+      '  "why": "lead answered the renewal timing question",',
+      '  "handoff": true',
+      "}"
+    ].join("\n");
+
+    it("strips a marker line followed by pretty-printed JSON, capturing the record", () => {
+      // The instruction says "on its own final line", but models pretty-print:
+      // line-based stripping used to remove ONLY the marker line and text the
+      // entire reasoning JSON to the customer — and lose handoff:true, so the
+      // needs-human escalation silently never fired.
+      const raw = `Thanks for letting me know!\n${REASONING_MARKER}\n${PRETTY_JSON}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Thanks for letting me know!");
+      expect(res.reasoning).toEqual({
+        intent: "gave_renewal_info",
+        rationale: "lead answered the renewal timing question",
+        escalated: true
+      });
+    });
+
+    it("tolerates blank lines between the marker and the pretty JSON", () => {
+      const raw = `See you then!\n${REASONING_MARKER}\n\n${PRETTY_JSON}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("See you then!");
+      expect(res.reasoning?.intent).toBe("gave_renewal_info");
+    });
+
+    it("strips a trailer whose JSON opens on the marker line and closes later", () => {
+      const raw =
+        "On it!\n" +
+        `${REASONING_MARKER}{"intent":"booking",\n"why":"they picked a time",\n"handoff":false}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("On it!");
+      expect(res.reasoning?.intent).toBe("booking");
+    });
+
+    it("handles escaped quotes and braces inside multi-line trailer strings", () => {
+      const raw =
+        "Done!\n" +
+        `${REASONING_MARKER}\n{\n  "intent": "notes",\n  "why": "said \\"use {curly} braces\\" today",\n  "handoff": false\n}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Done!");
+      expect(res.reasoning?.rationale).toBe('said "use {curly} braces" today');
+    });
+
+    it("strips a markerless pretty-printed trailer (bare `{` line, then \"intent\":)", () => {
+      const raw = `Happy to help.\n{\n  "intent": "wants_quote",\n  "why": "asked about pricing",\n  "handoff": false\n}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Happy to help.");
+      expect(res.reasoning?.intent).toBe("wants_quote");
+    });
+
+    it("markerless bare `{` tolerates blank lines before the \"intent\" line", () => {
+      const raw = `Got it.\n{\n\n  "intent": "note",\n  "why": "captured",\n  "handoff": false\n}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Got it.");
+      expect(res.reasoning?.intent).toBe("note");
+    });
+
+    it("a bare `{` line that is NOT a trailer stays in the reply", () => {
+      // The bare-object net requires "intent": on the next non-blank line.
+      const raw =
+        "Here's the shape:\n{\nnot a trailer\n}\n" +
+        `${REASONING_MARKER}{"intent":"a","why":"b","handoff":false}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toContain("not a trailer");
+      expect(res.reasoning?.intent).toBe("a");
+    });
+
+    it("a trailing bare `{` with nothing after it stays in the reply", () => {
+      const raw = `${REASONING_MARKER}{"intent":"a","why":"b","handoff":false}\nP.S.\n{`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("P.S.\n{");
+      expect(res.reasoning?.intent).toBe("a");
+    });
+
+    it("removes fence-only debris lines when a fenced trailer was stripped", () => {
+      const raw =
+        "Happy to help with a quote!\n```json\n" +
+        `${REASONING_MARKER}{"intent":"wants_quote","why":"asked for pricing","handoff":false}\n` +
+        "```";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Happy to help with a quote!");
+      expect(res.reasoning?.intent).toBe("wants_quote");
+    });
+
+    it("keeps fence lines when nothing trailer-like was stripped", () => {
+      const raw = "Steps:\n```\nnpm install\n```\nThat's it!";
+      expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
+    });
+
+    it("a marker whose JSON never balances strips only the marker line", () => {
+      const raw =
+        `Real reply.\n${REASONING_MARKER}\n` +
+        Array.from({ length: 15 }, (_, i) => `{ "line${i}":`).join("\n");
+      const res = splitReplyReasoning(raw);
+      // The unbalanced blob is NOT swallowed as a trailer (reply text after a
+      // stray marker must never disappear) — but every `{`-bearing line here
+      // still trips the bare-object/JSON nets independently or stays. The
+      // first line survives untouched.
+      expect(res.reply.startsWith("Real reply.")).toBe(true);
+      expect(res.reasoning).toBeNull();
+    });
+
+    it("a marker line with no JSON anywhere strips just itself", () => {
+      const raw = `Real reply text.\n${REASONING_MARKER}\nMore reply text.`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Real reply text.\nMore reply text.");
+      expect(res.reasoning).toBeNull();
+    });
+
+    it("balances trailers whose JSON nests an inner object", () => {
+      const raw =
+        "All set!\n" +
+        `${REASONING_MARKER}{"intent":"booking","why":"time agreed","meta":{"slot":"2pm"},"handoff":false}`;
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("All set!");
+      expect(res.reasoning?.intent).toBe("booking");
+    });
+
+    it("an opening brace glued to a sentence with the JSON below is a KNOWN unhandled shape (reply passes through)", () => {
+      // Documented limitation: the bare-object net requires the `{` on its
+      // own line — a `... {` sentence tail followed by pretty JSON has no
+      // strippable line, so the text passes through untouched (the raw-level
+      // gate matched, but nothing line-level did).
+      const raw = 'Sounds good {\n"intent": "note"';
+      expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
+    });
+  });
+
   it("malformed trailers strip but parse to null", () => {
     for (const bad of [
       "not json",

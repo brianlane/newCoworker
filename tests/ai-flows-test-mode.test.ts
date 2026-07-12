@@ -50,6 +50,16 @@ describe("simulateTestAction", () => {
       simulateTestAction({ kind: "send_sms", to: "", body: "b" } as StepAction, scope())
     ).toMatchObject({ to: "(group thread)" });
 
+    // A planner SKIP (templated recipient resolved to nothing usable) reads
+    // as the skip the live run would record — never as a successful send to
+    // the "(group thread)" display fallback.
+    expect(
+      simulateTestAction(
+        { kind: "send_sms", to: "", body: "b", skipReason: "no_recipient_phone" } as StepAction,
+        scope()
+      )
+    ).toEqual({ simulated: "send_sms", skipped: "no_recipient_phone" });
+
     expect(
       simulateTestAction(
         { kind: "send_email", to: "a@b.co", subject: "s", body: "b", attachScreenshot: false } as StepAction,
@@ -151,6 +161,25 @@ describe("simulateTestAction", () => {
       )
     ).toMatchObject({ to: "(no recipient)" });
     expect(Object.keys(s2.vars)).toHaveLength(0);
+
+    // A planner SKIP mirrors the live path: no simulated share, no
+    // placeholder link stamped for a message that would never send.
+    const s3 = scope();
+    expect(
+      simulateTestAction(
+        {
+          kind: "share_document",
+          documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          via: "sms",
+          to: "",
+          message: "here: {{share_url}}",
+          saveAs: "doc_url",
+          skipReason: "no_recipient"
+        } as StepAction,
+        s3
+      )
+    ).toEqual({ simulated: "share_document", skipped: "no_recipient" });
+    expect(Object.keys(s3.vars)).toHaveLength(0);
   });
 
   it("generate_image leaves the saveAs var empty so MMS degrades like a live failure", () => {

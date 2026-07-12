@@ -21,6 +21,7 @@ import {
   localClock,
   messagesInWindow,
   isE164,
+  isPhoneFieldName,
   normalizeNanpToE164,
   parseExtractionJson,
   parseHmToMinutes,
@@ -327,6 +328,17 @@ describe("normalizeNanpToE164", () => {
   it("returns null for an implausible length", () => {
     expect(normalizeNanpToE164("12345")).toBeNull();
   });
+  it("rejects NANP-invalid area codes (N digit must be 2-9)", () => {
+    // These used to normalize to +10…/+11… and die at Telnyx (40310) instead
+    // of failing fast in the planner.
+    expect(normalizeNanpToE164("023-456-7890")).toBeNull();
+    expect(normalizeNanpToE164("123-456-7890")).toBeNull();
+    expect(normalizeNanpToE164("1-023-456-7890")).toBeNull();
+  });
+  it("rejects NANP-invalid exchange codes (N digit must be 2-9)", () => {
+    expect(normalizeNanpToE164("602-056-7890")).toBeNull();
+    expect(normalizeNanpToE164("602-156-7890")).toBeNull();
+  });
 });
 
 describe("extractPhones", () => {
@@ -336,6 +348,54 @@ describe("extractPhones", () => {
   });
   it("returns empty when no phones", () => {
     expect(extractPhones("no digits here")).toEqual([]);
+  });
+  it("never carves a 'phone' out of a longer digit run (tracking/order numbers)", () => {
+    // Production shape: a phoneless lead email carrying a USPS tracking
+    // number used to yield "+19400111202" (and a second fake), which the
+    // extraction fallback then texted.
+    expect(extractPhones("USPS Tracking: 9400111202555842332999")).toEqual([]);
+    expect(extractPhones("Order #4168775223999 has shipped.")).toEqual([]);
+    // A real phone adjacent to a long run is still found.
+    expect(
+      extractPhones("Ref 9400111202555842332999, call me at 602-686-6672")
+    ).toEqual(["+16026866672"]);
+  });
+  it("drops regex matches that are not real NANP numbers", () => {
+    expect(extractPhones("fax: 023-456-7890")).toEqual([]);
+  });
+});
+
+describe("isPhoneFieldName", () => {
+  it("matches real phone-field names, token-wise", () => {
+    for (const name of [
+      "phone",
+      "lead_phone",
+      "phone_number",
+      "phoneNumber",
+      "seller_mobile",
+      "cell",
+      "cellphone",
+      "tel",
+      "telephone",
+      "phones",
+      "telephones"
+    ]) {
+      expect(isPhoneFieldName(name), name).toBe(true);
+    }
+  });
+  it("never matches on a bare substring (the old /tel|cell/ false positives)", () => {
+    // "hoTEL_name" and "canCELLation_policy" used to trip the fallback and
+    // get a phone number stuffed into them whenever extraction was empty.
+    for (const name of [
+      "hotel_name",
+      "motel",
+      "cancellation_policy",
+      "excellent_reason",
+      "telemetry_id",
+      "intelligence"
+    ]) {
+      expect(isPhoneFieldName(name), name).toBe(false);
+    }
   });
 });
 
@@ -497,6 +557,14 @@ describe("buildClassifyPrompt / parseClassifyChoice", () => {
     expect(buildClassifyPrompt(categories, "hi")).not.toContain("Context:");
     // Long messages are clipped to the cap.
     expect(buildClassifyPrompt(categories, "x".repeat(9000)).length).toBeLessThan(6000);
+  });
+
+  it("clips long text keeping the TAIL — the newest message is what's classified", () => {
+    // windowText is oldest-first; head-keeping used to clip a lead's final
+    // "stop texting me" out of the prompt entirely, misrouting the opt-out.
+    const long = "old chatter. ".repeat(400) + "FINAL: please stop texting me";
+    const prompt = buildClassifyPrompt(categories, long);
+    expect(prompt).toContain("please stop texting me");
   });
 
   it("parses the choice case-insensitively, returning the author's exact casing", () => {

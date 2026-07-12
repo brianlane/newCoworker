@@ -21,7 +21,7 @@ describe("planStep: share_document", () => {
         messageTemplate: "Hi {{vars.lead_name}} — here it is: {{ share_url }}",
         saveAs: "doc_url"
       } as FlowStep,
-      { vars: { lead_phone: "(555) 123-4567", lead_name: "Sam" } }
+      { vars: { lead_phone: "(555) 234-5678", lead_name: "Sam" } }
     );
     expect(plan).toEqual({
       ok: true,
@@ -30,7 +30,7 @@ describe("planStep: share_document", () => {
         documentId: DOC_ID,
         documentTitle: "Price sheet",
         via: "sms",
-        to: "+15551234567",
+        to: "+15552345678",
         message: `Hi Sam — here it is: ${SHARE_URL_TOKEN}`,
         saveAs: "doc_url"
       }

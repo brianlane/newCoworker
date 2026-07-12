@@ -45,6 +45,7 @@ import {
   htmlToText,
   isE164,
   isExecutableDefinition,
+  isPhoneFieldName,
   localClock,
   normalizeNanpToE164,
   parseExtractionJson,
@@ -1002,6 +1003,16 @@ async function runStep(
   if (scope.testMode && plan.ok) {
     const simulated = simulateTestAction(plan.action, scope);
     if (simulated) {
+      // A simulated SKIP (planner skipReason — e.g. no usable recipient) is
+      // recorded as skipped, exactly like the live path, so a test run never
+      // claims it sent something the live run would not.
+      if (typeof simulated.skipped === "string") {
+        appendActionTaken(
+          scope,
+          `TEST run: skipped ${plan.action.kind} (${simulated.skipped})`
+        );
+        return { kind: "ok", skipped: true, result: simulated };
+      }
       appendActionTaken(scope, `TEST run: simulated ${plan.action.kind}`);
       return { kind: "ok", result: simulated };
     }
@@ -1871,7 +1882,7 @@ async function browseStep(
   const raw: Record<string, string> = {};
   for (const f of action.fields ?? []) {
     let val = extracted[f.name] ?? "";
-    if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+    if (!val && isPhoneFieldName(f.name)) {
       val = extractPhones(pageText)[0] ?? "";
     }
     raw[f.name] = val;
@@ -1935,7 +1946,7 @@ async function extractTextStep(
   const raw: Record<string, string> = {};
   for (const f of action.fields) {
     let val = extracted[f.name] ?? "";
-    if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+    if (!val && isPhoneFieldName(f.name)) {
       val = extractPhones(action.text)[0] ?? "";
     }
     raw[f.name] = val;
@@ -2032,7 +2043,7 @@ async function emailExtractStep(
       continue;
     }
     let val = extracted[f.name] ?? "";
-    if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+    if (!val && isPhoneFieldName(f.name)) {
       val = extractPhones(data.bodyText)[0] ?? "";
     }
     raw[f.name] = val;
@@ -2331,7 +2342,7 @@ async function browseActionStep(
     const raw: Record<string, string> = {};
     for (const f of action.fields) {
       let val = extracted[f.name] ?? "";
-      if (!val && /phone|mobile|cell|tel/i.test(f.name)) {
+      if (!val && isPhoneFieldName(f.name)) {
         val = extractPhones(pageText)[0] ?? "";
       }
       raw[f.name] = val;
