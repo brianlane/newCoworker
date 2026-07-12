@@ -132,6 +132,23 @@ export async function getFleetCurrentAiSpendMicros(
   client?: SupabaseClient,
   now: Date = new Date()
 ): Promise<number> {
+  const byBusiness = await getFleetCurrentAiSpendMicrosByBusiness(client, now);
+  let total = 0;
+  for (const spendMicros of byBusiness.values()) total += spendMicros;
+  return total;
+}
+
+/**
+ * Per-business variant of {@link getFleetCurrentAiSpendMicros} (same
+ * newest-covering-window semantics, same best-effort paging): businessId →
+ * current-period Gemini chat spend in micro-USD. Businesses whose newest
+ * window no longer covers `now` are omitted (their current-period spend is
+ * zero). Feeds the admin Usage page and the margin engine.
+ */
+export async function getFleetCurrentAiSpendMicrosByBusiness(
+  client?: SupabaseClient,
+  now: Date = new Date()
+): Promise<Map<string, number>> {
   const db = client ?? (await createSupabaseServiceClient());
   const nowMs = now.getTime();
   const lookbackIso = addUtcMonthsClamped(now, -2).toISOString();
@@ -152,7 +169,7 @@ export async function getFleetCurrentAiSpendMicros(
       .order("period_start", { ascending: true })
       .range(from, from + pageSize - 1);
     if (error) {
-      console.error("getFleetCurrentAiSpendMicros", error.message);
+      console.error("getFleetCurrentAiSpendMicrosByBusiness", error.message);
       break;
     }
 
@@ -176,11 +193,13 @@ export async function getFleetCurrentAiSpendMicros(
     if (rows.length < pageSize) break;
   }
 
-  let total = 0;
-  for (const { startMs, spendMicros } of newestByBusiness.values()) {
-    if (addUtcMonthsClamped(new Date(startMs), 1).getTime() > nowMs) total += spendMicros;
+  const current = new Map<string, number>();
+  for (const [businessId, { startMs, spendMicros }] of newestByBusiness) {
+    if (addUtcMonthsClamped(new Date(startMs), 1).getTime() > nowMs) {
+      current.set(businessId, spendMicros);
+    }
   }
-  return total;
+  return current;
 }
 
 /** Unexpired, unvoided bonus texts remaining across all SMS grants. 0 on error. */

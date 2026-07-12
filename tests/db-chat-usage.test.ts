@@ -12,6 +12,7 @@ import {
   chatSpendBaseCapMicrosForTier,
   getChatSpendSnapshotForBusiness,
   getFleetCurrentAiSpendMicros,
+  getFleetCurrentAiSpendMicrosByBusiness,
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
 
@@ -300,6 +301,35 @@ describe("getFleetCurrentAiSpendMicros", () => {
     });
     mockCreateClient.mockResolvedValueOnce({ from });
     await expect(getFleetCurrentAiSpendMicros()).resolves.toBe(42);
+    expect(mockCreateClient).toHaveBeenCalled();
+  });
+
+  it("exposes the per-business map (admin usage page / margin engine)", async () => {
+    const now = new Date("2026-07-10T12:00:00Z");
+    const { from } = fleetSpendDb({
+      data: [
+        { business_id: "biz-a", period_start: "2026-07-01T00:00:00Z", spend_micros: 1_000_000 },
+        // Rolled-over window — omitted from the map entirely.
+        { business_id: "biz-c", period_start: "2026-06-01T00:00:00Z", spend_micros: 750_000 }
+      ],
+      error: null
+    });
+    const map = await getFleetCurrentAiSpendMicrosByBusiness({ from } as never, now);
+    expect(map.get("biz-a")).toBe(1_000_000);
+    expect(map.has("biz-c")).toBe(false);
+    expect(map.size).toBe(1);
+  });
+
+  it("by-business variant creates a service client and defaults now on its own", async () => {
+    const { from } = fleetSpendDb({
+      data: [
+        { business_id: "biz-a", period_start: new Date().toISOString(), spend_micros: 7 }
+      ],
+      error: null
+    });
+    mockCreateClient.mockResolvedValueOnce({ from });
+    const map = await getFleetCurrentAiSpendMicrosByBusiness();
+    expect(map.get("biz-a")).toBe(7);
     expect(mockCreateClient).toHaveBeenCalled();
   });
 });
