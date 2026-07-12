@@ -172,7 +172,7 @@ Escalation is **manual by design**; the system advises, the operator moves:
 
 | VM | Plan | State | Disposition |
 | --- | --- | --- | --- |
-| srv1632631 | KVM 8 | old Amy box (cutover done) | cancel before Jul 30 renewal — saves $73.99/mo |
+| srv1632631 | KVM 8 | pooled (available) — old Amy box (cutover done) | in `vps_inventory` as available (Jul 11); auto-renew off — lapses Jul 30 unless a kvm8 provision adopts it first |
 | **srv1800980** | KVM 2 | **Amy PRODUCTION** | cutover complete Jul 5; in `vps_inventory` as assigned |
 | srv1800985 | KVM 2 | pooled (available) | adopt for a signup before Aug 2 or let it lapse |
 | srv1806097 | KVM 1 | **starter test tenant** | live testbed; lapses ~Aug 5 |
