@@ -95,42 +95,31 @@ beforeEach(() => {
 });
 
 describe("replaceTelnyxCostWindow", () => {
-  it("deletes the window then inserts the fresh rows", async () => {
-    const { client, calls } = mockClient([{ data: null, error: null }]);
-    await replaceTelnyxCostWindow("2026-07-05", [TELNYX_ROW], client);
-    expect(calls[0].ops).toEqual([
-      { method: "delete", args: [] },
-      { method: "gte", args: ["day", "2026-07-05"] }
-    ]);
-    expect(calls[1].ops[0]).toEqual({ method: "insert", args: [[TELNYX_ROW]] });
+  it("replaces the window atomically through the SQL function", async () => {
+    const rpc = vi.fn(async () => ({ data: 1, error: null }));
+    await replaceTelnyxCostWindow("2026-07-05", [TELNYX_ROW], { rpc } as never);
+    expect(rpc).toHaveBeenCalledWith("replace_telnyx_cost_window", {
+      p_window_start: "2026-07-05",
+      p_rows: [TELNYX_ROW]
+    });
   });
 
-  it("skips the insert when there are no rows", async () => {
-    const { client, calls } = mockClient([{ data: null, error: null }]);
-    await replaceTelnyxCostWindow("2026-07-05", [], client);
-    expect(calls).toHaveLength(1);
-  });
-
-  it("throws on delete and insert errors", async () => {
-    const del = mockClient([{ data: null, error: { message: "boom" } }]);
-    await expect(replaceTelnyxCostWindow("2026-07-05", [TELNYX_ROW], del.client)).rejects.toThrow(
-      /delete: boom/
-    );
-    const ins = mockClient([
-      { data: null, error: null },
-      { data: null, error: { message: "bang" } }
-    ]);
-    await expect(replaceTelnyxCostWindow("2026-07-05", [TELNYX_ROW], ins.client)).rejects.toThrow(
-      /insert: bang/
-    );
+  it("throws on an rpc error", async () => {
+    const rpc = vi.fn(async () => ({ data: null, error: { message: "boom" } }));
+    await expect(
+      replaceTelnyxCostWindow("2026-07-05", [TELNYX_ROW], { rpc } as never)
+    ).rejects.toThrow(/replaceTelnyxCostWindow: boom/);
   });
 
   it("falls back to the service client when none is provided", async () => {
-    const { client } = mockClient([{ data: null, error: null }]);
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
-    await replaceTelnyxCostWindow("2026-07-05", [], client);
+    const rpc = vi.fn(async () => ({ data: 0, error: null }));
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({ rpc } as never);
     await replaceTelnyxCostWindow("2026-07-05", []);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith("replace_telnyx_cost_window", {
+      p_window_start: "2026-07-05",
+      p_rows: []
+    });
   });
 });
 
@@ -161,39 +150,24 @@ describe("listTelnyxCostDaily", () => {
 });
 
 describe("replaceHostingerVpsCosts", () => {
-  it("deletes everything then inserts the snapshot", async () => {
-    const { client, calls } = mockClient([{ data: null, error: null }]);
-    await replaceHostingerVpsCosts([HOSTINGER_ROW], client);
-    expect(calls[0].ops).toEqual([
-      { method: "delete", args: [] },
-      { method: "neq", args: ["subscription_id", ""] }
-    ]);
-    expect(calls[1].ops[0]).toEqual({ method: "insert", args: [[HOSTINGER_ROW]] });
+  it("replaces the snapshot atomically through the SQL function", async () => {
+    const rpc = vi.fn(async () => ({ data: 1, error: null }));
+    await replaceHostingerVpsCosts([HOSTINGER_ROW], { rpc } as never);
+    expect(rpc).toHaveBeenCalledWith("replace_hostinger_vps_costs", {
+      p_rows: [HOSTINGER_ROW]
+    });
   });
 
-  it("skips the insert on an empty snapshot", async () => {
-    const { client, calls } = mockClient([{ data: null, error: null }]);
-    await replaceHostingerVpsCosts([], client);
-    expect(calls).toHaveLength(1);
-  });
-
-  it("throws on delete and insert errors", async () => {
-    const del = mockClient([{ data: null, error: { message: "boom" } }]);
-    await expect(replaceHostingerVpsCosts([HOSTINGER_ROW], del.client)).rejects.toThrow(
-      /delete: boom/
-    );
-    const ins = mockClient([
-      { data: null, error: null },
-      { data: null, error: { message: "bang" } }
-    ]);
-    await expect(replaceHostingerVpsCosts([HOSTINGER_ROW], ins.client)).rejects.toThrow(
-      /insert: bang/
+  it("throws on an rpc error", async () => {
+    const rpc = vi.fn(async () => ({ data: null, error: { message: "boom" } }));
+    await expect(replaceHostingerVpsCosts([HOSTINGER_ROW], { rpc } as never)).rejects.toThrow(
+      /replaceHostingerVpsCosts: boom/
     );
   });
 
   it("falls back to the service client when none is provided", async () => {
-    const { client } = mockClient([{ data: null, error: null }]);
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    const rpc = vi.fn(async () => ({ data: 0, error: null }));
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({ rpc } as never);
     await replaceHostingerVpsCosts([]);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });

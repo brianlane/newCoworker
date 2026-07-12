@@ -53,11 +53,12 @@ export type HostingerVpsCostRow = HostingerVpsCostInsert & {
 };
 
 /**
- * Idempotent write for a rolling Telnyx sync window: delete every row with
- * `day >= windowStartDay`, then insert the fresh aggregates. Telnyx only
- * accepts preset last_7/30/90-day ranges, so re-running a sync always
- * covers a superset of the previous run's recent days — delete+insert
- * keeps the table exact without an upsert key (business_id is nullable).
+ * Idempotent write for a rolling Telnyx sync window: replace every row with
+ * `day >= windowStartDay` with the fresh aggregates. Telnyx only accepts
+ * preset last_7/30/90-day ranges, so re-running a sync always covers a
+ * superset of the previous run's recent days. The delete+insert runs
+ * inside ONE transaction (`replace_telnyx_cost_window` SQL function) so a
+ * failed insert can never leave the window deleted-but-empty.
  */
 export async function replaceTelnyxCostWindow(
   windowStartDay: string,
@@ -65,14 +66,11 @@ export async function replaceTelnyxCostWindow(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error: deleteError } = await db
-    .from("telnyx_cost_daily")
-    .delete()
-    .gte("day", windowStartDay);
-  if (deleteError) throw new Error(`replaceTelnyxCostWindow delete: ${deleteError.message}`);
-  if (rows.length === 0) return;
-  const { error: insertError } = await db.from("telnyx_cost_daily").insert(rows);
-  if (insertError) throw new Error(`replaceTelnyxCostWindow insert: ${insertError.message}`);
+  const { error } = await db.rpc("replace_telnyx_cost_window", {
+    p_window_start: windowStartDay,
+    p_rows: rows
+  });
+  if (error) throw new Error(`replaceTelnyxCostWindow: ${error.message}`);
 }
 
 /**
@@ -103,22 +101,19 @@ export async function listTelnyxCostDaily(
   return all;
 }
 
-/** Full-replace the Hostinger billing snapshot (it is a point-in-time view). */
+/**
+ * Full-replace the Hostinger billing snapshot (a point-in-time view).
+ * Atomic for the same reason as {@link replaceTelnyxCostWindow}: the
+ * `replace_hostinger_vps_costs` SQL function wraps delete+insert in one
+ * transaction.
+ */
 export async function replaceHostingerVpsCosts(
   rows: HostingerVpsCostInsert[],
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  // `neq` on a value no subscription id can have = "delete everything"
-  // (PostgREST requires a filter on delete).
-  const { error: deleteError } = await db
-    .from("hostinger_vps_costs")
-    .delete()
-    .neq("subscription_id", "");
-  if (deleteError) throw new Error(`replaceHostingerVpsCosts delete: ${deleteError.message}`);
-  if (rows.length === 0) return;
-  const { error: insertError } = await db.from("hostinger_vps_costs").insert(rows);
-  if (insertError) throw new Error(`replaceHostingerVpsCosts insert: ${insertError.message}`);
+  const { error } = await db.rpc("replace_hostinger_vps_costs", { p_rows: rows });
+  if (error) throw new Error(`replaceHostingerVpsCosts: ${error.message}`);
 }
 
 /** The current Hostinger billing snapshot, soonest renewal first (nulls last). */

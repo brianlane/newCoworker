@@ -37,7 +37,10 @@ select cron.schedule(
       'Authorization', 'Bearer ' || public._cron_vault_read('internal_cron_secret')
     ),
     body := '{}'::jsonb,
-    timeout_milliseconds := 60000
+    -- Telnyx MDR paging + sequential Hostinger calls can run several
+    -- minutes; match the Edge bridge's 290s ceiling so pg_cron doesn't
+    -- abandon the request mid-sync.
+    timeout_milliseconds := 295000
   );
   $$
 );

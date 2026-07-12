@@ -74,3 +74,80 @@ create index if not exists idx_hostinger_vps_costs_business
 
 alter table public.hostinger_vps_costs enable row level security;
 -- No policies on purpose (service-role only), matching telnyx_cost_daily.
+
+-- Atomic replace functions: the sync must never leave a window deleted but
+-- not re-inserted (a failed insert after a successful delete would silently
+-- zero the admin cost views until the next sync). Each runs delete+insert
+-- in one transaction; PostgREST can't do that client-side. Service-role
+-- only, like every public function (fn_grants_lockdown re-revokes anyway).
+
+create or replace function public.replace_telnyx_cost_window(
+  p_window_start date,
+  p_rows jsonb
+) returns integer
+language plpgsql
+set search_path = pg_catalog, public
+as $$
+declare
+  inserted integer;
+begin
+  delete from public.telnyx_cost_daily where day >= p_window_start;
+  insert into public.telnyx_cost_daily
+    (day, business_id, record_type, direction, record_count,
+     cost_micros, carrier_fee_micros, billed_seconds)
+  select
+    (r->>'day')::date,
+    nullif(r->>'business_id', '')::uuid,
+    r->>'record_type',
+    r->>'direction',
+    coalesce((r->>'record_count')::integer, 0),
+    coalesce((r->>'cost_micros')::bigint, 0),
+    coalesce((r->>'carrier_fee_micros')::bigint, 0),
+    coalesce((r->>'billed_seconds')::bigint, 0)
+  from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) as r;
+  get diagnostics inserted = row_count;
+  return inserted;
+end;
+$$;
+
+revoke execute on function public.replace_telnyx_cost_window(date, jsonb)
+  from public, anon, authenticated;
+
+create or replace function public.replace_hostinger_vps_costs(
+  p_rows jsonb
+) returns integer
+language plpgsql
+set search_path = pg_catalog, public
+as $$
+declare
+  inserted integer;
+begin
+  delete from public.hostinger_vps_costs;
+  insert into public.hostinger_vps_costs
+    (subscription_id, vm_id, hostname, plan, status, billing_period,
+     billing_period_unit, total_price_cents, renewal_price_cents,
+     monthly_price_cents, is_auto_renewed, next_billing_at, expires_at,
+     assigned_business_id)
+  select
+    r->>'subscription_id',
+    (r->>'vm_id')::bigint,
+    r->>'hostname',
+    r->>'plan',
+    r->>'status',
+    (r->>'billing_period')::integer,
+    r->>'billing_period_unit',
+    (r->>'total_price_cents')::integer,
+    (r->>'renewal_price_cents')::integer,
+    (r->>'monthly_price_cents')::integer,
+    (r->>'is_auto_renewed')::boolean,
+    (r->>'next_billing_at')::timestamptz,
+    (r->>'expires_at')::timestamptz,
+    nullif(r->>'assigned_business_id', '')::uuid
+  from jsonb_array_elements(coalesce(p_rows, '[]'::jsonb)) as r;
+  get diagnostics inserted = row_count;
+  return inserted;
+end;
+$$;
+
+revoke execute on function public.replace_hostinger_vps_costs(jsonb)
+  from public, anon, authenticated;
