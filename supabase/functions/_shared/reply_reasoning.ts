@@ -123,33 +123,129 @@ function parseTrailer(payload: string): ReplyReasoning | null {
   };
 }
 
+/** Max lines a multi-line (pretty-printed) trailer may span past its marker. */
+const MAX_TRAILER_LINES = 12;
+
 /**
- * Strip every trailer-carrying line from the reply and parse the LAST one.
- * A trailer mid-line strips from its start to the end of that line (a model
- * that glued the trailer onto its last sentence keeps the sentence). Lines
- * are trailer-carrying when they hold a marker variant OR a bare trailer
- * JSON body (see TRAILER_JSON_PATTERN).
+ * A markdown fence-only line (``` or ```json). When a trailer was stripped,
+ * these are debris from a model that fenced its trailer — never customer
+ * copy — and are scrubbed too. (An SMS reply has no legitimate code fences;
+ * stripping here is deliberately over-eager, like the marker matcher.)
+ */
+const FENCE_LINE_RE = /^\s*`{3,}[a-zA-Z]*\s*$/;
+
+/** True when `text` contains a complete balanced `{...}` span. */
+function hasBalancedObject(text: string): boolean {
+  const start = text.indexOf("{");
+  if (start === -1) return false;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') inString = true;
+    else if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Third net, for a PRETTY-PRINTED trailer with no marker at all: a line that
+ * is just `{` whose next non-blank line opens with `"intent":`. Neither the
+ * marker matcher nor the (line-local) trailer-JSON matcher can see this
+ * shape, and no customer-facing reply legitimately contains it.
+ */
+function bareObjectTrailerStart(lines: string[], i: number): boolean {
+  if (!/^\s*\{\s*$/.test(lines[i])) return false;
+  let j = i + 1;
+  while (j < lines.length && lines[j].trim() === "") j++;
+  return j < lines.length && /^\s*"intent"\s*:/.test(lines[j]);
+}
+
+/**
+ * Collect the full trailer payload starting at `cutIndex` on `startLine`.
+ * The instruction asks for a single line, but models pretty-print: the JSON
+ * may OPEN on the marker line and close later, or start on a following line
+ * entirely (`[[reasoning]]\n{\n  "intent": … }`). Both used to leak the JSON
+ * body to the customer because stripping was strictly line-based. Consumes
+ * forward (bounded by MAX_TRAILER_LINES) only while the shape still looks
+ * like a trailer; anything else falls back to stripping just the marker line.
+ */
+function gatherTrailerPayload(
+  lines: string[],
+  startLine: number,
+  cutIndex: number
+): { payload: string; endLine: number } {
+  const single = lines[startLine].slice(cutIndex);
+  if (hasBalancedObject(single)) return { payload: single, endLine: startLine };
+  if (!single.includes("{")) {
+    // Marker with no JSON on its own line: only treat following lines as the
+    // trailer when the next non-blank line actually opens an object.
+    let peek = startLine + 1;
+    while (peek < lines.length && lines[peek].trim() === "") peek++;
+    if (peek >= lines.length || !lines[peek].trimStart().startsWith("{")) {
+      return { payload: single, endLine: startLine };
+    }
+  }
+  let payload = single;
+  for (
+    let i = startLine + 1;
+    i < lines.length && i - startLine <= MAX_TRAILER_LINES;
+    i++
+  ) {
+    payload += "\n" + lines[i];
+    if (hasBalancedObject(payload)) return { payload, endLine: i };
+  }
+  // Never balanced: don't swallow reply text — strip only the marker line.
+  return { payload: single, endLine: startLine };
+}
+
+/**
+ * Strip every trailer from the reply and parse the LAST one. A trailer
+ * mid-line strips from its start to the end of that line (a model that glued
+ * the trailer onto its last sentence keeps the sentence); a trailer whose
+ * JSON spans multiple lines (pretty-printed / fenced) is stripped whole.
+ * Lines are trailer-carrying when they hold a marker variant OR a bare
+ * trailer JSON body (see TRAILER_JSON_PATTERN).
  */
 export function splitReplyReasoning(raw: string): SplitReplyResult {
   if (!MARKER_PATTERN.test(raw) && !TRAILER_JSON_PATTERN.test(raw)) {
     return { reply: raw, reasoning: null };
   }
+  const lines = raw.split("\n");
   const keptLines: string[] = [];
   let reasoning: ReplyReasoning | null = null;
-  for (const line of raw.split("\n")) {
-    const at = trailerCutIndex(line);
+  let strippedAny = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    let at = trailerCutIndex(line);
+    if (at === -1 && bareObjectTrailerStart(lines, i)) at = line.indexOf("{");
     if (at === -1) {
       keptLines.push(line);
       continue;
     }
+    strippedAny = true;
     const before = line.slice(0, at).trimEnd();
     if (before) keptLines.push(before);
     // parseTrailer scans for the outermost {...} span, so passing the cut
     // (marker/blob included) parses the same JSON for every variant.
-    const parsed = parseTrailer(line.slice(at));
+    const gathered = gatherTrailerPayload(lines, i, at);
+    const parsed = parseTrailer(gathered.payload);
     if (parsed) reasoning = parsed;
+    i = gathered.endLine;
   }
+  const kept = strippedAny ? keptLines.filter((l) => !FENCE_LINE_RE.test(l)) : keptLines;
   // Collapse the blank tail the removed trailer line usually leaves behind.
-  const reply = keptLines.join("\n").replace(/\n+$/, "").trimEnd();
+  const reply = kept.join("\n").replace(/\n+$/, "").trimEnd();
   return { reply, reasoning };
 }
