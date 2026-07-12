@@ -118,27 +118,36 @@ export async function escalateToHuman(
       tags?: string[] | null;
     } | null;
 
-    // Dedupe 1: the tag is the open/closed state.
+    // Dedupe 1: the tag is the open/closed state. For contacts that can
+    // carry it, it is the ONLY dedupe — when the owner clears the tag they
+    // are saying "resolved", and a fresh handoff (even minutes later) must
+    // page again rather than silently vanish into a history-window match.
     if (contact && hasNeedsHumanTag(contact.tags)) return "already_open";
+    const existingTags = (Array.isArray(contact?.tags) ? contact!.tags! : []).filter(
+      (t): t is string => typeof t === "string" && t.trim().length > 0
+    );
+    const canCarryTag = Boolean(contact?.id) && existingTags.length < MAX_TAGS;
 
-    // Dedupe 2: recent-page fallback. Covers texters with no contact row and
-    // rows at the tag cap (neither can carry the tag), and tag writes that
-    // failed after a successful page. The notifications function stamps
-    // contactE164 into every history row for this kind (see
-    // supabase/functions/notifications/index.ts basePayload).
-    const sinceIso = new Date(Date.now() - NEEDS_HUMAN_REPAGE_HOURS * 3_600_000).toISOString();
-    const { data: recent, error: recentErr } = await supabase
-      .from("notifications")
-      .select("id")
-      .eq("business_id", input.businessId)
-      .eq("payload->>taskType", NEEDS_HUMAN_TASK_TYPE)
-      .eq("payload->>contactE164", input.contactE164)
-      .gte("created_at", sinceIso)
-      .limit(1);
-    if (recentErr) {
-      console.error("needs_human: recent-page lookup", recentErr);
-    } else if (((recent ?? []) as unknown[]).length > 0) {
-      return "already_open";
+    // Dedupe 2 (ONLY for contacts that cannot carry the tag — no CRM row, or
+    // a row at the tag cap): recent-page fallback against the notifications
+    // history, so every turn of an open escalation doesn't page again. The
+    // notifications function stamps contactE164 into every history row for
+    // this kind (see supabase/functions/notifications/index.ts basePayload).
+    if (!canCarryTag) {
+      const sinceIso = new Date(Date.now() - NEEDS_HUMAN_REPAGE_HOURS * 3_600_000).toISOString();
+      const { data: recent, error: recentErr } = await supabase
+        .from("notifications")
+        .select("id")
+        .eq("business_id", input.businessId)
+        .eq("payload->>taskType", NEEDS_HUMAN_TASK_TYPE)
+        .eq("payload->>contactE164", input.contactE164)
+        .gte("created_at", sinceIso)
+        .limit(1);
+      if (recentErr) {
+        console.error("needs_human: recent-page lookup", recentErr);
+      } else if (((recent ?? []) as unknown[]).length > 0) {
+        return "already_open";
+      }
     }
 
     // 1) Page the owner FIRST (notifications function fans out SMS/email/
@@ -176,48 +185,45 @@ export async function escalateToHuman(
       return "notify_failed";
     }
 
-    // 2) Open the needs-human state (when a row exists with tag headroom —
-    // untaggable contacts fall back to the recent-page dedupe above).
-    if (contact?.id) {
-      const existing = (Array.isArray(contact.tags) ? contact.tags : []).filter(
-        (t): t is string => typeof t === "string" && t.trim().length > 0
-      );
-      if (existing.length < MAX_TAGS) {
-        const nextTags = [...existing, NEEDS_HUMAN_TAG];
-        const { error: tagErr } = await supabase
-          .from("contacts")
-          .update({ tags: nextTags, updated_at: new Date().toISOString() })
-          .eq("id", contact.id);
-        if (tagErr) {
-          console.error("needs_human: tag write", tagErr);
-        } else {
-          // 3) Same hooks as every other tag write path: goal events on every
-          // linked number, and the tag_changed contact-event trigger.
-          const numbers = [
-            ...new Set(
-              [contact.customer_e164 ?? "", ...(contact.alias_e164s ?? []), input.contactE164].filter(
-                Boolean
-              )
+    // 2) Open the needs-human state (contacts with tag headroom only —
+    // untaggable contacts were deduped against the history above).
+    if (canCarryTag && contact?.id) {
+      const nextTags = [...existingTags, NEEDS_HUMAN_TAG];
+      const { error: tagErr } = await supabase
+        .from("contacts")
+        .update({ tags: nextTags, updated_at: new Date().toISOString() })
+        .eq("id", contact.id);
+      if (tagErr) {
+        // Safe direction: the page already landed; a failed tag write means
+        // the NEXT escalated turn may page again (duplicate), never silence.
+        console.error("needs_human: tag write", tagErr);
+      } else {
+        // 3) Same hooks as every other tag write path: goal events on every
+        // linked number, and the tag_changed contact-event trigger.
+        const numbers = [
+          ...new Set(
+            [contact.customer_e164 ?? "", ...(contact.alias_e164s ?? []), input.contactE164].filter(
+              Boolean
             )
-          ];
-          for (const number of numbers) {
-            await applyGoalEvent(supabase, input.businessId, number, {
-              kind: "tag_added",
-              tag: NEEDS_HUMAN_TAG
-            });
-          }
-          await enqueueContactEventRuns(supabase, input.businessId, {
-            kind: "tag_changed",
-            tag: NEEDS_HUMAN_TAG,
-            change: "added",
-            contact: {
-              e164: contact.customer_e164 || input.contactE164,
-              name: contact.display_name ?? undefined,
-              tags: nextTags
-            },
-            dedupeKey: `needs-human:${input.contactE164}:${Date.now()}`
+          )
+        ];
+        for (const number of numbers) {
+          await applyGoalEvent(supabase, input.businessId, number, {
+            kind: "tag_added",
+            tag: NEEDS_HUMAN_TAG
           });
         }
+        await enqueueContactEventRuns(supabase, input.businessId, {
+          kind: "tag_changed",
+          tag: NEEDS_HUMAN_TAG,
+          change: "added",
+          contact: {
+            e164: contact.customer_e164 || input.contactE164,
+            name: contact.display_name ?? undefined,
+            tags: nextTags
+          },
+          dedupeKey: `needs-human:${input.contactE164}:${Date.now()}`
+        });
       }
     }
     return "escalated";

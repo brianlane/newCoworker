@@ -77,18 +77,20 @@ describe("hasNeedsHumanTag", () => {
 describe("escalateToHuman", () => {
   it("pages the owner, tags the contact, and fires the tag hooks", async () => {
     const fetchFn = okFetch();
-    // Scripted terminal awaits, in call order: contact lookup, recent-page
-    // dedupe lookup, (notify POST — fetch, not db), tag update, goal-event
-    // run lookup (empty → no jumps), contact-event flow page (empty).
+    // Scripted terminal awaits, in call order: contact lookup, (notify POST
+    // — fetch, not db), tag update, goal-event run lookup (empty → no
+    // jumps), contact-event flow page (empty). No history-dedupe lookup for
+    // a taggable contact: the tag alone is the open/closed state, so an
+    // owner clearing it re-arms paging IMMEDIATELY (Bugbot finding).
     const { db, calls } = makeDb([
       { data: contactRow() },
-      { data: [] }, // recent-page dedupe (none)
       { data: null }, // tags update
       { data: [] }, // applyGoalEvent: candidate runs (none)
       { data: [] } // enqueueContactEventRuns: enabled flows page (none)
     ]);
     const result = await escalateToHuman(db, input(fetchFn));
     expect(result).toBe("escalated");
+    expect(calls.filter((c) => c.table === "notifications")).toHaveLength(0);
 
     // The tag write appended Needs Human to the existing tags.
     const update = calls.find((c) => c.table === "contacts" && c.name === "update");
@@ -166,7 +168,6 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow() },
-      { data: [] }, // recent-page dedupe
       { data: null, error: { message: "boom" } } // tags update fails
     ]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
@@ -189,7 +190,6 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow({ customer_e164: "+16025550000", alias_e164s: [LEAD] }) },
-      { data: [] }, // recent-page dedupe
       { data: null }, // tag update
       { data: [] }, // goal lookup for +16025550000
       { data: [] }, // goal lookup for +14168775223 (texter/alias)
@@ -213,7 +213,6 @@ describe("escalateToHuman", () => {
           tags: null
         })
       },
-      { data: [] }, // recent-page dedupe
       { data: null }, // tag update
       { data: [] }, // goal lookup (texter number only)
       { data: [] } // contact-event flows page
@@ -233,7 +232,6 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow({ tags: ["Engaged", 7, "  ", null] as unknown as string[] }) },
-      { data: [] }, // recent-page dedupe
       { data: null },
       { data: [] },
       { data: [] }
