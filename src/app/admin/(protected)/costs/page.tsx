@@ -69,10 +69,15 @@ export default async function AdminCostsPage() {
     .filter((r) => r.business_id === null)
     .reduce((sum, r) => sum + r.cost_micros, 0);
   const unattributedMonthCents = Math.round(unattributedMonthMicros / 10_000);
-  const totalCostCents = margins.totals.costCents + unattributedMonthCents;
-  // Leak spend is real platform cost: the net figure must match
-  // revenue − Est. Monthly Cost shown beside it, not just per-tenant sums.
-  const netMarginCents = margins.totals.marginCents - unattributedMonthCents;
+  const poolBurn = buildPoolBoxBurn({ inventory, hostingerRows, now });
+  const poolBurnMonthlyCents = poolBurn.reduce((sum, b) => sum + (b.monthlyCents ?? 0), 0);
+  // Leak spend and idle-pool hosting are real platform cost the per-tenant
+  // margin sums never see: fold both into the KPI cost + net figures so
+  // they reconcile with the vendor numbers on this same page.
+  const totalCostCents =
+    margins.totals.costCents + unattributedMonthCents + poolBurnMonthlyCents;
+  const netMarginCents =
+    margins.totals.marginCents - unattributedMonthCents - poolBurnMonthlyCents;
   const netMarginPct =
     margins.totals.revenueCents > 0
       ? Math.round((netMarginCents / margins.totals.revenueCents) * 1000) / 10
@@ -91,9 +96,6 @@ export default async function AdminCostsPage() {
     businessNames,
     now
   });
-  const poolBurn = buildPoolBoxBurn({ inventory, hostingerRows, now });
-  const poolBurnMonthlyCents = poolBurn.reduce((sum, b) => sum + (b.monthlyCents ?? 0), 0);
-
   // Hostinger fleet monthly total: every non-cancelled subscription's
   // effective monthly price (assigned + pooled — cancelled rows are gone
   // money, not recurring spend).
@@ -171,7 +173,8 @@ export default async function AdminCostsPage() {
           <p className="text-xs text-parchment/30 mt-1">
             on {money(margins.totals.revenueCents)} revenue
             {netMarginPct !== null && ` · ${netMarginPct}%`}
-            {unattributedMonthCents > 0 && " · incl. leak spend"}
+            {(unattributedMonthCents > 0 || poolBurnMonthlyCents > 0) &&
+              " · incl. leak + pool spend"}
           </p>
         </Card>
         <Card>
@@ -213,6 +216,7 @@ export default async function AdminCostsPage() {
               ["Gemini chat (metered)", lineTotals.gemini_chat],
               ["Gemini Live voice (rate est.)", lineTotals.gemini_voice],
               ["Stripe fees", lineTotals.stripe_fees],
+              ["Idle pool hosting", poolBurnMonthlyCents],
               ["Telnyx unattributed (leak check)", unattributedMonthCents]
             ] as const
           ).map(([label, cents]) => {
