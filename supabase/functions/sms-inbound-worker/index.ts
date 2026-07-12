@@ -38,6 +38,11 @@ import {
 } from "../_shared/reply_reasoning.ts";
 import { loadFlowRunContext } from "../_shared/ai_flows/run_context.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
+import {
+  SMS_CONVERSATION_QUALITY_LINE,
+  SMS_GROUNDED_ACTIONS_LINE,
+  SMS_IDENTITY_LINE
+} from "../_shared/sms_prompt_lines.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -844,61 +849,13 @@ serve(async (req: Request) => {
     // customer lead-intake script — and never a customer-memory profile.
     const isStaff = Boolean(job.staff_kind);
 
-    // Identity: present as a member of the team, never as software. The owner
-    // wants texters to see "the assistant", not "the AI assistant". Injected
-    // on every SMS turn (this preamble is always sent) so the model never
-    // labels itself an AI even on first contact.
-    const identityLine =
-      "Identity: you are the business's assistant. Refer to yourself only as " +
-      "the assistant or part of the team — never as an AI, an AI assistant, a " +
-      "bot, automated, virtual, a language model, or software, and don't " +
-      "mention any tools, models, or systems behind you. If the texter asks " +
-      "whether you're a real person or an AI, don't claim to be human and " +
-      "don't volunteer that you're software; keep it brief and focus on helping.";
-    // Honesty about actions: an assistant that NARRATES an action ("your
-    // appointment is booked for 9 AM", "I've sent the calendar invite")
-    // without a successful tool call behind it is worse than one that says
-    // it can't. A real tenant lead was told an appointment was booked when
-    // no calendar event existed and a made-up email address got the
-    // "invite". Injected on every turn (same rationale as identityLine) so
-    // it holds even when the tenant's persona says nothing about tools.
-    // Twin of the voice bridge's groundedActionsLine
-    // (vps/voice-bridge/src/gemini-telnyx-bridge.ts) — keep in sync.
-    const groundedActionsLine =
-      "Grounded actions: you can only do things through your tools — saying " +
-      "you did something does not do it. Never tell the texter you booked, " +
-      "scheduled, sent, canceled, or updated anything unless the matching " +
-      "tool call succeeded in this conversation. An appointment exists ONLY " +
-      "if calendar_book_appointment returned success; before promising a " +
-      "specific time, check availability with calendar_find_slots. If " +
-      "calendar_book_appointment returns detail booking_link_created with a " +
-      "bookingLink (Calendly accounts), the appointment is NOT booked yet — " +
-      "send the texter that link and ask them to complete the booking " +
-      "there; never describe it as confirmed. " +
-      "send_email sends a plain text email — it is NOT a calendar invite, so " +
-      "never call it one. A real calendar invite only goes out when the " +
-      "booking succeeded WITH the texter's email address on it — if they " +
-      "want an invite, ask for their email before booking; otherwise don't " +
-      "mention invites. Never invent or guess email addresses, phone " +
-      "numbers, times, or confirmation details — if you need one, ask for " +
-      "it. If a booking fails, tell the texter that time is no longer " +
-      "available (never blame a technical error), re-check with " +
-      "calendar_find_slots before offering another option, and if a second " +
-      "booking also fails, stop offering times — call notify_team with " +
-      "their preferred day/time and say a team member will confirm. If any " +
-      "other tool is unavailable, turned off, or fails, say plainly that " +
-      "you couldn't complete that step and that someone from the team will " +
-      "follow up — never pretend it worked.";
-    // Conversation quality (from tenant feedback: repeated acknowledgements
-    // and re-asking for a name the lead already gave): reuse what is known,
-    // vary the phrasing. Customer path only — staff chat has no intake.
-    const conversationQualityLine =
-      "Conversation quality: never ask for information you already have " +
-      "from this conversation or the customer profile (their name, phone, " +
-      "email, or details they've shared) — reuse it, including when booking " +
-      "an appointment. Vary your acknowledgements instead of repeating the " +
-      "same phrase, and make each reply reflect what the texter just said " +
-      "rather than restating your previous message.";
+    // Always-injected prompt lines (identity / grounded actions / quality)
+    // live in _shared/sms_prompt_lines.ts so the live-AI e2e suite
+    // regression-tests the EXACT production strings (the Derek Schultz
+    // call-promise replay). Edit them there.
+    const identityLine = SMS_IDENTITY_LINE;
+    const groundedActionsLine = SMS_GROUNDED_ACTIONS_LINE;
+    const conversationQualityLine = SMS_CONVERSATION_QUALITY_LINE;
     // Date awareness: without this the model cannot resolve "tomorrow at
     // 2pm" into the ISO times the calendar tools require. Business-local
     // when the owner set a timezone; UTC fallback otherwise.
