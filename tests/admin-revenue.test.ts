@@ -324,6 +324,20 @@ describe("listPaymentProblems", () => {
     ]);
   });
 
+  it("hides a resolved problem: a newer active row supersedes an old payment-failure cancel", () => {
+    const problems = listPaymentProblems([
+      sub({
+        business_id: "recovered",
+        status: "canceled",
+        cancel_reason: "payment_failed",
+        canceled_at: "2026-06-10T00:00:00Z",
+        created_at: "2026-05-01T00:00:00Z"
+      }),
+      sub({ business_id: "recovered", created_at: "2026-06-15T00:00:00Z" })
+    ]);
+    expect(problems).toEqual([]);
+  });
+
   it("sorts stably when both timestamps are missing", () => {
     const problems = listPaymentProblems([
       sub({ business_id: "n1", status: "canceled", cancel_reason: "payment_failed", canceled_at: null }),

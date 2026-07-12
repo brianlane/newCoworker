@@ -54,7 +54,8 @@ export default async function AdminRevenuePage() {
     limit: Number.MAX_SAFE_INTEGER
   });
   const topClients = payingBusinesses.slice(0, 10);
-  const problems = listPaymentProblems(revenueSubs).slice(0, 20);
+  const allProblems = listPaymentProblems(revenueSubs);
+  const problems = allProblems.slice(0, 20);
 
   const trendMax = Math.max(...trend.map((p) => p.totalCents), 1);
   const payingCount = payingBusinesses.length;
@@ -171,8 +172,13 @@ export default async function AdminRevenuePage() {
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
               Payment Problems
             </h2>
-            {problems.length > 0 && <Badge variant="error">{problems.length}</Badge>}
+            {allProblems.length > 0 && <Badge variant="error">{allProblems.length}</Badge>}
           </div>
+          {allProblems.length > problems.length && (
+            <p className="text-xs text-parchment/40 mb-2">
+              Showing the newest {problems.length} of {allProblems.length}.
+            </p>
+          )}
           {problems.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">
               No past-due or failed-payment subscriptions.

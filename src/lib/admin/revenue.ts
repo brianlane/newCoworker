@@ -30,9 +30,10 @@ export type RevenueDeal = {
 /**
  * Newest row per business — the same "one subscription per tenant" view the
  * admin dashboard gets from `listSubscriptionsByBusinessIds`. Current-state
- * metrics (MRR, ARPU, top clients, trend anchors) must use this so a tenant
- * with historical/overlapping rows can never count twice; churn and the
- * payment-problem report deliberately keep the full history.
+ * metrics (MRR, ARPU, top clients, trend anchors, payment problems) must use
+ * this so a tenant with historical/overlapping rows can never count twice or
+ * resurface a resolved problem; churn alone deliberately keeps the full
+ * history (its per-business sets need the canceled rows).
  */
 export function dedupeNewestPerBusiness(
   subscriptions: RevenueSubscription[]
@@ -263,11 +264,13 @@ export type PaymentProblem = {
 
 /**
  * The failed-payments report: `past_due` rows plus cancels whose recorded
- * reason was a payment failure, newest first.
+ * reason was a payment failure, newest first. Only each business's NEWEST
+ * subscription row is considered — a tenant that recovered onto a newer
+ * active subscription is a resolved problem, not a current one.
  */
 export function listPaymentProblems(subscriptions: RevenueSubscription[]): PaymentProblem[] {
   const problems: PaymentProblem[] = [];
-  for (const sub of subscriptions) {
+  for (const sub of dedupeNewestPerBusiness(subscriptions)) {
     if (sub.status === "past_due") {
       problems.push({ businessId: sub.business_id, kind: "past_due", at: sub.created_at });
     } else if (sub.status === "canceled" && sub.cancel_reason === "payment_failed") {
