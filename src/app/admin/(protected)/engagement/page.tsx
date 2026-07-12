@@ -12,7 +12,7 @@ import { UserEngagementTable } from "@/components/admin/UserEngagementTable";
 export const dynamic = "force-dynamic";
 
 export default async function AdminEngagementPage() {
-  const [users, businesses, members] = await Promise.all([
+  const [{ users, clipped }, businesses, members] = await Promise.all([
     listPlatformAuthUsers(),
     listBusinesses(),
     listAllBusinessMembers()
@@ -34,6 +34,15 @@ export default async function AdminEngagementPage() {
           Sign-in activity across every owner and team member.
         </p>
       </div>
+
+      {clipped && (
+        <Card className="border-spark-orange/40">
+          <p className="text-sm text-spark-orange">
+            Auth directory scan hit its page cap — counts and segments below cover only the
+            users collected so far, and uncollected users may show as never signed in.
+          </p>
+        </Card>
+      )}
 
       {/* KPI row (BizBlasts' DAU analytics panel) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

@@ -10,6 +10,7 @@ import {
   listPlatformAuthUsers,
   quietOwnerBusinessIds,
   summarizeUserEngagement,
+  AUTH_USERS_PAGE_CAP,
   AUTH_USERS_PER_PAGE,
   type PlatformAuthUser
 } from "@/lib/admin/user-engagement";
@@ -256,30 +257,46 @@ describe("listPlatformAuthUsers", () => {
     ]);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
-    const users = await listPlatformAuthUsers();
+    const { users, clipped } = await listPlatformAuthUsers();
     expect(users).toHaveLength(AUTH_USERS_PER_PAGE + 1);
     expect(users.at(-1)).toEqual({
       email: "last@x.com",
       created_at: daysAgo(1),
       last_sign_in_at: daysAgo(1)
     });
+    expect(clipped).toBe(false);
     expect(db.listUsers).toHaveBeenCalledTimes(2);
   });
 
   it("accepts an injected client and stops on the first short page", async () => {
     const db = authDb([[{ email: "only@x.com", created_at: daysAgo(2) }]]);
-    const users = await listPlatformAuthUsers(db as never);
-    expect(users).toEqual([
-      { email: "only@x.com", created_at: daysAgo(2), last_sign_in_at: null }
-    ]);
+    expect(await listPlatformAuthUsers(db as never)).toEqual({
+      users: [{ email: "only@x.com", created_at: daysAgo(2), last_sign_in_at: null }],
+      clipped: false
+    });
     expect(db.listUsers).toHaveBeenCalledTimes(1);
   });
 
   it("treats a null data payload as an empty (final) page", async () => {
     const listUsers = vi.fn().mockResolvedValue({ data: null, error: null });
     const db = { auth: { admin: { listUsers } } };
-    expect(await listPlatformAuthUsers(db as never)).toEqual([]);
+    expect(await listPlatformAuthUsers(db as never)).toEqual({ users: [], clipped: false });
     expect(listUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it("flags a scan that fills the page cap as clipped", async () => {
+    const fullPage = Array.from({ length: AUTH_USERS_PER_PAGE }, (_, i) => ({
+      email: `u${i}@x.com`,
+      created_at: daysAgo(10),
+      last_sign_in_at: null
+    }));
+    const listUsers = vi.fn().mockResolvedValue({ data: { users: fullPage }, error: null });
+    const db = { auth: { admin: { listUsers } } };
+
+    const { users, clipped } = await listPlatformAuthUsers(db as never);
+    expect(clipped).toBe(true);
+    expect(users).toHaveLength(AUTH_USERS_PAGE_CAP * AUTH_USERS_PER_PAGE);
+    expect(listUsers).toHaveBeenCalledTimes(AUTH_USERS_PAGE_CAP);
   });
 
   it("throws on a listUsers error", async () => {

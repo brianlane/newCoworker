@@ -26,18 +26,20 @@ export default async function AdminClientsPage() {
   const intakes = await listWhiteGloveIntakes();
 
   // Churn-risk badge: businesses whose owner hasn't signed in for 90+ days
-  // (see /admin/engagement). Best effort — an auth-directory read failure
-  // degrades to "no badges" instead of erroring the whole page.
+  // (see /admin/engagement). Best effort — an auth-directory read failure OR
+  // a clipped (partial) directory degrades to "no badges" instead of
+  // erroring the page or flagging users the scan never reached.
   const quietOwners = await listPlatformAuthUsers()
-    .then(async (users) =>
-      quietOwnerBusinessIds(
+    .then(async ({ users, clipped }) => {
+      if (clipped) return new Set<string>();
+      return quietOwnerBusinessIds(
         buildUserEngagementRows({
           users,
           businesses,
           members: await listAllBusinessMembers()
         })
-      )
-    )
+      );
+    })
     .catch((err: unknown) => {
       console.error(
         "admin clients: engagement read failed",

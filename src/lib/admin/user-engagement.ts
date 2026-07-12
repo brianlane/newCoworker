@@ -61,6 +61,17 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 export const AUTH_USERS_PAGE_CAP = 20;
 export const AUTH_USERS_PER_PAGE = 500;
 
+export type PlatformAuthUsersResult = {
+  users: PlatformAuthUser[];
+  /**
+   * True when the scan filled its page cap — the directory is PARTIAL and
+   * recency data for uncollected users is missing. Callers must degrade
+   * (hide churn badges / show a truncation notice) rather than mis-segment
+   * users past the cap as never-signed-in.
+   */
+  clipped: boolean;
+};
+
 /**
  * The whole Supabase auth directory (email + created + last sign-in),
  * paginated up to {@link AUTH_USERS_PAGE_CAP} pages. Email-less users
@@ -69,9 +80,10 @@ export const AUTH_USERS_PER_PAGE = 500;
  */
 export async function listPlatformAuthUsers(
   client?: SupabaseClient
-): Promise<PlatformAuthUser[]> {
+): Promise<PlatformAuthUsersResult> {
   const db = client ?? (await createSupabaseServiceClient());
   const users: PlatformAuthUser[] = [];
+  let clipped = true;
   for (let page = 1; page <= AUTH_USERS_PAGE_CAP; page += 1) {
     const { data, error } = await db.auth.admin.listUsers({
       page,
@@ -87,9 +99,12 @@ export async function listPlatformAuthUsers(
         last_sign_in_at: user.last_sign_in_at ?? null
       });
     }
-    if (batch.length < AUTH_USERS_PER_PAGE) break;
+    if (batch.length < AUTH_USERS_PER_PAGE) {
+      clipped = false;
+      break;
+    }
   }
-  return users;
+  return { users, clipped };
 }
 
 function segmentFor(
