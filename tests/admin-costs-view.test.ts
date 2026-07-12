@@ -360,8 +360,10 @@ describe("buildPoolBoxBurn", () => {
     const burn = buildPoolBoxBurn({
       inventory: [
         inventoryRow(), // synced billing row below
-        inventoryRow({ vm_id: 42, hostname: null, plan: "kvm1" }), // no billing row → estimate
-        inventoryRow({ vm_id: 43, plan: "weird-plan" }), // unknown plan → null price
+        // No billing row at all → SKU estimate.
+        inventoryRow({ vm_id: 42, hostname: null, plan: "kvm1", hostinger_billing_subscription_id: null }),
+        // Unknown plan and no billing → null price.
+        inventoryRow({ vm_id: 43, plan: "weird-plan", hostinger_billing_subscription_id: null }),
         inventoryRow({ vm_id: 44, state: "assigned" }), // not idle — skipped
         inventoryRow({ vm_id: 45, state: "retired" }),
         // Cancelled billing = sunk cost until lapse, NOT recurring burn
@@ -433,7 +435,9 @@ describe("buildPoolBoxBurn", () => {
     const burn = buildPoolBoxBurn({
       inventory: [
         inventoryRow({ hostinger_billing_subscription_id: "sub-detached" }),
-        inventoryRow({ vm_id: 47, hostinger_billing_subscription_id: null })
+        inventoryRow({ vm_id: 47, hostinger_billing_subscription_id: null }),
+        // Subscription id that matches no synced billing row at all.
+        inventoryRow({ vm_id: 48, hostinger_billing_subscription_id: "sub-ghost" })
       ],
       hostingerRows: [
         // Billing row lost its VM (deleted box, lingering subscription).
@@ -453,5 +457,10 @@ describe("buildPoolBoxBurn", () => {
     expect(detached.endsAt).toBe("2026-08-20T00:00:00.000Z");
     // No subscription id at all → SKU estimate fallback.
     expect(burn.find((b) => b.vmId === 47)?.monthlySource).toBe("estimate");
+    // A ghost subscription id (billing row gone entirely) also estimates.
+    expect(burn.find((b) => b.vmId === 48)).toMatchObject({
+      monthlySource: "estimate",
+      endsAt: null
+    });
   });
 });
