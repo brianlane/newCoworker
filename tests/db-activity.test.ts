@@ -6,6 +6,9 @@ import {
   getRecentActivity,
   getActivityFeedPage,
   activityWindowDays,
+  parseActivityKindsParam,
+  parseActivityDaysParam,
+  ACTIVITY_KINDS,
   DEFAULT_ACTIVITY_LIMIT,
   ACTIVITY_FEED_MAX,
   ACTIVITY_WINDOW_DAYS,
@@ -782,6 +785,174 @@ describe("getActivityFeedPage", () => {
     expect(chains[0].lt).toHaveBeenCalledWith("started_at", before);
     expect(chains[2].lt).toHaveBeenCalledWith("updated_at", before);
     expect(chains[3].lt).toHaveBeenCalledWith("created_at", before);
+  });
+});
+
+describe("getActivityFeedPage — filters", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
+
+  it("queries only the source for a single selected kind", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: ["call"] } }, db as never);
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["voice_call_transcripts"]);
+  });
+
+  it("skips the calls source when another kind is selected", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: ["chat"] } }, db as never);
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["dashboard_chat_jobs"]);
+  });
+
+  it("keeps both outbound-SMS sources (replies + log) and skips the inbound query", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: ["sms_outbound"] } }, db as never);
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["sms_inbound_jobs", "sms_outbound_log"]);
+    // The one sms_inbound_jobs query is the REPLY query (not-null reply filter),
+    // not the inbound-text query.
+    const replyChain = db.from.mock.results[0].value;
+    expect(replyChain.not).toHaveBeenCalledWith("assistant_reply_text", "is", null);
+  });
+
+  it("queries only inbound texts for kinds=[sms_inbound]", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: ["sms_inbound"] } }, db as never);
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["sms_inbound_jobs"]);
+    expect(db.from.mock.results[0].value.not).not.toHaveBeenCalled();
+  });
+
+  it("maps aiflow/customer/alert kinds to their tables", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage(
+      "biz-1",
+      { filter: { kinds: ["aiflow", "customer", "alert"] } },
+      db as never
+    );
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual([
+      "ai_flow_runs",
+      "contacts",
+      "coworker_logs"
+    ]);
+  });
+
+  it("pushes a single selected email direction into the query", async () => {
+    const inboundDb = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: ["email_inbound"] } }, inboundDb as never);
+    expect(inboundDb.from.mock.calls.map((c) => c[0])).toEqual(["email_log"]);
+    expect(inboundDb.from.mock.results[0].value.eq).toHaveBeenCalledWith("direction", "inbound");
+
+    const outboundDb = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage(
+      "biz-1",
+      { filter: { kinds: ["email_outbound"] } },
+      outboundDb as never
+    );
+    expect(outboundDb.from.mock.results[0].value.eq).toHaveBeenCalledWith("direction", "outbound");
+  });
+
+  it("does not constrain direction when both email kinds are selected", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage(
+      "biz-1",
+      { filter: { kinds: ["email_inbound", "email_outbound"] } },
+      db as never
+    );
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["email_log"]);
+    const eqColumns = db.from.mock.results[0].value.eq.mock.calls.map((c: unknown[]) => c[0]);
+    expect(eqColumns).not.toContain("direction");
+  });
+
+  it("treats an empty kinds array as no filter (all sources queried)", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getActivityFeedPage("biz-1", { filter: { kinds: [] } }, db as never);
+    expect(db.from.mock.calls).toHaveLength(9);
+  });
+
+  it("tightens the look-back with sinceDays and clamps it to the tier window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-01T00:00:00Z"));
+    try {
+      // Standard tier (90d window) narrowed to the last 30 days.
+      const narrowed = mockDbByTable(ALL_EMPTY);
+      await getActivityFeedPage(
+        "biz-1",
+        { tier: "standard", filter: { kinds: ["call"], sinceDays: 30 } },
+        narrowed as never
+      );
+      expect(narrowed.from.mock.results[0].value.gte).toHaveBeenCalledWith(
+        "started_at",
+        "2026-05-02T00:00:00.000Z"
+      );
+
+      // Starter tier: an oversized value clamps DOWN to the 7-day window —
+      // a crafted URL can't widen the view past the tier.
+      const clamped = mockDbByTable(ALL_EMPTY);
+      await getActivityFeedPage(
+        "biz-1",
+        { tier: "starter", filter: { kinds: ["call"], sinceDays: 500 } },
+        clamped as never
+      );
+      expect(clamped.from.mock.results[0].value.gte).toHaveBeenCalledWith(
+        "started_at",
+        "2026-05-25T00:00:00.000Z"
+      );
+
+      // Non-positive sinceDays falls back to the full tier window.
+      const fallback = mockDbByTable(ALL_EMPTY);
+      await getActivityFeedPage(
+        "biz-1",
+        { tier: "starter", filter: { kinds: ["call"], sinceDays: 0 } },
+        fallback as never
+      );
+      expect(fallback.from.mock.results[0].value.gte).toHaveBeenCalledWith(
+        "started_at",
+        "2026-05-25T00:00:00.000Z"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("cursor-pages within the filtered set", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    const before = "2026-02-01T00:00:00Z";
+    await getActivityFeedPage("biz-1", { before, filter: { kinds: ["call"] } }, db as never);
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["voice_call_transcripts"]);
+    expect(db.from.mock.results[0].value.lt).toHaveBeenCalledWith("started_at", before);
+  });
+});
+
+describe("parseActivityKindsParam", () => {
+  it("returns empty (no filter) for a missing or empty param", () => {
+    expect(parseActivityKindsParam(undefined)).toEqual([]);
+    expect(parseActivityKindsParam("")).toEqual([]);
+  });
+
+  it("keeps valid kinds, drops unknown values, and de-duplicates", () => {
+    expect(parseActivityKindsParam("call,sms_inbound")).toEqual(["call", "sms_inbound"]);
+    expect(parseActivityKindsParam("call,bogus,,call,DROP TABLE")).toEqual(["call"]);
+  });
+
+  it("accepts every kind in ACTIVITY_KINDS", () => {
+    expect(parseActivityKindsParam(ACTIVITY_KINDS.join(","))).toEqual([...ACTIVITY_KINDS]);
+  });
+});
+
+describe("parseActivityDaysParam", () => {
+  it("parses a positive whole number of days", () => {
+    expect(parseActivityDaysParam("7")).toBe(7);
+    expect(parseActivityDaysParam("1")).toBe(1);
+  });
+
+  it("returns undefined for missing, non-numeric, fractional, or non-positive values", () => {
+    expect(parseActivityDaysParam(undefined)).toBeUndefined();
+    expect(parseActivityDaysParam("")).toBeUndefined();
+    expect(parseActivityDaysParam("abc")).toBeUndefined();
+    expect(parseActivityDaysParam("7.5")).toBeUndefined();
+    expect(parseActivityDaysParam("0")).toBeUndefined();
+    expect(parseActivityDaysParam("-3")).toBeUndefined();
   });
 });
 
