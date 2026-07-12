@@ -6,17 +6,19 @@ import type { ActivityItem } from "@/lib/db/activity";
  * events identically. Pure data (no "use client") so it can be imported from
  * both the server card and the client list.
  */
+// Key order is meaningful: the activity page's filter chips render in this
+// order (AiFlow deliberately first).
 export const ACTIVITY_BADGE: Record<
   ActivityItem["kind"],
   { label: string; variant: "online" | "pending" | "neutral" | "success" | "urgent" }
 > = {
+  aiflow: { label: "AiFlow", variant: "success" },
   call: { label: "Call", variant: "online" },
   sms_inbound: { label: "Text in", variant: "pending" },
   sms_outbound: { label: "Text out", variant: "neutral" },
   email_inbound: { label: "Email in", variant: "pending" },
   email_outbound: { label: "Email out", variant: "neutral" },
   chat: { label: "Chat", variant: "neutral" },
-  aiflow: { label: "AiFlow", variant: "success" },
   customer: { label: "Customer", variant: "pending" },
   alert: { label: "Alert", variant: "urgent" }
 };
