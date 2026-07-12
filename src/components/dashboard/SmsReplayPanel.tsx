@@ -61,6 +61,7 @@ export function SmsReplayPanel({
             duplicates: number;
             skipped: number;
             errors: number;
+            truncated: boolean;
           };
         };
         error?: { message?: string };
@@ -81,9 +82,12 @@ export function SmsReplayPanel({
       if (s.duplicates > 0) parts.push(`${s.duplicates} already handled`);
       if (s.skipped > 0) parts.push(`${s.skipped} didn't match the flow`);
       if (s.errors > 0) parts.push(`${s.errors} failed`);
+      const truncatedNote = s.truncated
+        ? " That window held more texts than one pass checks — only the newest were evaluated; run again with a shorter window to reach the rest."
+        : "";
       setState({
         status: "done",
-        message: `Checked ${s.total} text${s.total === 1 ? "" : "s"}: ${parts.join(", ")}. Leads already in your contacts are filed without re-texting.`
+        message: `Checked ${s.total} text${s.total === 1 ? "" : "s"}: ${parts.join(", ")}. Leads already in your contacts are filed without re-texting.${truncatedNote}`
       });
     } catch {
       setState({ status: "error", message: "Replay failed — try again in a minute." });

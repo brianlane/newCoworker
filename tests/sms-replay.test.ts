@@ -32,10 +32,15 @@ type Result = { data: unknown; error: { message: string } | null };
  *  - contacts select        (from_matches ref resolution .maybeSingle() → `contacts`)
  */
 function replayDb(opts: { jobs: Result; runLookup?: Result; contacts?: Result }) {
+  const isFilters: [string, unknown][] = [];
   const from = vi.fn((table: string) => {
     const builder: Record<string, unknown> = {};
     builder.select = vi.fn(() => builder);
     builder.eq = vi.fn(() => builder);
+    builder.is = vi.fn((col: string, v: unknown) => {
+      isFilters.push([col, v]);
+      return builder;
+    });
     builder.gte = vi.fn(() => builder);
     builder.order = vi.fn(() => builder);
     builder.limit = vi.fn(() => Promise.resolve(opts.jobs));
@@ -48,7 +53,7 @@ function replayDb(opts: { jobs: Result; runLookup?: Result; contacts?: Result })
     );
     return builder;
   });
-  return { db: { from } as never };
+  return { db: { from } as never, isFilters };
 }
 
 /** One persisted Telnyx inbound envelope, as sms_inbound_jobs stores it. */
@@ -134,6 +139,7 @@ describe("replayInboundSms", () => {
       duplicates: 0,
       skipped: 0,
       errors: 0,
+      truncated: false,
       outcomes: []
     });
     expect(recordSystemLog).not.toHaveBeenCalled();
@@ -154,7 +160,7 @@ describe("replayInboundSms", () => {
   });
 
   it("enqueues a backfill run with the live trigger-scope shape and event-id dedupe key", async () => {
-    const { db } = replayDb({
+    const { db, isFilters } = replayDb({
       jobs: {
         data: [
           job("j1", {
@@ -172,7 +178,11 @@ describe("replayInboundSms", () => {
     const summary = await replayInboundSms("biz-1", FLOW, { lookbackHours: 24 }, db);
 
     expect(summary.enqueued).toBe(1);
+    expect(summary.truncated).toBe(false);
     expect(summary.outcomes).toEqual([{ jobId: "j1", status: "enqueued", runId: "run-9" }]);
+    // Staff (owner/team) texts never trigger flows on the live path, so the
+    // replay's read excludes them at the query.
+    expect(isFilters).toContainEqual(["staff_kind", null]);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       {
         businessId: "biz-1",
@@ -427,7 +437,7 @@ describe("replayInboundSms", () => {
     expect(summary.outcomes).toEqual([{ jobId: "j-in", status: "enqueued", runId: "run-1" }]);
   });
 
-  it("caps a request at the newest MAX_REPLAY_SMS texts", async () => {
+  it("caps a request at the newest MAX_REPLAY_SMS texts and reports truncation", async () => {
     const rows = Array.from({ length: MAX_REPLAY_SMS + 10 }, (_, i) =>
       job(`j${i}`, { atMsAgo: (i + 1) * 1000, eventId: `evt-${i}` })
     );
@@ -435,9 +445,29 @@ describe("replayInboundSms", () => {
     enqueueAiFlowRun.mockResolvedValue(null);
     const summary = await replayInboundSms("biz-1", FLOW, { lookbackHours: 24 }, db);
     expect(summary.total).toBe(MAX_REPLAY_SMS);
+    expect(summary.truncated).toBe(true);
     // The DROPPED ones are the oldest (highest atMsAgo).
     expect(summary.outcomes.some((o) => o.jobId === `j${MAX_REPLAY_SMS + 9}`)).toBe(false);
     expect(summary.outcomes.some((o) => o.jobId === "j0")).toBe(true);
+  });
+
+  it("reports truncation when the row load maxes out before reaching the cutoff", async () => {
+    // 300 loaded rows (the load cap), only 50 of them inside the window:
+    // older in-window texts may exist beyond the cap, so the summary must
+    // say so rather than read as complete.
+    const rows = [
+      ...Array.from({ length: 50 }, (_, i) =>
+        job(`in${i}`, { atMsAgo: (i + 1) * 1000, eventId: `evt-in-${i}` })
+      ),
+      ...Array.from({ length: 250 }, (_, i) =>
+        job(`ctx${i}`, { atMsAgo: 3_600_000 + (i + 1) * 1000, eventId: `evt-ctx-${i}` })
+      )
+    ];
+    const { db } = replayDb({ jobs: { data: rows, error: null } });
+    enqueueAiFlowRun.mockResolvedValue(null);
+    const summary = await replayInboundSms("biz-1", FLOW, { lookbackHours: 1 }, db);
+    expect(summary.total).toBe(50);
+    expect(summary.truncated).toBe(true);
   });
 
   it("falls back to a stable per-row dedupe key when the envelope has no event id", async () => {

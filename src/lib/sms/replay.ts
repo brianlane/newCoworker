@@ -88,6 +88,13 @@ export type ReplaySmsSummary = {
   duplicates: number;
   skipped: number;
   errors: number;
+  /**
+   * True when the window held more texts than one request evaluates (the
+   * newest MAX_REPLAY_SMS win, or the row load hit its cap) — older texts
+   * were NOT checked. The caller should surface "narrow the window / run
+   * again" rather than letting the summary read as complete.
+   */
+  truncated: boolean;
   outcomes: ReplaySmsOutcome[];
 };
 
@@ -186,6 +193,7 @@ export async function replayInboundSms(
     duplicates: 0,
     skipped: 0,
     errors: 0,
+    truncated: false,
     outcomes: []
   };
   const triggers = smsTriggersOf(flow.definition);
@@ -203,22 +211,34 @@ export async function replayInboundSms(
   );
   const loadFromIso = new Date(cutoffMs - maxWindowMinutes * 60_000).toISOString();
 
+  // staff_kind IS NULL: owner/team texts never go through the live flow-eval
+  // path (telnyx-sms-inbound only calls evaluateAndEnqueueAiFlows for
+  // customer texts), so a replay must not treat a teammate's message as a
+  // lead either.
   const { data, error } = await db
     .from("sms_inbound_jobs")
     .select("id, payload, created_at")
     .eq("business_id", businessId)
+    .is("staff_kind", null)
     .gte("created_at", loadFromIso)
     .order("created_at", { ascending: false })
     .limit(CONTEXT_ROW_LIMIT);
   if (error) throw new Error(`replayInboundSms: ${error.message}`);
+  const loaded = (data ?? []) as InboundJobRow[];
   // Chronological (oldest first) so correlation windows and outcomes read in
   // conversation order.
-  const rows = (((data ?? []) as InboundJobRow[]).map(parseInboundJob)).reverse();
+  const rows = loaded.map(parseInboundJob).reverse();
 
-  // Newest MAX_REPLAY_SMS texts inside the window are the candidates.
+  // Newest MAX_REPLAY_SMS texts inside the window are the candidates. A
+  // busier window than one request evaluates (more candidates than the cap,
+  // or the newest-first row load maxing out before reaching the cutoff) is
+  // reported as truncated so the caller can say "narrow the window" instead
+  // of the summary reading as complete.
   const inWindow = rows.filter((r) => r.atMs >= cutoffMs);
   const candidates = inWindow.slice(-MAX_REPLAY_SMS);
   summary.total = candidates.length;
+  summary.truncated =
+    inWindow.length > candidates.length || loaded.length >= CONTEXT_ROW_LIMIT;
   if (candidates.length === 0) return summary;
 
   // Pre-resolve each trigger's from_matches contact refs ONCE for the whole
@@ -348,7 +368,8 @@ export async function replayInboundSms(
         enqueued: summary.enqueued,
         duplicates: summary.duplicates,
         skipped: summary.skipped,
-        errored: summary.errors
+        errored: summary.errors,
+        truncated: summary.truncated
       }
     },
     db
