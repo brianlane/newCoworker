@@ -281,6 +281,26 @@ export async function pruneExpiredContent(
     results.push({ table: "business_document_shares", central: centralCount(data), box: null });
   }
 
+  // ── document_signature_requests (dead requests only; central-only) ─────
+  // Unsigned requests carry signer PII. Only rows that can never be signed
+  // (voided, or past the link's own expiry) are pruned; SIGNED requests are
+  // legal evidence and are never retention-pruned — erasure handles them
+  // with targeted redaction instead.
+  {
+    const { data, error } = await db
+      .from("document_signature_requests")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .neq("status", "signed")
+      .or(`expires_at.lt.${nowIso},status.eq.void`)
+      .select("id");
+    if (error) {
+      throw new Error(`pruneExpiredContent: document_signature_requests: ${error.message}`);
+    }
+    results.push({ table: "document_signature_requests", central: centralCount(data), box: null });
+  }
+
   // ── sms_links (central-only: tracked short links carry the recipient ───
   // number + original URL; aged links go stale with their texts. Expired
   // codes then 303 to the homepage — by design).

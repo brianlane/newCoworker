@@ -20,7 +20,11 @@ import { listConversationsForBusiness } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { rcsChannelActiveForBusiness } from "@/lib/telnyx/messaging";
 import { smsToolsAllowedForTier } from "@/lib/plans/sms-tools";
+import { listAiFlows } from "@/lib/ai-flows/db";
+import { flowUpsertsBeforeOutreach } from "@/lib/email/replay";
+import { flowHasSmsTrigger } from "@/lib/sms/replay";
 import { MessagesList, type MessageListRow } from "@/components/dashboard/MessagesList";
+import { SmsReplayPanel } from "@/components/dashboard/SmsReplayPanel";
 import {
   SmsComposeNew,
   type SmsTemplateOption
@@ -81,6 +85,16 @@ export default async function DashboardMessagesPage() {
   // softened emoji hint in the composer: the rich message delivers as typed,
   // only the SMS fallback copy is capped.
   const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
+
+  // Replay targets ("Replay missed texts"): enabled SMS-triggered flows that
+  // file the lead before any outreach — the same gate as the replay route,
+  // mirroring the Emails page. Best-effort: no flows just hides the panel.
+  const replayFlows = (await listAiFlows(business.id).catch(() => []))
+    .filter(
+      (f) =>
+        f.enabled && flowHasSmsTrigger(f.definition) && flowUpsertsBeforeOutreach(f.definition)
+    )
+    .map((f) => ({ id: f.id, name: f.name }));
 
   // Scheduled + template SMS (Standard+ perk): fetch the composer picker data
   // and the tools panel contents for entitled tenants. Pending scheduled rows
@@ -186,6 +200,8 @@ export default async function DashboardMessagesPage() {
       ) : (
         <MessagesList rows={rows} />
       )}
+
+      <SmsReplayPanel businessId={business.id} flows={replayFlows} />
 
       {(smsToolsEnabled || scheduled.length > 0) && (
         <SmsToolsPanel

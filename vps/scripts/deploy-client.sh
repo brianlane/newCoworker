@@ -740,7 +740,8 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_document_list",
         "dashboard_document_share",
         "dashboard_document_update",
-        "dashboard_document_set_expiration"
+        "dashboard_document_set_expiration",
+        "dashboard_document_request_signature"
       ]
     },
     {
@@ -773,7 +774,8 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_document_list",
         "dashboard_document_share",
         "dashboard_document_update",
-        "dashboard_document_set_expiration"
+        "dashboard_document_set_expiration",
+        "dashboard_document_request_signature"
       ]
     },
     {
@@ -1053,7 +1055,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "document_share",
-      description: "Text the customer an expiring link to one of the business documents on file (price sheet, service menu, policy) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side — if the tool fails, say the team will follow up with a copy and never invent a link.",
+      description: "Text the customer an expiring link to one of the business documents on file (price sheet, policy, contract) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side — if the tool fails, say the team will follow up with a copy and never invent a link.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1282,6 +1284,37 @@ WORKFLOW_JSON=$(jq -nc \
         required: ["document"]
       }
     },
+    {
+      name: "dashboard_document_request_signature",
+      description: "Send a business document for a legal e-signature. The signer receives a link by text or email, reviews the document, and signs by typing their legal name; the owner is notified with a full audit record (name, time, IP, content fingerprint). ONLY call when the owner explicitly asks to send a document for signature, and never invent recipients. Provide phone OR email for delivery.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          document: {
+            type: "string",
+            description: "The document title (or part of it), or its id from dashboard_document_list."
+          },
+          signerName: {
+            type: "string",
+            description: "The name of the person being asked to sign."
+          },
+          phone: {
+            type: "string",
+            description: "Signer phone in E.164 to text the signing link to, e.g. +15551234567."
+          },
+          email: {
+            type: "string",
+            description: "Signer email address to send the signing link to."
+          },
+          message: {
+            type: "string",
+            description: "Optional note shown above the document on the signing page."
+          }
+        },
+        required: ["document", "signerName"]
+      }
+    },
     # Website chat widget surface (WebchatCoworker/-Local). Same dispatcher
     # cores as the knowledge/calendar tools above plus the webchat-only
     # lead-capture core; separate Settings toggles under the webchat agent
@@ -1355,7 +1388,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "webchat_document_share",
-      description: "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, service menu, policy) when they ask for a copy. Returns the link — include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
+      description: "Give the website visitor an expiring link to one of the client-facing business documents (price sheet, policy, contract) when they ask for a copy. Returns the link — include it in your chat reply. It never texts or emails anyone. Internal-only and expired documents are refused server-side; if the tool fails, say the team can provide a copy and never invent a link.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",

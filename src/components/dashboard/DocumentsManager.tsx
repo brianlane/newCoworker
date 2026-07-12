@@ -3,7 +3,7 @@
 /**
  * Business Documents manager (Dashboard → Memory → Documents).
  *
- * Upload real business documents (price sheets, menus, policies, SOPs) that
+ * Upload real business documents (price sheets, policies, contracts, SOPs) that
  * every coworker surface answers from and shares on request. Each document
  * carries an audience (clients / staff / both), an optional expiration date
  * (expired docs go inert to the agent and the daily sweep reminds the
@@ -37,6 +37,18 @@ type ShareItem = {
   expires_at: string;
   revoked_at: string | null;
   access_count: number;
+  created_at: string;
+};
+
+type SignatureRequestItem = {
+  id: string;
+  signer_name: string;
+  signer_email: string;
+  signer_phone: string;
+  status: "sent" | "viewed" | "signed" | "void";
+  signature_name: string | null;
+  signed_at: string | null;
+  expires_at: string;
   created_at: string;
 };
 
@@ -75,12 +87,22 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   const [uploadCategory, setUploadCategory] = useState("");
   const [uploadExpires, setUploadExpires] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
-  // Per-document expanded panel state.
+  // Per-document expanded panel state. The ref mirrors openId so async
+  // fetches can verify the SAME document is still expanded before applying
+  // results — a slow response must never show another document's signer or
+  // share PII under the wrong panel.
   const [openId, setOpenId] = useState<string | null>(null);
+  const openIdRef = useRef<string | null>(null);
   const [draftContent, setDraftContent] = useState("");
   const [draftExpires, setDraftExpires] = useState("");
   const [savingDoc, setSavingDoc] = useState(false);
   const [shares, setShares] = useState<ShareItem[]>([]);
+  // Signature requests for the open document + the request form.
+  const [signatureRequests, setSignatureRequests] = useState<SignatureRequestItem[]>([]);
+  const [sigName, setSigName] = useState("");
+  const [sigRecipient, setSigRecipient] = useState("");
+  const [sigMessage, setSigMessage] = useState("");
+  const [sigSending, setSigSending] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -138,21 +160,105 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   async function openDocument(doc: DocumentItem) {
     if (openId === doc.id) {
       setOpenId(null);
+      openIdRef.current = null;
       return;
     }
     setOpenId(doc.id);
+    openIdRef.current = doc.id;
     setDraftContent(doc.content_md);
     setDraftExpires(doc.expires_at ? doc.expires_at.slice(0, 10) : "");
     setShares([]);
+    setSignatureRequests([]);
+    setSigName("");
+    setSigRecipient("");
+    setSigMessage("");
     try {
       const res = await fetch(
         `/api/dashboard/documents/${doc.id}/shares?businessId=${encodeURIComponent(businessId)}`,
         { cache: "no-store" }
       );
       const json = (await res.json()) as { ok: boolean; data?: { shares?: ShareItem[] } };
-      if (json.ok && json.data?.shares) setShares(json.data.shares);
+      // Only apply if this document is STILL the expanded one (see openIdRef).
+      if (openIdRef.current === doc.id && json.ok && json.data?.shares) {
+        setShares(json.data.shares);
+      }
     } catch {
       /* shares panel stays empty */
+    }
+    await refreshSignatureRequests(doc.id);
+  }
+
+  async function refreshSignatureRequests(docId: string) {
+    try {
+      const res = await fetch(
+        `/api/dashboard/documents/${docId}/signature-requests?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { requests?: SignatureRequestItem[] };
+      };
+      // Only apply if this document is STILL the expanded one — a slow
+      // response must not render another document's signers.
+      if (openIdRef.current === docId && json.ok && json.data?.requests) {
+        setSignatureRequests(json.data.requests);
+      }
+    } catch {
+      /* signatures panel stays empty */
+    }
+  }
+
+  async function requestSignature(docId: string) {
+    const recipient = sigRecipient.trim();
+    if (!sigName.trim() || !recipient) {
+      setError("Enter the signer's name and their phone (+1…) or email.");
+      return;
+    }
+    const isEmail = recipient.includes("@");
+    if (!isEmail && !/^\+[1-9]\d{6,14}$/.test(recipient)) {
+      setError("Phone must be E.164 (e.g. +16025550147) — or use an email address.");
+      return;
+    }
+    setError(null);
+    setSigSending(true);
+    try {
+      const res = await fetch(`/api/dashboard/documents/${docId}/signature-requests`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          signerName: sigName.trim(),
+          ...(isEmail ? { email: recipient } : { phone: recipient }),
+          ...(sigMessage.trim() ? { message: sigMessage.trim() } : {})
+        })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? "Could not send the signature request");
+        return;
+      }
+      setSigName("");
+      setSigRecipient("");
+      setSigMessage("");
+      await refreshSignatureRequests(docId);
+    } catch {
+      setError("Could not send the signature request — try again.");
+    } finally {
+      setSigSending(false);
+    }
+  }
+
+  async function voidSignatureRequest(docId: string, requestId: string) {
+    try {
+      const res = await fetch(`/api/dashboard/documents/${docId}/signature-requests`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, requestId })
+      });
+      const json = (await res.json()) as { ok: boolean };
+      if (json.ok) await refreshSignatureRequests(docId);
+    } catch {
+      /* leave as-is */
     }
   }
 
@@ -222,7 +328,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     <Card>
       <h2 className="text-lg font-semibold text-parchment">Documents</h2>
       <p className="mt-1 text-sm text-parchment/50">
-        Upload price sheets, menus, policies, or internal SOPs. Your coworker answers questions
+        Upload price sheets, policies, contracts, or internal SOPs. Your coworker answers questions
         from them and can text/email customers an expiring link on request. Internal-only
         documents never reach customers, and expired documents stop being quoted or shared
         automatically.
@@ -254,7 +360,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
             className={inputClass}
             value={uploadCategory}
             onChange={(e) => setUploadCategory(e.target.value)}
-            placeholder="pricing / policies / menu"
+            placeholder="pricing / policies / contracts"
           />
         </div>
         <div>
@@ -412,6 +518,84 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                         >
                           Save content
                         </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Signatures</label>
+                      {signatureRequests.length === 0 ? (
+                        <p className="text-xs text-parchment/40">
+                          No signature requests yet. Send one below for a legal sign-off.
+                        </p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {signatureRequests.map((r) => {
+                            const dead =
+                              r.status === "void" ||
+                              (r.status !== "signed" && Date.parse(r.expires_at) <= Date.now());
+                            return (
+                              <li
+                                key={r.id}
+                                className="flex flex-wrap items-center gap-2 text-xs text-parchment/60"
+                              >
+                                <span className="text-parchment/80">{r.signer_name}</span>
+                                <span className="text-parchment/35">
+                                  {r.signer_phone || r.signer_email}
+                                </span>
+                                {r.status === "signed" ? (
+                                  <span className="rounded border border-signal-teal/50 px-1.5 py-0.5 text-signal-teal">
+                                    Signed {r.signed_at?.slice(0, 10)} as {r.signature_name}
+                                  </span>
+                                ) : dead ? (
+                                  <span className="text-parchment/35">
+                                    {r.status === "void" ? "voided" : "expired"}
+                                  </span>
+                                ) : (
+                                  <>
+                                    <span className="rounded border border-parchment/20 px-1.5 py-0.5">
+                                      {r.status === "viewed" ? "Viewed" : "Sent"}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => void voidSignatureRequest(doc.id, r.id)}
+                                      className="text-spark-orange/80 hover:text-spark-orange"
+                                    >
+                                      Void
+                                    </button>
+                                  </>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                        <input
+                          className={inputClass}
+                          value={sigName}
+                          onChange={(e) => setSigName(e.target.value)}
+                          placeholder="Signer's name"
+                        />
+                        <input
+                          className={inputClass}
+                          value={sigRecipient}
+                          onChange={(e) => setSigRecipient(e.target.value)}
+                          placeholder="+16025550147 or email"
+                        />
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          loading={sigSending}
+                          onClick={() => void requestSignature(doc.id)}
+                        >
+                          Request signature
+                        </Button>
+                        <input
+                          className={`${inputClass} sm:col-span-3`}
+                          value={sigMessage}
+                          onChange={(e) => setSigMessage(e.target.value)}
+                          placeholder="Optional note shown above the document"
+                        />
                       </div>
                     </div>
                     <div>

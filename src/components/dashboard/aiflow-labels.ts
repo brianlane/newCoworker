@@ -84,7 +84,7 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   generate_image:
     "Creates an image from your description and saves a link to it. Attach it to a later \"Send a text\" step (goes out as a picture message) or include the link in an email. Uses your monthly AI budget.",
   share_document:
-    "Texts or emails the person an expiring link to one of your uploaded documents (price sheet, menu, policy). Only client-facing, unexpired documents can be shared - an expired document fails the step and notifies you instead of sending a stale copy.",
+    "Texts or emails the person an expiring link to one of your uploaded documents (price sheet, policy, contract). Only client-facing, unexpired documents can be shared - an expired document fails the step and notifies you instead of sending a stale copy.",
   ring_handoff:
     "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
   voice_ai_intake:

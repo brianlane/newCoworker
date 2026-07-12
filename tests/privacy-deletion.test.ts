@@ -42,7 +42,7 @@ function makeCentralDb(perCall: Partial<Record<string, TableResult>> = {}) {
     seen.set(table, n);
     const result = perCall[`${table}#${n}`] ?? perCall[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
-    for (const m of ["delete", "select", "eq", "lt", "in", "not", "contains", "ilike", "or"]) {
+    for (const m of ["delete", "update", "select", "eq", "lt", "in", "not", "neq", "contains", "ilike", "or"]) {
       chain[m] = vi.fn().mockReturnValue(chain);
     }
     chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
@@ -150,9 +150,32 @@ describe("deleteEndUserData — central-only tenants", () => {
       "voice_call_transcripts",
       "email_log",
       "business_document_shares",
+      "document_signature_requests",
       "ai_reply_reasoning",
       "sms_links"
     ]);
+  });
+
+  it("deletes unsigned signature requests but only REDACTS signed ones (legal evidence)", async () => {
+    const db = makeCentralDb({
+      // Phone axis: #1 = delete unsigned, #2 = redact signed.
+      "document_signature_requests#1": { data: [{ id: "r1" }], error: null },
+      "document_signature_requests#2": { data: [{ id: "r2" }, { id: "r3" }], error: null },
+      // Email axis: #3 = delete unsigned, #4 = redact signed.
+      "document_signature_requests#3": { data: [], error: null },
+      "document_signature_requests#4": { data: [{ id: "r4" }], error: null }
+    });
+    const res = await deleteEndUserData(
+      BIZ,
+      { e164: E164, email: EMAIL },
+      { client: db as never }
+    );
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.document_signature_requests).toEqual({
+      table: "document_signature_requests",
+      central: 4,
+      box: null
+    });
   });
 
   it("erases document share links keyed to the person's numbers AND email", async () => {
@@ -236,6 +259,10 @@ describe("deleteEndUserData — central-only tenants", () => {
     ["ai_reply_reasoning", /ai_reply_reasoning: boom/, { e164: E164 }],
     ["business_document_shares", /business_document_shares: boom/, { e164: E164 }],
     ["business_document_shares", /business_document_shares: boom/, { email: EMAIL }],
+    ["document_signature_requests#1", /document_signature_requests: boom/, { e164: E164 }],
+    ["document_signature_requests#2", /document_signature_requests: boom/, { e164: E164 }],
+    ["document_signature_requests#1", /document_signature_requests: boom/, { email: EMAIL }],
+    ["document_signature_requests#2", /document_signature_requests: boom/, { email: EMAIL }],
     ["sms_links", /sms_links: boom/, { e164: E164 }],
     ["sms_owner_reply_prompts", /sms_owner_reply_prompts: boom/, { e164: E164 }],
     ["voice_call_transcripts", /voice_call_transcripts: boom/, { e164: E164 }],
