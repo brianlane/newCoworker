@@ -25,14 +25,15 @@ export async function POST(request: Request) {
 
     await setBusinessPaused(body.businessId, body.paused);
     if (user.isAdmin) {
-      // Only OPERATOR-initiated flips go to the admin audit trail. The
-      // platform admin account can also own/staff a business of its own —
-      // pausing that tenant is normal self-service, so skip the audit when
-      // the admin has their own role on the business.
+      // Only OPERATOR-initiated flips go to the admin audit trail. The one
+      // self-service case is the admin pausing a tenant they OWN — anything
+      // else (no relationship, or a mere staff/manager grant on a customer
+      // business) is a fleet-operator action and must be audited. A failed
+      // role lookup fails toward auditing (an extra row beats a gap).
       const selfRole = user.email
         ? await getBusinessRoleForEmail(body.businessId, user.email).catch(() => null)
         : null;
-      if (!selfRole) {
+      if (selfRole !== "owner") {
         await logAdminAction({
           adminEmail: user.email,
           action: body.paused ? "kill_switch_pause" : "kill_switch_resume",
