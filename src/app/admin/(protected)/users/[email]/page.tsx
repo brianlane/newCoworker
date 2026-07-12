@@ -76,12 +76,18 @@ export default async function AdminUserDetailPage({
   const subscriptionMap = await listSubscriptionsByBusinessIds(ownedBusinesses.map((b) => b.id));
 
   // Same fallback chain the engagement table uses: auth account creation,
-  // else the business/invite date — so an invite-only member reads "new"
-  // here too instead of "quiet". The notFound guard above guarantees at
-  // least one source exists (members are ordered oldest-first).
+  // else the OLDEST business/invite date — so an invite-only member reads
+  // "new" here too instead of "quiet", and a long-time owner's recent second
+  // business can't make the whole account look new (listBusinesses is
+  // newest-first; memberships are already oldest-first). The notFound guard
+  // above guarantees at least one source exists.
+  const oldestOwnedCreatedAt = ownedBusinesses.reduce<string | null>(
+    (oldest, b) => (oldest === null || b.created_at < oldest ? b.created_at : oldest),
+    null
+  );
   const createdAt =
     authUser?.created_at ??
-    ownedBusinesses[0]?.created_at ??
+    oldestOwnedCreatedAt ??
     memberships[0]?.created_at ??
     new Date().toISOString();
   const segment = classifyEngagement({
