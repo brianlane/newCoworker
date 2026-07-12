@@ -79,11 +79,21 @@ export function monthStartYmdUtc(now: Date = new Date()): string {
   return `${now.toISOString().slice(0, 7)}-01`;
 }
 
-/** businessId → summed monthly price of its synced Hostinger boxes. */
+/**
+ * businessId → summed monthly price of its synced Hostinger boxes.
+ * Cancelled subscriptions recur nothing (sunk cost until lapse) — same
+ * non-recurring rule as the Costs page fleet KPI and the pool burn view.
+ */
 export function hostingCentsByBusiness(rows: HostingerVpsCostRow[]): Map<string, number> {
   const map = new Map<string, number>();
   for (const row of rows) {
-    if (row.assigned_business_id === null || row.monthly_price_cents === null) continue;
+    if (
+      row.assigned_business_id === null ||
+      row.monthly_price_cents === null ||
+      row.status === "cancelled"
+    ) {
+      continue;
+    }
     map.set(
       row.assigned_business_id,
       (map.get(row.assigned_business_id) ?? 0) + row.monthly_price_cents

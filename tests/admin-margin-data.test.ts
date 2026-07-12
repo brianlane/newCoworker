@@ -172,12 +172,14 @@ describe("dedupeSubscriptionsPreferringActive", () => {
 });
 
 describe("hostingCentsByBusiness", () => {
-  it("sums per business, skipping unassigned/unpriced rows", () => {
+  it("sums per business, skipping unassigned/unpriced/cancelled rows", () => {
     const map = hostingCentsByBusiness([
       HOSTINGER_ROW,
       { ...HOSTINGER_ROW, subscription_id: "sub-2", monthly_price_cents: 1499 },
       { ...HOSTINGER_ROW, subscription_id: "sub-3", assigned_business_id: null },
-      { ...HOSTINGER_ROW, subscription_id: "sub-4", monthly_price_cents: null }
+      { ...HOSTINGER_ROW, subscription_id: "sub-4", monthly_price_cents: null },
+      // Cancelled = sunk cost until lapse, not recurring hosting spend.
+      { ...HOSTINGER_ROW, subscription_id: "sub-5", status: "cancelled" }
     ]);
     expect(map.get("biz-amy")).toBe(2449 + 1499);
     expect(map.size).toBe(1);

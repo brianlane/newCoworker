@@ -221,15 +221,24 @@ export function buildPoolBoxBurn(params: {
   now: Date;
 }): PoolBoxBurn[] {
   const byVm = new Map<number, HostingerVpsCostRow>();
+  const bySubscription = new Map<string, HostingerVpsCostRow>();
   for (const row of params.hostingerRows) {
     if (row.vm_id !== null) byVm.set(row.vm_id, row);
+    bySubscription.set(row.subscription_id, row);
   }
   const nowMs = params.now.getTime();
 
   const burn: PoolBoxBurn[] = [];
   for (const box of params.inventory) {
     if (box.state !== "available") continue;
-    const billing = byVm.get(box.vm_id) ?? null;
+    // The VM join can miss (Hostinger drops the VM once it's deleted while
+    // the billing row lingers); the inventory's own subscription id is the
+    // fallback so cancelled/lapsing billing still resolves.
+    const billing =
+      byVm.get(box.vm_id) ??
+      (box.hostinger_billing_subscription_id !== null
+        ? (bySubscription.get(box.hostinger_billing_subscription_id) ?? null)
+        : null);
     // A cancelled billing subscription recurs nothing — the box is sunk
     // cost until it lapses, not monthly burn (same rule as the fleet KPI,
     // which excludes cancelled rows). Only a missing billing row falls

@@ -428,4 +428,30 @@ describe("buildPoolBoxBurn", () => {
     expect(burn[0].endsAt).toBe("2026-07-01T00:00:00.000Z");
     expect(burn[0].daysLeft).toBe(0);
   });
+
+  it("resolves billing via the inventory's subscription id when the VM join misses", () => {
+    const burn = buildPoolBoxBurn({
+      inventory: [
+        inventoryRow({ hostinger_billing_subscription_id: "sub-detached" }),
+        inventoryRow({ vm_id: 47, hostinger_billing_subscription_id: null })
+      ],
+      hostingerRows: [
+        // Billing row lost its VM (deleted box, lingering subscription).
+        hostingerRow({
+          subscription_id: "sub-detached",
+          vm_id: null,
+          status: "cancelled",
+          monthly_price_cents: 2449,
+          next_billing_at: null,
+          expires_at: "2026-08-20T00:00:00.000Z"
+        })
+      ],
+      now: NOW
+    });
+    const detached = burn.find((b) => b.vmId === 1800985)!;
+    expect(detached.monthlyCents).toBeNull(); // cancelled — no recurring burn
+    expect(detached.endsAt).toBe("2026-08-20T00:00:00.000Z");
+    // No subscription id at all → SKU estimate fallback.
+    expect(burn.find((b) => b.vmId === 47)?.monthlySource).toBe("estimate");
+  });
 });
