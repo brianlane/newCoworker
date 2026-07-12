@@ -57,7 +57,7 @@ function isStaleWebsiteSummaryGeminiId(id: string): boolean {
   );
 }
 
-export function resolveWebsiteSummaryGeminiModel(): string {
+function resolveWebsiteSummaryGeminiModel(): string {
   const rawFromEnv =
     (process.env.GEMINI_SUMMARY_MODEL ?? "").trim() ||
     (process.env.GEMINI_ROWBOAT_MODEL ?? "").trim();
