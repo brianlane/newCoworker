@@ -10,6 +10,7 @@ import {
   recordVpsAssigned,
   releaseVpsToPool,
   retireVps,
+  getVpsInventoryByVmId,
   listVpsInventory,
   type VpsInventoryRow
 } from "@/lib/db/vps-inventory";
@@ -24,6 +25,7 @@ const sampleRow: VpsInventoryRow = {
   acquired_at: "2026-07-01T00:00:00Z",
   assigned_at: null,
   notes: null,
+  never_renew: false,
   updated_at: "2026-07-01T00:00:00Z"
 };
 
@@ -339,6 +341,45 @@ describe("vps_inventory DB layer", () => {
       chain.eq.mockResolvedValueOnce({ error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await retireVps(42, "x");
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("getVpsInventoryByVmId", () => {
+    it("returns the row for a tracked VM", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { ...sampleRow, never_renew: true },
+        error: null
+      });
+      const db = makeDb(chain);
+      const row = await getVpsInventoryByVmId(1800985, db as never);
+      expect(row?.never_renew).toBe(true);
+      expect(db.from).toHaveBeenCalledWith("vps_inventory");
+      expect(chain.eq).toHaveBeenCalledWith("vm_id", 1800985);
+    });
+
+    it("returns null for a VM the inventory never tracked", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      const db = makeDb(chain);
+      await expect(getVpsInventoryByVmId(42, db as never)).resolves.toBeNull();
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: { message: "get boom" } });
+      const db = makeDb(chain);
+      await expect(getVpsInventoryByVmId(42, db as never)).rejects.toThrow(
+        /getVpsInventoryByVmId: get boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: sampleRow, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await expect(getVpsInventoryByVmId(1800985)).resolves.toEqual(sampleRow);
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

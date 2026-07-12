@@ -352,6 +352,129 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     expect(deps.enableAutoRenewal).toHaveBeenCalledWith("hsub-live");
   });
 
+  it("never heals a never_renew box — reports migration-needed instead (lapsing sub)", async () => {
+    // srv1632631 case: KVM8 hardware pooled under the kvm2 label. A paying
+    // tenant adopted it, but its $73.99/mo renewal must never be paid — the
+    // cron nags ops to migrate the tenant, it does NOT re-enable renewal.
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([biz({ id: "b1", hostinger_vps_id: "1632631" })]),
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([
+          poolRow({ vm_id: 1632631, state: "assigned", never_renew: true })
+        ]),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ id: 1632631, state: "running", subscription_id: "hsub-nr" }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-nr",
+          status: "non_renewing",
+          is_auto_renewed: false,
+          expires_at: "2026-07-30T00:00:00Z"
+        }
+      ])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.enableAutoRenewal).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "never_renew_tenant_migration_needed",
+        vmId: 1632631,
+        businessId: "b1",
+        hostingerBillingSubscriptionId: "hsub-nr",
+        expiresAt: "2026-07-30T00:00:00Z",
+        autoHealed: false,
+        detail: expect.stringContaining("migrate the tenant to its correct size")
+      })
+    ]);
+  });
+
+  it("reports a never_renew box whose renewal was flipped ON (manual hPanel or fail-open adopt)", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([
+        biz({ id: "b1", hostinger_vps_id: "1632631" }),
+        biz({ id: "b2", hostinger_vps_id: "103" })
+      ]),
+      listInventory: vi.fn().mockResolvedValue([
+        poolRow({ vm_id: 1632631, state: "assigned", never_renew: true }),
+        poolRow({ vm_id: 103, state: "assigned", never_renew: true })
+      ]),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValueOnce({ id: 1632631, state: "running", subscription_id: "hsub-nr" })
+        .mockResolvedValueOnce({ id: 103, state: "running", subscription_id: "hsub-nodates" }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([
+        {
+          id: "hsub-nr",
+          status: "active",
+          is_auto_renewed: true,
+          next_billing_at: "2026-07-30T00:00:00Z"
+        },
+        // Hostinger omitting both period dates must not break the report.
+        { id: "hsub-nodates", status: "active", is_auto_renewed: true }
+      ])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.enableAutoRenewal).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "never_renew_tenant_migration_needed",
+        vmId: 1632631,
+        expiresAt: "2026-07-30T00:00:00Z",
+        detail: expect.stringContaining("still auto-renewing — disable renewal in hPanel")
+      }),
+      expect.objectContaining({
+        kind: "never_renew_tenant_migration_needed",
+        vmId: 103,
+        expiresAt: null,
+        detail: expect.stringContaining("still auto-renewing — disable renewal in hPanel")
+      })
+    ]);
+  });
+
+  it("never_renew reporting works without a resolvable subscription — VM id fallback and null", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([
+        biz({ id: "b1", hostinger_vps_id: "101" }),
+        biz({ id: "b2", hostinger_vps_id: "102" })
+      ]),
+      listInventory: vi.fn().mockResolvedValue([
+        poolRow({ vm_id: 101, state: "assigned", never_renew: true }),
+        poolRow({ vm_id: 102, state: "assigned", never_renew: true })
+      ]),
+      getVirtualMachine: vi
+        .fn()
+        // subscription id present on the VM but missing from the list
+        .mockResolvedValueOnce({ id: 101, state: "running", subscription_id: "hsub-ghost" })
+        // no subscription id at all
+        .mockResolvedValueOnce({ id: 102, state: "running" }),
+      listBillingSubscriptions: vi.fn().mockResolvedValue([])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
+    expect(deps.enableAutoRenewal).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "never_renew_tenant_migration_needed",
+        vmId: 101,
+        hostingerBillingSubscriptionId: "hsub-ghost",
+        expiresAt: null
+      }),
+      expect.objectContaining({
+        kind: "never_renew_tenant_migration_needed",
+        vmId: 102,
+        hostingerBillingSubscriptionId: null,
+        expiresAt: null
+      })
+    ]);
+  });
+
   it("skips wiped businesses, non-Hostinger providers, and businesses without a numeric VM id", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([

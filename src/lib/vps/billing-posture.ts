@@ -24,7 +24,11 @@
  * whose subscription is `canceled` (grace window — lifecycle just parked
  * the box on purpose), `pending` (never paid), or missing (smoke/test rows)
  * are deliberately OUT of scope; their boxes surface via the pool direction
- * once released.
+ * once released. Boxes flagged `never_renew` in vps_inventory are NEVER
+ * healed even for paying tenants — they must lapse at period end by design
+ * (sunk-cost hardware whose renewal costs more than the tenant pays), so
+ * the check instead emits a migration-needed finding every run until ops
+ * moves the tenant to its correct size.
  *
  * Direction 2 (money leak, REPORT-ONLY): pool boxes in state `available`
  * whose subscription is still auto-renewing cost money while serving nobody.
@@ -47,6 +51,7 @@ export type BillingPostureFinding = {
     | "tenant_auto_renew_off"
     | "tenant_vm_unreachable"
     | "stripeless_tenant_auto_renew_off"
+    | "never_renew_tenant_migration_needed"
     | "pool_box_auto_renew_on";
   vmId: number;
   businessId: string | null;
@@ -97,11 +102,19 @@ function isNotRenewing(sub: BillingSubscription): boolean {
 export async function checkVpsBillingPosture(
   deps: BillingPostureDeps
 ): Promise<BillingPostureResult> {
-  const [businesses, subscriptions] = await Promise.all([
+  const [businesses, subscriptions, inventoryForFlags] = await Promise.all([
     deps.listBusinesses(),
-    deps.listBillingSubscriptions()
+    deps.listBillingSubscriptions(),
+    // Early inventory read JUST for the never_renew flags (the flag is set
+    // by hand, so staleness over the tenant pass is a non-issue). Direction
+    // 2 below deliberately re-reads the inventory AFTER the slow tenant
+    // pass for its own TOCTOU reasons.
+    deps.listInventory()
   ]);
   const subsById = new Map(subscriptions.map((sub) => [sub.id, sub]));
+  const neverRenewVmIds = new Set(
+    inventoryForFlags.filter((row) => row.never_renew).map((row) => row.vm_id)
+  );
   const findings: BillingPostureFinding[] = [];
 
   // ---- Direction 1: live tenants must renew (auto-heal). ----
@@ -153,6 +166,40 @@ export async function checkVpsBillingPosture(
     }
     const sub =
       typeof vm.subscription_id === "string" ? subsById.get(vm.subscription_id) ?? null : null;
+
+    // A never_renew box must lapse at its paid period end NO MATTER WHAT —
+    // the sunk-cost hardware (e.g. KVM8 srv1632631 pooled under the kvm2
+    // label) costs more to renew than the tenant pays. Auto-heal is
+    // therefore WRONG here: instead of re-enabling renewal, nag ops every
+    // run to migrate the tenant onto its correct size (adopt-first from the
+    // pool, else a fresh purchase) before the deadline. If someone flipped
+    // renewal ON manually (or the adopt-time flag read failed open), report
+    // that too so it gets flipped back off.
+    if (neverRenewVmIds.has(vmId)) {
+      const renewing = sub !== null && !isNotRenewing(sub);
+      const subId =
+        sub?.id ?? (typeof vm.subscription_id === "string" ? vm.subscription_id : null);
+      findings.push({
+        kind: "never_renew_tenant_migration_needed",
+        vmId,
+        businessId: business.id,
+        businessName: business.name,
+        hostingerBillingSubscriptionId: subId,
+        expiresAt: sub ? sub.expires_at ?? sub.next_billing_at ?? null : null,
+        autoHealed: false,
+        detail: renewing
+          ? `box is flagged never_renew but subscription ${subId} is still auto-renewing — disable renewal in hPanel, then migrate this tenant to its correct size (debug/migrate-vps-size.ts) before the period ends`
+          : "live tenant is on a never_renew box that lapses at its paid period end — migrate the tenant to its correct size (debug/migrate-vps-size.ts) before then"
+      });
+      logger.warn("vps billing posture: live tenant on a never_renew box — migration needed", {
+        businessId: business.id,
+        vmId,
+        hostingerBillingSubscriptionId: subId,
+        renewing
+      });
+      continue;
+    }
+
     if (!sub) {
       findings.push({
         kind: "tenant_auto_renew_off",
