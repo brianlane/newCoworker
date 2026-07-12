@@ -19,6 +19,7 @@ import type {
 } from "@/lib/db/voice-transcripts";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { SearchControl } from "@/components/dashboard/SearchControl";
+import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 import { matchesQuery } from "@/lib/dashboard/search";
@@ -95,6 +96,10 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
             No calls match “{query}”.
           </div>
         ) : (
+          // Same bounded scroll window as the Emails page inbox list: the
+          // page stops growing with the call count and the list scrolls in
+          // place. Newest-first, so no bottom anchoring.
+          <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">
           <ul className="divide-y divide-parchment/10">
             {sorted.map((row) => (
               <li key={row.id}>
@@ -153,6 +158,7 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
               </li>
             ))}
           </ul>
+          </ConversationScroll>
         )}
       </Card>
     </div>
