@@ -17,7 +17,9 @@ export const dynamic = "force-dynamic";
 
 const bodySchema = z.object({
   signatureName: z.string().min(1).max(200),
-  consent: z.boolean()
+  consent: z.boolean(),
+  /** Fingerprint of the content the page showed — binds view to signature. */
+  contentSha256: z.string().regex(/^[0-9a-f]{64}$/)
 });
 
 type RouteContext = { params: Promise<{ token: string }> };
@@ -46,6 +48,7 @@ export async function POST(request: Request, context: RouteContext) {
       token,
       signatureName: body.data.signatureName,
       consent: body.data.consent,
+      viewedContentSha256: body.data.contentSha256,
       signerIp: rateLimitIdentifierFromRequest(request),
       signerUserAgent: request.headers.get("user-agent") ?? ""
     });
@@ -55,10 +58,11 @@ export async function POST(request: Request, context: RouteContext) {
       if (result.detail === "consent_required" || result.detail === "signature_name_required") {
         return Response.json(result, { status: 400 });
       }
-      // `already_signed` stays distinct: a signed token already serves its
-      // certificate page, so it reveals nothing new — and the form needs it
-      // for honest copy.
-      if (result.detail === "already_signed") {
+      // `already_signed` and `content_changed` stay distinct: both concern
+      // a LIVE token whose page is already being served (the certificate
+      // page / the current document), so nothing new is revealed — and the
+      // form needs them for honest copy.
+      if (result.detail === "already_signed" || result.detail === "content_changed") {
         return Response.json(result, { status: 409 });
       }
       // Every other dead-token state collapses to the SAME 404 the signing

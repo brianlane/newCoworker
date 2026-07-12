@@ -9,7 +9,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-export function SignDocumentForm({ token }: { token: string }) {
+export function SignDocumentForm({
+  token,
+  contentSha256
+}: {
+  token: string;
+  /** Fingerprint of the content rendered above — binds view to signature. */
+  contentSha256: string;
+}) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [consent, setConsent] = useState(false);
@@ -31,7 +38,7 @@ export function SignDocumentForm({ token }: { token: string }) {
       const res = await fetch(`/api/public/sign/${encodeURIComponent(token)}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ signatureName: name.trim(), consent })
+        body: JSON.stringify({ signatureName: name.trim(), consent, contentSha256 })
       });
       const json = (await res.json().catch(() => null)) as
         | { ok: boolean; detail?: string }
@@ -43,9 +50,11 @@ export function SignDocumentForm({ token }: { token: string }) {
       setError(
         json?.detail === "already_signed"
           ? "This document has already been signed."
-          : json?.detail === "rate_limited"
-            ? "Too many attempts — wait a minute and try again."
-            : "Signing failed. Refresh the page and try again."
+          : json?.detail === "content_changed"
+            ? "This document was updated after you opened it. Refresh the page to review the current version before signing."
+            : json?.detail === "rate_limited"
+              ? "Too many attempts — wait a minute and try again."
+              : "Signing failed. Refresh the page and try again."
       );
     } catch {
       setError("Signing failed. Check your connection and try again.");

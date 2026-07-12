@@ -11,6 +11,7 @@
 
 import { notFound } from "next/navigation";
 import {
+  fingerprintDocumentContent,
   markSignatureRequestOpened,
   resolveSignatureRequestByToken
 } from "@/lib/documents/signing";
@@ -92,7 +93,12 @@ export default async function SignPage({ params }: { params: Promise<{ token: st
             </p>
           </section>
         ) : (
-          <SignDocumentForm token={token} />
+          // The sha pins what was SHOWN: signing submits it back and the
+          // server refuses if the document changed after this render.
+          <SignDocumentForm
+            token={token}
+            contentSha256={fingerprintDocumentContent(document.content_md)}
+          />
         )}
       </div>
     </main>

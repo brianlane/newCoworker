@@ -123,7 +123,11 @@ export async function resolveSignatureRequestByToken(
     return { ok: false, detail: "expired" };
   }
   const document = await getBusinessDocument(request.business_id, request.document_id);
-  if (!document || document.status !== "ready") {
+  if (!document) return { ok: false, detail: "document_unavailable" };
+  // A SIGNED certificate stays viewable even if the document later leaves
+  // `ready` — the evidence must not 404 because of a processing state.
+  // Unsigned requests still require a ready document (nothing signable).
+  if (request.status !== "signed" && document.status !== "ready") {
     return { ok: false, detail: "document_unavailable" };
   }
   // An expired document can no longer be SIGNED, but an already-signed
@@ -159,6 +163,13 @@ export type SignDocumentInput = {
   signatureName: string;
   /** The explicit e-sign consent checkbox state. */
   consent: boolean;
+  /**
+   * sha256 of the content_md the signer was SHOWN (pinned by the signing
+   * page). Binds view to signature: if the owner edits the document while
+   * the page is open, signing refuses instead of fingerprinting text the
+   * signer never saw.
+   */
+  viewedContentSha256: string;
   signerIp?: string;
   signerUserAgent?: string;
   now?: Date;
@@ -176,7 +187,8 @@ export type SignDocumentResult =
         | "document_unavailable"
         | "already_signed"
         | "consent_required"
-        | "signature_name_required";
+        | "signature_name_required"
+        | "content_changed";
     };
 
 /**
@@ -195,13 +207,21 @@ export async function signDocumentRequest(input: SignDocumentInput): Promise<Sig
   if (!resolved.ok) return { ok: false, detail: resolved.detail };
   if (resolved.request.status === "signed") return { ok: false, detail: "already_signed" };
 
+  // Bind what was SHOWN to what gets signed: the fingerprint we store must
+  // be the one the page pinned at render time. An owner edit between view
+  // and submit refuses the signature (the signer reloads and re-reads).
+  const currentSha = fingerprintDocumentContent(resolved.document.content_md);
+  if (currentSha !== input.viewedContentSha256) {
+    return { ok: false, detail: "content_changed" };
+  }
+
   const signedAt = now.toISOString();
   const updated = await completeSignatureRequest(resolved.request.id, {
     signature_name: signatureName.slice(0, 200),
     signed_at: signedAt,
     signer_ip: (input.signerIp ?? "").slice(0, 64) || null,
     signer_user_agent: (input.signerUserAgent ?? "").slice(0, 400) || null,
-    content_sha256: fingerprintDocumentContent(resolved.document.content_md)
+    content_sha256: currentSha
   });
   if (updated === 0) {
     // Zero rows means the request stopped being signable between resolve

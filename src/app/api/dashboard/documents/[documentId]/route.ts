@@ -16,6 +16,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   deleteBusinessDocument,
   getBusinessDocument,
+  listDocumentSignatureRequests,
   patchBusinessDocument,
   type BusinessDocumentPatch
 } from "@/lib/documents/db";
@@ -125,6 +126,18 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     const existing = await getBusinessDocument(businessId.data, documentId);
     if (!existing) return errorResponse("NOT_FOUND", "Document not found", 404);
+
+    // Signed signature requests are retained legal evidence: deleting the
+    // document would cascade them away. Refuse instead — the owner keeps
+    // the audit trail (and the document its certificate references).
+    const signatureRequests = await listDocumentSignatureRequests(businessId.data, documentId);
+    if (signatureRequests.some((r) => r.status === "signed")) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "This document has completed signatures and can't be deleted — the signed record is retained as evidence. Set an expiration date instead to retire it.",
+        409
+      );
+    }
 
     // Row first (cascades shares), then the stored original — a leftover
     // object with no row is invisible garbage, the reverse would be a live

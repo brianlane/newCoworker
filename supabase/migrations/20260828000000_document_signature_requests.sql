@@ -16,6 +16,12 @@
 -- Security posture: RLS on with NO policies — service-role only, identical
 -- to business_documents / business_document_shares.
 
+-- Deletion semantics: the document fk cascades so that deleting a business
+-- (account-level erasure) sweeps everything, but the application refuses to
+-- delete a DOCUMENT that has signed requests (dashboard DELETE route guard)
+-- — signed rows are retained legal evidence and must not vanish with a
+-- casual document delete. A DB-level restrict is deliberately NOT used: it
+-- would also block the business-level cascade.
 create table if not exists document_signature_requests (
   id uuid primary key default gen_random_uuid(),
   business_id uuid not null references businesses(id) on delete cascade,

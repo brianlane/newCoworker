@@ -229,6 +229,20 @@ describe("resolveSignatureRequestByToken", () => {
     });
   });
 
+  it("a SIGNED certificate stays viewable when the document leaves ready (but not when deleted)", async () => {
+    vi.mocked(getDocumentSignatureRequestByTokenSha).mockResolvedValue(
+      requestRow({ status: "signed" })
+    );
+    vi.mocked(getBusinessDocument).mockResolvedValue(doc({ status: "failed" }));
+    const res = await resolveSignatureRequestByToken("tok", NOW);
+    expect(res.ok).toBe(true);
+    vi.mocked(getBusinessDocument).mockResolvedValue(null);
+    expect(await resolveSignatureRequestByToken("tok", NOW)).toEqual({
+      ok: false,
+      detail: "document_unavailable"
+    });
+  });
+
   it("an expired document blocks signing but not viewing a completed signature", async () => {
     vi.mocked(getDocumentSignatureRequestByTokenSha).mockResolvedValue(requestRow());
     vi.mocked(getBusinessDocument).mockResolvedValue(doc({ expires_at: "2026-07-02T00:00:00Z" }));
@@ -270,6 +284,7 @@ describe("markSignatureRequestOpened", () => {
 });
 
 describe("signDocumentRequest", () => {
+  const VIEWED_SHA = fingerprintDocumentContent(doc().content_md);
   function signable() {
     vi.mocked(getDocumentSignatureRequestByTokenSha).mockResolvedValue(
       requestRow({ status: "viewed" })
@@ -280,10 +295,10 @@ describe("signDocumentRequest", () => {
 
   it("requires a signature name and explicit consent", async () => {
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "  ", consent: true, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "  ", consent: true, now: NOW })
     ).toEqual({ ok: false, detail: "signature_name_required" });
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: false, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "Jane", consent: false, now: NOW })
     ).toEqual({ ok: false, detail: "consent_required" });
     expect(getDocumentSignatureRequestByTokenSha).not.toHaveBeenCalled();
   });
@@ -291,7 +306,7 @@ describe("signDocumentRequest", () => {
   it("propagates resolution failures", async () => {
     vi.mocked(getDocumentSignatureRequestByTokenSha).mockResolvedValue(null);
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "Jane", consent: true, now: NOW })
     ).toEqual({ ok: false, detail: "not_found" });
   });
 
@@ -301,8 +316,21 @@ describe("signDocumentRequest", () => {
     );
     vi.mocked(getBusinessDocument).mockResolvedValue(doc());
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "Jane", consent: true, now: NOW })
     ).toEqual({ ok: false, detail: "already_signed" });
+    expect(completeSignatureRequest).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the document changed after the signer's page render", async () => {
+    signable();
+    const res = await signDocumentRequest({
+      token: "tok",
+      viewedContentSha256: fingerprintDocumentContent("some OTHER text the signer never saw"),
+      signatureName: "Jane",
+      consent: true,
+      now: NOW
+    });
+    expect(res).toEqual({ ok: false, detail: "content_changed" });
     expect(completeSignatureRequest).not.toHaveBeenCalled();
   });
 
@@ -310,7 +338,7 @@ describe("signDocumentRequest", () => {
     signable();
     vi.mocked(completeSignatureRequest).mockResolvedValue(0);
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "Jane", consent: true, now: NOW })
     ).toEqual({ ok: false, detail: "already_signed" });
     expect(dispatchUrgentNotification).not.toHaveBeenCalled();
   });
@@ -322,13 +350,13 @@ describe("signDocumentRequest", () => {
       .mockResolvedValueOnce(requestRow({ status: "viewed" })) // resolve
       .mockResolvedValueOnce(requestRow({ status: "void" })); // post-race re-read
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "Jane", consent: true, now: NOW })
     ).toEqual({ ok: false, detail: "void" });
     vi.mocked(getDocumentSignatureRequestByTokenSha)
       .mockResolvedValueOnce(requestRow({ status: "viewed" }))
       .mockResolvedValueOnce(null);
     expect(
-      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+      await signDocumentRequest({ token: "tok", viewedContentSha256: VIEWED_SHA, signatureName: "Jane", consent: true, now: NOW })
     ).toEqual({ ok: false, detail: "already_signed" });
   });
 
@@ -336,6 +364,7 @@ describe("signDocumentRequest", () => {
     signable();
     const res = await signDocumentRequest({
       token: "tok",
+      viewedContentSha256: VIEWED_SHA,
       signatureName: `  ${"J".repeat(300)}  `,
       consent: true,
       signerIp: "203.0.113.9",
@@ -370,6 +399,7 @@ describe("signDocumentRequest", () => {
     signable();
     const res = await signDocumentRequest({
       token: "tok",
+      viewedContentSha256: VIEWED_SHA,
       signatureName: "Jane",
       consent: true,
       now: NOW
@@ -385,6 +415,7 @@ describe("signDocumentRequest", () => {
     vi.mocked(insertCoworkerLog).mockRejectedValueOnce(new Error("log down"));
     const res = await signDocumentRequest({
       token: "tok",
+      viewedContentSha256: VIEWED_SHA,
       signatureName: "Jane",
       consent: true,
       now: NOW
@@ -394,6 +425,7 @@ describe("signDocumentRequest", () => {
     vi.mocked(dispatchUrgentNotification).mockRejectedValueOnce("string failure");
     const res2 = await signDocumentRequest({
       token: "tok",
+      viewedContentSha256: VIEWED_SHA,
       signatureName: "Jane",
       consent: true
     });
