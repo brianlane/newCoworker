@@ -13,13 +13,28 @@
 --     the tenant-direction auto-heal and emails ops a migration-needed
 --     finding every run until the tenant is moved to its correct size
 --     (debug/migrate-vps-size.ts), which itself adopts-first from the pool.
-alter table public.vps_inventory
+--
+-- ORDERING NOTE: the vps_inventory CREATE migration carries an invented
+-- future stamp (20260722000000 — it predates the real-timestamp rule), so
+-- this correctly-stamped file sorts BEFORE it on a fresh database. Both
+-- orders are handled:
+--   * fresh DB (CI `supabase start`, local reset): this file no-ops via the
+--     IF EXISTS guards, and the create migration itself now includes the
+--     column;
+--   * production: the create is long applied, so this file adds the column
+--     and sets the flag for srv1632631.
+alter table if exists public.vps_inventory
   add column if not exists never_renew boolean not null default false;
 
-comment on column public.vps_inventory.never_renew is
-  'Never re-enable Hostinger auto-renew for this box — it lapses at its paid period end no matter what. A tenant adopted onto it must be migrated to its correct size before then (the posture cron nags daily).';
+do $$
+begin
+  if to_regclass('public.vps_inventory') is not null then
+    comment on column public.vps_inventory.never_renew is
+      'Never re-enable Hostinger auto-renew for this box — it lapses at its paid period end no matter what. A tenant adopted onto it must be migrated to its correct size before then (the posture cron nags daily).';
 
--- srv1632631: KVM8 hardware pooled as kvm2 (see PRDs/tier-economics-jul-2026.md,
--- Fleet & constraints); must lapse at the Jul 30 2026 period end whether or
--- not a signup adopts it first.
-update public.vps_inventory set never_renew = true where vm_id = 1632631;
+    -- srv1632631: KVM8 hardware pooled as kvm2 (see
+    -- PRDs/tier-economics-jul-2026.md, Fleet & constraints); must lapse at
+    -- the Jul 30 2026 period end whether or not a signup adopts it first.
+    update public.vps_inventory set never_renew = true where vm_id = 1632631;
+  end if;
+end $$;

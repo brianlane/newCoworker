@@ -33,6 +33,15 @@ create table if not exists public.vps_inventory (
   acquired_at timestamptz not null default now(),
   assigned_at timestamptz,
   notes text,
+  -- Sunk-cost box that must lapse at its paid period end NO MATTER WHAT,
+  -- even while assigned to a live tenant (the adopt path skips its renewal
+  -- re-enable; the billing-posture cron skips its auto-heal and nags ops to
+  -- migrate the tenant instead). Declared here so fresh databases get the
+  -- column even though the 20260712164108 alter file sorts BEFORE this one
+  -- (this file's stamp is an invented future date predating the
+  -- real-timestamp rule; production applied it long ago, so this edit only
+  -- affects fresh local/CI databases).
+  never_renew boolean not null default false,
   updated_at timestamptz not null default now()
 );
 
