@@ -56,12 +56,14 @@ import {
   getSnapshotSeries,
   type SnapshotSeriesPoint
 } from "@/lib/analytics/snapshots";
+import { getFlowFunnels } from "@/lib/analytics/flow-funnels";
 import {
   AnswerRateCard,
   DailyVolumeCard,
   DayDetailCard,
   EmployeePerformanceCard,
   EngagementCard,
+  FlowFunnelCard,
   PeakHoursCard,
   SegmentDetailCard,
   SentimentMixCard,
@@ -209,6 +211,7 @@ export default async function DashboardAnalyticsPage(props: {
     snapshotSeries,
     engagement,
     teamPerformance,
+    flowFunnels,
     dayDetail,
     sentimentDetail,
     hourDetail
@@ -229,6 +232,8 @@ export default async function DashboardAnalyticsPage(props: {
       isOwnerViewer
         ? getEmployeePerformance(business.id, { client: db, now }).catch(() => null)
         : Promise.resolve(null),
+      // Per-flow funnel; a blip hides the card.
+      getFlowFunnels(business.id, { client: db, now }).catch(() => null),
       selectedDay
         ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
         : Promise.resolve(null),
@@ -431,6 +436,27 @@ export default async function DashboardAnalyticsPage(props: {
       {showTrend && (
         <TrendForecastCard weeks={trendWeeks} calls={callForecast} texts={textForecast} />
       )}
+
+      {flowFunnels && flowFunnels.rows.length > 0 && (
+        <FlowFunnelCard rows={flowFunnels.rows} clipped={flowFunnels.clipped} />
+      )}
+
+      <p className="text-xs text-parchment/40">
+        Export CSV:{" "}
+        <a
+          href={`/api/dashboard/analytics/export?businessId=${business.id}&kind=daily`}
+          className="text-signal-teal hover:underline"
+        >
+          daily volume
+        </a>
+        {" · "}
+        <a
+          href={`/api/dashboard/analytics/export?businessId=${business.id}&kind=flows`}
+          className="text-signal-teal hover:underline"
+        >
+          flow performance
+        </a>
+      </p>
 
       {callStats && (
         <PeakHoursCard
