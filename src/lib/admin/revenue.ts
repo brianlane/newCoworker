@@ -148,6 +148,12 @@ export type ChurnStats = {
  * included — so multiple cancel rows for one tenant must count once, and a
  * tenant that canceled and then resubscribed inside the window didn't
  * churn at all).
+ *
+ * "Active now" comes from each tenant's NEWEST row — the same view every
+ * other metric on the page uses — so a stale older `active` row can never
+ * mask a tenant whose current subscription is canceled. Cancels are scanned
+ * across the FULL history (the churned set subtracts newest-row-active
+ * businesses, which is what makes a resubscribe a non-churn).
  */
 export function computeChurnStats(params: {
   subscriptions: RevenueSubscription[];
@@ -158,15 +164,17 @@ export function computeChurnStats(params: {
   const windowMs = (params.windowDays ?? 30) * 24 * 60 * 60 * 1000;
 
   const activeBusinesses = new Set<string>();
-  const canceledBusinesses = new Set<string>();
-  for (const sub of params.subscriptions) {
+  for (const sub of dedupeNewestPerBusiness(params.subscriptions)) {
     // Rows with no Stripe subscription behind them (internal pilots,
     // admin-created accounts) never charged anyone — same exclusion as MRR.
-    if (sub.stripe_subscription_id === null) continue;
-    if (sub.status === "active") {
+    if (sub.status === "active" && sub.stripe_subscription_id !== null) {
       activeBusinesses.add(sub.business_id);
-      continue;
     }
+  }
+
+  const canceledBusinesses = new Set<string>();
+  for (const sub of params.subscriptions) {
+    if (sub.stripe_subscription_id === null) continue;
     if (sub.status === "canceled" && sub.canceled_at) {
       const canceled = Date.parse(sub.canceled_at);
       if (Number.isFinite(canceled) && now.getTime() - canceled <= windowMs && canceled <= now.getTime()) {

@@ -177,11 +177,26 @@ describe("computeChurnStats", () => {
     const stats = computeChurnStats({
       subscriptions: [
         // Two historical cancel rows for the same tenant inside the window.
-        sub({ business_id: "gone", status: "canceled", canceled_at: "2026-07-01T00:00:00Z" }),
-        sub({ business_id: "gone", status: "canceled", canceled_at: "2026-06-20T00:00:00Z" }),
-        // Canceled in-window but resubscribed: active row wins, no churn.
-        sub({ business_id: "back", status: "canceled", canceled_at: "2026-07-02T00:00:00Z" }),
-        sub({ business_id: "back" }),
+        sub({
+          business_id: "gone",
+          status: "canceled",
+          canceled_at: "2026-07-01T00:00:00Z",
+          created_at: "2026-05-01T00:00:00Z"
+        }),
+        sub({
+          business_id: "gone",
+          status: "canceled",
+          canceled_at: "2026-06-20T00:00:00Z",
+          created_at: "2026-04-01T00:00:00Z"
+        }),
+        // Canceled in-window but resubscribed: the newer active row wins.
+        sub({
+          business_id: "back",
+          status: "canceled",
+          canceled_at: "2026-07-02T00:00:00Z",
+          created_at: "2026-05-01T00:00:00Z"
+        }),
+        sub({ business_id: "back", created_at: "2026-07-03T00:00:00Z" }),
         // Two active rows for one tenant count once toward activeNow.
         sub({ business_id: "dupe-active" }),
         sub({ business_id: "dupe-active" })
@@ -189,6 +204,22 @@ describe("computeChurnStats", () => {
       now: NOW
     });
     expect(stats).toEqual({ canceledInWindow: 1, activeNow: 2, churnRatePct: 33.3 });
+  });
+
+  it("a stale older active row cannot mask a tenant whose newest row is canceled", () => {
+    const stats = computeChurnStats({
+      subscriptions: [
+        sub({ business_id: "masked", created_at: "2026-01-01T00:00:00Z" }),
+        sub({
+          business_id: "masked",
+          status: "canceled",
+          canceled_at: "2026-07-01T00:00:00Z",
+          created_at: "2026-06-01T00:00:00Z"
+        })
+      ],
+      now: NOW
+    });
+    expect(stats).toEqual({ canceledInWindow: 1, activeNow: 0, churnRatePct: 100 });
   });
 
   it("ignores unparseable and future cancel timestamps and yields 0% with no active subs", () => {
