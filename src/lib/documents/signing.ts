@@ -203,7 +203,15 @@ export async function signDocumentRequest(input: SignDocumentInput): Promise<Sig
     signer_user_agent: (input.signerUserAgent ?? "").slice(0, 400) || null,
     content_sha256: fingerprintDocumentContent(resolved.document.content_md)
   });
-  if (updated === 0) return { ok: false, detail: "already_signed" };
+  if (updated === 0) {
+    // Zero rows means the request stopped being signable between resolve
+    // and write. Distinguish WHY: a racing void must not be reported to the
+    // signer as "already signed".
+    const current = await getDocumentSignatureRequestByTokenSha(
+      hashShareToken(input.token.trim())
+    );
+    return { ok: false, detail: current?.status === "void" ? "void" : "already_signed" };
+  }
 
   // Owner notification + audit log are best-effort: the signature itself is
   // already durable, and the dashboard list shows it regardless.

@@ -315,6 +315,23 @@ describe("signDocumentRequest", () => {
     expect(dispatchUrgentNotification).not.toHaveBeenCalled();
   });
 
+  it("reports a racing VOID as void, not already_signed (and survives a vanished row)", async () => {
+    signable();
+    vi.mocked(completeSignatureRequest).mockResolvedValue(0);
+    vi.mocked(getDocumentSignatureRequestByTokenSha)
+      .mockResolvedValueOnce(requestRow({ status: "viewed" })) // resolve
+      .mockResolvedValueOnce(requestRow({ status: "void" })); // post-race re-read
+    expect(
+      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+    ).toEqual({ ok: false, detail: "void" });
+    vi.mocked(getDocumentSignatureRequestByTokenSha)
+      .mockResolvedValueOnce(requestRow({ status: "viewed" }))
+      .mockResolvedValueOnce(null);
+    expect(
+      await signDocumentRequest({ token: "tok", signatureName: "Jane", consent: true, now: NOW })
+    ).toEqual({ ok: false, detail: "already_signed" });
+  });
+
   it("records the full audit trail, notifies the owner, and logs", async () => {
     signable();
     const res = await signDocumentRequest({
