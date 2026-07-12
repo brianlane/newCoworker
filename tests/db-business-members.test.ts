@@ -8,6 +8,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   listBusinessMembers,
   listAllBusinessMembers,
+  deleteBusinessMembersByEmail,
   getBusinessMember,
   inviteBusinessMember,
   updateBusinessMemberRole,
@@ -85,6 +86,36 @@ describe("db/business-members", () => {
     });
     await expect(listAllBusinessMembers(bad as never)).rejects.toThrow(
       "listAllBusinessMembers: boom"
+    );
+  });
+
+  it("deleteBusinessMembersByEmail removes every grant for the email and reports the count", async () => {
+    function deleteDb(result: { data: unknown; error: unknown }) {
+      return {
+        from: vi.fn().mockReturnThis(),
+        delete: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        select: vi.fn().mockResolvedValue(result)
+      };
+    }
+
+    const db = deleteDb({ data: [{ id: "m1" }, { id: "m2" }], error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await deleteBusinessMembersByEmail("  Staffer@Example.com ")).toBe(2);
+    // Normalized to the schema's lowercase form before the indexed equality.
+    expect(db.eq).toHaveBeenCalledWith("email", "staffer@example.com");
+
+    const none = deleteDb({ data: null, error: null });
+    expect(await deleteBusinessMembersByEmail("gone@example.com", none as never)).toBe(0);
+
+    // Blank email is a no-op that never touches the db.
+    const untouched = deleteDb({ data: null, error: null });
+    expect(await deleteBusinessMembersByEmail("   ", untouched as never)).toBe(0);
+    expect(untouched.from).not.toHaveBeenCalled();
+
+    const bad = deleteDb({ data: null, error: { message: "boom" } });
+    await expect(deleteBusinessMembersByEmail("x@example.com", bad as never)).rejects.toThrow(
+      "deleteBusinessMembersByEmail: boom"
     );
   });
 

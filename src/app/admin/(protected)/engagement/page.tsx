@@ -3,11 +3,11 @@ import { listAllBusinessMembers } from "@/lib/db/business-members";
 import {
   buildUserEngagementRows,
   listPlatformAuthUsers,
-  quietOwnerBusinessIds,
-  summarizeUserEngagement
+  quietOwnerBusinessIds
 } from "@/lib/admin/user-engagement";
 import { Card } from "@/components/ui/Card";
 import { UserEngagementTable } from "@/components/admin/UserEngagementTable";
+import { EngagementKpis } from "@/components/admin/EngagementKpis";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +18,6 @@ export default async function AdminEngagementPage() {
     listAllBusinessMembers()
   ]);
 
-  const summary = summarizeUserEngagement(users);
   const rows = buildUserEngagementRows({ users, businesses, members });
   // The churn-risk KPI counts quiet OWNERS (per business) — the same set
   // that gets the churn-risk badge on /admin/clients, so the two surfaces
@@ -46,47 +45,13 @@ export default async function AdminEngagementPage() {
         </Card>
       )}
 
-      {/* KPI row (BizBlasts' DAU analytics panel) */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Active Today</p>
-          <p className="text-3xl font-bold text-parchment">{summary.activeToday}</p>
-          <p className="text-xs text-parchment/30 mt-1">
-            {summary.dailyEngagementRatePct}% of {summary.totalUsers} users
-          </p>
-        </Card>
-        <Card>
-          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
-            Active: 7 Days
-          </p>
-          <p className="text-3xl font-bold text-claw-green">{summary.active7d}</p>
-        </Card>
-        <Card>
-          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
-            Active: 30 Days
-          </p>
-          <p className="text-3xl font-bold text-signal-teal">{summary.active30d}</p>
-        </Card>
-        <Card>
-          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
-            Quiet Owners (90d+)
-          </p>
-          <p
-            className={`text-3xl font-bold ${
-              quietOwnerCount !== null && quietOwnerCount > 0
-                ? "text-spark-orange"
-                : "text-parchment"
-            }`}
-          >
-            {quietOwnerCount ?? "–"}
-          </p>
-          <p className="text-xs text-parchment/30 mt-1">
-            {quietOwnerCount === null
-              ? "unknown — partial auth scan"
-              : `churn-risk businesses · ${quietRowCount} quiet users total`}
-          </p>
-        </Card>
-      </div>
+      {/* KPI row (BizBlasts' DAU analytics panel) — client-computed so
+          "Active Today" is the viewer's calendar day. */}
+      <EngagementKpis
+        users={users}
+        quietOwnerCount={quietOwnerCount}
+        quietRowCount={quietRowCount}
+      />
 
       <Card padding="sm">
         <UserEngagementTable rows={rows} />

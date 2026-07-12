@@ -110,7 +110,14 @@ export function UserEngagementTable({ rows }: { rows: UserEngagementRow[] }) {
                 key={`${row.email}-${row.businessId ?? "none"}-${i}`}
                 className="border-b border-parchment/5 hover:bg-parchment/3"
               >
-                <td className="py-3 px-4 text-parchment">{row.email}</td>
+                <td className="py-3 px-4">
+                  <a
+                    href={`/admin/users/${encodeURIComponent(row.email)}`}
+                    className="text-parchment font-medium hover:text-signal-teal"
+                  >
+                    {row.email}
+                  </a>
+                </td>
                 <td className="py-3 px-4">
                   {row.businessId ? (
                     <a
