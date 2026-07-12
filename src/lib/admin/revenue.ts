@@ -27,11 +27,19 @@ export type RevenueDeal = {
   created_at: string;
 };
 
-/** Was this subscription (approximately) live at instant `at`? */
+/**
+ * Was this subscription (approximately) live at instant `at`?
+ *
+ * Matches `computeDayCurrentMrr`'s revenue definition: only `active` rows
+ * count (a `past_due` row isn't collecting money, and the headline Est. MRR
+ * excludes it — counting it here would make the current month's trend bar
+ * disagree with the KPI card). `past_due` is legacy-only anyway: payment
+ * failures now flip straight to `canceled`.
+ */
 export function wasSubscriptionActiveAt(sub: RevenueSubscription, at: Date): boolean {
   const created = Date.parse(sub.created_at);
   if (Number.isFinite(created) && created > at.getTime()) return false;
-  if (sub.status === "active" || sub.status === "past_due") return true;
+  if (sub.status === "active") return true;
   if (sub.status === "canceled" && sub.canceled_at) {
     const canceled = Date.parse(sub.canceled_at);
     return Number.isFinite(canceled) && canceled > at.getTime();
@@ -101,14 +109,20 @@ export function computeMrrTrend(params: {
 }
 
 export type ChurnStats = {
-  /** Stripe-backed cancels inside the window. */
+  /** BUSINESSES that churned (canceled in the window, not active now). */
   canceledInWindow: number;
-  /** Stripe-backed active subscriptions right now. */
+  /** Businesses with a Stripe-backed active subscription right now. */
   activeNow: number;
-  /** BizBlasts semantics: canceled-this-period ÷ currently-active, in %. */
+  /** BizBlasts semantics: churned-this-period ÷ currently-active, in %. */
   churnRatePct: number;
 };
 
+/**
+ * Per-BUSINESS churn (the input is `listAllSubscriptions()` — history
+ * included — so multiple cancel rows for one tenant must count once, and a
+ * tenant that canceled and then resubscribed inside the window didn't
+ * churn at all).
+ */
 export function computeChurnStats(params: {
   subscriptions: RevenueSubscription[];
   windowDays?: number;
@@ -117,23 +131,28 @@ export function computeChurnStats(params: {
   const now = params.now ?? new Date();
   const windowMs = (params.windowDays ?? 30) * 24 * 60 * 60 * 1000;
 
-  let canceledInWindow = 0;
-  let activeNow = 0;
+  const activeBusinesses = new Set<string>();
+  const canceledBusinesses = new Set<string>();
   for (const sub of params.subscriptions) {
     // Rows with no Stripe subscription behind them (internal pilots,
     // admin-created accounts) never charged anyone — same exclusion as MRR.
     if (sub.stripe_subscription_id === null) continue;
     if (sub.status === "active") {
-      activeNow += 1;
+      activeBusinesses.add(sub.business_id);
       continue;
     }
     if (sub.status === "canceled" && sub.canceled_at) {
       const canceled = Date.parse(sub.canceled_at);
       if (Number.isFinite(canceled) && now.getTime() - canceled <= windowMs && canceled <= now.getTime()) {
-        canceledInWindow += 1;
+        canceledBusinesses.add(sub.business_id);
       }
     }
   }
+  let canceledInWindow = 0;
+  for (const businessId of canceledBusinesses) {
+    if (!activeBusinesses.has(businessId)) canceledInWindow += 1;
+  }
+  const activeNow = activeBusinesses.size;
   return {
     canceledInWindow,
     activeNow,

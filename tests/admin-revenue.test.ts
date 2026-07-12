@@ -51,9 +51,9 @@ describe("wasSubscriptionActiveAt", () => {
     expect(wasSubscriptionActiveAt(sub({ status: "pending" }), at)).toBe(false);
   });
 
-  it("is true for active and past_due rows created before the anchor", () => {
+  it("is true for active rows created before the anchor; past_due matches the MRR definition (excluded)", () => {
     expect(wasSubscriptionActiveAt(sub(), at)).toBe(true);
-    expect(wasSubscriptionActiveAt(sub({ status: "past_due" }), at)).toBe(true);
+    expect(wasSubscriptionActiveAt(sub({ status: "past_due" }), at)).toBe(false);
   });
 
   it("canceled rows count only while canceled_at is still in the future", () => {
@@ -132,7 +132,7 @@ describe("computeMrrTrend", () => {
 });
 
 describe("computeChurnStats", () => {
-  it("computes canceled-in-window over currently-active, Stripe-backed only", () => {
+  it("computes churned businesses over currently-active businesses, Stripe-backed only", () => {
     const stats = computeChurnStats({
       subscriptions: [
         sub(),
@@ -145,6 +145,24 @@ describe("computeChurnStats", () => {
         // Canceled without a timestamp, and a pending row: neither counts.
         sub({ business_id: "b6", status: "canceled", canceled_at: null }),
         sub({ business_id: "b7", status: "pending" })
+      ],
+      now: NOW
+    });
+    expect(stats).toEqual({ canceledInWindow: 1, activeNow: 2, churnRatePct: 50 });
+  });
+
+  it("counts per business: duplicate cancel rows count once and a resubscribed tenant didn't churn", () => {
+    const stats = computeChurnStats({
+      subscriptions: [
+        // Two historical cancel rows for the same tenant inside the window.
+        sub({ business_id: "gone", status: "canceled", canceled_at: "2026-07-01T00:00:00Z" }),
+        sub({ business_id: "gone", status: "canceled", canceled_at: "2026-06-20T00:00:00Z" }),
+        // Canceled in-window but resubscribed: active row wins, no churn.
+        sub({ business_id: "back", status: "canceled", canceled_at: "2026-07-02T00:00:00Z" }),
+        sub({ business_id: "back" }),
+        // Two active rows for one tenant count once toward activeNow.
+        sub({ business_id: "dupe-active" }),
+        sub({ business_id: "dupe-active" })
       ],
       now: NOW
     });

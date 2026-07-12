@@ -117,7 +117,13 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
     URL.revokeObjectURL(url);
   }
 
-  const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.id)), [rows, selected]);
+  // Batch actions act on the visible selection ONLY: a row selected and then
+  // hidden by a filter must never receive a kill-switch / redeploy call the
+  // operator can't see happening.
+  const selectedRows = useMemo(
+    () => visibleRows.filter((r) => selected.has(r.id)),
+    [visibleRows, selected]
+  );
 
   async function runBatch(action: BatchAction) {
     if (selectedRows.length === 0) return;
@@ -252,13 +258,13 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
       {/* Batch actions */}
       <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-parchment/10">
         <span className="text-xs text-parchment/40">
-          {selected.size} selected
+          {selectedRows.length} selected
         </span>
         <Button
           type="button"
           size="sm"
           variant="ghost"
-          disabled={selected.size === 0 || running !== null}
+          disabled={selectedRows.length === 0 || running !== null}
           loading={running === "pause"}
           onClick={() => void runBatch("pause")}
         >
@@ -268,7 +274,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
           type="button"
           size="sm"
           variant="ghost"
-          disabled={selected.size === 0 || running !== null}
+          disabled={selectedRows.length === 0 || running !== null}
           loading={running === "resume"}
           onClick={() => void runBatch("resume")}
         >
@@ -278,7 +284,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
           type="button"
           size="sm"
           variant="ghost"
-          disabled={selected.size === 0 || running !== null}
+          disabled={selectedRows.length === 0 || running !== null}
           loading={running === "redeploy"}
           onClick={() => void runBatch("redeploy")}
         >
