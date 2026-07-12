@@ -163,6 +163,27 @@ describe("getFlowFunnels", () => {
     expect(funnels.clipped).toBe(false);
   });
 
+  it("vps sends clipping is judged on RAW scanned rows, before null flow_ids drop", async () => {
+    vi.mocked(isVpsReadMode).mockResolvedValue(true);
+    vi.mocked(readMovedRows).mockImplementation(async (_biz: string, req: { table: string }) => {
+      if (req.table === "ai_flows") {
+        return [{ id: "flow-1", name: "F", enabled: true }] as never;
+      }
+      // A FULL raw page whose rows are mostly unattributed: the filtered
+      // list is tiny, but the scan itself was capped — must flag clipped.
+      return Array.from({ length: FLOW_FUNNEL_SCAN_LIMIT }, (_, i) => ({
+        flow_id: i === 0 ? "flow-1" : null
+      })) as never;
+    });
+    const { client } = makeClient({
+      ai_flow_runs: { data: [], error: null },
+      sms_links: { data: [], error: null }
+    });
+    const funnels = await getFlowFunnels("biz-1", { client, now: NOW });
+    expect(funnels.clipped).toBe(true);
+    expect(funnels.rows[0].textsSent).toBe(1);
+  });
+
   it("flags clipping when any source scan fills its cap", async () => {
     const fullRuns = Array.from({ length: FLOW_FUNNEL_SCAN_LIMIT }, () => ({
       flow_id: "flow-1",

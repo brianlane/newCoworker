@@ -106,9 +106,12 @@ export async function getFlowFunnels(
     if (error) throw new Error(`getFlowFunnels flows: ${error.message}`);
     return ((data as FlowRow[] | null) ?? []);
   };
-  const fetchSends = async (): Promise<SendRow[]> => {
+  // `scanned` is the RAW row count before any client-side filtering, so the
+  // clipped flag reflects what the scan actually consumed — on the vps path
+  // the cap applies before null flow_ids are dropped.
+  const fetchSends = async (): Promise<{ rows: SendRow[]; scanned: number }> => {
     if (vpsReadMode) {
-      const rows = await readMovedRows<SendRow>(businessId, {
+      const raw = await readMovedRows<SendRow>(businessId, {
         table: "sms_outbound_log",
         columns: ["flow_id"],
         filters: [
@@ -119,7 +122,7 @@ export async function getFlowFunnels(
         order: [{ column: "created_at", ascending: false }],
         limit: FLOW_FUNNEL_SCAN_LIMIT
       });
-      return rows.filter((r) => r.flow_id !== null);
+      return { rows: raw.filter((r) => r.flow_id !== null), scanned: raw.length };
     }
     const { data, error } = await db
       .from("sms_outbound_log")
@@ -133,7 +136,8 @@ export async function getFlowFunnels(
       .order("created_at", { ascending: false })
       .limit(FLOW_FUNNEL_SCAN_LIMIT);
     if (error) throw new Error(`getFlowFunnels sends: ${error.message}`);
-    return ((data as SendRow[] | null) ?? []);
+    const rows = ((data as SendRow[] | null) ?? []);
+    return { rows, scanned: rows.length };
   };
 
   const [flows, runsRes, sends, linksRes] = await Promise.all([
@@ -171,7 +175,7 @@ export async function getFlowFunnels(
   }
 
   const texts = new Map<string, number>();
-  for (const send of sends) {
+  for (const send of sends.rows) {
     texts.set(send.flow_id as string, (texts.get(send.flow_id as string) ?? 0) + 1);
   }
 
@@ -205,7 +209,7 @@ export async function getFlowFunnels(
     // "counts are partial" warning.
     clipped:
       runRows.length >= FLOW_FUNNEL_SCAN_LIMIT ||
-      sends.length >= FLOW_FUNNEL_SCAN_LIMIT ||
+      sends.scanned >= FLOW_FUNNEL_SCAN_LIMIT ||
       linkRows.length >= FLOW_FUNNEL_SCAN_LIMIT
   };
 }
