@@ -188,6 +188,17 @@ export default async function DashboardMessagesPage() {
         />
       </div>
 
+      <SmsReplayPanel businessId={business.id} flows={replayFlows} />
+
+      {(smsToolsEnabled || scheduled.length > 0) && (
+        <SmsToolsPanel
+          businessId={business.id}
+          templates={templates}
+          scheduled={scheduled}
+          toolsEnabled={smsToolsEnabled}
+        />
+      )}
+
       {conversations.length === 0 ? (
         <Card>
           <div className="text-center py-8">
@@ -199,17 +210,6 @@ export default async function DashboardMessagesPage() {
         </Card>
       ) : (
         <MessagesList rows={rows} />
-      )}
-
-      <SmsReplayPanel businessId={business.id} flows={replayFlows} />
-
-      {(smsToolsEnabled || scheduled.length > 0) && (
-        <SmsToolsPanel
-          businessId={business.id}
-          templates={templates}
-          scheduled={scheduled}
-          toolsEnabled={smsToolsEnabled}
-        />
       )}
     </div>
   );
