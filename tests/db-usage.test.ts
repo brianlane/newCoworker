@@ -423,6 +423,45 @@ describe("db/usage", () => {
       expect((await getFleetCalendarMonthUsageByBusiness(empty as never)).size).toBe(0);
     });
 
+    it("applies a historical month window to both reads", async () => {
+      const chains: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
+      const from = vi.fn(() => {
+        const chain: Record<string, ReturnType<typeof vi.fn>> = {};
+        chain.select = vi.fn(() => chain);
+        chain.gte = vi.fn(() => chain);
+        chain.lt = vi.fn(() => chain);
+        chain.order = vi.fn(() => chain);
+        chain.range = vi.fn(async () => ({ data: [], error: null }));
+        chains.push(chain);
+        return chain;
+      });
+      await getFleetCalendarMonthUsageByBusiness({ from } as never, {
+        startYmd: "2026-06-01",
+        endYmdExclusive: "2026-07-01"
+      });
+      expect(chains[0].gte).toHaveBeenCalledWith("usage_date", "2026-06-01");
+      expect(chains[0].lt).toHaveBeenCalledWith("usage_date", "2026-07-01");
+      expect(chains[1].gte).toHaveBeenCalledWith("created_at", "2026-06-01T00:00:00.000Z");
+      expect(chains[1].lt).toHaveBeenCalledWith("created_at", "2026-07-01T00:00:00.000Z");
+    });
+
+    it("supports an open-ended window (start only)", async () => {
+      const chains: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
+      const from = vi.fn(() => {
+        const chain: Record<string, ReturnType<typeof vi.fn>> = {};
+        chain.select = vi.fn(() => chain);
+        chain.gte = vi.fn(() => chain);
+        chain.lt = vi.fn(() => chain);
+        chain.order = vi.fn(() => chain);
+        chain.range = vi.fn(async () => ({ data: [], error: null }));
+        chains.push(chain);
+        return chain;
+      });
+      await getFleetCalendarMonthUsageByBusiness({ from } as never, { startYmd: "2026-06-01" });
+      expect(chains[0].lt).not.toHaveBeenCalled();
+      expect(chains[1].lt).not.toHaveBeenCalled();
+    });
+
     it("throws when either read fails", async () => {
       const smsErr = fleetChain({
         daily_usage: [{ data: null, error: { message: "db down" } }]

@@ -309,6 +309,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
               <th className="text-left py-3 px-4 text-parchment/40 font-medium">Owner</th>
               <SortHeader label="Plan" sortKey="tier" sort={sort} onSort={toggleSort} />
               <SortHeader label="Payment" sortKey="payment" sort={sort} onSort={toggleSort} />
+              <SortHeader label="Margin/mo" sortKey="margin" sort={sort} onSort={toggleSort} />
               <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
               <th className="text-left py-3 px-4 text-parchment/40 font-medium">Actions</th>
             </tr>
@@ -316,7 +317,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
           <tbody>
             {visibleRows.length === 0 && (
               <tr>
-                <td colSpan={7} className="py-8 px-4 text-center text-sm text-parchment/40">
+                <td colSpan={8} className="py-8 px-4 text-center text-sm text-parchment/40">
                   No clients match the current filters.
                 </td>
               </tr>
@@ -370,6 +371,23 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     >
                       {b.subscriptionStatus}
                     </Badge>
+                  )}
+                </td>
+                <td className="py-3 px-4">
+                  {b.marginCents === null ? (
+                    <span className="text-xs text-parchment/30">—</span>
+                  ) : (
+                    <span
+                      className={`text-xs font-semibold ${
+                        b.marginCents >= 0 ? "text-claw-green" : "text-spark-orange"
+                      }`}
+                    >
+                      {b.marginCents < 0 ? "−" : ""}$
+                      {Math.abs(b.marginCents / 100).toLocaleString("en-US", {
+                        minimumFractionDigits: 2,
+                        maximumFractionDigits: 2
+                      })}
+                    </span>
                   )}
                 </td>
                 <td className="py-3 px-4">
