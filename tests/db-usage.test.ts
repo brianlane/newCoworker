@@ -3,6 +3,7 @@ import {
   getTodayUsage,
   getCalendarMonthUsageTotals,
   getFleetCalendarMonthUsageTotals,
+  getFleetCalendarMonthUsageByBusiness,
   incrementUsage,
   checkLimitReached
 } from "@/lib/db/usage";
@@ -300,6 +301,142 @@ describe("db/usage", () => {
       });
       await expect(getFleetCalendarMonthUsageTotals(voiceErr as never)).rejects.toThrow(
         "getFleetCalendarMonthUsageTotals: settlements down"
+      );
+    });
+  });
+
+  describe("getFleetCalendarMonthUsageByBusiness", () => {
+    type FleetPage = {
+      data: Array<Record<string, number | string | null>> | null;
+      error: { message: string } | null;
+    };
+
+    function fleetChain(pagesByTable: Record<string, FleetPage[]>) {
+      const calls: Record<string, number> = {};
+      const rangeSpies: Record<string, ReturnType<typeof vi.fn>> = {};
+      const from = vi.fn((table: string) => {
+        const pages = pagesByTable[table] ?? [{ data: [], error: null }];
+        rangeSpies[table] ??= vi.fn(async () => {
+          const i = calls[table] ?? 0;
+          calls[table] = i + 1;
+          return pages[Math.min(i, pages.length - 1)];
+        });
+        const chain: Record<string, unknown> = {};
+        chain.select = vi.fn(() => chain);
+        chain.gte = vi.fn(() => chain);
+        chain.order = vi.fn(() => chain);
+        chain.range = rangeSpies[table];
+        return chain;
+      });
+      return { from, rangeSpies };
+    }
+
+    it("groups SMS/calls/peak from daily_usage and voice minutes from settlements per business", async () => {
+      const db = fleetChain({
+        daily_usage: [
+          {
+            data: [
+              { business_id: "biz-1", sms_sent: 3, calls_made: 2, peak_concurrent_calls: 2 },
+              { business_id: "biz-1", sms_sent: 2, calls_made: 1, peak_concurrent_calls: 1 },
+              { business_id: "biz-2", sms_sent: 7, calls_made: 0, peak_concurrent_calls: 0 },
+              { sms_sent: 99 } // no business_id — skipped
+            ],
+            error: null
+          }
+        ],
+        voice_settlements: [
+          {
+            data: [
+              { business_id: "biz-1", billable_seconds: 600 },
+              { business_id: "biz-3", billable_seconds: 90 },
+              { billable_seconds: 999 } // no business_id — skipped
+            ],
+            error: null
+          }
+        ]
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const map = await getFleetCalendarMonthUsageByBusiness();
+      expect(map.get("biz-1")).toEqual({
+        smsSent: 5,
+        voiceMinutes: 10,
+        callsMade: 3,
+        peakConcurrentCalls: 2
+      });
+      expect(map.get("biz-2")).toEqual({
+        smsSent: 7,
+        voiceMinutes: 0,
+        callsMade: 0,
+        peakConcurrentCalls: 0
+      });
+      // Voice-only business still gets an entry (settlements pass created it).
+      expect(map.get("biz-3")).toEqual({
+        smsSent: 0,
+        voiceMinutes: 1.5,
+        callsMade: 0,
+        peakConcurrentCalls: 0
+      });
+    });
+
+    it("pages both reads past the 1000-row cap and tolerates null data/fields (explicit client)", async () => {
+      const smsPage = Array.from({ length: 1000 }, () => ({
+        business_id: "biz-1",
+        sms_sent: 1,
+        calls_made: null,
+        peak_concurrent_calls: null
+      }));
+      const voicePage = Array.from({ length: 1000 }, () => ({
+        business_id: "biz-1",
+        billable_seconds: 60
+      }));
+      const db = fleetChain({
+        daily_usage: [
+          { data: smsPage, error: null },
+          {
+            data: [
+              { business_id: "biz-1", sms_sent: 5 },
+              { business_id: "biz-1", sms_sent: null } // null SMS field → zero
+            ],
+            error: null
+          }
+        ],
+        voice_settlements: [
+          { data: voicePage, error: null },
+          { data: [{ business_id: "biz-1", billable_seconds: null }], error: null }
+        ]
+      });
+      const map = await getFleetCalendarMonthUsageByBusiness(db as never);
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+      expect(map.get("biz-1")).toEqual({
+        smsSent: 1005,
+        voiceMinutes: 1000,
+        callsMade: 0,
+        peakConcurrentCalls: 0
+      });
+      expect(db.rangeSpies.daily_usage).toHaveBeenNthCalledWith(2, 1000, 1999);
+      expect(db.rangeSpies.voice_settlements).toHaveBeenNthCalledWith(2, 1000, 1999);
+
+      const empty = fleetChain({
+        daily_usage: [{ data: null, error: null }],
+        voice_settlements: [{ data: null, error: null }]
+      });
+      expect((await getFleetCalendarMonthUsageByBusiness(empty as never)).size).toBe(0);
+    });
+
+    it("throws when either read fails", async () => {
+      const smsErr = fleetChain({
+        daily_usage: [{ data: null, error: { message: "db down" } }]
+      });
+      await expect(getFleetCalendarMonthUsageByBusiness(smsErr as never)).rejects.toThrow(
+        "getFleetCalendarMonthUsageByBusiness: db down"
+      );
+
+      const voiceErr = fleetChain({
+        daily_usage: [{ data: [], error: null }],
+        voice_settlements: [{ data: null, error: { message: "settlements down" } }]
+      });
+      await expect(getFleetCalendarMonthUsageByBusiness(voiceErr as never)).rejects.toThrow(
+        "getFleetCalendarMonthUsageByBusiness: settlements down"
       );
     });
   });

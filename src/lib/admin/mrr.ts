@@ -77,7 +77,7 @@ export type DayCurrentMrr = {
  * day-clamping checkout's renewal-date math uses, so a Jan 31 signup ends
  * its intro month on Feb 28, not rolled into March).
  */
-function dayCurrentRateCents(
+export function dayCurrentSubscriptionRateCents(
   sub: MrrSubscriptionInput & { tier: "starter" | "standard" },
   now: Date
 ): number {
@@ -114,7 +114,7 @@ export function computeDayCurrentMrr(params: {
     // its deal row, not the $0 tier table.
     if (sub.status !== "active" || sub.stripe_subscription_id === null) continue;
     if (sub.tier === "enterprise") continue;
-    subscriptionCents += dayCurrentRateCents(
+    subscriptionCents += dayCurrentSubscriptionRateCents(
       sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
       now
     );
@@ -136,6 +136,8 @@ export function computeDayCurrentMrr(params: {
 
 /** The business fields the cost estimate reads (BusinessRow-compatible). */
 export type PlatformCostBusinessInput = {
+  /** Only needed to match synced Hostinger actuals; optional for estimate-only callers. */
+  id?: string;
   tier: "starter" | "standard" | "enterprise";
   status: string;
   hostinger_vps_id: string | null;
@@ -157,11 +159,34 @@ export type MonthlyPlatformCostEstimate = {
   boxCount: number;
 };
 
+export type PlatformCostActuals = {
+  /**
+   * Synced Hostinger effective-monthly price per business (from
+   * `hostinger_vps_costs`, see src/lib/db/platform-costs.ts). Businesses
+   * absent from the map fall back to the static SKU table.
+   */
+  hostingCentsByBusinessId?: Map<string, number>;
+  /**
+   * This calendar month's Telnyx invoice actuals fleet-wide (messaging +
+   * voice + carrier fees, from `telnyx_cost_daily`). When present it
+   * REPLACES the per-unit usage estimate — the vendor's number wins. Note
+   * the estimate covers Telnyx + Gemini voice together, so the actual is
+   * topped up with the Gemini-voice rate component by the caller-provided
+   * `geminiVoiceCents`.
+   */
+  telnyxMonthCostCents?: number;
+  /** Gemini Live voice cost (settled minutes × rate) to pair with the Telnyx actual. */
+  geminiVoiceCents?: number;
+};
+
 export function estimateMonthlyPlatformCost(params: {
   businesses: PlatformCostBusinessInput[];
   monthUsage: { smsSent: number; voiceMinutes: number };
   aiSpendMicros: number;
+  /** Synced vendor actuals — preferred over the static estimates when present. */
+  actuals?: PlatformCostActuals;
 }): MonthlyPlatformCostEstimate {
+  const syncedHosting = params.actuals?.hostingCentsByBusinessId;
   let hostingCents = 0;
   let didCents = 0;
   let boxCount = 0;
@@ -172,14 +197,21 @@ export function estimateMonthlyPlatformCost(params: {
     boxCount += 1;
     didCents += ENTERPRISE_UNIT_COSTS.didMonthlyCents;
     if (business.vps_provider === "byos") continue;
+    const synced = business.id !== undefined ? syncedHosting?.get(business.id) : undefined;
     hostingCents +=
+      synced ??
       HOSTING_MONTHLY_CENTS_BY_SIZE[resolveDeployedVpsSize(business.tier, business.vps_size)];
   }
 
-  const usageCents = Math.round(
-    params.monthUsage.smsSent * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
-      params.monthUsage.voiceMinutes * VOICE_ALL_IN_CENTS_PER_MINUTE
-  );
+  // Vendor actual (Telnyx invoice records + Gemini Live rate on settled
+  // minutes) wins over the per-unit estimate when the sync has data.
+  const usageCents =
+    params.actuals?.telnyxMonthCostCents !== undefined
+      ? Math.round(params.actuals.telnyxMonthCostCents + (params.actuals.geminiVoiceCents ?? 0))
+      : Math.round(
+          params.monthUsage.smsSent * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
+            params.monthUsage.voiceMinutes * VOICE_ALL_IN_CENTS_PER_MINUTE
+        );
   // 1 cent = 10,000 micro-USD.
   const aiSpendCents = Math.round(params.aiSpendMicros / 10_000);
 

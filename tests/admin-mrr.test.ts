@@ -280,4 +280,48 @@ describe("estimateMonthlyPlatformCost", () => {
     expect(result.aiSpendCents).toBe(123);
     expect(result.totalCents).toBe(result.usageCents + result.aiSpendCents);
   });
+
+  it("prefers synced Hostinger prices per business, falling back per box", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [
+        biz({ id: "biz-synced" }),
+        biz({ id: "biz-unsynced" }),
+        biz() // no id — estimate-only caller shape
+      ],
+      monthUsage: NO_USAGE,
+      aiSpendMicros: 0,
+      actuals: { hostingCentsByBusinessId: new Map([["biz-synced", 1499]]) }
+    });
+    expect(result.hostingCents).toBe(1499 + 2 * HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2);
+  });
+
+  it("falls back to the SKU table when ids are present but no actuals map is given", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [biz({ id: "biz-1" })],
+      monthUsage: NO_USAGE,
+      aiSpendMicros: 0,
+      actuals: {}
+    });
+    expect(result.hostingCents).toBe(HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2);
+  });
+
+  it("replaces the usage estimate with Telnyx invoice actuals + Gemini voice rate", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [],
+      monthUsage: { smsSent: 999, voiceMinutes: 999 },
+      aiSpendMicros: 0,
+      actuals: { telnyxMonthCostCents: 720.4, geminiVoiceCents: 69.75 }
+    });
+    expect(result.usageCents).toBe(Math.round(720.4 + 69.75));
+  });
+
+  it("defaults the Gemini voice top-up to zero when only the Telnyx actual is present", () => {
+    const result = estimateMonthlyPlatformCost({
+      businesses: [],
+      monthUsage: { smsSent: 999, voiceMinutes: 999 },
+      aiSpendMicros: 0,
+      actuals: { telnyxMonthCostCents: 720 }
+    });
+    expect(result.usageCents).toBe(720);
+  });
 });

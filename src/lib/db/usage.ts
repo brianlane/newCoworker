@@ -156,6 +156,89 @@ export async function getFleetCalendarMonthUsageTotals(
   return { smsSent, voiceMinutes: billableSeconds / 60 };
 }
 
+export type BusinessMonthUsage = {
+  smsSent: number;
+  voiceMinutes: number;
+  callsMade: number;
+  peakConcurrentCalls: number;
+};
+
+/**
+ * Per-business variant of {@link getFleetCalendarMonthUsageTotals}: the
+ * same sources (SMS from `daily_usage`, voice from settled
+ * `voice_settlements` seconds) grouped by business for the admin Usage
+ * page and the margin engine. Same paging + ordering rationale.
+ */
+export async function getFleetCalendarMonthUsageByBusiness(
+  client?: SupabaseClient
+): Promise<Map<string, BusinessMonthUsage>> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const monthStartYmd = calendarMonthStartUtcYmd();
+  const pageSize = 1000;
+
+  const byBusiness = new Map<string, BusinessMonthUsage>();
+  const entry = (businessId: string): BusinessMonthUsage => {
+    let usage = byBusiness.get(businessId);
+    if (!usage) {
+      usage = { smsSent: 0, voiceMinutes: 0, callsMade: 0, peakConcurrentCalls: 0 };
+      byBusiness.set(businessId, usage);
+    }
+    return usage;
+  };
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("daily_usage")
+      .select("business_id, sms_sent, calls_made, peak_concurrent_calls")
+      .gte("usage_date", monthStartYmd)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`getFleetCalendarMonthUsageByBusiness: ${error.message}`);
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as {
+        business_id?: string;
+        sms_sent?: number | null;
+        calls_made?: number | null;
+        peak_concurrent_calls?: number | null;
+      };
+      if (!r.business_id) continue;
+      const usage = entry(r.business_id);
+      usage.smsSent += Number(r.sms_sent ?? 0);
+      usage.callsMade += Number(r.calls_made ?? 0);
+      usage.peakConcurrentCalls = Math.max(
+        usage.peakConcurrentCalls,
+        Number(r.peak_concurrent_calls ?? 0)
+      );
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("voice_settlements")
+      .select("business_id, billable_seconds")
+      .gte("created_at", `${monthStartYmd}T00:00:00.000Z`)
+      .order("created_at", { ascending: true })
+      .order("call_control_id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`getFleetCalendarMonthUsageByBusiness: ${error.message}`);
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as { business_id?: string; billable_seconds?: number | null };
+      if (!r.business_id) continue;
+      entry(r.business_id).voiceMinutes += Number(r.billable_seconds ?? 0) / 60;
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  return byBusiness;
+}
+
 export async function incrementUsage(
   businessId: string,
   field: UsageField,
