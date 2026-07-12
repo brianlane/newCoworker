@@ -69,7 +69,9 @@ export default async function AdminUserDetailPage({
   }
 
   // A user with no auth account AND no business relationship doesn't exist.
-  if (!authUser && ownedBusinesses.length === 0 && memberships.length === 0) {
+  // Keyed on the ID lookup, not the profile fetch — an auth-only user whose
+  // getUserById read transiently failed must still render, not 404.
+  if (!authUserId && ownedBusinesses.length === 0 && memberships.length === 0) {
     notFound();
   }
 
@@ -110,7 +112,7 @@ export default async function AdminUserDetailPage({
           <h1 className="text-2xl font-bold text-parchment mt-1 break-all">{email}</h1>
           <div className="flex items-center gap-2 mt-2">
             <Badge variant={segmentBadgeVariant(segment)}>{segment}</Badge>
-            {!authUser && <Badge variant="pending">no login yet</Badge>}
+            {!authUserId && <Badge variant="pending">no login yet</Badge>}
           </div>
         </div>
         <DeleteUserButton email={email} ownedBusinessCount={ownedBusinesses.length} />
@@ -125,7 +127,7 @@ export default async function AdminUserDetailPage({
           <div>
             <dt className="text-parchment/40 text-xs">Auth user id</dt>
             <dd className="text-parchment font-mono text-xs break-all">
-              {authUser?.id ?? "– (invited, never signed up)"}
+              {authUser?.id ?? authUserId ?? "– (invited, never signed up)"}
             </dd>
           </div>
           <div>
@@ -148,7 +150,9 @@ export default async function AdminUserDetailPage({
             <dt className="text-parchment/40 text-xs">Email confirmed</dt>
             <dd>
               {!authUser ? (
-                <span className="text-parchment/40 text-xs">– (no account)</span>
+                <span className="text-parchment/40 text-xs">
+                  {authUserId ? "– (unavailable)" : "– (no account)"}
+                </span>
               ) : authUser.email_confirmed_at ? (
                 <Badge variant="success">confirmed</Badge>
               ) : (

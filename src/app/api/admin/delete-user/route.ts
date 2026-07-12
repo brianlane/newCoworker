@@ -146,6 +146,19 @@ export async function DELETE(request: Request) {
           supabaseUserId: authUserId,
           error: error.message
         });
+        // The wipe already happened — record it even though the login
+        // survived, so the destructive half is never audit-invisible.
+        await logAdminAction({
+          adminEmail: admin.email,
+          action: "delete_user",
+          detail: {
+            email,
+            deletedBusinessIds: businessIds,
+            membershipsRemoved,
+            authUserDeleted: false,
+            partial: true
+          }
+        });
         return errorResponse(
           "INTERNAL_SERVER_ERROR",
           "Business data removed but the login could not be deleted — retry to finish",
