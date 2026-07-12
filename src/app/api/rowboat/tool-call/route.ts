@@ -20,6 +20,7 @@ import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import {
   listDocumentsTool,
+  requestDocumentSignatureTool,
   setDocumentExpirationTool,
   shareDocumentTool,
   updateDocumentTool,
@@ -170,6 +171,13 @@ const documentSetExpirationArgsSchema = z.object({
   /** ISO date/datetime; omit/empty/null to clear (never expires). */
   expiresAt: z.string().max(64).nullish()
 });
+const documentRequestSignatureArgsSchema = z.object({
+  document: z.string().min(1).max(300),
+  signerName: z.string().min(1).max(200),
+  phone: phoneSchema.optional(),
+  email: z.string().email().optional(),
+  message: z.string().max(1000).optional()
+});
 const notifyTeamArgsSchema = z.object({
   /** What the team needs to do, in plain language. */
   message: z.string().min(1).max(1000),
@@ -297,6 +305,10 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
     agentKey: "dashboard",
     toolKey: "document_set_expiration"
   },
+  dashboard_document_request_signature: {
+    agentKey: "dashboard",
+    toolKey: "document_request_signature"
+  },
   ...Object.fromEntries(
     Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
       name,
@@ -388,6 +400,23 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       return setDocumentExpirationTool(
         businessId,
         { documentRef: parsed.data.document, expiresAt: parsed.data.expiresAt ?? null },
+        toolSurface(name)
+      );
+    }
+    case "document_request_signature": {
+      const parsed = documentRequestSignatureArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return requestDocumentSignatureTool(
+        businessId,
+        {
+          documentRef: parsed.data.document,
+          signerName: parsed.data.signerName,
+          ...(parsed.data.phone ? { phone: parsed.data.phone } : {}),
+          ...(parsed.data.email ? { email: parsed.data.email } : {}),
+          ...(parsed.data.message ? { message: parsed.data.message } : {})
+        },
         toolSurface(name)
       );
     }

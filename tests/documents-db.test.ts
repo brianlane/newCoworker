@@ -11,17 +11,24 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  completeSignatureRequest,
+  voidAllSignatureRequestsForDocument,
   countBusinessDocuments,
   deleteBusinessDocument,
   getBusinessDocument,
   getDocumentShareByTokenSha,
+  getDocumentSignatureRequestByTokenSha,
   insertBusinessDocument,
   insertDocumentShare,
+  insertDocumentSignatureRequest,
   listBusinessDocuments,
   listDocumentShares,
+  listDocumentSignatureRequests,
+  markSignatureRequestViewed,
   patchBusinessDocument,
   revokeDocumentShare,
-  touchDocumentShareAccess
+  touchDocumentShareAccess,
+  voidSignatureRequest
 } from "@/lib/documents/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -31,7 +38,7 @@ type Chain = Record<string, ReturnType<typeof vi.fn>> & PromiseLike<unknown>;
 
 function chain(terminal?: unknown): Chain {
   const c: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "delete", "eq", "not", "order"]) {
+  for (const m of ["select", "insert", "update", "delete", "eq", "in", "not", "order"]) {
     c[m] = vi.fn(() => c);
   }
   c.single = vi.fn();
@@ -253,6 +260,165 @@ describe("revokeDocumentShare", () => {
     const c = chain({ data: null, error: { message: "rvk" } });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await expect(revokeDocumentShare(BIZ, "s1")).rejects.toThrow(/rvk/);
+  });
+});
+
+describe("insertDocumentSignatureRequest", () => {
+  const row = {
+    id: "44444444-4444-4444-8444-444444444444",
+    business_id: BIZ,
+    document_id: DOC,
+    token_sha256: "cafebabe",
+    signer_name: "Jane",
+    expires_at: "2026-08-01T00:00:00Z"
+  };
+
+  it("inserts and returns the row (explicit client)", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: { ...row, status: "sent" }, error: null });
+    const out = await insertDocumentSignatureRequest(row, makeDb(c));
+    expect(out.status).toBe("sent");
+  });
+
+  it("throws on error (default client)", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: null, error: { message: "sig-ins" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(insertDocumentSignatureRequest(row)).rejects.toThrow(/sig-ins/);
+  });
+});
+
+describe("getDocumentSignatureRequestByTokenSha", () => {
+  it("looks up by sha (explicit client)", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { id: "r1" }, error: null });
+    expect(await getDocumentSignatureRequestByTokenSha("abc", makeDb(c))).toEqual({ id: "r1" });
+    expect(c.eq).toHaveBeenCalledWith("token_sha256", "abc");
+  });
+
+  it("returns null on no row (default client)", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await getDocumentSignatureRequestByTokenSha("abc")).toBeNull();
+  });
+
+  it("throws on error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "sig-tok" } });
+    await expect(getDocumentSignatureRequestByTokenSha("abc", makeDb(c))).rejects.toThrow(
+      /sig-tok/
+    );
+  });
+});
+
+describe("listDocumentSignatureRequests", () => {
+  it("lists for the business, optionally filtered by document (explicit client)", async () => {
+    const c = chain({ data: [{ id: "r1" }], error: null });
+    expect(await listDocumentSignatureRequests(BIZ, DOC, makeDb(c))).toEqual([{ id: "r1" }]);
+    expect(c.eq).toHaveBeenCalledWith("document_id", DOC);
+  });
+
+  it("returns [] for null data without a document filter (default client)", async () => {
+    const c = chain({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await listDocumentSignatureRequests(BIZ)).toEqual([]);
+    expect(c.eq).not.toHaveBeenCalledWith("document_id", expect.anything());
+  });
+
+  it("throws on error", async () => {
+    const c = chain({ data: null, error: { message: "sig-lst" } });
+    await expect(listDocumentSignatureRequests(BIZ, undefined, makeDb(c))).rejects.toThrow(
+      /sig-lst/
+    );
+  });
+});
+
+describe("markSignatureRequestViewed", () => {
+  it("flips sent → viewed conditionally (explicit client)", async () => {
+    const c = chain({ error: null });
+    await markSignatureRequestViewed("r1", makeDb(c));
+    expect(c.update).toHaveBeenCalledWith({ status: "viewed" });
+    expect(c.eq).toHaveBeenCalledWith("status", "sent");
+  });
+
+  it("throws on error (default client)", async () => {
+    const c = chain({ error: { message: "sig-view" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(markSignatureRequestViewed("r1")).rejects.toThrow(/sig-view/);
+  });
+});
+
+describe("completeSignatureRequest", () => {
+  const fields = {
+    signature_name: "Jane Customer",
+    signed_at: "2026-07-11T12:00:00Z",
+    signer_ip: "203.0.113.9",
+    signer_user_agent: "UA",
+    content_sha256: "deadbeef",
+    signed_content_md: "## Terms"
+  };
+
+  it("signs conditionally on a signable status and reports the count (explicit client)", async () => {
+    const c = chain({ data: [{ id: "r1" }], error: null });
+    expect(await completeSignatureRequest("r1", fields, makeDb(c))).toBe(1);
+    expect(c.update).toHaveBeenCalledWith({ ...fields, status: "signed" });
+    expect(c.in).toHaveBeenCalledWith("status", ["sent", "viewed"]);
+  });
+
+  it("reports 0 when the race was lost", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await completeSignatureRequest("r1", fields, makeDb(c))).toBe(0);
+    const cNull = chain({ data: null, error: null });
+    expect(await completeSignatureRequest("r1", fields, makeDb(cNull))).toBe(0);
+  });
+
+  it("throws on error (default client)", async () => {
+    const c = chain({ data: null, error: { message: "sig-cmp" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(completeSignatureRequest("r1", fields)).rejects.toThrow(/sig-cmp/);
+  });
+});
+
+describe("voidSignatureRequest", () => {
+  it("voids signable rows and reports the count (explicit client, no document filter)", async () => {
+    const c = chain({ data: [{ id: "r1" }], error: null });
+    expect(await voidSignatureRequest(BIZ, "r1", undefined, makeDb(c))).toBe(1);
+    expect(c.update).toHaveBeenCalledWith({ status: "void" });
+    expect(c.in).toHaveBeenCalledWith("status", ["sent", "viewed"]);
+    expect(c.eq).not.toHaveBeenCalledWith("document_id", expect.anything());
+  });
+
+  it("scopes to the document when given and reports 0 on a signed/foreign row", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await voidSignatureRequest(BIZ, "r1", DOC, makeDb(c))).toBe(0);
+    expect(c.eq).toHaveBeenCalledWith("document_id", DOC);
+    const cNull = chain({ data: null, error: null });
+    expect(await voidSignatureRequest(BIZ, "r1", DOC, makeDb(cNull))).toBe(0);
+  });
+
+  it("throws on error (default client)", async () => {
+    const c = chain({ data: null, error: { message: "sig-void" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(voidSignatureRequest(BIZ, "r1")).rejects.toThrow(/sig-void/);
+  });
+});
+
+describe("voidAllSignatureRequestsForDocument", () => {
+  it("voids only still-signable rows for the document and counts them (explicit client)", async () => {
+    const c = chain({ data: [{ id: "r1" }, { id: "r2" }], error: null });
+    expect(await voidAllSignatureRequestsForDocument(BIZ, DOC, makeDb(c))).toBe(2);
+    expect(c.update).toHaveBeenCalledWith({ status: "void" });
+    expect(c.eq).toHaveBeenCalledWith("document_id", DOC);
+    expect(c.in).toHaveBeenCalledWith("status", ["sent", "viewed"]);
+    const cNull = chain({ data: null, error: null });
+    expect(await voidAllSignatureRequestsForDocument(BIZ, DOC, makeDb(cNull))).toBe(0);
+  });
+
+  it("throws on error (default client)", async () => {
+    const c = chain({ data: null, error: { message: "sig-sweep" } });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await expect(voidAllSignatureRequestsForDocument(BIZ, DOC)).rejects.toThrow(/sig-sweep/);
   });
 });
 

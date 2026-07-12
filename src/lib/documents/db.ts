@@ -1,12 +1,13 @@
 /**
  * Business Documents knowledge library — DB access.
  *
- * `business_documents` holds owner-uploaded documents (price sheets, menus,
- * policies, SOPs) with the agent-facing extracted markdown (`content_md`);
- * `business_document_shares` holds tokenized, revocable share links. Both
- * tables are service-role-only (RLS on, no policies) — every access flows
- * through the Next.js server after its own auth checks, matching the
- * customer_profiles / vps_ssh_keys posture.
+ * `business_documents` holds owner-uploaded documents (price sheets,
+ * policies, contracts, SOPs) with the agent-facing extracted markdown
+ * (`content_md`); `business_document_shares` holds tokenized, revocable
+ * share links; `document_signature_requests` holds e-sign requests with
+ * their audit trail. All tables are service-role-only (RLS on, no policies)
+ * — every access flows through the Next.js server after its own auth
+ * checks, matching the customer_profiles / vps_ssh_keys posture.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -224,6 +225,175 @@ export async function revokeDocumentShare(
   const query = documentId ? base.eq("document_id", documentId) : base;
   const { data, error } = await query.select("id");
   if (error) throw new Error(`revokeDocumentShare: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+export type DocumentSignatureRequestStatus = "sent" | "viewed" | "signed" | "void";
+
+export type DocumentSignatureRequestRow = {
+  id: string;
+  business_id: string;
+  document_id: string;
+  token_sha256: string;
+  signer_name: string;
+  signer_email: string;
+  signer_phone: string;
+  message: string;
+  status: DocumentSignatureRequestStatus;
+  signature_name: string | null;
+  signed_at: string | null;
+  signer_ip: string | null;
+  signer_user_agent: string | null;
+  content_sha256: string | null;
+  /** Snapshot of content_md at signing — what the certificate renders. */
+  signed_content_md: string | null;
+  expires_at: string;
+  created_at: string;
+};
+
+export async function insertDocumentSignatureRequest(
+  row: Pick<
+    DocumentSignatureRequestRow,
+    "id" | "business_id" | "document_id" | "token_sha256" | "signer_name" | "expires_at"
+  > &
+    Partial<Pick<DocumentSignatureRequestRow, "signer_email" | "signer_phone" | "message">>,
+  client?: SupabaseClient
+): Promise<DocumentSignatureRequestRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("document_signature_requests")
+    .insert({ ...row })
+    .select()
+    .single();
+  if (error) throw new Error(`insertDocumentSignatureRequest: ${error.message}`);
+  return data as DocumentSignatureRequestRow;
+}
+
+export async function getDocumentSignatureRequestByTokenSha(
+  tokenSha256: string,
+  client?: SupabaseClient
+): Promise<DocumentSignatureRequestRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("document_signature_requests")
+    .select()
+    .eq("token_sha256", tokenSha256)
+    .maybeSingle();
+  if (error) throw new Error(`getDocumentSignatureRequestByTokenSha: ${error.message}`);
+  return (data as DocumentSignatureRequestRow | null) ?? null;
+}
+
+export async function listDocumentSignatureRequests(
+  businessId: string,
+  documentId?: string,
+  client?: SupabaseClient
+): Promise<DocumentSignatureRequestRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const base = db
+    .from("document_signature_requests")
+    .select()
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false });
+  const query = documentId ? base.eq("document_id", documentId) : base;
+  const { data, error } = await query;
+  if (error) throw new Error(`listDocumentSignatureRequests: ${error.message}`);
+  return (data ?? []) as DocumentSignatureRequestRow[];
+}
+
+/**
+ * First-open stamp: `sent → viewed`. Conditional on the current status so a
+ * signed/void request is never regressed. Best-effort — the caller ignores
+ * the outcome (a failed stamp must not block rendering the document).
+ */
+export async function markSignatureRequestViewed(
+  requestId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("document_signature_requests")
+    .update({ status: "viewed" })
+    .eq("id", requestId)
+    .eq("status", "sent");
+  if (error) throw new Error(`markSignatureRequestViewed: ${error.message}`);
+}
+
+/**
+ * The signing write. TOCTOU-safe: the update is conditional on the request
+ * still being signable (`status in sent/viewed`), so a double-submit — or a
+ * void racing the signer — loses cleanly. Returns the number of rows
+ * updated (0 = lost the race / no longer signable).
+ */
+export async function completeSignatureRequest(
+  requestId: string,
+  fields: Pick<
+    DocumentSignatureRequestRow,
+    | "signature_name"
+    | "signed_at"
+    | "signer_ip"
+    | "signer_user_agent"
+    | "content_sha256"
+    | "signed_content_md"
+  >,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("document_signature_requests")
+    .update({ ...fields, status: "signed" })
+    .eq("id", requestId)
+    .in("status", ["sent", "viewed"])
+    .select("id");
+  if (error) throw new Error(`completeSignatureRequest: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+/**
+ * Owner-side void of an unsigned request (kills the link). `documentId`
+ * (when given) scopes the void to that document, mirroring
+ * revokeDocumentShare. Signed requests are immutable evidence and cannot be
+ * voided. Returns the number of rows voided (0 = no signable match).
+ */
+export async function voidSignatureRequest(
+  businessId: string,
+  requestId: string,
+  documentId?: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const base = db
+    .from("document_signature_requests")
+    .update({ status: "void" })
+    .eq("business_id", businessId)
+    .eq("id", requestId)
+    .in("status", ["sent", "viewed"]);
+  const query = documentId ? base.eq("document_id", documentId) : base;
+  const { data, error } = await query.select("id");
+  if (error) throw new Error(`voidSignatureRequest: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+/**
+ * Void EVERY still-signable request for a document. Used as the first
+ * phase of document deletion: after this sweep no request can transition
+ * to signed (the signing write requires status in sent/viewed), which
+ * closes the check-then-delete race against a concurrent signer. Returns
+ * the number of rows voided.
+ */
+export async function voidAllSignatureRequestsForDocument(
+  businessId: string,
+  documentId: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("document_signature_requests")
+    .update({ status: "void" })
+    .eq("business_id", businessId)
+    .eq("document_id", documentId)
+    .in("status", ["sent", "viewed"])
+    .select("id");
+  if (error) throw new Error(`voidAllSignatureRequestsForDocument: ${error.message}`);
   return Array.isArray(data) ? data.length : 0;
 }
 

@@ -28,6 +28,7 @@ const PRUNED_TABLES = [
   "scheduled_sms",
   "ai_reply_reasoning",
   "business_document_shares",
+  "document_signature_requests",
   "sms_links",
   "sms_owner_reply_prompts"
 ] as const;
@@ -36,6 +37,7 @@ const PRUNED_TABLES = [
 const CENTRAL_ONLY_TABLES = new Set<string>([
   "ai_reply_reasoning",
   "business_document_shares",
+  "document_signature_requests",
   "sms_links"
 ]);
 
@@ -52,7 +54,7 @@ function makeCentralDb(perTable: Partial<Record<string, TableResult>> = {}) {
   const from = vi.fn((table: string) => {
     const result = perTable[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
-    for (const m of ["delete", "eq", "lt", "in", "not", "or"]) {
+    for (const m of ["delete", "eq", "lt", "in", "not", "neq", "or"]) {
       chain[m] = vi.fn().mockReturnValue(chain);
     }
     chain.select = vi.fn().mockResolvedValue(result);
@@ -90,8 +92,8 @@ describe("pruneExpiredContent — central-only tenants", () => {
     expect(res.tables.every((t) => t.box === null)).toBe(true);
     expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(2);
     expect(res.tables.find((t) => t.table === "notifications")?.central).toBe(0);
-    // 10 central deletes, no data-api construction.
-    expect(db.from).toHaveBeenCalledTimes(10);
+    // 11 central deletes, no data-api construction.
+    expect(db.from).toHaveBeenCalledTimes(11);
   });
 
   it.each(PRUNED_TABLES)("throws loudly when the central delete on %s fails", async (table) => {
