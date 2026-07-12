@@ -106,6 +106,56 @@ export type ActivityAlertRow = {
   created_at: string;
 };
 
+/**
+ * Owner-chosen narrowing of the full activity page, from the filter bar's URL
+ * params. Applied at the FETCH layer (not post-merge) so every chunk is full
+ * of the requested kinds — filtering the merged chunk client-side would show
+ * near-empty pages for low-frequency kinds and waste the row budget on
+ * excluded sources.
+ */
+export type ActivityFilter = {
+  /** Kinds to include. Undefined or empty = all kinds. */
+  kinds?: ActivityKind[];
+  /**
+   * Look-back in days. Always clamped to the tier's window server-side, so a
+   * crafted URL can't widen a starter tenant past its 7-day view.
+   */
+  sinceDays?: number;
+};
+
+/** Every activity kind, in the order the filter bar shows them. */
+export const ACTIVITY_KINDS: readonly ActivityKind[] = [
+  "call",
+  "sms_inbound",
+  "sms_outbound",
+  "email_inbound",
+  "email_outbound",
+  "chat",
+  "aiflow",
+  "customer",
+  "alert"
+] as const;
+
+/**
+ * Parse the `kinds` URL param (comma-separated) into valid kinds, dropping
+ * anything outside the union and de-duplicating. Empty result = no filter.
+ */
+export function parseActivityKindsParam(raw: string | undefined): ActivityKind[] {
+  if (!raw) return [];
+  const valid = new Set<string>(ACTIVITY_KINDS);
+  return [...new Set(raw.split(","))].filter((k): k is ActivityKind => valid.has(k));
+}
+
+/**
+ * Parse the `days` URL param into a positive whole look-back, or undefined for
+ * anything malformed/non-positive (= full tier window). The fetch layer clamps
+ * to the tier window, so an oversized value merely means "everything".
+ */
+export function parseActivityDaysParam(raw: string | undefined): number | undefined {
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 export type ActivityFeedInput = {
   calls: ActivityCallRow[];
   smsInbound: ActivitySmsInboundRow[];
@@ -433,15 +483,29 @@ export function activityWindowDays(tier: string | null | undefined): number {
  * additionally bounded to rows STRICTLY OLDER than it (on the same timestamp
  * column it orders by), so "Older activity" walks the whole window instead of
  * stopping at the first `limit` rows.
+ *
+ * `filter` narrows kinds and the look-back at the fetch layer: a source whose
+ * kinds are all excluded is never queried (it resolves to no rows, which the
+ * chunk pagination already treats as "never capped"), and `sinceDays` tightens
+ * — never widens — the tier window.
  */
 async function fetchActivityFeedInput(
   businessId: string,
   limit: number,
   db: SupabaseClient,
   windowDays: number = ACTIVITY_WINDOW_DAYS,
-  before?: string
+  before?: string,
+  filter?: ActivityFilter
 ): Promise<ActivityFeedInput> {
-  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  const kinds = filter?.kinds ?? [];
+  // Empty selection means "everything" — the filter bar treats no chips as all.
+  const wants = (...ks: ActivityKind[]): boolean =>
+    kinds.length === 0 || ks.some((k) => kinds.includes(k));
+  const effectiveDays =
+    filter?.sinceDays && filter.sinceDays > 0 ? Math.min(filter.sinceDays, windowDays) : windowDays;
+  const since = new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000).toISOString();
+  // A skipped source resolves to the same shape rowsOf() reads off a query.
+  const none = Promise.resolve({ data: [], error: null });
   // Cursor filter, applied per-source on its ordering column. `q` is the
   // PostgREST builder mid-chain; `lt`'s return is typed `any` because a
   // recursive structural constraint (lt(): T) sends tsc into TS2589 against
@@ -451,112 +515,146 @@ async function fetchActivityFeedInput(
     column: string
   ) => (before ? q.lt(column, before) : q);
 
+  // When exactly one email kind is selected, push the direction into the query
+  // so the row budget isn't spent on the excluded direction.
+  const emailDirection =
+    kinds.length === 0 || (kinds.includes("email_inbound") && kinds.includes("email_outbound"))
+      ? null
+      : kinds.includes("email_inbound")
+        ? "inbound"
+        : "outbound";
+
   const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, chatRes, flowsRes, custRes, alertRes] =
     await Promise.all([
-      beforeLt(
-        db
-          .from("voice_call_transcripts")
-          .select("caller_e164, status, started_at")
-          .eq("business_id", businessId)
-          .gte("started_at", since),
-        "started_at"
-      )
-        .order("started_at", { ascending: false })
-        .limit(limit),
-      beforeLt(
-        db
-          .from("sms_inbound_jobs")
-          .select("payload, created_at")
-          .eq("business_id", businessId)
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
+      !wants("call")
+        ? none
+        : beforeLt(
+            db
+              .from("voice_call_transcripts")
+              .select("caller_e164, status, started_at")
+              .eq("business_id", businessId)
+              .gte("started_at", since),
+            "started_at"
+          )
+            .order("started_at", { ascending: false })
+            .limit(limit),
+      !wants("sms_inbound")
+        ? none
+        : beforeLt(
+            db
+              .from("sms_inbound_jobs")
+              .select("payload, created_at")
+              .eq("business_id", businessId)
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit),
       // Replies windowed on updated_at (send time) so a recent reply to an
       // older inbound text still appears as outbound activity.
-      beforeLt(
-        db
-          .from("sms_inbound_jobs")
-          .select("payload, updated_at")
-          .eq("business_id", businessId)
-          .not("assistant_reply_text", "is", null)
-          .gte("updated_at", since),
-        "updated_at"
-      )
-        .order("updated_at", { ascending: false })
-        .limit(limit),
-      beforeLt(
-        db
-          .from("sms_outbound_log")
-          .select("to_e164, created_at")
-          .eq("business_id", businessId)
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
+      !wants("sms_outbound")
+        ? none
+        : beforeLt(
+            db
+              .from("sms_inbound_jobs")
+              .select("payload, updated_at")
+              .eq("business_id", businessId)
+              .not("assistant_reply_text", "is", null)
+              .gte("updated_at", since),
+            "updated_at"
+          )
+            .order("updated_at", { ascending: false })
+            .limit(limit),
+      !wants("sms_outbound")
+        ? none
+        : beforeLt(
+            db
+              .from("sms_outbound_log")
+              .select("to_e164, created_at")
+              .eq("business_id", businessId)
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit),
       // Coworker email activity (AiFlow/assistant sends, trigger emails,
       // tenant-mailbox traffic) — the email counterpart of the SMS sources.
-      beforeLt(
-        db
-          .from("email_log")
-          .select("direction, to_email, from_email, subject, created_at")
-          .eq("business_id", businessId)
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
-      beforeLt(
-        db
-          .from("dashboard_chat_jobs")
-          .select("created_at")
-          .eq("business_id", businessId)
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
-      beforeLt(
-        db
-          .from("ai_flow_runs")
-          .select("id, flow_id, status, created_at, ai_flows(name)")
-          .eq("business_id", businessId)
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
-      beforeLt(
-        db
-          .from("contacts")
-          // Only real customer profiles count as "new customer" activity — folded
-          // manual contacts (vendors, services, testers) are not interactions.
-          .select("display_name, customer_e164, created_at")
-          .eq("business_id", businessId)
-          .eq("type", "customer")
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
+      !wants("email_inbound", "email_outbound")
+        ? none
+        : beforeLt(
+            emailDirection
+              ? db
+                  .from("email_log")
+                  .select("direction, to_email, from_email, subject, created_at")
+                  .eq("business_id", businessId)
+                  .eq("direction", emailDirection)
+                  .gte("created_at", since)
+              : db
+                  .from("email_log")
+                  .select("direction, to_email, from_email, subject, created_at")
+                  .eq("business_id", businessId)
+                  .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+      !wants("chat")
+        ? none
+        : beforeLt(
+            db
+              .from("dashboard_chat_jobs")
+              .select("created_at")
+              .eq("business_id", businessId)
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+      !wants("aiflow")
+        ? none
+        : beforeLt(
+            db
+              .from("ai_flow_runs")
+              .select("id, flow_id, status, created_at, ai_flows(name)")
+              .eq("business_id", businessId)
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+      !wants("customer")
+        ? none
+        : beforeLt(
+            db
+              .from("contacts")
+              // Only real customer profiles count as "new customer" activity — folded
+              // manual contacts (vendors, services, testers) are not interactions.
+              .select("display_name, customer_e164, created_at")
+              .eq("business_id", businessId)
+              .eq("type", "customer")
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit),
       // High-signal coworker_logs entries: urgent alerts only. These are the
       // ones dispatched to the notifications page (see evaluateUrgency), so the
       // "/dashboard/notifications" deep link always resolves to the event.
       // `error` rows are intentionally excluded — they aren't dispatched
       // anywhere owner-facing, so there's no page to link them to.
-      beforeLt(
-        db
-          .from("coworker_logs")
-          .select("task_type, log_payload, created_at")
-          .eq("business_id", businessId)
-          .eq("status", "urgent_alert")
-          .gte("created_at", since),
-        "created_at"
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit)
+      !wants("alert")
+        ? none
+        : beforeLt(
+            db
+              .from("coworker_logs")
+              .select("task_type, log_payload, created_at")
+              .eq("business_id", businessId)
+              .eq("status", "urgent_alert")
+              .gte("created_at", since),
+            "created_at"
+          )
+            .order("created_at", { ascending: false })
+            .limit(limit)
     ]);
 
   const calls = rowsOf<ActivityCallRow>(callsRes);
@@ -620,7 +718,8 @@ export async function getRecentActivity(
  * (no alert reservation), plus the `nextBefore` cursor for the next-older
  * chunk — so the whole tier window (e.g. 90 days) is reachable, not just the
  * newest {@link ACTIVITY_FEED_MAX} events. Pass `before` (a previous chunk's
- * `nextBefore`) to walk older history.
+ * `nextBefore`) to walk older history. `filter` narrows kinds and the
+ * look-back window (see {@link ActivityFilter}).
  */
 export async function getActivityFeedPage(
   businessId: string,
@@ -628,6 +727,7 @@ export async function getActivityFeedPage(
     limit?: number;
     before?: string;
     tier?: string | null;
+    filter?: ActivityFilter;
   } = {},
   client?: SupabaseClient
 ): Promise<ActivityFeedPage> {
@@ -646,7 +746,8 @@ export async function getActivityFeedPage(
         opts.limit ?? ACTIVITY_FEED_MAX,
         db,
         activityWindowDays(opts.tier),
-        before
+        before,
+        opts.filter
       )
     );
     if (page.items.length > 0 || !page.nextBefore) return page;
