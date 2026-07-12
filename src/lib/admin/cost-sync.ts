@@ -157,6 +157,12 @@ export async function fetchTelnyxDetailRecords(params: {
  * Records whose day falls before the window start are dropped (they were
  * captured by an earlier sync of a wider window; keeping them would
  * double-count against rows outside the delete range).
+ *
+ * Attribution prefers the DIRECTION-appropriate leg: an outbound record's
+ * cost belongs to the sender (`cli`), an inbound record's to the receiver
+ * (`cld`). Only when the preferred leg matches no tenant DID does the
+ * other leg count (tenant-to-tenant traffic then lands on the paying
+ * side, never on map iteration order).
  */
 export function aggregateTelnyxRecords(params: {
   records: MdrRecord[];
@@ -164,6 +170,13 @@ export function aggregateTelnyxRecords(params: {
   didToBusiness: Map<string, string>;
   windowStartDay: string;
 }): TelnyxCostDailyInsert[] {
+  const matchOwner = (num: string): string | null => {
+    for (const [suffix, owner] of params.didToBusiness) {
+      if (num.endsWith(suffix)) return owner;
+    }
+    return null;
+  };
+
   const buckets = new Map<string, TelnyxCostDailyInsert>();
   for (const record of params.records) {
     const when = str(record.sent_at) || str(record.started_at) || str(record.created_at);
@@ -173,13 +186,8 @@ export function aggregateTelnyxRecords(params: {
     const direction = str(record.direction) || "unknown";
     const cli = str(record.cli).replace(/[^+\d]/g, "");
     const cld = str(record.cld).replace(/[^+\d]/g, "");
-    let businessId: string | null = null;
-    for (const [suffix, owner] of params.didToBusiness) {
-      if (cli.endsWith(suffix) || cld.endsWith(suffix)) {
-        businessId = owner;
-        break;
-      }
-    }
+    const [preferredLeg, fallbackLeg] = direction === "inbound" ? [cld, cli] : [cli, cld];
+    const businessId = matchOwner(preferredLeg) ?? matchOwner(fallbackLeg);
 
     const key = `${day}|${businessId ?? ""}|${direction}`;
     let bucket = buckets.get(key);

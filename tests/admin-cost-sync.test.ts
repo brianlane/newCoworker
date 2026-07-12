@@ -206,6 +206,48 @@ describe("aggregateTelnyxRecords", () => {
     });
   });
 
+  it("prefers the direction-appropriate leg when both legs match tenants", () => {
+    const twoTenants = new Map([
+      ["6025551111", "biz-a"],
+      ["6025552222", "biz-b"]
+    ]);
+    const rows = aggregateTelnyxRecords({
+      records: [
+        // Outbound: sender (cli) pays — biz-a, even though cld is biz-b.
+        {
+          sent_at: "2026-07-10T01:00:00Z",
+          direction: "outbound",
+          cli: "+16025551111",
+          cld: "+16025552222",
+          cost: "0.01"
+        },
+        // Inbound: receiver (cld) pays — biz-b, even though cli is biz-a.
+        {
+          sent_at: "2026-07-10T02:00:00Z",
+          direction: "inbound",
+          cli: "+16025551111",
+          cld: "+16025552222",
+          cost: "0.01"
+        },
+        // Outbound from an external number TO a tenant: falls back to cld.
+        {
+          sent_at: "2026-07-10T03:00:00Z",
+          direction: "outbound",
+          cli: "+19995550000",
+          cld: "+16025552222",
+          cost: "0.01"
+        }
+      ],
+      recordType: "messaging",
+      didToBusiness: twoTenants,
+      windowStartDay: "2026-07-05"
+    });
+    const byBusiness = new Map(rows.map((r) => [`${r.business_id}|${r.direction}`, r]));
+    expect(byBusiness.get("biz-a|outbound")?.cost_micros).toBe(10_000);
+    expect(byBusiness.get("biz-b|inbound")?.cost_micros).toBe(10_000);
+    expect(byBusiness.get("biz-b|outbound")?.cost_micros).toBe(10_000);
+  });
+
   it("drops records before the window start and records with no parseable day", () => {
     const rows = aggregateTelnyxRecords({
       records: [
