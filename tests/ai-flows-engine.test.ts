@@ -10,6 +10,7 @@ import {
   evaluateStepCondition,
   extractLeadIdentity,
   extractLinkByText,
+  extractLabeledPhones,
   extractPhones,
   filterRosterByAvailability,
   firstUrlInText,
@@ -365,6 +366,51 @@ describe("extractPhones", () => {
   });
 });
 
+describe("extractLabeledPhones", () => {
+  it("finds phones behind field-style labels", () => {
+    expect(extractLabeledPhones("Phone: (602) 686-6672")).toEqual(["+16026866672"]);
+    expect(extractLabeledPhones("Cell - 480.555.1212")).toEqual(["+14805551212"]);
+    expect(extractLabeledPhones("Mobile no. 602-686-6672")).toEqual(["+16026866672"]);
+    expect(extractLabeledPhones("Telephone # +1 (602) 686-6672")).toEqual(["+16026866672"]);
+    expect(extractLabeledPhones("My phone number is 602-686-6672")).toEqual(["+16026866672"]);
+  });
+
+  it("finds phones behind first-person contact phrasing and trailing labels", () => {
+    expect(extractLabeledPhones("call me at 602-686-6672")).toEqual(["+16026866672"]);
+    expect(extractLabeledPhones("Text me back on 602-686-6672 anytime")).toEqual([
+      "+16026866672"
+    ]);
+    expect(extractLabeledPhones("602-686-6672 (cell)")).toEqual(["+16026866672"]);
+  });
+
+  it("drops labeled numbers that are not real NANP numbers", () => {
+    expect(extractLabeledPhones("Phone: 123-456-7890")).toEqual([]);
+  });
+
+  it("ignores unlabeled numbers — the vendor-footer incident", () => {
+    // A phoneless lead email whose footer said "Call Privyr support at
+    // (415) 555-0126" had the SUPPORT LINE backfilled into lead_phone and
+    // got texted the lead greeting (bug-hunt round 3). Third-party numbers
+    // are not the lead's contact number.
+    expect(
+      extractLabeledPhones("Need help with lead forwarding? Call Privyr support at (415) 555-0126.")
+    ).toEqual([]);
+    expect(extractLabeledPhones("Our office line (303) 555-0142 is on the flyer.")).toEqual([]);
+    expect(extractLabeledPhones("Ref 602-686-6672")).toEqual([]);
+  });
+
+  it("requires the label to be adjacent on the same line", () => {
+    expect(extractLabeledPhones("Phone:\n602-686-6672")).toEqual([]);
+    expect(extractLabeledPhones("phone was disconnected. Support: 602-686-6672")).toEqual([]);
+  });
+
+  it("dedupes and preserves order across multiple labeled numbers", () => {
+    expect(
+      extractLabeledPhones("Phone: 602-686-6672\nCell: 480-555-1212\nphone: (602) 686-6672")
+    ).toEqual(["+16026866672", "+14805551212"]);
+  });
+});
+
 describe("isPhoneFieldName", () => {
   it("matches real phone-field names, token-wise", () => {
     for (const name of [
@@ -409,11 +455,23 @@ describe("buildExtractionPrompt", () => {
     expect(p).toContain("- price\n");
     expect(p).toContain("price $10");
   });
-  it("truncates long page text to maxChars", () => {
-    const long = "x".repeat(50);
-    const p = buildExtractionPrompt([{ name: "a" }], long, 10);
-    expect(p).toContain("x".repeat(10));
-    expect(p).not.toContain("x".repeat(11));
+  it("clips long text from the MIDDLE, keeping the head and the tail", () => {
+    // Head-only clipping dropped the newest content of a trigger's
+    // windowText — a fresh lead block at the end of a long forwarded thread
+    // vanished from the prompt (bug-hunt round 3).
+    const text = "HEAD-" + "x".repeat(50) + "-TAIL";
+    const p = buildExtractionPrompt([{ name: "a" }], text, 20);
+    expect(p).toContain("HEAD-");
+    expect(p).toContain("-TAIL");
+    expect(p).toContain("omitted");
+    expect(p).not.toContain("x".repeat(20));
+  });
+
+  it("leaves text at or under maxChars untouched", () => {
+    const text = "HEAD-" + "x".repeat(10) + "-TAIL";
+    const p = buildExtractionPrompt([{ name: "a" }], text, 20);
+    expect(p).toContain(text);
+    expect(p).not.toContain("omitted");
   });
 });
 
@@ -922,7 +980,7 @@ describe("parseWeeklyWindows", () => {
     expect(parseWeeklyWindows({})).toBeNull();
   });
 
-  it("drops malformed windows (wrong shape, bad times, inverted ranges) and unknown day keys", () => {
+  it("drops malformed windows (wrong shape, bad times, zero-length) and unknown day keys", () => {
     expect(
       parseWeeklyWindows({
         mon: [
@@ -931,7 +989,6 @@ describe("parseWeeklyWindows", () => {
           [42, "17:00"],
           ["09:00", 42],
           ["25:00", "26:00"],
-          ["17:00", "09:00"],
           ["09:00", "09:00"],
           ["09:00", "17:00"]
         ],
@@ -942,7 +999,25 @@ describe("parseWeeklyWindows", () => {
   });
 
   it("returns null when every entry is malformed", () => {
-    expect(parseWeeklyWindows({ mon: [["17:00", "09:00"]] })).toBeNull();
+    expect(parseWeeklyWindows({ mon: [["09:00", "09:00"]] })).toBeNull();
+  });
+
+  it("splits an overnight window across midnight onto the next weekday", () => {
+    // 18:00–02:00 used to be dropped as "inverted", hard-skipping
+    // night-shift members during their actual shift (bug-hunt round 3).
+    expect(parseWeeklyWindows({ tue: [["18:00", "02:00"]] })).toEqual({
+      tue: [[1080, 1440]],
+      wed: [[0, 120]]
+    });
+    // Saturday wraps to Sunday.
+    expect(parseWeeklyWindows({ sat: [["22:00", "01:30"]] })).toEqual({
+      sun: [[0, 90]],
+      sat: [[1320, 1440]]
+    });
+    // "Until midnight" spills nothing onto the next day.
+    expect(parseWeeklyWindows({ fri: [["18:00", "00:00"]] })).toEqual({
+      fri: [[1080, 1440]]
+    });
   });
 });
 
@@ -990,10 +1065,26 @@ describe("filterRosterByAvailability", () => {
   });
 
   it("treats an unparseable schedule as unset (owner typo must not bench an employee)", () => {
-    const roster = [member("garbled", { weekly_schedule: { mon: [["17:00", "09:00"]] } })];
+    const roster = [member("garbled", { weekly_schedule: { mon: [["9am", "5pm"]] } })];
     expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
       "garbled"
     ]);
+  });
+
+  it("keeps a night-shift member available during their overnight window", () => {
+    const roster = [
+      member("night", { weekly_schedule: { mon: [["09:00", "17:00"]], tue: [["18:00", "02:00"]] } })
+    ];
+    const tueNight = { isoDate: "2026-06-09", weekday: "tue" as const, minutes: 22 * 60 };
+    const wedSmallHours = { isoDate: "2026-06-10", weekday: "wed" as const, minutes: 60 };
+    const tueMorning = { isoDate: "2026-06-09", weekday: "tue" as const, minutes: 600 };
+    expect(filterRosterByAvailability(roster, new Set(), tueNight).map((m) => m.id)).toEqual([
+      "night"
+    ]);
+    expect(filterRosterByAvailability(roster, new Set(), wedSmallHours).map((m) => m.id)).toEqual([
+      "night"
+    ]);
+    expect(filterRosterByAvailability(roster, new Set(), tueMorning)).toEqual([]);
   });
 
   it("floats members inside a preferred window to the front, preserving rotation order otherwise", () => {
