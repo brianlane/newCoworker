@@ -8,11 +8,14 @@
  *      route must never orphan live Stripe billing);
  *   2. stops any Hostinger VMs still attached to owned businesses
  *      (best-effort; a 404 means the box is already gone);
- *   3. deletes the Supabase auth user (before the business rows, so a
- *      transient auth failure leaves everything intact and retryable);
- *   4. hard-deletes every owned business row (FK cascades take the tenant's
+ *   3. hard-deletes every owned business row (FK cascades take the tenant's
  *      content, members, logs, and subscription history with it);
- *   5. removes the email's membership grants on OTHER tenants; and
+ *   4. removes the email's membership grants on OTHER tenants;
+ *   5. deletes the Supabase auth user LAST — everything above is keyed on
+ *      the email (not the auth id), so a failure at any step leaves the
+ *      login intact and the whole DELETE retryable; a failure on the final
+ *      auth step is also retryable (the re-run finds no rows and just
+ *      removes the auth user); and
  *   6. writes an admin audit entry (payload-only business ids — the FK
  *      targets are gone).
  *
@@ -107,15 +110,24 @@ export async function DELETE(request: Request) {
       }
     }
 
-    // Auth user first (mirrors delete-client's subscription-less path): a
-    // transient auth failure aborts with all rows intact so the whole DELETE
-    // can simply be retried. "Not found" is the desired end state.
+    // Rows first, auth user LAST. Unlike delete-client (whose only handle on
+    // the auth user is the soon-to-be-deleted business row), everything here
+    // keys on the email — so if a business delete throws partway, the login
+    // still exists and re-running this same DELETE finishes the job. The
+    // opposite order would strand a half-deleted account behind a dead login.
+    for (const businessId of businessIds) {
+      await deleteBusiness(businessId);
+    }
+    const membershipsRemoved = await deleteBusinessMembersByEmail(email);
+
+    // "Not found" is the desired end state; any other auth failure is
+    // surfaced for a retry (which will find zero rows and only do this step).
     const authUserId = await findAuthUserIdByEmail(email);
     if (authUserId) {
       const db = await createSupabaseServiceClient();
       const { error } = await db.auth.admin.deleteUser(authUserId);
       if (error && !/not found|does not exist/i.test(error.message ?? "")) {
-        logger.error("admin.delete-user: auth user delete failed; aborting", {
+        logger.error("admin.delete-user: auth user delete failed", {
           adminEmail: admin.email,
           email,
           supabaseUserId: authUserId,
@@ -123,16 +135,11 @@ export async function DELETE(request: Request) {
         });
         return errorResponse(
           "INTERNAL_SERVER_ERROR",
-          "Auth user delete failed; nothing was removed — retry",
+          "Business data removed but the login could not be deleted — retry to finish",
           500
         );
       }
     }
-
-    for (const businessId of businessIds) {
-      await deleteBusiness(businessId);
-    }
-    const membershipsRemoved = await deleteBusinessMembersByEmail(email);
 
     await logAdminAction({
       adminEmail: admin.email,

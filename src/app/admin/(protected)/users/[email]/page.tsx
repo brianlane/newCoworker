@@ -75,9 +75,17 @@ export default async function AdminUserDetailPage({
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(ownedBusinesses.map((b) => b.id));
 
-  const createdAt = authUser?.created_at ?? ownedBusinesses[0]?.created_at ?? null;
+  // Same fallback chain the engagement table uses: auth account creation,
+  // else the business/invite date — so an invite-only member reads "new"
+  // here too instead of "quiet". The notFound guard above guarantees at
+  // least one source exists (members are ordered oldest-first).
+  const createdAt =
+    authUser?.created_at ??
+    ownedBusinesses[0]?.created_at ??
+    memberships[0]?.created_at ??
+    new Date().toISOString();
   const segment = classifyEngagement({
-    created_at: createdAt ?? new Date(0).toISOString(),
+    created_at: createdAt,
     last_interaction_at: authUser?.last_sign_in_at ?? null
   });
 
@@ -133,7 +141,9 @@ export default async function AdminUserDetailPage({
           <div>
             <dt className="text-parchment/40 text-xs">Email confirmed</dt>
             <dd>
-              {authUser?.email_confirmed_at ? (
+              {!authUser ? (
+                <span className="text-parchment/40 text-xs">– (no account)</span>
+              ) : authUser.email_confirmed_at ? (
                 <Badge variant="success">confirmed</Badge>
               ) : (
                 <Badge variant="pending">unconfirmed</Badge>
