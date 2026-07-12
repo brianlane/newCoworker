@@ -7,6 +7,7 @@ import {
   computeChurnStats,
   computeMrrTrend,
   computeTopBusinessRevenue,
+  dedupeNewestPerBusiness,
   listPaymentProblems,
   type RevenueSubscription
 } from "@/lib/admin/revenue";
@@ -34,7 +35,13 @@ export default async function AdminRevenuePage() {
   const revenueSubs: RevenueSubscription[] = subscriptions;
   const businessName = new Map(businesses.map((b) => [b.id, b.name]));
 
-  const mrr = computeDayCurrentMrr({ subscriptions: revenueSubs, enterpriseDeals: deals });
+  // Newest row per business for the headline KPI — the same view the admin
+  // dashboard's MRR card computes from listSubscriptionsByBusinessIds, so
+  // the two never disagree over historical/overlapping rows.
+  const mrr = computeDayCurrentMrr({
+    subscriptions: dedupeNewestPerBusiness(revenueSubs),
+    enterpriseDeals: deals
+  });
   const arpuCents = computeArpuCents({ subscriptions: revenueSubs, deals });
   const churn = computeChurnStats({ subscriptions: revenueSubs });
   const trend = computeMrrTrend({ subscriptions: revenueSubs, deals, months: 6 });

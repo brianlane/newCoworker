@@ -5,6 +5,7 @@ import {
   computeChurnStats,
   computeMrrTrend,
   computeTopBusinessRevenue,
+  dedupeNewestPerBusiness,
   listPaymentProblems,
   wasSubscriptionActiveAt,
   type RevenueDeal,
@@ -42,6 +43,16 @@ function deal(overrides: Partial<RevenueDeal> = {}): RevenueDeal {
     ...overrides
   };
 }
+
+describe("dedupeNewestPerBusiness", () => {
+  it("keeps only the newest row per business, regardless of input order", () => {
+    const older = sub({ business_id: "b1", created_at: "2026-01-01T00:00:00Z", status: "canceled" });
+    const newer = sub({ business_id: "b1", created_at: "2026-06-01T00:00:00Z" });
+    const other = sub({ business_id: "b2" });
+    expect(dedupeNewestPerBusiness([newer, older, other])).toEqual([newer, other]);
+    expect(dedupeNewestPerBusiness([older, newer, other])).toEqual([newer, other]);
+  });
+});
 
 describe("wasSubscriptionActiveAt", () => {
   const at = new Date("2026-06-15T00:00:00Z");
@@ -246,6 +257,19 @@ describe("computeTopBusinessRevenue", () => {
       now: NOW
     });
     expect(rows).toHaveLength(1);
+  });
+
+  it("counts a business with duplicate active rows once (newest wins) — ARPU, top clients, trend", () => {
+    const dupes = [
+      sub({ business_id: "b1", created_at: "2026-05-01T00:00:00Z" }),
+      sub({ business_id: "b1", created_at: "2026-06-01T00:00:00Z" })
+    ];
+    expect(computeArpuCents({ subscriptions: dupes, deals: [], now: NOW })).toBe(STANDARD_MONTHLY);
+    expect(computeTopBusinessRevenue({ subscriptions: dupes, deals: [], now: NOW })).toEqual([
+      { businessId: "b1", cents: STANDARD_MONTHLY, source: "subscription" }
+    ]);
+    const trend = computeMrrTrend({ subscriptions: dupes, deals: [], months: 1, now: NOW });
+    expect(trend[0].totalCents).toBe(STANDARD_MONTHLY);
   });
 });
 

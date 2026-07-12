@@ -28,6 +28,26 @@ export type RevenueDeal = {
 };
 
 /**
+ * Newest row per business — the same "one subscription per tenant" view the
+ * admin dashboard gets from `listSubscriptionsByBusinessIds`. Current-state
+ * metrics (MRR, ARPU, top clients, trend anchors) must use this so a tenant
+ * with historical/overlapping rows can never count twice; churn and the
+ * payment-problem report deliberately keep the full history.
+ */
+export function dedupeNewestPerBusiness(
+  subscriptions: RevenueSubscription[]
+): RevenueSubscription[] {
+  const newest = new Map<string, RevenueSubscription>();
+  for (const sub of subscriptions) {
+    const existing = newest.get(sub.business_id);
+    if (!existing || Date.parse(sub.created_at) > Date.parse(existing.created_at)) {
+      newest.set(sub.business_id, sub);
+    }
+  }
+  return [...newest.values()];
+}
+
+/**
  * Was this subscription (approximately) live at instant `at`?
  *
  * Matches `computeDayCurrentMrr`'s revenue definition: only `active` rows
@@ -86,8 +106,9 @@ export function computeMrrTrend(params: {
     const monthEnd = new Date(Math.min(Date.UTC(year, month + 1, 1) - 1, now.getTime()));
     const monthStart = new Date(Date.UTC(year, month, 1));
 
-    const subsAtAnchor = params.subscriptions
-      .filter((sub) => wasSubscriptionActiveAt(sub, monthEnd))
+    const subsAtAnchor = dedupeNewestPerBusiness(
+      params.subscriptions.filter((sub) => wasSubscriptionActiveAt(sub, monthEnd))
+    )
       // computeDayCurrentMrr only counts status==="active"; rows that were
       // live at the anchor but have since canceled are re-labeled for the
       // historical evaluation.
@@ -172,7 +193,7 @@ export function computeArpuCents(params: {
 }): number {
   const activeDeals = params.deals.filter((d) => d.status === "active");
   const mrr = computeDayCurrentMrr({
-    subscriptions: params.subscriptions,
+    subscriptions: dedupeNewestPerBusiness(params.subscriptions),
     enterpriseDeals: activeDeals,
     now: params.now
   });
@@ -195,7 +216,7 @@ export function computeTopBusinessRevenue(params: {
 }): BusinessRevenue[] {
   const byBusiness = new Map<string, BusinessRevenue>();
 
-  for (const sub of params.subscriptions) {
+  for (const sub of dedupeNewestPerBusiness(params.subscriptions)) {
     const mrr = computeDayCurrentMrr({
       subscriptions: [sub],
       enterpriseDeals: [],
