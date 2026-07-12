@@ -57,6 +57,19 @@ export function simulateTestAction(
         subject: action.subject,
         body: action.body
       };
+    case "share_document": {
+      // No link is minted (a real share row would be a live capability URL);
+      // the saveAs var gets a placeholder so later templates render visibly.
+      const placeholder = "https://example.invalid/test-share-link";
+      if (action.saveAs) scope.vars[action.saveAs] = placeholder;
+      return {
+        simulated: "share_document",
+        documentId: action.documentId,
+        via: action.via,
+        to: action.to || "(no recipient)",
+        message: action.message
+      };
+    }
     case "notify_owner":
       return { simulated: "notify_owner", message: action.message };
     case "http_call":

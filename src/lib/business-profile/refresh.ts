@@ -11,6 +11,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
+import { listBusinessServices } from "@/lib/services/db";
 import { parseBusinessHours, renderBusinessProfileMd } from "@/lib/business-profile/profile";
 import { logger } from "@/lib/logger";
 
@@ -25,6 +26,15 @@ export async function refreshBusinessProfileMd(
   if (!business) {
     throw new Error(`refreshBusinessProfileMd: business ${businessId} not found`);
   }
+  // Services must never break a profile refresh: a table/read failure just
+  // renders the profile without the catalog section.
+  const services = await listBusinessServices(businessId, db).catch((err: unknown) => {
+    logger.warn("refreshBusinessProfileMd: services list failed; rendering without services", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return [];
+  });
   const md = renderBusinessProfileMd({
     name: business.name,
     ownerName: business.owner_name ?? null,
@@ -32,7 +42,15 @@ export async function refreshBusinessProfileMd(
     phone: business.phone ?? null,
     address: business.address ?? null,
     timezone: business.timezone ?? null,
-    hours: parseBusinessHours(business.business_hours ?? null)
+    hours: parseBusinessHours(business.business_hours ?? null),
+    services: services
+      .filter((s) => s.active)
+      .map((s) => ({
+        name: s.name,
+        description: s.description,
+        durationMinutes: s.duration_minutes,
+        priceText: s.price_text
+      }))
   });
   await patchBusinessConfig(businessId, { profile_md: md }, db);
   return md;

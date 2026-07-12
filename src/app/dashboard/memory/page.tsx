@@ -6,6 +6,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { Card } from "@/components/ui/Card";
 import { MemoryEditor } from "@/components/dashboard/MemoryEditor";
+import { SeoInsightsCard, type SeoReportView } from "@/components/dashboard/SeoInsightsCard";
+import { DocumentsManager } from "@/components/dashboard/DocumentsManager";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +32,27 @@ export default async function MemoryPage() {
   const tier = business?.tier ?? null;
   const config = businessId ? await getBusinessConfig(businessId) : null;
 
+  // Hydrate the SEO card only when the stored report still describes the
+  // CURRENTLY configured site — after the owner changes/clears the URL, a
+  // report for the old site must not keep rendering (the next audit
+  // replaces it).
+  const storedSeoReport =
+    ((config as { seo_report?: SeoReportView | null } | null)?.seo_report ?? null);
+  const seoReportMatchesSite = (() => {
+    if (!storedSeoReport || !business?.website_url) return false;
+    try {
+      const configured = new URL(
+        /^[a-z][a-z0-9+.-]*:\/\//i.test(business.website_url)
+          ? business.website_url
+          : `https://${business.website_url}`
+      );
+      return new URL(storedSeoReport.url).hostname.replace(/^www\./, "") ===
+        configured.hostname.replace(/^www\./, "");
+    } catch {
+      return false;
+    }
+  })();
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -44,17 +67,25 @@ export default async function MemoryPage() {
           <p className="text-parchment/50 text-sm">Memory not initialized. Provision your coworker first.</p>
         </Card>
       ) : (
-        <MemoryEditor
-          businessId={businessId!}
-          tier={tier ?? undefined}
-          businessName={business?.name ?? undefined}
-          businessType={business?.business_type ?? undefined}
-          initialSoul={config.soul_md}
-          initialIdentity={config.identity_md}
-          initialMemory={config.memory_md}
-          initialWebsiteUrl={business?.website_url ?? ""}
-          initialWebsiteMd={config.website_md ?? ""}
-        />
+        <>
+          <MemoryEditor
+            businessId={businessId!}
+            tier={tier ?? undefined}
+            businessName={business?.name ?? undefined}
+            businessType={business?.business_type ?? undefined}
+            initialSoul={config.soul_md}
+            initialIdentity={config.identity_md}
+            initialMemory={config.memory_md}
+            initialWebsiteUrl={business?.website_url ?? ""}
+            initialWebsiteMd={config.website_md ?? ""}
+          />
+          <SeoInsightsCard
+            businessId={businessId!}
+            websiteUrl={business?.website_url ?? null}
+            initialReport={seoReportMatchesSite ? storedSeoReport : null}
+          />
+          <DocumentsManager businessId={businessId!} />
+        </>
       )}
     </div>
   );

@@ -11,6 +11,9 @@
  *   website.md   — optional summarized public-website briefing
  *   profile.md   — optional structured business profile (hours/address/contact)
  *                  rendered from the Settings → Business profile card
+ *   documents.md — optional digest (titles + summaries) of the client-facing
+ *                  business documents on file; full contents stay behind the
+ *                  business_knowledge_lookup / document_share tools
  *
  * We cap each section aggressively. Gemini Live currently accepts fairly
  * long system prompts, but oversized prompts eat into the context window
@@ -26,10 +29,11 @@ export type VaultSnapshot = {
   memory: string;
   website: string;
   profile: string;
+  documents: string;
   /** Sum of characters after truncation — useful for logs. */
   totalChars: number;
   /** Files that actually had non-empty content after trimming. */
-  presentFiles: Array<"soul" | "identity" | "memory" | "website" | "profile">;
+  presentFiles: Array<"soul" | "identity" | "memory" | "website" | "profile" | "documents">;
 };
 
 export type VaultLoaderOptions = {
@@ -46,7 +50,8 @@ const FILES = [
   { key: "identity", name: "identity.md" },
   { key: "memory", name: "memory.md" },
   { key: "website", name: "website.md" },
-  { key: "profile", name: "profile.md" }
+  { key: "profile", name: "profile.md" },
+  { key: "documents", name: "documents.md" }
 ] as const;
 
 function truncate(text: string, maxChars: number): string {
@@ -68,6 +73,7 @@ export async function loadVaultForPrompt(
     memory: "",
     website: "",
     profile: "",
+    documents: "",
     totalChars: 0,
     presentFiles: []
   };
@@ -128,6 +134,12 @@ export function composeVaultPromptSection(snapshot: VaultSnapshot): string {
     sections.push(
       "=== website.md (summarized public website — may be outdated; prefer live tool lookups when available) ===",
       snapshot.website
+    );
+  }
+  if (snapshot.documents) {
+    sections.push(
+      "=== documents.md (business documents on file — offer to text a link via document_share when the caller wants a copy; answer detail questions via business_knowledge_lookup) ===",
+      snapshot.documents
     );
   }
   if (snapshot.memory) {

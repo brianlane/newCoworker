@@ -661,6 +661,15 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Saves the image link as" value={step.saveAs} mono />
         </>
       );
+    case "share_document":
+      return (
+        <>
+          <Row label="Document" value={step.documentTitle ?? step.documentId} />
+          <Row label={step.via === "email" ? "Email to" : "Text to"} value={step.to} mono />
+          {step.messageTemplate && <Row label="Message" value={step.messageTemplate} />}
+          {step.saveAs && <Row label="Saves the link as" value={step.saveAs} mono />}
+        </>
+      );
     case "ring_handoff":
       return (
         <>

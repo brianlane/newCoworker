@@ -154,6 +154,65 @@ describe("scrubDefinition", () => {
     expect((piiDefinition.steps[1] as { to: string }).to).toBe("+15826866672");
     expect((piiDefinition.steps[1] as { body: string }).body).toContain("Amy");
   });
+
+  it("neutralizes share_document tenant ids and prose (trunk + branch arms)", () => {
+    const def = {
+      version: 1 as const,
+      trigger: { channel: "sms" as const, conditions: [] },
+      steps: [
+        {
+          id: "d1",
+          type: "share_document" as const,
+          documentId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          documentTitle: "Amy's secret price sheet",
+          to: "{{trigger.from}}",
+          messageTemplate: "Here is Amy's pricing: {{share_url}}"
+        },
+        {
+          id: "br",
+          type: "branch" as const,
+          question: "path?",
+          branches: [
+            {
+              id: "arm1",
+              label: "A",
+              condition: { var: "x", equals: "y" },
+              steps: [
+                {
+                  id: "d2",
+                  type: "share_document" as const,
+                  documentId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                  to: "{{trigger.from}}"
+                }
+              ]
+            }
+          ],
+          else: [
+            {
+              id: "d3",
+              type: "share_document" as const,
+              documentId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+              to: "{{trigger.from}}"
+            }
+          ]
+        }
+      ]
+    };
+    const scrubbed = scrubDefinition(def as unknown as AiFlowDefinition, { knownNames: ["Amy"] });
+    const json = JSON.stringify(scrubbed);
+    expect(json).not.toContain("aaaaaaaa-aaaa");
+    expect(json).not.toContain("bbbbbbbb-bbbb");
+    expect(json).not.toContain("cccccccc-cccc");
+    expect(json).not.toContain("secret price sheet");
+    expect(json).not.toContain("Amy's pricing");
+    const steps = scrubbed.steps as Record<string, unknown>[];
+    expect(steps[0].documentId).toBe(NIL_UUID);
+    expect(steps[0].documentTitle).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[0].messageTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    const branch = steps[1] as { branches: Array<{ steps: Record<string, unknown>[] }>; else: Record<string, unknown>[] };
+    expect(branch.branches[0].steps[0].documentId).toBe(NIL_UUID);
+    expect(branch.else[0].documentId).toBe(NIL_UUID);
+  });
 });
 
 describe("scrubDefinition strips prose across all step/condition shapes", () => {

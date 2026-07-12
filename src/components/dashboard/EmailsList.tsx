@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import DOMPurify from "dompurify";
 import Link from "next/link";
 import { Card } from "@/components/ui/Card";
@@ -416,6 +417,164 @@ type ComposerState =
   // messages can't leave a stale recipient/subject in the composer.
   | { mode: "reply"; sourceId: string; to: string; subject: string };
 
+/** Enabled tenant_email flows offered as replay targets (built server-side). */
+export type ReplayFlowOption = { id: string; name: string };
+
+/** Inbound AI-mailbox mail that never matched a flow — the replayable set. */
+function isUnmatchedInbound(row: EmailLogRow): boolean {
+  return (
+    row.direction === "inbound" &&
+    row.source === "tenant_mailbox_inbound" &&
+    !row.flow_id &&
+    !row.run_id
+  );
+}
+
+// Keep in sync with MAX_REPLAY_EMAILS in src/lib/email/replay.ts (not imported
+// here to keep the server-only lib out of the client bundle).
+const REPLAY_BATCH_CAP = 100;
+
+type ReplayState =
+  | { status: "idle" }
+  | { status: "confirm"; flowId: string }
+  | { status: "submitting"; flowId: string }
+  | { status: "done"; message: string }
+  | { status: "error"; message: string };
+
+/**
+ * "Replay missed emails" panel: inbound AI-mailbox messages that arrived
+ * while no flow was enabled (flow_id null) can be re-run through an enabled
+ * tenant_email flow as BACKFILL runs — brand-new leads get filed + contacted;
+ * leads already saved as contacts are filed-and-finished without outreach, so
+ * a replay can never double-text.
+ */
+function ReplayPanel({
+  businessId,
+  unmatchedIds,
+  flows,
+  onReplayed
+}: {
+  businessId: string;
+  unmatchedIds: string[];
+  flows: ReplayFlowOption[];
+  onReplayed: () => void;
+}) {
+  const [state, setState] = useState<ReplayState>({ status: "idle" });
+  const batch = unmatchedIds.slice(0, REPLAY_BATCH_CAP);
+
+  async function submit(flowId: string) {
+    setState({ status: "submitting", flowId });
+    try {
+      const res = await fetch(
+        `/api/dashboard/emails/replay?businessId=${encodeURIComponent(businessId)}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ flowId, emailLogIds: batch })
+        }
+      );
+      const json = (await res.json().catch(() => null)) as {
+        data?: { summary?: { enqueued: number; duplicates: number; skipped: number; errors: number } };
+        error?: { message?: string };
+      } | null;
+      if (!res.ok || !json?.data?.summary) {
+        setState({
+          status: "error",
+          message: json?.error?.message ?? "Replay failed — try again in a minute."
+        });
+        return;
+      }
+      const s = json.data.summary;
+      const parts = [`${s.enqueued} queued`];
+      if (s.duplicates > 0) parts.push(`${s.duplicates} already replayed`);
+      if (s.skipped > 0) parts.push(`${s.skipped} skipped`);
+      if (s.errors > 0) parts.push(`${s.errors} failed`);
+      setState({
+        status: "done",
+        message: `${parts.join(", ")}. Leads already in your contacts are filed without re-texting.`
+      });
+      onReplayed();
+    } catch {
+      setState({ status: "error", message: "Replay failed — try again in a minute." });
+    }
+  }
+
+  if (state.status === "done") {
+    return (
+      <div className="rounded-lg border border-signal-teal/30 bg-signal-teal/5 px-4 py-3 text-sm text-parchment/80">
+        {state.message}
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-spark-orange/30 bg-spark-orange/5 px-4 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm text-parchment/80">
+          <span className="font-semibold text-parchment">
+            {unmatchedIds.length} inbox email{unmatchedIds.length === 1 ? "" : "s"}
+          </span>{" "}
+          arrived without an active flow — no contact was created and nobody was texted.
+        </p>
+        {(state.status === "idle" || state.status === "error") && (
+          <button
+            type="button"
+            onClick={() => setState({ status: "confirm", flowId: flows[0].id })}
+            className="rounded-lg border border-spark-orange/40 px-3 py-1.5 text-xs font-semibold text-spark-orange transition-colors hover:bg-spark-orange/10"
+          >
+            Replay through flow…
+          </button>
+        )}
+      </div>
+      {state.status === "error" && (
+        <p className="mt-2 text-xs text-spark-orange">{state.message}</p>
+      )}
+      {(state.status === "confirm" || state.status === "submitting") && (
+        <div className="mt-3 flex flex-wrap items-center gap-3">
+          <label htmlFor="replay-flow" className="text-xs text-parchment/60">
+            Flow
+          </label>
+          <select
+            id="replay-flow"
+            value={state.flowId}
+            onChange={(e) => setState({ status: "confirm", flowId: e.target.value })}
+            disabled={state.status === "submitting"}
+            className="rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-sm text-parchment"
+          >
+            {flows.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => submit(state.flowId)}
+            disabled={state.status === "submitting"}
+            className="rounded-lg bg-spark-orange px-3 py-1.5 text-xs font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+          >
+            {state.status === "submitting"
+              ? "Replaying…"
+              : `Replay ${batch.length} email${batch.length === 1 ? "" : "s"}`}
+          </button>
+          <button
+            type="button"
+            onClick={() => setState({ status: "idle" })}
+            disabled={state.status === "submitting"}
+            className="text-xs text-parchment/50 hover:text-parchment"
+          >
+            Cancel
+          </button>
+          <p className="w-full text-[11px] text-parchment/40">
+            New leads run the full flow (contact + follow-up text). Leads already in your
+            contacts are filed without any outreach.
+          </p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** The address to reply to: the other party on the message. */
 function replyRecipient(row: EmailLogRow): string {
   return (row.direction === "inbound" ? row.from_email : row.to_email) ?? "";
@@ -450,7 +609,8 @@ export function EmailsList({
   rows,
   businessId,
   fromOptions = [],
-  emailContacts = {}
+  emailContacts = {},
+  replayFlows = []
 }: {
   rows: EmailLogRow[];
   businessId: string;
@@ -458,9 +618,13 @@ export function EmailsList({
   fromOptions?: FromOption[];
   /** Lowercase address → contact profile link (built server-side). */
   emailContacts?: EmailContacts;
+  /** Enabled tenant_email flows offered as replay targets (built server-side). */
+  replayFlows?: ReplayFlowOption[];
 }) {
+  const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
+  const unmatchedIds = rows.filter(isUnmatchedInbound).map((r) => r.id);
   const [query, setQuery] = useState("");
   const [sort, setSort] = usePersistentSort(
     "dashboard.emails.sort",
@@ -498,6 +662,16 @@ export function EmailsList({
 
   return (
     <div className="space-y-4">
+      {replayFlows.length > 0 && unmatchedIds.length > 0 && (
+        <ReplayPanel
+          businessId={businessId}
+          unmatchedIds={unmatchedIds}
+          flows={replayFlows}
+          // Re-fetch the server rows so replayed mail shows its flow/run stamp
+          // (and drops out of the unmatched count).
+          onReplayed={() => router.refresh()}
+        />
+      )}
       <div className="flex justify-end">
         {!composer && (
           <button

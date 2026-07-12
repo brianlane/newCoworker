@@ -117,6 +117,37 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         description: "Pin permanent facts (preferences, constraints) to a customer's profile from chat.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "document_list",
+        label: "List documents",
+        description: "List your uploaded business documents (title, audience, expiration) in chat.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "document_share",
+        label: "Share documents",
+        description:
+          "Create an expiring share link for any of your documents and text/email it when you ask.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "document_update",
+        label: "Edit documents",
+        description:
+          "Apply your plain-language edits (\"haircuts are now $40\") to a document's knowledge content. Dashboard only — customers can never change your documents.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "document_set_expiration",
+        label: "Set document expiration",
+        description:
+          "Set, extend, or clear a document's expiration date from chat. Expired documents stop being quoted or shared.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },
@@ -195,6 +226,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         description: "Pin permanent facts (preferences, constraints) to a customer's profile.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "document_share",
+        label: "Share documents",
+        description:
+          "Text a caller an expiring link to a client-facing document (price sheet, menu, policy) when they ask for it.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },
@@ -269,6 +308,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "Pin permanent facts (preferences, constraints) to a customer's profile.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "document_share",
+        label: "Share documents",
+        description:
+          "Text a customer an expiring link to a client-facing document (price sheet, menu, policy) when they ask for it.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },
@@ -313,6 +360,17 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "calendar_book_appointment",
         label: "Book appointments",
         description: "Book appointments on your connected calendar for a website visitor.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        // Webchat sharing is INLINE-ONLY (the link appears in the chat) —
+        // no SMS/email sends from the anonymous surface, preserving the
+        // info + lead-gen threat model.
+        toolKey: "document_share",
+        label: "Share documents",
+        description:
+          "Give a website visitor an expiring link to a client-facing document (price sheet, menu, policy) right in the chat.",
         defaultEnabled: true,
         configurable: true
       }

@@ -76,3 +76,41 @@ export function metaLeadFollowUpTemplate(): AiFlowTemplate {
     }
   };
 }
+
+/**
+ * "Send new leads your price sheet": when a new lead texts in, extract their
+ * details, file them, text them the chosen document as an expiring link, and
+ * wait for the reply. Parameterized on the document because documents are
+ * per-business — the installer passes the owner's picked doc (id + title),
+ * and the save-time validator refuses anything that isn't a real, ready,
+ * client-facing document of theirs.
+ */
+export function priceSheetShareTemplate(documentId: string, documentTitle: string): AiFlowTemplate {
+  return {
+    key: "price_sheet_share",
+    name: "Send new leads your price sheet",
+    definition: {
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        {
+          id: "s_share",
+          type: "share_document",
+          documentId,
+          documentTitle,
+          to: "{{trigger.from}}",
+          via: "sms",
+          messageTemplate: "Thanks for reaching out! Here it is: {{share_url}}",
+          saveAs: "shared_doc_url"
+        },
+        {
+          id: "s_notify_owner",
+          type: "notify_owner",
+          message:
+            "A new texter ({{trigger.from}}) asked about your services — I texted them " +
+            "the document. Link I shared: {{vars.shared_doc_url}}"
+        }
+      ]
+    }
+  };
+}

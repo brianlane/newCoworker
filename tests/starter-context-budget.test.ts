@@ -55,4 +55,18 @@ describe("starterContextBudget", () => {
     expect(res.maxTokens).toBe(50);
     expect(res.overBudget).toBe(true);
   });
+
+  it("counts the documents digest (documents.md) against the starter budget", () => {
+    const atLimit = starterVaultBudgetStatus("", "", "", "", STARTER_VAULT_MAX_ESTIMATED_TOKENS, "d".repeat(8000));
+    expect(atLimit.estimatedTotal).toBe(2000);
+    expect(atLimit.overBudget).toBe(false);
+    const over = starterVaultBudgetStatus("s".repeat(4), "", "", "", STARTER_VAULT_MAX_ESTIMATED_TOKENS, "d".repeat(8000));
+    expect(over.overBudget).toBe(true);
+  });
+
+  it("defaults documentsMd to empty for older callers", () => {
+    const legacy = starterVaultBudgetStatus("abcd", "abcd", "abcd", "abcd");
+    const explicit = starterVaultBudgetStatus("abcd", "abcd", "abcd", "abcd", undefined, "");
+    expect(legacy).toEqual(explicit);
+  });
 });

@@ -1,0 +1,467 @@
+"use client";
+
+/**
+ * Business Documents manager (Dashboard → Memory → Documents).
+ *
+ * Upload real business documents (price sheets, menus, policies, SOPs) that
+ * every coworker surface answers from and shares on request. Each document
+ * carries an audience (clients / staff / both), an optional expiration date
+ * (expired docs go inert to the agent and the daily sweep reminds the
+ * owner), an editable agent-facing markdown body, and a list of active
+ * share links with one-click revoke.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+
+type DocumentItem = {
+  id: string;
+  title: string;
+  category: string;
+  audience: "clients" | "staff" | "both";
+  mime_type: string;
+  byte_size: number;
+  content_md: string;
+  summary: string;
+  status: "processing" | "ready" | "failed";
+  error_detail: string | null;
+  expires_at: string | null;
+  created_at: string;
+};
+
+type ShareItem = {
+  id: string;
+  shared_with: string;
+  channel: string;
+  expires_at: string;
+  revoked_at: string | null;
+  access_count: number;
+  created_at: string;
+};
+
+const inputClass =
+  "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
+const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
+
+const AUDIENCE_LABELS: Record<DocumentItem["audience"], string> = {
+  clients: "Customers",
+  staff: "Internal only",
+  both: "Customers + internal"
+};
+
+function expiryBadge(doc: DocumentItem): { text: string; tone: string } | null {
+  if (!doc.expires_at) return null;
+  const ms = Date.parse(doc.expires_at);
+  if (!Number.isFinite(ms)) return null;
+  const days = Math.ceil((ms - Date.now()) / 86_400_000);
+  if (days <= 0) return { text: "Expired", tone: "text-spark-orange border-spark-orange/50" };
+  if (days <= 7) {
+    return { text: `Expires in ${days}d`, tone: "text-spark-orange border-spark-orange/40" };
+  }
+  return {
+    text: `Expires ${doc.expires_at.slice(0, 10)}`,
+    tone: "text-parchment/50 border-parchment/20"
+  };
+}
+
+export function DocumentsManager({ businessId }: { businessId: string }) {
+  const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [uploadAudience, setUploadAudience] = useState<DocumentItem["audience"]>("both");
+  const [uploadTitle, setUploadTitle] = useState("");
+  const [uploadCategory, setUploadCategory] = useState("");
+  const [uploadExpires, setUploadExpires] = useState("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  // Per-document expanded panel state.
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [draftContent, setDraftContent] = useState("");
+  const [draftExpires, setDraftExpires] = useState("");
+  const [savingDoc, setSavingDoc] = useState(false);
+  const [shares, setShares] = useState<ShareItem[]>([]);
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/dashboard/documents?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as { ok: boolean; data?: { documents?: DocumentItem[] } };
+      if (json.ok && json.data?.documents) setDocuments(json.data.documents);
+    } catch {
+      /* keep the last list */
+    } finally {
+      setLoading(false);
+    }
+  }, [businessId]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function upload() {
+    const file = fileRef.current?.files?.[0];
+    if (!file) {
+      setError("Pick a file first (PDF, text, markdown, or CSV).");
+      return;
+    }
+    setError(null);
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.set("businessId", businessId);
+      form.set("file", file);
+      if (uploadTitle.trim()) form.set("title", uploadTitle.trim());
+      if (uploadCategory.trim()) form.set("category", uploadCategory.trim());
+      form.set("audience", uploadAudience);
+      if (uploadExpires) form.set("expiresAt", uploadExpires);
+      const res = await fetch("/api/dashboard/documents", { method: "POST", body: form });
+      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? "Upload failed");
+        return;
+      }
+      setUploadTitle("");
+      setUploadCategory("");
+      setUploadExpires("");
+      if (fileRef.current) fileRef.current.value = "";
+      await refresh();
+    } catch {
+      setError("Upload failed — try again.");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function openDocument(doc: DocumentItem) {
+    if (openId === doc.id) {
+      setOpenId(null);
+      return;
+    }
+    setOpenId(doc.id);
+    setDraftContent(doc.content_md);
+    setDraftExpires(doc.expires_at ? doc.expires_at.slice(0, 10) : "");
+    setShares([]);
+    try {
+      const res = await fetch(
+        `/api/dashboard/documents/${doc.id}/shares?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as { ok: boolean; data?: { shares?: ShareItem[] } };
+      if (json.ok && json.data?.shares) setShares(json.data.shares);
+    } catch {
+      /* shares panel stays empty */
+    }
+  }
+
+  async function patchDocument(docId: string, patch: Record<string, unknown>) {
+    setSavingDoc(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/dashboard/documents/${docId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, ...patch })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? "Save failed");
+        return;
+      }
+      await refresh();
+    } catch {
+      setError("Save failed — try again.");
+    } finally {
+      setSavingDoc(false);
+    }
+  }
+
+  async function removeDocument(docId: string) {
+    if (!window.confirm("Delete this document? The coworker stops using it and share links die.")) {
+      return;
+    }
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/dashboard/documents/${docId}?businessId=${encodeURIComponent(businessId)}`,
+        { method: "DELETE" }
+      );
+      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? "Delete failed");
+        return;
+      }
+      if (openId === docId) setOpenId(null);
+      await refresh();
+    } catch {
+      setError("Delete failed — try again.");
+    }
+  }
+
+  async function revokeShare(docId: string, shareId: string) {
+    try {
+      const res = await fetch(`/api/dashboard/documents/${docId}/shares`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, shareId })
+      });
+      const json = (await res.json()) as { ok: boolean };
+      if (json.ok) {
+        setShares((prev) =>
+          prev.map((s) => (s.id === shareId ? { ...s, revoked_at: new Date().toISOString() } : s))
+        );
+      }
+    } catch {
+      /* leave as-is */
+    }
+  }
+
+  return (
+    <Card>
+      <h2 className="text-lg font-semibold text-parchment">Documents</h2>
+      <p className="mt-1 text-sm text-parchment/50">
+        Upload price sheets, menus, policies, or internal SOPs. Your coworker answers questions
+        from them and can text/email customers an expiring link on request. Internal-only
+        documents never reach customers, and expired documents stop being quoted or shared
+        automatically.
+      </p>
+
+      {/* ── Upload ─────────────────────────────────────────────────────── */}
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        <div>
+          <label className={labelClass}>File (PDF, text, markdown, or CSV — max 10 MB)</label>
+          <input
+            ref={fileRef}
+            type="file"
+            accept=".pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv"
+            className="block w-full text-sm text-parchment/70 file:mr-3 file:rounded-md file:border-0 file:bg-signal-teal/20 file:px-3 file:py-1.5 file:text-sm file:text-signal-teal"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Title (optional — defaults to the file name)</label>
+          <input
+            className={inputClass}
+            value={uploadTitle}
+            onChange={(e) => setUploadTitle(e.target.value)}
+            placeholder="Summer price list"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Category (optional)</label>
+          <input
+            className={inputClass}
+            value={uploadCategory}
+            onChange={(e) => setUploadCategory(e.target.value)}
+            placeholder="pricing / policies / menu"
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Who can the coworker use it with?</label>
+          <select
+            className={inputClass}
+            value={uploadAudience}
+            onChange={(e) => setUploadAudience(e.target.value as DocumentItem["audience"])}
+          >
+            <option value="both">Customers + internal</option>
+            <option value="clients">Customers</option>
+            <option value="staff">Internal only (never shown to customers)</option>
+          </select>
+        </div>
+        <div>
+          <label className={labelClass}>Expires (optional)</label>
+          <input
+            type="date"
+            className={inputClass}
+            value={uploadExpires}
+            onChange={(e) => setUploadExpires(e.target.value)}
+          />
+        </div>
+        <div className="flex items-end">
+          <Button type="button" variant="primary" size="sm" onClick={upload} loading={uploading}>
+            Upload document
+          </Button>
+        </div>
+      </div>
+      {error ? (
+        <p className="mt-2 text-xs text-spark-orange" role="alert">
+          {error}
+        </p>
+      ) : null}
+
+      {/* ── List ───────────────────────────────────────────────────────── */}
+      <div className="mt-5 space-y-2">
+        {loading ? (
+          <p className="text-sm text-parchment/40">Loading documents…</p>
+        ) : documents.length === 0 ? (
+          <p className="text-sm text-parchment/40">No documents yet.</p>
+        ) : (
+          documents.map((doc) => {
+            const badge = expiryBadge(doc);
+            const open = openId === doc.id;
+            return (
+              <div key={doc.id} className="rounded-md border border-parchment/10 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void openDocument(doc)}
+                    className="text-sm font-medium text-parchment hover:text-signal-teal"
+                  >
+                    {doc.title}
+                  </button>
+                  <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
+                    {doc.category}
+                  </span>
+                  <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
+                    {AUDIENCE_LABELS[doc.audience]}
+                  </span>
+                  {doc.status !== "ready" && (
+                    <span
+                      className={`rounded border px-1.5 py-0.5 text-[11px] ${
+                        doc.status === "failed"
+                          ? "border-spark-orange/50 text-spark-orange"
+                          : "border-parchment/20 text-parchment/50"
+                      }`}
+                    >
+                      {doc.status === "failed" ? "Ingest failed" : "Processing"}
+                    </span>
+                  )}
+                  {badge && (
+                    <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
+                      {badge.text}
+                    </span>
+                  )}
+                  <span className="ml-auto text-[11px] text-parchment/35">
+                    {(doc.byte_size / 1024).toFixed(0)} KB
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void removeDocument(doc.id)}
+                    className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
+                  >
+                    Delete
+                  </button>
+                </div>
+                {doc.summary && !open ? (
+                  <p className="mt-1 text-xs text-parchment/45">{doc.summary}</p>
+                ) : null}
+                {doc.status === "failed" && doc.error_detail ? (
+                  <p className="mt-1 text-xs text-spark-orange/80">
+                    Could not read this file ({doc.error_detail}). You can paste the content
+                    manually below.
+                  </p>
+                ) : null}
+
+                {open && (
+                  <div className="mt-3 space-y-3 border-t border-parchment/10 pt-3">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass}>Audience</label>
+                        <select
+                          className={inputClass}
+                          value={doc.audience}
+                          onChange={(e) => void patchDocument(doc.id, { audience: e.target.value })}
+                        >
+                          <option value="both">Customers + internal</option>
+                          <option value="clients">Customers</option>
+                          <option value="staff">Internal only</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Expires</label>
+                        <div className="flex gap-2">
+                          <input
+                            type="date"
+                            className={inputClass}
+                            value={draftExpires}
+                            onChange={(e) => setDraftExpires(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            loading={savingDoc}
+                            onClick={() =>
+                              void patchDocument(doc.id, {
+                                expiresAt: draftExpires ? draftExpires : null
+                              })
+                            }
+                          >
+                            Set
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>
+                        What the coworker knows from this document (editable)
+                      </label>
+                      <textarea
+                        className={`${inputClass} min-h-40 font-mono text-xs`}
+                        value={draftContent}
+                        onChange={(e) => setDraftContent(e.target.value)}
+                      />
+                      <div className="mt-2">
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          loading={savingDoc}
+                          onClick={() => void patchDocument(doc.id, { contentMd: draftContent })}
+                        >
+                          Save content
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <label className={labelClass}>Share links</label>
+                      {shares.length === 0 ? (
+                        <p className="text-xs text-parchment/40">
+                          No links yet. Ask your coworker to share this document, or use it in an
+                          AiFlow.
+                        </p>
+                      ) : (
+                        <ul className="space-y-1">
+                          {shares.map((s) => {
+                            const dead =
+                              Boolean(s.revoked_at) || Date.parse(s.expires_at) <= Date.now();
+                            return (
+                              <li
+                                key={s.id}
+                                className="flex flex-wrap items-center gap-2 text-xs text-parchment/60"
+                              >
+                                <span>{s.shared_with || "(link)"}</span>
+                                <span className="text-parchment/35">via {s.channel}</span>
+                                <span className="text-parchment/35">
+                                  opened {s.access_count}×
+                                </span>
+                                {dead ? (
+                                  <span className="text-parchment/35">
+                                    {s.revoked_at ? "revoked" : "expired"}
+                                  </span>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => void revokeShare(doc.id, s.id)}
+                                    className="text-spark-orange/80 hover:text-spark-orange"
+                                  >
+                                    Revoke
+                                  </button>
+                                )}
+                              </li>
+                            );
+                          })}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
+  );
+}
