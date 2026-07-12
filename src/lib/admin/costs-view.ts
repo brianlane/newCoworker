@@ -148,7 +148,14 @@ export function buildRenewalCalendar(params: {
       : (params.businessNames.get(businessId) ?? `${businessId.slice(0, 8)}…`);
 
   for (const row of params.hostingerRows) {
-    const renewing = row.is_auto_renewed === true && row.status !== "cancelled";
+    // Same not-renewing rule as the Costs fleet table and the
+    // billing-posture cron: an explicit auto-renew=false OR a terminal
+    // status wins; a null flag on a live subscription counts as renewing.
+    const lapsing =
+      row.is_auto_renewed === false ||
+      row.status === "non_renewing" ||
+      row.status === "cancelled";
+    const renewing = !lapsing;
     const at = renewing ? row.next_billing_at : (row.expires_at ?? row.next_billing_at);
     const atMs = at !== null ? Date.parse(at) : Number.NaN;
     if (!Number.isFinite(atMs) || atMs < nowMs || atMs > horizonMs) continue;

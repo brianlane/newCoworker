@@ -212,6 +212,21 @@ describe("buildRenewalCalendar", () => {
           subscription_id: "sub-no-plan",
           plan: null,
           next_billing_at: "2026-08-10T00:00:00.000Z"
+        }),
+        // Null auto-renew flag on a live subscription counts as renewing
+        // (same rule as the fleet table / billing-posture cron).
+        hostingerRow({
+          subscription_id: "sub-null-flag",
+          is_auto_renewed: null,
+          next_billing_at: "2026-08-11T00:00:00.000Z"
+        }),
+        // non_renewing status wins over a stale auto-renew=true flag.
+        hostingerRow({
+          subscription_id: "sub-status-wins",
+          is_auto_renewed: true,
+          status: "non_renewing",
+          next_billing_at: null,
+          expires_at: "2026-08-12T00:00:00.000Z"
         })
       ],
       subscriptions: [
@@ -298,10 +313,15 @@ describe("buildRenewalCalendar", () => {
       "term_rollover",
       "hostinger_renewal",
       "hostinger_lapse",
-      "hostinger_renewal"
+      "hostinger_renewal",
+      "hostinger_renewal",
+      "hostinger_lapse"
     ]);
-    const [lapse, rollover, renewal, lapse2, noPlan] = events;
+    const [lapse, rollover, renewal, lapse2, noPlan, nullFlag, statusWins] = events;
     expect(noPlan.detail).toBe("VPS · Amy Laidlaw Real Estate");
+    expect(nullFlag.label).toContain("renews");
+    expect(statusWins.label).toContain("lapses");
+    expect(statusWins.at).toBe("2026-08-12T00:00:00.000Z");
     expect(lapse).toMatchObject({
       label: "VM 1800985 lapses",
       detail: expect.stringContaining("unassigned"),

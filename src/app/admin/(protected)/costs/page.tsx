@@ -72,7 +72,15 @@ export default async function AdminCostsPage() {
   const unattributedMonthMicros = monthTelnyxRows
     .filter((r) => r.business_id === null)
     .reduce((sum, r) => sum + r.cost_micros, 0);
-  const totalCostCents = margins.totals.costCents + Math.round(unattributedMonthMicros / 10_000);
+  const unattributedMonthCents = Math.round(unattributedMonthMicros / 10_000);
+  const totalCostCents = margins.totals.costCents + unattributedMonthCents;
+  // Leak spend is real platform cost: the net figure must match
+  // revenue − Est. Monthly Cost shown beside it, not just per-tenant sums.
+  const netMarginCents = margins.totals.marginCents - unattributedMonthCents;
+  const netMarginPct =
+    margins.totals.revenueCents > 0
+      ? Math.round((netMarginCents / margins.totals.revenueCents) * 1000) / 10
+      : null;
 
   const trend = telnyxMonthlyTrend(telnyxTrendRows);
   const trendMax = Math.max(...trend.map((p) => p.costMicros), 1);
@@ -157,14 +165,15 @@ export default async function AdminCostsPage() {
           </p>
           <p
             className={`text-3xl font-bold ${
-              margins.totals.marginCents >= 0 ? "text-claw-green" : "text-spark-orange"
+              netMarginCents >= 0 ? "text-claw-green" : "text-spark-orange"
             }`}
           >
-            {money(margins.totals.marginCents)}
+            {money(netMarginCents)}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             on {money(margins.totals.revenueCents)} revenue
-            {margins.totals.marginPct !== null && ` · ${margins.totals.marginPct}%`}
+            {netMarginPct !== null && ` · ${netMarginPct}%`}
+            {unattributedMonthCents > 0 && " · incl. leak spend"}
           </p>
         </Card>
         <Card>
@@ -206,7 +215,7 @@ export default async function AdminCostsPage() {
               ["Gemini chat (metered)", lineTotals.gemini_chat],
               ["Gemini Live voice (rate est.)", lineTotals.gemini_voice],
               ["Stripe fees", lineTotals.stripe_fees],
-              ["Telnyx unattributed (leak check)", Math.round(unattributedMonthMicros / 10_000)]
+              ["Telnyx unattributed (leak check)", unattributedMonthCents]
             ] as const
           ).map(([label, cents]) => {
             const pct = totalCostCents > 0 ? Math.round((cents / totalCostCents) * 100) : 0;
