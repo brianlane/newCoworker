@@ -24,7 +24,7 @@
  */
 
 import { z } from "zod";
-import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
+import { requireAdmin, findAuthUserIdByEmail, authUserExistsByEmail } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { deleteBusiness, listBusinesses } from "@/lib/db/businesses";
 import { listBusinessIdsWithStripeLinkedSubscription } from "@/lib/db/subscriptions";
@@ -110,6 +110,20 @@ export async function DELETE(request: Request) {
       }
     }
 
+    // Resolve the login BEFORE touching any rows: findAuthUserIdByEmail
+    // collapses transient lookup failures into null, and acting on that null
+    // after the wipe would return success while the login silently survives.
+    // A null is only trusted once the STRICT variant (which throws on lookup
+    // failure) confirms the miss.
+    const authUserId = await findAuthUserIdByEmail(email);
+    if (!authUserId && (await authUserExistsByEmail(email))) {
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        "Auth-user lookup was inconsistent; nothing was removed — retry",
+        500
+      );
+    }
+
     // Rows first, auth user LAST. Unlike delete-client (whose only handle on
     // the auth user is the soon-to-be-deleted business row), everything here
     // keys on the email — so if a business delete throws partway, the login
@@ -122,7 +136,6 @@ export async function DELETE(request: Request) {
 
     // "Not found" is the desired end state; any other auth failure is
     // surfaced for a retry (which will find zero rows and only do this step).
-    const authUserId = await findAuthUserIdByEmail(email);
     if (authUserId) {
       const db = await createSupabaseServiceClient();
       const { error } = await db.auth.admin.deleteUser(authUserId);
