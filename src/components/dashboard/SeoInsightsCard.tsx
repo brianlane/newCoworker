@@ -47,6 +47,17 @@ export function SeoInsightsCard({ businessId, websiteUrl, initialReport }: Props
   const [report, setReport] = useState<SeoReportView | null>(initialReport);
   const [running, setRunning] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
+  // Derived-state reset (React's sanctioned render-time pattern): when the
+  // owner saves a different website URL and the server re-renders this card
+  // with new props, drop the state captured for the OLD site — otherwise
+  // useState would keep showing the previous hostname's scores until a full
+  // remount.
+  const [seenWebsiteUrl, setSeenWebsiteUrl] = useState(websiteUrl);
+  if (seenWebsiteUrl !== websiteUrl) {
+    setSeenWebsiteUrl(websiteUrl);
+    setReport(initialReport);
+    setBanner(null);
+  }
 
   async function analyze() {
     setBanner(null);
