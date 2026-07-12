@@ -148,6 +148,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "Set, extend, or clear a document's expiration date from chat. Expired documents stop being quoted or shared.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "document_request_signature",
+        label: "Request signatures",
+        description:
+          "Send a document for a legal e-signature when you ask: the signer gets a link, types their name to sign, and you're notified with a full audit record. Dashboard only — sending contracts is always your call.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },
@@ -231,7 +239,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "document_share",
         label: "Share documents",
         description:
-          "Text a caller an expiring link to a client-facing document (price sheet, menu, policy) when they ask for it.",
+          "Text a caller an expiring link to a client-facing document (price sheet, policy, contract) when they ask for it.",
         defaultEnabled: true,
         configurable: true
       }
@@ -313,7 +321,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "document_share",
         label: "Share documents",
         description:
-          "Text a customer an expiring link to a client-facing document (price sheet, menu, policy) when they ask for it.",
+          "Text a customer an expiring link to a client-facing document (price sheet, policy, contract) when they ask for it.",
         defaultEnabled: true,
         configurable: true
       }
@@ -370,7 +378,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "document_share",
         label: "Share documents",
         description:
-          "Give a website visitor an expiring link to a client-facing document (price sheet, menu, policy) right in the chat.",
+          "Give a website visitor an expiring link to a client-facing document (price sheet, policy, contract) right in the chat.",
         defaultEnabled: true,
         configurable: true
       }

@@ -454,6 +454,69 @@ export async function deleteEndUserData(
     results.push({ table: "business_document_shares", central, box: null });
   }
 
+  // ── document_signature_requests (e-sign requests to the person) ─────────
+  // Unsigned/void requests are plain PII rows → deleted. SIGNED requests are
+  // standalone legal evidence (ESIGN audit record): the signer identifiers
+  // are REDACTED but the signed fact, timestamp, and content fingerprint
+  // stay — the same evidence-preserving philosophy as the erasure audit
+  // trail itself. Central-only table.
+  {
+    let central = 0;
+    const redaction = {
+      signer_name: "",
+      signer_email: "",
+      signer_phone: "",
+      signature_name: "[erased]",
+      signer_ip: null,
+      signer_user_agent: null
+    };
+    if (linkedNumbers.size > 0) {
+      const { data, error } = await db
+        .from("document_signature_requests")
+        .delete()
+        .eq("business_id", businessId)
+        .neq("status", "signed")
+        .in("signer_phone", [...linkedNumbers])
+        .select("id");
+      if (error) throw new EndUserDeletionError(`document_signature_requests: ${error.message}`);
+      central += count(data);
+      const { data: redacted, error: redactError } = await db
+        .from("document_signature_requests")
+        .update(redaction)
+        .eq("business_id", businessId)
+        .eq("status", "signed")
+        .in("signer_phone", [...linkedNumbers])
+        .select("id");
+      if (redactError) {
+        throw new EndUserDeletionError(`document_signature_requests: ${redactError.message}`);
+      }
+      central += count(redacted);
+    }
+    if (email) {
+      const { data, error } = await db
+        .from("document_signature_requests")
+        .delete()
+        .eq("business_id", businessId)
+        .neq("status", "signed")
+        .ilike("signer_email", emailPattern!)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`document_signature_requests: ${error.message}`);
+      central += count(data);
+      const { data: redacted, error: redactError } = await db
+        .from("document_signature_requests")
+        .update(redaction)
+        .eq("business_id", businessId)
+        .eq("status", "signed")
+        .ilike("signer_email", emailPattern!)
+        .select("id");
+      if (redactError) {
+        throw new EndUserDeletionError(`document_signature_requests: ${redactError.message}`);
+      }
+      central += count(redacted);
+    }
+    results.push({ table: "document_signature_requests", central, box: null });
+  }
+
   // ── ai_reply_reasoning (per-reply AI decision records; central-only) ────
   // Keyed by whichever number the person texted from, so the delete spans
   // every linked number captured pre-delete — the e164 request's primary +

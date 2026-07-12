@@ -14,6 +14,10 @@
  *   - document_update          (dashboard-only) free-form edit applied to
  *                              content_md via Gemini; original file immutable.
  *   - document_set_expiration  (dashboard-only) set/extend/clear expires_at.
+ *   - document_request_signature (dashboard-only) send a document for a
+ *                              DocuSign-style legal sign-off — sending
+ *                              contracts is an owner action, never a
+ *                              customer-surface one.
  *
  * Surface gating is layered: the tool registries / TOOL_GATES decide which
  * names exist per surface, and these cores re-assert the dashboard-only
@@ -33,10 +37,12 @@ import {
   listBusinessDocuments,
   patchBusinessDocument,
   revokeDocumentShare,
+  voidSignatureRequest,
   type BusinessDocumentRow
 } from "./db";
 import { isDocumentExpired, parseExpirationInput, resolveDocumentReference } from "./core";
 import { mintDocumentShare, type DocumentShareChannel } from "./share";
+import { mintSignatureRequest } from "./signing";
 import { rewriteDocumentContent } from "./ingest";
 
 export type DocumentToolSurface = "dashboard" | "sms" | "voice" | "webchat";
@@ -245,6 +251,173 @@ export async function shareDocumentTool(
       delivered === "inline"
         ? "Share this link with them directly; it expires automatically."
         : `The document link was ${delivered === "sms" ? "texted" : "emailed"} to them.`
+  };
+}
+
+export type RequestSignatureArgs = {
+  /** Document id or (partial) title. */
+  documentRef: string;
+  /** Who is being asked to sign (shown on the signing page). */
+  signerName: string;
+  /** E.164 recipient for SMS delivery of the signing link. */
+  phone?: string;
+  /** Email recipient for email delivery of the signing link. */
+  email?: string;
+  /** Optional note shown above the document on the signing page. */
+  message?: string;
+};
+
+/**
+ * Dashboard-only: send a document for a DocuSign-style legal sign-off. The
+ * signing link is delivered by SMS or email (at least one required); a
+ * failed delivery voids the freshly-minted request so no live signing link
+ * survives a send nobody received.
+ */
+export async function requestDocumentSignatureTool(
+  businessId: string,
+  args: RequestSignatureArgs,
+  surface: DocumentToolSurface
+): Promise<DocumentToolResult> {
+  if (surface !== "dashboard") {
+    return { ok: false, detail: "surface_not_allowed" };
+  }
+  if (!args.phone && !args.email) {
+    return {
+      ok: false,
+      detail: "no_recipient",
+      message: "Ask the owner for the signer's phone number or email address first."
+    };
+  }
+  const docs = await listBusinessDocuments(businessId);
+  const resolved = resolveDocumentReference(docs, args.documentRef);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      detail: resolved.detail,
+      message:
+        resolved.detail === "document_ambiguous"
+          ? "More than one document matches that name — ask which one the owner means."
+          : "No document with that name is on file."
+    };
+  }
+
+  // Recipient validation BEFORE minting (same rule as shares): an opted-out
+  // or uncheckable number must not leave an orphaned live signing link.
+  if (args.phone) {
+    const optOut = await checkSmsOptOut(businessId, args.phone);
+    if (!optOut.ok) {
+      logger.error("documents/tool: signature opt-out check failed; refusing (fail closed)", {
+        businessId,
+        error: optOut.error
+      });
+      return { ok: false, detail: "opt_out_check_failed" };
+    }
+    if (optOut.optedOut) return { ok: false, detail: "recipient_opted_out" };
+  }
+
+  const minted = await mintSignatureRequest({
+    businessId,
+    document: resolved.document,
+    signerName: args.signerName,
+    ...(args.phone ? { signerPhone: args.phone } : {}),
+    ...(args.email ? { signerEmail: args.email } : {}),
+    ...(args.message ? { message: args.message } : {})
+  });
+  if (!minted.ok) {
+    return {
+      ok: false,
+      detail: minted.detail,
+      message:
+        minted.detail === "document_expired"
+          ? "That document has expired — extend or replace it before requesting a signature."
+          : minted.detail === "document_empty"
+            ? "That document has no readable content to sign yet."
+            : "That document is not ready yet."
+    };
+  }
+
+  const voidUndelivered = async (): Promise<void> => {
+    try {
+      await voidSignatureRequest(businessId, minted.requestId);
+    } catch (err) {
+      logger.warn("documents/tool: undelivered signature-request void failed", {
+        businessId,
+        requestId: minted.requestId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
+
+  const title = resolved.document.title;
+  const business = await getBusiness(businessId);
+  const fromLabel = business?.name ? ` from ${business.name}` : "";
+  let delivered: "sms" | "email" = "sms";
+  if (args.phone) {
+    const body = `${args.signerName}, please review and sign "${title}"${fromLabel}: ${minted.url}`;
+    const config = await getTelnyxMessagingForBusiness(businessId, undefined, { resolveRcs: true });
+    try {
+      await sendTelnyxSms(config, args.phone, body, { meterBusinessId: businessId });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const isQuota = /Monthly SMS limit|SMS quota blocked|throttled/i.test(message);
+      logger.warn("documents/tool: signature sms send failed", { businessId, error: message });
+      await voidUndelivered();
+      return { ok: false, detail: isQuota ? "sms_quota_blocked" : "sms_send_failed" };
+    }
+  } else {
+    const bodyText = [
+      `${args.signerName},`,
+      "",
+      `Please review and sign "${title}"${fromLabel}:`,
+      minted.url,
+      "",
+      `This link expires ${minted.expiresAt.slice(0, 10)}.`
+    ].join("\n");
+    const sent = await sendFromOwnerMailbox(businessId, {
+      toEmail: args.email!,
+      subject: `Signature requested: ${title}`,
+      bodyText
+    });
+    if (!sent.ok) {
+      await voidUndelivered();
+      return { ok: false, detail: sent.detail };
+    }
+    await recordOutboundAssistantEmail({
+      businessId,
+      toEmail: args.email!,
+      subject: `Signature requested: ${title}`,
+      bodyText,
+      source: EMAIL_LOG_SOURCE[surface],
+      providerMessageId: sent.messageId
+    });
+    delivered = "email";
+  }
+
+  await insertCoworkerLog({
+    id: randomUUID(),
+    business_id: businessId,
+    task_type: "data_flow",
+    status: "success",
+    log_payload: {
+      source: "dashboard_tool_document_request_signature",
+      event: "signature_requested",
+      documentId: resolved.document.id,
+      title,
+      requestId: minted.requestId,
+      signerName: args.signerName.slice(0, 200),
+      delivered
+    }
+  });
+
+  return {
+    ok: true,
+    data: {
+      title,
+      requestId: minted.requestId,
+      expiresAt: minted.expiresAt,
+      delivered
+    },
+    message: `The signing link was ${delivered === "sms" ? "texted" : "emailed"} to ${args.signerName}. You'll be notified the moment they sign.`
   };
 }
 

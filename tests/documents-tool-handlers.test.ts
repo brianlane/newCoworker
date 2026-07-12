@@ -10,11 +10,16 @@ vi.mock("@/lib/documents/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/documents/db")>()),
   listBusinessDocuments: vi.fn(),
   patchBusinessDocument: vi.fn(),
-  revokeDocumentShare: vi.fn()
+  revokeDocumentShare: vi.fn(),
+  voidSignatureRequest: vi.fn()
 }));
 vi.mock("@/lib/documents/share", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/documents/share")>()),
   mintDocumentShare: vi.fn()
+}));
+vi.mock("@/lib/documents/signing", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/documents/signing")>()),
+  mintSignatureRequest: vi.fn()
 }));
 vi.mock("@/lib/documents/ingest", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/documents/ingest")>()),
@@ -33,6 +38,7 @@ vi.mock("@/lib/vps/sync-vault", () => ({ syncVaultToVpsAndLog: vi.fn(async () =>
 
 import {
   listDocumentsTool,
+  requestDocumentSignatureTool,
   setDocumentExpirationTool,
   shareDocumentTool,
   updateDocumentTool
@@ -41,9 +47,11 @@ import {
   listBusinessDocuments,
   patchBusinessDocument,
   revokeDocumentShare,
+  voidSignatureRequest,
   type BusinessDocumentRow
 } from "@/lib/documents/db";
 import { mintDocumentShare } from "@/lib/documents/share";
+import { mintSignatureRequest } from "@/lib/documents/signing";
 import { rewriteDocumentContent } from "@/lib/documents/ingest";
 import { getBusiness } from "@/lib/db/businesses";
 import { insertCoworkerLog } from "@/lib/db/logs";
@@ -95,6 +103,13 @@ const MINTED = {
   expiresAt: "2026-08-10T12:00:00.000Z"
 };
 
+const MINTED_SIGNATURE = {
+  ok: true as const,
+  requestId: "req-1",
+  url: "https://app.example.com/sign/tok456",
+  expiresAt: "2026-08-10T12:00:00.000Z"
+};
+
 beforeEach(() => {
   vi.clearAllMocks();
   list.mockResolvedValue([doc()]);
@@ -104,6 +119,8 @@ beforeEach(() => {
   vi.mocked(insertCoworkerLog).mockResolvedValue({} as never);
   optOut.mockResolvedValue({ ok: true, optedOut: false });
   vi.mocked(revokeDocumentShare).mockResolvedValue(1);
+  vi.mocked(voidSignatureRequest).mockResolvedValue(1);
+  vi.mocked(mintSignatureRequest).mockResolvedValue(MINTED_SIGNATURE);
   smsConfig.mockResolvedValue({ apiKey: "k" } as never);
   smsSend.mockResolvedValue({ id: "msg-1" } as never);
   emailSend.mockResolvedValue({ ok: true, messageId: "em-1", provider: "google" } as never);
@@ -312,6 +329,167 @@ describe("shareDocumentTool", () => {
   it("labels a webchat share without args as a webchat visitor", async () => {
     await shareDocumentTool(BIZ, { documentRef: "price" }, "webchat");
     expect(mint).toHaveBeenCalledWith(expect.objectContaining({ sharedWith: "webchat visitor" }));
+  });
+});
+
+describe("requestDocumentSignatureTool", () => {
+  const args = { documentRef: "price", signerName: "Jane Customer", phone: PHONE };
+
+  it("hard-refuses every non-dashboard surface", async () => {
+    for (const surface of ["sms", "voice", "webchat"] as const) {
+      expect(await requestDocumentSignatureTool(BIZ, args, surface)).toEqual({
+        ok: false,
+        detail: "surface_not_allowed"
+      });
+    }
+    expect(mintSignatureRequest).not.toHaveBeenCalled();
+  });
+
+  it("requires a delivery recipient", async () => {
+    const res = await requestDocumentSignatureTool(
+      BIZ,
+      { documentRef: "price", signerName: "Jane" },
+      "dashboard"
+    );
+    expect(res.detail).toBe("no_recipient");
+    expect(res.message).toContain("phone number or email");
+  });
+
+  it("fails with guidance when the document is unknown or ambiguous", async () => {
+    const missing = await requestDocumentSignatureTool(
+      BIZ,
+      { ...args, documentRef: "warranty" },
+      "dashboard"
+    );
+    expect(missing.detail).toBe("document_not_found");
+    list.mockResolvedValue([doc({ id: "a", title: "Terms A" }), doc({ id: "b", title: "Terms B" })]);
+    const ambiguous = await requestDocumentSignatureTool(
+      BIZ,
+      { ...args, documentRef: "terms" },
+      "dashboard"
+    );
+    expect(ambiguous.detail).toBe("document_ambiguous");
+  });
+
+  it("checks SMS opt-outs BEFORE minting (fail closed + opted out)", async () => {
+    optOut.mockResolvedValue({ ok: false, error: "rpc down" });
+    expect((await requestDocumentSignatureTool(BIZ, args, "dashboard")).detail).toBe(
+      "opt_out_check_failed"
+    );
+    optOut.mockResolvedValue({ ok: true, optedOut: true });
+    expect((await requestDocumentSignatureTool(BIZ, args, "dashboard")).detail).toBe(
+      "recipient_opted_out"
+    );
+    expect(mintSignatureRequest).not.toHaveBeenCalled();
+  });
+
+  it("maps every mint refusal to model guidance", async () => {
+    for (const [detail, needle] of [
+      ["document_expired", "extend or replace"],
+      ["document_empty", "no readable content"],
+      ["document_not_ready", "not ready"]
+    ] as const) {
+      vi.mocked(mintSignatureRequest).mockResolvedValue({ ok: false, detail });
+      const res = await requestDocumentSignatureTool(BIZ, args, "dashboard");
+      expect(res.detail).toBe(detail);
+      expect(res.message).toContain(needle);
+    }
+  });
+
+  it("texts the signing link and logs the request", async () => {
+    const res = await requestDocumentSignatureTool(BIZ, args, "dashboard");
+    expect(res.ok).toBe(true);
+    expect(res.data).toMatchObject({ delivered: "sms", requestId: "req-1" });
+    expect(res.message).toContain("texted to Jane Customer");
+    expect(smsSend).toHaveBeenCalledWith(
+      expect.anything(),
+      PHONE,
+      `Jane Customer, please review and sign "Price sheet" from Clip Joint: ${MINTED_SIGNATURE.url}`,
+      { meterBusinessId: BIZ }
+    );
+    expect(insertCoworkerLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task_type: "data_flow",
+        status: "success",
+        log_payload: expect.objectContaining({ event: "signature_requested", delivered: "sms" })
+      })
+    );
+  });
+
+  it("omits the business name when the row is missing", async () => {
+    vi.mocked(getBusiness).mockResolvedValue(null as never);
+    await requestDocumentSignatureTool(BIZ, args, "dashboard");
+    expect(smsSend).toHaveBeenCalledWith(
+      expect.anything(),
+      PHONE,
+      `Jane Customer, please review and sign "Price sheet": ${MINTED_SIGNATURE.url}`,
+      expect.anything()
+    );
+  });
+
+  it("voids the request when the SMS delivery fails (quota vs generic)", async () => {
+    smsSend.mockRejectedValueOnce(new Error("Monthly SMS limit reached"));
+    expect((await requestDocumentSignatureTool(BIZ, args, "dashboard")).detail).toBe(
+      "sms_quota_blocked"
+    );
+    smsSend.mockRejectedValueOnce("wire down");
+    expect((await requestDocumentSignatureTool(BIZ, args, "dashboard")).detail).toBe(
+      "sms_send_failed"
+    );
+    expect(voidSignatureRequest).toHaveBeenCalledTimes(2);
+    expect(voidSignatureRequest).toHaveBeenCalledWith(BIZ, "req-1");
+  });
+
+  it("tolerates a failing void on an undelivered request (Error and non-Error)", async () => {
+    smsSend.mockRejectedValueOnce(new Error("wire down"));
+    vi.mocked(voidSignatureRequest).mockRejectedValueOnce(new Error("db down"));
+    expect((await requestDocumentSignatureTool(BIZ, args, "dashboard")).ok).toBe(false);
+    smsSend.mockRejectedValueOnce(new Error("wire down"));
+    vi.mocked(voidSignatureRequest).mockRejectedValueOnce("string failure");
+    expect((await requestDocumentSignatureTool(BIZ, args, "dashboard")).ok).toBe(false);
+  });
+
+  it("emails the signing link with the owner note passed through to the mint", async () => {
+    const res = await requestDocumentSignatureTool(
+      BIZ,
+      {
+        documentRef: "price",
+        signerName: "Jane",
+        email: "jane@example.com",
+        message: "Please sign before Friday."
+      },
+      "dashboard"
+    );
+    expect(res.ok).toBe(true);
+    expect(res.data).toMatchObject({ delivered: "email" });
+    expect(mintSignatureRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signerEmail: "jane@example.com",
+        message: "Please sign before Friday."
+      })
+    );
+    expect(emailSend).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        toEmail: "jane@example.com",
+        subject: "Signature requested: Price sheet",
+        bodyText: expect.stringContaining(MINTED_SIGNATURE.url)
+      })
+    );
+    expect(recordOutboundAssistantEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "dashboard_chat" })
+    );
+  });
+
+  it("voids the request when the email delivery fails", async () => {
+    emailSend.mockResolvedValue({ ok: false, detail: "email_not_connected" } as never);
+    const res = await requestDocumentSignatureTool(
+      BIZ,
+      { documentRef: "price", signerName: "Jane", email: "jane@example.com" },
+      "dashboard"
+    );
+    expect(res).toEqual({ ok: false, detail: "email_not_connected" });
+    expect(voidSignatureRequest).toHaveBeenCalledWith(BIZ, "req-1");
   });
 });
 

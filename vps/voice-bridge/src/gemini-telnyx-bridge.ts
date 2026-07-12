@@ -388,7 +388,7 @@ export function systemInstructionForBusiness(
         "You can act on the caller's behalf by calling these tools:",
         "- `business_knowledge_lookup` when the caller asks something specific to this business that your briefing below doesn't answer directly.",
         "- `calendar_find_slots` then `calendar_book_appointment` when the caller wants to schedule something (consultations, viewings, intake calls).",
-        "- `document_share` when the caller asks for a copy of a document listed in your documents.md briefing (price sheet, menu, policy) — it texts them an expiring link.",
+        "- `document_share` when the caller asks for a copy of a document listed in your documents.md briefing (price sheet, policy, contract) — it texts them an expiring link.",
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         "- `notify_team` whenever the caller needs something only the team can resolve (confirm an appointment you couldn't book, answer a question you couldn't, return a call). This is your ONLY way to reach the team.",
@@ -748,7 +748,7 @@ function buildVoiceToolDeclarations() {
     {
       name: "document_share",
       description:
-        "Text the caller an expiring link to one of the business's documents (price sheet, service menu, policy, brochure) when they ask for a copy. Refer to the document by its title from your documents.md briefing. Internal/staff documents and expired documents are refused server-side — if the tool fails, tell the caller the team will follow up with a copy.",
+        "Text the caller an expiring link to one of the business's documents (price sheet, policy, contract, brochure) when they ask for a copy. Refer to the document by its title from your documents.md briefing. Internal/staff documents and expired documents are refused server-side — if the tool fails, tell the caller the team will follow up with a copy.",
       parameters: {
         type: Type.OBJECT,
         properties: {
