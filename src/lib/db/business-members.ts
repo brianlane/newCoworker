@@ -64,6 +64,29 @@ export async function listAllBusinessMembers(
   return (data ?? []) as unknown as BusinessMemberRow[];
 }
 
+/**
+ * Hard-delete every membership row for `email` across all businesses —
+ * the admin "delete account completely" path (a business's own members go
+ * with the business-row cascade; this catches grants on OTHER tenants).
+ * Returns how many rows were removed.
+ */
+export async function deleteBusinessMembersByEmail(
+  email: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const normalized = email.trim().toLowerCase();
+  if (!normalized) return 0;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("business_members")
+    .delete()
+    // Lowercase by schema CHECK, so equality is an index lookup.
+    .eq("email", normalized)
+    .select("id");
+  if (error) throw new Error(`deleteBusinessMembersByEmail: ${error.message}`);
+  return ((data as unknown[] | null) ?? []).length;
+}
+
 export async function getBusinessMember(
   businessId: string,
   memberId: string,

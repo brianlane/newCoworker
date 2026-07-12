@@ -160,13 +160,14 @@ describe("summarizeUserEngagement", () => {
   it("counts DAU/WAU/MAU windows and the daily engagement rate", () => {
     const summary = summarizeUserEngagement(
       [
-        user("a@x.com", { last_sign_in_at: daysAgo(0.5) }),
+        user("a@x.com", { last_sign_in_at: daysAgo(0.25) }),
         user("b@x.com", { last_sign_in_at: daysAgo(3) }),
         user("c@x.com", { last_sign_in_at: daysAgo(20) }),
         user("d@x.com", { last_sign_in_at: daysAgo(90) }),
         user("e@x.com", { last_sign_in_at: null })
       ],
-      NOW
+      NOW,
+      "UTC"
     );
     expect(summary).toEqual({
       totalUsers: 5,
@@ -177,7 +178,19 @@ describe("summarizeUserEngagement", () => {
     });
   });
 
-  it("returns a 0% rate for an empty directory", () => {
+  it("active-today is a calendar-day match, not a rolling 24h window", () => {
+    // NOW is 2026-07-11T12:00Z; a sign-in 18h earlier lands on Jul 10 —
+    // inside a rolling 24h window but NOT today.
+    const summary = summarizeUserEngagement(
+      [user("evening@x.com", { last_sign_in_at: daysAgo(0.75) })],
+      NOW,
+      "UTC"
+    );
+    expect(summary.activeToday).toBe(0);
+    expect(summary.active7d).toBe(1);
+  });
+
+  it("returns a 0% rate for an empty directory (runtime-zone day boundary)", () => {
     expect(summarizeUserEngagement([], NOW).dailyEngagementRatePct).toBe(0);
   });
 });

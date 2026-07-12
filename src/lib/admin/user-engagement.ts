@@ -19,14 +19,13 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type { EngagementSegment };
+import type { PlatformAuthUser } from "@/lib/admin/engagement-summary";
 
-/** One Supabase auth user, as read from `auth.admin.listUsers()`. */
-export type PlatformAuthUser = {
-  email: string;
-  created_at: string;
-  last_sign_in_at: string | null;
-};
+export type { EngagementSegment };
+// Re-exported so existing server-side callers keep one import site; the
+// browser-safe summary math lives in engagement-summary.ts.
+export type { PlatformAuthUser, UserEngagementSummary } from "@/lib/admin/engagement-summary";
+export { summarizeUserEngagement } from "@/lib/admin/engagement-summary";
 
 export type EngagementBusinessRef = {
   id: string;
@@ -54,8 +53,6 @@ export type UserEngagementRow = {
   lastSignInAt: string | null;
   segment: EngagementSegment;
 };
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Pagination bounds for the auth-directory scan — far above current fleet size. */
 export const AUTH_USERS_PAGE_CAP = 20;
@@ -198,41 +195,6 @@ export function buildUserEngagementRows(
     const bm = b.lastSignInAt ? Date.parse(b.lastSignInAt) : Number.NEGATIVE_INFINITY;
     return bm - am;
   });
-}
-
-export type UserEngagementSummary = {
-  totalUsers: number;
-  activeToday: number;
-  active7d: number;
-  active30d: number;
-  /** BizBlasts' "Daily Engagement Rate": active today ÷ total users. */
-  dailyEngagementRatePct: number;
-};
-
-/** DAU / WAU / MAU over the auth directory (one count per auth user). */
-export function summarizeUserEngagement(
-  users: PlatformAuthUser[],
-  now: Date = new Date()
-): UserEngagementSummary {
-  let activeToday = 0;
-  let active7d = 0;
-  let active30d = 0;
-  for (const user of users) {
-    const last = user.last_sign_in_at ? Date.parse(user.last_sign_in_at) : NaN;
-    if (!Number.isFinite(last)) continue;
-    const age = now.getTime() - last;
-    if (age <= DAY_MS) activeToday += 1;
-    if (age <= 7 * DAY_MS) active7d += 1;
-    if (age <= 30 * DAY_MS) active30d += 1;
-  }
-  return {
-    totalUsers: users.length,
-    activeToday,
-    active7d,
-    active30d,
-    dailyEngagementRatePct:
-      users.length > 0 ? Math.round((activeToday / users.length) * 100) : 0
-  };
 }
 
 /**
