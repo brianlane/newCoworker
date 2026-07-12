@@ -260,6 +260,53 @@ export function extractPhones(text: string): string[] {
   return out;
 }
 
+// A lead-phone LABEL immediately before a number ("Phone:", "Cell -",
+// "Mobile no.", "call/text me at") or right after it ("602-686-6672 (cell)").
+// Deliberately tight: "Call Privyr support at …" / "our office line …" must
+// NOT qualify — only first-person contact phrasing ("me") or a field-style
+// phone label marks a number as the lead's own.
+const LEAD_PHONE_LABEL_BEFORE_RE =
+  /(?:\b(?:ph|phone|mobile|cell(?:phone)?|tel(?:ephone)?)\b(?:\s*(?:number|no\.?|#))?(?:\s+is)?\s*[.:#\-–—)]*\s*|\b(?:call|text|reach)\s+me\s+(?:back\s+)?(?:at|on)\s*[:\-–—]?\s*)$/i;
+const LEAD_PHONE_LABEL_AFTER_RE =
+  /^\s*[(\-–—:]*\s*(?:ph|phone|mobile|cell(?:phone)?|tel(?:ephone)?)\b/i;
+
+/** How far back on the number's own line a leading label may sit. */
+const LABEL_BEFORE_WINDOW = 48;
+/** How far past the number a trailing label may sit ("(cell)"). */
+const LABEL_AFTER_WINDOW = 14;
+
+/**
+ * Extract only phones that are LABELED as a person's contact number — the
+ * safe subset for the extraction fallback. `extractPhones` finds every
+ * NANP-shaped number in the text, which is right for "is there a phone
+ * here?" questions but wrong for "text this number": a phoneless lead email
+ * whose vendor footer said "Call Privyr support at (415) 555-0126" had the
+ * support line backfilled into lead_phone and got texted the lead greeting
+ * (bug-hunt round 3). A wrong send is far worse than a missed fallback (a
+ * skip with an owner note), so an unlabeled number never qualifies.
+ */
+export function extractLabeledPhones(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  PHONE_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = PHONE_RE.exec(text)) !== null) {
+    const e164 = normalizeNanpToE164(m[0]);
+    if (!e164 || seen.has(e164)) continue;
+    // The label must sit on the number's own line, directly adjacent.
+    const lineStart = text.lastIndexOf("\n", m.index) + 1;
+    const before = text.slice(Math.max(lineStart, m.index - LABEL_BEFORE_WINDOW), m.index);
+    const afterEnd = Math.min(text.length, m.index + m[0].length + LABEL_AFTER_WINDOW);
+    const after = text.slice(m.index + m[0].length, afterEnd).split("\n")[0];
+    if (!LEAD_PHONE_LABEL_BEFORE_RE.test(before) && !LEAD_PHONE_LABEL_AFTER_RE.test(after)) {
+      continue;
+    }
+    seen.add(e164);
+    out.push(e164);
+  }
+  return out;
+}
+
 // Whole tokens only (split on _ / digits / camelCase humps): the old bare
 // substring test /phone|mobile|cell|tel/i matched "hoTEL_name" and
 // "canCELLation_policy", stuffing a phone number into non-phone fields
@@ -335,10 +382,20 @@ export function extractLeadIdentity(vars: Record<string, unknown>): LeadIdentity
   };
 }
 
+/** Marker inserted where an over-long extraction text was cut. */
+const EXTRACTION_CLIP_MARKER = "\n[... middle of the text omitted ...]\n";
+
 /**
  * Build the Gemini extraction prompt: ask for a strict JSON object with exactly
- * the requested field names, from the provided page text. Page text is truncated
- * to keep the prompt bounded.
+ * the requested field names, from the provided page text. Over-long text is
+ * clipped from the MIDDLE (head + tail kept, elision marked): head-only
+ * clipping silently dropped the newest content of a trigger's windowText —
+ * a fresh lead block at the end of a long forwarded thread vanished from the
+ * prompt entirely, and extraction returned a stale phone from the quoted
+ * chatter instead (bug-hunt round 3; the classify twin of this bug was the
+ * round-1 tail-clip fix in buildClassifyPrompt). Keeping both ends serves
+ * both callers: fetched pages lead with their substance, correlation windows
+ * end with it.
  */
 export function buildExtractionPrompt(
   fields: { name: string; description?: string }[],
@@ -348,7 +405,11 @@ export function buildExtractionPrompt(
   const fieldLines = fields
     .map((f) => `- ${f.name}${f.description ? `: ${f.description}` : ""}`)
     .join("\n");
-  const clipped = pageText.length > maxChars ? pageText.slice(0, maxChars) : pageText;
+  const half = Math.floor(maxChars / 2);
+  const clipped =
+    pageText.length > maxChars
+      ? pageText.slice(0, half) + EXTRACTION_CLIP_MARKER + pageText.slice(-(maxChars - half))
+      : pageText;
   return [
     "Extract the following fields from the web page content below.",
     "Return ONLY a JSON object whose keys are exactly these field names.",
@@ -657,34 +718,61 @@ export function parseHmToMinutes(raw: string): number | null {
   return h * 60 + min;
 }
 
+/** Minutes in a day; the exclusive end of a to-midnight window. */
+const DAY_END_MINUTES = 24 * 60;
+
 /**
  * Validate a stored weekly-windows jsonb value (shape
  * `{"mon":[["09:00","17:00"]]}`) into minute windows. Malformed entries are
  * dropped (an owner typo narrows availability rather than crashing routing);
  * returns null when nothing valid remains, which callers treat as "unset".
+ *
+ * An end at or before the start (except start === end, which stays invalid)
+ * is an OVERNIGHT window — `["18:00","02:00"]` is a night shift crossing
+ * midnight, not a typo. It splits into `[start, 24:00)` on its own day plus
+ * `[00:00, end)` on the NEXT day, so the flat per-weekday containment check
+ * keeps working unchanged. These used to be dropped outright, which
+ * hard-skipped night-shift members during their actual working hours (and,
+ * when the overnight window was their only one, made the whole schedule read
+ * as "unset = always available") — bug-hunt round 3.
  */
 export function parseWeeklyWindows(raw: unknown): WeeklyWindows | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  const out: WeeklyWindows = {};
-  let any = false;
-  for (const day of WEEKDAY_KEYS) {
+  const acc = new Map<Weekday, [number, number][]>();
+  const push = (day: Weekday, window: [number, number]) => {
+    const list = acc.get(day);
+    if (list) list.push(window);
+    else acc.set(day, [window]);
+  };
+  for (let i = 0; i < WEEKDAY_KEYS.length; i++) {
+    const day = WEEKDAY_KEYS[i];
     const windows = (raw as Record<string, unknown>)[day];
     if (!Array.isArray(windows)) continue;
-    const parsed: [number, number][] = [];
     for (const w of windows) {
       if (!Array.isArray(w) || w.length !== 2) continue;
       if (typeof w[0] !== "string" || typeof w[1] !== "string") continue;
       const start = parseHmToMinutes(w[0]);
       const end = parseHmToMinutes(w[1]);
-      if (start === null || end === null || end <= start) continue;
-      parsed.push([start, end]);
-    }
-    if (parsed.length > 0) {
-      out[day] = parsed;
-      any = true;
+      if (start === null || end === null || start === end) continue;
+      if (end > start) {
+        push(day, [start, end]);
+        continue;
+      }
+      // Overnight: tonight's stretch to midnight + the small hours spilling
+      // onto the next weekday (sat wraps to sun).
+      push(day, [start, DAY_END_MINUTES]);
+      if (end > 0) {
+        push(WEEKDAY_KEYS[(i + 1) % WEEKDAY_KEYS.length], [0, end]);
+      }
     }
   }
-  return any ? out : null;
+  if (acc.size === 0) return null;
+  const out: WeeklyWindows = {};
+  for (const day of WEEKDAY_KEYS) {
+    const list = acc.get(day);
+    if (list) out[day] = list;
+  }
+  return out;
 }
 
 /** True when the clock falls inside any window for its weekday (start inclusive, end exclusive). */

@@ -105,8 +105,10 @@ export function parseScheduleText(text: string): ParseResult {
       if (!start || !end) {
         return { ok: false, error: `"${windowText}" is not a time window (use HH:MM-HH:MM, e.g. 09:00-17:00)` };
       }
-      if (end <= start) {
-        return { ok: false, error: `"${windowText}" ends before it starts` };
+      // end < start is a valid OVERNIGHT window ("18:00-02:00" — the engine
+      // splits it across midnight); only a zero-length window is an error.
+      if (end === start) {
+        return { ok: false, error: `"${windowText}" starts and ends at the same time` };
       }
       windows.push([start, end]);
     }
@@ -134,7 +136,8 @@ export function normalizeWeeklyWindowsJson(raw: unknown): WeeklyWindowsJson | nu
       if (typeof w[0] !== "string" || typeof w[1] !== "string") continue;
       const start = normalizeHm(w[0]);
       const end = normalizeHm(w[1]);
-      if (!start || !end || end <= start) continue;
+      // end < start is a stored overnight window; only zero-length is invalid.
+      if (!start || !end || end === start) continue;
       parsed.push([start, end]);
     }
     if (parsed.length > 0) out[day] = parsed;

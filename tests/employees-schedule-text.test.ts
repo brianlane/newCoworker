@@ -96,14 +96,21 @@ describe("parseScheduleText", () => {
     expect(parseScheduleText("mon,,tue 09:00-17:00").ok).toBe(false);
   });
 
-  it("errors on malformed or inverted time windows", () => {
+  it("errors on malformed or zero-length time windows", () => {
     expect(parseScheduleText("mon nine-to-five").ok).toBe(false);
     expect(parseScheduleText("mon 09:00").ok).toBe(false);
     expect(parseScheduleText("mon 09:00-25:00").ok).toBe(false);
     expect(parseScheduleText("mon 09:00-17:00,").ok).toBe(false);
-    const inverted = parseScheduleText("mon 17:00-09:00");
-    expect(inverted.ok).toBe(false);
-    if (!inverted.ok) expect(inverted.error).toContain("ends before it starts");
+    const zeroLength = parseScheduleText("mon 09:00-09:00");
+    expect(zeroLength.ok).toBe(false);
+    if (!zeroLength.ok) expect(zeroLength.error).toContain("starts and ends at the same time");
+  });
+
+  it("accepts an overnight window (the engine splits it across midnight)", () => {
+    expect(parseScheduleText("tue 18:00-02:00")).toEqual({
+      ok: true,
+      value: { tue: [["18:00", "02:00"]] }
+    });
   });
 });
 
@@ -124,7 +131,7 @@ describe("normalizeWeeklyWindowsJson", () => {
   it("drops malformed entries and returns null when nothing valid remains", () => {
     expect(
       normalizeWeeklyWindowsJson({
-        mon: [["bad", "17:00"], ["09:00", 5], ["09:00"], "x", ["17:00", "09:00"]],
+        mon: [["bad", "17:00"], ["09:00", 5], ["09:00"], "x", ["09:00", "09:00"]],
         tue: "closed",
         funday: [["09:00", "17:00"]]
       })
@@ -134,6 +141,12 @@ describe("normalizeWeeklyWindowsJson", () => {
         mon: [["bad", "17:00"], ["09:00", "17:00"]]
       })
     ).toEqual({ mon: [["09:00", "17:00"]] });
+  });
+
+  it("keeps a stored overnight window (round-trips back to the form)", () => {
+    expect(normalizeWeeklyWindowsJson({ tue: [["18:00", "02:00"]] })).toEqual({
+      tue: [["18:00", "02:00"]]
+    });
   });
 });
 

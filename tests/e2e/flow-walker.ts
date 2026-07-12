@@ -30,7 +30,7 @@ import {
   buildClassifyPrompt,
   buildExtractionPrompt,
   evaluateStepCondition,
-  extractPhones,
+  extractLabeledPhones,
   isPhoneFieldName,
   parseClassifyChoice,
   parseExtractionJson
@@ -129,10 +129,11 @@ export async function walkFlow(
         const extracted = parseExtractionJson(raw, action.fields);
         const out: Record<string, string> = {};
         for (const f of action.fields) {
-          // Mirror the worker's regex fallback for phone fields.
+          // Mirror the worker's regex fallback for phone fields (labeled
+          // numbers only — see extractLabeledPhones).
           let val = extracted[f.name] ?? "";
           if (!val && isPhoneFieldName(f.name)) {
-            val = extractPhones(action.text)[0] ?? "";
+            val = extractLabeledPhones(action.text)[0] ?? "";
           }
           out[f.name] = val;
         }

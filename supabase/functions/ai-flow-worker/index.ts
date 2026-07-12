@@ -39,7 +39,7 @@ import {
   evaluateStepCondition,
   extractLeadIdentity,
   extractLinkByText,
-  extractPhones,
+  extractLabeledPhones,
   filterRosterByAvailability,
   flowTriggers,
   htmlToText,
@@ -1883,7 +1883,7 @@ async function browseStep(
   for (const f of action.fields ?? []) {
     let val = extracted[f.name] ?? "";
     if (!val && isPhoneFieldName(f.name)) {
-      val = extractPhones(pageText)[0] ?? "";
+      val = extractLabeledPhones(pageText)[0] ?? "";
     }
     raw[f.name] = val;
   }
@@ -1947,7 +1947,7 @@ async function extractTextStep(
   for (const f of action.fields) {
     let val = extracted[f.name] ?? "";
     if (!val && isPhoneFieldName(f.name)) {
-      val = extractPhones(action.text)[0] ?? "";
+      val = extractLabeledPhones(action.text)[0] ?? "";
     }
     raw[f.name] = val;
   }
@@ -2044,7 +2044,7 @@ async function emailExtractStep(
     }
     let val = extracted[f.name] ?? "";
     if (!val && isPhoneFieldName(f.name)) {
-      val = extractPhones(data.bodyText)[0] ?? "";
+      val = extractLabeledPhones(data.bodyText)[0] ?? "";
     }
     raw[f.name] = val;
   }
@@ -2343,7 +2343,7 @@ async function browseActionStep(
     for (const f of action.fields) {
       let val = extracted[f.name] ?? "";
       if (!val && isPhoneFieldName(f.name)) {
-        val = extractPhones(pageText)[0] ?? "";
+        val = extractLabeledPhones(pageText)[0] ?? "";
       }
       raw[f.name] = val;
     }
