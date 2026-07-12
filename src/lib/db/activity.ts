@@ -123,15 +123,16 @@ export type ActivityFilter = {
   sinceDays?: number;
 };
 
-/** Every activity kind, in the order the filter bar shows them. */
+/** Every activity kind, in the order the filter bar shows them (keep in
+ * lockstep with the ACTIVITY_BADGE key order the chips actually render from). */
 export const ACTIVITY_KINDS: readonly ActivityKind[] = [
+  "aiflow",
   "call",
   "sms_inbound",
   "sms_outbound",
   "email_inbound",
   "email_outbound",
   "chat",
-  "aiflow",
   "customer",
   "alert"
 ] as const;
