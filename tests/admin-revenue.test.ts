@@ -159,7 +159,18 @@ describe("computeChurnStats", () => {
       ],
       now: NOW
     });
-    expect(stats).toEqual({ canceledInWindow: 1, activeNow: 2, churnRatePct: 50 });
+    expect(stats).toEqual({ canceledInWindow: 1, activeNow: 2, churnRatePct: 33.3 });
+  });
+
+  it("reads 100% on a full wipeout instead of a divide-by-zero 0%", () => {
+    const stats = computeChurnStats({
+      subscriptions: [
+        sub({ business_id: "gone1", status: "canceled", canceled_at: "2026-07-01T00:00:00Z" }),
+        sub({ business_id: "gone2", status: "canceled", canceled_at: "2026-07-02T00:00:00Z" })
+      ],
+      now: NOW
+    });
+    expect(stats).toEqual({ canceledInWindow: 2, activeNow: 0, churnRatePct: 100 });
   });
 
   it("counts per business: duplicate cancel rows count once and a resubscribed tenant didn't churn", () => {
@@ -177,7 +188,7 @@ describe("computeChurnStats", () => {
       ],
       now: NOW
     });
-    expect(stats).toEqual({ canceledInWindow: 1, activeNow: 2, churnRatePct: 50 });
+    expect(stats).toEqual({ canceledInWindow: 1, activeNow: 2, churnRatePct: 33.3 });
   });
 
   it("ignores unparseable and future cancel timestamps and yields 0% with no active subs", () => {

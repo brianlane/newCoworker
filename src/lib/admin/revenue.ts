@@ -134,7 +134,11 @@ export type ChurnStats = {
   canceledInWindow: number;
   /** Businesses with a Stripe-backed active subscription right now. */
   activeNow: number;
-  /** BizBlasts semantics: churned-this-period ÷ currently-active, in %. */
+  /**
+   * Churned ÷ customers-at-start-of-period (active + churned), in %. The
+   * start-of-period denominator keeps the rate meaningful at the edges: a
+   * full wipeout reads 100%, not a divide-by-zero 0%.
+   */
   churnRatePct: number;
 };
 
@@ -174,11 +178,12 @@ export function computeChurnStats(params: {
     if (!activeBusinesses.has(businessId)) canceledInWindow += 1;
   }
   const activeNow = activeBusinesses.size;
+  const startOfPeriod = activeNow + canceledInWindow;
   return {
     canceledInWindow,
     activeNow,
     churnRatePct:
-      activeNow > 0 ? Math.round((canceledInWindow / activeNow) * 1000) / 10 : 0
+      startOfPeriod > 0 ? Math.round((canceledInWindow / startOfPeriod) * 1000) / 10 : 0
   };
 }
 
