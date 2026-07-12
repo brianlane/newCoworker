@@ -253,13 +253,18 @@ export async function readBodyBounded(res: Response): Promise<string> {
   const decoder = new TextDecoder();
   let out = "";
   // Cap on RAW bytes received, not decoded string length — multibyte HTML
-  // must not stretch the download budget.
+  // must not stretch the download budget, and the chunk that crosses the
+  // budget is truncated BEFORE decoding so one giant chunk can't balloon
+  // the buffered string past the cap either.
   let bytesRead = 0;
   while (bytesRead < SEO_MAX_BYTES) {
     const { done, value } = await reader.read();
     if (done) break;
-    bytesRead += value.byteLength;
-    out += decoder.decode(value, { stream: true });
+    const remaining = SEO_MAX_BYTES - bytesRead;
+    const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+    bytesRead += chunk.byteLength;
+    out += decoder.decode(chunk, { stream: true });
+    if (chunk !== value) break;
   }
   try {
     await reader.cancel();
@@ -364,10 +369,13 @@ async function fetchHomepageHops(
       try {
         await assertSafeHostname(new URL(landedUrl).hostname, lookup);
       } catch (err) {
+        // Same mapping as the hop check above: a DNS outage on the landed
+        // host is a fetch problem, not a "not publicly reachable" verdict.
+        const message = (err as Error).message;
         return {
           ok: false,
-          error: "private_address",
-          detail: (err as Error).message
+          error: message === "dns_failure" ? "fetch_failed" : "private_address",
+          detail: message
         };
       }
     }

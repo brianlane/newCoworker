@@ -422,6 +422,26 @@ describe("analyzeWebsiteSeo", () => {
       lookup: lookupByHost
     });
     expect(badResult).toMatchObject({ ok: false, error: "private_address" });
+
+    // A DNS outage on the LANDED host is a fetch problem, not a
+    // "not publicly reachable" verdict (same mapping as the hop check).
+    const lookupDnsFail = async (hostname: string) => {
+      if (hostname === "x.example.com") return [{ address: "93.184.216.34", family: 4 }];
+      throw new Error("boom");
+    };
+    const followedDnsFail = {
+      ...response(200, GOOD_HTML),
+      url: "https://nxdomain.example.com/"
+    } as unknown as FakeResponse;
+    const dnsResult = await analyzeWebsiteSeo("https://x.example.com", {
+      fetchImpl: fetchSequence([followedDnsFail]).impl,
+      lookup: lookupDnsFail as never
+    });
+    expect(dnsResult).toMatchObject({
+      ok: false,
+      error: "fetch_failed",
+      detail: "dns_failure"
+    });
   });
 
   it("refuses invalid URLs, private hosts, dns failures, and redirect abuse", async () => {

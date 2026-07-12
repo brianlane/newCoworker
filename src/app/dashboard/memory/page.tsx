@@ -32,6 +32,27 @@ export default async function MemoryPage() {
   const tier = business?.tier ?? null;
   const config = businessId ? await getBusinessConfig(businessId) : null;
 
+  // Hydrate the SEO card only when the stored report still describes the
+  // CURRENTLY configured site — after the owner changes/clears the URL, a
+  // report for the old site must not keep rendering (the next audit
+  // replaces it).
+  const storedSeoReport =
+    ((config as { seo_report?: SeoReportView | null } | null)?.seo_report ?? null);
+  const seoReportMatchesSite = (() => {
+    if (!storedSeoReport || !business?.website_url) return false;
+    try {
+      const configured = new URL(
+        /^[a-z][a-z0-9+.-]*:\/\//i.test(business.website_url)
+          ? business.website_url
+          : `https://${business.website_url}`
+      );
+      return new URL(storedSeoReport.url).hostname.replace(/^www\./, "") ===
+        configured.hostname.replace(/^www\./, "");
+    } catch {
+      return false;
+    }
+  })();
+
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
@@ -61,9 +82,7 @@ export default async function MemoryPage() {
           <SeoInsightsCard
             businessId={businessId!}
             websiteUrl={business?.website_url ?? null}
-            initialReport={
-              ((config as { seo_report?: SeoReportView | null }).seo_report ?? null)
-            }
+            initialReport={seoReportMatchesSite ? storedSeoReport : null}
           />
           <DocumentsManager businessId={businessId!} />
         </>
