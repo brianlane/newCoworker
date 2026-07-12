@@ -363,7 +363,10 @@ describe("buildPoolBoxBurn", () => {
         inventoryRow({ vm_id: 42, hostname: null, plan: "kvm1" }), // no billing row → estimate
         inventoryRow({ vm_id: 43, plan: "weird-plan" }), // unknown plan → null price
         inventoryRow({ vm_id: 44, state: "assigned" }), // not idle — skipped
-        inventoryRow({ vm_id: 45, state: "retired" })
+        inventoryRow({ vm_id: 45, state: "retired" }),
+        // Cancelled billing = sunk cost until lapse, NOT recurring burn
+        // (same rule as the fleet KPI excluding cancelled subs).
+        inventoryRow({ vm_id: 46 })
       ],
       hostingerRows: [
         hostingerRow({
@@ -375,12 +378,23 @@ describe("buildPoolBoxBurn", () => {
           next_billing_at: null,
           expires_at: "2026-08-02T00:00:00.000Z"
         }),
+        hostingerRow({
+          subscription_id: "sub-cancelled",
+          vm_id: 46,
+          status: "cancelled",
+          monthly_price_cents: 2449,
+          next_billing_at: null,
+          expires_at: "2026-09-01T00:00:00.000Z"
+        }),
         hostingerRow({ subscription_id: "sub-no-vm", vm_id: null })
       ],
       now: NOW
     });
 
-    expect(burn.map((b) => b.vmId)).toEqual([1800985, 42, 43]);
+    expect(burn.map((b) => b.vmId)).toEqual([1800985, 46, 42, 43]);
+    const cancelled = burn.find((b) => b.vmId === 46)!;
+    expect(cancelled.monthlyCents).toBeNull();
+    expect(cancelled.endsAt).toBe("2026-09-01T00:00:00.000Z");
     expect(burn[0]).toMatchObject({
       monthlyCents: 2449,
       monthlySource: "actual",
@@ -388,14 +402,14 @@ describe("buildPoolBoxBurn", () => {
       endsAt: "2026-08-02T00:00:00.000Z",
       daysLeft: 21
     });
-    expect(burn[1]).toMatchObject({
+    expect(burn.find((b) => b.vmId === 42)).toMatchObject({
       monthlyCents: HOSTING_MONTHLY_CENTS_BY_SIZE.kvm1,
       monthlySource: "estimate",
       autoRenew: null,
       endsAt: null,
       daysLeft: null
     });
-    expect(burn[2].monthlyCents).toBeNull();
+    expect(burn.find((b) => b.vmId === 43)?.monthlyCents).toBeNull();
   });
 
   it("falls back to next_billing_at for the clock and clamps past dates to 0 days", () => {

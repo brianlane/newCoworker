@@ -230,8 +230,14 @@ export function buildPoolBoxBurn(params: {
   for (const box of params.inventory) {
     if (box.state !== "available") continue;
     const billing = byVm.get(box.vm_id) ?? null;
-    const syncedCents = billing?.monthly_price_cents ?? null;
-    const estimateCents = isVpsSize(box.plan) ? HOSTING_MONTHLY_CENTS_BY_SIZE[box.plan] : null;
+    // A cancelled billing subscription recurs nothing — the box is sunk
+    // cost until it lapses, not monthly burn (same rule as the fleet KPI,
+    // which excludes cancelled rows). Only a missing billing row falls
+    // back to the SKU estimate.
+    const cancelled = billing !== null && billing.status === "cancelled";
+    const syncedCents = cancelled ? null : (billing?.monthly_price_cents ?? null);
+    const estimateCents =
+      !cancelled && isVpsSize(box.plan) ? HOSTING_MONTHLY_CENTS_BY_SIZE[box.plan] : null;
     const endsAt = billing?.expires_at ?? billing?.next_billing_at ?? null;
     const endsMs = endsAt !== null ? Date.parse(endsAt) : Number.NaN;
     burn.push({

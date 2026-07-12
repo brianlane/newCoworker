@@ -12,7 +12,6 @@ import {
   telnyxMonthlyTrend
 } from "@/lib/admin/costs-view";
 import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
-import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { fetchTelnyxBalance } from "@/lib/telnyx/balance";
 import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
@@ -62,9 +61,6 @@ export default async function AdminCostsPage() {
       fetchTelnyxBalance(process.env.TELNYX_API_KEY?.trim() || null)
     ]);
 
-  const subscriptionMap = await listSubscriptionsByBusinessIds(
-    margins.businesses.map((b) => b.id)
-  );
   const syncStatus = parsePlatformCostSyncStatus(syncStatusRaw);
 
   const lineTotals = sumMarginLinesByKey(margins.economics);
@@ -87,9 +83,11 @@ export default async function AdminCostsPage() {
   const directions = telnyxDirectionSummary(monthTelnyxRows);
 
   const businessNames = new Map(margins.businesses.map((b) => [b.id, b.name]));
+  // The loader's active-preferring subscription map, so a pending
+  // resubscribe row can't hide a live contract from the calendar.
   const renewalEvents = buildRenewalCalendar({
     hostingerRows,
-    subscriptions: [...subscriptionMap.values()],
+    subscriptions: [...margins.subscriptionByBusiness.values()],
     businessNames,
     now
   });

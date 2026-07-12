@@ -12,7 +12,7 @@
 
 import { logger } from "@/lib/logger";
 import { listBusinesses, type BusinessRow } from "@/lib/db/businesses";
-import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
+import { listAllSubscriptions, type SubscriptionRow } from "@/lib/db/subscriptions";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import {
   getFleetCalendarMonthUsageByBusiness,
@@ -38,12 +38,42 @@ export type FleetMarginData = {
   byBusiness: Map<string, BusinessMarginEconomics>;
   usageByBusiness: Map<string, BusinessMonthUsage>;
   aiSpendMicrosByBusiness: Map<string, number>;
+  /** The revenue-bearing subscription row per business (see {@link dedupeSubscriptionsPreferringActive}). */
+  subscriptionByBusiness: Map<string, SubscriptionRow>;
   totals: FleetMarginTotals;
   /** True when this month's Telnyx sync rows exist (margin uses invoice actuals). */
   telnyxActuals: boolean;
   /** UTC YYYY-MM-DD the month window starts at. */
   monthStartYmd: string;
 };
+
+/**
+ * One revenue-bearing subscription row per business from a newest-first
+ * history: the newest ACTIVE Stripe-backed row wins; only businesses with
+ * none fall back to their newest row of any status. Plain
+ * newest-row-wins would let a `pending` resubscribe checkout shadow the
+ * still-live subscription and zero the tenant's revenue/margin until it
+ * activates.
+ */
+export function dedupeSubscriptionsPreferringActive(
+  rows: SubscriptionRow[]
+): Map<string, SubscriptionRow> {
+  const picked = new Map<string, SubscriptionRow>();
+  const pickedIsActive = new Set<string>();
+  for (const row of rows) {
+    const isActive = row.status === "active" && row.stripe_subscription_id !== null;
+    if (!picked.has(row.business_id)) {
+      picked.set(row.business_id, row);
+      if (isActive) pickedIsActive.add(row.business_id);
+      continue;
+    }
+    if (isActive && !pickedIsActive.has(row.business_id)) {
+      picked.set(row.business_id, row);
+      pickedIsActive.add(row.business_id);
+    }
+  }
+  return picked;
+}
 
 export function monthStartYmdUtc(now: Date = new Date()): string {
   return `${now.toISOString().slice(0, 7)}-01`;
@@ -76,9 +106,9 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
   const businesses = await listBusinesses();
   const monthStartYmd = monthStartYmdUtc(now);
 
-  const [subscriptionMap, deals, usageByBusiness, aiSpendMicrosByBusiness, hostingerRows, telnyxRows] =
+  const [allSubscriptions, deals, usageByBusiness, aiSpendMicrosByBusiness, hostingerRows, telnyxRows] =
     await Promise.all([
-      listSubscriptionsByBusinessIds(businesses.map((b) => b.id)),
+      listAllSubscriptions(),
       listActiveEnterpriseDeals(),
       // Best-effort reads: a transient failure degrades one input to
       // zero/estimates instead of erroring the whole admin page.
@@ -108,6 +138,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
       })
     ]);
 
+  const subscriptionByBusiness = dedupeSubscriptionsPreferringActive(allSubscriptions);
   const dealByBusiness = new Map(deals.map((deal) => [deal.business_id, deal.monthly_cents]));
   const hostingByBusiness = hostingCentsByBusiness(hostingerRows);
   const telnyxByBusiness = telnyxMicrosByBusiness(telnyxRows);
@@ -127,7 +158,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
         hostingerVpsId: business.hostinger_vps_id,
         vpsSize: business.vps_size ?? null,
         vpsProvider: business.vps_provider ?? null,
-        subscription: subscriptionMap.get(business.id) ?? null,
+        subscription: subscriptionByBusiness.get(business.id) ?? null,
         enterpriseDealMonthlyCents: dealByBusiness.get(business.id) ?? null,
         hostingerMonthlyPriceCents: hostingByBusiness.get(business.id) ?? null,
         telnyxMonthCostMicros: telnyxActuals ? (telnyxByBusiness.get(business.id) ?? 0) : null,
@@ -147,6 +178,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
     byBusiness,
     usageByBusiness,
     aiSpendMicrosByBusiness,
+    subscriptionByBusiness,
     totals: computeFleetMarginTotals(economics),
     telnyxActuals,
     monthStartYmd

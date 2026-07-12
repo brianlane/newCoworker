@@ -7,7 +7,7 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db/subscriptions")>();
   return {
     ...actual,
-    listSubscriptionsByBusinessIds: vi.fn()
+    listAllSubscriptions: vi.fn()
   };
 });
 vi.mock("@/lib/db/enterprise-deals", () => ({
@@ -25,13 +25,14 @@ vi.mock("@/lib/db/platform-costs", () => ({
 }));
 
 import {
+  dedupeSubscriptionsPreferringActive,
   hostingCentsByBusiness,
   loadFleetMargins,
   monthStartYmdUtc,
   telnyxMicrosByBusiness
 } from "@/lib/admin/margin-data";
 import { listBusinesses } from "@/lib/db/businesses";
-import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
+import { listAllSubscriptions, type SubscriptionRow } from "@/lib/db/subscriptions";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { getFleetCalendarMonthUsageByBusiness } from "@/lib/db/usage";
 import { getFleetCurrentAiSpendMicrosByBusiness } from "@/lib/db/chat-usage";
@@ -112,9 +113,7 @@ function telnyxRow(overrides: Partial<TelnyxCostDailyRow> = {}): TelnyxCostDaily
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(listBusinesses).mockResolvedValue([AMY, PILOT] as never);
-  vi.mocked(listSubscriptionsByBusinessIds).mockResolvedValue(
-    new Map([["biz-amy", AMY_SUB]]) as never
-  );
+  vi.mocked(listAllSubscriptions).mockResolvedValue([AMY_SUB] as never);
   vi.mocked(listActiveEnterpriseDeals).mockResolvedValue([
     { business_id: "biz-pilot", monthly_cents: 250_000 }
   ] as never);
@@ -137,6 +136,38 @@ beforeEach(() => {
 describe("monthStartYmdUtc", () => {
   it("returns the first of the current UTC month", () => {
     expect(monthStartYmdUtc(NOW)).toBe("2026-07-01");
+  });
+});
+
+describe("dedupeSubscriptionsPreferringActive", () => {
+  function sub(overrides: Partial<SubscriptionRow>): SubscriptionRow {
+    return { ...AMY_SUB, ...overrides } as SubscriptionRow;
+  }
+
+  it("lets an older ACTIVE row win over a newer pending resubscribe (newest-first input)", () => {
+    const pending = sub({ id: "sub-pending", status: "pending" });
+    const active = sub({ id: "sub-active" });
+    const map = dedupeSubscriptionsPreferringActive([pending, active]);
+    expect(map.get("biz-amy")?.id).toBe("sub-active");
+  });
+
+  it("keeps the newest active row when several are active", () => {
+    const newerActive = sub({ id: "sub-newer" });
+    const olderActive = sub({ id: "sub-older" });
+    const map = dedupeSubscriptionsPreferringActive([newerActive, olderActive]);
+    expect(map.get("biz-amy")?.id).toBe("sub-newer");
+  });
+
+  it("falls back to the newest row of any status when nothing is active", () => {
+    const canceledNewest = sub({ id: "sub-canceled", status: "canceled" });
+    const stripelessActive = sub({
+      id: "sub-stripeless",
+      status: "active",
+      stripe_subscription_id: null
+    });
+    const map = dedupeSubscriptionsPreferringActive([canceledNewest, stripelessActive]);
+    // Stripe-less "active" is not revenue-bearing; the newest row stands.
+    expect(map.get("biz-amy")?.id).toBe("sub-canceled");
   });
 });
 
