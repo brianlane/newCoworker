@@ -112,8 +112,13 @@ describe("getEmployeePerformance", () => {
             "2026-07-03T12:00:00Z",
             "garbage"
           ),
-          // Claimed run that was never updated: counts the claim, no duration.
+          // A claim on a run with NO offer bookkeeping (pre-offered_log run or
+          // late-claim finalization): the claim itself proves an offer reached
+          // Dave, so it counts as offered too — offered can never read lower
+          // than claimed. Never updated → no duration.
           run({ claimed_by: DAVE }, "2026-07-03T12:30:00Z", null),
+          // A LIVE un-answered offer (routing.offered) also counts as offered.
+          run({ offered: ANA }, "2026-07-03T14:00:00Z", null),
           // Claimed by someone off the roster — ignored in member rows.
           run({ claimed_by: "+19998887777" }, "2026-07-03T13:00:00Z", "2026-07-03T14:00:00Z"),
           // No routing context at all.
@@ -138,11 +143,10 @@ describe("getEmployeePerformance", () => {
         name: "Dave",
         e164: DAVE,
         active: true,
-        offered: 4,
+        // 4 offer-logged runs + 1 claim-implied offer = 5.
+        offered: 5,
         claimed: 3,
-        // Rate counts OFFER-MATCHED claims only (the direct claim with no
-        // offer row doesn't inflate it past 100%).
-        claimRate: 2 / 4,
+        claimRate: 3 / 5,
         medianClaimMs: 30 * 60_000,
         forwardedCalls: 2
       },
@@ -151,9 +155,10 @@ describe("getEmployeePerformance", () => {
         name: "Ana",
         e164: ANA,
         active: false,
-        offered: 1,
+        // 1 offer-logged + 1 live routing.offered = 2.
+        offered: 2,
         claimed: 1,
-        claimRate: 1,
+        claimRate: 1 / 2,
         medianClaimMs: 90 * 60_000,
         forwardedCalls: 0
       }

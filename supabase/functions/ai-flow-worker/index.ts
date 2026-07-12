@@ -916,8 +916,9 @@ type StepOutcome =
   // after the gate (the action it guards) is recorded as skipped and never
   // runs, while the rest of the flow continues.
   // endRun: finalize the run immediately after this step WITHOUT running any
-  // remaining steps. Used by a route_to_team LATE claim ("86") so the claim
-  // path notifies the owner but later steps (email/browse/notify) don't replay.
+  // remaining steps. Used by a route_to_team LATE claim (a "1" on a lapsed
+  // offer) and the "86" unclaim, so those paths notify the owner but later
+  // steps (email/browse/notify) don't replay.
   | { kind: "ok"; result?: Record<string, unknown>; skipped?: boolean; skipNextStep?: boolean; endRun?: boolean }
   // `result` lets a failing step attach diagnostics (e.g. a screenshot_path of
   // the stuck page) onto the recorded failed step so the dashboard can show it.
@@ -4364,12 +4365,13 @@ async function routeToTeamStep(
     };
   }
 
-  // An agent claimed (inbound '1', or a late claim option): finalize and
-  // optionally tell the owner.
+  // An agent claimed (inbound '1' — live, late, or first-to-claim yank):
+  // finalize and optionally tell the owner.
   if (routing.last_event === "claim") {
     // Late claim: the offer had already lapsed (and likely fallen back to the
-    // owner) when the agent texted "86". Notify the owner the same way, then
-    // finalize WITHOUT replaying the steps after route_to_team.
+    // owner) when the agent texted "1". Notify the owner the same way, then
+    // finalize WITHOUT replaying the steps after route_to_team. ("86" is the
+    // OPPOSITE — a retroactive unclaim — handled above.)
     const lateClaim = routing.late_claim === true;
     const claimedBy =
       typeof routing.reply_from === "string" && routing.reply_from
@@ -4417,7 +4419,10 @@ async function routeToTeamStep(
     }
     appendActionTaken(
       scope,
-      `lead ${lateClaim ? "claimed late (86) by" : "claimed by"} ${claimedName || claimedBy}` +
+      // No "(86)" here: "86" is the retroactive UNCLAIM digit — a late claim
+      // arrives as a "1" on a lapsed offer. The old label taught owners the
+      // wrong digit.
+      `lead ${lateClaim ? "claimed late by" : "claimed by"} ${claimedName || claimedBy}` +
         (claimTimeframe ? ` (ETA: ${claimTimeframe})` : "")
     );
     // Claim-driven ownership: the claimer becomes the contact's owner if the

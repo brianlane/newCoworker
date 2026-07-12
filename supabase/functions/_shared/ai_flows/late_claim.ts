@@ -84,7 +84,7 @@ export function matchLateClaimReply(args: {
     const claimedBy = routing.claimed_by ?? "";
     // Claimed by someone else → not available to this teammate.
     if (claimedBy && claimedBy !== from) continue;
-    // Already this teammate's lead (claimed via 1, or a prior 86): re-ack
+    // Already this teammate's lead (claimed via an earlier "1"): re-ack
     // without re-opening. The worker clears routing.step_index when it
     // finalizes a claim, so this idempotent path must NOT require step_index.
     if (claimedBy === from) {
