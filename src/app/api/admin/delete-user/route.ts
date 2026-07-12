@@ -23,7 +23,7 @@
 import { z } from "zod";
 import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
-import { getBusiness, deleteBusiness, listBusinessIdsByOwnerEmail } from "@/lib/db/businesses";
+import { deleteBusiness, listBusinesses } from "@/lib/db/businesses";
 import { listBusinessIdsWithStripeLinkedSubscription } from "@/lib/db/subscriptions";
 import { deleteBusinessMembersByEmail } from "@/lib/db/business-members";
 import { logAdminAction } from "@/lib/admin/audit";
@@ -50,7 +50,14 @@ export async function DELETE(request: Request) {
       return errorResponse("VALIDATION_ERROR", "Refusing to delete the admin account", 400);
     }
 
-    const businessIds = await listBusinessIdsByOwnerEmail(email);
+    // Case-INSENSITIVE ownership match (mirrors the user detail page):
+    // `businesses.owner_email` keeps signup casing, so an equality lookup on
+    // the lowercased email could miss owned tenants — deleting the auth user
+    // while their businesses (and the Stripe/VM guards) silently survive.
+    const ownedBusinesses = (await listBusinesses()).filter(
+      (b) => (b.owner_email ?? "").trim().toLowerCase() === email
+    );
+    const businessIds = ownedBusinesses.map((b) => b.id);
 
     // Billing guard: fail closed if Stripe is (or may start) billing any
     // owned business. Force-cancel & wipe is the path for paying tenants.
@@ -65,9 +72,9 @@ export async function DELETE(request: Request) {
 
     // Stop any VMs still attached so deleting the business rows can't strand
     // a running (billed) box with no DB correlation left to find it by.
-    for (const businessId of businessIds) {
-      const business = await getBusiness(businessId);
-      if (!business?.hostinger_vps_id) continue;
+    for (const business of ownedBusinesses) {
+      const businessId = business.id;
+      if (!business.hostinger_vps_id) continue;
       const vmId = Number.parseInt(business.hostinger_vps_id, 10);
       if (!Number.isFinite(vmId)) {
         logger.warn("admin.delete-user: non-numeric hostinger_vps_id; cannot stop VM", {
