@@ -185,7 +185,27 @@ jobs:
 
       - name: Serve edge functions
         run: |
-          printf 'INTERNAL_CRON_SECRET=itest-cron-secret\n' > supabase/functions/.env.itest
+          # The sms-reply-pipeline suite runs a fake Rowboat (port 8977) on
+          # THIS host; the edge-runtime container reaches it via the supabase
+          # docker network's gateway IP (Linux). Locally on Docker Desktop
+          # the same role is played by host.docker.internal — see the
+          # vitest.worker-integration.config.ts header for the local recipe.
+          NET=supabase_network_glwmorjxzkzpcfffwvkk
+          GW=$(docker network inspect "$NET" -f '{{(index .IPAM.Config 0).Gateway}}' 2>/dev/null || true)
+          if [ -z "$GW" ]; then
+            # Some docker versions omit Gateway from IPAM — derive the host
+            # address as .1 of the network's subnet (docker's convention).
+            SUBNET=$(docker network inspect "$NET" -f '{{(index .IPAM.Config 0).Subnet}}' 2>/dev/null || true)
+            GW=$(printf '%s' "$SUBNET" | sed -E 's#\.[0-9]+/[0-9]+$#.1#')
+          fi
+          [ -z "$GW" ] && GW=host.docker.internal
+          echo "fake-rowboat host for containers: $GW"
+          {
+            echo "INTERNAL_CRON_SECRET=itest-cron-secret"
+            echo "ROWBOAT_CHAT_URL_TEMPLATE=http://${GW}:8977/chat"
+            echo "ROWBOAT_DEFAULT_PROJECT_ID=itest-project"
+            echo "ROWBOAT_VPS_CHAT_BEARER=itest-rowboat-bearer"
+          } > supabase/functions/.env.itest
           # --no-verify-jwt mirrors production: every function is deployed
           # with verify_jwt = false (see supabase/config.toml) because they
           # authenticate their own callers (the pg_cron bearer is plain hex,
