@@ -45,6 +45,12 @@ export function simulateTestAction(
 ): Record<string, unknown> | null {
   switch (action.kind) {
     case "send_sms":
+      // A planner skip (templated recipient resolved to nothing usable) must
+      // read as the SKIP the live run would record — not as a successful
+      // send to the "(group thread)" display fallback.
+      if (action.skipReason) {
+        return { simulated: "send_sms", skipped: action.skipReason };
+      }
       return {
         simulated: "send_sms",
         to: action.toAgentName || action.toRef?.label || action.to || "(group thread)",
@@ -58,6 +64,12 @@ export function simulateTestAction(
         body: action.body
       };
     case "share_document": {
+      // Same skip semantics as send_sms: a live run never mints a link for a
+      // missing recipient, so the test run must not report one (or stamp the
+      // saveAs var with a placeholder link that was never "sent").
+      if (action.skipReason) {
+        return { simulated: "share_document", skipped: action.skipReason };
+      }
       // No link is minted (a real share row would be a live capability URL);
       // the saveAs var gets a placeholder so later templates render visibly.
       const placeholder = "https://example.invalid/test-share-link";

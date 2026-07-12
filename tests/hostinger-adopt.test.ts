@@ -15,6 +15,13 @@ vi.mock("@/lib/db/vps-ssh-keys", () => ({
   updateVpsSshKeyHostKeyFingerprint: (...args: unknown[]) =>
     moduleUpdateVpsSshKeyHostKeyFingerprint(...args)
 }));
+// The adopt path reads vps_inventory for the never_renew flag; the module
+// fallback (deps.db omits the override) must not touch a real database.
+// Defaults to "not tracked" so pre-existing tests keep their behavior.
+const moduleGetVpsInventoryByVmId = vi.fn().mockResolvedValue(null);
+vi.mock("@/lib/db/vps-inventory", () => ({
+  getVpsInventoryByVmId: (...args: unknown[]) => moduleGetVpsInventoryByVmId(...args)
+}));
 
 import { adoptVpsForBusiness, type AdoptVpsDeps } from "@/lib/hostinger/adopt";
 import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
@@ -605,6 +612,78 @@ describe("adoptVpsForBusiness", () => {
     // loud follow-up instead (a pooled box left with auto-renew off lapses
     // at period end under the new tenant).
     expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("leaves auto-renew OFF when the box is flagged never_renew (must lapse at period end)", async () => {
+    // srv1632631 case: KVM8 hardware pooled under the kvm2 label whose
+    // $73.99/mo renewal must never be paid for a kvm2-priced tenant — the
+    // tenant gets migrated off before the paid period ends instead.
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-never" })
+    });
+    const getInventory = vi
+      .fn()
+      .mockResolvedValue({ vm_id: 1800985, never_renew: true, state: "assigned" });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: getInventory
+      }
+    });
+    const res = await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    // The adopt succeeds and still reports the billing id, but renewal was
+    // deliberately NOT re-enabled.
+    expect(res.hostingerBillingSubscriptionId).toBe("hsub-never");
+    expect(getInventory).toHaveBeenCalledWith(1800985);
+    expect(client.enableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("re-enables renewal when the never_renew lookup fails — tenant safety wins over the flag", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-adopted" })
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: vi.fn().mockRejectedValue(new Error("inventory db down"))
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    // With the flag unknowable the box must not lapse under the tenant; the
+    // posture cron re-checks the flag daily and surfaces any conflict.
+    expect(client.enableBillingAutoRenewal).toHaveBeenCalledWith("hsub-adopted");
+  });
+
+  it("stringifies a non-Error never_renew lookup failure and still re-enables", async () => {
+    const client = makeClient({
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ ...runningVm, subscription_id: "hsub-adopted" })
+    });
+    const deps = makeDeps(client, {
+      db: {
+        insertVpsSshKey: vi.fn(),
+        getActiveVpsSshKey: vi.fn().mockResolvedValue(keyRow),
+        getVpsInventoryByVmId: vi.fn().mockRejectedValue("inventory string boom")
+      }
+    });
+    await adoptVpsForBusiness(
+      { businessId: "biz-1", tier: "standard", virtualMachineId: 1800985 },
+      deps
+    );
+    expect(client.enableBillingAutoRenewal).toHaveBeenCalledWith("hsub-adopted");
   });
 
   it("re-enables billing auto-renew on the adopted box (pooled boxes are parked with it off)", async () => {
