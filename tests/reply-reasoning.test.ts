@@ -273,6 +273,28 @@ describe("splitReplyReasoning", () => {
       const raw = "Our suite code is [[LOBBY — text when you arrive.";
       expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
     });
+
+    it("a NESTED [[a [[b]] c]] blob is removed in full — no tail debris", () => {
+      const raw =
+        "Sounds good!\n[[Outer note [[inner aside]] more private text]]\nSee you at 2pm.";
+      const res = splitReplyReasoning(raw);
+      // The whole nested blob goes (a blank line where it sat is fine —
+      // the guarantee is zero leaked note content, not line compaction).
+      expect(res.reply).not.toContain("[[");
+      expect(res.reply).not.toContain("]]");
+      expect(res.reply).not.toContain("private");
+      expect(res.reply).not.toContain("aside");
+      expect(res.reply).toContain("Sounds good!");
+      expect(res.reply).toContain("See you at 2pm.");
+    });
+
+    it("an unbalanced nested blob scrubs the closed spans and keeps the legit tail", () => {
+      const raw = "Note: [[wrapper [[closed]] dangling — but your slot is 2pm.";
+      const res = splitReplyReasoning(raw);
+      // The complete inner span goes; the dangling remainder survives.
+      expect(res.reply).toContain("your slot is 2pm");
+      expect(res.reply).not.toContain("closed]]");
+    });
   });
 
   it("malformed trailers strip but parse to null", () => {

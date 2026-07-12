@@ -133,6 +133,38 @@ function parseTrailer(payload: string): ReplyReasoning | null {
  */
 const BRACKET_BLOB_PATTERN = /\[\[[\s\S]*?\]\]/g;
 
+/**
+ * Remove every `[[...]]` span, DEPTH-AWARE so a nested `[[a [[b]] c]]` is
+ * removed in full (a non-greedy regex would stop at the inner `]]` and leak
+ * the outer blob's tail). When the brackets never balance (an unclosed
+ * `[[` in legitimate text), nothing outside complete non-greedy spans is
+ * touched — the flat regex handles whatever closed spans exist and the
+ * dangling remainder stays as the customer wrote... as the model wrote it.
+ */
+function scrubBracketBlobs(text: string): string {
+  let out = "";
+  let depth = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("[[", i)) {
+      depth += 1;
+      i += 2;
+      continue;
+    }
+    if (depth > 0 && text.startsWith("]]", i)) {
+      depth -= 1;
+      i += 2;
+      continue;
+    }
+    if (depth === 0) out += text[i];
+    i += 1;
+  }
+  // Balanced: the scan is exact. Unbalanced (a dangling "[[" with no
+  // close): fall back to scrubbing only the complete spans so an unclosed
+  // literal like "[[LOBBY — text when you arrive" is not eaten to EOF.
+  return depth === 0 ? out : text.replace(BRACKET_BLOB_PATTERN, "");
+}
+
 /** A line that is only a markdown fence (with an optional language tag). */
 function isBareFence(line: string): boolean {
   return /^\s*```[a-z]*\s*$/i.test(line);
@@ -213,7 +245,7 @@ export function splitReplyReasoning(raw: string): SplitReplyResult {
   let reply = keptLines.join("\n");
   // Third net: free-form [[...]] private-note blobs (see pattern doc).
   if (reply.includes("[[")) {
-    const scrubbed = reply.replace(BRACKET_BLOB_PATTERN, "");
+    const scrubbed = scrubBracketBlobs(reply);
     if (scrubbed !== reply) stripped = true;
     reply = scrubbed;
   }
