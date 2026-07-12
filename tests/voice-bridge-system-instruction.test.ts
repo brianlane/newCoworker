@@ -4,7 +4,7 @@ import {
   VOICE_CUSTOMER_MEMORY_MAX_CHARS,
   VOICE_FLOW_CONTEXT_MAX_CHARS,
   type CallerIdentity
-} from "../vps/voice-bridge/src/gemini-telnyx-bridge";
+} from "../vps/voice-bridge/src/system-instruction";
 
 /**
  * The voice bridge's system-instruction builder — the single string that
@@ -120,7 +120,10 @@ describe("caller-memory block", () => {
   });
 
   it("whitespace-only memory adds nothing", () => {
-    expect(build({ memory: "   " })).toBe(build());
+    // No full-string equality with build(): the instruction embeds the
+    // current time, so two builds can legitimately differ across a second
+    // boundary. Absence of the block header is the invariant.
+    expect(build({ memory: "   " })).not.toContain("Caller context");
   });
 });
 
@@ -141,6 +144,8 @@ describe("AiFlow flow-context block", () => {
   });
 
   it("whitespace-only flow context adds nothing", () => {
-    expect(build({ flowContext: "  \n " })).toBe(build());
+    // Timestamp caveat again: assert the instruction still ENDS at the
+    // persona's final line (the whitespace blob was never appended).
+    expect(build({ flowContext: "  \n " }).endsWith("recognized it.")).toBe(true);
   });
 });

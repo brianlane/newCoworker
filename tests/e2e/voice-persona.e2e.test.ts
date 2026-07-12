@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from "vitest";
-import { systemInstructionForBusiness } from "../../vps/voice-bridge/src/gemini-telnyx-bridge";
+import { systemInstructionForBusiness } from "../../vps/voice-bridge/src/system-instruction";
 import { formatVoiceFlowContext } from "../../vps/voice-bridge/src/flow-run-context";
 import { geminiChatReply } from "./gemini";
 
