@@ -127,16 +127,53 @@ describe("escalateToHuman", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("a recent page for an untaggable contact also counts as OPEN (no page spam)", async () => {
+  it("a recent DELIVERED page for an untaggable contact counts as OPEN (no page spam)", async () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: null }, // no contact row (nothing can carry the tag)
-      { data: [{ id: "n1" }] } // a page inside the re-page window
+      { data: [{ id: "n1" }] } // a delivered page inside the re-page window
     ]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("already_open");
     expect(fetchFn).not.toHaveBeenCalled();
     const dedupe = calls.find((c) => c.table === "notifications" && c.name === "eq" && c.args[0] === "payload->>contactE164");
     expect(dedupe?.args[1]).toBe(LEAD);
+    // Only status=sent rows suppress a re-page: skipped/failed channel rows
+    // mean the owner was never reached, so a retry must go out.
+    const sent = calls.find((c) => c.table === "notifications" && c.name === "eq" && c.args[0] === "status");
+    expect(sent?.args[1]).toBe("sent");
+  });
+
+  it("retries a transient notify failure and succeeds within the attempt budget", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    let calls = 0;
+    const flaky = vi.fn(async () => {
+      calls += 1;
+      return calls === 1 ? new Response("overloaded", { status: 503 }) : new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const { db } = makeDb([{ data: null }, { data: [] }]);
+    expect(await escalateToHuman(db, input(flaky))).toBe("escalated");
+    expect(calls).toBe(2);
+    err.mockRestore();
+  });
+
+  it("a permanent notify 4xx fails fast without burning retries", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const rejecting = vi.fn(async () => new Response("bad", { status: 400 })) as unknown as typeof fetch;
+    const { db } = makeDb([{ data: null }, { data: [] }]);
+    expect(await escalateToHuman(db, input(rejecting))).toBe("notify_failed");
+    expect(rejecting).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+
+  it("a throwing notify fetch is retried, then reported as notify_failed", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const throwing = vi.fn(async () => {
+      throw new Error("network down");
+    }) as unknown as typeof fetch;
+    const { db } = makeDb([{ data: null }, { data: [] }]);
+    expect(await escalateToHuman(db, input(throwing))).toBe("notify_failed");
+    expect(throwing).toHaveBeenCalledTimes(3);
+    err.mockRestore();
   });
 
   it("no contact row: nothing to tag, but the owner is still paged", async () => {
@@ -258,7 +295,8 @@ describe("escalateToHuman", () => {
       const { db, calls } = makeDb([{ data: null }, { data: [] }]);
       const { fetchFn: _omitted, ...noFetch } = input(okFetch());
       expect(await escalateToHuman(db, noFetch)).toBe("notify_failed");
-      expect(globalFetch).toHaveBeenCalledTimes(1);
+      // Transient 5xx: every attempt in the budget was spent.
+      expect(globalFetch).toHaveBeenCalledTimes(3);
       // Page-first ordering: a failed page must leave NO tag behind.
       expect(calls.some((c) => c.name === "update")).toBe(false);
     } finally {

@@ -39,6 +39,9 @@ export const NEEDS_HUMAN_TASK_TYPE = "sms_needs_human";
 /** Same cap as every other tag write path (DB check constraint). */
 const MAX_TAGS = 25;
 
+/** Bounded transient retry for the notify POST (429/5xx/thrown fetch). */
+const NOTIFY_MAX_ATTEMPTS = 3;
+
 export function hasNeedsHumanTag(tags: unknown): boolean {
   if (!Array.isArray(tags)) return false;
   return tags.some(
@@ -139,6 +142,10 @@ export async function escalateToHuman(
         .from("notifications")
         .select("id")
         .eq("business_id", input.businessId)
+        // Only a DELIVERED page counts: the notifications function records
+        // skipped/failed channel rows too, and those must not suppress a
+        // retry that could actually reach the owner.
+        .eq("status", "sent")
         .eq("payload->>taskType", NEEDS_HUMAN_TASK_TYPE)
         .eq("payload->>contactE164", input.contactE164)
         .gte("created_at", sinceIso)
@@ -152,38 +159,57 @@ export async function escalateToHuman(
 
     // 1) Page the owner FIRST (notifications function fans out SMS/email/
     // dashboard per their preferences and records the history rows). A
-    // failure leaves no state so the next escalated turn retries.
+    // failure leaves no state so the next escalated TURN retries — and
+    // because the reply path only escalates on the fresh-reply attempt
+    // (cached retries skip it), transient upstream blips get a bounded
+    // in-call retry here so one 503 can't lose the page for a job whose
+    // handoff reply was already cached.
     const label = contact?.display_name?.trim() || input.contactE164;
     const doFetch = input.fetchFn ?? fetch;
-    const res = await doFetch(input.notifyUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${input.bearer}`
-      },
-      body: JSON.stringify({
-        type: "INSERT",
-        table: "coworker_logs",
-        record: {
-          id: crypto.randomUUID(),
-          business_id: input.businessId,
-          task_type: NEEDS_HUMAN_TASK_TYPE,
-          status: "urgent_alert",
-          log_payload: {
-            contact_e164: input.contactE164,
-            contact_label: label,
-            intent: input.intent.slice(0, 80),
-            reason: input.reason.slice(0, 300),
-            inbound_preview: input.inboundPreview.slice(0, 300)
-          },
-          created_at: new Date().toISOString()
-        }
-      })
+    const body = JSON.stringify({
+      type: "INSERT",
+      table: "coworker_logs",
+      record: {
+        id: crypto.randomUUID(),
+        business_id: input.businessId,
+        task_type: NEEDS_HUMAN_TASK_TYPE,
+        status: "urgent_alert",
+        log_payload: {
+          contact_e164: input.contactE164,
+          contact_label: label,
+          intent: input.intent.slice(0, 80),
+          reason: input.reason.slice(0, 300),
+          inbound_preview: input.inboundPreview.slice(0, 300)
+        },
+        created_at: new Date().toISOString()
+      }
     });
-    if (!res.ok) {
-      console.error("needs_human: notify post failed", res.status);
-      return "notify_failed";
+    let delivered = false;
+    for (let attempt = 1; attempt <= NOTIFY_MAX_ATTEMPTS; attempt++) {
+      try {
+        const res = await doFetch(input.notifyUrl, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${input.bearer}`
+          },
+          body
+        });
+        if (res.ok) {
+          delivered = true;
+          break;
+        }
+        const transient = res.status === 429 || res.status >= 500;
+        console.error("needs_human: notify post failed", res.status);
+        if (!transient) break; // a 4xx is permanent — retrying can't help
+      } catch (postErr) {
+        console.error("needs_human: notify post threw", postErr);
+      }
+      if (attempt < NOTIFY_MAX_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 300 * attempt));
+      }
     }
+    if (!delivered) return "notify_failed";
 
     // 2) Open the needs-human state (contacts with tag headroom only —
     // untaggable contacts were deduped against the history above).
