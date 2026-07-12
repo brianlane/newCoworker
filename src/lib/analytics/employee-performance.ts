@@ -5,9 +5,18 @@
  * `context.routing` and forwarded calls from voice transcripts.
  *
  * Per roster member over the trailing window:
- *   - offered      — runs whose offer SMS actually reached them (offered_log)
+ *   - offered      — runs where an offer verifiably reached them. Derived
+ *     from the union of `routing.offered_log` (who was actually texted an
+ *     offer), the current live `routing.offered`, AND `routing.claimed_by`.
+ *     The claimed_by leg matters: the engine only finalizes a claim for a
+ *     member who WAS offered the lead ("1" claims live/late/yank offers;
+ *     see late_claim.ts), but the claim finalization does not append to
+ *     offered_log, and runs predating the offered_log bookkeeping
+ *     (2026-07-06, #387) never carry it at all — counting offered_log alone
+ *     made Offered undercount and read LOWER than Claimed. This union keeps
+ *     the invariant offered ≥ claimed for every member on every run.
  *   - claimed      — runs they hold (claimed_by)
- *   - claimRate    — claimed / offered
+ *   - claimRate    — claimed / offered (≤ 100% by the invariant above)
  *   - medianClaimMs — median run-start → last-update time across their
  *     claimed runs. APPROXIMATE by design: the routing context stamps no
  *     claim timestamp, and updated_at moves again if steps run after the
@@ -98,26 +107,22 @@ export async function getEmployeePerformance(
 
   const offered = new Map<string, number>();
   const claimed = new Map<string, number>();
-  // Claims whose run also OFFERED that member — the claim-rate numerator.
-  // Counting every claim there would let direct/yank claims (no offer row
-  // in the window) push the displayed rate past 100%.
-  const claimedFromOffer = new Map<string, number>();
   const claimDurations = new Map<string, number[]>();
   for (const run of ((runsRes.data as RunRow[] | null) ?? [])) {
     const routing = routingOfContext(run.context);
     if (!routing) continue;
+    // Everyone this run's offer verifiably reached (see module doc): the
+    // offer log, plus a live un-answered offer, plus the claimer — a claim
+    // is itself proof an offer reached them, including on runs that predate
+    // the offered_log bookkeeping.
     const offeredSet = new Set(routing.offered_log ?? []);
+    if (routing.offered) offeredSet.add(routing.offered);
+    if (routing.claimed_by) offeredSet.add(routing.claimed_by);
     for (const e164 of offeredSet) {
       offered.set(e164, (offered.get(e164) ?? 0) + 1);
     }
     if (routing.claimed_by) {
       claimed.set(routing.claimed_by, (claimed.get(routing.claimed_by) ?? 0) + 1);
-      if (offeredSet.has(routing.claimed_by)) {
-        claimedFromOffer.set(
-          routing.claimed_by,
-          (claimedFromOffer.get(routing.claimed_by) ?? 0) + 1
-        );
-      }
       const start = Date.parse(run.created_at);
       const end = run.updated_at ? Date.parse(run.updated_at) : NaN;
       if (Number.isFinite(start) && Number.isFinite(end) && end > start) {
@@ -137,7 +142,6 @@ export async function getEmployeePerformance(
   const rows: EmployeePerformanceRow[] = members.map((m) => {
     const offers = offered.get(m.phone_e164) ?? 0;
     const claims = claimed.get(m.phone_e164) ?? 0;
-    const claimsFromOffers = claimedFromOffer.get(m.phone_e164) ?? 0;
     return {
       memberId: m.id,
       name: m.name,
@@ -145,9 +149,9 @@ export async function getEmployeePerformance(
       active: m.active,
       offered: offers,
       claimed: claims,
-      // Offer-matched claims only, so a direct/yank claim can never push
-      // the displayed rate past 100%.
-      claimRate: offers === 0 ? null : claimsFromOffers / offers,
+      // offered ⊇ claimed per run (the claimer always counts as offered),
+      // so this can never exceed 100%.
+      claimRate: offers === 0 ? null : claims / offers,
       medianClaimMs: median(claimDurations.get(m.phone_e164) ?? []),
       forwardedCalls: forwarded.get(m.phone_e164) ?? 0
     };

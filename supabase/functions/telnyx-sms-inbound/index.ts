@@ -416,12 +416,12 @@ async function resumeAwaitingReplyRun(
 
 /**
  * How long after a lead was last offered/handed back a teammate may still
- * claim it with "86". Bounds a stray "86" from reviving an ancient lead.
+ * late-claim it with "1". Bounds a stray reply from reviving an ancient lead.
  */
 const LATE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Persist a teammate/owner offer reply (claim "1", pass "2", "86" late-claim,
+ * Persist a teammate/owner offer reply (claim "1", pass "2", unclaim "86",
  * "<n>, <eta>", or an owner approval digit) to `sms_inbound_jobs` so it appears
  * in the dashboard Texts thread alongside the offer that prompted it.
  *
@@ -864,13 +864,13 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
 
   // Recent route_to_team runs for this business (route steps stamp
   // context.routing). Newest first; 25 routing runs is plenty for a human
-  // texting "86". Filter to context.routing IS NOT NULL so unrelated runs
+  // texting "1". Filter to context.routing IS NOT NULL so unrelated runs
   // (send_sms-only flows, approvals with no route step, etc.) don't consume
   // the cap and hide an eligible late-claim run within the 24h window.
   // Include awaiting_approval: after the owner fallback the worker can advance
   // past route_to_team and park a LATER step on an approval gate — that run is
-  // still the teammate's most recent offered lead and must be visible to "86",
-  // otherwise an older eligible run within 24h would be claimed instead.
+  // still the teammate's most recent offered lead and must be visible to the
+  // claim, otherwise an older eligible run within 24h would be claimed instead.
   const { data: rows } = await supabase
     .from("ai_flow_runs")
     .select("id, status, context, awaiting_agent_e164, current_step, updated_at, revision")
@@ -942,7 +942,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   routing.reply_from = from;
   routing.offered = from;
   if (memberName) routing.offered_name = memberName;
-  // ETA the teammate stated ("86, 2 hours") → the worker appends it to the owner's
+  // ETA the teammate stated ("1, 2 hours") → the worker appends it to the owner's
   // claim notice. Cleared when none so a re-claim never carries a stale ETA.
   if (claimTimeframe) routing.claim_timeframe = claimTimeframe;
   else delete routing.claim_timeframe;
@@ -952,7 +952,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // late_claim flags a run whose post-route steps ALREADY ran (see matcher):
   // the worker re-runs just the route claim/notify and then ends, so
   // email/browse/notify aren't replayed. A still-live offer is left unflagged
-  // so "86" continues the flow exactly like a "1" claim.
+  // and continues the flow exactly like an on-time "1" claim.
   if (isLate) routing.late_claim = true;
   const stepIndex = matchStepIndex;
   const nextContext = { ...(match.context ?? {}), routing };
@@ -1046,8 +1046,8 @@ type StaleOfferAckArgs = {
  * recently. Consume it with a deterministic "here's what happened to that
  * lead" ack instead of letting it fall through to the chat AI, which has no
  * offer context and improvises a baffling reply. This never claims — the
- * late-claim path and "86" keep that role. Returns a Response when consumed,
- * or null when the reply should fall through to the normal inbound path.
+ * "1" claim paths keep that role (and "86" unclaims). Returns a Response when
+ * consumed, or null when the reply should fall through to the normal inbound path.
  */
 async function tryStaleOfferAck(args: StaleOfferAckArgs): Promise<Response | null> {
   const {
