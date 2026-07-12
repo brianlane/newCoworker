@@ -55,14 +55,17 @@ export async function GET(request: Request) {
       return errorResponse("FORBIDDEN", "Analytics requires the Standard plan", 403);
     }
 
+    // One shared instant per request, mirroring the analytics page's shared
+    // `now`, so a download describes exactly one day-aligned window.
+    const now = new Date();
     let csv: string;
     let filename: string;
     if (kind === "flows") {
-      const funnels = await getFlowFunnels(businessId, { client: db });
+      const funnels = await getFlowFunnels(businessId, { client: db, now });
       csv = flowFunnelsCsv(funnels.rows, funnels.clipped);
       filename = "flow-performance-30d.csv";
     } else {
-      const series = await getDailyUsageSeries(businessId, { client: db });
+      const series = await getDailyUsageSeries(businessId, { client: db, now });
       csv = dailySeriesCsv(series.days, series.clipped);
       filename = "analytics-daily-30d.csv";
     }
