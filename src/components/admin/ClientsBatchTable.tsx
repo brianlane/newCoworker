@@ -7,33 +7,84 @@ import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { DeployButton } from "@/components/dashboard/DeployButton";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
+import {
+  clientsCsv,
+  filterClientRows,
+  sortClientRows,
+  EMPTY_CLIENTS_FILTERS,
+  PAYMENT_NONE,
+  type AdminClientRow,
+  type ClientsFilters,
+  type ClientsSortDir,
+  type ClientsSortKey
+} from "@/lib/admin/clients-table";
 
-export type ClientRow = {
-  id: string;
-  name: string;
-  ownerEmail: string;
-  tier: string;
-  createdAt: string;
-  status: string;
-  isPaused: boolean;
-  subscriptionStatus: string | null;
-};
+export type ClientRow = AdminClientRow;
 
 type BatchAction = "pause" | "resume" | "redeploy";
 
+const TIER_OPTIONS = ["starter", "standard", "enterprise"];
+
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort
+}: {
+  label: string;
+  sortKey: ClientsSortKey;
+  sort: { key: ClientsSortKey; dir: ClientsSortDir } | null;
+  onSort: (key: ClientsSortKey) => void;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th className="text-left py-3 px-4 text-parchment/40 font-medium">
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={`inline-flex items-center gap-1 hover:text-parchment/70 ${
+          active ? "text-parchment/80" : ""
+        }`}
+      >
+        {label}
+        <span className="text-[10px]">{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span>
+      </button>
+    </th>
+  );
+}
+
 /**
- * Admin clients table with BizBlasts-style batch actions: select rows, then
- * pause/resume (kill switch) or redeploy them in one pass. Actions run
- * sequentially per business (each is an existing single-tenant endpoint) and
- * report per-row failures instead of aborting the whole batch.
+ * Admin clients table with BizBlasts-style index affordances: text search,
+ * tier / VPS-status / payment filters, sortable columns, one-click CSV
+ * export of the visible rows, and batch actions (select rows, then
+ * pause/resume or redeploy them in one pass). Batch actions run sequentially
+ * per business (each is an existing single-tenant endpoint) and report
+ * per-row failures instead of aborting the whole batch.
  */
 export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState<BatchAction | null>(null);
   const [report, setReport] = useState<string | null>(null);
+  const [filters, setFilters] = useState<ClientsFilters>(EMPTY_CLIENTS_FILTERS);
+  const [sort, setSort] = useState<{ key: ClientsSortKey; dir: ClientsSortDir } | null>(null);
 
-  const allSelected = selected.size === rows.length && rows.length > 0;
+  const visibleRows = useMemo(() => {
+    const filtered = filterClientRows(rows, filters);
+    return sort ? sortClientRows(filtered, sort.key, sort.dir) : filtered;
+  }, [rows, filters, sort]);
+
+  const statusOptions = useMemo(
+    () => [...new Set(rows.map((r) => r.status))].sort(),
+    [rows]
+  );
+  const paymentOptions = useMemo(
+    () => [...new Set(rows.map((r) => r.subscriptionStatus ?? PAYMENT_NONE))].sort(),
+    [rows]
+  );
+
+  const allSelected =
+    visibleRows.length > 0 && visibleRows.every((r) => selected.has(r.id));
 
   function toggle(id: string) {
     setSelected((prev) => {
@@ -45,10 +96,34 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
   }
 
   function toggleAll() {
-    setSelected(allSelected ? new Set() : new Set(rows.map((r) => r.id)));
+    setSelected(allSelected ? new Set() : new Set(visibleRows.map((r) => r.id)));
   }
 
-  const selectedRows = useMemo(() => rows.filter((r) => selected.has(r.id)), [rows, selected]);
+  function toggleSort(key: ClientsSortKey) {
+    setSort((prev) => {
+      if (!prev || prev.key !== key) return { key, dir: "asc" };
+      if (prev.dir === "asc") return { key, dir: "desc" };
+      return null;
+    });
+  }
+
+  function exportCsv() {
+    const blob = new Blob([clientsCsv(visibleRows)], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `clients-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  // Batch actions act on the visible selection ONLY: a row selected and then
+  // hidden by a filter must never receive a kill-switch / redeploy call the
+  // operator can't see happening.
+  const selectedRows = useMemo(
+    () => visibleRows.filter((r) => selected.has(r.id)),
+    [visibleRows, selected]
+  );
 
   async function runBatch(action: BatchAction) {
     if (selectedRows.length === 0) return;
@@ -116,15 +191,80 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-parchment/10">
+      {/* Search + filters + export */}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-3 border-b border-parchment/10">
+        <input
+          type="search"
+          value={filters.search}
+          onChange={(e) => setFilters((f) => ({ ...f, search: e.target.value }))}
+          placeholder="Search name or owner email…"
+          aria-label="Search clients"
+          className="w-56 rounded-md border border-parchment/20 bg-deep-ink px-2.5 py-1.5 text-xs text-parchment placeholder:text-parchment/30 focus:outline-none focus:ring-1 focus:ring-signal-teal"
+        />
+        <select
+          value={filters.tier ?? ""}
+          onChange={(e) => setFilters((f) => ({ ...f, tier: e.target.value || null }))}
+          aria-label="Filter by plan"
+          className="rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-xs text-parchment/80 focus:outline-none focus:ring-1 focus:ring-signal-teal"
+        >
+          <option value="">All plans</option>
+          {TIER_OPTIONS.map((t) => (
+            <option key={t} value={t}>
+              {t}
+            </option>
+          ))}
+        </select>
+        <select
+          value={filters.status ?? ""}
+          onChange={(e) => setFilters((f) => ({ ...f, status: e.target.value || null }))}
+          aria-label="Filter by VPS status"
+          className="rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-xs text-parchment/80 focus:outline-none focus:ring-1 focus:ring-signal-teal"
+        >
+          <option value="">All statuses</option>
+          {statusOptions.map((s) => (
+            <option key={s} value={s}>
+              {s.replaceAll("_", " ")}
+            </option>
+          ))}
+        </select>
+        <select
+          value={filters.payment ?? ""}
+          onChange={(e) => setFilters((f) => ({ ...f, payment: e.target.value || null }))}
+          aria-label="Filter by payment status"
+          className="rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-xs text-parchment/80 focus:outline-none focus:ring-1 focus:ring-signal-teal"
+        >
+          <option value="">All payments</option>
+          {paymentOptions.map((p) => (
+            <option key={p} value={p}>
+              {p.replaceAll("_", " ")}
+            </option>
+          ))}
+        </select>
         <span className="text-xs text-parchment/40">
-          {selected.size} selected
+          {visibleRows.length} of {rows.length}
         </span>
         <Button
           type="button"
           size="sm"
           variant="ghost"
-          disabled={selected.size === 0 || running !== null}
+          className="ml-auto"
+          onClick={exportCsv}
+          disabled={visibleRows.length === 0}
+        >
+          Export CSV
+        </Button>
+      </div>
+
+      {/* Batch actions */}
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-parchment/10">
+        <span className="text-xs text-parchment/40">
+          {selectedRows.length} selected
+        </span>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={selectedRows.length === 0 || running !== null}
           loading={running === "pause"}
           onClick={() => void runBatch("pause")}
         >
@@ -134,7 +274,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
           type="button"
           size="sm"
           variant="ghost"
-          disabled={selected.size === 0 || running !== null}
+          disabled={selectedRows.length === 0 || running !== null}
           loading={running === "resume"}
           onClick={() => void runBatch("resume")}
         >
@@ -144,7 +284,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
           type="button"
           size="sm"
           variant="ghost"
-          disabled={selected.size === 0 || running !== null}
+          disabled={selectedRows.length === 0 || running !== null}
           loading={running === "redeploy"}
           onClick={() => void runBatch("redeploy")}
         >
@@ -161,20 +301,27 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                   type="checkbox"
                   checked={allSelected}
                   onChange={toggleAll}
-                  aria-label="Select all businesses"
+                  aria-label="Select all visible businesses"
                   className="accent-signal-teal"
                 />
               </th>
-              <th className="text-left py-3 px-4 text-parchment/40 font-medium">Business</th>
+              <SortHeader label="Business" sortKey="name" sort={sort} onSort={toggleSort} />
               <th className="text-left py-3 px-4 text-parchment/40 font-medium">Owner</th>
-              <th className="text-left py-3 px-4 text-parchment/40 font-medium">Plan</th>
-              <th className="text-left py-3 px-4 text-parchment/40 font-medium">Payment</th>
-              <th className="text-left py-3 px-4 text-parchment/40 font-medium">Status</th>
+              <SortHeader label="Plan" sortKey="tier" sort={sort} onSort={toggleSort} />
+              <SortHeader label="Payment" sortKey="payment" sort={sort} onSort={toggleSort} />
+              <SortHeader label="Status" sortKey="status" sort={sort} onSort={toggleSort} />
               <th className="text-left py-3 px-4 text-parchment/40 font-medium">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((b) => (
+            {visibleRows.length === 0 && (
+              <tr>
+                <td colSpan={7} className="py-8 px-4 text-center text-sm text-parchment/40">
+                  No clients match the current filters.
+                </td>
+              </tr>
+            )}
+            {visibleRows.map((b) => (
               <tr key={b.id} className="border-b border-parchment/5 hover:bg-parchment/3">
                 <td className="py-3 px-4">
                   <input
@@ -193,7 +340,18 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     <LocalDateTime iso={b.createdAt} style="date" />
                   </p>
                 </td>
-                <td className="py-3 px-4 text-parchment/70">{b.ownerEmail}</td>
+                <td className="py-3 px-4 text-parchment/70">
+                  <span className="inline-flex items-center gap-2">
+                    {b.ownerEmail}
+                    {b.ownerQuiet && (
+                      <span title="Owner hasn't signed in for 90+ days">
+                        <Badge variant="error" className="text-[10px]">
+                          churn risk
+                        </Badge>
+                      </span>
+                    )}
+                  </span>
+                </td>
                 <td className="py-3 px-4">
                   <Badge variant={b.tier === "standard" ? "online" : "neutral"}>{b.tier}</Badge>
                 </td>

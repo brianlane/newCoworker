@@ -2,6 +2,7 @@ import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
 import { getSubscription, createSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import { logAdminAction } from "@/lib/admin/audit";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 
@@ -11,7 +12,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
 
     const body = schema.parse(await request.json());
     const business = await getBusiness(body.businessId);
@@ -42,6 +43,13 @@ export async function POST(request: Request) {
       // (admin-created Stripe-less rows) keeps the monthly purchase.
       billingPeriod: existing?.billing_period ?? null,
       ownerEmail: business.owner_email
+    });
+
+    await logAdminAction({
+      adminEmail: admin.email,
+      action: "skip_payment",
+      businessId: body.businessId,
+      detail: { hadSubscription: Boolean(existing), tier: business.tier }
     });
 
     return successResponse(result);

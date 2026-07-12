@@ -5,6 +5,7 @@ import { listSystemLogs } from "@/lib/db/system-logs";
 import { getProvisioningLogs, type ProvisioningLogPayload } from "@/lib/provisioning/progress";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getSubscription } from "@/lib/db/subscriptions";
+import { listBusinessMembers } from "@/lib/db/business-members";
 import {
   getTelnyxVoiceRouteForBusiness,
   getBusinessTelnyxSettings
@@ -87,6 +88,7 @@ export default async function BusinessDetailPage({
     listEnterpriseDeals(businessId)
   ]);
   const postureReport = await getLatestVpsPostureReport(businessId);
+  const teamMembers = await listBusinessMembers(businessId);
 
   if (!business) notFound();
 
@@ -297,6 +299,59 @@ export default async function BusinessDetailPage({
           businessId={businessId}
           initialRetentionDays={business.data_retention_days ?? null}
         />
+      </Card>
+
+      {/* Team (read-only; BizBlasts' business-show "Users" panel) */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Team
+        </h2>
+        <ul className="divide-y divide-parchment/8">
+          <li className="py-2.5 flex flex-wrap items-center gap-2">
+            <span className="text-sm text-parchment font-medium">{business.owner_email}</span>
+            <Badge variant="success">owner</Badge>
+            <span className="text-xs text-parchment/30 ml-auto shrink-0">
+              since <LocalDateTime iso={business.created_at} style="date" />
+            </span>
+          </li>
+          {teamMembers.map((member) => (
+            <li key={member.id} className="py-2.5 flex flex-wrap items-center gap-2">
+              <span
+                className={`text-sm font-medium ${
+                  member.status === "revoked" ? "text-parchment/40 line-through" : "text-parchment"
+                }`}
+              >
+                {member.email}
+              </span>
+              <Badge variant="neutral">{member.role}</Badge>
+              <Badge
+                variant={
+                  member.status === "active"
+                    ? "success"
+                    : member.status === "invited"
+                      ? "pending"
+                      : "error"
+                }
+              >
+                {member.status}
+              </Badge>
+              <span className="text-xs text-parchment/30 ml-auto shrink-0">
+                {member.accepted_at ? (
+                  <>
+                    joined <LocalDateTime iso={member.accepted_at} style="date" />
+                  </>
+                ) : (
+                  <>
+                    invited <LocalDateTime iso={member.created_at} style="date" />
+                  </>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+        {teamMembers.length === 0 && (
+          <p className="text-xs text-parchment/40 mt-2">No team members beyond the owner.</p>
+        )}
       </Card>
 
       {/* Subscription */}

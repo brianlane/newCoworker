@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { logAdminAction } from "@/lib/admin/audit";
 import { getBusiness } from "@/lib/db/businesses";
 import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
 import { assignExistingDidToBusiness, normalizeE164 } from "@/lib/telnyx/assign-did";
@@ -18,7 +19,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const body = schema.parse(await request.json());
     const business = await getBusiness(body.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found");
@@ -58,6 +59,12 @@ export async function POST(request: Request) {
       },
       { telnyxNumbers }
     );
+    await logAdminAction({
+      adminEmail: admin.email,
+      action: "assign_did",
+      businessId: body.businessId,
+      detail: { toE164, associateWithPlatform: associate }
+    });
     return successResponse(result);
   } catch (err) {
     return handleRouteError(err);
