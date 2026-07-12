@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listAllBusinessMembers } from "@/lib/db/business-members";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
-import { findAuthUserIdByEmail } from "@/lib/auth";
+import { findAuthUserIdByEmail, authUserExistsByEmail } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { classifyEngagement } from "@/lib/analytics/engagement";
 import { Card } from "@/components/ui/Card";
@@ -70,9 +70,13 @@ export default async function AdminUserDetailPage({
 
   // A user with no auth account AND no business relationship doesn't exist.
   // Keyed on the ID lookup, not the profile fetch — an auth-only user whose
-  // getUserById read transiently failed must still render, not 404.
+  // getUserById read transiently failed must still render, not 404. And a
+  // null from findAuthUserIdByEmail (which swallows lookup failures) is only
+  // trusted after the STRICT variant (throws on failure) confirms the miss —
+  // same double-check the delete-user route uses.
   if (!authUserId && ownedBusinesses.length === 0 && memberships.length === 0) {
-    notFound();
+    const exists = await authUserExistsByEmail(email);
+    if (!exists) notFound();
   }
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(ownedBusinesses.map((b) => b.id));
