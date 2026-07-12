@@ -211,15 +211,55 @@ function gatherTrailerPayload(
 }
 
 /**
+ * Fourth net: free-form double-bracket note blobs. Teaching the model the
+ * `[[reasoning]]` marker made it generalize "double brackets are my private
+ * notes" — live replays showed replies carrying `[[The user wants to
+ * schedule...]]` prose (no marker word, no JSON) straight into customer
+ * text, which no marker or trailer-JSON matcher can see. No legitimate SMS
+ * reply wraps prose in `[[...]]`, so every complete span is scrubbed
+ * (multi-line included).
+ */
+const BRACKET_BLOB_PATTERN = /\[\[[\s\S]*?\]\]/g;
+
+/**
+ * Remove every `[[...]]` span, DEPTH-AWARE so a nested `[[a [[b]] c]]` is
+ * removed in full (a non-greedy regex would stop at the inner `]]` and leak
+ * the outer blob's tail). When the brackets never balance (a dangling `[[`
+ * in otherwise-legitimate text), fall back to scrubbing only the complete
+ * non-greedy spans so the dangling literal is not eaten to end-of-reply.
+ */
+function scrubBracketBlobs(text: string): string {
+  let out = "";
+  let depth = 0;
+  let i = 0;
+  while (i < text.length) {
+    if (text.startsWith("[[", i)) {
+      depth += 1;
+      i += 2;
+      continue;
+    }
+    if (depth > 0 && text.startsWith("]]", i)) {
+      depth -= 1;
+      i += 2;
+      continue;
+    }
+    if (depth === 0) out += text[i];
+    i += 1;
+  }
+  return depth === 0 ? out : text.replace(BRACKET_BLOB_PATTERN, "");
+}
+
+/**
  * Strip every trailer from the reply and parse the LAST one. A trailer
  * mid-line strips from its start to the end of that line (a model that glued
  * the trailer onto its last sentence keeps the sentence); a trailer whose
  * JSON spans multiple lines (pretty-printed / fenced) is stripped whole.
  * Lines are trailer-carrying when they hold a marker variant OR a bare
- * trailer JSON body (see TRAILER_JSON_PATTERN).
+ * trailer JSON body (see TRAILER_JSON_PATTERN); free-form `[[...]]` note
+ * blobs are scrubbed afterwards (see BRACKET_BLOB_PATTERN).
  */
 export function splitReplyReasoning(raw: string): SplitReplyResult {
-  if (!MARKER_PATTERN.test(raw) && !TRAILER_JSON_PATTERN.test(raw)) {
+  if (!MARKER_PATTERN.test(raw) && !TRAILER_JSON_PATTERN.test(raw) && !raw.includes("[[")) {
     return { reply: raw, reasoning: null };
   }
   const lines = raw.split("\n");
@@ -245,7 +285,13 @@ export function splitReplyReasoning(raw: string): SplitReplyResult {
     i = gathered.endLine;
   }
   const kept = strippedAny ? keptLines.filter((l) => !FENCE_LINE_RE.test(l)) : keptLines;
-  // Collapse the blank tail the removed trailer line usually leaves behind.
-  const reply = kept.join("\n").replace(/\n+$/, "").trimEnd();
+  let reply = kept.join("\n");
+  // Fourth net: free-form [[...]] private-note blobs (see pattern doc).
+  if (reply.includes("[[")) {
+    reply = scrubBracketBlobs(reply);
+  }
+  // Collapse the blanks the removed content leaves behind (both ends: a
+  // leading [[...]] blob strips to an empty first line).
+  reply = reply.replace(/^\n+/, "").replace(/\n+$/, "").trimEnd();
   return { reply, reasoning };
 }

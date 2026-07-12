@@ -298,6 +298,56 @@ describe("splitReplyReasoning", () => {
     });
   });
 
+  describe("free-form [[...]] note blobs (fourth net, live-caught)", () => {
+    // Teaching [[reasoning]] made the model generalize "double brackets are
+    // my private notes": replies carried [[The user wants...]] prose with no
+    // marker word and no JSON. Every complete span must be scrubbed.
+    it("strips a leading [[...]] blob with no marker word or JSON", () => {
+      const raw =
+        "[[The user wants to schedule an appointment. Since the tools are unavailable, I need to inform the user.]]\n" +
+        "I'm sorry, someone from the team will follow up with you shortly.";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("I'm sorry, someone from the team will follow up with you shortly.");
+      expect(res.reasoning).toBeNull();
+    });
+
+    it("strips a multi-line [[...]] blob glued after the reply", () => {
+      const raw =
+        "Okay, I'm available now to chat. What would you like to discuss?\n\n" +
+        "[[The user is available now.\nI cannot make phone calls, so I confirmed text.]]";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Okay, I'm available now to chat. What would you like to discuss?");
+    });
+
+    it("a NESTED [[a [[b]] c]] blob is removed in full — no tail debris", () => {
+      const raw =
+        "Sounds good!\n[[Outer note [[inner aside]] more private text]]\nSee you at 2pm.";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).not.toContain("[[");
+      expect(res.reply).not.toContain("]]");
+      expect(res.reply).not.toContain("private");
+      expect(res.reply).toContain("Sounds good!");
+      expect(res.reply).toContain("See you at 2pm.");
+    });
+
+    it("an unbalanced nested blob scrubs the closed spans and keeps the legit tail", () => {
+      const raw = "Note: [[wrapper [[closed]] dangling — but your slot is 2pm.";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toContain("your slot is 2pm");
+      expect(res.reply).not.toContain("closed]]");
+    });
+
+    it("an unclosed [[ with no closing ]] passes through untouched", () => {
+      const raw = "Our suite code is [[LOBBY — text when you arrive.";
+      expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
+    });
+
+    it("single [ brackets and a lone ]] never trigger the blob net", () => {
+      const raw = "We're at 12 Main St [Suite 4]. Reply YES]] to confirm.";
+      expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
+    });
+  });
+
   it("malformed trailers strip but parse to null", () => {
     for (const bad of [
       "not json",
