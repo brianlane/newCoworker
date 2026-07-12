@@ -185,3 +185,117 @@ export async function ageRun(
 export function minutesAgo(mins: number): string {
   return new Date(Date.now() - mins * 60_000).toISOString();
 }
+
+/** One sms-inbound-worker tick — the exact POST pg_cron makes. */
+export async function tickSmsWorker(): Promise<{ ok: boolean; processed: number }> {
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/sms-inbound-worker`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${CRON_SECRET}`, "Content-Type": "application/json" },
+    body: "{}"
+  });
+  if (!res.ok) {
+    throw new Error(`sms worker tick ${res.status}: ${(await res.text()).slice(0, 300)}`);
+  }
+  return (await res.json()) as { ok: boolean; processed: number };
+}
+
+/** Seed a pending inbound SMS job in the Telnyx webhook envelope shape. */
+export async function enqueueSmsJob(
+  db: SupabaseClient,
+  businessId: string,
+  fromE164: string,
+  text: string
+): Promise<string> {
+  const { data, error } = await db
+    .from("sms_inbound_jobs")
+    .insert({
+      business_id: businessId,
+      status: "pending",
+      payload: { data: { payload: { from: { phone_number: fromE164 }, text } } }
+    })
+    .select("id")
+    .single();
+  if (error) throw new Error(`enqueueSmsJob: ${error.message}`);
+  return (data as { id: string }).id;
+}
+
+export type SmsJobRow = {
+  id: string;
+  status: string;
+  last_error: string | null;
+  rowboat_reply_cached: string | null;
+  rowboat_conversation_id: string | null;
+  customer_e164: string | null;
+};
+
+export async function getSmsJob(db: SupabaseClient, jobId: string): Promise<SmsJobRow> {
+  const { data, error } = await db
+    .from("sms_inbound_jobs")
+    .select("id, status, last_error, rowboat_reply_cached, rowboat_conversation_id, customer_e164")
+    .eq("id", jobId)
+    .single();
+  if (error) throw new Error(`getSmsJob: ${error.message}`);
+  return data as SmsJobRow;
+}
+
+/**
+ * Resume a parked wait_for_reply run the way the telnyx-sms-inbound webhook
+ * does. MIRROR of `resumeAwaitingReplyRun` in
+ * supabase/functions/telnyx-sms-inbound/index.ts (keep in sync) — the
+ * webhook itself can't be invoked here because it verifies Telnyx's
+ * Ed25519 signature, which a test cannot forge by design.
+ */
+export async function resumeReplyLikeWebhook(
+  db: SupabaseClient,
+  businessId: string,
+  fromE164: string,
+  bodyText: string
+): Promise<string[]> {
+  const { data } = await db
+    .from("ai_flow_runs")
+    .select("id, context, revision")
+    .eq("business_id", businessId)
+    .eq("status", "awaiting_reply")
+    .eq("context->waiting_reply->>from", fromE164)
+    .order("updated_at", { ascending: false })
+    .limit(10);
+  const resumed: string[] = [];
+  for (const run of (data ?? []) as Array<{
+    id: string;
+    context: Record<string, unknown> | null;
+    revision: number;
+  }>) {
+    const waiting =
+      (run.context?.waiting_reply as { save_as?: unknown; marker?: unknown } | undefined) ?? {};
+    const saveAs =
+      typeof waiting.save_as === "string" && waiting.save_as.trim() ? waiting.save_as : "reply_text";
+    const prevVars =
+      run.context?.vars && typeof run.context.vars === "object"
+        ? (run.context.vars as Record<string, unknown>)
+        : {};
+    const markerVars =
+      typeof waiting.marker === "string" && waiting.marker.trim() ? { [waiting.marker]: "1" } : {};
+    const { data: updated, error } = await db
+      .from("ai_flow_runs")
+      .update({
+        status: "queued",
+        respond_by_at: null,
+        claimed_at: null,
+        context: {
+          ...(run.context ?? {}),
+          vars: { ...prevVars, [saveAs]: bodyText.slice(0, 4000), ...markerVars },
+          waiting_reply: {
+            ...(run.context?.waiting_reply as Record<string, unknown>),
+            result: "reply"
+          }
+        },
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", run.id)
+      .eq("revision", run.revision)
+      .eq("status", "awaiting_reply")
+      .select("id");
+    if (!error && ((updated ?? []) as unknown[]).length > 0) resumed.push(run.id);
+  }
+  return resumed;
+}
