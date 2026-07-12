@@ -47,7 +47,9 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "a phone call, call notify_team with their number and preferred time so " +
   "a person can call them; only after it succeeds say that someone from " +
   "the team will call them (at the number they're texting from — never " +
-  "quote a different callback number). An appointment exists ONLY " +
+  "quote a different callback number). If notify_team is unavailable or " +
+  "fails, do not promise a call AT ALL — say you couldn't arrange it and " +
+  "someone from the team will follow up. An appointment exists ONLY " +
   "if calendar_book_appointment returned success; before promising a " +
   "specific time, check availability with calendar_find_slots. If " +
   "calendar_book_appointment returns detail booking_link_created with a " +

@@ -164,6 +164,84 @@ describe("splitReplyReasoning", () => {
     });
   });
 
+  describe("multi-line, fenced, and free-form trailer shapes (live-caught)", () => {
+    it("strips a pretty-printed trailer whose JSON spans multiple lines", () => {
+      const raw = [
+        "Happy to help with that!",
+        `${REASONING_MARKER}{`,
+        '  "intent": "wants_quote",',
+        '  "why": "They asked about pricing.",',
+        '  "handoff": false',
+        "}"
+      ].join("\n");
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Happy to help with that!");
+      expect(res.reasoning).toEqual({
+        intent: "wants_quote",
+        rationale: "They asked about pricing.",
+        escalated: false
+      });
+    });
+
+    it("a pretty-printed trailer that never closes strips to the end (never leaks)", () => {
+      const raw = [
+        "See you soon!",
+        `${REASONING_MARKER}{`,
+        '  "intent": "confirming",',
+        '  "why": "unterminated...'
+      ].join("\n");
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("See you soon!");
+      expect(res.reasoning).toBeNull();
+    });
+
+    it("strips a code-fenced trailer without leaving fence debris", () => {
+      const raw = [
+        "Sounds good, talk soon!",
+        "```json",
+        `${REASONING_MARKER}{"intent":"confirming","why":"Wrapped in a fence.","handoff":false}`,
+        "```"
+      ].join("\n");
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Sounds good, talk soon!");
+      expect(res.reply).not.toContain("```");
+      expect(res.reasoning?.intent).toBe("confirming");
+    });
+
+    it("strips free-form [[...]] note blobs with no marker word or JSON (third net)", () => {
+      const raw =
+        "[[The user wants to schedule an appointment. Since the tools are unavailable, I need to inform the user.]]\n" +
+        "I'm sorry, someone from the team will follow up with you shortly.";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("I'm sorry, someone from the team will follow up with you shortly.");
+      expect(res.reply).not.toContain("[[");
+      expect(res.reasoning).toBeNull();
+    });
+
+    it("strips a multi-line [[...]] blob glued after the reply", () => {
+      const raw =
+        "Okay, I'm available now to chat. What would you like to discuss?\n\n" +
+        "[[The user is available now.\nI cannot make phone calls, so I confirmed text.]]";
+      const res = splitReplyReasoning(raw);
+      expect(res.reply).toBe("Okay, I'm available now to chat. What would you like to discuss?");
+    });
+
+    it("a benign fenced snippet in a normal reply is untouched (no trailer stripped)", () => {
+      const raw = "Here are the hours:\n```\nMon-Fri 9-5\n```\nSee you!";
+      expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
+    });
+
+    it("a single [ bracket or lone ]] never triggers the blob net", () => {
+      const raw = "We're at 12 Main St [Suite 4]. Reply YES]] to confirm.";
+      expect(splitReplyReasoning(raw).reply).toBe(raw);
+    });
+
+    it("an unclosed [[ with no closing ]] passes through untouched", () => {
+      const raw = "Our suite code is [[LOBBY — text when you arrive.";
+      expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
+    });
+  });
+
   it("malformed trailers strip but parse to null", () => {
     for (const bad of [
       "not json",

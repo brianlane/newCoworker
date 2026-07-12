@@ -124,32 +124,101 @@ function parseTrailer(payload: string): ReplyReasoning | null {
 }
 
 /**
- * Strip every trailer-carrying line from the reply and parse the LAST one.
- * A trailer mid-line strips from its start to the end of that line (a model
- * that glued the trailer onto its last sentence keeps the sentence). Lines
- * are trailer-carrying when they hold a marker variant OR a bare trailer
- * JSON body (see TRAILER_JSON_PATTERN).
+ * Third net: free-form double-bracket blobs. Teaching the model the
+ * `[[reasoning]]` marker made it generalize "double brackets are my private
+ * notes" — live replays showed replies carrying `[[The user wants to
+ * schedule...]]` (no marker word, no JSON) straight into customer text.
+ * No legitimate SMS reply wraps prose in `[[...]]`, so every such span is
+ * stripped wholesale (multi-line included).
+ */
+const BRACKET_BLOB_PATTERN = /\[\[[\s\S]*?\]\]/g;
+
+/** A line that is only a markdown fence (with an optional language tag). */
+function isBareFence(line: string): boolean {
+  return /^\s*```[a-z]*\s*$/i.test(line);
+}
+
+/** More `{` than `}` so far — the trailer JSON continues on later lines. */
+function unclosedBraces(chunk: string): boolean {
+  let depth = 0;
+  for (const ch of chunk) {
+    if (ch === "{") depth += 1;
+    else if (ch === "}") depth -= 1;
+  }
+  return depth > 0;
+}
+
+/**
+ * Strip every trailer from the reply and parse the LAST well-formed one.
+ * Handled shapes, all observed live:
+ *   - single-line trailers (marker variants or bare trailer JSON), stripped
+ *     from the trailer's start to end of line (a model that glued the
+ *     trailer onto its last sentence keeps the sentence);
+ *   - PRETTY-PRINTED trailers whose JSON spans multiple lines (the walk
+ *     consumes lines until the braces balance — stripped even when the
+ *     JSON turns out malformed);
+ *   - free-form `[[...]]` blobs with no marker word at all (third net);
+ *   - markdown fence lines left bare once the trailer inside them is gone.
  */
 export function splitReplyReasoning(raw: string): SplitReplyResult {
-  if (!MARKER_PATTERN.test(raw) && !TRAILER_JSON_PATTERN.test(raw)) {
+  if (!MARKER_PATTERN.test(raw) && !TRAILER_JSON_PATTERN.test(raw) && !raw.includes("[[")) {
     return { reply: raw, reasoning: null };
   }
+  const lines = raw.split("\n");
   const keptLines: string[] = [];
   let reasoning: ReplyReasoning | null = null;
-  for (const line of raw.split("\n")) {
+  let stripped = false;
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
     const at = trailerCutIndex(line);
     if (at === -1) {
       keptLines.push(line);
+      i += 1;
       continue;
     }
+    stripped = true;
     const before = line.slice(0, at).trimEnd();
     if (before) keptLines.push(before);
+    // Gather the whole trailer: this line's cut, plus following lines while
+    // the JSON braces are unbalanced (pretty-printed trailers span lines).
+    // Consumed lines are stripped regardless of whether the JSON parses —
+    // marker-plus-braces garbage must never reach the customer.
+    let chunk = line.slice(at);
+    while (chunk.includes("{") && unclosedBraces(chunk) && i + 1 < lines.length) {
+      i += 1;
+      chunk += "\n" + lines[i];
+    }
     // parseTrailer scans for the outermost {...} span, so passing the cut
     // (marker/blob included) parses the same JSON for every variant.
-    const parsed = parseTrailer(line.slice(at));
+    const parsed = parseTrailer(chunk);
     if (parsed) reasoning = parsed;
+    i += 1;
   }
-  // Collapse the blank tail the removed trailer line usually leaves behind.
-  const reply = keptLines.join("\n").replace(/\n+$/, "").trimEnd();
+
+  let reply = keptLines.join("\n");
+  // Third net: free-form [[...]] private-note blobs (see pattern doc).
+  if (reply.includes("[[")) {
+    const scrubbed = reply.replace(BRACKET_BLOB_PATTERN, "");
+    if (scrubbed !== reply) stripped = true;
+    reply = scrubbed;
+  }
+  // A stripped trailer can leave its markdown fences behind as bare ```
+  // lines; drop them only when something was actually stripped so a benign
+  // fenced snippet in a normal reply is left alone.
+  if (stripped) {
+    reply = reply
+      .split("\n")
+      .filter((l) => !isBareFence(l))
+      .join("\n");
+  }
+  // Collapse the blank runs the removed content leaves behind (both ends:
+  // a leading [[...]] blob strips to an empty first line).
+  reply = reply
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/^\n+/, "")
+    .replace(/\n+$/, "")
+    .trimEnd();
   return { reply, reasoning };
 }

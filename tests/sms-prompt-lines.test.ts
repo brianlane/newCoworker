@@ -27,6 +27,8 @@ describe("SMS prompt lines", () => {
     );
     // The incident quoted a number the lead should expect a call from.
     expect(SMS_GROUNDED_ACTIONS_LINE).toContain("never quote a different callback number");
+    // Tools-unavailable worst case: no call promise in ANY person.
+    expect(SMS_GROUNDED_ACTIONS_LINE).toContain("do not promise a call AT ALL");
   });
 
   it("grounded actions: the booking honesty rules (Truly booking incident)", () => {
