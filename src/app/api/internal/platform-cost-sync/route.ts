@@ -16,6 +16,8 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { runProductionPlatformCostSync } from "@/lib/admin/cost-sync-runner";
+import { runProductionMarginAlert } from "@/lib/admin/margin-alert-runner";
+import type { MarginAlertRunResult } from "@/lib/admin/margin-alert";
 
 // Telnyx MDR paging over a 90-day backfill plus the Hostinger list can take
 // minutes on slow vendor days; same ceiling as vps-billing-posture.
@@ -41,7 +43,25 @@ export async function POST(request: Request): Promise<Response> {
       hostingerRows: status.hostingerRows,
       hostingerError: status.hostingerError
     });
-    return successResponse({ status });
+
+    // Margin watchdog rides the sync (freshest vendor numbers) —
+    // best-effort: an alert failure must never fail the sync itself.
+    let marginAlert: MarginAlertRunResult | null = null;
+    try {
+      marginAlert = await runProductionMarginAlert();
+      if (marginAlert.emailed) {
+        logger.info("margin alert digest sent", {
+          breaches: marginAlert.breaches.length,
+          thresholdCents: marginAlert.thresholdCents
+        });
+      }
+    } catch (err) {
+      logger.warn("margin alert run failed", {
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    return successResponse({ status, marginAlert });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");
