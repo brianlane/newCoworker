@@ -6,6 +6,7 @@ import {
   getSubscriptionByStripeSubscriptionId,
   isCheckoutBlockingSubscription,
   isCommitmentElapsed,
+  listAllSubscriptions,
   listBusinessIdsWithLiveSubscription,
   listSubscriptionsByBusinessIds,
   stripeSubscriptionPeriodCache,
@@ -439,6 +440,24 @@ describe("db/subscriptions", () => {
     await expect(listSubscriptionsByBusinessIds(["biz-uuid-1"])).rejects.toThrow(
       "listSubscriptionsByBusinessIds"
     );
+  });
+
+  it("listAllSubscriptions returns every row ([] for null data) and throws on error", async () => {
+    const rows = [
+      { ...MOCK_SUB, id: "sub-new" },
+      { ...MOCK_SUB, id: "sub-old", status: "canceled" }
+    ];
+    const db = mockDb({ order: vi.fn().mockResolvedValue({ data: rows, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await listAllSubscriptions()).toEqual(rows);
+
+    const empty = mockDb({ order: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    expect(await listAllSubscriptions(empty as never)).toEqual([]);
+
+    const bad = mockDb({
+      order: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    await expect(listAllSubscriptions(bad as never)).rejects.toThrow("listAllSubscriptions: boom");
   });
 
   it("updateSubscriptionIfNotWiped returns updated row when wiped_at IS NULL matches", async () => {

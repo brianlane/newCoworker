@@ -1,6 +1,7 @@
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness, updateEnterpriseLimits } from "@/lib/db/businesses";
 import { enterpriseLimitsOverrideSchema } from "@/lib/plans/enterprise-limits";
+import { logAdminAction } from "@/lib/admin/audit";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { z } from "zod";
 
@@ -12,7 +13,7 @@ const bodySchema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
 
     const body = bodySchema.parse(await request.json());
     const business = await getBusiness(body.businessId);
@@ -22,6 +23,13 @@ export async function POST(request: Request) {
     }
 
     await updateEnterpriseLimits(body.businessId, body.enterpriseLimits);
+
+    await logAdminAction({
+      adminEmail: admin.email,
+      action: "update_enterprise_limits",
+      businessId: body.businessId,
+      detail: { cleared: body.enterpriseLimits === null }
+    });
 
     return successResponse({ ok: true });
   } catch (err) {

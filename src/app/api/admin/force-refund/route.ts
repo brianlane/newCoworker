@@ -58,6 +58,7 @@ import {
 } from "@/lib/billing/lifecycle-executor";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
+import { logAdminAction } from "@/lib/admin/audit";
 import { logger } from "@/lib/logger";
 
 // Vercel Pro allows up to 300s. The admin force-refund flow's slow
@@ -234,6 +235,12 @@ export async function POST(request: Request) {
 
     logger.info("admin.force-refund complete", {
       adminEmail: admin.email,
+      businessId: body.businessId
+    });
+
+    await logAdminAction({
+      adminEmail: admin.email,
+      action: "force_refund",
       businessId: body.businessId
     });
 

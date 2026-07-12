@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   listBusinessMembers,
+  listAllBusinessMembers,
   getBusinessMember,
   inviteBusinessMember,
   updateBusinessMemberRole,
@@ -66,6 +67,24 @@ describe("db/business-members", () => {
     });
     await expect(listBusinessMembers(BIZ, bad as never)).rejects.toThrow(
       "listBusinessMembers: boom"
+    );
+  });
+
+  it("listAllBusinessMembers returns rows ([] for null data) and throws on error", async () => {
+    const db = mockDb({ order: vi.fn().mockResolvedValue({ data: [MEMBER], error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await listAllBusinessMembers()).toEqual([MEMBER]);
+    // Cross-business list: no business_id filter is applied.
+    expect(db.eq).not.toHaveBeenCalled();
+
+    const empty = mockDb({ order: vi.fn().mockResolvedValue({ data: null, error: null }) });
+    expect(await listAllBusinessMembers(empty as never)).toEqual([]);
+
+    const bad = mockDb({
+      order: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    await expect(listAllBusinessMembers(bad as never)).rejects.toThrow(
+      "listAllBusinessMembers: boom"
     );
   });
 

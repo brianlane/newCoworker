@@ -48,6 +48,22 @@ export async function listBusinessMembers(
   return (data ?? []) as unknown as BusinessMemberRow[];
 }
 
+/**
+ * Every membership row across all businesses (admin engagement page).
+ * Includes revoked rows — callers filter by status as needed.
+ */
+export async function listAllBusinessMembers(
+  client?: SupabaseClient
+): Promise<BusinessMemberRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("business_members")
+    .select(COLUMNS)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`listAllBusinessMembers: ${error.message}`);
+  return (data ?? []) as unknown as BusinessMemberRow[];
+}
+
 export async function getBusinessMember(
   businessId: string,
   memberId: string,

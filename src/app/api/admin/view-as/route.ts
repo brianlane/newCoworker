@@ -15,6 +15,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
 import { VIEW_AS_COOKIE } from "@/lib/admin/view-as";
+import { logAdminAction } from "@/lib/admin/audit";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 
 const schema = z.object({
@@ -23,7 +24,7 @@ const schema = z.object({
 
 export async function POST(request: Request) {
   try {
-    await requireAdmin();
+    const admin = await requireAdmin();
     const body = schema.parse(await request.json());
 
     const business = await getBusiness(body.businessId);
@@ -41,6 +42,13 @@ export async function POST(request: Request) {
       // account/billing mutations, and it expires on its own). Exit via the
       // banner clears it immediately.
       maxAge: 4 * 60 * 60
+    });
+
+    await logAdminAction({
+      adminEmail: admin.email,
+      action: "view_as",
+      businessId: business.id,
+      detail: { businessName: business.name }
     });
 
     return successResponse({

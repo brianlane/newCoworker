@@ -29,6 +29,7 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
+import { logAdminAction } from "@/lib/admin/audit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   HostingerClient,
@@ -189,6 +190,17 @@ export async function DELETE(request: Request) {
           ownerEmail: business.owner_email ?? null,
           authUserDeleted: Boolean(ownerAuthUserId)
         });
+        // Audit with businessId in the payload only: the businesses row is
+        // gone, so an FK-stamped system_logs row would fail to insert.
+        await logAdminAction({
+          adminEmail: admin.email,
+          action: "delete_client",
+          detail: {
+            businessId: body.businessId,
+            businessName: business.name,
+            mode: "hard_delete_subscriptionless"
+          }
+        });
         return successResponse({ deleted: true });
       }
       return errorResponse("NOT_FOUND", ctxRes.reason, 404);
@@ -263,6 +275,13 @@ export async function DELETE(request: Request) {
       adminEmail: admin.email,
       businessId: body.businessId,
       ownerEmail: business.owner_email ?? null
+    });
+
+    await logAdminAction({
+      adminEmail: admin.email,
+      action: "delete_client",
+      businessId: body.businessId,
+      detail: { businessName: business.name, mode: "admin_force_cancel" }
     });
 
     return successResponse({ deleted: true });

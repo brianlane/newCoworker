@@ -235,6 +235,24 @@ export async function listSubscriptionsByBusinessIds(
   return map;
 }
 
+/**
+ * EVERY subscription row across all businesses, newest first — history
+ * included (older canceled rows under a resubscribe, wiped rows). Powers the
+ * admin revenue analytics, which needs cancels for churn, not just the
+ * newest-per-business row that {@link listSubscriptionsByBusinessIds} keeps.
+ */
+export async function listAllSubscriptions(
+  client?: SupabaseClient
+): Promise<SubscriptionRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("subscriptions")
+    .select()
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listAllSubscriptions: ${error.message}`);
+  return (data ?? []) as SubscriptionRow[];
+}
+
 export type LiveSubscriptionBusinessIds = {
   /** Live (active/past_due) subscription BACKED BY A STRIPE PAYMENT. */
   stripeBacked: Set<string>;
