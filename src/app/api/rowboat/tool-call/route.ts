@@ -28,6 +28,10 @@ import {
 } from "@/lib/documents/tool-handlers";
 import { captureWebchatLead } from "@/lib/webchat/lead-capture";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
+import {
+  cancelCalendarAppointment,
+  rescheduleCalendarAppointment
+} from "@/lib/calendar-tools/reschedule";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import {
@@ -155,6 +159,19 @@ const bookAppointmentArgsSchema = z.object({
   // Vagaro connections only: explicit service to book.
   serviceId: z.string().max(120).optional()
 });
+const rescheduleAppointmentArgsSchema = z.object({
+  newStartIso: z.string().datetime({ offset: true }),
+  newEndIso: z.string().datetime({ offset: true }),
+  attendeeName: z.string().max(200).optional(),
+  attendeeEmail: z.string().email().optional(),
+  attendeePhone: z.string().max(32).optional(),
+  timezone: z.string().optional()
+});
+const cancelAppointmentArgsSchema = z.object({
+  attendeeName: z.string().max(200).optional(),
+  attendeeEmail: z.string().email().optional(),
+  attendeePhone: z.string().max(32).optional()
+});
 const documentShareArgsSchema = z.object({
   /** Document id or (partial) title. */
   document: z.string().min(1).max(300),
@@ -219,6 +236,45 @@ function bookFailureGuidance(toolName: string, detail: string): string {
 }
 
 /**
+ * Model-facing guidance for failed reschedule/cancel calls — same rationale
+ * as bookFailureGuidance: without it the model blames "a system error" or,
+ * worse, books a SECOND event to fake a reschedule (the exact lifecycle
+ * failure this tool exists to prevent). Null for details that need no
+ * extra steering (e.g. invalid_window — a plain arg fix).
+ */
+function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel"): string | null {
+  if (detail === "booking_not_found") {
+    return (
+      "No upcoming appointment was found for this person. Confirm the phone number or " +
+      "email their appointment was booked under and the original time. Never book a new " +
+      `appointment to fake a ${verb} — if it still can't be found, call notify_team with ` +
+      "the details and tell them a team member will sort it out."
+    );
+  }
+  if (detail === "reschedule_not_supported" || detail === "cancel_not_supported") {
+    return (
+      `This calendar can't be ${verb === "cancel" ? "canceled" : "changed"} directly from here. ` +
+      "Call notify_team with the requested change and tell them a team member will confirm it. " +
+      "Never book a duplicate appointment as a workaround."
+    );
+  }
+  if (detail === "calendar_not_connected") {
+    return (
+      "No calendar is connected, so you cannot change or cancel any appointment. " +
+      "Call notify_team with the request and tell them a team member will handle it."
+    );
+  }
+  if (detail === "calendar_reschedule_failed" || detail === "calendar_cancel_failed") {
+    return (
+      `The ${verb} did not go through — never blame a technical error and never book a ` +
+      "second appointment as a workaround. Call notify_team with the requested change and " +
+      "tell them a team member will confirm it."
+    );
+  }
+  return null;
+}
+
+/**
  * toolName → the Settings → Coworker tools toggle that gates it, plus the
  * channel recorded on customer interactions and the stamp on pinned notes.
  * The `dashboard_`-prefixed names are the dashboard coworker's declarations
@@ -266,6 +322,15 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   business_knowledge_lookup: { agentKey: "sms", toolKey: "business_knowledge_lookup" },
   calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
   calendar_book_appointment: { agentKey: "sms", toolKey: "calendar_book_appointment" },
+  // Appointment lifecycle beyond the initial booking (Truly Issue 4): a
+  // reschedule updates the EXISTING provider event and a cancel deletes it —
+  // never a second event plus a lingering original. No webchat twins: the
+  // anonymous surface must not mutate the owner's calendar.
+  calendar_reschedule_appointment: {
+    agentKey: "sms",
+    toolKey: "calendar_reschedule_appointment"
+  },
+  calendar_cancel_appointment: { agentKey: "sms", toolKey: "calendar_cancel_appointment" },
   dashboard_business_knowledge_lookup: {
     agentKey: "dashboard",
     toolKey: "business_knowledge_lookup"
@@ -274,6 +339,14 @@ const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   dashboard_calendar_book_appointment: {
     agentKey: "dashboard",
     toolKey: "calendar_book_appointment"
+  },
+  dashboard_calendar_reschedule_appointment: {
+    agentKey: "dashboard",
+    toolKey: "calendar_reschedule_appointment"
+  },
+  dashboard_calendar_cancel_appointment: {
+    agentKey: "dashboard",
+    toolKey: "calendar_cancel_appointment"
   },
   // Website chat widget (anonymous internet surface): info + lead gen ONLY.
   // This is the COMPLETE `webchat_*` allowlist — the WebchatCoworker agent
@@ -453,6 +526,30 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ...booked, message: bookFailureGuidance(name, booked.detail) };
       }
       return booked;
+    }
+    case "calendar_reschedule_appointment": {
+      const parsed = rescheduleAppointmentArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const rescheduled = await rescheduleCalendarAppointment(businessId, parsed.data, null);
+      if (!rescheduled.ok && rescheduled.detail) {
+        const message = lifecycleFailureGuidance(rescheduled.detail, "reschedule");
+        if (message) return { ...rescheduled, message };
+      }
+      return rescheduled;
+    }
+    case "calendar_cancel_appointment": {
+      const parsed = cancelAppointmentArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const canceled = await cancelCalendarAppointment(businessId, parsed.data, null);
+      if (!canceled.ok && canceled.detail) {
+        const message = lifecycleFailureGuidance(canceled.detail, "cancel");
+        if (message) return { ...canceled, message };
+      }
+      return canceled;
     }
     case "notify_team": {
       const parsed = notifyTeamArgsSchema.safeParse(args);

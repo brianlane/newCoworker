@@ -98,6 +98,22 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "calendar_reschedule_appointment",
+        label: "Reschedule appointments",
+        description:
+          "Move an existing appointment to a new time from chat — the invitation is updated in place, never duplicated.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_cancel_appointment",
+        label: "Cancel appointments",
+        description:
+          "Cancel an existing appointment from chat — the attendee gets a single cancellation notice.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description: "Look up a customer's cross-channel history when you ask about them in chat.",
@@ -268,6 +284,22 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "calendar_book_appointment",
         label: "Book appointments",
         description: "Book appointments on your connected calendar for a texter.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_reschedule_appointment",
+        label: "Reschedule appointments",
+        description:
+          "Move a texter's existing appointment to a new time — the invitation is updated in place, never duplicated.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_cancel_appointment",
+        label: "Cancel appointments",
+        description:
+          "Cancel a texter's existing appointment — they get a single cancellation notice.",
         defaultEnabled: true,
         configurable: true
       },

@@ -672,6 +672,8 @@ WORKFLOW_JSON=$(jq -nc \
         "business_knowledge_lookup",
         "calendar_find_slots",
         "calendar_book_appointment",
+        "calendar_reschedule_appointment",
+        "calendar_cancel_appointment",
         "send_email",
         "notify_team",
         "generate_image",
@@ -703,6 +705,8 @@ WORKFLOW_JSON=$(jq -nc \
         "business_knowledge_lookup",
         "calendar_find_slots",
         "calendar_book_appointment",
+        "calendar_reschedule_appointment",
+        "calendar_cancel_appointment",
         "send_email",
         "notify_team",
         "generate_image",
@@ -736,6 +740,8 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
+        "dashboard_calendar_reschedule_appointment",
+        "dashboard_calendar_cancel_appointment",
         "dashboard_generate_image",
         "dashboard_document_list",
         "dashboard_document_share",
@@ -770,6 +776,8 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
+        "dashboard_calendar_reschedule_appointment",
+        "dashboard_calendar_cancel_appointment",
         "dashboard_generate_image",
         "dashboard_document_list",
         "dashboard_document_share",
@@ -1054,6 +1062,37 @@ WORKFLOW_JSON=$(jq -nc \
       }
     },
     {
+      name: "calendar_reschedule_appointment",
+      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation — this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          newStartIso: { type: "string", description: "New start time, ISO 8601 with offset." },
+          newEndIso: { type: "string", description: "New end time, ISO 8601 with offset." },
+          attendeePhone: { type: "string", description: "Customer phone the appointment was booked under (E.164)." },
+          attendeeEmail: { type: "string", description: "Customer email, if the phone is unknown." },
+          attendeeName: { type: "string", description: "Customer name, if known." },
+          timezone: { type: "string", description: "IANA timezone for the new times." }
+        },
+        required: ["newStartIso", "newEndIso"]
+      }
+    },
+    {
+      name: "calendar_cancel_appointment",
+      description: "Cancel the customer existing upcoming appointment. The event is deleted and the customer receives ONE cancellation notice. Only call when the customer clearly asks to cancel; confirm before calling. This is the ONLY way an appointment gets canceled — never just say it is canceled.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          attendeePhone: { type: "string", description: "Customer phone the appointment was booked under (E.164)." },
+          attendeeEmail: { type: "string", description: "Customer email, if the phone is unknown." },
+          attendeeName: { type: "string", description: "Customer name, if known." }
+        },
+        required: []
+      }
+    },
+    {
       name: "document_share",
       description: "Text the customer an expiring link to one of the business documents on file (price sheet, policy, contract) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side — if the tool fails, say the team will follow up with a copy and never invent a link.",
       isWebhook: $toolsAreReal,
@@ -1126,6 +1165,37 @@ WORKFLOW_JSON=$(jq -nc \
           timezone: { type: "string", description: "IANA timezone for the event times." }
         },
         required: ["startIso", "endIso", "summary", "attendeeName"]
+      }
+    },
+    {
+      name: "dashboard_calendar_reschedule_appointment",
+      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place — never book a second appointment to change a time. Times must be ISO 8601 with timezone offset.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          newStartIso: { type: "string", description: "New start time, ISO 8601 with offset." },
+          newEndIso: { type: "string", description: "New end time, ISO 8601 with offset." },
+          attendeePhone: { type: "string", description: "Attendee phone the appointment was booked under (E.164)." },
+          attendeeEmail: { type: "string", description: "Attendee email, if the phone is unknown." },
+          attendeeName: { type: "string", description: "Attendee name, if known." },
+          timezone: { type: "string", description: "IANA timezone for the new times." }
+        },
+        required: ["newStartIso", "newEndIso"]
+      }
+    },
+    {
+      name: "dashboard_calendar_cancel_appointment",
+      description: "Cancel an existing upcoming appointment when the owner asks in dashboard chat. The event is deleted and the attendee receives ONE cancellation notice.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          attendeePhone: { type: "string", description: "Attendee phone the appointment was booked under (E.164)." },
+          attendeeEmail: { type: "string", description: "Attendee email, if the phone is unknown." },
+          attendeeName: { type: "string", description: "Attendee name, if known." }
+        },
+        required: []
       }
     },
     {

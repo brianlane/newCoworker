@@ -200,6 +200,136 @@ export async function confirmBookingDedupe(claimId: string, eventId: string): Pr
   });
 }
 
+export type UpcomingBookingClaim = {
+  id: string;
+  eventId: string;
+  startAt: string;
+};
+
+/**
+ * The attendee's next CONFIRMED upcoming booking (soonest first), from the
+ * ledger. This is how reschedule/cancel find the provider event without a
+ * provider-side search. Null on no row or any read error (callers fall back
+ * to a provider search).
+ */
+export async function findUpcomingBookingClaim(
+  businessId: string,
+  attendeeKey: string
+): Promise<UpcomingBookingClaim | null> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("id, event_id, start_at")
+      .eq("business_id", businessId)
+      .eq("attendee_key", attendeeKey)
+      .not("event_id", "is", null)
+      .gte("start_at", new Date().toISOString())
+      .order("start_at", { ascending: true })
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    const row = data as { id: string; event_id: string; start_at: string };
+    return { id: row.id, eventId: row.event_id, startAt: row.start_at };
+  } catch (err) {
+    logger.warn("booking-dedupe: upcoming lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
+ * Move a confirmed claim to its rescheduled start so the slot ledger keeps
+ * matching the provider event. A unique-index conflict means another
+ * confirmed claim already covers the new slot (e.g. the model re-booked
+ * before rescheduling); the old row is deleted instead — the surviving row
+ * governs. Best-effort either way.
+ */
+export async function rescheduleBookingClaim(claimId: string, newStartIso: string): Promise<void> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { error } = await supabase
+      .from("calendar_booking_dedupe")
+      .update({ start_at: newStartIso, created_at: new Date().toISOString() })
+      .eq("id", claimId);
+    if (!error) return;
+    if ((error as { code?: string }).code === "23505") {
+      const { error: delErr } = await supabase
+        .from("calendar_booking_dedupe")
+        .delete()
+        .eq("id", claimId);
+      if (delErr) {
+        logger.warn("booking-dedupe: reschedule conflict cleanup failed", {
+          claimId,
+          error: delErr.message
+        });
+      }
+      return;
+    }
+    logger.warn("booking-dedupe: reschedule update failed", { claimId, error: error.message });
+  } catch (err) {
+    logger.warn("booking-dedupe: reschedule threw", {
+      claimId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/** Drop a claim after its provider event was canceled. Best-effort. */
+export async function deleteBookingClaim(claimId: string): Promise<void> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { error } = await supabase
+      .from("calendar_booking_dedupe")
+      .delete()
+      .eq("id", claimId);
+    if (error) {
+      logger.warn("booking-dedupe: claim delete failed", { claimId, error: error.message });
+    }
+  } catch (err) {
+    logger.warn("booking-dedupe: claim delete threw", {
+      claimId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Record a confirmed booking discovered OUTSIDE the ledger (a reschedule of
+ * an event booked before the ledger shipped) so future duplicate checks and
+ * reschedules resolve without a provider search. Conflicts are ignored — an
+ * existing claim for the slot already serves that purpose.
+ */
+export async function recordExternalBookingClaim(
+  businessId: string,
+  attendeeKey: string,
+  startAtIso: string,
+  eventId: string
+): Promise<void> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { error } = await supabase.from("calendar_booking_dedupe").insert({
+      business_id: businessId,
+      attendee_key: attendeeKey,
+      start_at: startAtIso,
+      event_id: eventId
+    });
+    if (error && (error as { code?: string }).code !== "23505") {
+      logger.warn("booking-dedupe: external claim record failed", {
+        businessId,
+        error: error.message
+      });
+    }
+  } catch (err) {
+    logger.warn("booking-dedupe: external claim record threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 /**
  * Release a claim whose booking did NOT produce a confirmed event, so the
  * next attempt can book cleanly. Best-effort: an unreleased claim only

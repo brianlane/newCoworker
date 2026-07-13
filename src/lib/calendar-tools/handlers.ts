@@ -92,7 +92,7 @@ function isValidTimeZone(tz: string): boolean {
  * bad zone. Looked up per call (single indexed read) and never fatal — a
  * lookup error degrades to UTC, exactly the pre-timezone behavior.
  */
-async function resolveToolTimezone(
+export async function resolveToolTimezone(
   businessId: string,
   explicit: string | undefined
 ): Promise<string> {
