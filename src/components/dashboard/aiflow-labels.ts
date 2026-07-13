@@ -8,10 +8,12 @@
  * the wording stays identical in both places. Lives under `src/components`
  * (outside the test-coverage include) since it is pure presentation strings.
  */
-import type {
-  BROWSE_ACTION_KINDS,
-  FLOW_STEP_TYPES,
-  TRIGGER_CONDITION_TYPES
+import {
+  summarizeDefinition,
+  type AiFlowDefinition,
+  type BROWSE_ACTION_KINDS,
+  type FLOW_STEP_TYPES,
+  type TRIGGER_CONDITION_TYPES
 } from "@/lib/ai-flows/schema";
 
 type StepType = (typeof FLOW_STEP_TYPES)[number];
@@ -94,6 +96,22 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   outbound_call:
     "Places a call to a number you choose; when they answer, the AI talks to them, captures the details, and texts you a summary. Use the Place call button to start it (budget is checked first)."
 };
+
+/**
+ * Owner-facing one-line summary of a flow: the tested trigger prose from
+ * `summarizeDefinition`, followed by the steps as their friendly labels
+ * instead of raw step types — "When SMS matching 3 condition(s): Read details
+ * from the message text → Send a text → Notify me". Display-only; the raw
+ * `summarizeDefinition` string (used by scripts/tests) is unchanged.
+ */
+export function friendlyFlowSummary(def: AiFlowDefinition): string {
+  // Summarize with no steps to reuse the trigger wording, then drop the
+  // dangling ": " separator it leaves behind.
+  const trigPart = summarizeDefinition({ ...def, steps: [] }).replace(/:\s*$/, "");
+  if (def.steps.length === 0) return trigPart;
+  const stepPart = def.steps.map((s) => STEP_TYPE_LABELS[s.type]).join(" → ");
+  return `${trigPart}: ${stepPart}`;
+}
 
 /** Friendly name for each inbound trigger condition. */
 export const CONDITION_LABELS: Record<ConditionType, string> = {

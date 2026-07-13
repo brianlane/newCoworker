@@ -467,7 +467,7 @@ function StatsBadge({ stats }: { stats: StepStats }) {
   if (parts.length === 0) return null;
   return (
     <span
-      className={`rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
+      className={`shrink-0 whitespace-nowrap rounded-full px-1.5 py-0.5 text-[9px] font-semibold ${
         stats.failed > 0 ? "bg-red-400/15 text-red-400" : "bg-parchment/10 text-parchment/50"
       }`}
     >
@@ -513,15 +513,20 @@ function NodeCard({
         selected ? "ring-2 ring-signal-teal" : ""
       } ${readOnly ? "" : "cursor-pointer hover:bg-deep-ink/90"}`}
     >
-      <div className="flex items-center gap-2">
-        {STEP_ICONS[step.type]}
-        <span className="min-w-0 flex-1 truncate text-xs font-semibold text-parchment">
+      {/* items-start + line-clamp-2: long labels/subtitles wrap to a second
+          line instead of getting chopped mid-word; the icon and stats badge
+          stay pinned to the first line. Full text on hover via title. */}
+      <div className="flex items-start gap-2">
+        <span className="mt-0.5 shrink-0">{STEP_ICONS[step.type]}</span>
+        <span className="min-w-0 flex-1 text-xs font-semibold text-parchment line-clamp-2">
           {STEP_TYPE_LABELS[step.type]}
         </span>
         {stats && <StatsBadge stats={stats} />}
       </div>
       {subtitle && (
-        <p className="mt-0.5 truncate text-[11px] text-parchment/50">{subtitle}</p>
+        <p title={subtitle} className="mt-0.5 text-[11px] text-parchment/50 line-clamp-2">
+          {subtitle}
+        </p>
       )}
       {step.when && (
         <p className="mt-1 inline-block rounded-full bg-parchment/8 px-2 py-0.5 text-[10px] text-parchment/50">

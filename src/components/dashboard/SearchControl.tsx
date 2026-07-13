@@ -21,7 +21,9 @@ export function SearchControl({
 }) {
   const inputId = `${idPrefix}-input`;
   return (
-    <div className="relative">
+    // Grows to the available row width below md — the mobile 16px form-control
+    // font needs the room for the placeholder — and hugs the fixed input at md+.
+    <div className="relative min-w-0 grow md:grow-0">
       <label htmlFor={inputId} className="sr-only">
         Search
       </label>
@@ -32,7 +34,10 @@ export function SearchControl({
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full rounded-md border border-parchment/15 bg-deep-ink/60 py-1 pl-7 pr-7 text-xs text-parchment placeholder:text-parchment/40 focus:border-signal-teal/60 focus:outline-none sm:w-56"
+        // Full width below md: the mobile CSS bumps form controls to 16px
+        // (iOS anti-zoom), which needs the extra room; at md+ the 12px text
+        // fits comfortably in a fixed 16rem box.
+        className="w-full rounded-md border border-parchment/15 bg-deep-ink/60 py-1 pl-7 pr-7 text-xs text-parchment placeholder:text-parchment/40 focus:border-signal-teal/60 focus:outline-none md:w-64"
       />
       {value.length > 0 && (
         <button

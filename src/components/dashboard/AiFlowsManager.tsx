@@ -15,7 +15,6 @@ import {
   VOICE_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
   HTTP_METHODS,
-  summarizeDefinition,
   type AiFlowDefinition,
   type BranchStep,
   type FlowStep,
@@ -42,7 +41,8 @@ import {
   STEP_TYPE_LABELS,
   STEP_TYPE_HELP,
   CONDITION_LABELS,
-  BROWSE_ACTION_LABELS
+  BROWSE_ACTION_LABELS,
+  friendlyFlowSummary
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
 import {
@@ -2485,15 +2485,19 @@ export function AiFlowsManager({
           <Card key={row.id} className="space-y-3">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="flex items-center gap-2">
+                {/* items-start (not center): a long name wraps to a second
+                    clamped line, and the pill + status times stay pinned to
+                    the first line instead of floating mid-block. */}
+                <div className="flex items-start gap-2">
                   <Link
                     href={`/dashboard/aiflows/${row.id}`}
-                    className="truncate font-semibold text-parchment hover:text-signal-teal hover:underline"
+                    title={row.name}
+                    className="min-w-0 break-words font-semibold text-parchment line-clamp-2 hover:text-signal-teal hover:underline"
                   >
                     {row.name}
                   </Link>
                   <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                    className={`mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                       row.enabled
                         ? "bg-claw-green/15 text-claw-green"
                         : "bg-parchment/10 text-parchment/50"
@@ -2507,15 +2511,18 @@ export function AiFlowsManager({
                       clockMounted) and hidden on narrow screens so the name
                       keeps room. */}
                   {clockMounted && (
-                    <span className="hidden shrink-0 whitespace-nowrap text-[10px] text-parchment/40 sm:inline">
+                    <span className="mt-1 hidden shrink-0 whitespace-nowrap text-[10px] text-parchment/40 sm:inline">
                       last triggered {shortWhen(row.last_run_at) ?? "never"} ·{" "}
                       {row.enabled ? "on" : "off"} since{" "}
                       {shortWhen(row.enabled_changed_at ?? row.created_at)}
                     </span>
                   )}
                 </div>
-                <p className="mt-1 truncate text-xs text-parchment/50">
-                  {summarizeDefinition(row.definition)}
+                <p
+                  title={friendlyFlowSummary(row.definition)}
+                  className="mt-1 text-xs text-parchment/50 line-clamp-2"
+                >
+                  {friendlyFlowSummary(row.definition)}
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-3 text-parchment/50">
