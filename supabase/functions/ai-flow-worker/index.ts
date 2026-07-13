@@ -42,6 +42,7 @@ import {
   extractLabeledPhones,
   filterRosterByAvailability,
   flowTriggers,
+  groupLeadPhone,
   htmlToText,
   isE164,
   isExecutableDefinition,
@@ -488,6 +489,29 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // was already persisted into run.context.vars.
   if (scope.vars.claimed_agent === undefined) {
     scope.vars.claimed_agent = "none";
+  }
+  // Engine-provided {{vars.group_lead_phone}}: in a group-text trigger (e.g. a
+  // referral service's intro thread) the lead's number never appears in the
+  // message TEXT — it's the one thread participant who is neither the sender
+  // (the service) nor any of the business's own numbers. Seeded once at run
+  // start ("" for non-group triggers or an ambiguous roster) and persisted via
+  // buildContext like every other var, so parks/resumes never recompute it.
+  // GROUP threads only (3+ participants, the same > 2 rule the inbound webhook
+  // stamps trigger.group with): a 1:1 thread always has a two-number roster,
+  // and an empty/unparseable trigger.from there would otherwise leave the
+  // customer as the sole "group lead" on a non-group trigger.
+  if (scope.vars.group_lead_phone === undefined) {
+    const participants = Array.isArray(scope.trigger.participants)
+      ? scope.trigger.participants
+      : [];
+    scope.vars.group_lead_phone =
+      participants.length > 2
+        ? groupLeadPhone(participants, [
+            typeof scope.trigger.from === "string" ? scope.trigger.from : "",
+            typeof scope.trigger.to === "string" ? scope.trigger.to : "",
+            ...(await businessSelfNumbers(supabase, run.business_id))
+          ])
+        : "";
   }
   // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
   // outbound email sends AS the coworker — never the platform identity — and so

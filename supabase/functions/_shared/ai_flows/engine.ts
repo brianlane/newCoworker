@@ -307,6 +307,40 @@ export function extractLabeledPhones(text: string): string[] {
   return out;
 }
 
+/**
+ * The lead's phone in a group-text thread: the ONE participant left after
+ * excluding the business's own numbers and the alert's sender (e.g. a referral
+ * service's DID). Both sides are normalized to E.164 so formatting differences
+ * never defeat the exclusion. Returns "" when zero or 2+ candidates remain —
+ * an ambiguous roster must never guess who the lead is, because the value is
+ * templated into owner notifications and can be used as a send target.
+ * Backs the engine-provided {{vars.group_lead_phone}}.
+ */
+export function groupLeadPhone(
+  participants: readonly unknown[],
+  exclude: readonly string[]
+): string {
+  const excluded = new Set<string>();
+  for (const raw of exclude) {
+    const trimmed = raw.trim();
+    const e164 = isE164(trimmed) ? trimmed : normalizeNanpToE164(trimmed);
+    if (e164) excluded.add(e164);
+  }
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of participants) {
+    const trimmed = typeof raw === "string" ? raw.trim() : "";
+    if (!trimmed) continue;
+    // isE164 first so non-NANP international numbers survive; the NANP
+    // normalizer only handles loose North-American formatting.
+    const e164 = isE164(trimmed) ? trimmed : normalizeNanpToE164(trimmed);
+    if (!e164 || excluded.has(e164) || seen.has(e164)) continue;
+    seen.add(e164);
+    candidates.push(e164);
+  }
+  return candidates.length === 1 ? candidates[0] : "";
+}
+
 // Whole tokens only (split on _ / digits / camelCase humps): the old bare
 // substring test /phone|mobile|cell|tel/i matched "hoTEL_name" and
 // "canCELLation_policy", stuffing a phone number into non-phone fields

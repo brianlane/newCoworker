@@ -87,8 +87,18 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
  *     (or "none" on owner-fallback / no claim), so LATER steps can gate on
  *     `when: { var: "claimed_agent", notEquals: "none" }` to run only after a
  *     teammate accepted the lead. Empty string before any route_to_team runs.
+ *   - `group_lead_phone`: on a group-text trigger, the lead's E.164 number —
+ *     the one thread participant who is neither the alert's sender nor any of
+ *     the business's own numbers (e.g. the seller in a referral service's
+ *     intro thread, whose number appears nowhere in the message text). Empty
+ *     for non-group triggers or when the roster leaves 0 or 2+ candidates
+ *     (never guess who the lead is).
  */
-export const ENGINE_PROVIDED_VARS = ["actions_taken", "claimed_agent"] as const;
+export const ENGINE_PROVIDED_VARS = [
+  "actions_taken",
+  "claimed_agent",
+  "group_lead_phone"
+] as const;
 
 /** The UI action kinds a browse_action step may perform. */
 export const BROWSE_ACTION_KINDS = [
