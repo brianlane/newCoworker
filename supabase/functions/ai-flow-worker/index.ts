@@ -1447,7 +1447,11 @@ async function findDuplicateLeadRun(
       .neq("id", run.id)
       .neq("status", "failed")
       .eq("context->vars->>lead_phone", leadE164)
-      .gte("created_at", sinceIso)
+      // updated_at (not created_at): a long-running/parked run enqueued more
+      // than 72h ago is still a live conversation for the reply path (which
+      // looks back on updated_at too) — a repeat submission during it must
+      // still be suppressed (Bugbot Medium on PR #575).
+      .gte("updated_at", sinceIso)
       .lt("created_at", myCreatedAt)
       // Simulated test runs never texted the lead — they don't count.
       .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
