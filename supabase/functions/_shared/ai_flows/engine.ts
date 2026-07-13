@@ -308,13 +308,50 @@ export function extractLabeledPhones(text: string): string[] {
 }
 
 /**
+ * Is the triggering sender PINNED to a declared identity by a `from_matches`
+ * condition on one of the flow's SMS triggers? This is the safety gate for
+ * {{vars.group_lead_phone}}: "everyone in the roster except the sender and
+ * ourselves is the lead" only holds when the flow author DECLARED who the
+ * sender is (a referral service's DID, a saved alert contact). Without a pin
+ * the sender of the matched message could be the lead themselves — and the
+ * roster remainder would then be the SERVICE, a mis-target that could be
+ * texted. Matching mirrors evaluateCondition's from_matches arm exactly
+ * (substring, case-controlled, ref → pre-resolved live identity values via
+ * resolveFromMatchesRefValues; an unresolved ref fails closed).
+ */
+export function senderPinnedByFromMatches(
+  triggers: readonly FlowTrigger[],
+  from: string,
+  refValues?: ReadonlyMap<string, string[]>
+): boolean {
+  if (!from) return false;
+  for (const trigger of triggers) {
+    if (trigger.channel !== "sms") continue;
+    for (const cond of trigger.conditions) {
+      if (cond.type !== "from_matches") continue;
+      if (cond.ref) {
+        const candidates = refValues?.get(`${cond.ref.source}:${cond.ref.id}`) ?? [];
+        if (candidates.some((v) => textContains(from, v, cond.caseInsensitive))) return true;
+        continue;
+      }
+      if (typeof cond.value === "string" && textContains(from, cond.value, cond.caseInsensitive)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * The lead's phone in a group-text thread: the ONE participant left after
  * excluding the business's own numbers and the alert's sender (e.g. a referral
  * service's DID). Both sides are normalized to E.164 so formatting differences
  * never defeat the exclusion. Returns "" when zero or 2+ candidates remain —
  * an ambiguous roster must never guess who the lead is, because the value is
  * templated into owner notifications and can be used as a send target.
- * Backs the engine-provided {{vars.group_lead_phone}}.
+ * Backs the engine-provided {{vars.group_lead_phone}}; the worker additionally
+ * gates seeding on senderPinnedByFromMatches (see above) so a lead-sent
+ * message can never mislabel the remaining participant as "the lead".
  */
 export function groupLeadPhone(
   participants: readonly unknown[],

@@ -90,9 +90,12 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
  *   - `group_lead_phone`: on a group-text trigger, the lead's E.164 number —
  *     the one thread participant who is neither the alert's sender nor any of
  *     the business's own numbers (e.g. the seller in a referral service's
- *     intro thread, whose number appears nowhere in the message text). Empty
- *     for non-group triggers or when the roster leaves 0 or 2+ candidates
- *     (never guess who the lead is).
+ *     intro thread, whose number appears nowhere in the message text). Only
+ *     seeded when a `from_matches` trigger condition PINS the sender to a
+ *     declared identity — without the pin the sender could be the lead
+ *     themselves and the roster remainder would be the service. Empty for
+ *     non-group triggers, unpinned senders, or when the roster leaves 0 or
+ *     2+ candidates (never guess who the lead is).
  */
 export const ENGINE_PROVIDED_VARS = [
   "actions_taken",
