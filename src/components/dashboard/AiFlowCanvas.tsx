@@ -692,8 +692,11 @@ function BranchFan({
     <div className="flex w-full flex-col items-center">
       <Connector dashed />
       <div className="flex w-full items-start justify-center gap-6 border-t border-dashed border-parchment/20 pt-3">
+        {/* Columns use min-w-max (not a fixed min-width) so a column is never
+            narrower than its widest content — a w-64 card or an entire nested
+            fan — otherwise sibling columns' cards overlap. */}
         {columns.map((col) => (
-          <div key={col.key} className="flex min-w-40 flex-1 flex-col items-center">
+          <div key={col.key} className="flex min-w-max flex-1 flex-col items-center">
             <span
               title={col.pillTitle}
               className={`rounded-full px-3 py-1 text-[10px] font-semibold ${
