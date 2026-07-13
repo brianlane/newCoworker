@@ -1417,8 +1417,21 @@ const DUPLICATE_LEAD_WINDOW_HOURS = 72;
  * lead phone within the window → its id; null otherwise. Only lead-intake
  * triggers (tenant_email / webhook) are guarded. Strictly-earlier created_at
  * ordering (vs this run) keeps two same-batch duplicates from suppressing
- * each other into silence — exactly one of them wins. Best-effort: any read
- * failure returns null so a live lead is never blocked by the guard.
+ * each other into silence — exactly one of them wins.
+ *
+ * Lead identity uses the SAME keys as the reply path's flow-context lookup
+ * (run_context.ts / goal_events): the triggering sender, the extracted
+ * lead_phone var, or the number a wait is parked on — trigger.from and
+ * waiting_reply.from are always E.164, so a prior run whose extraction
+ * stored a formatted lead_phone still matches on those (Bugbot Mediums on
+ * PR #575). A flow filing leads under a fully custom var name degrades to
+ * pre-guard behavior (a duplicate intro), never a lost lead.
+ *
+ * A CANCELED prior run counts only when it actually texted the lead before
+ * being stopped — an owner canceling a run pre-outreach must not make the
+ * lead's next submission fall silent (Bugbot Medium on PR #575).
+ *
+ * Best-effort throughout: any read failure returns null (fail open).
  */
 async function findDuplicateLeadRun(
   supabase: Supabase,
@@ -1439,14 +1452,16 @@ async function findDuplicateLeadRun(
     const sinceIso = new Date(
       Date.now() - DUPLICATE_LEAD_WINDOW_HOURS * 3_600_000
     ).toISOString();
-    const { data: prior, error: priorErr } = await supabase
+    const { data: priorRows, error: priorErr } = await supabase
       .from("ai_flow_runs")
-      .select("id")
+      .select("id, status")
       .eq("business_id", run.business_id)
       .eq("flow_id", run.flow_id)
       .neq("id", run.id)
       .neq("status", "failed")
-      .eq("context->vars->>lead_phone", leadE164)
+      .or(
+        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
+      )
       // updated_at (not created_at): a long-running/parked run enqueued more
       // than 72h ago is still a live conversation for the reply path (which
       // looks back on updated_at too) — a repeat submission during it must
@@ -1456,13 +1471,29 @@ async function findDuplicateLeadRun(
       // Simulated test runs never texted the lead — they don't count.
       .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
       .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .limit(3);
     if (priorErr) {
       console.error("duplicate-lead guard lookup", priorErr);
       return null;
     }
-    return (prior as { id?: string } | null)?.id ?? null;
+    for (const prior of (priorRows ?? []) as Array<{ id: string; status: string }>) {
+      if (prior.status !== "canceled") return prior.id;
+      // Canceled: qualifies only if it reached the lead before being stopped.
+      const { data: sent, error: sentErr } = await supabase
+        .from("sms_outbound_log")
+        .select("id")
+        .eq("business_id", run.business_id)
+        .eq("run_id", prior.id)
+        .eq("to_e164", leadE164)
+        .limit(1)
+        .maybeSingle();
+      if (sentErr) {
+        console.error("duplicate-lead guard outbound check", sentErr);
+        continue;
+      }
+      if (sent) return prior.id;
+    }
+    return null;
   } catch (e) {
     console.error("duplicate-lead guard", e);
     return null;

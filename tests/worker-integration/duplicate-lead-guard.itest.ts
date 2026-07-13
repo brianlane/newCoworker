@@ -94,6 +94,54 @@ describe("duplicate lead submission guard (real worker)", () => {
     expect((logs ?? []).length).toBe(1);
   });
 
+  it("a prior canceled run suppresses ONLY when it actually texted the lead first", async () => {
+    const biz = await seedBusiness(db, "IT dup lead canceled");
+
+    // Scenario A — canceled BEFORE outreach: the lead never heard from us,
+    // so a fresh submission must run the full intro.
+    const flowA = await createFlow(db, biz, leadFlow());
+    const silentCanceled = await enqueueRun(db, flowA, biz, TRIGGER, {}, {
+      created_at: minutesAgo(30),
+      status: "canceled"
+    });
+    await db
+      .from("ai_flow_runs")
+      .update({ context: { trigger: TRIGGER, vars: { lead_phone: LEAD } } })
+      .eq("id", silentCanceled);
+    const resubmitA = await enqueueRun(db, flowA, biz, TRIGGER);
+    await tickWorker();
+    const stepsA = await getSteps(db, resubmitA);
+    const upsertA = stepsA.find((s) => s.step_type === "upsert_customer");
+    expect((upsertA?.result as { skipped?: string }).skipped).toBeUndefined();
+
+    // Scenario B — canceled AFTER outreach (outbound log row for the run):
+    // the lead already got the intro, so a repeat submission is suppressed.
+    const flowB = await createFlow(db, biz, leadFlow());
+    const textedCanceled = await enqueueRun(db, flowB, biz, TRIGGER, {}, {
+      created_at: minutesAgo(30),
+      status: "canceled"
+    });
+    await db
+      .from("ai_flow_runs")
+      .update({ context: { trigger: TRIGGER, vars: { lead_phone: LEAD } } })
+      .eq("id", textedCanceled);
+    const { error: logErr } = await db.from("sms_outbound_log").insert({
+      business_id: biz,
+      to_e164: LEAD,
+      from_e164: "+14165550000",
+      body: "Hi! Thanks for requesting a quote.",
+      source: "ai_flow",
+      run_id: textedCanceled
+    });
+    if (logErr) throw new Error(logErr.message);
+    const resubmitB = await enqueueRun(db, flowB, biz, TRIGGER);
+    await tickWorker();
+    const stepsB = await getSteps(db, resubmitB);
+    const upsertB = stepsB.find((s) => s.step_type === "upsert_customer");
+    expect((upsertB?.result as { skipped?: string }).skipped).toBe("duplicate_lead_submission");
+    expect((upsertB?.result as { duplicate_of?: string }).duplicate_of).toBe(textedCanceled);
+  });
+
   it("a different flow handling the same phone is NOT suppressed (guard is per flow)", async () => {
     const biz = await seedBusiness(db, "IT dup lead other flow");
     const flowA = await createFlow(db, biz, leadFlow());
