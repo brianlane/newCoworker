@@ -18,7 +18,14 @@
  *     optional per-node stats overlay shows ran/skipped/failed counts from
  *     recorded run history.
  */
-import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode
+} from "react";
 import { createPortal } from "react-dom";
 import {
   ArrowDown,
@@ -721,6 +728,7 @@ function TriggerNode({
     "conditions" in trigger ? (trigger.conditions ?? []) : [];
   return (
     <div
+      data-flow-node="trigger"
       role={readOnly ? undefined : "button"}
       tabIndex={readOnly ? undefined : 0}
       onClick={readOnly ? undefined : onSelectTrigger}
@@ -825,6 +833,24 @@ export function AiFlowCanvas(props: AiFlowCanvasProps) {
       window.removeEventListener("mouseup", onUp);
     };
   }, [panning]);
+
+  // Start the view on the FIRST item (the trigger node), not the top-left
+  // corner: when a branch fan makes the flow wider than the viewport, the
+  // centered trunk sits well right of scrollLeft 0 and the user would land on
+  // empty canvas. Centering on the trigger's actual position (rather than
+  // scrollWidth / 2) handles asymmetric fans. useLayoutEffect so the
+  // correction lands before paint; mount-only so it never fights the user's
+  // panning/zooming or the selection scrollIntoView effect below.
+  useLayoutEffect(() => {
+    const el = viewportRef.current;
+    const trigger = el?.querySelector('[data-flow-node="trigger"]');
+    if (!el || !trigger) return;
+    const viewportRect = el.getBoundingClientRect();
+    const triggerRect = trigger.getBoundingClientRect();
+    el.scrollLeft +=
+      triggerRect.left + triggerRect.width / 2 - (viewportRect.left + viewportRect.width / 2);
+    el.scrollTop = 0;
+  }, []);
 
   // Bring a node into view when it BECOMES selected. The manager selects a
   // step the moment it is inserted, so a "+"-added step that lands below the
