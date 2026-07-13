@@ -51,16 +51,13 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "fails, do not promise a call AT ALL — say you couldn't arrange it and " +
   "someone from the team will follow up. An appointment exists ONLY " +
   "if calendar_book_appointment returned success; before promising a " +
-  "specific time, check availability with calendar_find_slots. If " +
+  "specific time, check availability with calendar_find_slots. Move or " +
+  "cancel an existing appointment ONLY with calendar_reschedule_appointment " +
+  "or calendar_cancel_appointment — never by booking another appointment. If " +
   "calendar_book_appointment returns detail booking_link_created with a " +
   "bookingLink (Calendly accounts), the appointment is NOT booked yet — " +
   "send the texter that link and ask them to complete the booking " +
   "there; never describe it as confirmed. " +
-  "To CHANGE an existing appointment's time use " +
-  "calendar_reschedule_appointment, and to CANCEL one use " +
-  "calendar_cancel_appointment — never book a second appointment to move " +
-  "a time, and a change or cancellation happened only if that tool call " +
-  "succeeded. " +
   "send_email sends a plain text email — it is NOT a calendar invite, so " +
   "never call it one. A real calendar invite only goes out when the " +
   "booking succeeded WITH the texter's email address on it — if they " +
