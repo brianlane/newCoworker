@@ -17,6 +17,7 @@ import {
   hasUnresolvedPlaceholders,
   htmlToText,
   flowTriggers,
+  groupLeadPhone,
   isExecutableDefinition,
   isWithinWeeklyWindows,
   localClock,
@@ -339,6 +340,56 @@ describe("normalizeNanpToE164", () => {
   it("rejects NANP-invalid exchange codes (N digit must be 2-9)", () => {
     expect(normalizeNanpToE164("602-056-7890")).toBeNull();
     expect(normalizeNanpToE164("602-156-7890")).toBeNull();
+  });
+});
+
+describe("groupLeadPhone", () => {
+  // The Clever intro shape: sender is the referral service, `to` is the
+  // business DID, and the remaining participant is the seller.
+  it("returns the one participant left after excluding the sender and self numbers", () => {
+    expect(
+      groupLeadPhone(
+        ["+13144708990", "+16028053377", "+16025551234"],
+        ["+13144708990", "+16028053377"]
+      )
+    ).toBe("+16025551234");
+  });
+  it("normalizes loose formatting on BOTH sides before comparing", () => {
+    expect(
+      groupLeadPhone(
+        ["(314) 470-8990", "602-805-3377", "6025551234"],
+        ["+13144708990", "602.805.3377"]
+      )
+    ).toBe("+16025551234");
+  });
+  it("returns '' when the roster leaves no candidate (a plain 1:1 thread)", () => {
+    expect(groupLeadPhone(["+13144708990", "+16028053377"], ["+13144708990", "+16028053377"])).toBe(
+      ""
+    );
+  });
+  it("returns '' when 2+ candidates remain (never guess who the lead is)", () => {
+    expect(
+      groupLeadPhone(
+        ["+13144708990", "+16028053377", "+16025551234", "+16025556789"],
+        ["+13144708990", "+16028053377"]
+      )
+    ).toBe("");
+  });
+  it("keeps a non-NANP international participant (E.164 passes straight through)", () => {
+    expect(groupLeadPhone(["+447911123456", "+16028053377"], ["+16028053377"])).toBe(
+      "+447911123456"
+    );
+  });
+  it("ignores non-string / unparseable participants and duplicate numbers", () => {
+    expect(
+      groupLeadPhone(
+        [42, "not-a-phone", "  ", "+16025551234", "(602) 555-1234"],
+        ["+16028053377"]
+      )
+    ).toBe("+16025551234");
+  });
+  it("ignores unparseable exclude entries instead of excluding nothing by accident", () => {
+    expect(groupLeadPhone(["+16025551234"], ["", "garbage"])).toBe("+16025551234");
   });
 });
 

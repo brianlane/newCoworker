@@ -1096,6 +1096,25 @@ describe("engine-provided vars + send_email fromConnectionId", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
+  it("allows {{vars.group_lead_phone}} with no producing step (engine-provided)", () => {
+    const def = aiFlowDefinitionSchema.parse({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        {
+          id: "n",
+          type: "notify_owner",
+          message: "Lead's number: {{vars.group_lead_phone}}",
+          // The var is "" when the thread wasn't a group / was ambiguous, so a
+          // consuming step guards on the E.164 "+" the same way recall_url
+          // consumers guard on "http".
+          when: { var: "group_lead_phone", contains: "+" }
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
   it("accepts fromConnectionId and rejects combining it with attachScreenshot", () => {
     const mk = (extra: Record<string, unknown>) =>
       aiFlowDefinitionSchema.parse({
