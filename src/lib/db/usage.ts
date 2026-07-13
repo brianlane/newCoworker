@@ -171,11 +171,48 @@ export type UsageWindow = {
 };
 
 /**
- * Per-business variant of {@link getFleetCalendarMonthUsageTotals}: the
- * same sources (SMS from `daily_usage`, voice from settled
- * `voice_settlements` seconds) grouped by business for the admin Usage
- * page and the margin engine. Same paging + ordering rationale. Defaults
- * to the current UTC calendar month; pass `window` for a historical month.
+ * Peak concurrent calls from a set of [start, end) call intervals: sweep
+ * the start/+1 and end/-1 events in time order, counting the maximum
+ * simultaneously-open calls. An end at the exact instant of another
+ * call's start does NOT overlap it (ends sort before starts).
+ */
+export function peakConcurrentFromIntervals(
+  intervals: Array<{ startMs: number; endMs: number }>
+): number {
+  const events: Array<{ atMs: number; delta: 1 | -1 }> = [];
+  for (const { startMs, endMs } of intervals) {
+    events.push({ atMs: startMs, delta: 1 });
+    events.push({ atMs: endMs, delta: -1 });
+  }
+  events.sort((a, b) => a.atMs - b.atMs || a.delta - b.delta);
+  let open = 0;
+  let peak = 0;
+  for (const event of events) {
+    open += event.delta;
+    if (open > peak) peak = open;
+  }
+  return peak;
+}
+
+/**
+ * Per-business variant of {@link getFleetCalendarMonthUsageTotals} for the
+ * admin Usage page and the margin engine, grouped by business. Same paging
+ * + ordering rationale. Defaults to the current UTC calendar month; pass
+ * `window` for a historical month. Sources:
+ *
+ * - SMS from `daily_usage.sms_sent` (live writer: the SMS reserve RPCs).
+ * - Voice minutes AND call counts from `voice_settlements` — each row is
+ *   one settled call. `daily_usage.calls_made` is deliberately NOT used:
+ *   like `voice_minutes_used`, it has no live production writer (the SMS
+ *   reserve path inserts it as zero), so reading it rendered permanent
+ *   zeros next to real settled minutes.
+ * - Peak concurrent calls from `voice_call_transcripts` started_at/ended_at
+ *   overlap (missed calls excluded, same population as the owner analytics
+ *   page; `daily_usage.peak_concurrent_calls` is dead for the same reason
+ *   as `calls_made`). Rows without `ended_at` (in-progress or stuck) are
+ *   skipped rather than treated as open forever. Central read only: a
+ *   vps-residency tenant's purged transcript history can undercount its
+ *   peak — acceptable for this operator-facing health metric.
  */
 export async function getFleetCalendarMonthUsageByBusiness(
   client?: SupabaseClient,
@@ -199,7 +236,7 @@ export async function getFleetCalendarMonthUsageByBusiness(
   for (let from = 0; ; from += pageSize) {
     let query = db
       .from("daily_usage")
-      .select("business_id, sms_sent, calls_made, peak_concurrent_calls")
+      .select("business_id, sms_sent")
       .gte("usage_date", monthStartYmd);
     if (monthEndYmd !== null) query = query.lt("usage_date", monthEndYmd);
     const { data, error } = await query
@@ -210,20 +247,9 @@ export async function getFleetCalendarMonthUsageByBusiness(
 
     const rows = data ?? [];
     for (const row of rows) {
-      const r = row as {
-        business_id?: string;
-        sms_sent?: number | null;
-        calls_made?: number | null;
-        peak_concurrent_calls?: number | null;
-      };
+      const r = row as { business_id?: string; sms_sent?: number | null };
       if (!r.business_id) continue;
-      const usage = entry(r.business_id);
-      usage.smsSent += Number(r.sms_sent ?? 0);
-      usage.callsMade += Number(r.calls_made ?? 0);
-      usage.peakConcurrentCalls = Math.max(
-        usage.peakConcurrentCalls,
-        Number(r.peak_concurrent_calls ?? 0)
-      );
+      entry(r.business_id).smsSent += Number(r.sms_sent ?? 0);
     }
     if (rows.length < pageSize) break;
   }
@@ -245,9 +271,50 @@ export async function getFleetCalendarMonthUsageByBusiness(
     for (const row of rows) {
       const r = row as { business_id?: string; billable_seconds?: number | null };
       if (!r.business_id) continue;
-      entry(r.business_id).voiceMinutes += Number(r.billable_seconds ?? 0) / 60;
+      const usage = entry(r.business_id);
+      usage.voiceMinutes += Number(r.billable_seconds ?? 0) / 60;
+      usage.callsMade += 1;
     }
     if (rows.length < pageSize) break;
+  }
+
+  const intervalsByBusiness = new Map<string, Array<{ startMs: number; endMs: number }>>();
+  for (let from = 0; ; from += pageSize) {
+    let query = db
+      .from("voice_call_transcripts")
+      .select("business_id, started_at, ended_at")
+      .neq("status", "missed")
+      .gte("started_at", `${monthStartYmd}T00:00:00.000Z`);
+    if (monthEndYmd !== null) query = query.lt("started_at", `${monthEndYmd}T00:00:00.000Z`);
+    const { data, error } = await query
+      .order("started_at", { ascending: true })
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+
+    if (error) throw new Error(`getFleetCalendarMonthUsageByBusiness: ${error.message}`);
+
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as {
+        business_id?: string;
+        started_at?: string | null;
+        ended_at?: string | null;
+      };
+      if (!r.business_id || !r.started_at || !r.ended_at) continue;
+      const startMs = Date.parse(r.started_at);
+      const endMs = Date.parse(r.ended_at);
+      if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+      let intervals = intervalsByBusiness.get(r.business_id);
+      if (!intervals) {
+        intervals = [];
+        intervalsByBusiness.set(r.business_id, intervals);
+      }
+      intervals.push({ startMs, endMs });
+    }
+    if (rows.length < pageSize) break;
+  }
+  for (const [businessId, intervals] of intervalsByBusiness) {
+    entry(businessId).peakConcurrentCalls = peakConcurrentFromIntervals(intervals);
   }
 
   return byBusiness;

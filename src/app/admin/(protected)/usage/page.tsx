@@ -111,9 +111,9 @@ export default async function AdminUsagePage({
         <div>
           <h1 className="text-2xl font-bold text-parchment">Usage</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Every tenant&apos;s metered usage vs caps — voice from settled Telnyx seconds, SMS from
-            the metering counters, AI from the Gemini spend fuse, Telnyx cost from synced invoice
-            records.
+            Every tenant&apos;s metered usage vs caps — voice minutes and call counts from settled
+            Telnyx records, peak concurrency from call transcript overlap, SMS from the metering
+            counters, AI from the Gemini spend fuse, Telnyx cost from synced invoice records.
           </p>
         </div>
         <div className="flex items-center gap-1">
