@@ -1,13 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
-vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn() } }));
+vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 
 import {
   BOOKING_DEDUPE_WINDOW_MS,
   BOOKING_IN_FLIGHT_TTL_MS,
   bookingAttendeeKey,
   claimBookingDedupe,
+  CONFIRM_MAX_ATTEMPTS,
   confirmBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -109,18 +110,20 @@ describe("claimBookingDedupe", () => {
     expect(await claimBookingDedupe(BIZ, KEY, START)).toEqual({ kind: "in_flight" });
   });
 
-  it("reclaims an expired confirmed row in place", async () => {
+  it("reclaims an expired confirmed row in place via compare-and-swap on created_at", async () => {
+    const staleIso = olderThan(BOOKING_DEDUPE_WINDOW_MS);
     const calls = scriptClient([
       { data: null, error: { code: "23505", message: "dup" } },
-      {
-        data: { id: "row-1", event_id: "evt-old", created_at: olderThan(BOOKING_DEDUPE_WINDOW_MS) },
-        error: null
-      },
-      { data: null, error: null } // reclaim update
+      { data: { id: "row-1", event_id: "evt-old", created_at: staleIso }, error: null },
+      { data: { id: "row-1" }, error: null } // reclaim CAS matched
     ]);
     expect(await claimBookingDedupe(BIZ, KEY, START)).toEqual({ kind: "claimed", id: "row-1" });
     const update = calls.find((c) => c.name === "update");
     expect((update?.args[0] as { event_id: unknown }).event_id).toBeNull();
+    // The CAS predicate: the update must be conditioned on the snapshot's
+    // created_at so a rival reclaim (which bumps it) makes ours match nothing.
+    const eqCreatedAt = calls.find((c) => c.name === "eq" && c.args[0] === "created_at");
+    expect(eqCreatedAt?.args[1]).toBe(staleIso);
   });
 
   it("reclaims a dead unconfirmed claim after the in-flight TTL", async () => {
@@ -130,9 +133,21 @@ describe("claimBookingDedupe", () => {
         data: { id: "row-1", event_id: null, created_at: olderThan(BOOKING_IN_FLIGHT_TTL_MS) },
         error: null
       },
-      { data: null, error: null }
+      { data: { id: "row-1" }, error: null }
     ]);
     expect(await claimBookingDedupe(BIZ, KEY, START)).toEqual({ kind: "claimed", id: "row-1" });
+  });
+
+  it("losing the reclaim CAS to a rival claimant reports in_flight, never a parallel claim", async () => {
+    scriptClient([
+      { data: null, error: { code: "23505", message: "dup" } },
+      {
+        data: { id: "row-1", event_id: null, created_at: olderThan(BOOKING_IN_FLIGHT_TTL_MS) },
+        error: null
+      },
+      { data: null, error: null } // CAS matched zero rows: rival already reclaimed
+    ]);
+    expect(await claimBookingDedupe(BIZ, KEY, START)).toEqual({ kind: "in_flight" });
   });
 
   it("fails open when the conflict row cannot be read (error or missing)", async () => {
@@ -173,7 +188,7 @@ describe("claimBookingDedupe", () => {
 });
 
 describe("confirmBookingDedupe", () => {
-  it("stamps the event id on the claim row", async () => {
+  it("stamps the event id on the claim row (first attempt, no retries)", async () => {
     const calls = scriptClient([{ data: null, error: null }]);
     await confirmBookingDedupe("row-1", "evt-9");
     const update = calls.find((c) => c.name === "update");
@@ -181,20 +196,44 @@ describe("confirmBookingDedupe", () => {
     const eq = calls.find((c) => c.name === "eq");
     expect(eq?.args).toEqual(["id", "row-1"]);
     expect(logger.warn).not.toHaveBeenCalled();
+    expect(logger.error).not.toHaveBeenCalled();
   });
 
-  it("logs and swallows update errors and client blow-ups", async () => {
-    scriptClient([{ data: null, error: { message: "boom" } }]);
+  it("retries a failed confirm and succeeds without escalating", async () => {
+    // A lost confirm re-opens the duplicate window after the in-flight TTL
+    // (Bugbot High on PR #566) — one transient DB error must not be enough
+    // to get there.
+    scriptClient([
+      { data: null, error: { message: "transient" } },
+      { data: null, error: null }
+    ]);
     await confirmBookingDedupe("row-1", "evt-9");
     expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.error).not.toHaveBeenCalled();
+  });
 
+  it("escalates to error-level after exhausting retries (update errors)", async () => {
+    scriptClient([
+      { data: null, error: { message: "boom-1" } },
+      { data: null, error: { message: "boom-2" } },
+      { data: null, error: { message: "boom-3" } }
+    ]);
+    await confirmBookingDedupe("row-1", "evt-9");
+    expect(logger.warn).toHaveBeenCalledTimes(CONFIRM_MAX_ATTEMPTS);
+    expect(logger.error).toHaveBeenCalledTimes(1);
+  });
+
+  it("escalates after exhausting retries on client blow-ups (Error and non-Error)", async () => {
     vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
     await confirmBookingDedupe("row-1", "evt-9");
-    expect(logger.warn).toHaveBeenCalledTimes(2);
+    expect(logger.warn).toHaveBeenCalledTimes(CONFIRM_MAX_ATTEMPTS);
+    expect(logger.error).toHaveBeenCalledTimes(1);
 
+    vi.clearAllMocks();
     vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
     await confirmBookingDedupe("row-1", "evt-9");
-    expect(logger.warn).toHaveBeenCalledTimes(3);
+    expect(logger.warn).toHaveBeenCalledTimes(CONFIRM_MAX_ATTEMPTS);
+    expect(logger.error).toHaveBeenCalledTimes(1);
   });
 });
 

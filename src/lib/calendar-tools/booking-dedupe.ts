@@ -119,17 +119,30 @@ export async function claimBookingDedupe(
     }
 
     // Expired row (old confirmed booking, or a claimant that died without
-    // confirming): reclaim it in place.
-    const { error: reclaimErr } = await supabase
+    // confirming): reclaim it in place. Compare-and-swap on created_at so two
+    // concurrent claimants can't both win — the reclaim always bumps
+    // created_at, so a rival's reclaim invalidates our snapshot and this
+    // update matches zero rows (Bugbot Medium on PR #566).
+    const { data: reclaimed, error: reclaimErr } = await supabase
       .from("calendar_booking_dedupe")
       .update({ event_id: null, created_at: new Date().toISOString() })
-      .eq("id", existing.id);
+      .eq("id", existing.id)
+      .eq("created_at", existing.created_at)
+      .select("id")
+      .maybeSingle();
     if (reclaimErr) {
       logger.warn("booking-dedupe: reclaim failed (fail-open)", {
         businessId,
         error: reclaimErr.message
       });
       return null;
+    }
+    if (!reclaimed) {
+      // Lost the CAS: a rival claimant reclaimed (and is booking) this slot
+      // between our read and our update. Refuse instead of failing open —
+      // failing open here would book in parallel with the winner, which is
+      // exactly the duplicate this ledger exists to prevent.
+      return { kind: "in_flight" };
     }
     return { kind: "claimed", id: existing.id };
   } catch (err) {
@@ -141,23 +154,50 @@ export async function claimBookingDedupe(
   }
 }
 
-/** Stamp the provider event id on a confirmed booking. Best-effort. */
+/** Confirm write attempts before giving up (see confirmBookingDedupe). */
+export const CONFIRM_MAX_ATTEMPTS = 3;
+const CONFIRM_RETRY_DELAY_MS = 250;
+
+/**
+ * Stamp the provider event id on a confirmed booking.
+ *
+ * Retried, because this write is what stops a FUTURE attempt from re-booking
+ * an event that already exists: an unconfirmed row is reclaimable after
+ * BOOKING_IN_FLIGHT_TTL_MS, so a lost confirm re-opens the duplicate window
+ * (Bugbot High on PR #566). After the retries the failure is logged at error
+ * level — the residual exposure is a sustained DB outage bracketed by two
+ * working moments, at which point duplicate suppression is best-effort by
+ * the module's fail-open contract.
+ */
 export async function confirmBookingDedupe(claimId: string, eventId: string): Promise<void> {
-  try {
-    const supabase = await createSupabaseServiceClient();
-    const { error } = await supabase
-      .from("calendar_booking_dedupe")
-      .update({ event_id: eventId })
-      .eq("id", claimId);
-    if (error) {
-      logger.warn("booking-dedupe: confirm failed", { claimId, error: error.message });
+  for (let attempt = 1; attempt <= CONFIRM_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const supabase = await createSupabaseServiceClient();
+      const { error } = await supabase
+        .from("calendar_booking_dedupe")
+        .update({ event_id: eventId })
+        .eq("id", claimId);
+      if (!error) return;
+      logger.warn("booking-dedupe: confirm attempt failed", {
+        claimId,
+        attempt,
+        error: error.message
+      });
+    } catch (err) {
+      logger.warn("booking-dedupe: confirm attempt threw", {
+        claimId,
+        attempt,
+        error: err instanceof Error ? err.message : String(err)
+      });
     }
-  } catch (err) {
-    logger.warn("booking-dedupe: confirm threw", {
-      claimId,
-      error: err instanceof Error ? err.message : String(err)
-    });
+    if (attempt < CONFIRM_MAX_ATTEMPTS) {
+      await new Promise((r) => setTimeout(r, CONFIRM_RETRY_DELAY_MS));
+    }
   }
+  logger.error("booking-dedupe: confirm exhausted retries — slot re-opens after in-flight TTL", {
+    claimId,
+    eventId
+  });
 }
 
 /**
