@@ -165,6 +165,14 @@ export type EvaluateInput = {
   business: AdvisorBusiness;
   /** This business's window call intervals from voice_call_transcripts (any order). */
   callIntervals: CallInterval[];
+  /**
+   * Inclusive UTC day bounds (YYYY-MM-DD) of the rolling window. Only peak
+   * days inside these bounds count toward `daysAtCap`, so a stray interval
+   * with a corrupt out-of-window timestamp can neither fire the signal nor
+   * inflate the "N of the last 7 days" wording past the window length.
+   */
+  windowStartYmd: string;
+  windowEndYmd: string;
   /** This business's settled billable voice seconds in the window (voice_settlements). */
   windowVoiceSeconds: number;
   /** This business's month-to-date SMS total (cap is a calendar month). */
@@ -190,7 +198,8 @@ export function evaluateEscalationSignals(input: EvaluateInput): BusinessAdvice 
 
   const capCalls = input.limits.maxConcurrentCalls;
   let daysAtCap = 0;
-  for (const peak of dailyPeakConcurrency(input.callIntervals).values()) {
+  for (const [day, peak] of dailyPeakConcurrency(input.callIntervals)) {
+    if (day < input.windowStartYmd || day > input.windowEndYmd) continue;
     if (peak >= capCalls) daysAtCap += 1;
   }
   if (capCalls > 0 && daysAtCap >= t.concurrencySaturationDays) {

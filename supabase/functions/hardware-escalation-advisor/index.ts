@@ -261,6 +261,8 @@ serve(async (req: Request) => {
     const advice = evaluateEscalationSignals({
       business: biz,
       callIntervals: intervalsByBiz.get(biz.id) ?? [],
+      windowStartYmd: windowStartDate,
+      windowEndYmd: now.toISOString().slice(0, 10),
       windowVoiceSeconds: voiceSecondsByBiz.get(biz.id) ?? 0,
       monthToDateSms: smsMonthToDate.get(biz.id) ?? 0,
       onBoxErrorCount: errorCounts.get(biz.id) ?? 0,

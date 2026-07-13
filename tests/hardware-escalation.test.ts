@@ -24,6 +24,8 @@ function evaluateInput(overrides: Partial<EvaluateInput> = {}): EvaluateInput {
   return {
     business: { id: "biz-1", name: "Amy's Plumbing", tier: "starter", vps_size: null },
     callIntervals: [],
+    windowStartYmd: "2026-07-01",
+    windowEndYmd: "2026-07-07",
     windowVoiceSeconds: 0,
     monthToDateSms: 0,
     onBoxErrorCount: 0,
@@ -134,6 +136,21 @@ describe("evaluateEscalationSignals", () => {
   it("does not fire concurrency for a single day at the cap", () => {
     const advice = evaluateEscalationSignals(
       evaluateInput({ callIntervals: [interval("2026-07-01", 0, 10)] })
+    );
+    expect(advice).toBeNull();
+  });
+
+  it("ignores peak days outside the rolling window bounds", () => {
+    // One in-window day at cap; two out-of-window days (before start, after
+    // end) must not count toward daysAtCap.
+    const advice = evaluateEscalationSignals(
+      evaluateInput({
+        callIntervals: [
+          interval("2026-06-25", 0, 10),
+          interval("2026-07-03", 0, 10),
+          interval("2026-07-09", 0, 10)
+        ]
+      })
     );
     expect(advice).toBeNull();
   });
