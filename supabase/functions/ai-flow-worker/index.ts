@@ -1403,6 +1403,68 @@ async function recordLeadCustomerProfile(
  * recordLeadCustomerProfile (a side effect of a send), this is an explicit
  * step, so the phone IS the lead — no co-recipient gating needed.
  */
+/**
+ * How long a prior run of the same flow for the same lead phone suppresses a
+ * new introduction. Mirrors the 72h conversation-context lookback
+ * (FLOW_CONTEXT_LOOKBACK_HOURS): while the earlier thread still counts as
+ * live context for the reply path, a re-submission is a repeat, not a new
+ * lead.
+ */
+const DUPLICATE_LEAD_WINDOW_HOURS = 72;
+
+/**
+ * Prior non-test, non-failed run of the SAME flow that already handled this
+ * lead phone within the window → its id; null otherwise. Only lead-intake
+ * triggers (tenant_email / webhook) are guarded. Strictly-earlier created_at
+ * ordering (vs this run) keeps two same-batch duplicates from suppressing
+ * each other into silence — exactly one of them wins. Best-effort: any read
+ * failure returns null so a live lead is never blocked by the guard.
+ */
+async function findDuplicateLeadRun(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  leadE164: string
+): Promise<string | null> {
+  const channel = typeof scope.trigger?.channel === "string" ? scope.trigger.channel : "";
+  if (channel !== "tenant_email" && channel !== "webhook") return null;
+  try {
+    const { data: selfRow, error: selfErr } = await supabase
+      .from("ai_flow_runs")
+      .select("created_at")
+      .eq("id", run.id)
+      .maybeSingle();
+    const myCreatedAt = (selfRow as { created_at?: string } | null)?.created_at;
+    if (selfErr || !myCreatedAt) return null;
+    const sinceIso = new Date(
+      Date.now() - DUPLICATE_LEAD_WINDOW_HOURS * 3_600_000
+    ).toISOString();
+    const { data: prior, error: priorErr } = await supabase
+      .from("ai_flow_runs")
+      .select("id")
+      .eq("business_id", run.business_id)
+      .eq("flow_id", run.flow_id)
+      .neq("id", run.id)
+      .neq("status", "failed")
+      .eq("context->vars->>lead_phone", leadE164)
+      .gte("created_at", sinceIso)
+      .lt("created_at", myCreatedAt)
+      // Simulated test runs never texted the lead — they don't count.
+      .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (priorErr) {
+      console.error("duplicate-lead guard lookup", priorErr);
+      return null;
+    }
+    return (prior as { id?: string } | null)?.id ?? null;
+  } catch (e) {
+    console.error("duplicate-lead guard", e);
+    return null;
+  }
+}
+
 async function upsertCustomerStep(
   supabase: Supabase,
   run: RunRow,
@@ -1451,7 +1513,60 @@ async function upsertCustomerStep(
       }
     };
   }
+  // Duplicate lead submission guard (Truly Insurance, 2026-07-13): the same
+  // lead source re-submitting the same phone number within the window must
+  // UPDATE the contact and flag the owner — never re-run the introduction.
+  // Production showed five intro texts to one number in four minutes (one
+  // per Privyr submission) and a second intro to an in-progress lead 1.75h
+  // into their conversation. Scoped to lead-intake triggers (tenant_email /
+  // webhook): contact-event and manual runs legitimately re-run for the
+  // same phone. Detection is best-effort and FAILS OPEN — a duplicate intro
+  // beats a lost lead.
+  const duplicateOfRunId = isTestModeTrigger(scope.trigger)
+    ? null
+    : await findDuplicateLeadRun(supabase, run, scope, action.e164);
   await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
+  if (duplicateOfRunId) {
+    const label = action.name ? `${action.name} (${action.e164})` : action.e164;
+    appendActionTaken(
+      scope,
+      `duplicate lead submission for ${action.e164} — contact updated, no new outreach (prior run ${duplicateOfRunId})`
+    );
+    // Tell the owner once so the repeat isn't silent — someone may have
+    // re-submitted the form on purpose and expects a human to look.
+    await sendOwnerSms(
+      supabase,
+      run,
+      `Heads up: ${label} submitted the lead form again. I updated their contact details but did NOT send another intro — their existing conversation continues. Review them on your dashboard if follow-up is needed.`,
+      `aiflow-duplicate-lead:${run.id}`
+    );
+    await telemetryRecord(supabase, "ai_flow_duplicate_lead_suppressed", {
+      run_id: run.id,
+      flow_id: run.flow_id,
+      business_id: run.business_id,
+      duplicate_of: duplicateOfRunId
+    });
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: "ai_flow_duplicate_lead_suppressed",
+      message: `Repeat lead submission for ${action.e164}: contact updated, intro suppressed, owner notified`,
+      payload: { run_id: run.id, flow_id: run.flow_id, duplicate_of: duplicateOfRunId }
+    });
+    return {
+      kind: "ok",
+      skipped: true,
+      endRun: true,
+      result: {
+        skipped: "duplicate_lead_submission",
+        duplicate_of: duplicateOfRunId,
+        customer_e164: action.e164,
+        display_name: action.name || null,
+        email: action.email || null
+      }
+    };
+  }
   if (!existedBefore) {
     // contact_created triggers: a flow that files a brand-new lead may start
     // OTHER flows (loop-guarded against this one). Fired only when the row
