@@ -40,8 +40,16 @@ const MAX_VARS_PER_RUN = 12;
 /** Per-value excerpt cap — long lead replies stay readable, not dominant. */
 const MAX_VALUE_CHARS = 160;
 
-/** Excerpt cap for the last automated message body. */
+/** Excerpt cap for each already-sent automated message body. */
 const MAX_LAST_MESSAGE_CHARS = 300;
+
+/**
+ * Most recent automated messages quoted back to the model. One message was
+ * not enough: production showed the reply path re-sending the flow's SECOND-
+ * to-last question verbatim ("when does your policy renew?", Truly Insurance
+ * 2026-07-13) because only the newest message was marked as already-sent.
+ */
+export const MAX_FLOW_MESSAGES = 3;
 
 export type FlowRunSnapshot = {
   flowName: string;
@@ -95,14 +103,21 @@ export function presentableVars(vars: Record<string, unknown>): [string, string]
 
 /**
  * Per-contact context block for customer-facing reply workers. Null when
- * there is nothing to say (no recent runs and no recent automated message).
+ * there is nothing to say (no recent runs and no recent automated messages).
+ *
+ * @param recentFlowMessages automated messages already texted to this
+ *   contact, OLDEST FIRST (capped at MAX_FLOW_MESSAGES by the loader).
  */
 export function formatFlowRunContext(
   runs: FlowRunSnapshot[],
-  lastFlowMessage: string | null
+  recentFlowMessages: string[]
 ): string | null {
   const shown = runs.slice(0, MAX_RUNS_PER_CONTACT);
-  if (shown.length === 0 && !lastFlowMessage?.trim()) return null;
+  const messages = recentFlowMessages
+    .map((m) => m.trim())
+    .filter((m) => m.length > 0)
+    .slice(-MAX_FLOW_MESSAGES);
+  if (shown.length === 0 && messages.length === 0) return null;
 
   const lines: string[] = [
     "Automation context: this business's automated workflows recently handled this contact. " +
@@ -120,14 +135,18 @@ export function formatFlowRunContext(
       for (const [key, value] of vars) lines.push(`- ${key}: ${value}`);
     }
   }
-  if (lastFlowMessage?.trim()) {
+  if (messages.length > 0) {
     lines.push("");
+    lines.push("Messages the automation ALREADY texted this contact (oldest first):");
+    messages.forEach((m, i) => {
+      lines.push(`${i + 1}. "${truncate(m, MAX_LAST_MESSAGE_CHARS)}"`);
+    });
     lines.push(
-      `Last automated message sent to this contact: "${truncate(lastFlowMessage, MAX_LAST_MESSAGE_CHARS)}"`
-    );
-    lines.push(
-      "If their message reads like an answer to it, continue THAT thread naturally — " +
-        "acknowledge the answer and move forward; never restart the conversation."
+      "These were already delivered — NEVER send them again, never repeat or paraphrase " +
+        "them, and never re-ask a question they contain. If this contact's message reads " +
+        "like an answer to one of them, continue THAT thread naturally — acknowledge the " +
+        "answer and move forward. Never restart the conversation, re-introduce yourself, " +
+        "or re-run an intake script."
     );
   }
   return lines.join("\n");
@@ -254,9 +273,11 @@ export async function loadFlowRunContext(
     const names = await loadFlowNames(supabase, [...new Set(rows.map((r) => r.flow_id))]);
     const snapshots = rows.map((row) => toSnapshot(row, names));
 
-    // The last thing an automation texted this lead (send_sms steps only —
-    // agent offers and owner notices go to teammates, not the lead).
-    let lastFlowMessage: string | null = null;
+    // The last few things an automation texted this lead (send_sms steps
+    // only — agent offers and owner notices go to teammates, not the lead).
+    // Multiple messages, not just the newest: the model must know EVERY
+    // recently-delivered automated line so it can't re-send an earlier one.
+    let recentFlowMessages: string[] = [];
     const { data: outbound, error: outboundErr } = await supabase
       .from("sms_outbound_log")
       .select("body")
@@ -265,15 +286,18 @@ export async function loadFlowRunContext(
       .eq("source", "ai_flow")
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
-      .limit(1);
+      .limit(MAX_FLOW_MESSAGES);
     if (outboundErr) {
       console.error("run_context: outbound lookup", outboundErr);
     } else {
-      const body = (outbound as Array<{ body?: string | null }> | null)?.[0]?.body;
-      if (typeof body === "string" && body.trim()) lastFlowMessage = body;
+      // Query is newest-first for the LIMIT; the prompt reads oldest-first.
+      recentFlowMessages = ((outbound ?? []) as Array<{ body?: string | null }>)
+        .map((row) => (typeof row.body === "string" ? row.body : ""))
+        .filter((body) => body.trim().length > 0)
+        .reverse();
     }
 
-    return formatFlowRunContext(snapshots, lastFlowMessage);
+    return formatFlowRunContext(snapshots, recentFlowMessages);
   } catch (e) {
     console.error("loadFlowRunContext", e);
     return null;

@@ -33,7 +33,7 @@ const FLOW_CONTEXT = formatVoiceFlowContext(
       }
     }
   ],
-  "Thanks for sharing that - Approximately when does your current policy renew?"
+  ["Thanks for sharing that - Approximately when does your current policy renew?"]
 )!;
 
 const SYSTEM = systemInstructionForBusiness(

@@ -68,24 +68,31 @@ describe("format parity (data lines identical, wording channel-specific)", () =>
     const runs = statuses.map((status, i) =>
       snapshot({ status, updatedAt: i % 2 === 0 ? null : "2026-07-11T12:39:05Z" })
     );
-    const lastMsg = "Approximately when does your current policy renew?";
-    const voice = formatVoiceFlowContext(runs, lastMsg)!.split("\n");
-    const shared = formatFlowRunContext(runs, lastMsg)!.split("\n");
-    // Everything except the channel-worded header, last-message label,
+    const flowMsgs = [
+      "Hi Dwight! What prompted you to shop around today?",
+      "Approximately when does your current policy renew?"
+    ];
+    const voice = formatVoiceFlowContext(runs, flowMsgs)!.split("\n");
+    const shared = formatFlowRunContext(runs, flowMsgs)!.split("\n");
+    // Everything except the channel-worded header, already-sent label,
     // continuation instruction, and section ORDER (voice leads with the
-    // last-text block so the bridge's hard clip can't drop it) must be
+    // already-sent block so the bridge's hard clip can't drop it) must be
     // byte-identical.
     const dataLines = (lines: string[]) =>
       lines.filter((l) => l.startsWith('Workflow "') || l.startsWith("- "));
     expect(dataLines(voice)).toEqual(dataLines(shared));
-    // Both quote the same clipped last message.
-    expect(voice.find((l) => l.includes(lastMsg))).toBeTruthy();
-    expect(shared.find((l) => l.includes(lastMsg))).toBeTruthy();
+    // Both quote the same already-sent messages, numbered oldest-first.
+    for (const msg of flowMsgs) {
+      expect(voice.find((l) => l.includes(msg))).toBeTruthy();
+      expect(shared.find((l) => l.includes(msg))).toBeTruthy();
+    }
+    expect(voice.find((l) => l.startsWith("1. "))).toContain(flowMsgs[0]);
+    expect(voice.find((l) => l.startsWith("2. "))).toContain(flowMsgs[1]);
   });
 
-  it("the last-text block leads so a hard clip can never drop it", () => {
+  it("the already-sent-texts block leads so a hard clip can never drop it", () => {
     const runs = [1, 2, 3].map(() => snapshot());
-    const text = formatVoiceFlowContext(runs, "When does your policy renew?")!;
+    const text = formatVoiceFlowContext(runs, ["When does your policy renew?"])!;
     const guidanceAt = text.indexOf("never restart intake");
     const firstRunAt = text.indexOf('Workflow "');
     expect(guidanceAt).toBeGreaterThan(-1);
@@ -97,16 +104,16 @@ describe("format parity (data lines identical, wording channel-specific)", () =>
   });
 
   it("voice wording speaks to a phone call, not a text thread", () => {
-    const text = formatVoiceFlowContext([snapshot()], "Hi Dwight!")!;
+    const text = formatVoiceFlowContext([snapshot()], ["Hi Dwight!"])!;
     expect(text).toContain("they are calling from it");
-    expect(text).toContain("Last automated text sent to this caller");
+    expect(text).toContain("Texts the automation ALREADY sent this caller");
     expect(text).toContain("never restart intake");
     expect(text).not.toContain("you are texting it");
   });
 
   it("null when there is nothing to say (parity with shared)", () => {
-    expect(formatVoiceFlowContext([], null)).toBeNull();
-    expect(formatVoiceFlowContext([], "   ")).toBeNull();
+    expect(formatVoiceFlowContext([], [])).toBeNull();
+    expect(formatVoiceFlowContext([], ["   "])).toBeNull();
   });
 
   it("lookback windows stay in sync", () => {
@@ -217,7 +224,7 @@ describe("loadVoiceFlowContext", () => {
     const text = await loadVoiceFlowContext(db, BIZ, LEAD);
     expect(text).toContain('Workflow "Untitled workflow"');
     expect(text?.match(/Workflow "/g)).toHaveLength(1);
-    expect(text).not.toContain("Last automated text");
+    expect(text).not.toContain("Texts the automation ALREADY sent");
     warn.mockRestore();
   });
 });

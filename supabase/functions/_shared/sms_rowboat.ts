@@ -14,15 +14,11 @@
 
 /**
  * Errors where Rowboat's response strongly suggests the *server-side*
- * conversation referenced by our stored conversationId is gone OR
- * the conversation is otherwise unhealthy. On these we get one
- * stateless retry with the continuation dropped — Rowboat will treat
- * the SMS turn as a fresh thread and produce a reply rooted in just
- * the new user message.
- *
- * Mirrors src/app/api/dashboard/chat/route.ts's STATELESS_RETRY_ERRORS
- * deliberately: the underlying Rowboat /chat contract is identical
- * for both surfaces (only the post-reply persistence differs).
+ * conversation referenced by our stored conversationId is gone OR the
+ * conversation is otherwise unhealthy. On these we get one stateless
+ * retry with the continuation dropped — Rowboat will treat the SMS
+ * turn as a fresh thread and produce a reply rooted in just the new
+ * user message (plus `statelessContextExtra`, see below).
  *
  * Deliberately excluded:
  *   - rowboat_timeout: timing out doesn't tell us anything about
@@ -31,14 +27,45 @@
  *   - rowboat_http_401 / 403: auth is global, retrying with the same
  *     bearer would fail identically.
  */
-export const STATELESS_RETRY_ERRORS = new Set([
+export const CONVERSATION_STATE_RETRY_ERRORS = new Set([
   "rowboat_http_400",
   "rowboat_http_404",
   "rowboat_http_409",
+  "rowboat_empty_assistant"
+]);
+
+/**
+ * Errors that are USUALLY a transient server/upstream failure (the
+ * llm-router's Gemini 503s surface as Rowboat 500s), not a stale
+ * continuation. A stateless retry here would throw away the whole
+ * conversation history to "fix" a problem that isn't conversation
+ * state — production showed the model restarting lead intake ("what
+ * prompted you to shop around?") mid-thread during a Gemini outage
+ * (Truly Insurance, 2026-07-13).
+ *
+ * These are stateless-retry-eligible ONLY when the caller opts in via
+ * `allowStatelessOnServerErrors` — the SMS worker does so on late
+ * attempts, where a persistent 5xx may in fact be a poisoned
+ * conversation and the reset is the last resort before dead-letter.
+ * Early attempts surface the error to the job-level retry, which
+ * re-runs STATEFUL with the thread intact.
+ */
+export const TRANSIENT_SERVER_RETRY_ERRORS = new Set([
   "rowboat_http_500",
   "rowboat_http_502",
-  "rowboat_http_503",
-  "rowboat_empty_assistant"
+  "rowboat_http_503"
+]);
+
+/**
+ * Union of both classes — the full set of errors that MAY warrant a
+ * stateless retry. Kept exported because the dashboard chat path
+ * mirrors this concept (src/app/api/dashboard/chat/route.ts); note the
+ * dashboard's stateless input carries the FULL history tail, so a
+ * reset there never loses context the way the SMS path can.
+ */
+export const STATELESS_RETRY_ERRORS = new Set([
+  ...CONVERSATION_STATE_RETRY_ERRORS,
+  ...TRANSIENT_SERVER_RETRY_ERRORS
 ]);
 
 export type RowboatChatCallInput = {
@@ -106,6 +133,25 @@ export type StatelessFallbackInput = RowboatChatCallInput & {
    * a self-inflicted "rowboat_timeout" from a doomed retry.
    */
   retryMinBudgetMs?: number;
+  /**
+   * Opt-in: also allow the stateless retry on
+   * TRANSIENT_SERVER_RETRY_ERRORS (5xx). Default false — a 5xx is
+   * usually an upstream model outage, and dropping the continuation
+   * for it discards the whole SMS thread; the job-level retry
+   * re-runs stateful instead. The SMS worker sets this on late
+   * attempts only, when a persistent 5xx starts to look like a
+   * poisoned conversation.
+   */
+  allowStatelessOnServerErrors?: boolean;
+  /**
+   * Extra system-preamble block appended ONLY on the stateless retry
+   * call: a compact transcript of the recent SMS exchange, so a
+   * freshly-rooted Rowboat conversation continues the thread instead
+   * of restarting intake (the 2026-07-13 "what prompted you to shop
+   * around?" repeat). Never sent on the first (stateful) attempt —
+   * Rowboat already holds the history there.
+   */
+  statelessContextExtra?: string | null;
 };
 
 export const DEFAULT_RETRY_MIN_BUDGET_MS = 5_000;
@@ -262,7 +308,11 @@ export async function callSmsRowboatWithStatelessFallback(
     return { ...out, retriedStateless: false };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    const isStaleContinuation = hadContinuation && STATELESS_RETRY_ERRORS.has(message);
+    const isStaleContinuation =
+      hadContinuation &&
+      (CONVERSATION_STATE_RETRY_ERRORS.has(message) ||
+        (TRANSIENT_SERVER_RETRY_ERRORS.has(message) &&
+          input.allowStatelessOnServerErrors === true));
     if (!isStaleContinuation) throw err;
 
     const elapsedMs = Date.now() - startedAt;
@@ -275,11 +325,19 @@ export async function callSmsRowboatWithStatelessFallback(
       throw err;
     }
 
+    // A stateless call roots a brand-new Rowboat conversation, so give it
+    // the recent-thread transcript (when the caller supplied one) — without
+    // it the model restarts intake mid-conversation.
+    const statelessExtra = input.statelessContextExtra?.trim();
+    const retryPreamble = [input.customerPreamble?.trim(), statelessExtra]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n");
     const out = await callRowboatChatOnce(
       {
         ...input,
         conversationId: null,
         state: null,
+        customerPreamble: retryPreamble || null,
         // Cap the retry's per-call timeout at the remaining budget so
         // a slow Rowboat that hangs near the budget edge still aborts
         // cleanly inside the cron window. Also clamp by the original

@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   callSmsRowboatWithStatelessFallback,
+  CONVERSATION_STATE_RETRY_ERRORS,
   parseRowboatChatJson,
-  STATELESS_RETRY_ERRORS
+  STATELESS_RETRY_ERRORS,
+  TRANSIENT_SERVER_RETRY_ERRORS
 } from "../supabase/functions/_shared/sms_rowboat";
 
 const ROWBOAT_URL = "https://biz.example.test/api/v1/proj/chat";
@@ -77,21 +79,35 @@ describe("parseRowboatChatJson", () => {
   });
 });
 
-describe("STATELESS_RETRY_ERRORS — deliberately bounded set", () => {
-  // The set is intentionally small. Adding entries here without
-  // updating the dashboard chat path's mirror list (or vice-versa)
-  // creates skew between SMS and dashboard retry behaviour. This test
-  // pins the surface so a casual edit triggers a visible diff.
-  it("contains exactly the dashboard-chat-mirrored codes — no more, no less", () => {
-    expect([...STATELESS_RETRY_ERRORS].sort()).toEqual([
+describe("retry-error classes — deliberately bounded sets", () => {
+  // The sets are intentionally small. Adding entries without updating the
+  // dashboard chat path's mirror concept (or vice-versa) creates skew
+  // between SMS and dashboard retry behaviour. These tests pin the surface
+  // so a casual edit triggers a visible diff.
+  it("conversation-state codes (always stateless-eligible) — no more, no less", () => {
+    expect([...CONVERSATION_STATE_RETRY_ERRORS].sort()).toEqual([
       "rowboat_empty_assistant",
       "rowboat_http_400",
       "rowboat_http_404",
-      "rowboat_http_409",
+      "rowboat_http_409"
+    ]);
+  });
+
+  it("transient 5xx codes (stateless only via allowStatelessOnServerErrors) — no more, no less", () => {
+    // A 5xx is usually an upstream model outage (2026-07-13: Gemini 503s
+    // surfaced as Rowboat 500s); dropping the continuation for it discards
+    // the SMS thread. Callers must opt in explicitly.
+    expect([...TRANSIENT_SERVER_RETRY_ERRORS].sort()).toEqual([
       "rowboat_http_500",
       "rowboat_http_502",
       "rowboat_http_503"
     ]);
+  });
+
+  it("STATELESS_RETRY_ERRORS stays the exact union of both classes", () => {
+    expect([...STATELESS_RETRY_ERRORS].sort()).toEqual(
+      [...CONVERSATION_STATE_RETRY_ERRORS, ...TRANSIENT_SERVER_RETRY_ERRORS].sort()
+    );
   });
 
   it("EXCLUDES rowboat_timeout — retrying a slow VPS doubles load without diagnostic value", () => {
@@ -189,11 +205,8 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
 
   it.each([
     ["rowboat_http_404", 404],
-    ["rowboat_http_409", 409],
-    ["rowboat_http_500", 500],
-    ["rowboat_http_502", 502],
-    ["rowboat_http_503", 503]
-  ])("retries on %s (the full STATELESS_RETRY_ERRORS HTTP set)", async (_label, status) => {
+    ["rowboat_http_409", 409]
+  ])("retries on %s by default (conversation-state class)", async (_label, status) => {
     const fetchStub = vi
       .fn<typeof fetch>()
       .mockResolvedValueOnce(jsonResponse({}, { status }))
@@ -211,6 +224,114 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
     );
     expect(result.retriedStateless).toBe(true);
     expect(result.reply).toBe("fresh");
+  });
+
+  it.each([
+    ["rowboat_http_500", 500],
+    ["rowboat_http_502", 502],
+    ["rowboat_http_503", 503]
+  ])(
+    "does NOT retry on %s by default — a transient upstream outage must not cost the thread its history (2026-07-13 incident)",
+    async (label, status) => {
+      const fetchStub = vi
+        .fn<typeof fetch>()
+        .mockResolvedValueOnce(jsonResponse({}, { status }));
+      await expect(
+        callSmsRowboatWithStatelessFallback(
+          {
+            chatUrl: ROWBOAT_URL,
+            bearer: BEARER,
+            userText: "hi",
+            conversationId: "conv-STALE",
+            state: null,
+            timeoutMs: 60_000
+          },
+          fetchStub
+        )
+      ).rejects.toThrow(label);
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each([
+    ["rowboat_http_500", 500],
+    ["rowboat_http_502", 502],
+    ["rowboat_http_503", 503]
+  ])("retries on %s when allowStatelessOnServerErrors is set (late-attempt last resort)", async (_label, status) => {
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({}, { status }))
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("fresh", "conv-NEW")));
+    const result = await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hi",
+        conversationId: "conv-STALE",
+        state: null,
+        timeoutMs: 60_000,
+        allowStatelessOnServerErrors: true
+      },
+      fetchStub
+    );
+    expect(result.retriedStateless).toBe(true);
+    expect(result.reply).toBe("fresh");
+  });
+
+  it("appends statelessContextExtra to the preamble ONLY on the stateless retry call", async () => {
+    // The retry roots a brand-new Rowboat conversation; the transcript block
+    // is what keeps it from restarting intake. The first (stateful) attempt
+    // must NOT carry it — Rowboat already holds the history there.
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({}, { status: 404 }))
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("fresh", "conv-NEW")));
+    await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hi",
+        conversationId: "conv-STALE",
+        state: null,
+        timeoutMs: 60_000,
+        customerPreamble: "Customer profile: Joe.",
+        statelessContextExtra: "Recent SMS conversation:\nTexter: hi\nYou: hello"
+      },
+      fetchStub
+    );
+    const firstBody = JSON.parse(String(fetchStub.mock.calls[0]?.[1]?.body));
+    expect(firstBody.messages[0]).toEqual({ role: "system", content: "Customer profile: Joe." });
+    const retryBody = JSON.parse(String(fetchStub.mock.calls[1]?.[1]?.body));
+    expect(retryBody.messages[0]).toEqual({
+      role: "system",
+      content: "Customer profile: Joe.\n\nRecent SMS conversation:\nTexter: hi\nYou: hello"
+    });
+  });
+
+  it("statelessContextExtra alone (no customerPreamble) still lands as the retry's system message", async () => {
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({}, { status: 404 }))
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("fresh", "conv-NEW")));
+    await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hi",
+        conversationId: "conv-STALE",
+        state: null,
+        timeoutMs: 60_000,
+        statelessContextExtra: "Recent SMS conversation:\nTexter: hi\nYou: hello"
+      },
+      fetchStub
+    );
+    const firstBody = JSON.parse(String(fetchStub.mock.calls[0]?.[1]?.body));
+    expect(firstBody.messages[0]?.role).toBe("user");
+    const retryBody = JSON.parse(String(fetchStub.mock.calls[1]?.[1]?.body));
+    expect(retryBody.messages[0]).toEqual({
+      role: "system",
+      content: "Recent SMS conversation:\nTexter: hi\nYou: hello"
+    });
   });
 
   it("retries on rowboat_empty_assistant (HTTP 200 but no assistant message)", async () => {
@@ -295,7 +416,8 @@ describe("callSmsRowboatWithStatelessFallback — stateless retry on stale conti
         userText: "hi",
         conversationId: "conv-STALE",
         state: null,
-        timeoutMs: 60_000
+        timeoutMs: 60_000,
+        allowStatelessOnServerErrors: true
       },
       fetchStub
     );
@@ -404,7 +526,8 @@ describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)
         state: null,
         timeoutMs: 10_000,
         budgetMs: 200,
-        retryMinBudgetMs: 50
+        retryMinBudgetMs: 50,
+        allowStatelessOnServerErrors: true
       },
       fetchStub
     );
@@ -433,7 +556,8 @@ describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)
           state: null,
           timeoutMs: 10_000,
           budgetMs: 50,
-          retryMinBudgetMs: 100
+          retryMinBudgetMs: 100,
+          allowStatelessOnServerErrors: true
         },
         fetchStub
       )
@@ -457,7 +581,8 @@ describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)
           conversationId: "conv-STALE",
           state: null,
           timeoutMs: 10_000,
-          budgetMs: 1_000
+          budgetMs: 1_000,
+          allowStatelessOnServerErrors: true
         },
         fetchStub
       )
@@ -496,7 +621,8 @@ describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)
           state: null,
           timeoutMs: 50,
           budgetMs: 100_000,
-          retryMinBudgetMs: 1
+          retryMinBudgetMs: 1,
+          allowStatelessOnServerErrors: true
         },
         fetchStub
       )
@@ -519,7 +645,8 @@ describe("callSmsRowboatWithStatelessFallback — combined budget bound (P1 fix)
         userText: "hi",
         conversationId: "conv-STALE",
         state: null,
-        timeoutMs: 60_000
+        timeoutMs: 60_000,
+        allowStatelessOnServerErrors: true
       },
       fetchStub
     );
