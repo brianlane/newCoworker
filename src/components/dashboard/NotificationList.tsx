@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import type { NotificationRow } from "@/lib/db/notifications";
 import {
   notificationDetailFields,
@@ -134,6 +135,11 @@ export function NotificationList({ businessId, initial }: Props) {
           </Button>
         )}
       </div>
+      {/* Same bounded scroll window as the Emails page inbox list: the card
+          stops growing with the notification count and the list scrolls in
+          place. Newest-first, so no bottom anchoring. The unread header and
+          the error line stay outside so they're always visible. */}
+      <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">
       <ul className="divide-y divide-parchment/10">
         {items.map((n) => {
           const reason = describeReason((n.payload as Record<string, unknown>) ?? {});
@@ -231,6 +237,7 @@ export function NotificationList({ businessId, initial }: Props) {
           );
         })}
       </ul>
+      </ConversationScroll>
       {error && <p className="text-xs text-spark-orange">{error}</p>}
     </div>
   );

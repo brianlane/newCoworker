@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { SearchControl } from "@/components/dashboard/SearchControl";
+import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 import { matchesQuery } from "@/lib/dashboard/search";
@@ -159,6 +160,10 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
             No contacts match “{query}”.
           </div>
         )}
+        {/* Same bounded scroll window as the Emails page inbox list: the
+            page stops growing with the contact count and the list scrolls
+            in place. Newest-first, so no bottom anchoring. */}
+        <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">
         <ul className="divide-y divide-parchment/10">
           {sorted.map((c) => (
             <li key={c.e164}>
@@ -232,6 +237,7 @@ export function CustomersList({ rows }: { rows: CustomerListRow[] }) {
             </li>
           ))}
         </ul>
+        </ConversationScroll>
       </Card>
     </div>
   );
