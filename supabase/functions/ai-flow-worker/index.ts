@@ -496,12 +496,16 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // (the service) nor any of the business's own numbers. Seeded once at run
   // start ("" for non-group triggers or an ambiguous roster) and persisted via
   // buildContext like every other var, so parks/resumes never recompute it.
+  // GROUP threads only (3+ participants, the same > 2 rule the inbound webhook
+  // stamps trigger.group with): a 1:1 thread always has a two-number roster,
+  // and an empty/unparseable trigger.from there would otherwise leave the
+  // customer as the sole "group lead" on a non-group trigger.
   if (scope.vars.group_lead_phone === undefined) {
     const participants = Array.isArray(scope.trigger.participants)
       ? scope.trigger.participants
       : [];
     scope.vars.group_lead_phone =
-      participants.length > 0
+      participants.length > 2
         ? groupLeadPhone(participants, [
             typeof scope.trigger.from === "string" ? scope.trigger.from : "",
             typeof scope.trigger.to === "string" ? scope.trigger.to : "",
