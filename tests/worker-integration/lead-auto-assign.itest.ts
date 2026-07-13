@@ -99,6 +99,9 @@ describe("lead auto-assignment (real worker)", () => {
     expect(routing?.claimed_by).toBe(AGENT_PHONE);
     expect(routing?.auto_assigned).toBe(true);
     expect(routing?.offered).toBeUndefined(); // no live offer ever existed
+    // The "86" unclaim rewind target: offer mode stamps it at park time;
+    // auto-assign must stamp it too or the lead can never be handed back.
+    expect(routing?.route_step_index).toBe(1);
 
     const steps = await getSteps(db, runId);
     const route = steps.find((s) => s.step_type === "route_to_team");

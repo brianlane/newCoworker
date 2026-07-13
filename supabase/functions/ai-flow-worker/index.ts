@@ -1121,7 +1121,9 @@ async function runStep(
       // The routing grab-bag is owned by this worker; the typed contract
       // (OfferRouting) makes every field read/write key-checked while the
       // in-place mutation semantics (persisted via context) are preserved.
-      return routeToTeamStep(supabase, run, scope, action, routing as OfferRouting);
+      // `index` is the rewind target auto-assignment stamps as
+      // route_step_index (offer mode stamps it later, at park time).
+      return routeToTeamStep(supabase, run, scope, action, routing as OfferRouting, index);
     case "browse_action":
       return browseActionStep(supabase, run, index, scope, action);
     case "recall_url":
@@ -4390,7 +4392,11 @@ async function routeToTeamStep(
   action: Extract<StepAction, { kind: "route_to_team" }>,
   // Typed contract shared with the inbound webhook — see
   // _shared/ai_flows/routing.ts for each field's full lifecycle.
-  routing: OfferRouting
+  routing: OfferRouting,
+  // This step's index: auto-assignment stamps it as route_step_index so a
+  // teammate's "86" can re-open the finished run (offer mode stamps it at
+  // park time in executeRun instead).
+  stepIndex: number
 ): Promise<StepOutcome> {
   const tried: string[] = Array.isArray(routing.tried)
     ? (routing.tried as unknown[]).filter((x): x is string => typeof x === "string")
@@ -4652,10 +4658,16 @@ async function routeToTeamStep(
       routing.claimed_by = agent.phone;
       routing.claimed_name = agent.name;
       routing.auto_assigned = true;
+      // Rewind target for a retroactive "86" unclaim: the webhook re-opens a
+      // claimed-and-finished run at route_step_index, which offer mode stamps
+      // at park time — auto-assign never parks, so stamp it here or an
+      // auto-assigned lead could never be handed back (Bugbot on PR #580).
+      routing.route_step_index = stepIndex;
       scope.vars.claimed_agent = agent.name || agent.phone;
       const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
       const fyiBody =
-        "New lead assigned to you (auto-assign is on — it's yours, no reply needed):\n" +
+        "New lead assigned to you (auto-assign is on — it's yours, no reply " +
+        'needed; reply "86" to hand it back):\n' +
         renderTemplate(action.offerTemplate, agentScope(scope, agent));
       // FYI delivery is best-effort: the assignment is the durable fact; a
       // Telnyx hiccup must not bounce the lead back into rotation. The
