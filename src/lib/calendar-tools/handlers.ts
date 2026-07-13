@@ -5,6 +5,12 @@ import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/sh
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
+import {
+  bookingAttendeeKey,
+  claimBookingDedupe,
+  confirmBookingDedupe,
+  releaseBookingDedupe
+} from "@/lib/calendar-tools/booking-dedupe";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { logger } from "@/lib/logger";
 
@@ -402,6 +408,51 @@ export async function bookCalendarAppointment(
     return { ok: false, detail: "invalid_window" };
   }
 
+  // Idempotency guard (2026-07-13 incident): a worker-retried model turn
+  // re-runs its tool calls, and provider create APIs are not idempotent —
+  // one customer confirmation produced FOUR identical Outlook events. Claim
+  // the (business, attendee, start) slot before creating; a repeat attempt
+  // inside the window returns the recorded event instead of booking again.
+  // Fail-open: a null claim (ledger unavailable) books without dedupe.
+  // Calendly is naturally exempt — its link-mode result never confirms an
+  // eventId, so its claims are always released.
+  const claim = await claimBookingDedupe(
+    businessId,
+    bookingAttendeeKey(args.attendeePhone ?? fallbackPhone, args.attendeeEmail, args.attendeeName),
+    new Date(args.startIso).toISOString()
+  );
+  if (claim?.kind === "duplicate") {
+    return {
+      ok: true,
+      detail: "already_booked",
+      data: { eventId: claim.eventId, deduplicated: true }
+    };
+  }
+  if (claim?.kind === "in_flight") {
+    // Another attempt is booking this exact slot right now. Refuse without
+    // touching the provider; the in-flight attempt confirms (or its claim
+    // expires and a later retry books cleanly).
+    return { ok: false, detail: "booking_in_progress" };
+  }
+
+  const result = await bookOnProvider(businessId, args, fallbackPhone);
+
+  if (claim?.kind === "claimed") {
+    const bookedEventId = (result.data as { eventId?: unknown } | undefined)?.eventId;
+    if (result.ok && typeof bookedEventId === "string" && bookedEventId.length > 0) {
+      await confirmBookingDedupe(claim.id, bookedEventId);
+    } else {
+      await releaseBookingDedupe(claim.id);
+    }
+  }
+  return result;
+}
+
+async function bookOnProvider(
+  businessId: string,
+  args: BookAppointmentArgs,
+  fallbackPhone?: string | null
+): Promise<CalendarToolResult> {
   try {
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) {

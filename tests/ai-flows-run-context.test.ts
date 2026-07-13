@@ -57,19 +57,19 @@ describe("presentableVars", () => {
 });
 
 describe("formatFlowRunContext", () => {
-  it("null when there are no runs and no last message (nothing to say)", () => {
-    expect(formatFlowRunContext([], null)).toBeNull();
-    expect(formatFlowRunContext([], "   ")).toBeNull();
+  it("null when there are no runs and no recent messages (nothing to say)", () => {
+    expect(formatFlowRunContext([], [])).toBeNull();
+    expect(formatFlowRunContext([], ["   "])).toBeNull();
   });
 
   it("lists each run's workflow, status phrase, and collected vars", () => {
-    const text = formatFlowRunContext([snapshot()], null);
+    const text = formatFlowRunContext([snapshot()], []);
     expect(text).toContain('Workflow "Lead intake & follow-up" — finished, last update 2026-07-11T12:39:05Z:');
     expect(text).toContain("- lead_name: Dwight Colclough");
     expect(text).toContain("- product: auto_insurance");
     expect(text).toContain("treat them as KNOWN");
-    // No last message → no continuation block.
-    expect(text).not.toContain("Last automated message");
+    // No recent messages → no already-sent block.
+    expect(text).not.toContain("Messages the automation ALREADY texted");
   });
 
   it("phrases every run status for the model (raw status as fallback)", () => {
@@ -83,14 +83,14 @@ describe("formatFlowRunContext", () => {
       ["failed", "stopped with an error"],
       ["paused_by_call", "paused_by_call"]
     ] as const) {
-      expect(formatFlowRunContext([snapshot({ status })], null)).toContain(`— ${phrase}`);
+      expect(formatFlowRunContext([snapshot({ status })], [])).toContain(`— ${phrase}`);
     }
   });
 
   it("handles a run with no timestamps and no presentable vars", () => {
     const text = formatFlowRunContext(
       [snapshot({ updatedAt: null, vars: { __goal_g1: "replied" } })],
-      null
+      []
     );
     expect(text).toContain('Workflow "Lead intake & follow-up" — finished:');
     expect(text).toContain("- (no collected details)");
@@ -98,30 +98,46 @@ describe("formatFlowRunContext", () => {
 
   it("caps at three runs (newest first is the caller's ordering)", () => {
     const runs = [1, 2, 3, 4].map((i) => snapshot({ flowName: `Flow ${i}` }));
-    const text = formatFlowRunContext(runs, null);
+    const text = formatFlowRunContext(runs, []);
     expect(text).toContain('Workflow "Flow 3"');
     expect(text).not.toContain('Workflow "Flow 4"');
   });
 
-  it("quotes the last automated message with the continue-the-thread instruction", () => {
+  it("numbers every already-sent message (oldest first) with the never-repeat instruction", () => {
+    // The 2026-07-13 incident: only the NEWEST flow message was quoted, so
+    // the model re-sent the flow's earlier question verbatim. Every recent
+    // automated message must be marked as already-delivered.
     const text = formatFlowRunContext(
       [snapshot()],
-      "Approximately when does your current policy renew?"
+      [
+        "Hi Dwight! What prompted you to shop around today?",
+        "Approximately when does your current policy renew?"
+      ]
     );
-    expect(text).toContain(
-      'Last automated message sent to this contact: "Approximately when does your current policy renew?"'
-    );
+    expect(text).toContain("Messages the automation ALREADY texted this contact (oldest first):");
+    expect(text).toContain('1. "Hi Dwight! What prompted you to shop around today?"');
+    expect(text).toContain('2. "Approximately when does your current policy renew?"');
+    expect(text).toContain("NEVER send them again");
+    expect(text).toContain("never re-ask a question they contain");
     expect(text).toContain("continue THAT thread naturally");
   });
 
+  it("caps the already-sent list at three and drops blank entries", () => {
+    const text = formatFlowRunContext([], ["m1", "  ", "m2", "m3", "m4"]);
+    expect(text).not.toContain('"m1"');
+    expect(text).toContain('1. "m2"');
+    expect(text).toContain('2. "m3"');
+    expect(text).toContain('3. "m4"');
+  });
+
   it("a recent automated message alone (no runs in-window) is still context", () => {
-    const text = formatFlowRunContext([], "Hi Dwight! What prompted you to shop around today?");
+    const text = formatFlowRunContext([], ["Hi Dwight! What prompted you to shop around today?"]);
     expect(text).toContain("Automation context");
     expect(text).toContain("What prompted you to shop around today?");
   });
 
-  it("clips a very long last message", () => {
-    const text = formatFlowRunContext([], `start ${"y".repeat(600)}`);
+  it("clips a very long message", () => {
+    const text = formatFlowRunContext([], [`start ${"y".repeat(600)}`]);
     expect(text).toContain("start ");
     expect(text).toContain("…");
     expect(text).not.toContain("y".repeat(400));
@@ -298,7 +314,7 @@ describe("loadFlowRunContext", () => {
       ]);
       const text = await loadFlowRunContext(db, BIZ, LEAD);
       expect(text).toContain('Workflow "Privyr intake"');
-      expect(text).not.toContain("Last automated message");
+      expect(text).not.toContain("Messages the automation ALREADY texted");
     }
     err.mockRestore();
   });

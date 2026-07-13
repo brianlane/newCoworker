@@ -31,8 +31,14 @@ const MAX_VARS_PER_RUN = 12;
 /** Per-value excerpt cap — long lead replies stay readable, not dominant. */
 const MAX_VALUE_CHARS = 160;
 
-/** Excerpt cap for the last automated message body. */
+/** Excerpt cap for each already-sent automated message body. */
 const MAX_LAST_MESSAGE_CHARS = 300;
+
+/**
+ * Most recent automated messages quoted back to the model (mirror of the
+ * shared module's MAX_FLOW_MESSAGES — keep in sync).
+ */
+export const MAX_FLOW_MESSAGES = 3;
 
 export type FlowRunSnapshot = {
   flowName: string;
@@ -86,33 +92,42 @@ export function presentableVars(vars: Record<string, unknown>): [string, string]
 
 /**
  * Per-caller context block for the voice system instruction. Null when
- * there is nothing to say (no recent runs and no recent automated message).
+ * there is nothing to say (no recent runs and no recent automated messages).
  *
  * Ordering differs from the SMS mirror on purpose: the voice bridge hard-
- * clips this block to VOICE_FLOW_CONTEXT_MAX_CHARS, so the header, the last
- * automated text, and the continue-the-thread guidance LEAD — a clip can
+ * clips this block to VOICE_FLOW_CONTEXT_MAX_CHARS, so the header, the
+ * already-sent texts, and the continue-the-thread guidance LEAD — a clip can
  * only ever cost var lines of older runs, never the guidance itself.
+ *
+ * @param recentFlowMessages automated texts already sent to this caller,
+ *   OLDEST FIRST (capped at MAX_FLOW_MESSAGES by the loader).
  */
 export function formatVoiceFlowContext(
   runs: FlowRunSnapshot[],
-  lastFlowMessage: string | null
+  recentFlowMessages: string[]
 ): string | null {
   const shown = runs.slice(0, MAX_RUNS_PER_CONTACT);
-  if (shown.length === 0 && !lastFlowMessage?.trim()) return null;
+  const messages = recentFlowMessages
+    .map((m) => m.trim())
+    .filter((m) => m.length > 0)
+    .slice(-MAX_FLOW_MESSAGES);
+  if (shown.length === 0 && messages.length === 0) return null;
 
   const lines: string[] = [
     "Automation context: this business's automated workflows recently handled this caller over text. " +
       "Facts the automation already collected are listed below — treat them as KNOWN. " +
       "Do NOT ask for or re-confirm any of them (including their phone number: they are calling from it)."
   ];
-  if (lastFlowMessage?.trim()) {
+  if (messages.length > 0) {
     lines.push("");
+    lines.push("Texts the automation ALREADY sent this caller (oldest first):");
+    messages.forEach((m, i) => {
+      lines.push(`${i + 1}. "${truncate(m, MAX_LAST_MESSAGE_CHARS)}"`);
+    });
     lines.push(
-      `Last automated text sent to this caller: "${truncate(lastFlowMessage, MAX_LAST_MESSAGE_CHARS)}"`
-    );
-    lines.push(
-      "If the caller brings it up or seems to be responding to it, continue THAT conversation " +
-        "naturally — acknowledge and move forward; never restart intake."
+      "These were already delivered — never repeat them or re-ask a question they contain. " +
+        "If the caller brings one up or seems to be responding to it, continue THAT " +
+        "conversation naturally — acknowledge and move forward; never restart intake."
     );
   }
   for (const run of shown) {
@@ -219,9 +234,10 @@ export async function loadVoiceFlowContext(
       vars: runVars(row.context)
     }));
 
-    // The last thing an automation texted this caller (send_sms steps only —
-    // agent offers and owner notices go to teammates, not the lead).
-    let lastFlowMessage: string | null = null;
+    // The last few things an automation texted this caller (send_sms steps
+    // only — agent offers and owner notices go to teammates, not the lead).
+    // Multiple messages, not just the newest — mirror of the shared module.
+    let recentFlowMessages: string[] = [];
     const { data: outbound, error: outboundErr } = await supabase
       .from("sms_outbound_log")
       .select("body")
@@ -230,15 +246,18 @@ export async function loadVoiceFlowContext(
       .eq("source", "ai_flow")
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
-      .limit(1);
+      .limit(MAX_FLOW_MESSAGES);
     if (outboundErr) {
       console.warn("voice-bridge: flow-context outbound lookup failed (non-fatal)", outboundErr);
     } else {
-      const body = (outbound as Array<{ body?: string | null }> | null)?.[0]?.body;
-      if (typeof body === "string" && body.trim()) lastFlowMessage = body;
+      // Query is newest-first for the LIMIT; the prompt reads oldest-first.
+      recentFlowMessages = ((outbound ?? []) as Array<{ body?: string | null }>)
+        .map((row) => (typeof row.body === "string" ? row.body : ""))
+        .filter((body) => body.trim().length > 0)
+        .reverse();
     }
 
-    return formatVoiceFlowContext(snapshots, lastFlowMessage);
+    return formatVoiceFlowContext(snapshots, recentFlowMessages);
   } catch (e) {
     console.warn("voice-bridge: flow-context load failed (non-fatal)", e);
     return null;

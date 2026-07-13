@@ -24,6 +24,12 @@ vi.mock("@/lib/calendar-tools/caldav", () => ({
   getCaldavBusyBlocks: vi.fn(),
   bookCaldavAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
+  bookingAttendeeKey: vi.fn(() => "key-under-test"),
+  claimBookingDedupe: vi.fn(),
+  confirmBookingDedupe: vi.fn(),
+  releaseBookingDedupe: vi.fn()
+}));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 
 import {
@@ -42,6 +48,12 @@ import {
 } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
+import {
+  bookingAttendeeKey,
+  claimBookingDedupe,
+  confirmBookingDedupe,
+  releaseBookingDedupe
+} from "@/lib/calendar-tools/booking-dedupe";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -78,6 +90,10 @@ beforeEach(() => {
   // Default: no shared NewCoworker calendar → pre-shared-calendar behavior.
   vi.mocked(getSharedCalendar).mockResolvedValue(null);
   vi.mocked(ensureSharedCalendar).mockResolvedValue(null);
+  // Default: dedupe ledger unavailable (fail-open) — bookings proceed exactly
+  // as before the idempotency guard, which is what the pre-guard tests pin.
+  vi.mocked(bookingAttendeeKey).mockReturnValue("key-under-test");
+  vi.mocked(claimBookingDedupe).mockResolvedValue(null);
 });
 
 describe("computeFreeSlots", () => {
@@ -937,5 +953,112 @@ describe("bookCalendarAppointment", () => {
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
     expect(payload.endpoint).toBe("/v1.0/me/calendars/shared-ms/events");
+  });
+});
+
+describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadruple-booking incident)", () => {
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate",
+    attendeeName: "Joe Plumber"
+  };
+
+  it("claims the slot with the attendee key (explicit phone over fallback) and start instant", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeePhone: "+15559998888", attendeeEmail: "joe@acme.com" },
+      "+15551230000"
+    );
+    expect(vi.mocked(bookingAttendeeKey)).toHaveBeenCalledWith(
+      "+15559998888",
+      "joe@acme.com",
+      "Joe Plumber"
+    );
+    expect(vi.mocked(claimBookingDedupe)).toHaveBeenCalledWith(
+      BIZ,
+      "key-under-test",
+      "2026-06-12T17:00:00.000Z"
+    );
+  });
+
+  it("falls back to the surface phone for the attendee key when the model omits one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(bookingAttendeeKey)).toHaveBeenCalledWith(
+      "+15551230000",
+      undefined,
+      "Joe Plumber"
+    );
+  });
+
+  it("a duplicate claim returns the recorded event WITHOUT touching the provider or firing goals", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "duplicate", eventId: "evt-prior" });
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({
+      ok: true,
+      detail: "already_booked",
+      data: { eventId: "evt-prior", deduplicated: true }
+    });
+    expect(vi.mocked(resolveCalendarConnection)).not.toHaveBeenCalled();
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+    expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
+    expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
+  });
+
+  it("an in-flight claim refuses without touching the provider", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "in_flight" });
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({ ok: false, detail: "booking_in_progress" });
+    expect(vi.mocked(resolveCalendarConnection)).not.toHaveBeenCalled();
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("confirms the claim after a successful provider create", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-1" });
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1");
+    expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
+  });
+
+  it("releases the claim when the booking fails, so a later attempt can book cleanly", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-1" });
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(vi.mocked(releaseBookingDedupe)).toHaveBeenCalledWith("claim-1");
+    expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
+  });
+
+  it("releases the claim on an ok result WITHOUT a confirmed event id (Calendly link mode)", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-1" });
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(createCalendlyBookingLink).mockResolvedValue({
+      ok: true,
+      detail: "booking_link_created",
+      data: { bookingLink: "https://calendly.com/d/abc" }
+    } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result.detail).toBe("booking_link_created");
+    expect(vi.mocked(releaseBookingDedupe)).toHaveBeenCalledWith("claim-1");
+    expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
+  });
+
+  it("a null claim (ledger unavailable) books without dedupe — fail-open", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue(null);
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
+    expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
   });
 });

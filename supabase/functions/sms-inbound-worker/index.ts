@@ -37,6 +37,7 @@ import {
   splitReplyReasoning
 } from "../_shared/reply_reasoning.ts";
 import { loadFlowRunContext } from "../_shared/ai_flows/run_context.ts";
+import { loadRecentSmsTranscript } from "../_shared/sms_transcript.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
 import {
   SMS_CONVERSATION_QUALITY_LINE,
@@ -60,6 +61,13 @@ import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
+// First attempt (attempt_count, incremented at claim) on which a Rowboat 5xx
+// may trigger the history-dropping STATELESS retry. Attempts below this
+// surface the 5xx to the job-level retry, which re-runs stateful — a
+// transient Gemini outage must not cost the customer their thread context
+// (2026-07-13 incident). Conversation-state errors (400/404/409/empty) stay
+// stateless-eligible on every attempt.
+const STATELESS_5XX_MIN_ATTEMPT = 3;
 // Hard ceiling on a single Rowboat /chat call. A hung business VPS would otherwise
 // keep the worker blocked for the full platform invocation timeout (and stall every
 // other claimed job in the batch). Retries are handled by bounded `attempt_count`.
@@ -1030,6 +1038,15 @@ serve(async (req: Request) => {
           continue;
         }
 
+        // Continuation turns get a fallback transcript: if the stateless
+        // retry fires, the freshly-rooted conversation continues the thread
+        // instead of restarting intake (2026-07-13 incident). Loaded only
+        // when a continuation exists — a fresh thread has no history to lose.
+        const statelessContextExtra =
+          !turnPlan.stateless && existingConv
+            ? await loadRecentSmsTranscript(supabase, job.business_id, fromE164, job.id)
+            : null;
+
         const parsed = await callSmsRowboatWithStatelessFallback({
           chatUrl,
           bearer,
@@ -1043,7 +1060,14 @@ serve(async (req: Request) => {
           // Cap the combined initial+retry wall time under the 90s
           // pg_cron HTTP timeout (see ROWBOAT_RETRY_BUDGET_MS).
           budgetMs: ROWBOAT_RETRY_BUDGET_MS,
-          customerPreamble
+          customerPreamble,
+          statelessContextExtra,
+          // A 5xx is usually a transient upstream (Gemini) outage, not a
+          // stale continuation — early attempts surface it to the job-level
+          // retry, which re-runs STATEFUL with the thread intact. Only after
+          // repeated failures do we allow the history-dropping stateless
+          // reset, as the last resort before dead-letter.
+          allowStatelessOnServerErrors: job.attempt_count >= STATELESS_5XX_MIN_ATTEMPT
         });
         // Strip the reasoning trailer BEFORE anything caches or sends the
         // reply — the trailer is for the ai_reply_reasoning record only.
