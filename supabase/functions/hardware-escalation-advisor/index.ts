@@ -38,6 +38,7 @@ import {
   weeklyPeriodKey,
   type AdvisorBusiness,
   type BusinessAdvice,
+  type CallInterval,
   type DailyUsageRow
 } from "../_shared/hardware_escalation.ts";
 
@@ -128,25 +129,26 @@ serve(async (req: Request) => {
   }
 
   const ids = businesses.map((b) => b.id);
-  // WINDOW_DAYS - 1: `usage_date >= start` is inclusive of both endpoints,
-  // so subtracting the full window would span 8 calendar days and overstate
+  // WINDOW_DAYS - 1: `>= start-of-day` is inclusive of both endpoints, so
+  // subtracting the full window would span 8 calendar days and overstate
   // the pace against the evaluator's fixed 7-day divisor. Today + 6 prior
   // days = exactly WINDOW_DAYS calendar days.
   const windowStartDate = isoDaysAgo(WINDOW_DAYS - 1, now).slice(0, 10);
+  const windowStartIso = `${windowStartDate}T00:00:00.000Z`;
   const monthStartDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))
     .toISOString()
     .slice(0, 10);
-  // One fetch covers both windows: the month start is at most ~31 days back.
-  const fetchFromDate = windowStartDate < monthStartDate ? windowStartDate : monthStartDate;
 
+  // daily_usage feeds only the month-to-date SMS total — its voice/peak
+  // columns have no live writer (see _shared/hardware_escalation.ts).
   let usageRows: DailyUsageRow[];
   try {
     usageRows = await fetchAllPages<DailyUsageRow>((from, to) =>
       supabase
         .from("daily_usage")
-        .select("business_id, usage_date, voice_minutes_used, sms_sent, peak_concurrent_calls")
+        .select("business_id, usage_date, sms_sent")
         .in("business_id", ids)
-        .gte("usage_date", fetchFromDate)
+        .gte("usage_date", monthStartDate)
         .order("usage_date", { ascending: true })
         .order("business_id", { ascending: true })
         .range(from, to)
@@ -154,6 +156,73 @@ serve(async (req: Request) => {
   } catch (err) {
     console.error("daily_usage select failed", err);
     return new Response("select failed", { status: 500 });
+  }
+
+  // Window call intervals for the concurrency signal. Central read: a
+  // vps-residency tenant's transcripts live on its box, but residency is
+  // enterprise-only and this cron scans starter/standard tenants.
+  let transcriptRows: Array<{
+    business_id: string;
+    started_at: string | null;
+    ended_at: string | null;
+  }>;
+  try {
+    transcriptRows = await fetchAllPages<{
+      business_id: string;
+      started_at: string | null;
+      ended_at: string | null;
+    }>((from, to) =>
+      supabase
+        .from("voice_call_transcripts")
+        .select("business_id, started_at, ended_at")
+        .in("business_id", ids)
+        .neq("status", "missed")
+        .gte("started_at", windowStartIso)
+        .order("started_at", { ascending: true })
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("voice_call_transcripts select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const intervalsByBiz = new Map<string, CallInterval[]>();
+  for (const row of transcriptRows) {
+    if (!row.started_at || !row.ended_at) continue;
+    const startMs = Date.parse(row.started_at);
+    const endMs = Date.parse(row.ended_at);
+    if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+    const list = intervalsByBiz.get(row.business_id) ?? [];
+    list.push({ startMs, endMs });
+    intervalsByBiz.set(row.business_id, list);
+  }
+
+  // Settled billable seconds for the voice_volume signal (billing ground truth).
+  let settlementRows: Array<{ business_id: string; billable_seconds: number | null }>;
+  try {
+    settlementRows = await fetchAllPages<{
+      business_id: string;
+      billable_seconds: number | null;
+    }>((from, to) =>
+      supabase
+        .from("voice_settlements")
+        .select("business_id, billable_seconds")
+        .in("business_id", ids)
+        .gte("created_at", windowStartIso)
+        .order("created_at", { ascending: true })
+        .order("call_control_id", { ascending: true })
+        .range(from, to)
+    );
+  } catch (err) {
+    console.error("voice_settlements select failed", err);
+    return new Response("select failed", { status: 500 });
+  }
+  const voiceSecondsByBiz = new Map<string, number>();
+  for (const row of settlementRows) {
+    voiceSecondsByBiz.set(
+      row.business_id,
+      (voiceSecondsByBiz.get(row.business_id) ?? 0) + Number(row.billable_seconds ?? 0)
+    );
   }
 
   let errRows: Array<{ business_id: string }>;
@@ -178,20 +247,12 @@ serve(async (req: Request) => {
     errorCounts.set(row.business_id, (errorCounts.get(row.business_id) ?? 0) + 1);
   }
 
-  const usageByBiz = new Map<string, DailyUsageRow[]>();
   const smsMonthToDate = new Map<string, number>();
   for (const row of usageRows) {
-    if (row.usage_date >= windowStartDate) {
-      const list = usageByBiz.get(row.business_id) ?? [];
-      list.push(row);
-      usageByBiz.set(row.business_id, list);
-    }
-    if (row.usage_date >= monthStartDate) {
-      smsMonthToDate.set(
-        row.business_id,
-        (smsMonthToDate.get(row.business_id) ?? 0) + row.sms_sent
-      );
-    }
+    smsMonthToDate.set(
+      row.business_id,
+      (smsMonthToDate.get(row.business_id) ?? 0) + row.sms_sent
+    );
   }
 
   const flagged: BusinessAdvice[] = [];
@@ -199,7 +260,10 @@ serve(async (req: Request) => {
     const limits = VOICE_RES_LIMITS[biz.tier];
     const advice = evaluateEscalationSignals({
       business: biz,
-      usageRows: usageByBiz.get(biz.id) ?? [],
+      callIntervals: intervalsByBiz.get(biz.id) ?? [],
+      windowStartYmd: windowStartDate,
+      windowEndYmd: now.toISOString().slice(0, 10),
+      windowVoiceSeconds: voiceSecondsByBiz.get(biz.id) ?? 0,
       monthToDateSms: smsMonthToDate.get(biz.id) ?? 0,
       onBoxErrorCount: errorCounts.get(biz.id) ?? 0,
       limits: {

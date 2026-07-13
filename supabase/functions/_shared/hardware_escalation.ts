@@ -7,17 +7,26 @@
  * escalation (the admin panel's migrate-size flow — escalation itself stays
  * a human decision; nothing here moves hardware).
  *
- * Signals (rolling 7-day window over `daily_usage` + `system_logs`):
- *   - concurrency_saturation: peak_concurrent_calls reached the tier's
- *     advertised cap on ≥ CONCURRENCY_DAYS days. The tenant is bouncing off
- *     their concurrency ceiling — the strongest "needs bigger box / plan"
- *     indicator we collect.
- *   - voice_volume: 7-day voice minutes, extrapolated to a 30-day month,
- *     ≥ VOICE_UTILIZATION of the tier's included pool. Voice-heavy tenants
- *     are the ones that stress CPU (Gemini Live bridging).
- *   - sms_volume: month-to-date SMS ≥ SMS_UTILIZATION of the monthly cap.
- *     More an upsell signal than hardware pressure, but the operator wants
- *     to see it in the same digest.
+ * Signals (rolling 7-day window over `voice_call_transcripts`,
+ * `voice_settlements`, `daily_usage`, and `system_logs`):
+ *   - concurrency_saturation: the per-day peak of simultaneously-open calls
+ *     (derived from transcript started_at/ended_at overlap via
+ *     {@link dailyPeakConcurrency}) reached the tier's advertised cap on
+ *     ≥ CONCURRENCY_DAYS days. The tenant is bouncing off their concurrency
+ *     ceiling — the strongest "needs bigger box / plan" indicator we
+ *     collect. NOT `daily_usage.peak_concurrent_calls`: that column has no
+ *     live production writer (the SMS reserve path inserts it as zero), so
+ *     reading it meant this signal could never fire.
+ *   - voice_volume: 7-day settled voice seconds
+ *     (`voice_settlements.billable_seconds`, the billing ground truth),
+ *     extrapolated to a 30-day month, ≥ VOICE_UTILIZATION of the tier's
+ *     included pool. Voice-heavy tenants are the ones that stress CPU
+ *     (Gemini Live bridging). NOT `daily_usage.voice_minutes_used` — dead
+ *     for the same reason as `peak_concurrent_calls`.
+ *   - sms_volume: month-to-date SMS ≥ SMS_UTILIZATION of the monthly cap
+ *     (`daily_usage.sms_sent` — the one column the SMS reserve functions DO
+ *     write). More an upsell signal than hardware pressure, but the
+ *     operator wants to see it in the same digest.
  *   - system_errors: ≥ ERROR_COUNT error-level `system_logs` rows from the
  *     on-box sources (rowboat / ollama / voice) in the window — the "this
  *     box is actually choking" signal (OOM, container crashes).
@@ -42,10 +51,43 @@ export type AdvisorBusiness = {
 export type DailyUsageRow = {
   business_id: string;
   usage_date: string;
-  voice_minutes_used: number;
   sms_sent: number;
-  peak_concurrent_calls: number;
 };
+
+/** One call's [start, end) wall-clock interval (epoch ms). */
+export type CallInterval = {
+  startMs: number;
+  endMs: number;
+};
+
+/**
+ * Per-UTC-day peak of simultaneously-open calls from [start, end)
+ * intervals: sweep the +1/-1 events in time order (ends sort before starts
+ * at the same instant, so back-to-back calls never count as overlap) and
+ * record each day's maximum live-call count at its event times. A call
+ * crossing midnight contributes to its end day via the end event's
+ * pre-close count; a day a call spans END TO END with no events records
+ * nothing — acceptable, real calls are minutes long.
+ */
+export function dailyPeakConcurrency(intervals: CallInterval[]): Map<string, number> {
+  const events: Array<{ atMs: number; delta: 1 | -1 }> = [];
+  for (const { startMs, endMs } of intervals) {
+    events.push({ atMs: startMs, delta: 1 });
+    events.push({ atMs: endMs, delta: -1 });
+  }
+  events.sort((a, b) => a.atMs - b.atMs || a.delta - b.delta);
+  const peaks = new Map<string, number>();
+  let open = 0;
+  for (const event of events) {
+    // Live calls at this instant: a start includes itself; an end is still
+    // live just before it closes (so a cross-midnight call marks its end day).
+    const live = event.delta === 1 ? open + 1 : open;
+    open += event.delta;
+    const day = new Date(event.atMs).toISOString().slice(0, 10);
+    if (live > (peaks.get(day) ?? 0)) peaks.set(day, live);
+  }
+  return peaks;
+}
 
 export type AdvisorThresholds = {
   /** Days (out of the window) at the concurrency cap before firing. */
@@ -121,8 +163,18 @@ export function weeklyPeriodKey(now: Date = new Date()): string {
 
 export type EvaluateInput = {
   business: AdvisorBusiness;
-  /** This business's daily_usage rows for the window (any order). */
-  usageRows: DailyUsageRow[];
+  /** This business's window call intervals from voice_call_transcripts (any order). */
+  callIntervals: CallInterval[];
+  /**
+   * Inclusive UTC day bounds (YYYY-MM-DD) of the rolling window. Only peak
+   * days inside these bounds count toward `daysAtCap`, so a stray interval
+   * with a corrupt out-of-window timestamp can neither fire the signal nor
+   * inflate the "N of the last 7 days" wording past the window length.
+   */
+  windowStartYmd: string;
+  windowEndYmd: string;
+  /** This business's settled billable voice seconds in the window (voice_settlements). */
+  windowVoiceSeconds: number;
   /** This business's month-to-date SMS total (cap is a calendar month). */
   monthToDateSms: number;
   /** Error-level on-box system_logs count in the window. */
@@ -145,12 +197,16 @@ export function evaluateEscalationSignals(input: EvaluateInput): BusinessAdvice 
   const signals: EscalationSignal[] = [];
 
   const capCalls = input.limits.maxConcurrentCalls;
-  const daysAtCap = input.usageRows.filter((r) => r.peak_concurrent_calls >= capCalls).length;
+  let daysAtCap = 0;
+  for (const [day, peak] of dailyPeakConcurrency(input.callIntervals)) {
+    if (day < input.windowStartYmd || day > input.windowEndYmd) continue;
+    if (peak >= capCalls) daysAtCap += 1;
+  }
   if (capCalls > 0 && daysAtCap >= t.concurrencySaturationDays) {
     signals.push({ kind: "concurrency_saturation", daysAtCap, capCalls });
   }
 
-  const windowMinutes = input.usageRows.reduce((sum, r) => sum + r.voice_minutes_used, 0);
+  const windowMinutes = input.windowVoiceSeconds / 60;
   const projectedMonthlyMinutes = Math.round((windowMinutes / ADVISOR_WINDOW_DAYS) * 30);
   const includedMinutes = Math.round(input.limits.voiceIncludedSecondsPerStripePeriod / 60);
   if (includedMinutes > 0 && projectedMonthlyMinutes >= includedMinutes * t.voiceUtilization) {
