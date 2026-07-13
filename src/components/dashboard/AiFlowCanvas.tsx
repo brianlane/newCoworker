@@ -522,13 +522,17 @@ function NodeCard({
         </p>
       )}
       {!readOnly && (
-        <div className="absolute -right-2 -top-2 hidden items-center gap-1 rounded-md border border-parchment/15 bg-deep-ink px-1 py-0.5 group-hover:flex">
+        // Hover reveals on desktop; coarse pointers (touch) have no hover, so
+        // the toolbar stays visible there — lifted above the card so it never
+        // covers the step title — with padded tap targets.
+        <div className="absolute -right-2 -top-2 hidden items-center gap-1 rounded-md border border-parchment/15 bg-deep-ink px-1 py-0.5 group-hover:flex pointer-coarse:-top-8 pointer-coarse:flex">
           <button
             onClick={(ev) => {
               ev.stopPropagation();
               onMoveStep?.(step.id, -1);
             }}
             aria-label="Move up"
+            className="pointer-coarse:p-1"
           >
             <ArrowUp className="h-3.5 w-3.5 text-parchment/50 hover:text-parchment" />
           </button>
@@ -538,6 +542,7 @@ function NodeCard({
               onMoveStep?.(step.id, 1);
             }}
             aria-label="Move down"
+            className="pointer-coarse:p-1"
           >
             <ArrowDown className="h-3.5 w-3.5 text-parchment/50 hover:text-parchment" />
           </button>
@@ -547,6 +552,7 @@ function NodeCard({
               onDuplicateStep?.(step.id);
             }}
             aria-label="Duplicate step"
+            className="pointer-coarse:p-1"
           >
             <Copy className="h-3.5 w-3.5 text-parchment/50 hover:text-signal-teal" />
           </button>
@@ -556,6 +562,7 @@ function NodeCard({
               onRemoveStep?.(step.id);
             }}
             aria-label="Remove step"
+            className="pointer-coarse:p-1"
           >
             <Trash2 className="h-3.5 w-3.5 text-parchment/50 hover:text-spark-orange" />
           </button>
