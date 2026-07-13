@@ -26,7 +26,10 @@ import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
-import { callSmsRowboatWithStatelessFallback } from "../_shared/sms_rowboat.ts";
+import {
+  callSmsRowboatWithStatelessFallback,
+  STATELESS_5XX_MIN_ATTEMPT
+} from "../_shared/sms_rowboat.ts";
 import {
   resolveRowboatBearerForBusiness,
   sharedEnvRowboatBearer
@@ -61,13 +64,6 @@ import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
-// First attempt (attempt_count, incremented at claim) on which a Rowboat 5xx
-// may trigger the history-dropping STATELESS retry. Attempts below this
-// surface the 5xx to the job-level retry, which re-runs stateful — a
-// transient Gemini outage must not cost the customer their thread context
-// (2026-07-13 incident). Conversation-state errors (400/404/409/empty) stay
-// stateless-eligible on every attempt.
-const STATELESS_5XX_MIN_ATTEMPT = 3;
 // Hard ceiling on a single Rowboat /chat call. A hung business VPS would otherwise
 // keep the worker blocked for the full platform invocation timeout (and stall every
 // other claimed job in the batch). Retries are handled by bounded `attempt_count`.
