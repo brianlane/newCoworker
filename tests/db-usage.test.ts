@@ -4,6 +4,7 @@ import {
   getCalendarMonthUsageTotals,
   getFleetCalendarMonthUsageTotals,
   getFleetCalendarMonthUsageByBusiness,
+  peakConcurrentFromIntervals,
   incrementUsage,
   checkLimitReached
 } from "@/lib/db/usage";
@@ -305,6 +306,41 @@ describe("db/usage", () => {
     });
   });
 
+  describe("peakConcurrentFromIntervals", () => {
+    it("returns 0 for no intervals", () => {
+      expect(peakConcurrentFromIntervals([])).toBe(0);
+    });
+
+    it("counts overlapping calls and ignores disjoint ones", () => {
+      expect(
+        peakConcurrentFromIntervals([
+          { startMs: 0, endMs: 100 },
+          { startMs: 50, endMs: 150 }, // overlaps the first → 2
+          { startMs: 200, endMs: 300 } // disjoint
+        ])
+      ).toBe(2);
+    });
+
+    it("does not treat an end meeting a start at the same instant as overlap", () => {
+      expect(
+        peakConcurrentFromIntervals([
+          { startMs: 0, endMs: 100 },
+          { startMs: 100, endMs: 200 }
+        ])
+      ).toBe(1);
+    });
+
+    it("handles nested intervals", () => {
+      expect(
+        peakConcurrentFromIntervals([
+          { startMs: 0, endMs: 1000 },
+          { startMs: 100, endMs: 900 },
+          { startMs: 200, endMs: 800 }
+        ])
+      ).toBe(3);
+    });
+  });
+
   describe("getFleetCalendarMonthUsageByBusiness", () => {
     type FleetPage = {
       data: Array<Record<string, number | string | null>> | null;
@@ -324,6 +360,8 @@ describe("db/usage", () => {
         const chain: Record<string, unknown> = {};
         chain.select = vi.fn(() => chain);
         chain.gte = vi.fn(() => chain);
+        chain.lt = vi.fn(() => chain);
+        chain.neq = vi.fn(() => chain);
         chain.order = vi.fn(() => chain);
         chain.range = rangeSpies[table];
         return chain;
@@ -331,14 +369,14 @@ describe("db/usage", () => {
       return { from, rangeSpies };
     }
 
-    it("groups SMS/calls/peak from daily_usage and voice minutes from settlements per business", async () => {
+    it("groups SMS from daily_usage, minutes+calls from settlements, and peak from transcript overlap", async () => {
       const db = fleetChain({
         daily_usage: [
           {
             data: [
-              { business_id: "biz-1", sms_sent: 3, calls_made: 2, peak_concurrent_calls: 2 },
-              { business_id: "biz-1", sms_sent: 2, calls_made: 1, peak_concurrent_calls: 1 },
-              { business_id: "biz-2", sms_sent: 7, calls_made: 0, peak_concurrent_calls: 0 },
+              { business_id: "biz-1", sms_sent: 3 },
+              { business_id: "biz-1", sms_sent: 2 },
+              { business_id: "biz-2", sms_sent: 7 },
               { sms_sent: 99 } // no business_id — skipped
             ],
             error: null
@@ -348,8 +386,51 @@ describe("db/usage", () => {
           {
             data: [
               { business_id: "biz-1", billable_seconds: 600 },
+              { business_id: "biz-1", billable_seconds: 30 },
               { business_id: "biz-3", billable_seconds: 90 },
               { billable_seconds: 999 } // no business_id — skipped
+            ],
+            error: null
+          }
+        ],
+        voice_call_transcripts: [
+          {
+            data: [
+              // biz-1: two overlapping calls + one disjoint → peak 2
+              {
+                business_id: "biz-1",
+                started_at: "2026-07-05T10:00:00.000Z",
+                ended_at: "2026-07-05T10:05:00.000Z"
+              },
+              {
+                business_id: "biz-1",
+                started_at: "2026-07-05T10:03:00.000Z",
+                ended_at: "2026-07-05T10:04:00.000Z"
+              },
+              {
+                business_id: "biz-1",
+                started_at: "2026-07-05T11:00:00.000Z",
+                ended_at: "2026-07-05T11:01:00.000Z"
+              },
+              // transcript-only business still gets an entry
+              {
+                business_id: "biz-4",
+                started_at: "2026-07-06T09:00:00.000Z",
+                ended_at: "2026-07-06T09:02:00.000Z"
+              },
+              // skipped rows: no business_id, no ended_at (in progress),
+              // unparsable timestamp, end <= start
+              {
+                started_at: "2026-07-05T10:00:00.000Z",
+                ended_at: "2026-07-05T10:01:00.000Z"
+              },
+              { business_id: "biz-1", started_at: "2026-07-05T10:00:00.000Z", ended_at: null },
+              { business_id: "biz-1", started_at: "not-a-date", ended_at: "also-not-a-date" },
+              {
+                business_id: "biz-1",
+                started_at: "2026-07-05T10:01:00.000Z",
+                ended_at: "2026-07-05T10:01:00.000Z"
+              }
             ],
             error: null
           }
@@ -359,8 +440,8 @@ describe("db/usage", () => {
       const map = await getFleetCalendarMonthUsageByBusiness();
       expect(map.get("biz-1")).toEqual({
         smsSent: 5,
-        voiceMinutes: 10,
-        callsMade: 3,
+        voiceMinutes: 10.5,
+        callsMade: 2,
         peakConcurrentCalls: 2
       });
       expect(map.get("biz-2")).toEqual({
@@ -369,25 +450,35 @@ describe("db/usage", () => {
         callsMade: 0,
         peakConcurrentCalls: 0
       });
-      // Voice-only business still gets an entry (settlements pass created it).
+      // Voice-only business still gets an entry (settlements pass created
+      // it); with no transcript rows its peak stays 0.
       expect(map.get("biz-3")).toEqual({
         smsSent: 0,
         voiceMinutes: 1.5,
-        callsMade: 0,
+        callsMade: 1,
         peakConcurrentCalls: 0
+      });
+      expect(map.get("biz-4")).toEqual({
+        smsSent: 0,
+        voiceMinutes: 0,
+        callsMade: 0,
+        peakConcurrentCalls: 1
       });
     });
 
-    it("pages both reads past the 1000-row cap and tolerates null data/fields (explicit client)", async () => {
+    it("pages all three reads past the 1000-row cap and tolerates null data/fields (explicit client)", async () => {
       const smsPage = Array.from({ length: 1000 }, () => ({
         business_id: "biz-1",
-        sms_sent: 1,
-        calls_made: null,
-        peak_concurrent_calls: null
+        sms_sent: 1
       }));
       const voicePage = Array.from({ length: 1000 }, () => ({
         business_id: "biz-1",
         billable_seconds: 60
+      }));
+      const transcriptPage = Array.from({ length: 1000 }, () => ({
+        business_id: "biz-1",
+        started_at: "2026-07-01T00:00:00.000Z",
+        ended_at: "2026-07-01T00:01:00.000Z"
       }));
       const db = fleetChain({
         daily_usage: [
@@ -403,6 +494,19 @@ describe("db/usage", () => {
         voice_settlements: [
           { data: voicePage, error: null },
           { data: [{ business_id: "biz-1", billable_seconds: null }], error: null }
+        ],
+        voice_call_transcripts: [
+          { data: transcriptPage, error: null },
+          {
+            data: [
+              {
+                business_id: "biz-1",
+                started_at: "2026-07-01T00:00:00.000Z",
+                ended_at: "2026-07-01T00:01:00.000Z"
+              }
+            ],
+            error: null
+          }
         ]
       });
       const map = await getFleetCalendarMonthUsageByBusiness(db as never);
@@ -410,26 +514,29 @@ describe("db/usage", () => {
       expect(map.get("biz-1")).toEqual({
         smsSent: 1005,
         voiceMinutes: 1000,
-        callsMade: 0,
-        peakConcurrentCalls: 0
+        callsMade: 1001,
+        peakConcurrentCalls: 1001
       });
       expect(db.rangeSpies.daily_usage).toHaveBeenNthCalledWith(2, 1000, 1999);
       expect(db.rangeSpies.voice_settlements).toHaveBeenNthCalledWith(2, 1000, 1999);
+      expect(db.rangeSpies.voice_call_transcripts).toHaveBeenNthCalledWith(2, 1000, 1999);
 
       const empty = fleetChain({
         daily_usage: [{ data: null, error: null }],
-        voice_settlements: [{ data: null, error: null }]
+        voice_settlements: [{ data: null, error: null }],
+        voice_call_transcripts: [{ data: null, error: null }]
       });
       expect((await getFleetCalendarMonthUsageByBusiness(empty as never)).size).toBe(0);
     });
 
-    it("applies a historical month window to both reads", async () => {
+    it("applies a historical month window to all three reads and excludes missed transcripts", async () => {
       const chains: Array<Record<string, ReturnType<typeof vi.fn>>> = [];
       const from = vi.fn(() => {
         const chain: Record<string, ReturnType<typeof vi.fn>> = {};
         chain.select = vi.fn(() => chain);
         chain.gte = vi.fn(() => chain);
         chain.lt = vi.fn(() => chain);
+        chain.neq = vi.fn(() => chain);
         chain.order = vi.fn(() => chain);
         chain.range = vi.fn(async () => ({ data: [], error: null }));
         chains.push(chain);
@@ -443,6 +550,9 @@ describe("db/usage", () => {
       expect(chains[0].lt).toHaveBeenCalledWith("usage_date", "2026-07-01");
       expect(chains[1].gte).toHaveBeenCalledWith("created_at", "2026-06-01T00:00:00.000Z");
       expect(chains[1].lt).toHaveBeenCalledWith("created_at", "2026-07-01T00:00:00.000Z");
+      expect(chains[2].gte).toHaveBeenCalledWith("started_at", "2026-06-01T00:00:00.000Z");
+      expect(chains[2].lt).toHaveBeenCalledWith("started_at", "2026-07-01T00:00:00.000Z");
+      expect(chains[2].neq).toHaveBeenCalledWith("status", "missed");
     });
 
     it("supports an open-ended window (start only)", async () => {
@@ -452,6 +562,7 @@ describe("db/usage", () => {
         chain.select = vi.fn(() => chain);
         chain.gte = vi.fn(() => chain);
         chain.lt = vi.fn(() => chain);
+        chain.neq = vi.fn(() => chain);
         chain.order = vi.fn(() => chain);
         chain.range = vi.fn(async () => ({ data: [], error: null }));
         chains.push(chain);
@@ -460,9 +571,10 @@ describe("db/usage", () => {
       await getFleetCalendarMonthUsageByBusiness({ from } as never, { startYmd: "2026-06-01" });
       expect(chains[0].lt).not.toHaveBeenCalled();
       expect(chains[1].lt).not.toHaveBeenCalled();
+      expect(chains[2].lt).not.toHaveBeenCalled();
     });
 
-    it("throws when either read fails", async () => {
+    it("throws when any read fails", async () => {
       const smsErr = fleetChain({
         daily_usage: [{ data: null, error: { message: "db down" } }]
       });
@@ -476,6 +588,15 @@ describe("db/usage", () => {
       });
       await expect(getFleetCalendarMonthUsageByBusiness(voiceErr as never)).rejects.toThrow(
         "getFleetCalendarMonthUsageByBusiness: settlements down"
+      );
+
+      const transcriptErr = fleetChain({
+        daily_usage: [{ data: [], error: null }],
+        voice_settlements: [{ data: [], error: null }],
+        voice_call_transcripts: [{ data: null, error: { message: "transcripts down" } }]
+      });
+      await expect(getFleetCalendarMonthUsageByBusiness(transcriptErr as never)).rejects.toThrow(
+        "getFleetCalendarMonthUsageByBusiness: transcripts down"
       );
     });
   });
