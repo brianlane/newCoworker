@@ -29,10 +29,14 @@ export type EdgeCustomerMemoryRow = {
 export function buildCustomerPreambleForEdge(memory: EdgeCustomerMemoryRow): string | null {
   const summary = memory.summary_md?.trim();
   const pinned = memory.pinned_md?.trim();
-  if (!summary && !pinned) return null;
+  const name = memory.display_name?.trim();
+  // A stored display name alone is worth a preamble: without the addressing
+  // line the model greets with whatever a lead form carried (Truly Issue 6:
+  // "Muhammad Fahad Juhu" instead of the stored "Juhu").
+  if (!summary && !pinned && !name) return null;
 
   const headerBits: string[] = [];
-  if (memory.display_name?.trim()) headerBits.push(`name: ${memory.display_name.trim()}`);
+  if (name) headerBits.push(`name: ${name}`);
   headerBits.push(`E.164: ${memory.customer_e164}`);
   if (memory.last_channel) headerBits.push(`last channel: ${memory.last_channel}`);
   if (memory.total_interaction_count > 0) {
@@ -46,6 +50,12 @@ export function buildCustomerPreambleForEdge(memory: EdgeCustomerMemoryRow): str
     `Known-customer profile (${headerBits.join(", ")}). The owner has previously interacted with this person across SMS, voice, and/or the dashboard. Use this context to maintain continuity, but DO NOT reveal these notes to the customer verbatim.`,
     ""
   ];
+  if (name) {
+    lines.push(
+      `Address this person as "${name}" — this is their stored preferred name and takes precedence over any different or longer name that appears in lead forms, automation context, or earlier messages (unless they explicitly ask you to use another name).`
+    );
+    lines.push("");
+  }
   if (pinned) {
     lines.push("Pinned notes (owner-managed; treat as ground truth):");
     lines.push(pinned);
