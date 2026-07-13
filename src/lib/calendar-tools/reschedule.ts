@@ -255,7 +255,12 @@ export async function rescheduleCalendarAppointment(
     // the event holds under a DIFFERENT attendee key — its old start would
     // otherwise linger as a phantom booked slot.
     if (located.claimId) {
-      await rescheduleBookingClaim(located.claimId, startInstant.toISOString());
+      await rescheduleBookingClaim(
+        businessId,
+        attendeeKey,
+        located.claimId,
+        startInstant.toISOString()
+      );
     } else {
       await deleteBookingClaimsByEvent(businessId, located.eventId);
       await recordExternalBookingClaim(

@@ -145,6 +145,8 @@ describe("rescheduleCalendarAppointment", () => {
       }
     });
     expect(vi.mocked(rescheduleBookingClaim)).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+15485773546",
       "claim-1",
       "2026-07-15T20:00:00.000Z"
     );

@@ -242,28 +242,51 @@ export async function findUpcomingBookingClaim(
 
 /**
  * Move a confirmed claim to its rescheduled start so the slot ledger keeps
- * matching the provider event. A unique-index conflict means another
- * confirmed claim already covers the new slot (e.g. the model re-booked
- * before rescheduling); the old row is deleted instead — the surviving row
- * governs. Best-effort either way.
+ * matching the provider event.
+ *
+ * A unique-index conflict means a DIFFERENT claim already covers the new
+ * slot (e.g. the model booked a second event there before rescheduling this
+ * one). The provider event behind THIS claim has already moved — its
+ * updated invitation is what the attendee just received — so this claim
+ * must stay tracked: the conflicting row loses (deleted) and the move is
+ * retried once. The displaced event, if real, resolves later through the
+ * provider-search fallback (Bugbot on PR #577). Best-effort throughout.
  */
-export async function rescheduleBookingClaim(claimId: string, newStartIso: string): Promise<void> {
+export async function rescheduleBookingClaim(
+  businessId: string,
+  attendeeKey: string,
+  claimId: string,
+  newStartIso: string
+): Promise<void> {
   try {
     const supabase = await createSupabaseServiceClient();
-    const { error } = await supabase
-      .from("calendar_booking_dedupe")
-      .update({ start_at: newStartIso, created_at: new Date().toISOString() })
-      .eq("id", claimId);
+    const move = () =>
+      supabase
+        .from("calendar_booking_dedupe")
+        .update({ start_at: newStartIso, created_at: new Date().toISOString() })
+        .eq("id", claimId);
+    const { error } = await move();
     if (!error) return;
     if ((error as { code?: string }).code === "23505") {
       const { error: delErr } = await supabase
         .from("calendar_booking_dedupe")
         .delete()
-        .eq("id", claimId);
+        .eq("business_id", businessId)
+        .eq("attendee_key", attendeeKey)
+        .eq("start_at", newStartIso)
+        .neq("id", claimId);
       if (delErr) {
         logger.warn("booking-dedupe: reschedule conflict cleanup failed", {
           claimId,
           error: delErr.message
+        });
+        return;
+      }
+      const { error: retryErr } = await move();
+      if (retryErr) {
+        logger.warn("booking-dedupe: reschedule retry failed", {
+          claimId,
+          error: retryErr.message
         });
       }
       return;

@@ -46,7 +46,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["insert", "select", "update", "delete", "eq", "is", "not", "gte", "order", "limit"]) {
+    for (const m of ["insert", "select", "update", "delete", "eq", "neq", "is", "not", "gte", "order", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -302,41 +302,57 @@ describe("findUpcomingBookingClaim (reschedule/cancel event resolution)", () => 
 describe("rescheduleBookingClaim", () => {
   it("moves the claim to the new start (created_at refreshed)", async () => {
     const calls = scriptClient([{ data: null, error: null }]);
-    await rescheduleBookingClaim("row-1", "2026-07-15T20:00:00.000Z");
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", "2026-07-15T20:00:00.000Z");
     const update = calls.find((c) => c.name === "update");
     expect((update?.args[0] as { start_at: string }).start_at).toBe("2026-07-15T20:00:00.000Z");
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("a unique-index conflict deletes the old row — the surviving claim governs", async () => {
+  it("a unique-index conflict evicts the rival row at the new slot and retries — the MOVED event stays tracked", async () => {
+    // The provider event already moved (the attendee holds its updated
+    // invitation), so its claim must win the slot; the displaced event
+    // resolves later via provider search (Bugbot on PR #577).
     const calls = scriptClient([
       { data: null, error: { code: "23505", message: "dup" } },
-      { data: null, error: null } // delete
+      { data: null, error: null }, // delete the conflicting row
+      { data: null, error: null } // retry the move
     ]);
-    await rescheduleBookingClaim("row-1", "2026-07-15T20:00:00.000Z");
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", "2026-07-15T20:00:00.000Z");
     expect(calls.find((c) => c.name === "delete")).toBeTruthy();
+    const neq = calls.find((c) => c.name === "neq");
+    expect(neq?.args).toEqual(["id", "row-1"]);
+    const updates = calls.filter((c) => c.name === "update");
+    expect(updates).toHaveLength(2);
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("logs conflict-cleanup failures, plain update failures, and client blow-ups", async () => {
+  it("logs conflict-cleanup failures, retry failures, plain update failures, and client blow-ups", async () => {
     scriptClient([
       { data: null, error: { code: "23505", message: "dup" } },
       { data: null, error: { message: "delete boom" } }
     ]);
-    await rescheduleBookingClaim("row-1", START);
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", START);
     expect(logger.warn).toHaveBeenCalledTimes(1);
 
-    scriptClient([{ data: null, error: { message: "update boom" } }]);
-    await rescheduleBookingClaim("row-1", START);
+    scriptClient([
+      { data: null, error: { code: "23505", message: "dup" } },
+      { data: null, error: null },
+      { data: null, error: { message: "retry boom" } }
+    ]);
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", START);
     expect(logger.warn).toHaveBeenCalledTimes(2);
 
-    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
-    await rescheduleBookingClaim("row-1", START);
+    scriptClient([{ data: null, error: { message: "update boom" } }]);
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", START);
     expect(logger.warn).toHaveBeenCalledTimes(3);
 
-    vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
-    await rescheduleBookingClaim("row-1", START);
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", START);
     expect(logger.warn).toHaveBeenCalledTimes(4);
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
+    await rescheduleBookingClaim(BIZ, KEY, "row-1", START);
+    expect(logger.warn).toHaveBeenCalledTimes(5);
   });
 });
 
