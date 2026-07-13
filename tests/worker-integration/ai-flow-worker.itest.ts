@@ -234,6 +234,99 @@ describe("stale-lease reclaim (reclaim_stale_ai_flow_runs RPC)", () => {
   });
 });
 
+describe("group_lead_phone seeding gate (worker executeRun)", () => {
+  // A referral-style group thread: the service's DID sent the intro, the
+  // business DID and the lead (seller) are the other two participants. The
+  // lead's number appears NOWHERE in the message text — the roster is the
+  // only way to identify it, which is exactly why the var exists.
+  const SERVICE = "+13144708990";
+  const BIZ_DID = "+16028053377";
+  const SELLER = "+16025551234";
+
+  /**
+   * A flow whose SMS trigger PINS the sender to the service via from_matches,
+   * with a single pure goal step (the seeding happens at run start, before any
+   * step, and is persisted in context.vars). Not the shared flow() helper —
+   * that one hard-codes an empty-conditions trigger.
+   */
+  function pinnedGroupFlow(): Record<string, unknown> {
+    const def = {
+      version: 1,
+      trigger: {
+        channel: "sms",
+        conditions: [{ type: "from_matches", value: "3144708990" }]
+      },
+      options: { suppressDefaultReply: false },
+      steps: [{ id: "milestone", type: "goal", label: "Seeded", events: [{ kind: "replied" }] }]
+    };
+    parseAiFlowDefinition(def);
+    return def;
+  }
+
+  const groupTrigger = (from: string) => ({
+    channel: "sms",
+    from,
+    to: BIZ_DID,
+    participants: [SERVICE, BIZ_DID, SELLER],
+    group: true,
+    windowText: "New referral — connecting you with a seller in your area."
+  });
+
+  it("service-sent (sender pinned): seeds the seller as group_lead_phone", async () => {
+    const biz = await seedBusiness(db, "IT group pinned");
+    const flowId = await createFlow(db, biz, pinnedGroupFlow());
+    const runId = await enqueueRun(db, flowId, biz, groupTrigger(SERVICE));
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    // Roster minus the pinned sender (service) minus our own DID = the seller.
+    expect(run.context.vars?.group_lead_phone).toBe(SELLER);
+  });
+
+  it("lead-sent group message: group_lead_phone stays empty (the bug-2 gate)", async () => {
+    // The failure this gate closes: the LEAD themselves sends the matched
+    // group message. The sender is no longer the pinned service, so the
+    // roster remainder would be the SERVICE — a stranger this var must never
+    // carry (it can be texted). senderPinnedByFromMatches sees from != the
+    // from_matches value and refuses to seed. (enqueueRun inserts the run
+    // directly, exercising the worker gate regardless of trigger eval.)
+    const biz = await seedBusiness(db, "IT group leadsent");
+    const flowId = await createFlow(db, biz, pinnedGroupFlow());
+    const runId = await enqueueRun(db, flowId, biz, groupTrigger(SELLER));
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    expect(run.context.vars?.group_lead_phone).toBe("");
+  });
+
+  it("no from_matches pin at all: group_lead_phone stays empty", async () => {
+    const biz = await seedBusiness(db, "IT group unpinned");
+    const def = {
+      version: 1,
+      trigger: {
+        channel: "sms",
+        conditions: [{ type: "contains", value: "referral", caseInsensitive: true }]
+      },
+      options: { suppressDefaultReply: false },
+      steps: [{ id: "milestone", type: "goal", label: "Seeded", events: [{ kind: "replied" }] }]
+    };
+    parseAiFlowDefinition(def);
+    const flowId = await createFlow(db, biz, def);
+    // Even the service as sender must not seed without a declared pin.
+    const runId = await enqueueRun(db, flowId, biz, groupTrigger(SERVICE));
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    expect(run.context.vars?.group_lead_phone).toBe("");
+  });
+});
+
 describe("test-mode runs", () => {
   it("simulates side effects (no real sends) and bypasses the enabled check", async () => {
     const biz = await seedBusiness(db, "IT testmode");
