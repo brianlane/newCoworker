@@ -11,6 +11,7 @@ import {
   CONFIRM_MAX_ATTEMPTS,
   confirmBookingDedupe,
   deleteBookingClaim,
+  deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   recordExternalBookingClaim,
   releaseBookingDedupe,
@@ -359,6 +360,32 @@ describe("deleteBookingClaim", () => {
 
     vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
     await deleteBookingClaim("row-1");
+    expect(logger.warn).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("deleteBookingClaimsByEvent (canceled/moved slot must not survive under ANY key)", () => {
+  it("deletes every claim row recorded for the provider event", async () => {
+    const calls = scriptClient([{ data: null, error: null }]);
+    await deleteBookingClaimsByEvent(BIZ, "evt-9");
+    expect(calls.find((c) => c.name === "delete")).toBeTruthy();
+    const eqs = calls.filter((c) => c.name === "eq").map((c) => c.args);
+    expect(eqs).toContainEqual(["business_id", BIZ]);
+    expect(eqs).toContainEqual(["event_id", "evt-9"]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("logs and swallows delete errors and client blow-ups", async () => {
+    scriptClient([{ data: null, error: { message: "boom" } }]);
+    await deleteBookingClaimsByEvent(BIZ, "evt-9");
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
+    await deleteBookingClaimsByEvent(BIZ, "evt-9");
+    expect(logger.warn).toHaveBeenCalledTimes(2);
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
+    await deleteBookingClaimsByEvent(BIZ, "evt-9");
     expect(logger.warn).toHaveBeenCalledTimes(3);
   });
 });

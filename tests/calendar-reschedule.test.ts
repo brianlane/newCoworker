@@ -8,6 +8,7 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   findUpcomingBookingClaim: vi.fn(),
   rescheduleBookingClaim: vi.fn(),
   deleteBookingClaim: vi.fn(),
+  deleteBookingClaimsByEvent: vi.fn(),
   recordExternalBookingClaim: vi.fn()
 }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
@@ -25,6 +26,7 @@ import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import {
   deleteBookingClaim,
+  deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   recordExternalBookingClaim,
   rescheduleBookingClaim
@@ -209,6 +211,10 @@ describe("rescheduleCalendarAppointment", () => {
     expect(patchCall.endpoint).toBe("/v1.0/me/events/evt-search");
     expect(patchCall.method).toBe("PATCH");
     expect(patchCall.data.start.dateTime).toBe("wall(2026-07-15T20:00:00.000Z,America/New_York)");
+    // A searched event may hold a ledger row under a DIFFERENT attendee key
+    // (booked by phone, rescheduled by email): stale rows are dropped by
+    // event id before the fresh claim is recorded.
+    expect(vi.mocked(deleteBookingClaimsByEvent)).toHaveBeenCalledWith(BIZ, "evt-search");
     expect(vi.mocked(recordExternalBookingClaim)).toHaveBeenCalledWith(
       BIZ,
       "phone:+15485773546",
@@ -440,7 +446,7 @@ describe("cancelCalendarAppointment", () => {
     expect(vi.mocked(deleteBookingClaim)).not.toHaveBeenCalled();
   });
 
-  it("DELETEs the Microsoft event; a searched (ledger-less) event skips claim cleanup", async () => {
+  it("DELETEs the Microsoft event; a searched (ledger-less) event cleans the ledger BY EVENT ID", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({
@@ -458,7 +464,10 @@ describe("cancelCalendarAppointment", () => {
       method: string;
     };
     expect(deleteCall).toMatchObject({ endpoint: "/v1.0/me/events/evt-search", method: "DELETE" });
+    // No claim under OUR key, but the event may hold rows under other keys —
+    // a canceled slot must not survive as "booked" in the ledger.
     expect(vi.mocked(deleteBookingClaim)).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteBookingClaimsByEvent)).toHaveBeenCalledWith(BIZ, "evt-search");
   });
 
   it("a null Microsoft DELETE response maps to calendar_not_connected", async () => {

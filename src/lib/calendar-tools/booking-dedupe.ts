@@ -297,6 +297,39 @@ export async function deleteBookingClaim(claimId: string): Promise<void> {
 }
 
 /**
+ * Drop EVERY claim recorded for a provider event, regardless of attendee
+ * key. Used when an event was located via provider search (no ledger hit
+ * for the caller's key): the booking may still have a ledger row under a
+ * DIFFERENT key (booked by phone, canceled by email), and leaving it would
+ * make later duplicate checks treat a canceled/moved slot as still booked
+ * (Bugbot High on PR #577). Best-effort.
+ */
+export async function deleteBookingClaimsByEvent(
+  businessId: string,
+  eventId: string
+): Promise<void> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { error } = await supabase
+      .from("calendar_booking_dedupe")
+      .delete()
+      .eq("business_id", businessId)
+      .eq("event_id", eventId);
+    if (error) {
+      logger.warn("booking-dedupe: by-event delete failed", {
+        businessId,
+        error: error.message
+      });
+    }
+  } catch (err) {
+    logger.warn("booking-dedupe: by-event delete threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
  * Record a confirmed booking discovered OUTSIDE the ledger (a reschedule of
  * an event booked before the ledger shipped) so future duplicate checks and
  * reschedules resolve without a provider search. Conflicts are ignored — an

@@ -5,6 +5,7 @@ import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import {
   bookingAttendeeKey,
   deleteBookingClaim,
+  deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   recordExternalBookingClaim,
   rescheduleBookingClaim
@@ -249,10 +250,14 @@ export async function rescheduleCalendarAppointment(
     }
 
     // Keep the slot ledger matching the provider event so a later duplicate
-    // check / reschedule / cancel resolves without a provider search.
+    // check / reschedule / cancel resolves without a provider search. For a
+    // provider-search hit (no ledger row under OUR key), first drop any row
+    // the event holds under a DIFFERENT attendee key — its old start would
+    // otherwise linger as a phantom booked slot.
     if (located.claimId) {
       await rescheduleBookingClaim(located.claimId, startInstant.toISOString());
     } else {
+      await deleteBookingClaimsByEvent(businessId, located.eventId);
       await recordExternalBookingClaim(
         businessId,
         attendeeKey,
@@ -313,8 +318,14 @@ export async function cancelCalendarAppointment(
       if (!res) return { ok: false, detail: "calendar_not_connected" };
     }
 
+    // Ledger cleanup covers BOTH resolution paths: the caller's own claim row
+    // (ledger hit) and any row recorded under a different attendee key
+    // (provider-search hit) — a canceled slot must never survive as a
+    // "booked" ledger entry under any key.
     if (located.claimId) {
       await deleteBookingClaim(located.claimId);
+    } else {
+      await deleteBookingClaimsByEvent(businessId, located.eventId);
     }
 
     return {
