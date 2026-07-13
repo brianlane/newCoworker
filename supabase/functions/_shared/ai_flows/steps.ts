@@ -605,7 +605,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           }
         };
       }
-      const body = renderTemplate(step.body, scope).trim();
+      // collapseEmpty: an empty personalization var must not leave a broken
+      // "Hi !" greeting in the customer-facing text (bug-hunt round 4).
+      const body = renderTemplate(step.body, scope, { collapseEmpty: true }).trim();
       if (!body) return { ok: false, error: "send_sms: body is empty after templating" };
       // Group reply: recipients come from the inbound thread roster, not `to`.
       // Everyone in trigger.participants except our own business number
@@ -694,7 +696,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // is substituted by the worker AFTER the link is minted), then render
       // everything else normally.
       const shielded = (step.messageTemplate ?? "").replace(SHARE_URL_RE, SHARE_URL_SENTINEL);
-      const message = renderTemplate(shielded, scope)
+      const message = renderTemplate(shielded, scope, { collapseEmpty: true })
         .split(SHARE_URL_SENTINEL)
         .join(SHARE_URL_TOKEN)
         .trim();
@@ -776,7 +778,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
     }
     case "notify_owner": {
-      const message = renderTemplate(step.message, scope).trim();
+      const message = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
       if (!message) return { ok: false, error: "notify_owner: message is empty after templating" };
       return { ok: true, action: { kind: "notify_owner", message } };
     }
