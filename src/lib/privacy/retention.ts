@@ -3,7 +3,7 @@
  *
  * Deletes tenant CONTENT rows older than the admin-configured
  * `businesses.data_retention_days` window. The table set and predicates
- * mirror `residency_purge_business()` (20260805000000_residency_purge.sql)
+ * mirror `residency_purge_business()` (20260707192939_residency_purge.sql)
  * — append-only history the engine never re-reads — with the same live-row
  * carve-outs (unread notifications, non-terminal calls/sends). Contacts
  * are deliberately EXEMPT: retention trims history, it does not erase
