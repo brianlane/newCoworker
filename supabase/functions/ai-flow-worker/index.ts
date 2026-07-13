@@ -1403,6 +1403,123 @@ async function recordLeadCustomerProfile(
  * recordLeadCustomerProfile (a side effect of a send), this is an explicit
  * step, so the phone IS the lead — no co-recipient gating needed.
  */
+/**
+ * How long a prior run of the same flow for the same lead phone suppresses a
+ * new introduction. Mirrors the 72h conversation-context lookback
+ * (FLOW_CONTEXT_LOOKBACK_HOURS): while the earlier thread still counts as
+ * live context for the reply path, a re-submission is a repeat, not a new
+ * lead.
+ */
+const DUPLICATE_LEAD_WINDOW_HOURS = 72;
+
+/**
+ * Prior non-test, non-failed run of the SAME flow that already handled this
+ * lead phone within the window → its id; null otherwise. Only lead-intake
+ * triggers (tenant_email / webhook) are guarded. Strictly-earlier created_at
+ * ordering (vs this run) keeps two same-batch duplicates from suppressing
+ * each other into silence — exactly one of them wins.
+ *
+ * Lead identity uses the SAME keys as the reply path's flow-context lookup
+ * (run_context.ts / goal_events): the triggering sender, the extracted
+ * lead_phone var, or the number a wait is parked on — trigger.from and
+ * waiting_reply.from are always E.164, so a prior run whose extraction
+ * stored a formatted lead_phone still matches on those (Bugbot Mediums on
+ * PR #575). A flow filing leads under a fully custom var name degrades to
+ * pre-guard behavior (a duplicate intro), never a lost lead.
+ *
+ * A CANCELED prior run counts only when it actually texted the lead before
+ * being stopped — an owner canceling a run pre-outreach must not make the
+ * lead's next submission fall silent (Bugbot Medium on PR #575).
+ *
+ * Best-effort throughout: any read failure returns null (fail open).
+ */
+async function findDuplicateLeadRun(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  leadE164: string
+): Promise<string | null> {
+  const channel = typeof scope.trigger?.channel === "string" ? scope.trigger.channel : "";
+  if (channel !== "tenant_email" && channel !== "webhook") return null;
+  try {
+    const { data: selfRow, error: selfErr } = await supabase
+      .from("ai_flow_runs")
+      .select("created_at")
+      .eq("id", run.id)
+      .maybeSingle();
+    const myCreatedAt = (selfRow as { created_at?: string } | null)?.created_at;
+    if (selfErr || !myCreatedAt) return null;
+    const sinceIso = new Date(
+      Date.now() - DUPLICATE_LEAD_WINDOW_HOURS * 3_600_000
+    ).toISOString();
+    // Shared filter shape for both passes below. updated_at (not created_at):
+    // a long-running/parked run enqueued more than 72h ago is still a live
+    // conversation for the reply path (which looks back on updated_at too) —
+    // a repeat submission during it must still be suppressed. The second
+    // .or() excludes simulated test runs (they never texted the lead).
+    // (Bugbot Mediums on PR #575.)
+    const priorRunsQuery = () =>
+      supabase
+        .from("ai_flow_runs")
+        .select("id, status")
+        .eq("business_id", run.business_id)
+        .eq("flow_id", run.flow_id)
+        .neq("id", run.id)
+        .or(
+          `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
+        )
+        .gte("updated_at", sinceIso)
+        .lt("created_at", myCreatedAt)
+        .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
+        .order("created_at", { ascending: false });
+
+    // Pass 1: any live/finished prior run qualifies outright. Queried
+    // separately from the canceled pass so a stack of silent cancels can
+    // never push a real qualifying run past a row limit (Bugbot Medium on
+    // PR #575, second round).
+    const { data: activePrior, error: activeErr } = await priorRunsQuery()
+      .not("status", "in", "(failed,canceled)")
+      .limit(1)
+      .maybeSingle();
+    if (activeErr) {
+      console.error("duplicate-lead guard lookup", activeErr);
+      return null;
+    }
+    const activeId = (activePrior as { id?: string } | null)?.id;
+    if (activeId) return activeId;
+
+    // Pass 2: canceled runs qualify only if they reached the lead before
+    // being stopped (an owner cancel pre-outreach must not silence the
+    // lead's next submission).
+    const { data: canceledRows, error: canceledErr } = await priorRunsQuery()
+      .eq("status", "canceled")
+      .limit(5);
+    if (canceledErr) {
+      console.error("duplicate-lead guard canceled lookup", canceledErr);
+      return null;
+    }
+    for (const prior of (canceledRows ?? []) as Array<{ id: string }>) {
+      const { data: sent, error: sentErr } = await supabase
+        .from("sms_outbound_log")
+        .select("id")
+        .eq("business_id", run.business_id)
+        .eq("run_id", prior.id)
+        .eq("to_e164", leadE164)
+        .limit(1)
+        .maybeSingle();
+      if (sentErr) {
+        console.error("duplicate-lead guard outbound check", sentErr);
+        continue;
+      }
+      if (sent) return prior.id;
+    }
+    return null;
+  } catch (e) {
+    console.error("duplicate-lead guard", e);
+    return null;
+  }
+}
+
 async function upsertCustomerStep(
   supabase: Supabase,
   run: RunRow,
@@ -1451,7 +1568,60 @@ async function upsertCustomerStep(
       }
     };
   }
+  // Duplicate lead submission guard (Truly Insurance, 2026-07-13): the same
+  // lead source re-submitting the same phone number within the window must
+  // UPDATE the contact and flag the owner — never re-run the introduction.
+  // Production showed five intro texts to one number in four minutes (one
+  // per Privyr submission) and a second intro to an in-progress lead 1.75h
+  // into their conversation. Scoped to lead-intake triggers (tenant_email /
+  // webhook): contact-event and manual runs legitimately re-run for the
+  // same phone. Detection is best-effort and FAILS OPEN — a duplicate intro
+  // beats a lost lead.
+  const duplicateOfRunId = isTestModeTrigger(scope.trigger)
+    ? null
+    : await findDuplicateLeadRun(supabase, run, scope, action.e164);
   await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
+  if (duplicateOfRunId) {
+    const label = action.name ? `${action.name} (${action.e164})` : action.e164;
+    appendActionTaken(
+      scope,
+      `duplicate lead submission for ${action.e164} — contact updated, no new outreach (prior run ${duplicateOfRunId})`
+    );
+    // Tell the owner once so the repeat isn't silent — someone may have
+    // re-submitted the form on purpose and expects a human to look.
+    await sendOwnerSms(
+      supabase,
+      run,
+      `Heads up: ${label} submitted the lead form again. I updated their contact details but did NOT send another intro — their existing conversation continues. Review them on your dashboard if follow-up is needed.`,
+      `aiflow-duplicate-lead:${run.id}`
+    );
+    await telemetryRecord(supabase, "ai_flow_duplicate_lead_suppressed", {
+      run_id: run.id,
+      flow_id: run.flow_id,
+      business_id: run.business_id,
+      duplicate_of: duplicateOfRunId
+    });
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: "ai_flow_duplicate_lead_suppressed",
+      message: `Repeat lead submission for ${action.e164}: contact updated, intro suppressed, owner notified`,
+      payload: { run_id: run.id, flow_id: run.flow_id, duplicate_of: duplicateOfRunId }
+    });
+    return {
+      kind: "ok",
+      skipped: true,
+      endRun: true,
+      result: {
+        skipped: "duplicate_lead_submission",
+        duplicate_of: duplicateOfRunId,
+        customer_e164: action.e164,
+        display_name: action.name || null,
+        email: action.email || null
+      }
+    };
+  }
   if (!existedBefore) {
     // contact_created triggers: a flow that files a brand-new lead may start
     // OTHER flows (loop-guarded against this one). Fired only when the row
