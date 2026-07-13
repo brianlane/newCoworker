@@ -37,7 +37,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
 
   return (
     <div className="max-w-4xl space-y-8">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">AiFlows</h1>
           <p className="mt-1 text-sm text-parchment/50">
@@ -47,7 +47,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           </p>
         </div>
         {businessId && (
-          <div className="flex shrink-0 items-center gap-4 whitespace-nowrap text-sm">
+          <div className="flex flex-wrap items-center gap-4 text-sm sm:shrink-0 sm:flex-nowrap sm:whitespace-nowrap">
             <Link
               href="/dashboard/aiflows/guides/meta-leads"
               className="text-signal-teal hover:underline"
