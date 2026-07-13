@@ -53,6 +53,7 @@ import {
   parseRoutedAgent,
   pickRosterAgent,
   renderTemplate,
+  senderPinnedByFromMatches,
   type NowScope,
   type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
@@ -115,7 +116,8 @@ import type {
   BrowseAuth,
   ExtractField,
   FlowStep,
-  FlowTimeWindow
+  FlowTimeWindow,
+  SmsTrigger
 } from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 
@@ -496,22 +498,48 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // (the service) nor any of the business's own numbers. Seeded once at run
   // start ("" for non-group triggers or an ambiguous roster) and persisted via
   // buildContext like every other var, so parks/resumes never recompute it.
-  // GROUP threads only (3+ participants, the same > 2 rule the inbound webhook
-  // stamps trigger.group with): a 1:1 thread always has a two-number roster,
-  // and an empty/unparseable trigger.from there would otherwise leave the
-  // customer as the sole "group lead" on a non-group trigger.
+  // Two safety gates, both required:
+  //   - GROUP threads only (3+ participants, the same > 2 rule the inbound
+  //     webhook stamps trigger.group with): a 1:1 thread always has a
+  //     two-number roster, and an empty/unparseable trigger.from there would
+  //     otherwise leave the customer as the sole "group lead".
+  //   - The sender must be PINNED by a from_matches trigger condition
+  //     (senderPinnedByFromMatches): "roster minus sender minus us = the lead"
+  //     only holds when the author declared who the sender is. Without a pin
+  //     the sender could BE the lead — and the remainder would be the referral
+  //     service, a mis-target this var must never carry.
   if (scope.vars.group_lead_phone === undefined) {
     const participants = Array.isArray(scope.trigger.participants)
       ? scope.trigger.participants
       : [];
-    scope.vars.group_lead_phone =
-      participants.length > 2
-        ? groupLeadPhone(participants, [
-            typeof scope.trigger.from === "string" ? scope.trigger.from : "",
-            typeof scope.trigger.to === "string" ? scope.trigger.to : "",
-            ...(await businessSelfNumbers(supabase, run.business_id))
-          ])
-        : "";
+    const from = typeof scope.trigger.from === "string" ? scope.trigger.from : "";
+    let pinned = false;
+    if (participants.length > 2 && from) {
+      const triggers = flowTriggers(def);
+      // from_matches saved-person refs resolve to live identity values, same
+      // as trigger evaluation. Resolution failure fails CLOSED (no pin, var
+      // seeds "") — a lookup blip must never mislabel a lead.
+      let refValues: ReadonlyMap<string, string[]> | undefined;
+      const refConds = triggers
+        .filter((t): t is SmsTrigger => t.channel === "sms")
+        .flatMap((t) => t.conditions)
+        .filter((c) => c.type === "from_matches" && c.ref);
+      if (refConds.length > 0) {
+        try {
+          refValues = await resolveFromMatchesRefValues(supabase, run.business_id, refConds);
+        } catch (e) {
+          console.error("group_lead_phone ref resolution", e);
+        }
+      }
+      pinned = senderPinnedByFromMatches(triggers, from, refValues);
+    }
+    scope.vars.group_lead_phone = pinned
+      ? groupLeadPhone(participants, [
+          from,
+          typeof scope.trigger.to === "string" ? scope.trigger.to : "",
+          ...(await businessSelfNumbers(supabase, run.business_id))
+        ])
+      : "";
   }
   // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
   // outbound email sends AS the coworker — never the platform identity — and so

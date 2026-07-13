@@ -32,11 +32,14 @@ import {
   pickRosterAgent,
   renderTemplate,
   resolvePath,
-  safeRegexTest
+  safeRegexTest,
+  senderPinnedByFromMatches
 } from "../supabase/functions/_shared/ai_flows/engine";
 import type {
   AiFlowDefinition,
+  FlowTrigger,
   SmsTrigger,
+  TriggerCondition,
   TriggerContext
 } from "../supabase/functions/_shared/ai_flows/types";
 
@@ -390,6 +393,72 @@ describe("groupLeadPhone", () => {
   });
   it("ignores unparseable exclude entries instead of excluding nothing by accident", () => {
     expect(groupLeadPhone(["+16025551234"], ["", "garbage"])).toBe("+16025551234");
+  });
+});
+
+describe("senderPinnedByFromMatches", () => {
+  const smsTrigger = (conditions: TriggerCondition[]): SmsTrigger => ({
+    channel: "sms",
+    conditions
+  });
+
+  it("pins a sender matched by a from_matches value (substring, like the trigger)", () => {
+    const triggers = [smsTrigger([{ type: "from_matches", value: "3144708990" }])];
+    expect(senderPinnedByFromMatches(triggers, "+13144708990")).toBe(true);
+  });
+  it("does NOT pin when the sender differs from every from_matches value", () => {
+    // The bug shape: the LEAD sent the matched message — their number is not
+    // the pinned service number, so the var must not be seeded.
+    const triggers = [smsTrigger([{ type: "from_matches", value: "3144708990" }])];
+    expect(senderPinnedByFromMatches(triggers, "+16025551234")).toBe(false);
+  });
+  it("does NOT pin when the flow has no from_matches condition at all", () => {
+    const triggers = [
+      smsTrigger([{ type: "contains", value: "Clever Real Estate", caseInsensitive: true }])
+    ];
+    expect(senderPinnedByFromMatches(triggers, "+13144708990")).toBe(false);
+  });
+  it("respects caseInsensitive=false on the value match", () => {
+    const triggers = [
+      smsTrigger([{ type: "from_matches", value: "ABC", caseInsensitive: false }])
+    ];
+    expect(senderPinnedByFromMatches(triggers, "abc-sender")).toBe(false);
+    expect(senderPinnedByFromMatches(triggers, "ABC-sender")).toBe(true);
+  });
+  it("pins via a from_matches ref resolved to live identity values", () => {
+    const triggers = [
+      smsTrigger([{ type: "from_matches", ref: { source: "contact", id: "c1" } }])
+    ];
+    const refValues = new Map([["contact:c1", ["+13144708990", "clever@example.com"]]]);
+    expect(senderPinnedByFromMatches(triggers, "+13144708990", refValues)).toBe(true);
+  });
+  it("fails closed on an unresolved ref (no refValues entry)", () => {
+    const triggers = [
+      smsTrigger([{ type: "from_matches", ref: { source: "contact", id: "c1" } }])
+    ];
+    expect(senderPinnedByFromMatches(triggers, "+13144708990")).toBe(false);
+    expect(senderPinnedByFromMatches(triggers, "+13144708990", new Map())).toBe(false);
+  });
+  it("checks every SMS trigger of a multi-trigger flow, skipping non-SMS ones", () => {
+    const triggers: FlowTrigger[] = [
+      { channel: "manual" },
+      smsTrigger([{ type: "contains", value: "other alert" }]),
+      smsTrigger([
+        { type: "has_url" },
+        { type: "from_matches", value: "3144708990" }
+      ])
+    ];
+    expect(senderPinnedByFromMatches(triggers, "+13144708990")).toBe(true);
+  });
+  it("never pins an empty sender, and a value-less from_matches never matches", () => {
+    const triggers = [smsTrigger([{ type: "from_matches", value: "3144708990" }])];
+    expect(senderPinnedByFromMatches(triggers, "")).toBe(false);
+    expect(
+      senderPinnedByFromMatches(
+        [smsTrigger([{ type: "from_matches" } as TriggerCondition])],
+        "+13144708990"
+      )
+    ).toBe(false);
   });
 });
 
