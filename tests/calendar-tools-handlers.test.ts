@@ -30,6 +30,7 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   confirmBookingDedupe: vi.fn(),
   releaseBookingDedupe: vi.fn()
 }));
+vi.mock("@/lib/customer-memory/db", () => ({ getCustomerMemory: vi.fn() }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 
 import {
@@ -54,6 +55,7 @@ import {
   confirmBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -94,6 +96,9 @@ beforeEach(() => {
   // as before the idempotency guard, which is what the pre-guard tests pin.
   vi.mocked(bookingAttendeeKey).mockReturnValue("key-under-test");
   vi.mocked(claimBookingDedupe).mockResolvedValue(null);
+  // Default: no stored contact — the model-supplied attendeeName is used, as
+  // pre-preferred-name tests pin.
+  vi.mocked(getCustomerMemory).mockResolvedValue(null);
 });
 
 describe("computeFreeSlots", () => {
@@ -1060,5 +1065,61 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     expect(result.ok).toBe(true);
     expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
     expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
+  });
+});
+
+describe("bookCalendarAppointment — stored display name wins (Truly Issue 6)", () => {
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate",
+    attendeeName: "Muhammad Fahad Juhu"
+  };
+
+  it("replaces the model-supplied name with the contact's stored display name everywhere", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({ display_name: "Juhu" } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    await bookCalendarAppointment(BIZ, { ...ARGS, attendeeEmail: "j@x.co" }, "+15485773546");
+
+    expect(vi.mocked(getCustomerMemory)).toHaveBeenCalledWith(BIZ, "+15485773546");
+    // The dedupe key sees the preferred name too.
+    expect(vi.mocked(bookingAttendeeKey)).toHaveBeenCalledWith("+15485773546", "j@x.co", "Juhu");
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { description: string; attendees: Array<{ displayName: string }> };
+    };
+    expect(payload.data.description).toContain("Attendee: Juhu");
+    expect(payload.data.description).not.toContain("Muhammad Fahad Juhu");
+    expect(payload.data.attendees[0].displayName).toBe("Juhu");
+  });
+
+  it("keeps the model-supplied name when the contact has no stored name or is unknown", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({ display_name: "   " } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15485773546");
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { description: string };
+    };
+    expect(payload.data.description).toContain("Attendee: Muhammad Fahad Juhu");
+  });
+
+  it("skips the lookup entirely when no phone identity exists", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    await bookCalendarAppointment(BIZ, ARGS);
+    expect(vi.mocked(getCustomerMemory)).not.toHaveBeenCalled();
+  });
+
+  it("a lookup failure (Error or not) books with the model-supplied name — never blocks", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    vi.mocked(getCustomerMemory).mockRejectedValue(new Error("db down"));
+    expect((await bookCalendarAppointment(BIZ, ARGS, "+15485773546")).ok).toBe(true);
+
+    vi.mocked(getCustomerMemory).mockRejectedValue("raw failure");
+    expect((await bookCalendarAppointment(BIZ, ARGS, "+15485773546")).ok).toBe(true);
   });
 });

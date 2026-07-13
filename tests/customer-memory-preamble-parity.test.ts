@@ -49,6 +49,18 @@ describe("customer memory preamble parity (Next.js ↔ edge)", () => {
       }
     },
     {
+      label: "display name only (addressing rule, Truly Issue 6)",
+      memory: {
+        customer_e164: "+15485773546",
+        display_name: "Juhu",
+        summary_md: null,
+        pinned_md: null,
+        total_interaction_count: 1,
+        last_channel: "sms" as const,
+        last_interaction_at: "2026-07-13T15:00:00Z"
+      }
+    },
+    {
       label: "empty (returns null)",
       memory: {
         customer_e164: "+15555550000",

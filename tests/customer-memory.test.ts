@@ -44,7 +44,7 @@ afterEach(() => {
 });
 
 describe("buildCustomerPreamble", () => {
-  it("returns null when neither summary_md nor pinned_md are set — no empty header in the prompt", () => {
+  it("returns null when there is no summary, pinned note, OR stored name — no empty header in the prompt", () => {
     expect(
       buildCustomerPreamble({
         memory: {
@@ -58,6 +58,40 @@ describe("buildCustomerPreamble", () => {
         }
       })
     ).toBeNull();
+    // Whitespace-only name is not a name.
+    expect(
+      buildCustomerPreamble({
+        memory: {
+          customer_e164: CUSTOMER,
+          display_name: "   ",
+          summary_md: null,
+          pinned_md: null,
+          total_interaction_count: 0,
+          last_channel: null,
+          last_interaction_at: null
+        }
+      })
+    ).toBeNull();
+  });
+
+  it("a stored display name ALONE produces the preamble with the addressing rule (Truly Issue 6)", () => {
+    // Juhu's case: contact exists with the preferred name but no summary yet;
+    // without this the model greeted with the lead form's full legal name.
+    const out = buildCustomerPreamble({
+      memory: {
+        customer_e164: CUSTOMER,
+        display_name: "Juhu",
+        summary_md: null,
+        pinned_md: null,
+        total_interaction_count: 1,
+        last_channel: "sms",
+        last_interaction_at: "2026-07-13T15:00:00Z"
+      }
+    });
+    expect(out).toContain('Address this person as "Juhu"');
+    expect(out).toContain("takes precedence over any different or longer name");
+    expect(out).not.toContain("Rolling summary");
+    expect(out).not.toContain("Pinned notes");
   });
 
   it("includes summary content when summary_md is set", () => {

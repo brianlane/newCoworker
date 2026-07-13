@@ -11,6 +11,7 @@ import {
   confirmBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { logger } from "@/lib/logger";
 
@@ -399,14 +400,43 @@ export async function findCalendarSlots(
  *   one (the voice bridge passes the caller's number; webhook surfaces have
  *   no caller context and pass nothing).
  */
+/**
+ * Stored contact display name for the attendee phone (alias-aware). Best
+ * effort: null on no contact, no name, or any lookup failure — the booking
+ * proceeds with the model-supplied name.
+ */
+async function storedAttendeeName(businessId: string, phone: string): Promise<string | null> {
+  try {
+    const row = await getCustomerMemory(businessId, phone);
+    const name = row?.display_name?.trim();
+    return name && name.length > 0 ? name : null;
+  } catch (err) {
+    logger.warn("calendar-tools/book: stored-name lookup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
 export async function bookCalendarAppointment(
   businessId: string,
-  args: BookAppointmentArgs,
+  rawArgs: BookAppointmentArgs,
   fallbackPhone?: string | null
 ): Promise<CalendarToolResult> {
-  if (new Date(args.endIso).getTime() <= new Date(args.startIso).getTime()) {
+  if (new Date(rawArgs.endIso).getTime() <= new Date(rawArgs.startIso).getTime()) {
     return { ok: false, detail: "invalid_window" };
   }
+
+  // Preferred-name rule (Truly Issue 6): once a contact exists, the stored
+  // display name wins over whatever name the model carried in from a lead
+  // form or the conversation — invites stop flip-flopping between "Juhu"
+  // and "Muhammad Fahad Juhu" for the same person.
+  const attendeePhone = (rawArgs.attendeePhone ?? fallbackPhone ?? "").trim();
+  const preferredName = attendeePhone ? await storedAttendeeName(businessId, attendeePhone) : null;
+  const args: BookAppointmentArgs = preferredName
+    ? { ...rawArgs, attendeeName: preferredName }
+    : rawArgs;
 
   // Idempotency guard (2026-07-13 incident): a worker-retried model turn
   // re-runs its tool calls, and provider create APIs are not idempotent —
