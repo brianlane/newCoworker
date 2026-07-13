@@ -1452,33 +1452,53 @@ async function findDuplicateLeadRun(
     const sinceIso = new Date(
       Date.now() - DUPLICATE_LEAD_WINDOW_HOURS * 3_600_000
     ).toISOString();
-    const { data: priorRows, error: priorErr } = await supabase
-      .from("ai_flow_runs")
-      .select("id, status")
-      .eq("business_id", run.business_id)
-      .eq("flow_id", run.flow_id)
-      .neq("id", run.id)
-      .neq("status", "failed")
-      .or(
-        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
-      )
-      // updated_at (not created_at): a long-running/parked run enqueued more
-      // than 72h ago is still a live conversation for the reply path (which
-      // looks back on updated_at too) — a repeat submission during it must
-      // still be suppressed (Bugbot Medium on PR #575).
-      .gte("updated_at", sinceIso)
-      .lt("created_at", myCreatedAt)
-      // Simulated test runs never texted the lead — they don't count.
-      .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
-      .order("created_at", { ascending: false })
-      .limit(3);
-    if (priorErr) {
-      console.error("duplicate-lead guard lookup", priorErr);
+    // Shared filter shape for both passes below. updated_at (not created_at):
+    // a long-running/parked run enqueued more than 72h ago is still a live
+    // conversation for the reply path (which looks back on updated_at too) —
+    // a repeat submission during it must still be suppressed. The second
+    // .or() excludes simulated test runs (they never texted the lead).
+    // (Bugbot Mediums on PR #575.)
+    const priorRunsQuery = () =>
+      supabase
+        .from("ai_flow_runs")
+        .select("id, status")
+        .eq("business_id", run.business_id)
+        .eq("flow_id", run.flow_id)
+        .neq("id", run.id)
+        .or(
+          `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
+        )
+        .gte("updated_at", sinceIso)
+        .lt("created_at", myCreatedAt)
+        .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
+        .order("created_at", { ascending: false });
+
+    // Pass 1: any live/finished prior run qualifies outright. Queried
+    // separately from the canceled pass so a stack of silent cancels can
+    // never push a real qualifying run past a row limit (Bugbot Medium on
+    // PR #575, second round).
+    const { data: activePrior, error: activeErr } = await priorRunsQuery()
+      .not("status", "in", "(failed,canceled)")
+      .limit(1)
+      .maybeSingle();
+    if (activeErr) {
+      console.error("duplicate-lead guard lookup", activeErr);
       return null;
     }
-    for (const prior of (priorRows ?? []) as Array<{ id: string; status: string }>) {
-      if (prior.status !== "canceled") return prior.id;
-      // Canceled: qualifies only if it reached the lead before being stopped.
+    const activeId = (activePrior as { id?: string } | null)?.id;
+    if (activeId) return activeId;
+
+    // Pass 2: canceled runs qualify only if they reached the lead before
+    // being stopped (an owner cancel pre-outreach must not silence the
+    // lead's next submission).
+    const { data: canceledRows, error: canceledErr } = await priorRunsQuery()
+      .eq("status", "canceled")
+      .limit(5);
+    if (canceledErr) {
+      console.error("duplicate-lead guard canceled lookup", canceledErr);
+      return null;
+    }
+    for (const prior of (canceledRows ?? []) as Array<{ id: string }>) {
       const { data: sent, error: sentErr } = await supabase
         .from("sms_outbound_log")
         .select("id")
