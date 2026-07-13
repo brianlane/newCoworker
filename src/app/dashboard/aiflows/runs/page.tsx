@@ -66,9 +66,9 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-parchment">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="break-words text-2xl font-bold text-parchment">
             {filteredFlow ? `${filteredFlow.name}: runs` : "AiFlow runs"}
           </h1>
           <p className="mt-1 text-sm text-parchment/50">
@@ -79,7 +79,7 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
         </div>
         <Link
           href={filteredFlow ? `/dashboard/aiflows/${filteredFlow.id}` : "/dashboard/aiflows"}
-          className="text-sm text-signal-teal hover:underline"
+          className="text-sm text-signal-teal hover:underline sm:shrink-0 sm:whitespace-nowrap"
         >
           {filteredFlow ? "← Back to AiFlow" : "← Back to AiFlows"}
         </Link>

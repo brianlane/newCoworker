@@ -134,17 +134,19 @@ export function AiFlowLibraryBrowser({
       ) : (
         visible.map((row) => (
           <Card key={row.id} className="space-y-3">
-            <div className="flex items-start justify-between gap-4">
+            {/* Stacks on phones (full-width title, button below); the sm+
+                layout is identical to the original single row. */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
               <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <Link
                     href={`/dashboard/aiflows/library/${row.template_key}`}
-                    className="truncate font-semibold text-parchment hover:text-signal-teal hover:underline"
+                    className="min-w-0 break-words font-semibold text-parchment hover:text-signal-teal hover:underline sm:truncate"
                   >
                     {row.title}
                   </Link>
                   {row.category && (
-                    <span className="rounded-full border border-parchment/15 bg-deep-ink/40 px-2 py-0.5 text-[10px] text-parchment/60">
+                    <span className="shrink-0 rounded-full border border-parchment/15 bg-deep-ink/40 px-2 py-0.5 text-[10px] text-parchment/60">
                       {row.category}
                     </span>
                   )}
@@ -154,7 +156,7 @@ export function AiFlowLibraryBrowser({
               <button
                 onClick={() => use(row)}
                 disabled={busyId === row.id}
-                className="shrink-0 rounded-md bg-signal-teal px-3 py-1.5 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
+                className="self-start rounded-md bg-signal-teal px-3 py-1.5 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50 sm:shrink-0"
               >
                 {busyId === row.id ? "Using…" : "Use this flow"}
               </button>

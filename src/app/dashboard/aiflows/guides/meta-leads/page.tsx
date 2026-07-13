@@ -65,7 +65,7 @@ export default async function MetaLeadsGuidePage() {
 
   return (
     <div className="max-w-4xl space-y-8">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">
             Capture Meta ad leads with your AI coworker
@@ -88,7 +88,7 @@ export default async function MetaLeadsGuidePage() {
         </div>
         <Link
           href="/dashboard/aiflows"
-          className="shrink-0 whitespace-nowrap text-sm text-signal-teal hover:underline"
+          className="text-sm text-signal-teal hover:underline sm:shrink-0 sm:whitespace-nowrap"
         >
           ← Back to AiFlows
         </Link>

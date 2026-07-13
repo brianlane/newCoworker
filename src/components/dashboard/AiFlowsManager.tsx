@@ -2483,7 +2483,9 @@ export function AiFlowsManager({
       ) : (
         sortRows(flows, (row) => aiFlowSortValue(row, sort.field), sort.dir).map((row) => (
           <Card key={row.id} className="space-y-3">
-            <div className="flex items-start justify-between gap-4">
+            {/* Stacks on phones (full-width name, actions row below); the
+                sm+ layout is byte-identical to the original single row. */}
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
               <div className="min-w-0">
                 {/* items-start (not center): a long name wraps to a second
                     clamped line, and the pill + status times stay pinned to
@@ -2525,7 +2527,7 @@ export function AiFlowsManager({
                   {friendlyFlowSummary(row.definition)}
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-3 text-parchment/50">
+              <div className="flex flex-wrap items-center gap-3 text-parchment/50 sm:shrink-0 sm:flex-nowrap">
                 {/* Voice flows run on the real-time call path; the /run API rejects
                     them, so don't offer Run now (it would always error). */}
                 {row.enabled && row.definition.trigger.channel !== "voice" && (

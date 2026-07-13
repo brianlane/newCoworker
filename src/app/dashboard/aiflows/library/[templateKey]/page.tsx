@@ -52,7 +52,7 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
 
   return (
     <div className="max-w-3xl space-y-6">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           {/* The page's own title: show it in full (wrapped) rather than
               truncating — the category pill hangs off the first line. */}
@@ -70,7 +70,7 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
         </div>
         <Link
           href="/dashboard/aiflows/library"
-          className="shrink-0 whitespace-nowrap text-sm text-signal-teal hover:underline"
+          className="text-sm text-signal-teal hover:underline sm:shrink-0 sm:whitespace-nowrap"
         >
           ← Back to library
         </Link>
