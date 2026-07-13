@@ -5,29 +5,26 @@ import {
   ON_BOX_ERROR_SOURCES,
   advisorDeployedSize,
   buildEscalationAdviceEmail,
+  dailyPeakConcurrency,
   evaluateEscalationSignals,
   nextSizeUp,
   weeklyPeriodKey,
   type BusinessAdvice,
-  type DailyUsageRow,
+  type CallInterval,
   type EvaluateInput
 } from "../supabase/functions/_shared/hardware_escalation";
 
-function usageRow(overrides: Partial<DailyUsageRow> = {}): DailyUsageRow {
-  return {
-    business_id: "biz-1",
-    usage_date: "2026-07-01",
-    voice_minutes_used: 0,
-    sms_sent: 0,
-    peak_concurrent_calls: 0,
-    ...overrides
-  };
+/** [start, end) interval on a given UTC day, minutes after midnight. */
+function interval(day: string, startMin: number, endMin: number): CallInterval {
+  const midnight = Date.parse(`${day}T00:00:00.000Z`);
+  return { startMs: midnight + startMin * 60_000, endMs: midnight + endMin * 60_000 };
 }
 
 function evaluateInput(overrides: Partial<EvaluateInput> = {}): EvaluateInput {
   return {
     business: { id: "biz-1", name: "Amy's Plumbing", tier: "starter", vps_size: null },
-    usageRows: [],
+    callIntervals: [],
+    windowVoiceSeconds: 0,
     monthToDateSms: 0,
     onBoxErrorCount: 0,
     limits: {
@@ -83,39 +80,89 @@ describe("weeklyPeriodKey", () => {
   });
 });
 
+describe("dailyPeakConcurrency", () => {
+  it("returns an empty map for no intervals", () => {
+    expect(dailyPeakConcurrency([]).size).toBe(0);
+  });
+
+  it("records each day's max overlap", () => {
+    const peaks = dailyPeakConcurrency([
+      interval("2026-07-01", 0, 10),
+      interval("2026-07-01", 5, 15), // overlaps → 2
+      interval("2026-07-02", 30, 40) // lone call next day → 1
+    ]);
+    expect(peaks.get("2026-07-01")).toBe(2);
+    expect(peaks.get("2026-07-02")).toBe(1);
+  });
+
+  it("does not count back-to-back calls (end meets start) as overlap", () => {
+    const peaks = dailyPeakConcurrency([
+      interval("2026-07-01", 0, 10),
+      interval("2026-07-01", 10, 20)
+    ]);
+    expect(peaks.get("2026-07-01")).toBe(1);
+  });
+
+  it("attributes a cross-midnight call to both its start and end days", () => {
+    const peaks = dailyPeakConcurrency([interval("2026-07-01", 23 * 60 + 50, 24 * 60 + 10)]);
+    expect(peaks.get("2026-07-01")).toBe(1);
+    expect(peaks.get("2026-07-02")).toBe(1);
+  });
+});
+
 describe("evaluateEscalationSignals", () => {
   it("returns null when nothing fires", () => {
     expect(evaluateEscalationSignals(evaluateInput())).toBeNull();
   });
 
   it("fires concurrency_saturation after enough days at the cap", () => {
-    const rows = [
-      usageRow({ usage_date: "2026-07-01", peak_concurrent_calls: 1 }),
-      usageRow({ usage_date: "2026-07-02", peak_concurrent_calls: 1 }),
-      usageRow({ usage_date: "2026-07-03", peak_concurrent_calls: 0 })
+    const intervals = [
+      interval("2026-07-01", 0, 10),
+      interval("2026-07-02", 0, 10),
+      interval("2026-07-03", 0, 10),
+      interval("2026-07-03", 20, 30) // disjoint — still peak 1 that day
     ];
-    const advice = evaluateEscalationSignals(evaluateInput({ usageRows: rows }));
+    const advice = evaluateEscalationSignals(evaluateInput({ callIntervals: intervals }));
     expect(advice).not.toBeNull();
     expect(advice!.signals).toEqual([
-      { kind: "concurrency_saturation", daysAtCap: 2, capCalls: 1 }
+      { kind: "concurrency_saturation", daysAtCap: 3, capCalls: 1 }
     ]);
     expect(advice!.currentSize).toBe("kvm2");
     expect(advice!.recommendedSize).toBe("kvm4");
   });
 
   it("does not fire concurrency for a single day at the cap", () => {
-    const rows = [usageRow({ peak_concurrent_calls: 1 })];
-    expect(evaluateEscalationSignals(evaluateInput({ usageRows: rows }))).toBeNull();
+    const advice = evaluateEscalationSignals(
+      evaluateInput({ callIntervals: [interval("2026-07-01", 0, 10)] })
+    );
+    expect(advice).toBeNull();
+  });
+
+  it("requires the OVERLAP to reach the cap, not just call volume", () => {
+    // Standard cap is 10 concurrent: two sequential calls a day never get
+    // near it no matter how many days they repeat.
+    const intervals = Array.from({ length: 7 }, (_, i) => [
+      interval(`2026-07-0${i + 1}`, 0, 10),
+      interval(`2026-07-0${i + 1}`, 20, 30)
+    ]).flat();
+    const advice = evaluateEscalationSignals(
+      evaluateInput({
+        business: { id: "biz-2", name: "Big Corp", tier: "standard", vps_size: null },
+        callIntervals: intervals,
+        limits: {
+          maxConcurrentCalls: 10,
+          voiceIncludedSecondsPerStripePeriod: 15_000,
+          smsPerMonth: 3_000
+        }
+      })
+    );
+    expect(advice).toBeNull();
   });
 
   it("skips the concurrency signal entirely when the cap is zero", () => {
-    const rows = [
-      usageRow({ usage_date: "2026-07-01" }),
-      usageRow({ usage_date: "2026-07-02" })
-    ];
     const advice = evaluateEscalationSignals(
       evaluateInput({
-        usageRows: rows,
+        callIntervals: [interval("2026-07-01", 0, 10), interval("2026-07-02", 0, 10)],
         limits: {
           maxConcurrentCalls: 0,
           voiceIncludedSecondsPerStripePeriod: 1_500,
@@ -127,30 +174,25 @@ describe("evaluateEscalationSignals", () => {
   });
 
   it("fires voice_volume when projected monthly minutes clear the utilization bar", () => {
-    // 7 days × 5 min/day → 150/mo projected vs 25 included → way over 80%.
-    const rows = Array.from({ length: 7 }, (_, i) =>
-      usageRow({ usage_date: `2026-07-0${i + 1}`, voice_minutes_used: 5 })
-    );
-    const advice = evaluateEscalationSignals(evaluateInput({ usageRows: rows }));
+    // 35 settled min over the 7-day window → 150/mo projected vs 25
+    // included → way over 80%.
+    const advice = evaluateEscalationSignals(evaluateInput({ windowVoiceSeconds: 35 * 60 }));
     expect(advice!.signals).toEqual([
       { kind: "voice_volume", projectedMonthlyMinutes: 150, includedMinutes: 25 }
     ]);
   });
 
-  it("does not mistake a single-day voice burst for a sustained pace", () => {
-    // 4 minutes on one active day: dividing by the FIXED 7-day window gives
-    // ~17 projected min/month (< 80% of 25) — dividing by the 1 row present
-    // would have projected 120 and false-flagged the tenant.
-    const advice = evaluateEscalationSignals(
-      evaluateInput({ usageRows: [usageRow({ voice_minutes_used: 4 })] })
-    );
+  it("does not mistake a small window total for a sustained pace", () => {
+    // 4 settled minutes across the FIXED 7-day window projects ~17
+    // min/month (< 80% of 25) — no flag.
+    const advice = evaluateEscalationSignals(evaluateInput({ windowVoiceSeconds: 4 * 60 }));
     expect(advice).toBeNull();
   });
 
   it("skips voice_volume when the tier includes no voice", () => {
     const advice = evaluateEscalationSignals(
       evaluateInput({
-        usageRows: [usageRow({ voice_minutes_used: 100 })],
+        windowVoiceSeconds: 100 * 60,
         limits: {
           maxConcurrentCalls: 1,
           voiceIncludedSecondsPerStripePeriod: 0,
@@ -212,12 +254,13 @@ describe("evaluateEscalationSignals", () => {
   });
 
   it("stacks multiple signals in one advice block", () => {
-    const rows = [
-      usageRow({ usage_date: "2026-07-01", peak_concurrent_calls: 1, voice_minutes_used: 10 }),
-      usageRow({ usage_date: "2026-07-02", peak_concurrent_calls: 1, voice_minutes_used: 10 })
-    ];
     const advice = evaluateEscalationSignals(
-      evaluateInput({ usageRows: rows, monthToDateSms: 95, onBoxErrorCount: 40 })
+      evaluateInput({
+        callIntervals: [interval("2026-07-01", 0, 10), interval("2026-07-02", 0, 10)],
+        windowVoiceSeconds: 20 * 60,
+        monthToDateSms: 95,
+        onBoxErrorCount: 40
+      })
     );
     expect(advice!.signals.map((s) => s.kind)).toEqual([
       "concurrency_saturation",
