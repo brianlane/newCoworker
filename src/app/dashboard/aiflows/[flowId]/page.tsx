@@ -5,7 +5,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlow, listAiFlowRuns } from "@/lib/ai-flows/db";
-import { summarizeDefinition } from "@/lib/ai-flows/schema";
+import { friendlyFlowSummary } from "@/components/dashboard/aiflow-labels";
 import { statsByStepIdFromRunSteps, type StepStats } from "@/lib/ai-flows/tree";
 import { getTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { Card } from "@/components/ui/Card";
@@ -91,10 +91,14 @@ export default async function AiFlowViewPage({ params }: Props) {
         <div className="min-w-0">
           {flow ? (
             <>
-              <div className="flex items-center gap-2">
-                <h1 className="truncate text-2xl font-bold text-parchment">{flow.name}</h1>
+              {/* The page's own title: show it in full (wrapped) rather than
+                  truncating — the pill hangs off the first line. */}
+              <div className="flex items-start gap-2">
+                <h1 className="min-w-0 break-words text-2xl font-bold text-parchment">
+                  {flow.name}
+                </h1>
                 <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                  className={`mt-1.5 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
                     flow.enabled
                       ? "bg-claw-green/15 text-claw-green"
                       : "bg-parchment/10 text-parchment/50"
@@ -103,8 +107,8 @@ export default async function AiFlowViewPage({ params }: Props) {
                   {flow.enabled ? "ENABLED" : "OFF"}
                 </span>
               </div>
-              <p className="mt-1 truncate text-sm text-parchment/50">
-                {summarizeDefinition(flow.definition)}
+              <p className="mt-1 text-sm text-parchment/50">
+                {friendlyFlowSummary(flow.definition)}
               </p>
             </>
           ) : (
