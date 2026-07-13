@@ -57,6 +57,16 @@ export const TRANSIENT_SERVER_RETRY_ERRORS = new Set([
 ]);
 
 /**
+ * First job attempt (attempt_count, incremented at claim) on which a 5xx may
+ * trigger the history-dropping stateless retry. Below it, the 5xx surfaces
+ * to the job-level retry, which re-runs STATEFUL with the thread intact —
+ * a transient Gemini outage must not cost the customer their thread context
+ * (2026-07-13 incident). Lives here (not in the worker entrypoint) so the
+ * integration suite can pin the exact threshold the worker deploys with.
+ */
+export const STATELESS_5XX_MIN_ATTEMPT = 3;
+
+/**
  * Union of both classes — the full set of errors that MAY warrant a
  * stateless retry. Kept exported because the dashboard chat path
  * mirrors this concept (src/app/api/dashboard/chat/route.ts); note the

@@ -267,12 +267,15 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
       .single();
     if (error) throw new Error(error.message);
     const jobId = (data as { id: string }).id;
-    rowboat.scriptError(500);
+    // One scripted 500 is the whole attempt now: since PR #566, an
+    // early-attempt 5xx gets NO stateless retry (it would drop the thread
+    // history for a transient upstream outage) — the job-level retry owns it.
     rowboat.scriptError(500);
     await tickSmsWorker();
 
     const job = await getSmsJob(db, jobId);
     expect(job.status).toBe("pending"); // queued for the next tick's fresh sample
+    expect(rowboat.pendingScripts()).toBe(0);
     expect(await getContactTags(db, biz, LEAD)).not.toContain(NEEDS_HUMAN_TAG);
     expect((await notificationRows(biz)).length).toBe(0);
     // (The beforeEach isolation sweep parks this deliberately-pending job
