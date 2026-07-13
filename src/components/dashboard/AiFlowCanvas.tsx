@@ -530,9 +530,14 @@ function NodeCard({
       )}
       {!readOnly && (
         // Hover reveals on desktop; coarse pointers (touch) have no hover, so
-        // the toolbar stays visible there — lifted above the card so it never
-        // covers the step title — with padded tap targets.
-        <div className="absolute -right-2 -top-2 hidden items-center gap-1 rounded-md border border-parchment/15 bg-deep-ink px-1 py-0.5 group-hover:flex pointer-coarse:-top-8 pointer-coarse:flex">
+        // there the toolbar shows on the SELECTED step only (tapping a card
+        // selects it) — lifted above the card so it never covers the step
+        // title — with padded tap targets.
+        <div
+          className={`absolute -right-2 -top-2 hidden items-center gap-1 rounded-md border border-parchment/15 bg-deep-ink px-1 py-0.5 group-hover:flex ${
+            selected ? "pointer-coarse:-top-8 pointer-coarse:flex" : ""
+          }`}
+        >
           <button
             onClick={(ev) => {
               ev.stopPropagation();
