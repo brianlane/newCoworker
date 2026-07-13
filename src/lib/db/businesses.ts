@@ -656,6 +656,25 @@ export async function setAiflowStaffProtection(
 }
 
 /**
+ * Toggle lead auto-assignment (Employees page): when ON, route_to_team
+ * hard-assigns each lead to the next roster member in rotation (assignment
+ * FYI, no claim handshake). Default OFF = offer-and-claim. See migration
+ * 20260713222759_lead_auto_assign.
+ */
+export async function setLeadAutoAssign(
+  id: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ lead_auto_assign: enabled })
+    .eq("id", id);
+  if (error) throw new Error(`setLeadAutoAssign: ${error.message}`);
+}
+
+/**
  * Light single-column read for the calendar tools' timezone default.
  * Returns null when unset or on any read error (degrade to UTC, never
  * fail the tool call over a timezone lookup).

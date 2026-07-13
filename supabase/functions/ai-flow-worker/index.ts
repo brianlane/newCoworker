@@ -4360,6 +4360,29 @@ function approvalStep(
 // stale agentName — instead of round-robin to an unintended teammate.
 const UNRESOLVED_AGENT_REF = "\u0000__unresolved_agent_ref__";
 
+/**
+ * Is lead auto-assignment on for this business? (Truly Issue 7 — Employees
+ * page toggle.) Fails CLOSED to offer-and-claim on any read error: wrongly
+ * hard-assigning a lead is worse than wrongly asking for a claim.
+ */
+async function leadAutoAssignEnabled(supabase: Supabase, businessId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("businesses")
+      .select("lead_auto_assign")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (error) {
+      console.error("leadAutoAssignEnabled", error);
+      return false;
+    }
+    return (data as { lead_auto_assign?: boolean } | null)?.lead_auto_assign === true;
+  } catch (e) {
+    console.error("leadAutoAssignEnabled", e);
+    return false;
+  }
+}
+
 async function routeToTeamStep(
   supabase: Supabase,
   run: RunRow,
@@ -4579,6 +4602,12 @@ async function routeToTeamStep(
   }
 
   const leadPhone = leadPhoneE164(scope);
+  // Auto-assign mode (businesses.lead_auto_assign, Truly Issue 7): the
+  // rotation pick IS the assignment — no offer/claim handshake. Resolved
+  // per entry (not cached) so a Settings flip applies to the next lead.
+  // A read failure falls back to offer-and-claim, never the other way:
+  // wrongly hard-assigning a lead is worse than wrongly asking for a claim.
+  const autoAssign = await leadAutoAssignEnabled(supabase, run.business_id);
   // Owner-first routing (preferContactOwner): a repeat lead whose contact
   // already has an owning employee gets offered to "their" person first; the
   // normal cascade follows if they pass or time out (they land in `tried`).
@@ -4611,6 +4640,68 @@ async function routeToTeamStep(
     if (await isRecipientOptedOut(supabase, run.business_id, agent.phone)) {
       tried.push(agent.phone);
       continue;
+    }
+    if (autoAssign) {
+      // Hard assignment: record the claim NOW (same state shape a "1" reply
+      // produces — claimed_by/claimed_name on routing, claimed_agent var for
+      // claim-gated later steps, contact ownership, claimed goal) and send
+      // the teammate an FYI instead of an offer. routing.offered is NOT set:
+      // there is no live offer for the webhook's claim/yank machinery to act
+      // on. The rotation cursor was already stamped by pickNextAgent, so
+      // fairness holds exactly as in offer mode.
+      routing.claimed_by = agent.phone;
+      routing.claimed_name = agent.name;
+      routing.auto_assigned = true;
+      scope.vars.claimed_agent = agent.name || agent.phone;
+      const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
+      const fyiBody =
+        "New lead assigned to you (auto-assign is on — it's yours, no reply needed):\n" +
+        renderTemplate(action.offerTemplate, agentScope(scope, agent));
+      // FYI delivery is best-effort: the assignment is the durable fact; a
+      // Telnyx hiccup must not bounce the lead back into rotation. The
+      // owner notice below still lands (its own channel), and the lead
+      // shows as assigned on Tasks either way.
+      try {
+        await sendOfferSms(
+          supabase,
+          run,
+          agent.phone,
+          fyiBody,
+          `aiflow-assign:${run.id}:${tried.length}`,
+          fyiMms ? [fyiMms] : undefined
+        );
+      } catch (e) {
+        console.error("route_to_team auto-assign FYI send failed", e);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_assign_sms_failed",
+          message: `auto-assign FYI send failed: ${e instanceof Error ? e.message : String(e)}`,
+          payload: { run_id: run.id, flow_id: run.flow_id, agent: agent.phone }
+        });
+      }
+      if (action.claimedNotifyTemplate) {
+        const ownerBody = renderTemplate(action.claimedNotifyTemplate, agentScope(scope, agent));
+        await sendOwnerSms(supabase, run, ownerBody, `aiflow-claimed:${run.id}`);
+      }
+      appendActionTaken(scope, `lead auto-assigned to ${agent.name || agent.phone} (round robin)`);
+      await assignContactOwnerOnClaim(supabase, run, scope, agent.phone);
+      {
+        const assignedLeadPhone = leadContactPhone(scope);
+        if (assignedLeadPhone) {
+          await applyGoalEvent(supabase, run.business_id, assignedLeadPhone, { kind: "claimed" });
+        }
+      }
+      await telemetryRecord(supabase, "ai_flow_route_auto_assigned", {
+        run_id: run.id,
+        business_id: run.business_id,
+        agent: agent.phone
+      });
+      return {
+        kind: "ok",
+        result: { routed: "auto_assigned", claimed_by: agent.phone }
+      };
     }
     routing.offered = agent.phone;
     routing.offered_name = agent.name;
