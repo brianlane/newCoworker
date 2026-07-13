@@ -20,6 +20,7 @@ import {
   updateComplianceModule,
   updateEnterpriseModels,
   setAiflowStaffProtection,
+  setLeadAutoAssign,
   updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
@@ -745,6 +746,22 @@ describe("db/businesses", () => {
     await expect(
       setAiflowStaffProtection("uuid-biz-1", true, failing as never)
     ).rejects.toThrow("setAiflowStaffProtection");
+  });
+
+  it("setLeadAutoAssign writes the toggle both ways and throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setLeadAutoAssign("uuid-biz-1", true);
+    expect(db.update).toHaveBeenCalledWith({ lead_auto_assign: true });
+
+    await setLeadAutoAssign("uuid-biz-1", false, db as never);
+    expect(db.update).toHaveBeenCalledWith({ lead_auto_assign: false });
+
+    const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    await expect(setLeadAutoAssign("uuid-biz-1", true, failing as never)).rejects.toThrow(
+      "setLeadAutoAssign"
+    );
   });
 
   it("updateBusinessVpsSize writes the pin and supports clearing with null", async () => {

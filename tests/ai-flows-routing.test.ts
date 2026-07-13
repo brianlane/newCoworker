@@ -44,7 +44,8 @@ describe("parseRouting", () => {
       last_event: "explode",
       first_to_claim: "false",
       late_claim: "yes",
-      late_claimed: 1
+      late_claimed: 1,
+      auto_assigned: "true"
     });
     expect(parsed.offered).toBeUndefined();
     expect(parsed.claimed_by).toBeUndefined();
@@ -57,6 +58,12 @@ describe("parseRouting", () => {
     expect(parsed.first_to_claim).toBeUndefined();
     expect(parsed.late_claim).toBeUndefined();
     expect(parsed.late_claimed).toBeUndefined();
+    expect(parsed.auto_assigned).toBeUndefined();
+  });
+
+  it("keeps a well-typed auto_assigned marker (lead auto-assignment claims)", () => {
+    expect(parseRouting({ auto_assigned: true }).auto_assigned).toBe(true);
+    expect(parseRouting({ auto_assigned: false }).auto_assigned).toBe(false);
   });
 
   it("preserves unknown/legacy keys at runtime so persisting never drops data", () => {

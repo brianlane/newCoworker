@@ -103,6 +103,13 @@ export type OfferRouting = {
   /** Permanent "this run was late-claimed" marker. Set: worker. Never cleared. */
   late_claimed?: boolean;
   /**
+   * Permanent "this claim came from lead auto-assignment" marker
+   * (businesses.lead_auto_assign): the worker hard-assigned the rotation pick
+   * without an offer/claim handshake, so no offer was ever live and the
+   * webhook's claim/yank machinery never applied. Set: worker. Never cleared.
+   */
+  auto_assigned?: boolean;
+  /**
    * LEGACY (pre-universal-digits). No longer set anywhere; the worker scrubs
    * them from stored runs on retire/claim so old stamps can't linger.
    * @deprecated
@@ -163,6 +170,9 @@ export function parseRouting(raw: unknown): OfferRouting {
   }
   if ("late_claim" in out && typeof out.late_claim !== "boolean") delete out.late_claim;
   if ("late_claimed" in out && typeof out.late_claimed !== "boolean") delete out.late_claimed;
+  if ("auto_assigned" in out && typeof out.auto_assigned !== "boolean") {
+    delete out.auto_assigned;
+  }
   return out as OfferRouting;
 }
 
