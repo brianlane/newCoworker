@@ -82,6 +82,17 @@ beforeAll(() => {
 });
 
 describe("lead auto-assignment (real worker)", () => {
+  it("the flag ships default OFF on the live schema — existing tenants keep offer-and-claim", async () => {
+    const biz = await seedBusiness(db, "IT auto assign default");
+    const { data, error } = await db
+      .from("businesses")
+      .select("lead_auto_assign")
+      .eq("id", biz)
+      .single();
+    expect(error).toBeNull();
+    expect((data as { lead_auto_assign?: boolean }).lead_auto_assign).toBe(false);
+  });
+
   it("flag ON: the rotation pick is claimed immediately, the run completes, and the contact gets an owner", async () => {
     const biz = await seedBusiness(db, "IT auto assign on");
     await db.from("businesses").update({ lead_auto_assign: true }).eq("id", biz);
