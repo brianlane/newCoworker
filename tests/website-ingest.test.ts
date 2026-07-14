@@ -2015,6 +2015,90 @@ describe("ingestWebsite", () => {
     expect(fetched).toHaveLength(5);
   });
 
+  // --- onProgress events + pages report ---
+
+  it("emits progress events (sitemap_found, page_fetched, page_failed, summarizing) and returns the pages report", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(urlset(["https://example.com/about", "https://example.com/broken"]));
+      }
+      if (url === "https://example.com/broken") return new Response("boom", { status: 500 });
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 10,
+      sitemapDiscovery: true,
+      onProgress: (event) => events.push(event as unknown as Record<string, unknown>)
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      // Pages report mirrors the crawled pages, in order, with char counts.
+      expect(res.pages).toHaveLength(res.pagesCrawled);
+      expect(res.pages[0].url).toBe("https://example.com/");
+      expect(res.pages.every((p) => p.chars > 0)).toBe(true);
+    }
+
+    const types = events.map((e) => e.type);
+    expect(types).toContain("sitemap_found");
+    expect(types).toContain("page_fetched");
+    expect(types).toContain("page_failed");
+    expect(types[types.length - 1]).toBe("summarizing");
+
+    const fetched = events.filter((e) => e.type === "page_fetched");
+    // Indexes are monotonically increasing 1..N.
+    expect(fetched.map((e) => e.index)).toEqual(fetched.map((_, i) => i + 1));
+    expect(fetched[0]).toMatchObject({ url: "https://example.com/" });
+    expect(fetched.every((e) => typeof e.bytes === "number" && (e.bytes as number) > 0)).toBe(true);
+
+    expect(events.find((e) => e.type === "page_failed")).toMatchObject({
+      url: "https://example.com/broken"
+    });
+    expect(events.find((e) => e.type === "sitemap_found")).toMatchObject({ count: 2 });
+    expect(events.find((e) => e.type === "summarizing")).toMatchObject({
+      pages: (res as { pagesCrawled: number }).pagesCrawled
+    });
+  });
+
+  it("emits a page_fetched event for the Jina fallback page", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const shell = "<html><head><title>Shell</title></head><body><div id=\"root\"></div></body></html>";
+    const markdown = `# Rendered\n\n${"Rendered copy. ".repeat(30)}`;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response(markdown, { status: 200, headers: { "content-type": "text/plain" } });
+      }
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(shell, { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      readerFallback: true,
+      onProgress: (event) => events.push(event as unknown as Record<string, unknown>)
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.pages).toEqual([{ url: "https://example.com/", chars: markdown.trim().length }]);
+    }
+    // Two page_fetched events: the shell page, then the reader-rendered one.
+    const fetched = events.filter((e) => e.type === "page_fetched");
+    expect(fetched).toHaveLength(2);
+    expect(fetched[1]).toMatchObject({ url: "https://example.com/", index: 2 });
+  });
+
   it("does not call Jina when the crawl already produced a rich corpus", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
@@ -2618,6 +2702,10 @@ describe("ingestWebsiteFromHtml", () => {
       expect(res.pagesCrawled).toBe(1);
       expect(res.finalUrl).toBe("https://example.com/");
       expect(res.bytesDownloaded).toBe(Buffer.byteLength(richHtml, "utf8"));
+      // Pages report mirrors the single pasted "page" with extracted chars.
+      expect(res.pages).toHaveLength(1);
+      expect(res.pages[0].url).toBe("https://example.com/");
+      expect(res.pages[0].chars).toBeGreaterThan(0);
     }
     // The summarizer received extracted TEXT, not raw markup.
     const prompt = summarize.mock.calls[0][0] as string;

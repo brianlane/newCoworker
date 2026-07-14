@@ -6,7 +6,8 @@ vi.mock("@/lib/db/businesses", () => ({
   updateBusinessWebsiteUrl: vi.fn()
 }));
 vi.mock("@/lib/db/configs", () => ({
-  setBusinessWebsiteMd: vi.fn()
+  setBusinessWebsiteMd: vi.fn(),
+  setBusinessWebsiteCrawlReport: vi.fn()
 }));
 vi.mock("@/lib/website-ingest", () => ({
   ingestWebsite: vi.fn(),
@@ -30,7 +31,7 @@ vi.mock("@/lib/vps/schedule-vault-sync", () => ({
 import { POST } from "@/app/api/onboard/website-ingest/route";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
-import { setBusinessWebsiteMd } from "@/lib/db/configs";
+import { setBusinessWebsiteCrawlReport, setBusinessWebsiteMd } from "@/lib/db/configs";
 import { ingestWebsite, ingestWebsiteFromHtml } from "@/lib/website-ingest";
 import { getAuthUser } from "@/lib/auth";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
@@ -51,7 +52,11 @@ const INGEST_OK = {
   websiteMd: "# Website\nbody",
   pagesCrawled: 2,
   bytesDownloaded: 1024,
-  finalUrl: "https://example.com/"
+  finalUrl: "https://example.com/",
+  pages: [
+    { url: "https://example.com/", chars: 500 },
+    { url: "https://example.com/about", chars: 300 }
+  ]
 };
 
 describe("api/onboard/website-ingest route", () => {
@@ -60,6 +65,7 @@ describe("api/onboard/website-ingest route", () => {
     vi.mocked(ingestWebsite).mockResolvedValue(INGEST_OK);
     vi.mocked(updateBusinessWebsiteUrl).mockResolvedValue(undefined as never);
     vi.mocked(setBusinessWebsiteMd).mockResolvedValue(undefined as never);
+    vi.mocked(setBusinessWebsiteCrawlReport).mockResolvedValue(undefined as never);
     vi.mocked(getAuthUser).mockResolvedValue(null);
   });
 
@@ -326,5 +332,155 @@ describe("api/onboard/website-ingest route", () => {
     const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
     expect(res.status).toBe(200);
     expect(scheduleVaultSync).not.toHaveBeenCalled();
+  });
+
+  // --- Last-crawl report persistence ---
+
+  it("persists the crawl report on success (crawl source)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
+
+    const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    expect(res.status).toBe(200);
+    expect(setBusinessWebsiteCrawlReport).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ source: "crawl", pages: INGEST_OK.pages })
+    );
+  });
+
+  it("persists the crawl report with pasted_html source for the paste path", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+    vi.mocked(ingestWebsiteFromHtml).mockResolvedValue({ ...INGEST_OK, pagesCrawled: 1 });
+
+    const res = await POST(
+      jsonRequest({
+        businessId: BIZ,
+        websiteUrl: "https://example.com/",
+        pastedHtml: "<html><body>Acme sells anvils</body></html>"
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(setBusinessWebsiteCrawlReport).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ source: "pasted_html" })
+    );
+  });
+
+  it("tolerates a crawl-report write failure (report is cosmetic, ingest still succeeds)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
+    vi.mocked(setBusinessWebsiteCrawlReport).mockRejectedValue(new Error("db down"));
+
+    const res = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    expect(res.status).toBe(200);
+    const json = await res.json();
+    expect(json.data.ok).toBe(true);
+    // The load-bearing writes still happened.
+    expect(setBusinessWebsiteMd).toHaveBeenCalled();
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("returns the crawled pages list to owners but not to draft callers", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+    const ownerRes = await POST(jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/" }));
+    const ownerJson = await ownerRes.json();
+    expect(ownerJson.data.pages).toEqual(INGEST_OK.pages);
+
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(getOnboardingDraft).mockResolvedValue({
+      business_id: BIZ,
+      draft_token: TOKEN,
+      payload: {},
+      created_at: "",
+      updated_at: ""
+    } as never);
+    const draftRes = await POST(
+      jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/", draftToken: TOKEN })
+    );
+    const draftJson = await draftRes.json();
+    expect(draftJson.data.pages).toBeUndefined();
+  });
+
+  // --- NDJSON streaming mode ---
+
+  async function readNdjsonLines(res: Response): Promise<Array<Record<string, unknown>>> {
+    const text = await res.text();
+    return text
+      .split("\n")
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  }
+
+  it("streams NDJSON progress lines followed by a result line when stream:true", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+    vi.mocked(ingestWebsite).mockImplementation(async (_url, options) => {
+      options?.onProgress?.({ type: "sitemap_found", count: 12 });
+      options?.onProgress?.({ type: "page_fetched", url: "https://example.com/", bytes: 1000, index: 1 });
+      options?.onProgress?.({ type: "summarizing", pages: 2 });
+      return INGEST_OK;
+    });
+
+    const res = await POST(
+      jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/", stream: true })
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/x-ndjson");
+
+    const lines = await readNdjsonLines(res);
+    expect(lines.map((l) => l.kind)).toEqual(["progress", "progress", "progress", "result"]);
+    expect(lines[0]).toMatchObject({ type: "sitemap_found", count: 12 });
+    expect(lines[1]).toMatchObject({ type: "page_fetched", url: "https://example.com/", index: 1 });
+    const result = lines[3];
+    expect(result).toMatchObject({
+      ok: true,
+      pagesCrawled: INGEST_OK.pagesCrawled,
+      websiteMd: INGEST_OK.websiteMd
+    });
+    expect(result.pages).toEqual(INGEST_OK.pages);
+    // Streaming persists exactly like the JSON path.
+    expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("streams an ok:false result line when the ingest fails (no persistence)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
+    vi.mocked(ingestWebsite).mockResolvedValue({ ok: false, error: "fetch_failed", detail: "HTTP 403" });
+
+    const res = await POST(
+      jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/", stream: true })
+    );
+    expect(res.status).toBe(200);
+    const lines = await readNdjsonLines(res);
+    expect(lines[lines.length - 1]).toMatchObject({
+      kind: "result",
+      ok: false,
+      error: "fetch_failed",
+      detail: "HTTP 403"
+    });
+    expect(setBusinessWebsiteMd).not.toHaveBeenCalled();
+  });
+
+  it("streams a terminal error line when the ingest throws mid-stream", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
+    vi.mocked(ingestWebsite).mockRejectedValue(new Error("kaboom"));
+
+    const res = await POST(
+      jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/", stream: true })
+    );
+    // Status is already committed once the stream starts; the error is a line.
+    expect(res.status).toBe(200);
+    const lines = await readNdjsonLines(res);
+    expect(lines[lines.length - 1]).toMatchObject({ kind: "error" });
+  });
+
+  it("keeps auth failures as plain JSON 403 even when stream:true", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    const res = await POST(
+      jsonRequest({ businessId: BIZ, websiteUrl: "https://example.com/", stream: true })
+    );
+    expect(res.status).toBe(403);
+    expect(res.headers.get("content-type") ?? "").not.toContain("ndjson");
+    expect(ingestWebsite).not.toHaveBeenCalled();
   });
 });
