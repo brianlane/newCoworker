@@ -8,6 +8,7 @@ import {
   ingestWebsite,
   ingestWebsiteFromHtml,
   normalizeWebsiteUrl,
+  WEBSITE_INGEST_DEEP_MAX_PAGES,
   WEBSITE_INGEST_MAX_PASTED_HTML_CHARS
 } from "@/lib/website-ingest";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
@@ -96,6 +97,13 @@ export async function POST(request: Request) {
           businessType: body.businessType,
           // Meter the Gemini summary into this business's shared AI budget.
           meterBusinessId: body.businessId,
+          // Deep crawl: this authenticated, once-per-onboarding (plus manual
+          // re-crawl) path covers the whole site — sitemap-seeded, up to 80
+          // pages — so the vault summary isn't limited to whatever the
+          // homepage happens to link. The unauthenticated preview route keeps
+          // the shallow default.
+          maxPages: WEBSITE_INGEST_DEEP_MAX_PAGES,
+          sitemapDiscovery: true,
           // Owner-consented bypass: this route is invoked post-checkout
           // with a URL the business owner explicitly provided during
           // onboarding. robots.txt expresses third-party-crawler
