@@ -18,6 +18,7 @@ import {
   Users,
   UserCog,
   Workflow,
+  Bot,
   CreditCard,
   ArrowDownUp,
   BarChart3,
@@ -45,6 +46,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "import-export": ArrowDownUp,
   integrations: Plug,
   aiflows: Workflow,
+  agents: Bot,
   billing: CreditCard,
   settings: Settings,
   notifications: Bell
