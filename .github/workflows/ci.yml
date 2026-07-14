@@ -247,12 +247,17 @@ jobs:
   # while Bugbot is NEUTRAL, any cross-workflow check is red, or a review
   # thread is unresolved. Unresolved threads fail the gate immediately —
   # resolve them, then re-run this job (e2e re-runs with it via `needs`).
+  # worker-integration is in `needs` (not just the e2e job's) so the gate
+  # never has to poll for it — its 25m ceiling would outlast the gate's 20m
+  # timeout and fail the deploy on a job that was about to pass. With every
+  # same-workflow job covered by `needs`, the gate poll only ever covers
+  # cross-workflow checks (CodeQL, audit) and apps (Bugbot, GitGuardian).
   # The 30m budget = gate poll (≤20m) + the deploy itself.
   vercel-deploy:
     name: Vercel Deploy
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    needs: [quality, typecheck, test, deno-check, security]
+    needs: [quality, typecheck, test, deno-check, security, worker-integration]
     permissions:
       contents: read
       pull-requests: write
