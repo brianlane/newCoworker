@@ -2,9 +2,11 @@ import { describe, expect, it, vi } from "vitest";
 import {
   FLOW_CONTEXT_LOOKBACK_HOURS,
   formatBusinessFlowActivity,
+  formatFlowAnswerNote,
   formatFlowRunContext,
   loadBusinessFlowActivity,
   loadFlowRunContext,
+  loadFlowRunContextDetailed,
   presentableVars,
   type FlowRunSnapshot
 } from "../supabase/functions/_shared/ai_flows/run_context";
@@ -333,6 +335,63 @@ describe("loadFlowRunContext", () => {
 
   it("exports the lookback window the loaders and callers share", () => {
     expect(FLOW_CONTEXT_LOOKBACK_HOURS).toBe(72);
+  });
+});
+
+describe("loadFlowRunContextDetailed", () => {
+  it("returns the block AND the raw recent messages (oldest first, trimmed)", async () => {
+    const { db } = makeDb([
+      { data: [dbRun()] },
+      { data: [{ id: "f1", name: "Privyr intake" }] },
+      {
+        data: [
+          { body: "  Approximately when does your current policy renew?  " },
+          { body: "Hi Dwight! What prompted you to shop around today?" }
+        ]
+      }
+    ]);
+    const detail = await loadFlowRunContextDetailed(db, BIZ, LEAD);
+    expect(detail.block).toContain('Workflow "Privyr intake"');
+    // Query is newest-first; recentMessages reads oldest-first like the block.
+    expect(detail.recentMessages).toEqual([
+      "Hi Dwight! What prompted you to shop around today?",
+      "Approximately when does your current policy renew?"
+    ]);
+  });
+
+  it("empty contact and query errors return the empty detail, never throw", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db: emptyDb, calls } = makeDb([]);
+    expect(await loadFlowRunContextDetailed(emptyDb, BIZ, "")).toEqual({
+      block: null,
+      recentMessages: []
+    });
+    expect(calls).toHaveLength(0);
+    const { db: errDb } = makeDb([{ data: null, error: { message: "boom" } }]);
+    expect(await loadFlowRunContextDetailed(errDb, BIZ, LEAD)).toEqual({
+      block: null,
+      recentMessages: []
+    });
+    err.mockRestore();
+  });
+});
+
+describe("formatFlowAnswerNote", () => {
+  it("anchors the last automated message next to the user turn", () => {
+    const note = formatFlowAnswerNote("Approximately when does your current policy renew?");
+    expect(note).toBe(
+      '(Note: the last automated message to this texter was: ' +
+        '"Approximately when does your current policy renew?" — read their ' +
+        "message below as a likely answer to it.)"
+    );
+  });
+
+  it("clips a runaway message and returns null for blank input", () => {
+    const note = formatFlowAnswerNote(`${"x".repeat(400)}`);
+    expect(note).toContain("…");
+    expect(note!.length).toBeLessThan(420);
+    expect(formatFlowAnswerNote("   ")).toBeNull();
+    expect(formatFlowAnswerNote("")).toBeNull();
   });
 });
 

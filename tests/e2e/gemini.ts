@@ -36,10 +36,13 @@ type GeminiBody = {
   error?: { message?: string };
 };
 
-async function generateContent(payload: Record<string, unknown>): Promise<string> {
+async function generateContent(
+  payload: Record<string, unknown>,
+  model: string = E2E_GEMINI_MODEL
+): Promise<string> {
   const key = requireGeminiKey();
   const url =
-    `https://generativelanguage.googleapis.com/v1beta/models/${E2E_GEMINI_MODEL}` +
+    `https://generativelanguage.googleapis.com/v1beta/models/${model}` +
     `:generateContent?key=${encodeURIComponent(key)}`;
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -79,14 +82,22 @@ export async function geminiJson(prompt: string): Promise<string> {
 
 export type ChatTurn = { role: "user" | "model"; text: string };
 
-/** System-instructed conversational reply — the SMS assistant turn shape. */
+/**
+ * System-instructed conversational reply — the SMS assistant turn shape.
+ * `model` defaults to E2E_GEMINI_MODEL (the fleet's SMS_CHAT_MODEL default);
+ * pass an override to pin a scenario to the exact model a tenant runs.
+ */
 export async function geminiChatReply(
   systemInstruction: string,
-  turns: ChatTurn[]
+  turns: ChatTurn[],
+  model?: string
 ): Promise<string> {
-  return generateContent({
-    systemInstruction: { parts: [{ text: systemInstruction }] },
-    contents: turns.map((t) => ({ role: t.role, parts: [{ text: t.text }] })),
-    generationConfig: { temperature: 0 }
-  });
+  return generateContent(
+    {
+      systemInstruction: { parts: [{ text: systemInstruction }] },
+      contents: turns.map((t) => ({ role: t.role, parts: [{ text: t.text }] })),
+      generationConfig: { temperature: 0 }
+    },
+    model
+  );
 }

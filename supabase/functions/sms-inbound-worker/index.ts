@@ -39,7 +39,10 @@ import {
   REASONING_PROMPT_INSTRUCTION,
   splitReplyReasoning
 } from "../_shared/reply_reasoning.ts";
-import { loadFlowRunContext } from "../_shared/ai_flows/run_context.ts";
+import {
+  formatFlowAnswerNote,
+  loadFlowRunContextDetailed
+} from "../_shared/ai_flows/run_context.ts";
 import { loadRecentSmsTranscript } from "../_shared/sms_transcript.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
 import {
@@ -866,6 +869,9 @@ serve(async (req: Request) => {
     const dateLine = currentDateTimeLine(new Date(), businessTimezone);
 
     let customerPreamble: string;
+    // Set only on customer turns where an automation just texted this
+    // contact and no Rowboat thread exists yet (see the block below).
+    let flowAnswerNote: string | null = null;
     if (isStaff) {
       // Internal-assistant mode (mirrors the voice staff persona): the texter
       // is the owner or a team member, so help them like a colleague and skip
@@ -913,7 +919,23 @@ serve(async (req: Request) => {
       // showed the post-flow turn asking a lead for their phone number —
       // over SMS (Truly Insurance, 2026-07-11). Best-effort: null on any
       // failure, and the reply proceeds with plain memory context.
-      const flowContext = await loadFlowRunContext(supabase, job.business_id, fromE164);
+      const flowDetail = await loadFlowRunContextDetailed(supabase, job.business_id, fromE164);
+      const flowContext = flowDetail.block;
+      // Fresh-thread anchor: on a conversation Rowboat hasn't rooted yet, a
+      // small model can ignore the system-preamble automation context — the
+      // 2026-07-14 Truly turn answered a bare "July 23, 2026" with "I need
+      // more context" while the renewal question sat in its system prompt.
+      // Anchoring the LAST automated message adjacent to the user turn
+      // (inside the user message, see sms_rowboat.ts) fixes that reliably,
+      // so it is applied whenever a flow recently texted this contact and
+      // no continuation exists. Continued threads skip it: Rowboat already
+      // replays the real history there.
+      const lastFlowMessage =
+        flowDetail.recentMessages[flowDetail.recentMessages.length - 1] ?? "";
+      flowAnswerNote =
+        !thread?.rowboat_conversation_id?.trim() && lastFlowMessage
+          ? formatFlowAnswerNote(lastFlowMessage)
+          : null;
       // The texter's E.164 is ALWAYS stated, even on first contact with no
       // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
       // caller context, so the customer tools require an explicit `phone`
@@ -1058,6 +1080,10 @@ serve(async (req: Request) => {
           budgetMs: ROWBOAT_RETRY_BUDGET_MS,
           customerPreamble,
           statelessContextExtra,
+          // Fresh-thread anchor for a contact an automation just texted —
+          // the last automated message rides INSIDE the user turn so a
+          // small model can't miss it (2026-07-14 Truly incident).
+          userTurnNote: flowAnswerNote,
           // A 5xx is usually a transient upstream (Gemini) outage, not a
           // stale continuation — early attempts surface it to the job-level
           // retry, which re-runs STATEFUL with the thread intact. Only after
@@ -1107,6 +1133,29 @@ serve(async (req: Request) => {
               bearer: serviceKey
             });
           }
+        } else if (!isStaff) {
+          // The trailer instruction is in EVERY customer preamble, so its
+          // absence means the model disregarded the system prompt this turn
+          // — the loudest early signal of a context-blind reply (the
+          // 2026-07-14 Truly incident turn had exactly this signature and
+          // it went unnoticed). Best-effort telemetry + warn log so a
+          // dashboard/alert can watch the rate; never touches the reply.
+          await telemetryRecord(supabase, "sms_reply_reasoning_missing", {
+            job_id: job.id,
+            business_id: job.business_id,
+            model: turnPlan.stateless ? "local" : "gemini",
+            fresh_thread: !existingConv
+          });
+          await systemLog(supabase, {
+            businessId: job.business_id,
+            source: "sms_worker",
+            level: "warn",
+            event: "sms_reply_reasoning_missing",
+            message:
+              "AI reply arrived without the reasoning trailer — the model likely " +
+              "ignored the system preamble this turn (context-blind reply risk)",
+            payload: { job_id: job.id, reply_preview: reply.slice(0, 200) }
+          });
         }
 
         if (cap.overCap) {

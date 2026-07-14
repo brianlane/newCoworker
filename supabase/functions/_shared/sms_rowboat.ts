@@ -112,6 +112,15 @@ export type RowboatChatCallInput = {
    * dropping the continuation when it needs the override honored.
    */
   startAgent?: string | null;
+  /**
+   * Optional note prepended INSIDE the user message, above the `[SMS]` line
+   * (never a separate system message). Production showed the SMS model
+   * ignoring system-preamble context on a fresh thread while honoring the
+   * same fact when adjacent to the user turn (Truly "July 23, 2026",
+   * 2026-07-14) — the worker passes formatFlowAnswerNote output here when an
+   * automation just texted this contact and no conversation exists yet.
+   */
+  userTurnNote?: string | null;
 };
 
 export type StatelessFallbackInput = RowboatChatCallInput & {
@@ -236,7 +245,11 @@ export async function callRowboatChatOnce(
   if (preamble) {
     messages.push({ role: "system", content: preamble });
   }
-  messages.push({ role: "user", content: `[SMS] ${input.userText}` });
+  const note = input.userTurnNote?.trim();
+  messages.push({
+    role: "user",
+    content: note ? `${note}\n\n[SMS] ${input.userText}` : `[SMS] ${input.userText}`
+  });
 
   const chatBody: Record<string, unknown> = { messages, stream: false };
   const startAgent = input.startAgent?.trim();

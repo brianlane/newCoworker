@@ -35,6 +35,9 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-3-flash": { in: 0.5, out: 3.0 },
   "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
+  // SMS Coworker default since the 2026-07-14 Truly context-blindness
+  // incident (GA May 2026; $0.25/$1.50 Google list).
+  "gemini-3.1-flash-lite": { in: 0.25, out: 1.5 },
   "gemini-3.1-flash": { in: 0.5, out: 3.0 },
   "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 }
 };
