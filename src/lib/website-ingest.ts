@@ -64,7 +64,13 @@ export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 150_000;
  * share instead of letting one bloated page crowd out the rest.
  */
 export const WEBSITE_INGEST_MAX_CHARS_PER_PAGE = 8_000;
-/** Below this many combined extracted chars the crawl is considered to have found nothing usable. */
+/**
+ * Low-signal floor: unless at least ONE crawled page carries this many
+ * extracted chars, the crawl found nothing usable. Judged per-page (not on
+ * the summed corpus) because a deep crawl of a JS-rendered SPA can stack
+ * many shell pages whose only text is each page's <title> — the sum would
+ * sneak past a corpus-wide floor and produce a titles-only garbage summary.
+ */
 export const WEBSITE_INGEST_MIN_CORPUS_CHARS = 200;
 /** Parallel page fetches per crawl wave. */
 export const WEBSITE_INGEST_CRAWL_CONCURRENCY = 4;
@@ -1012,10 +1018,15 @@ export async function ingestWebsite(
   const crawlDeadlineAt = Date.now() + (options.crawlDeadlineMs ?? WEBSITE_INGEST_CRAWL_DEADLINE_MS);
   const maxTotalBytes = options.maxTotalBytes ?? WEBSITE_INGEST_MAX_TOTAL_BYTES;
   const queue: string[] = [];
+  // The crawl budget counts fetch ATTEMPTS (every URL dequeued), not just
+  // pages that yielded text. Budgeting on `pages.length` would let a site of
+  // textless pages (or one that link-expands faster than it produces text)
+  // keep fetching far past maxPages until the deadline/byte budget tripped.
+  let attempted = 0;
 
-  /** Queue a candidate URL unless it's already seen or the crawl is full. */
+  /** Queue a candidate URL unless it's already seen or the fetch budget is spoken for. */
   const enqueue = (url: string) => {
-    if (queue.length + pages.length >= maxPages) return;
+    if (queue.length + attempted >= maxPages) return;
     if (visited.has(url) || queue.includes(url)) return;
     queue.push(url);
   };
@@ -1079,6 +1090,7 @@ export async function ingestWebsite(
   // sitemap URLs so shallow crawls keep their original "homepage + linked
   // pages" semantics.
   visited.add(normalized);
+  attempted += 1;
   const homepage = await crawlPage(normalized);
   if (homepage) {
     if (homepage.text.trim()) pages.push({ url: homepage.url, text: homepage.text });
@@ -1098,13 +1110,14 @@ export async function ingestWebsite(
 
   while (
     queue.length > 0 &&
-    pages.length < maxPages &&
+    attempted < maxPages &&
     Date.now() < crawlDeadlineAt &&
     bytesDownloaded < maxTotalBytes
   ) {
-    // Batch size is capped at the remaining page budget, so a wave can never
-    // overshoot maxPages even when every fetch in it succeeds.
-    const batch = queue.splice(0, Math.min(WEBSITE_INGEST_CRAWL_CONCURRENCY, maxPages - pages.length));
+    // Batch size is capped at the remaining fetch budget, so a wave can never
+    // push total attempts past maxPages even when every fetch in it succeeds.
+    const batch = queue.splice(0, Math.min(WEBSITE_INGEST_CRAWL_CONCURRENCY, maxPages - attempted));
+    attempted += batch.length;
     for (const url of batch) visited.add(url);
     const results = await Promise.all(batch.map((url) => crawlPage(url)));
     for (const result of results) {
@@ -1119,8 +1132,12 @@ export async function ingestWebsite(
     }
   }
 
-  const corpusChars = pages.reduce((total, page) => total + page.text.length, 0);
-  if (corpusChars < WEBSITE_INGEST_MIN_CORPUS_CHARS && options.readerFallback) {
+  // Judge signal on the RICHEST single page, not the summed corpus: a deep
+  // crawl of a JS-rendered SPA yields many shell pages whose only text is
+  // each page's <title>; enough of them sum past any corpus-wide floor while
+  // still carrying zero real content.
+  const richestPageChars = pages.reduce((max, page) => Math.max(max, page.text.length), 0);
+  if (richestPageChars < WEBSITE_INGEST_MIN_CORPUS_CHARS && options.readerFallback) {
     // The direct crawl recovered nothing usable. Either every fetch failed
     // (almost always Cloudflare or a similar WAF returning a 403
     // JS-challenge to our non-browser fetch), or the pages "succeeded" but
@@ -1179,12 +1196,11 @@ export async function ingestWebsite(
       : { ok: false, error: "fetch_failed" };
   }
 
-  // Gate on EXTRACTED text, not the assembled corpus: the `### <url>` page
-  // headers count toward the corpus length, so a multi-page crawl of SPA
-  // shells (4 pages × 41-char <title> + 4 URL headers) would sneak past a
-  // corpus-length check and "succeed" with a summary built from page titles.
-  const finalCorpusChars = pages.reduce((total, page) => total + page.text.length, 0);
-  if (finalCorpusChars < WEBSITE_INGEST_MIN_CORPUS_CHARS) {
+  // Same per-page gate on the final result: without it, a titles-only crawl
+  // would "succeed" with a garbage summary whenever the reader fallback is
+  // unavailable (disabled, down, or itself blocked).
+  const finalRichestPageChars = pages.reduce((max, page) => Math.max(max, page.text.length), 0);
+  if (finalRichestPageChars < WEBSITE_INGEST_MIN_CORPUS_CHARS) {
     return { ok: false, error: "empty_content" };
   }
 

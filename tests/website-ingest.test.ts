@@ -1875,6 +1875,69 @@ describe("ingestWebsite", () => {
     if (!res.ok) expect(res.error).toBe("empty_content");
   });
 
+  it("treats a multi-page titles-only crawl as low-signal even when the titles sum past the floor", async () => {
+    // Bugbot finding: with a corpus-wide sum, a deep crawl over N SPA shell
+    // pages (each contributing only its ~50-char <title>) can add up past
+    // the 200-char floor and produce a titles-only garbage summary. Signal
+    // must be judged on the richest single page.
+    const shellFor = (label: string, links: string[] = []) =>
+      `<html><head><title>${label} | Long Marketing Title Words Here</title></head><body>${links
+        .map((l) => `<a href="${l}"></a>`)
+        .join("")}<div id="root"></div></body></html>`;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/") {
+        return new Response(shellFor("Home", ["/p1", "/p2", "/p3", "/p4", "/p5"]), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(shellFor(url.slice(-2)), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn();
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 10
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("empty_content");
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it("caps total fetch attempts at maxPages even when every page is textless (BFS can't run away)", async () => {
+    // Bugbot finding: budgeting on pages-with-text let a site of textless,
+    // link-rich pages keep fetching until the deadline/byte budget. Every
+    // dequeued URL must count against the maxPages budget.
+    let serial = 0;
+    const fetched: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      fetched.push(url);
+      // Each textless page links to two brand-new URLs — an infinite frontier.
+      const a = `/n${(serial += 1)}`;
+      const b = `/n${(serial += 1)}`;
+      return new Response(`<html><body><a href="${a}"></a><a href="${b}"></a></body></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      maxPages: 5
+    });
+    // Nothing readable anywhere → fetch_failed, and crucially only 5 fetches.
+    expect(res.ok).toBe(false);
+    expect(fetched).toHaveLength(5);
+  });
+
   it("does not call Jina when the crawl already produced a rich corpus", async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
