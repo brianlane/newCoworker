@@ -20,7 +20,7 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getBusinessAgent, insertAgentRun, patchAgentRun, getAgentRun } from "@/lib/agents/db";
+import { getBusinessAgent, insertAgentRun, patchAgentRun } from "@/lib/agents/db";
 import { executeAgentRun } from "@/lib/agents/run";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
@@ -266,8 +266,11 @@ export async function POST(request: Request, context: RouteContext) {
       }
     }
 
-    const finalRun = (await getAgentRun(businessId, runId)) ?? run;
-    return successResponse({ run: finalRun });
+    // Respond with the terminal state we just wrote — deterministic even if
+    // a concurrent agent delete cascaded the row away mid-request (a re-read
+    // could return null, and the pre-patch insert snapshot still says
+    // 'running' with no artifact).
+    return successResponse({ run: { ...run, ...terminalPatch } });
   } catch (err) {
     return handleRouteError(err);
   }
