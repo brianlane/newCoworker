@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# e2e-gate.sh — hold the live-AI e2e job until EVERY other signal on the PR
-# is green, then let the (paid) model calls run.
+# e2e-gate.sh — hold a gated job (the Vercel preview deploy, the live-AI e2e
+# suite) until EVERY other signal on the PR is green, then let it run.
 #
 # Why this exists: `needs:` can only gate on jobs in the same workflow file,
 # but the repo's merge bar spans other workflows (CodeQL's Analyze, audit)
@@ -16,23 +16,29 @@
 #     SUCCESS on its own, no new commit needed — re-run this job).
 #   - every commit status context must be "success" (GitGuardian/Vercel
 #     report here on some plans; harmless overlap if they use check runs).
-#   - zero unresolved review threads.
+#   - zero unresolved review threads. Unlike a pending check, a thread can
+#     never resolve itself — someone has to fix the finding — so this fails
+#     IMMEDIATELY instead of polling out the whole timeout on a wait that
+#     cannot succeed. Resolve the threads, then re-run this job.
 #
-# Hard failures (failure / cancelled / timed_out / action_required / error)
-# exit immediately; pending or neutral states poll until GATE_TIMEOUT_MINS,
-# then fail with a summary — "Re-run failed jobs" picks the gate back up
-# after a human resolves whatever it was waiting on.
+# Hard failures (failure / cancelled / timed_out / action_required / error /
+# unresolved threads) exit immediately; pending or neutral states poll until
+# GATE_TIMEOUT_MINS, then fail with a summary — "Re-run failed jobs" picks
+# the gate back up after a human resolves whatever it was waiting on.
 #
 # Expected env: GH_TOKEN, REPO ("owner/name"), SHA, PR (number).
 set -euo pipefail
 
-# The gate must never wait on itself, and the dependabot automation jobs
+# The gate must never wait on any job that is ITSELF behind this gate:
+# "Vercel Deploy" runs the gate before deploying and "E2E (live AI +
+# AiFlows)" `needs` the deploy, so including either would deadlock the
+# deploy's gate against the queued e2e check. The dependabot automation jobs
 # (labeler + auto-merge evaluator) skip BY DESIGN on non-dependabot PRs —
 # their "skipped" check runs are plumbing, not merge signals. auto-merge in
 # particular lands mid-run (workflow_run after CI/CodeQL/Dependency Audit
 # complete), so without the exclusion it would hard-fail every human PR's
 # gate and every re-run.
-EXCLUDED_CHECKS='["E2E (live AI + AiFlows)", "label-dependabot", "auto-merge"]'
+EXCLUDED_CHECKS='["E2E (live AI + AiFlows)", "Vercel Deploy", "label-dependabot", "auto-merge"]'
 
 GATE_TIMEOUT_MINS="${GATE_TIMEOUT_MINS:-20}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
@@ -86,6 +92,9 @@ while true; do
   # --- Review threads: every conversation resolved (merge-policy item 2) ---
   # Cursor-paginated: a PR can carry more than one page of threads, and an
   # unresolved thread beyond page one must still hold the gate.
+  # Fails FAST: threads only resolve through human/agent action (fix the
+  # finding, mark it resolved), which in practice takes longer than the gate
+  # timeout — polling would just burn runner minutes before failing anyway.
   owner="${REPO%%/*}"
   name="${REPO##*/}"
   unresolved=$(gh api graphql --paginate \
@@ -101,10 +110,13 @@ while true; do
       }
     }' -q '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved | not)] | length' \
     | jq -s 'add // 0')
-  [ "$unresolved" -gt 0 ] && blockers+="unresolved review threads: ${unresolved}"$'\n'
+  if [ "$unresolved" -gt 0 ]; then
+    echo "::error::e2e gate: ${unresolved} unresolved review thread(s) — fix/resolve them, then re-run this job (threads cannot self-resolve, so polling would not help)."
+    exit 1
+  fi
 
   if [ -z "$blockers" ]; then
-    echo "e2e gate: every other check is green and all threads are resolved — running live suite."
+    echo "e2e gate: every other check is green and all threads are resolved — gate open."
     exit 0
   fi
 

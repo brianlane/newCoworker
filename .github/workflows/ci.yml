@@ -241,21 +241,45 @@ jobs:
   # pushes to main deploy production. Remote build (`vercel deploy` without
   # --prebuilt) keeps build env/behavior identical to the old git-triggered
   # builds. The e2e job `needs` this, so the chain is:
-  # checks → deploy → live e2e against a commit that actually deploys.
+  # checks → gate → deploy → live e2e against a commit that actually deploys.
+  #
+  # PR deploys run the same e2e-gate as the e2e job first: no preview deploy
+  # while Bugbot is NEUTRAL, any cross-workflow check is red, or a review
+  # thread is unresolved. Unresolved threads fail the gate immediately —
+  # resolve them, then re-run this job (e2e re-runs with it via `needs`).
+  # worker-integration is in `needs` (not just the e2e job's) so the gate
+  # never has to poll for it — its 25m ceiling would outlast the gate's 20m
+  # timeout and fail the deploy on a job that was about to pass. With every
+  # same-workflow job covered by `needs`, the gate poll only ever covers
+  # cross-workflow checks (CodeQL, audit) and apps (Bugbot, GitGuardian).
+  # The 30m budget = gate poll (≤20m) + the deploy itself.
   vercel-deploy:
     name: Vercel Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
-    needs: [quality, typecheck, test, deno-check, security]
+    timeout-minutes: 30
+    needs: [quality, typecheck, test, deno-check, security, worker-integration]
     permissions:
       contents: read
       pull-requests: write
+      checks: read
+      statuses: read
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      # Push events (post-merge main) skip the PR-shaped gate: Bugbot and
+      # review threads exist on the PR, which already enforced this pre-merge.
+      - name: Wait for every other check to pass and all threads to resolve
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          PR: ${{ github.event.pull_request.number }}
+        run: bash .github/scripts/e2e-gate.sh
 
       - name: Deploy to Vercel
         id: deploy
@@ -312,7 +336,9 @@ jobs:
   #      cross-workflow (Analyze/CodeQL/audit) and app-reported (Cursor
   #      Bugbot, GitGuardian) — is literally SUCCESS (a NEUTRAL Bugbot
   #      means open findings and keeps the gate closed) AND every review
-  #      thread is resolved. See .github/scripts/e2e-gate.sh.
+  #      thread is resolved. Unresolved threads fail the gate IMMEDIATELY
+  #      (they can't self-resolve; re-run the job after resolving them).
+  #      See .github/scripts/e2e-gate.sh.
   # Superseded pushes are cancelled by the workflow-level concurrency group.
   e2e:
     name: E2E (live AI + AiFlows)
