@@ -39,8 +39,9 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   "gemini-2.5-flash": { in: 0.3, out: 2.5 },
   "gemini-3-flash": { in: 0.5, out: 3.0 },
   "gemini-3-flash-preview": { in: 0.5, out: 3.0 },
-  // SMS Coworker default since the 2026-07-14 Truly context-blindness
-  // incident (GA May 2026; $0.25/$1.50 Google list).
+  // GA May 2026, $0.25/$1.50 Google list. Priced ahead of use: 3.x models
+  // are blocked on the SMS path until Rowboat's AI SDK round-trips
+  // thought_signature on tool calls (see deploy-client.sh SMS_CHAT_MODEL).
   "gemini-3.1-flash-lite": { in: 0.25, out: 1.5 },
   // Voice `voice_task` model (Rowboat text turns through the llm-router). Now
   // metered into the shared AI budget like every other gemini-* text call.
