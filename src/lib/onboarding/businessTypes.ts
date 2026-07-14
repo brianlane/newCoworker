@@ -116,5 +116,74 @@ export const DEFAULT_BUSINESS_TYPE: BusinessType = "real_estate";
 
 export const BUSINESS_TYPE_OPTIONS = Object.entries(BUSINESS_TYPE_LABELS).map(([value, label]) => ({
   value: value as BusinessType,
-  label
+  label:
+    // The bare label "Other" undersells that picking it reveals a text
+    // input; mirror CRM_OPTIONS' phrasing so users know they can type
+    // their own industry.
+    value === "other" ? "Other (I'll type it in)" : label
 }));
+
+export const BUSINESS_TYPE_OTHER_VALUE: BusinessType = "other";
+
+/**
+ * Render the stored business-type string as a (selection, free-text)
+ * pair the form UI can display. Round-trips with
+ * `serializeBusinessTypeSelection`. Mirrors `deriveCrmSelection` in
+ * `intakeOptions.ts`, except custom values are stored RAW (no
+ * "Other: " prefix) so downstream consumers (`identity.md`,
+ * `businessTypeLabel`) render the user's own words directly.
+ *
+ *   ""                  → { selection: "",           otherText: "" }
+ *   "consulting"        → { selection: "consulting", otherText: "" }
+ *   "other"             → { selection: "other",      otherText: "" }
+ *   "Drone Photography" → { selection: "other",      otherText: "Drone Photography" }
+ *
+ * The bare `"other"` value doubles as the in-flight sentinel: it keeps
+ * the dropdown in its Other state (revealing the text input) while the
+ * user hasn't typed anything yet, and is recognized by
+ * `isBusinessTypeSelectionComplete` as an incomplete answer.
+ */
+export function deriveBusinessTypeSelection(stored: string | undefined | null): {
+  selection: string;
+  otherText: string;
+} {
+  const value = (stored ?? "").trim();
+  if (!value) return { selection: "", otherText: "" };
+  if (value === BUSINESS_TYPE_OTHER_VALUE) {
+    return { selection: BUSINESS_TYPE_OTHER_VALUE, otherText: "" };
+  }
+  if (value in BUSINESS_TYPE_LABELS) return { selection: value, otherText: "" };
+  // Unknown free-text value (custom industry, legacy draft, etc.) →
+  // bucket as Other so the user sees and can edit what they entered.
+  return { selection: BUSINESS_TYPE_OTHER_VALUE, otherText: value };
+}
+
+/**
+ * Inverse of `deriveBusinessTypeSelection`. Other with empty text
+ * serializes to the bare `"other"` slug (rather than `""`) so the
+ * dropdown can re-render in its Other state and keep the custom-text
+ * input visible. Use `isBusinessTypeSelectionComplete` (not a raw
+ * truthiness check) for advance-gate validation, since `"other"` is
+ * intentionally truthy-but-incomplete.
+ */
+export function serializeBusinessTypeSelection(selection: string, otherText: string): string {
+  if (!selection) return "";
+  if (selection === BUSINESS_TYPE_OTHER_VALUE) {
+    const trimmed = otherText.trim();
+    return trimmed || BUSINESS_TYPE_OTHER_VALUE;
+  }
+  return selection;
+}
+
+/**
+ * True when the stored business-type value represents a completed
+ * answer: any known slug (except bare `"other"`) or any non-empty
+ * custom text. Empty string and the in-flight bare `"other"` block
+ * Step 1 advance.
+ */
+export function isBusinessTypeSelectionComplete(stored: string | undefined | null): boolean {
+  const value = (stored ?? "").trim();
+  if (!value) return false;
+  if (value === BUSINESS_TYPE_OTHER_VALUE) return false;
+  return true;
+}

@@ -21,7 +21,6 @@ import {
   parseBusinessHours,
   type BusinessHours
 } from "@/lib/business-profile/profile";
-import { BUSINESS_TYPE_LABELS } from "@/lib/onboarding/businessTypes";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 
 const timeSchema = z
@@ -32,12 +31,11 @@ const daySchema = z.union([z.null(), z.object({ open: timeSchema, close: timeSch
 
 const schema = z.object({
   address: z.string().trim().max(300, "Address is too long").optional(),
-  // "" clears the stored industry; anything else must be a known slug.
-  businessType: z
-    .string()
-    .trim()
-    .refine((v) => v === "" || v in BUSINESS_TYPE_LABELS, "Unknown industry")
-    .optional(),
+  // "" clears the stored industry. Any other value is accepted: a known
+  // slug from BUSINESS_TYPE_LABELS or a free-text custom industry (the
+  // onboarding "Other" flow stores the user's own words raw), capped so
+  // arbitrary payloads can't bloat the column / prompt.
+  businessType: z.string().trim().max(120, "Industry is too long").optional(),
   hours: z
     .object({
       mon: daySchema.optional(),

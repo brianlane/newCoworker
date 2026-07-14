@@ -21,7 +21,14 @@ import {
   createEmptyAssistantProfile,
   type OnboardingChatMessage
 } from "@/lib/onboarding/chat";
-import { BUSINESS_TYPE_OPTIONS, DEFAULT_BUSINESS_TYPE } from "@/lib/onboarding/businessTypes";
+import {
+  BUSINESS_TYPE_OPTIONS,
+  BUSINESS_TYPE_OTHER_VALUE,
+  DEFAULT_BUSINESS_TYPE,
+  deriveBusinessTypeSelection,
+  isBusinessTypeSelectionComplete,
+  serializeBusinessTypeSelection
+} from "@/lib/onboarding/businessTypes";
 import {
   CRM_OPTIONS,
   CRM_OTHER_VALUE,
@@ -858,15 +865,36 @@ function QuestionnaireForm() {
                 placeholder="Sunrise Realty"
                 required
               />
-              <RichSelect
-                label="Business Type"
-                value={form.businessType}
-                onChange={(nextValue) => update("businessType", nextValue)}
-                options={BUSINESS_TYPE_OPTIONS}
-                placeholder="Select your industry"
-                searchPlaceholder="Filter industries..."
-                noMatchesLabel="No industries match that search."
-              />
+              <div>
+                <RichSelect
+                  label="Business Type"
+                  value={deriveBusinessTypeSelection(form.businessType).selection}
+                  onChange={(nextValue) => {
+                    const { otherText } = deriveBusinessTypeSelection(form.businessType);
+                    update("businessType", serializeBusinessTypeSelection(nextValue, otherText));
+                  }}
+                  options={BUSINESS_TYPE_OPTIONS}
+                  placeholder="Select your industry"
+                  searchPlaceholder="Filter industries..."
+                  noMatchesLabel="No industries match that search."
+                />
+                {deriveBusinessTypeSelection(form.businessType).selection === BUSINESS_TYPE_OTHER_VALUE && (
+                  <div className="mt-4">
+                    <Input
+                      label="What kind of business?"
+                      value={deriveBusinessTypeSelection(form.businessType).otherText}
+                      onChange={(e) =>
+                        update(
+                          "businessType",
+                          serializeBusinessTypeSelection(BUSINESS_TYPE_OTHER_VALUE, e.target.value)
+                        )
+                      }
+                      placeholder="e.g. Drone Photography, Notary Services"
+                      required
+                    />
+                  </div>
+                )}
+              </div>
               <Input
                 label="Your Name"
                 value={form.ownerName}
@@ -1197,6 +1225,7 @@ function QuestionnaireForm() {
                     !signupEmail.trim() ||
                     !form.serviceArea.trim() ||
                     !form.teamSize ||
+                    !isBusinessTypeSelectionComplete(form.businessType) ||
                     !isCrmSelectionComplete(form.crmUsed))) ||
                 (step === 2 && !canContinueFromChat)
               }
