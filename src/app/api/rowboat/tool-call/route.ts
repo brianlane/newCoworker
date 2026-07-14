@@ -251,13 +251,6 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
       "the details and tell them a team member will sort it out."
     );
   }
-  if (detail === "reschedule_not_supported" || detail === "cancel_not_supported") {
-    return (
-      `This calendar can't be ${verb === "cancel" ? "canceled" : "changed"} directly from here. ` +
-      "Call notify_team with the requested change and tell them a team member will confirm it. " +
-      "Never book a duplicate appointment as a workaround."
-    );
-  }
   if (detail === "calendar_not_connected") {
     return (
       "No calendar is connected, so you cannot change or cancel any appointment. " +
