@@ -31,6 +31,10 @@ import {
   CALENDLY_DIRECT_KEY,
   type ResolvedVoiceConnection
 } from "@/lib/voice-tools/connections";
+// Country-code-tolerant phone comparison: our side holds E.164 ("+1548…")
+// while Calendly may store the invitee's number nationally ("548…") or vice
+// versa, so exact digit equality misses real matches (Bugbot on PR #584).
+import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
 
 /** Calendly rejects availability queries spanning more than 7 days. */
@@ -241,6 +245,199 @@ export async function findCalendlySlots(
 type SchedulingLinkBody = {
   resource?: { booking_url?: string };
 };
+
+// ── Appointment lifecycle (reschedule / cancel) ─────────────────────────────
+//
+// A Calendly "booking" is completed by the INVITEE on a Calendly page, so no
+// event id ever lands in our booking ledger — lifecycle operations locate the
+// scheduled event through Calendly's own API instead: list the user's active
+// upcoming events, then match an invitee by email or SMS-reminder number.
+//
+//   - cancel      → POST /scheduled_events/{uuid}/cancellation: a REAL
+//     cancellation; Calendly emails the invitee exactly one notice.
+//   - reschedule  → Calendly cannot move an event on the invitee's behalf
+//     (same constraint as booking). Every invitee carries a reschedule_url,
+//     so the core returns it with the distinct detail
+//     `reschedule_link_created` — the model sends the link and must never
+//     describe the reschedule as done (mirrors booking_link_created).
+
+/** Upcoming events scanned when matching the customer. */
+const LIFECYCLE_EVENT_SCAN = 20;
+
+
+type ScheduledEventsBody = {
+  collection?: Array<{ uri?: string; start_time?: string }>;
+};
+
+type InviteesBody = {
+  collection?: Array<{
+    email?: string;
+    text_reminder_number?: string;
+    reschedule_url?: string;
+    cancel_url?: string;
+    status?: string;
+  }>;
+};
+
+export type CalendlyLocatedEvent = {
+  /** Full event URI (https://api.calendly.com/scheduled_events/UUID). */
+  eventUri: string;
+  /** Bare UUID, used for the cancellation POST. */
+  eventUuid: string;
+  rescheduleUrl: string | null;
+};
+
+/**
+ * The customer's next upcoming active event, matched by invitee SMS number
+ * or email. When BOTH identities are supplied, a phone match is
+ * authoritative and wins over any email-only match on an earlier event: the
+ * phone is the surface-verified identity (the number that texted us), while
+ * the model-supplied email can be stale or shared — an OR across
+ * earliest-first events would let the wrong booking win (Bugbot on PR #584).
+ * Returns:
+ *   - `{ event }` on a match,
+ *   - `"not_connected"` when the transport refuses,
+ *   - `"not_found"` when no upcoming event has a matching active invitee.
+ */
+export async function findCalendlyScheduledEvent(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  attendee: { phone?: string | null; email?: string | null }
+): Promise<{ event: CalendlyLocatedEvent } | "not_connected" | "not_found"> {
+  const phoneDigits = attendee.phone?.trim() ? digitsOf(attendee.phone) : "";
+  const emailLc = attendee.email?.trim().toLowerCase() ?? "";
+  if (!phoneDigits && !emailLc) return "not_found";
+
+  const userUri = await resolveUserUri(businessId, conn);
+  if (!userUri) return "not_connected";
+
+  const eventsRes = await calendlyRequest(businessId, conn, {
+    endpoint: "/scheduled_events",
+    method: "GET",
+    params: {
+      user: userUri,
+      status: "active",
+      min_start_time: new Date().toISOString(),
+      sort: "start_time:asc",
+      count: String(LIFECYCLE_EVENT_SCAN)
+    }
+  });
+  if (!eventsRes) return "not_connected";
+
+  const events = ((eventsRes.data as ScheduledEventsBody)?.collection ?? []).filter(
+    (e): e is { uri: string } => typeof e?.uri === "string" && e.uri.length > 0
+  );
+  const toLocated = (
+    event: { uri: string },
+    eventUuid: string,
+    match: { reschedule_url?: string }
+  ): CalendlyLocatedEvent => ({
+    eventUri: event.uri,
+    eventUuid,
+    rescheduleUrl:
+      typeof match.reschedule_url === "string" && match.reschedule_url.length > 0
+        ? match.reschedule_url
+        : null
+  });
+
+  // Earliest event with an email-only match — used ONLY if no event in the
+  // whole scan matches the phone.
+  let emailFallback: CalendlyLocatedEvent | null = null;
+
+  for (const event of events) {
+    const eventUuid = event.uri.slice(event.uri.lastIndexOf("/") + 1);
+    if (!eventUuid) continue;
+    const inviteesRes = await calendlyRequest(businessId, conn, {
+      endpoint: `/scheduled_events/${encodeURIComponent(eventUuid)}/invitees`,
+      method: "GET",
+      params: { count: "10" }
+    });
+    if (!inviteesRes) return "not_connected";
+    const invitees = ((inviteesRes.data as InviteesBody)?.collection ?? []).filter(
+      (i) => i?.status !== "canceled"
+    );
+
+    const phoneMatch =
+      phoneDigits.length > 0
+        ? invitees.find((i) => {
+            const inviteePhone =
+              typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
+            return inviteePhone.length > 0 && phoneDigitsMatch(inviteePhone, phoneDigits);
+          })
+        : undefined;
+    if (phoneMatch) return { event: toLocated(event, eventUuid, phoneMatch) };
+
+    if (!emailFallback && emailLc.length > 0) {
+      const emailMatch = invitees.find(
+        (i) => typeof i.email === "string" && i.email.toLowerCase() === emailLc
+      );
+      if (emailMatch) emailFallback = toLocated(event, eventUuid, emailMatch);
+    }
+  }
+  return emailFallback ? { event: emailFallback } : "not_found";
+}
+
+/**
+ * `calendar_cancel_appointment` core for Calendly connections: a real
+ * API-side cancellation — Calendly emails the invitee ONE notice.
+ */
+export async function cancelCalendlyAppointment(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  attendee: { phone?: string | null; email?: string | null }
+): Promise<CalendarToolResult> {
+  const located = await findCalendlyScheduledEvent(businessId, conn, attendee);
+  if (located === "not_connected") return { ok: false, detail: "calendar_not_connected" };
+  if (located === "not_found") return { ok: false, detail: "booking_not_found" };
+
+  const res = await calendlyRequest(businessId, conn, {
+    endpoint: `/scheduled_events/${encodeURIComponent(located.event.eventUuid)}/cancellation`,
+    method: "POST",
+    data: { reason: "Canceled at the customer's request via the business's assistant." }
+  });
+  // The locate steps succeeded moments ago, so an unusable response here is
+  // a failed MUTATION on a connected account — reporting it as a missing
+  // calendar would steer the model to "you cannot cancel any appointment"
+  // (Bugbot on PR #584; same rationale as the Graph mutations on PR #577).
+  if (!res) return { ok: false, detail: "calendar_cancel_failed" };
+
+  return {
+    ok: true,
+    data: { eventId: located.event.eventUuid, provider: "calendly", canceled: true }
+  };
+}
+
+/**
+ * `calendar_reschedule_appointment` core for Calendly connections: returns
+ * the invitee's own reschedule link (detail `reschedule_link_created`) —
+ * Calendly cannot move an event on the invitee's behalf, so the customer
+ * picks the new time themselves and the SAME event is updated by Calendly.
+ */
+export async function createCalendlyRescheduleLink(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  attendee: { phone?: string | null; email?: string | null }
+): Promise<CalendarToolResult> {
+  const located = await findCalendlyScheduledEvent(businessId, conn, attendee);
+  if (located === "not_connected") return { ok: false, detail: "calendar_not_connected" };
+  if (located === "not_found") return { ok: false, detail: "booking_not_found" };
+  if (!located.event.rescheduleUrl) {
+    // An active invitee without a reschedule_url is unexpected; treat it as
+    // a failed reschedule so the model escalates instead of inventing links.
+    return { ok: false, detail: "calendar_reschedule_failed" };
+  }
+
+  return {
+    ok: true,
+    detail: "reschedule_link_created",
+    data: {
+      eventId: located.event.eventUuid,
+      provider: "calendly",
+      rescheduleLink: located.event.rescheduleUrl,
+      rescheduled: false
+    }
+  };
+}
 
 /**
  * `calendar_book_appointment` core for Calendly connections. Creates a

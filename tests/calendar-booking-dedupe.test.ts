@@ -13,6 +13,7 @@ import {
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
+  findUpcomingBookingClaimByPhone,
   recordExternalBookingClaim,
   releaseBookingDedupe,
   rescheduleBookingClaim
@@ -46,7 +47,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["insert", "select", "update", "delete", "eq", "neq", "is", "not", "gte", "order", "limit"]) {
+    for (const m of ["insert", "select", "update", "delete", "eq", "neq", "is", "not", "gte", "like", "order", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -296,6 +297,60 @@ describe("findUpcomingBookingClaim (reschedule/cancel event resolution)", () => 
 
     vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
     expect(await findUpcomingBookingClaim(BIZ, KEY)).toBeNull();
+  });
+});
+
+describe("findUpcomingBookingClaimByPhone (format-tolerant fallback)", () => {
+  const ROWS = [
+    // Someone else's booking — must be skipped, not matched.
+    {
+      id: "row-other",
+      event_id: "evt-other",
+      start_at: "2026-07-14T18:00:00Z",
+      attendee_key: "phone:+15550001111"
+    },
+    // Degenerate key (no digits after the prefix) — skipped.
+    { id: "row-bare", event_id: "evt-bare", start_at: "2026-07-14T19:00:00Z", attendee_key: "phone:" },
+    // The caller's booking, stored E.164 at booking time.
+    {
+      id: "row-mine",
+      event_id: "evt-mine",
+      start_at: "2026-07-14T20:00:00Z",
+      attendee_key: "phone:+15485773546"
+    }
+  ];
+
+  it("matches a differently formatted phone against the stored key and returns the ROW's key", async () => {
+    const calls = scriptClient([{ data: ROWS, error: null }]);
+    // National pretty-printed form vs the stored E.164 — still a match.
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "(548) 577-3546")).toEqual({
+      id: "row-mine",
+      eventId: "evt-mine",
+      startAt: "2026-07-14T20:00:00Z",
+      attendeeKey: "phone:+15485773546"
+    });
+    const like = calls.find((c) => c.name === "like");
+    expect(like?.args).toEqual(["attendee_key", "phone:%"]);
+  });
+
+  it("null when no digits, no rows match, or the read fails", async () => {
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "ext. abc")).toBeNull();
+
+    scriptClient([{ data: ROWS, error: null }]);
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "+16668884444")).toBeNull();
+
+    scriptClient([{ data: null, error: { message: "boom" } }]);
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "+15485773546")).toBeNull();
+
+    scriptClient([{ data: null, error: null }]);
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "+15485773546")).toBeNull();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "+15485773546")).toBeNull();
+    expect(logger.warn).toHaveBeenCalled();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
+    expect(await findUpcomingBookingClaimByPhone(BIZ, "+15485773546")).toBeNull();
   });
 });
 

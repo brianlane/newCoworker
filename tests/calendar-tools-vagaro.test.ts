@@ -20,20 +20,26 @@ vi.mock("@/lib/vagaro/client", () => {
     VagaroApiError,
     listVagaroServices: vi.fn(),
     searchVagaroAvailability: vi.fn(),
-    createVagaroAppointment: vi.fn()
+    createVagaroAppointment: vi.fn(),
+    updateVagaroAppointmentTime: vi.fn(),
+    deleteVagaroAppointment: vi.fn()
   };
 });
 
 import {
   bookVagaroAppointment,
+  cancelVagaroAppointment,
   findVagaroSlots,
+  rescheduleVagaroAppointment,
   resolveVagaroService
 } from "@/lib/calendar-tools/vagaro";
 import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
 import {
   createVagaroAppointment,
+  deleteVagaroAppointment,
   listVagaroServices,
   searchVagaroAvailability,
+  updateVagaroAppointmentTime,
   VagaroApiError
 } from "@/lib/vagaro/client";
 
@@ -325,5 +331,98 @@ describe("bookVagaroAppointment", () => {
 
     vi.mocked(createVagaroAppointment).mockRejectedValueOnce(new Error("network"));
     await expect(bookVagaroAppointment(BIZ, BOOK_ARGS)).rejects.toThrow(/network/);
+  });
+});
+
+describe("rescheduleVagaroAppointment", () => {
+  it("is calendar_not_connected without an active connection", async () => {
+    vi.mocked(getActiveVagaroConnection).mockResolvedValue(null);
+    expect(
+      await rescheduleVagaroAppointment(
+        BIZ,
+        "appt-1",
+        "2026-06-13T15:00:00.000Z",
+        "2026-06-13T15:30:00.000Z"
+      )
+    ).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(updateVagaroAppointmentTime).not.toHaveBeenCalled();
+  });
+
+  it("moves the appointment in place, normalizing times to ISO instants", async () => {
+    const result = await rescheduleVagaroAppointment(
+      BIZ,
+      "appt-1",
+      // Offset form: the core must normalize to the UTC instant.
+      "2026-06-13T08:00:00-07:00",
+      "2026-06-13T08:30:00-07:00"
+    );
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        eventId: "appt-1",
+        provider: "vagaro",
+        startIso: "2026-06-13T15:00:00.000Z",
+        endIso: "2026-06-13T15:30:00.000Z",
+        rescheduled: true
+      }
+    });
+    expect(updateVagaroAppointmentTime).toHaveBeenCalledWith(
+      CONN,
+      "appt-1",
+      "2026-06-13T15:00:00.000Z",
+      "2026-06-13T15:30:00.000Z"
+    );
+  });
+
+  it("maps credential rejections to vagaro_auth_failed and rethrows other errors", async () => {
+    vi.mocked(updateVagaroAppointmentTime).mockRejectedValueOnce(apiError("auth_failed", "401"));
+    expect(
+      await rescheduleVagaroAppointment(
+        BIZ,
+        "appt-1",
+        "2026-06-13T15:00:00.000Z",
+        "2026-06-13T15:30:00.000Z"
+      )
+    ).toEqual({ ok: false, detail: "vagaro_auth_failed" });
+
+    vi.mocked(updateVagaroAppointmentTime).mockRejectedValueOnce(new Error("network"));
+    await expect(
+      rescheduleVagaroAppointment(
+        BIZ,
+        "appt-1",
+        "2026-06-13T15:00:00.000Z",
+        "2026-06-13T15:30:00.000Z"
+      )
+    ).rejects.toThrow(/network/);
+  });
+});
+
+describe("cancelVagaroAppointment", () => {
+  it("is calendar_not_connected without an active connection", async () => {
+    vi.mocked(getActiveVagaroConnection).mockResolvedValue(null);
+    expect(await cancelVagaroAppointment(BIZ, "appt-1")).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+    expect(deleteVagaroAppointment).not.toHaveBeenCalled();
+  });
+
+  it("deletes the appointment on the merchant's book", async () => {
+    expect(await cancelVagaroAppointment(BIZ, "appt-1")).toEqual({
+      ok: true,
+      data: { eventId: "appt-1", provider: "vagaro", canceled: true }
+    });
+    expect(deleteVagaroAppointment).toHaveBeenCalledWith(CONN, "appt-1");
+  });
+
+  it("maps credential rejections to vagaro_auth_failed and rethrows other errors", async () => {
+    vi.mocked(deleteVagaroAppointment).mockRejectedValueOnce(apiError("auth_failed", "401"));
+    expect(await cancelVagaroAppointment(BIZ, "appt-1")).toEqual({
+      ok: false,
+      detail: "vagaro_auth_failed"
+    });
+
+    vi.mocked(deleteVagaroAppointment).mockRejectedValueOnce(new Error("network"));
+    await expect(cancelVagaroAppointment(BIZ, "appt-1")).rejects.toThrow(/network/);
   });
 });

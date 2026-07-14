@@ -264,6 +264,14 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
       "Call notify_team with the request and tell them a team member will handle it."
     );
   }
+  if (detail === "vagaro_auth_failed") {
+    return (
+      `The Vagaro connection was rejected, so the appointment was NOT ${verb === "cancel" ? "canceled" : "changed"}. ` +
+      "Call notify_team so the owner can reconnect Vagaro, and tell the customer a team " +
+      `member will handle the ${verb === "cancel" ? "cancellation" : "change"}. Never book a ` +
+      "duplicate appointment as a workaround."
+    );
+  }
   if (detail === "calendar_reschedule_failed" || detail === "calendar_cancel_failed") {
     return (
       `The ${verb} did not go through — never blame a technical error and never book a ` +
@@ -536,6 +544,18 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!rescheduled.ok && rescheduled.detail) {
         const message = lifecycleFailureGuidance(rescheduled.detail, "reschedule");
         if (message) return { ...rescheduled, message };
+      }
+      // Calendly cannot move an event on the invitee's behalf: the tool
+      // returns the invitee's own reschedule link. Without this steering the
+      // model would confirm a new time that does not exist yet.
+      if (rescheduled.ok && rescheduled.detail === "reschedule_link_created") {
+        return {
+          ...rescheduled,
+          message:
+            "The appointment has NOT been moved yet. Send the customer the rescheduleLink " +
+            "so they pick the new time themselves — the SAME appointment gets updated when " +
+            "they finish. Never state the reschedule is done or confirm a new time."
+        };
       }
       return rescheduled;
     }

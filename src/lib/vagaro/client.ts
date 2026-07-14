@@ -115,7 +115,7 @@ export async function getVagaroAccessToken(conn: VagaroConnectionRow): Promise<s
 }
 
 export type VagaroRequest = {
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "PUT" | "DELETE";
   path: string;
   query?: Record<string, string>;
   body?: unknown;
@@ -258,6 +258,35 @@ export async function createVagaroAppointment(
   const appointmentId =
     str(body?.id) ?? str(body?.appointmentId) ?? str(body?.data?.id);
   return { appointmentId };
+}
+
+/**
+ * Move an existing appointment to a new time IN PLACE (PUT on the
+ * appointment resource) — Vagaro notifies the customer about the change on
+ * the same appointment; no second booking is created.
+ */
+export async function updateVagaroAppointmentTime(
+  conn: VagaroConnectionRow,
+  appointmentId: string,
+  startIso: string,
+  endIso: string
+): Promise<void> {
+  await vagaroFetch(conn, {
+    method: "PUT",
+    path: `${VAGARO_APPOINTMENTS_PATH}/${encodeURIComponent(appointmentId)}`,
+    body: { startTime: startIso, endTime: endIso }
+  });
+}
+
+/** Cancel an appointment on the merchant's book (single customer notice). */
+export async function deleteVagaroAppointment(
+  conn: VagaroConnectionRow,
+  appointmentId: string
+): Promise<void> {
+  await vagaroFetch(conn, {
+    method: "DELETE",
+    path: `${VAGARO_APPOINTMENTS_PATH}/${encodeURIComponent(appointmentId)}`
+  });
 }
 
 export type VagaroService = {

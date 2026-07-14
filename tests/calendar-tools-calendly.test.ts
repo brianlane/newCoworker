@@ -13,7 +13,10 @@ vi.mock("@/lib/db/calendly-connections", () => ({ getActiveCalendlyConnection: v
 import {
   CALENDLY_MAX_WINDOW_MS,
   CALENDLY_MIN_LEAD_MS,
+  cancelCalendlyAppointment,
   createCalendlyBookingLink,
+  createCalendlyRescheduleLink,
+  findCalendlyScheduledEvent,
   findCalendlySlots,
   pickCalendlyEventType
 } from "@/lib/calendar-tools/calendly";
@@ -390,6 +393,313 @@ describe("createCalendlyBookingLink", () => {
     expect(await createCalendlyBookingLink(BIZ, CONN, ARGS)).toEqual({
       ok: false,
       detail: "calendar_book_failed"
+    });
+  });
+});
+
+// ── Lifecycle: locate / cancel / reschedule-link ─────────────────────────────
+
+const EVENT_URI = "https://api.calendly.com/scheduled_events/EV1";
+const RESCHEDULE_URL = "https://calendly.com/reschedulings/abc123";
+const PHONE = "+15485773546";
+
+function scheduledEventsResponse(collection: Array<Record<string, unknown>> | undefined) {
+  return { data: { collection } } as never;
+}
+
+function inviteesResponse(collection: Array<Record<string, unknown>> | undefined) {
+  return { data: { collection } } as never;
+}
+
+const MATCHING_INVITEE = {
+  email: "Joe@Acme.com",
+  text_reminder_number: "+1 (548) 577-3546",
+  reschedule_url: RESCHEDULE_URL,
+  status: "active"
+};
+
+/** Queue /users/me + /scheduled_events (the prefix every lifecycle path issues). */
+function mockUserAndEvents(collection: Array<Record<string, unknown>> | undefined) {
+  vi.mocked(nangoProxyForBusiness)
+    .mockResolvedValueOnce(usersMeResponse())
+    .mockResolvedValueOnce(scheduledEventsResponse(collection));
+}
+
+describe("findCalendlyScheduledEvent", () => {
+  it("is not_found immediately when the caller has no phone or email", async () => {
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, {})).toBe("not_found");
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: "  ", email: "" })).toBe(
+      "not_found"
+    );
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("is not_connected when /users/me or the events listing is refused", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_connected");
+
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce(usersMeResponse())
+      .mockResolvedValueOnce(null as never);
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_connected");
+  });
+
+  it("is not_connected when an invitee listing is refused mid-scan", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_connected");
+  });
+
+  it("lists ACTIVE upcoming events for the resolved user, earliest first", async () => {
+    mockUserAndEvents([]);
+    await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE });
+    const listCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as {
+      endpoint: string;
+      params: Record<string, string>;
+    };
+    expect(listCall.endpoint).toBe("/scheduled_events");
+    expect(listCall.params).toMatchObject({
+      user: USER_URI,
+      status: "active",
+      sort: "start_time:asc"
+    });
+    expect(Date.parse(listCall.params.min_start_time)).toBe(NOW);
+  });
+
+  it("matches an invitee by SMS number digits (formatting-insensitive)", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      // Email-less invitee: SMS number alone must carry the match.
+      inviteesResponse([{ ...MATCHING_INVITEE, email: undefined }])
+    );
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE });
+    expect(found).toEqual({
+      event: { eventUri: EVENT_URI, eventUuid: "EV1", rescheduleUrl: RESCHEDULE_URL }
+    });
+  });
+
+  it("matches across country-code variants (national vs E.164) but never on loose suffixes", async () => {
+    // Calendly stored the NATIONAL form; our side holds E.164 — still a match.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "(548) 577-3546" }])
+    );
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).not.toBe("not_found");
+
+    // The reverse: Calendly stored E.164, the caller passed the national form.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([MATCHING_INVITEE])
+    );
+    expect(
+      await findCalendlyScheduledEvent(BIZ, CONN, { phone: "548-577-3546" })
+    ).not.toBe("not_found");
+
+    // A DIFFERENT number sharing no suffix must not match.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "+15550001111" }])
+    );
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
+
+    // Short strings (below 7 digits) only match on EXACT equality — a bare
+    // suffix of a real number is too ambiguous to act on.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "773546" }])
+    );
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
+
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "773546" }])
+    );
+    expect(
+      await findCalendlyScheduledEvent(BIZ, CONN, { phone: "77-35-46" })
+    ).not.toBe("not_found");
+  });
+
+  it("phone match beats an earlier email-only match when both identities are supplied", async () => {
+    const EV2_URI = "https://api.calendly.com/scheduled_events/EV2";
+    mockUserAndEvents([{ uri: EVENT_URI }, { uri: EV2_URI }]);
+    vi.mocked(nangoProxyForBusiness)
+      // EV1 (earlier): the supplied email but a DIFFERENT SMS number — this
+      // is someone else's booking under a shared/stale email.
+      .mockResolvedValueOnce(
+        inviteesResponse([
+          { email: "joe@acme.com", text_reminder_number: "+15550001111", reschedule_url: "x" }
+        ])
+      )
+      // EV2 (later): the surface-verified phone.
+      .mockResolvedValueOnce(inviteesResponse([MATCHING_INVITEE]));
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+    expect(found).toEqual({
+      event: { eventUri: EV2_URI, eventUuid: "EV2", rescheduleUrl: RESCHEDULE_URL }
+    });
+  });
+
+  it("falls back to the EARLIEST email match when no event matches the phone", async () => {
+    const EV2_URI = "https://api.calendly.com/scheduled_events/EV2";
+    mockUserAndEvents([{ uri: EVENT_URI }, { uri: EV2_URI }]);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce(
+        inviteesResponse([{ email: "joe@acme.com", reschedule_url: RESCHEDULE_URL }])
+      )
+      // A second email match later must not displace the earliest one.
+      .mockResolvedValueOnce(inviteesResponse([{ email: "joe@acme.com", reschedule_url: "y" }]));
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+    expect(found).toEqual({
+      event: { eventUri: EVENT_URI, eventUuid: "EV1", rescheduleUrl: RESCHEDULE_URL }
+    });
+  });
+
+  it("matches an invitee by email case-insensitively", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([MATCHING_INVITEE])
+    );
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, { email: "joe@acme.com" });
+    expect(found).not.toBe("not_found");
+  });
+
+  it("skips canceled invitees, other people's events, uri-less rows, and malformed bodies", async () => {
+    mockUserAndEvents([
+      { start_time: "2026-06-13T15:00:00Z" }, // no uri → skipped
+      { uri: "https://api.calendly.com/scheduled_events/" }, // empty uuid → skipped
+      { uri: "https://api.calendly.com/scheduled_events/OTHER" },
+      { uri: EVENT_URI }
+    ]);
+    vi.mocked(nangoProxyForBusiness)
+      // OTHER: a canceled matching invitee and a stranger — neither counts.
+      .mockResolvedValueOnce(
+        inviteesResponse([
+          { ...MATCHING_INVITEE, status: "canceled" },
+          { email: "someone@else.com", text_reminder_number: "+15550001111" }
+        ])
+      )
+      // EV1: matching invitee without a reschedule_url (null is preserved).
+      .mockResolvedValueOnce(
+        inviteesResponse([{ email: "joe@acme.com", reschedule_url: "" }])
+      );
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+    expect(found).toEqual({
+      event: { eventUri: EVENT_URI, eventUuid: "EV1", rescheduleUrl: null }
+    });
+  });
+
+  it("never matches on empty invitee fields and tolerates missing collections", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }, { uri: "https://api.calendly.com/scheduled_events/EV2" }]);
+    vi.mocked(nangoProxyForBusiness)
+      // Invitee with NO phone must not match a phone-only caller; body
+      // without a collection is an empty scan, not a crash.
+      .mockResolvedValueOnce(inviteesResponse([{ email: "joe@acme.com" }]))
+      .mockResolvedValueOnce({ data: {} } as never);
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
+  });
+
+  it("tolerates an events body without a collection", async () => {
+    mockUserAndEvents(undefined);
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
+  });
+});
+
+describe("cancelCalendlyAppointment", () => {
+  it("maps locate outcomes: not_connected and not_found", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    expect(await cancelCalendlyAppointment(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+
+    mockUserAndEvents([]);
+    expect(await cancelCalendlyAppointment(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+  });
+
+  it("POSTs a real cancellation for the located event", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce(inviteesResponse([MATCHING_INVITEE]))
+      .mockResolvedValueOnce({ data: { resource: {} } } as never);
+
+    const result = await cancelCalendlyAppointment(BIZ, CONN, { phone: PHONE });
+    expect(result).toEqual({
+      ok: true,
+      data: { eventId: "EV1", provider: "calendly", canceled: true }
+    });
+    const cancelCall = vi.mocked(nangoProxyForBusiness).mock.calls[3][2] as {
+      endpoint: string;
+      method: string;
+    };
+    expect(cancelCall.endpoint).toBe("/scheduled_events/EV1/cancellation");
+    expect(cancelCall.method).toBe("POST");
+  });
+
+  it("a refused cancellation POST is a FAILED MUTATION, never calendar_not_connected", async () => {
+    // The locate steps just succeeded — misreporting a missing calendar
+    // would steer the model to "you cannot cancel any appointment".
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce(inviteesResponse([MATCHING_INVITEE]))
+      .mockResolvedValueOnce(null as never);
+    expect(await cancelCalendlyAppointment(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: false,
+      detail: "calendar_cancel_failed"
+    });
+  });
+});
+
+describe("createCalendlyRescheduleLink", () => {
+  it("maps locate outcomes: not_connected and not_found", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
+    expect(await createCalendlyRescheduleLink(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+
+    mockUserAndEvents([]);
+    expect(await createCalendlyRescheduleLink(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+  });
+
+  it("returns the invitee's reschedule link with the NOT-done detail", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([MATCHING_INVITEE])
+    );
+    expect(await createCalendlyRescheduleLink(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: true,
+      detail: "reschedule_link_created",
+      data: {
+        eventId: "EV1",
+        provider: "calendly",
+        rescheduleLink: RESCHEDULE_URL,
+        rescheduled: false
+      }
+    });
+  });
+
+  it("fails (not fabricates) when the matched invitee has no reschedule_url", async () => {
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, reschedule_url: undefined }])
+    );
+    expect(await createCalendlyRescheduleLink(BIZ, CONN, { phone: PHONE })).toEqual({
+      ok: false,
+      detail: "calendar_reschedule_failed"
     });
   });
 });

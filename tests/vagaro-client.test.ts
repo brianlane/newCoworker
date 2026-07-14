@@ -12,9 +12,11 @@ vi.mock("@/lib/logger", () => ({
 import {
   clearVagaroTokenCache,
   createVagaroAppointment,
+  deleteVagaroAppointment,
   getVagaroAccessToken,
   listVagaroServices,
   searchVagaroAvailability,
+  updateVagaroAppointmentTime,
   vagaroFetch,
   VagaroApiError
 } from "@/lib/vagaro/client";
@@ -389,6 +391,43 @@ describe("createVagaroAppointment", () => {
     expect(body.customer).toEqual({ name: "Jo" });
     expect(body).not.toHaveProperty("employeeId");
     expect(body).not.toHaveProperty("notes");
+  });
+});
+
+describe("appointment lifecycle helpers", () => {
+  it("PUTs the new times to the appointment resource (id URL-escaped)", async () => {
+    fetchMock
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(jsonResponse(200, {}));
+    await updateVagaroAppointmentTime(
+      CONN,
+      "appt/1",
+      "2026-06-13T15:00:00.000Z",
+      "2026-06-13T15:30:00.000Z"
+    );
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe("https://api.vagaro.com/api/v3/appointments/appt%2F1");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(String(init.body))).toEqual({
+      startTime: "2026-06-13T15:00:00.000Z",
+      endTime: "2026-06-13T15:30:00.000Z"
+    });
+  });
+
+  it("DELETEs the appointment resource and tolerates an empty body", async () => {
+    fetchMock.mockResolvedValueOnce(tokenResponse()).mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      json: async () => {
+        throw new Error("empty");
+      },
+      text: async () => ""
+    } as never);
+    await deleteVagaroAppointment(CONN, "appt-1");
+    const [url, init] = fetchMock.mock.calls[1] as [string, RequestInit];
+    expect(url).toBe("https://api.vagaro.com/api/v3/appointments/appt-1");
+    expect(init.method).toBe("DELETE");
+    expect(init.body).toBeUndefined();
   });
 });
 

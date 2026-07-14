@@ -7,6 +7,7 @@ import {
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
+  findUpcomingBookingClaimByPhone,
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -15,6 +16,14 @@ import {
   wallClockInZone,
   type CalendarToolResult
 } from "@/lib/calendar-tools/handlers";
+import {
+  cancelCalendlyAppointment,
+  createCalendlyRescheduleLink
+} from "@/lib/calendar-tools/calendly";
+import {
+  cancelVagaroAppointment,
+  rescheduleVagaroAppointment
+} from "@/lib/calendar-tools/vagaro";
 import { logger } from "@/lib/logger";
 
 /**
@@ -25,10 +34,18 @@ import { logger } from "@/lib/logger";
  * existed, the model's only move was booking a second event and leaving the
  * first one standing.
  *
- * Scope (v1): Google + Microsoft via the Nango proxy — the providers where
- * bookCalendarAppointment creates real events. Calendly ("bookings" are
- * invitee-completed links), Vagaro, and CalDAV return `not_supported` so the
- * model hands off to the team instead of pretending.
+ * Provider coverage:
+ *   - Google + Microsoft (Nango proxy): PATCH/DELETE the real event.
+ *   - Vagaro: PUT/DELETE the appointment on the merchant's book. Resolution
+ *     is ledger-only — Vagaro bookings stamp their appointment id into the
+ *     dedupe ledger at booking time, and the v1 client has no
+ *     search-by-customer surface.
+ *   - Calendly: cancel is a real API cancellation; reschedule returns the
+ *     invitee's own reschedule link (`reschedule_link_created`) because
+ *     Calendly cannot move an event on the invitee's behalf — mirrors the
+ *     `booking_link_created` booking contract.
+ *   - CalDAV returns `not_supported` so the model hands off to the team
+ *     instead of pretending.
  *
  * Event resolution: the `calendar_booking_dedupe` ledger row (stamped at
  * booking) is the primary key — no provider search needed. Bookings that
@@ -241,7 +258,19 @@ async function mutateGoogleEvent(
   return false;
 }
 
-const NOT_SUPPORTED_PROVIDERS = new Set(["calendly", "vagaro", "caldav"]);
+const NOT_SUPPORTED_PROVIDERS = new Set(["caldav"]);
+
+/**
+ * Ledger resolution for Vagaro (its ONLY resolution path — the v1 client
+ * has no search-by-customer surface): exact attendee key first, then the
+ * phone-tolerant fallback, since the booking may have stored a differently
+ * formatted phone than the lifecycle call passes (Bugbot on PR #584).
+ */
+async function findVagaroClaim(businessId: string, attendeeKey: string, phone: string) {
+  const exact = await findUpcomingBookingClaim(businessId, attendeeKey);
+  if (exact) return exact;
+  return phone ? findUpcomingBookingClaimByPhone(businessId, phone) : null;
+}
 
 /**
  * Move the attendee's upcoming appointment to a new time IN PLACE. The
@@ -266,6 +295,38 @@ export async function rescheduleCalendarAppointment(
     const phone = (args.attendeePhone ?? fallbackPhone ?? "").trim();
     const marker = phone || (args.attendeeEmail ?? "").trim();
     const attendeeKey = bookingAttendeeKey(phone, args.attendeeEmail, args.attendeeName);
+
+    if (conn.provider === "calendly") {
+      // No event mutation on our side: the invitee moves the SAME event
+      // through their reschedule link, and Calendly emails the update.
+      return createCalendlyRescheduleLink(businessId, conn, {
+        phone,
+        email: args.attendeeEmail ?? null
+      });
+    }
+
+    if (conn.provider === "vagaro") {
+      const claim = await findVagaroClaim(businessId, attendeeKey, phone);
+      if (!claim) return { ok: false, detail: "booking_not_found" };
+      const moved = await rescheduleVagaroAppointment(
+        businessId,
+        claim.eventId,
+        args.newStartIso,
+        args.newEndIso
+      );
+      if (moved.ok) {
+        await rescheduleBookingClaim(
+          businessId,
+          // The row's own key when the phone-tolerant fallback resolved it —
+          // conflict cleanup must target the key the row is stored under.
+          claim.attendeeKey ?? attendeeKey,
+          claim.id,
+          new Date(args.newStartIso).toISOString()
+        );
+      }
+      return moved;
+    }
+
     const located = await locateUpcomingAppointment(businessId, conn, attendeeKey, marker);
     if (!located) return { ok: false, detail: "booking_not_found" };
 
@@ -355,6 +416,24 @@ export async function cancelCalendarAppointment(
     const phone = (args.attendeePhone ?? fallbackPhone ?? "").trim();
     const marker = phone || (args.attendeeEmail ?? "").trim();
     const attendeeKey = bookingAttendeeKey(phone, args.attendeeEmail, args.attendeeName);
+
+    if (conn.provider === "calendly") {
+      // Located + canceled through Calendly's own API (no ledger rows exist
+      // for link-completed bookings).
+      return cancelCalendlyAppointment(businessId, conn, {
+        phone,
+        email: args.attendeeEmail ?? null
+      });
+    }
+
+    if (conn.provider === "vagaro") {
+      const claim = await findVagaroClaim(businessId, attendeeKey, phone);
+      if (!claim) return { ok: false, detail: "booking_not_found" };
+      const canceled = await cancelVagaroAppointment(businessId, claim.eventId);
+      if (canceled.ok) await deleteBookingClaim(claim.id);
+      return canceled;
+    }
+
     const located = await locateUpcomingAppointment(businessId, conn, attendeeKey, marker);
     if (!located) return { ok: false, detail: "booking_not_found" };
 
