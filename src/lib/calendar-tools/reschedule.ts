@@ -97,12 +97,24 @@ async function searchProviderEvent(
             timeMin: nowIso,
             singleEvents: "true",
             orderBy: "startTime",
-            maxResults: "5"
+            maxResults: "10"
           }
         });
-        const items = ((res?.data ?? null) as { items?: Array<{ id?: string }> } | null)?.items;
-        const id = items?.[0]?.id;
-        if (typeof id === "string" && id.length > 0) return id;
+        const items =
+          ((res?.data ?? null) as {
+            items?: Array<{ id?: string; description?: string }>;
+          } | null)?.items ?? [];
+        // `q` is a loose full-text match — verify the marker actually sits in
+        // the event description before mutating anything, mirroring the
+        // Microsoft path, so a fuzzy hit can never reschedule/cancel someone
+        // else's event (Bugbot on PR #577).
+        const hit = items.find(
+          (e) =>
+            typeof e.id === "string" &&
+            e.id.length > 0 &&
+            (e.description ?? "").includes(marker)
+        );
+        if (hit?.id) return hit.id;
       } catch (err) {
         logger.warn("calendar-tools/search: google lookup failed", {
           businessId,
@@ -137,7 +149,11 @@ async function searchProviderEvent(
           // when Graph returns the body HTML-wrapped.
           $select: "id,bodyPreview,body,start",
           $orderby: "start/dateTime",
-          $top: "25"
+          // A busy calendar can hold far more than a couple dozen upcoming
+          // events in the window; a small page made valid bookings past it
+          // unfindable (Bugbot on PR #577). One large page keeps the call
+          // single-round-trip — the search is already scoped to 60 days.
+          $top: "250"
         }
       });
       const items =

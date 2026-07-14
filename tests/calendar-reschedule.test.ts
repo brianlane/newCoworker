@@ -344,7 +344,17 @@ describe("rescheduleCalendarAppointment", () => {
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
     vi.mocked(nangoProxyForBusiness)
       .mockRejectedValueOnce(new Error("search boom")) // shared search fails
-      .mockResolvedValueOnce({ data: { items: [{ id: "evt-mail" }] } } as never) // primary search hits
+      .mockResolvedValueOnce({
+        // Primary search: a loose q hit WITHOUT the marker in its description
+        // must be rejected; only the verified event wins.
+        data: {
+          items: [
+            { id: "evt-fuzzy", description: "unrelated event that q matched loosely" },
+            { id: "evt-bare" }, // no description at all — also rejected
+            { id: "evt-mail", description: "Attendee: Joe\nEmail: joe@acme.com" }
+          ]
+        }
+      } as never)
       .mockResolvedValueOnce({ data: {} } as never); // PATCH shared succeeds
 
     const result = await rescheduleCalendarAppointment(BIZ, {
@@ -357,6 +367,10 @@ describe("rescheduleCalendarAppointment", () => {
       params: { q: string };
     };
     expect(searchCall.params.q).toBe("joe@acme.com");
+    // The unverified fuzzy hit lost; the marker-verified event was mutated.
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[2][2] as { endpoint: string };
+    expect(patchCall.endpoint).toContain("evt-mail");
+    expect(patchCall.endpoint).not.toContain("evt-fuzzy");
   });
 
   it("uses the surface fallback phone when the model omits attendee identity", async () => {
