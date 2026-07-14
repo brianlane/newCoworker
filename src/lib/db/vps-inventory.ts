@@ -51,6 +51,14 @@ export type VpsInventoryRow = {
  * conditional UPDATE (`state = 'available'` in the WHERE) is the lock — the
  * loser's update matches zero rows and moves on to the next candidate (or
  * returns null → caller falls back to purchase).
+ *
+ * Retry idempotency: a box THIS business already claimed is returned
+ * as-is before the available scan. Without this, a provision that died
+ * after the pool claim (the KYP Ads Jul 14 2026 signup — webhook function
+ * torn down mid-adopt) left the row 'assigned' to the business, and the
+ * retry would skip it and PURCHASE a second box; recovering required a
+ * manual pool-row reset. Now the watchdog's re-run lands back on the same
+ * hardware automatically.
  */
 export async function claimAvailableVps(
   plan: VpsSize,
@@ -58,6 +66,19 @@ export async function claimAvailableVps(
   client?: SupabaseClient
 ): Promise<VpsInventoryRow | null> {
   const db = client ?? (await createSupabaseServiceClient());
+
+  const { data: own, error: ownErr } = await db
+    .from("vps_inventory")
+    .select("*")
+    .eq("state", "assigned")
+    .eq("assigned_business_id", businessId)
+    .eq("plan", plan)
+    .order("acquired_at", { ascending: true })
+    .limit(1);
+  if (ownErr) throw new Error(`claimAvailableVps: ${ownErr.message}`);
+  const ownRow = ((own as VpsInventoryRow[] | null) ?? [])[0];
+  if (ownRow) return ownRow;
+
   const { data: candidates, error } = await db
     .from("vps_inventory")
     .select("vm_id")

@@ -48,16 +48,18 @@ import {
   runResubscribeFromCheckout
 } from "@/lib/billing/change-plan-orchestrator";
 
-// Vercel Pro allows up to 300s. Several dispatch paths below
-// (`dispatchAutoCancelOnPaymentFailure`, `runChangePlanFromCheckout`,
-// `runResubscribeFromCheckout`) schedule minutes-long SSH backup +
-// Hostinger teardown / new-VM provisioning work via `after()`, and
-// the runtime keeps the function alive only up to `maxDuration`. The
-// Hobby tier's 10s default would tear the slow-phase work down almost
-// immediately after the 200 ack — leaving Stripe acknowledged, the DB
-// half-flipped, and the VM/billing dangling. (Mirrors the same
-// reasoning used in `/api/billing/cancel`.)
-export const maxDuration = 300;
+// Vercel Pro allows up to 800s — take all of it. Several dispatch paths
+// below (`dispatchAutoCancelOnPaymentFailure`, `runChangePlanFromCheckout`,
+// `runResubscribeFromCheckout`, and the signup provisioning orchestrator)
+// schedule minutes-long SSH backup + Hostinger teardown / new-VM
+// provisioning work via `after()`, and the runtime keeps the function
+// alive only up to `maxDuration`. The previous 300s ceiling killed two
+// real signups mid-provision (Truly Insurance Jul 8 2026, KYP Ads Jul 14
+// 2026): an adopt/purchase provision runs ~8-12 minutes, and the runtime
+// tore it down at 5 minutes with no error row. 800s covers the observed
+// worst case; the provisioning-watchdog cron is the backstop for anything
+// that still dies (see src/lib/provisioning/jobs.ts).
+export const maxDuration = 800;
 
 async function fetchSubscriptionPeriodCacheOrEmpty(
   subscriptionId: string,
@@ -1222,15 +1224,49 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   }
 
   const { orchestrateProvisioning } = await import("@/lib/provisioning/orchestrate");
-  // billingPeriod drives the Hostinger purchase term: a customer committing
-  // to an annual/biennial contract funds a term-priced box (~40-65% cheaper
-  // per month than the monthly SKU's renewal price).
-  orchestrateProvisioning({
+  const { enqueueProvisioningJob, runProvisioningJob } = await import("@/lib/provisioning/jobs");
+
+  // Durable job row FIRST (inline, before the ack): even if this function
+  // is torn down before the orchestrator writes anything, the
+  // provisioning-watchdog cron has a queued row to find and re-run. A
+  // ledger failure must never block a signup — the inline run below still
+  // happens either way.
+  const jobInputs = {
     businessId,
-    tier,
+    tier: tier as string,
     vpsSize: business?.vps_size ?? null,
     billingPeriod: billingPeriod ?? null
-  })
+  };
+  try {
+    await enqueueProvisioningJob(jobInputs);
+  } catch (err) {
+    logger.warn("enqueueProvisioningJob failed (provisioning continues inline)", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  // `after()` (Vercel waitUntil) rather than a bare floating promise: the
+  // runtime is free to tear the function down right after the 200 ack
+  // otherwise, which is exactly how the Truly (Jul 8) and KYP (Jul 14)
+  // signups died at "started 5%" — the .then/.catch chain here previously
+  // had no keep-alive at all. billingPeriod drives the Hostinger purchase
+  // term: a customer committing to an annual/biennial contract funds a
+  // term-priced box (~40-65% cheaper per month than the monthly SKU's
+  // renewal price).
+  after(async () => {
+  await runProvisioningJob(
+    { business_id: businessId, tier: jobInputs.tier, vps_size: jobInputs.vpsSize, billing_period: jobInputs.billingPeriod },
+    {
+      orchestrate: (input) =>
+        orchestrateProvisioning({
+          businessId: input.businessId,
+          tier: input.tier,
+          vpsSize: input.vpsSize,
+          billingPeriod: input.billingPeriod
+        })
+    }
+  )
     .then(async (result) => {
       // Persist the Hostinger billing-subscription id so the lifecycle
       // engine can later cancel Hostinger billing (DELETE
@@ -1285,6 +1321,7 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
         ...detail
       });
     });
+  });
 }
 
 /**

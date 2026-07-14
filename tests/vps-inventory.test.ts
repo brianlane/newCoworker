@@ -60,11 +60,17 @@ function makeDb(chain: MockQB) {
   return { from: vi.fn(() => chain) };
 }
 
+/** Own-box re-claim scan comes first; resolve it empty for the common path. */
+function mockNoOwnBox(chain: MockQB) {
+  chain.limit.mockResolvedValueOnce({ data: [], error: null });
+}
+
 describe("vps_inventory DB layer", () => {
   describe("claimAvailableVps", () => {
     it("claims the oldest available box and marks it assigned", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({ data: [{ vm_id: 1800985 }], error: null });
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({ data: [{ vm_id: 1800985 }], error: null });
       chain.maybeSingle.mockResolvedValue({
         data: { ...sampleRow, state: "assigned", assigned_business_id: "biz-1" },
         error: null
@@ -85,9 +91,31 @@ describe("vps_inventory DB layer", () => {
       expect(chain.eq).toHaveBeenCalledWith("vm_id", 1800985);
     });
 
+    it("returns the box THIS business already claimed (dead-attempt retry) without re-updating", async () => {
+      const chain = makeChain();
+      const ownRow = { ...sampleRow, state: "assigned", assigned_business_id: "biz-1" };
+      chain.limit.mockResolvedValueOnce({ data: [ownRow], error: null });
+      const db = makeDb(chain);
+      const row = await claimAvailableVps("kvm2", "biz-1", db as never);
+      expect(row).toEqual(ownRow);
+      // Straight return: no conditional-claim UPDATE, no purchase fallback.
+      expect(chain.update).not.toHaveBeenCalled();
+      expect(chain.eq).toHaveBeenCalledWith("assigned_business_id", "biz-1");
+    });
+
+    it("throws when the own-box scan errors", async () => {
+      const chain = makeChain();
+      chain.limit.mockResolvedValueOnce({ data: null, error: { message: "own scan down" } });
+      const db = makeDb(chain);
+      await expect(claimAvailableVps("kvm2", "biz-1", db as never)).rejects.toThrow(
+        "claimAvailableVps: own scan down"
+      );
+    });
+
     it("moves to the next candidate when a concurrent claim wins the first", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({
         data: [{ vm_id: 111 }, { vm_id: 222 }],
         error: null
       });
@@ -106,21 +134,24 @@ describe("vps_inventory DB layer", () => {
 
     it("returns null when the pool has no matching-size box", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({ data: [], error: null });
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({ data: [], error: null });
       const db = makeDb(chain);
       await expect(claimAvailableVps("kvm8", "biz-1", db as never)).resolves.toBeNull();
     });
 
-    it("returns null when candidates is null", async () => {
+    it("returns null when candidates is null (own scan null-data tolerated too)", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({ data: null, error: null });
+      chain.limit.mockResolvedValueOnce({ data: null, error: null });
+      chain.limit.mockResolvedValueOnce({ data: null, error: null });
       const db = makeDb(chain);
       await expect(claimAvailableVps("kvm2", "biz-1", db as never)).resolves.toBeNull();
     });
 
     it("returns null when every candidate loses the race", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({ data: [{ vm_id: 111 }], error: null });
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({ data: [{ vm_id: 111 }], error: null });
       chain.maybeSingle.mockResolvedValue({ data: null, error: null });
       const db = makeDb(chain);
       await expect(claimAvailableVps("kvm2", "biz-1", db as never)).resolves.toBeNull();
@@ -128,7 +159,8 @@ describe("vps_inventory DB layer", () => {
 
     it("throws when the candidate scan errors", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({ data: null, error: { message: "scan boom" } });
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({ data: null, error: { message: "scan boom" } });
       const db = makeDb(chain);
       await expect(claimAvailableVps("kvm2", "biz-1", db as never)).rejects.toThrow(
         /claimAvailableVps: scan boom/
@@ -137,7 +169,8 @@ describe("vps_inventory DB layer", () => {
 
     it("throws when the claim update errors", async () => {
       const chain = makeChain();
-      chain.limit.mockResolvedValue({ data: [{ vm_id: 111 }], error: null });
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({ data: [{ vm_id: 111 }], error: null });
       chain.maybeSingle.mockResolvedValue({ data: null, error: { message: "claim boom" } });
       const db = makeDb(chain);
       await expect(claimAvailableVps("kvm2", "biz-1", db as never)).rejects.toThrow(

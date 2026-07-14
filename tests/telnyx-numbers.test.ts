@@ -104,6 +104,55 @@ describe("TelnyxNumbersClient", () => {
     expect(url3).toContain("filter%5Blimit%5D=10");
   });
 
+  it("searchAvailable treats Telnyx 400/10031 (no inventory for filters) as an empty result", async () => {
+    // Telnyx reports zero inventory for a filter combo as an error body
+    // instead of `data: []` — this must read as NO INVENTORY so the
+    // orchestrator's search cascade falls through to the next tier (the
+    // KYP Ads Jul 14 2026 signup died on a sold-out CA/514 exactly here).
+    const fetchImpl = mockFetch(() =>
+      jsonResponse(
+        {
+          errors: [
+            {
+              code: "10031",
+              title: "Invalid request filter",
+              detail: "No numbers found for the given filters. Please try again with best_effort=true."
+            }
+          ]
+        },
+        { status: 400 }
+      )
+    );
+    const client = new TelnyxNumbersClient({ apiKey: "k", fetchImpl });
+    await expect(
+      client.searchAvailable({ countryCode: "CA", areaCode: "514" })
+    ).resolves.toEqual([]);
+  });
+
+  it("searchAvailable still throws on non-10031 400s and non-400 errors", async () => {
+    const badFilter = mockFetch(() =>
+      jsonResponse({ errors: [{ code: "10015", title: "Bad request" }] }, { status: 400 })
+    );
+    await expect(
+      new TelnyxNumbersClient({ apiKey: "k", fetchImpl: badFilter }).searchAvailable()
+    ).rejects.toThrow(TelnyxApiError);
+
+    const authFail = mockFetch(() =>
+      jsonResponse({ errors: [{ code: "10009" }] }, { status: 401 })
+    );
+    await expect(
+      new TelnyxNumbersClient({ apiKey: "k", fetchImpl: authFail }).searchAvailable()
+    ).rejects.toThrow(TelnyxApiError);
+
+    // Transport-level failures (not TelnyxApiError) rethrow untouched.
+    const netFail = mockFetch(() => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(
+      new TelnyxNumbersClient({ apiKey: "k", fetchImpl: netFail }).searchAvailable()
+    ).rejects.toThrow("fetch failed");
+  });
+
   it("orderNumbers posts phone_numbers array and optional associations", async () => {
     let capturedBody: unknown = null;
     const fetchImpl = mockFetch((url, init) => {
