@@ -21,6 +21,8 @@ import {
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
 import { summarizeCustomerMemoryAndLog } from "@/lib/customer-memory/summarizer";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { loadContactTimeline } from "../../../supabase/functions/_shared/contact_context";
 
 export type CustomerToolResult = {
   ok: boolean;
@@ -48,6 +50,14 @@ export const PINNED_MAX_CHARS = 2000;
  * rather than erroring — Telnyx has been observed to deliver "anonymous" /
  * "" / "unknown" as the caller id in spotty CNAM cases, and the model
  * should just treat those as "nobody on file".
+ *
+ * `recentInteractions` is the cross-channel raw timeline (SMS both
+ * directions + recent call summaries, contact_context.ts): mid-first-
+ * conversation the rolling `summary` is still empty — the summarize sweep
+ * runs later — so without it a lookup told the agent NOTHING about an
+ * exchange that happened minutes ago (the 2026-07-14 Truly incident
+ * class). Best-effort: a timeline failure degrades to the pre-existing
+ * summary-only shape, never a failed lookup.
  */
 export async function lookupCustomerByPhone(
   businessId: string,
@@ -59,6 +69,20 @@ export async function lookupCustomerByPhone(
   const memory = await getCustomerMemory(businessId, phone);
   if (!memory) {
     return { ok: true, data: { found: false } };
+  }
+  let recentInteractions: string | null = null;
+  try {
+    const db = await createSupabaseServiceClient();
+    // The surviving profile number may differ from the queried alias —
+    // the timeline tables key on the number messages actually flowed over,
+    // so query with the caller's phone AND fall back to the primary.
+    recentInteractions =
+      (await loadContactTimeline(db, businessId, phone)) ??
+      (phone === memory.customer_e164
+        ? null
+        : await loadContactTimeline(db, businessId, memory.customer_e164));
+  } catch (e) {
+    console.error("lookupCustomerByPhone: timeline load failed", e);
   }
   return {
     ok: true,
@@ -73,7 +97,8 @@ export async function lookupCustomerByPhone(
         summary: memory.summary_md,
         lastChannel: memory.last_channel,
         lastInteractionAt: memory.last_interaction_at,
-        totalInteractionCount: memory.total_interaction_count
+        totalInteractionCount: memory.total_interaction_count,
+        ...(recentInteractions ? { recentInteractions } : {})
       }
     }
   };
