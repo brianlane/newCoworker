@@ -114,6 +114,17 @@ export async function POST(request: Request, context: RouteContext) {
     } else {
       const document = await getBusinessDocument(businessId, documentId!);
       if (!document) return errorResponse("NOT_FOUND", "Document not found", 404);
+      // Mirror the dashboard picker's constraints server-side: only ingested
+      // (ready) documents with a supported original format are runnable.
+      if (document.status !== "ready") {
+        return errorResponse("VALIDATION_ERROR", "That document isn't ready to use yet");
+      }
+      if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Only PDF, plain text, markdown, or CSV documents are supported"
+        );
+      }
       const { data: blob, error: downloadError } = await db.storage
         .from(BUSINESS_DOCS_BUCKET)
         .download(document.storage_path);
