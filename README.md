@@ -549,7 +549,26 @@ Intentional operational exemptions (NOT metered against the customer's monthly S
 
 ## All work and code modifications must follow this flow
 
-For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge apply migrations, deploy functions, vps needed redeploy, seed etc then return back to main -> **clean up the worktree** (mandatory, see below).
+For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below).
+
+### Post-merge: what CI does vs what you still do
+
+**CI does automatically on every push to main** (the `Vercel Deploy` job, in
+order, each step blocking the next): apply pending Supabase migrations
+(`supabase db push` — fails loudly on ledger drift, never auto-repairs),
+bulk-deploy **every** edge function in `supabase/functions/` (verify_jwt pins
+come from the tracked `supabase/config.toml` — a new function MUST get a
+`[functions.<name>] verify_jwt = false` entry there), then deploy the app to
+Vercel production. PRs get the same drift detection early via the
+`Supabase Drift Check` job, so drift is caught at review time. **Watch the
+main run to green after merging** — a failed migration blocks the app deploy
+by design.
+
+**Still manual after merge (when the change calls for it):**
+- VPS fleet redeploys when `vps/` changed (`tsx debug/update-all-vps.ts`,
+  voice-bridge redeploy) — per-box SSH keys never leave the laptop.
+- Seeds / one-shot scripts (`scripts/oneshot/`, ledger-recorded).
+- Worktree cleanup (below).
 
 ### Worktree cleanup (mandatory after merge)
 

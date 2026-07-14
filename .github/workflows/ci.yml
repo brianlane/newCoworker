@@ -234,6 +234,40 @@ jobs:
         if: failure()
         run: tail -200 /tmp/functions-serve.log || true
 
+  # Catches Supabase migration-ledger drift at REVIEW time instead of at
+  # deploy time on main. No `needs` — it starts the moment the PR run does
+  # (~1 min: CLI setup + a dry-run push), so drift shows up as a red check
+  # while the other jobs are still building. A red drift check also holds
+  # the e2e gate (and therefore the preview deploy) closed, and blocks the
+  # merge per the repo merge policy. On Dependabot PRs the steps no-op and
+  # the job reports success (a job-level skip would hard-fail the e2e gate,
+  # which treats non-excluded "skipped" checks as failures): dependabot
+  # never writes migrations, and dependabot-triggered runs get Dependabot
+  # secrets — not repo secrets — so the check could never link anyway.
+  supabase-drift:
+    name: Supabase Drift Check
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: actions/checkout@v7
+
+      # Same pin as worker-integration: bump deliberately, not implicitly.
+      - name: Setup Supabase CLI
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.78.1
+
+      - name: Drift check (dry-run push against prod ledger)
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: bash .github/scripts/supabase-deploy.sh check
+
   # Vercel deploys moved from the git integration into CI (vercel.json sets
   # git.deploymentEnabled: false) so a deployment only happens once the five
   # jobs above are green — not on every single commit. Previews deploy per
@@ -242,6 +276,13 @@ jobs:
   # --prebuilt) keeps build env/behavior identical to the old git-triggered
   # builds. The e2e job `needs` this, so the chain is:
   # checks → gate → deploy → live e2e against a commit that actually deploys.
+  #
+  # On push to main this job ALSO deploys Supabase first — drift check +
+  # `db push` + bulk edge-function deploy (see supabase-deploy.sh) — as
+  # ordered steps BEFORE the Vercel production deploy, so a failed migration
+  # blocks the app deploy instead of shipping code whose schema never landed.
+  # This replaces the manual post-merge "apply migrations, deploy functions"
+  # chores from the README flow.
   #
   # PR deploys run the same e2e-gate as the e2e job first: no preview deploy
   # while Bugbot is NEUTRAL, any cross-workflow check is red, or a review
@@ -280,6 +321,21 @@ jobs:
           SHA: ${{ github.event.pull_request.head.sha }}
           PR: ${{ github.event.pull_request.number }}
         run: bash .github/scripts/e2e-gate.sh
+
+      - name: Setup Supabase CLI
+        if: github.event_name == 'push'
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.78.1
+
+      # Order matters: schema first, then functions, then the app build that
+      # expects both. `db push` re-runs the same drift guard the PR check did.
+      - name: Apply migrations + deploy edge functions
+        if: github.event_name == 'push'
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: bash .github/scripts/supabase-deploy.sh deploy
 
       - name: Deploy to Vercel
         id: deploy
