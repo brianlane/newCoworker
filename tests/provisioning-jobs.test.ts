@@ -5,7 +5,7 @@ type StubResult = { data?: unknown; error?: { message: string } | null };
 /** Chainable + thenable PostgREST builder stub (tests/webchat-db pattern). */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "update", "upsert", "insert", "order", "limit"]) {
+  for (const m of ["select", "eq", "in", "update", "upsert", "insert", "order", "limit"]) {
     b[m] = vi.fn(() => b);
   }
   b.maybeSingle = vi.fn(async () => result);
@@ -152,12 +152,12 @@ describe("markProvisioningJobOutcome", () => {
 });
 
 describe("heartbeatProvisioningJob", () => {
-  it("bumps heartbeat on running rows only", async () => {
+  it("bumps heartbeat on queued AND running rows (queued = markRunning write failed but run is live)", async () => {
     const builder = makeBuilder({ error: null });
     supabaseStub.from.mockReturnValueOnce(builder);
     await heartbeatProvisioningJob(BIZ);
     expect(builder.eq).toHaveBeenCalledWith("business_id", BIZ);
-    expect(builder.eq).toHaveBeenCalledWith("status", "running");
+    expect(builder.in).toHaveBeenCalledWith("status", ["queued", "running"]);
   });
 
   it("swallows failures — a heartbeat must never fail a progress write", async () => {

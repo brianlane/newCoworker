@@ -47,11 +47,16 @@ comment on table provisioning_jobs is
 -- ---------------------------------------------------------------------
 -- Watchdog claim: one stalled job per tick, race-safe.
 --
--- Stalled means attempts remain AND either
---   * status='queued' and nothing started for p_stale_ms (the inline
---     runner never got to run — function torn down before after() fired), or
---   * status='running' with a heartbeat older than p_stale_ms (torn down
---     mid-provision; progress rows stopped landing).
+-- Stalled means attempts remain AND the row's liveness signal — its most
+-- recent heartbeat, falling back to started/enqueued stamps — is older
+-- than p_stale_ms, for BOTH 'queued' and 'running' rows:
+--   * queued + stale = the inline runner never got to run (function torn
+--     down before after() fired) — EXCEPT when heartbeats are landing,
+--     which happens when the runner's best-effort markRunning write failed
+--     but the orchestrator is alive (heartbeatProvisioningJob deliberately
+--     bumps queued rows too; claiming such a row would start a SECOND
+--     provision in parallel — Bugbot High on PR #598).
+--   * running + stale heartbeat = torn down mid-provision.
 --
 -- p_stale_ms must exceed the longest legitimately-silent orchestrator
 -- phase (fresh Hostinger purchase + PIS boot ≈ 5-8 min with zero progress
@@ -70,10 +75,8 @@ begin
   select business_id into v_id
   from provisioning_jobs
   where attempts < max_attempts
-    and (
-      (status = 'queued' and enqueued_at < v_cutoff and started_at is null)
-      or (status = 'running' and coalesce(heartbeat_at, started_at, enqueued_at) < v_cutoff)
-    )
+    and status in ('queued', 'running')
+    and coalesce(heartbeat_at, started_at, enqueued_at) < v_cutoff
   order by enqueued_at
   for update skip locked
   limit 1;

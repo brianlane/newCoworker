@@ -141,6 +141,13 @@ export async function markProvisioningJobOutcome(
  * Liveness bump, called from recordProvisioningProgress on every progress
  * write (orchestrator phases AND the in-deploy VPS callbacks). Never
  * throws — a heartbeat failure must not fail the progress write.
+ *
+ * Covers 'queued' rows as well as 'running' ones (Bugbot High on PR #598):
+ * when the inline runner's best-effort markRunning write fails, the row
+ * stays 'queued' while the orchestrator is very much alive — heartbeating
+ * it anyway is what stops the watchdog's queued-never-started claim from
+ * starting a SECOND provision in parallel (the claim treats a fresh
+ * heartbeat as liveness regardless of status).
  */
 export async function heartbeatProvisioningJob(
   businessId: string,
@@ -152,7 +159,7 @@ export async function heartbeatProvisioningJob(
       .from("provisioning_jobs")
       .update({ heartbeat_at: new Date().toISOString(), updated_at: new Date().toISOString() })
       .eq("business_id", businessId)
-      .eq("status", "running");
+      .in("status", ["queued", "running"]);
     if (error) throw new Error(error.message);
   } catch (err) {
     logger.warn("heartbeatProvisioningJob failed (non-fatal)", {
