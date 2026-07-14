@@ -11,7 +11,6 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { mintWidgetKey } from "@/lib/webchat/keys";
-import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -635,57 +634,35 @@ export async function reclaimStaleWebchatJobForPlatform(
 }
 
 /**
- * Persist the engine's reply: assistant message row, session bump
- * (last_seen + the sticky history marker; warn-only, mirrors the worker),
- * job → done. Returns the assistant message id. Mirrors the chat-worker's
- * finishWebchatJob — the Gemini engine is stateless by construction, so
- * the stored conversation id is only ever the marker sentinel.
+ * Persist the engine's reply ATOMICALLY via the
+ * `webchat_job_complete_platform` RPC: assistant message + session bump
+ * (last_seen + the sticky history marker) + job → done, one transaction.
+ * Returns the assistant message id.
+ *
+ * Atomicity is load-bearing (Bugbot High on PR #592): with separate
+ * writes, "message inserted but job flip failed" left a 'processing' row
+ * the stale-claim reclaim would answer AGAIN — duplicate assistant reply,
+ * double Gemini billing. The RPC makes partial states impossible, and a
+ * replay against an already-done job idempotently returns the original
+ * message id.
  */
 export async function completeWebchatJobFromPlatform(
-  job: Pick<WebchatJobRow, "id" | "session_id" | "business_id">,
+  job: Pick<WebchatJobRow, "id">,
   content: string,
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const msg = await appendWebchatMessage(job.session_id, job.business_id, "assistant", content, {}, db);
-
-  const { error: sessionErr } = await db
-    .from("webchat_sessions")
-    .update({
-      last_seen_at: new Date().toISOString(),
-      // Sticky history marker (see WEBCHAT_ENGINE_HISTORY_MARKER): flips
-      // the enqueue route to the full-tail input variant on later turns,
-      // matching the worker path's multi-turn context behavior.
-      rowboat_conversation_id: WEBCHAT_ENGINE_HISTORY_MARKER
-    })
-    .eq("id", job.session_id);
-  if (sessionErr) {
-    logger.warn("completeWebchatJobFromPlatform: session bump failed", {
-      sessionId: job.session_id,
-      error: sessionErr.message
-    });
+  const { data, error } = await db.rpc("webchat_job_complete_platform", {
+    p_job_id: job.id,
+    p_content: content,
+    p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+  });
+  if (error) throw new Error(`completeWebchatJobFromPlatform: ${error.message}`);
+  const msgId = Number(data);
+  if (!Number.isFinite(msgId)) {
+    throw new Error(`completeWebchatJobFromPlatform: non-numeric message id ${String(data)}`);
   }
-
-  const { error: jobErr } = await db
-    .from("webchat_jobs")
-    .update({
-      status: "done",
-      assistant_message_id: msg.id,
-      completed_at: new Date().toISOString(),
-      error_code: null,
-      error_detail: null
-    })
-    .eq("id", job.id);
-  if (jobErr) {
-    // Reply already persisted (the visitor's next poll renders it); the
-    // stuck 'processing' row is telemetry noise, not data loss — same
-    // acceptance as the worker's webchat_job_update_failed path.
-    logger.error("completeWebchatJobFromPlatform: job status flip failed", {
-      jobId: job.id,
-      error: jobErr.message
-    });
-  }
-  return msg.id;
+  return msgId;
 }
 
 /** Flip a platform-claimed job to error (the widget shows its retry copy). */

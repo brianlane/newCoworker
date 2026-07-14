@@ -72,3 +72,62 @@ comment on function claim_webchat_job is
 
 revoke all on function claim_webchat_job(text, uuid) from public;
 grant execute on function claim_webchat_job(text, uuid) to service_role;
+
+-- Atomic completion for the platform engine: assistant message + session
+-- history marker + job flip in ONE transaction. Without this, "message
+-- inserted but the job-status flip failed" leaves a 'processing' row that
+-- the stale-claim reclaim would answer AGAIN — duplicate assistant reply,
+-- double Gemini billing. With it, partial states cannot exist, and a
+-- replay against an already-done job idempotently returns the original
+-- reply instead of inserting a second one.
+create or replace function webchat_job_complete_platform(
+  p_job_id uuid,
+  p_content text,
+  p_history_marker text
+)
+returns bigint
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+declare
+  v_job webchat_jobs%rowtype;
+  v_msg_id bigint;
+begin
+  select * into v_job from webchat_jobs where id = p_job_id for update;
+  if not found then
+    raise exception 'webchat_job_complete_platform: job % not found', p_job_id;
+  end if;
+  if v_job.status = 'done' then
+    -- Idempotent replay (a reclaim raced an already-committed turn).
+    return v_job.assistant_message_id;
+  end if;
+
+  insert into webchat_messages (session_id, business_id, role, content)
+  values (v_job.session_id, v_job.business_id, 'assistant', p_content)
+  returning id into v_msg_id;
+
+  -- Sticky history marker: flips the enqueue route to the full-tail input
+  -- variant on later turns (multi-turn context parity with the worker).
+  update webchat_sessions
+     set last_seen_at = now(),
+         rowboat_conversation_id = p_history_marker
+   where id = v_job.session_id;
+
+  update webchat_jobs
+     set status = 'done',
+         assistant_message_id = v_msg_id,
+         completed_at = now(),
+         error_code = null,
+         error_detail = null
+   where id = p_job_id;
+
+  return v_msg_id;
+end;
+$$;
+
+comment on function webchat_job_complete_platform is
+  'Platform (Gemini) engine reply commit: assistant message + session history marker + job done, atomically. Replay on a done job returns the existing assistant_message_id (no duplicate reply, no double bill).';
+
+revoke all on function webchat_job_complete_platform(uuid, text, text) from public;
+grant execute on function webchat_job_complete_platform(uuid, text, text) to service_role;

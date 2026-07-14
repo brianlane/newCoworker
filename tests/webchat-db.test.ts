@@ -24,7 +24,7 @@ function makeBuilder(result: StubResult) {
   return b;
 }
 
-const supabaseStub = { from: vi.fn() };
+const supabaseStub = { from: vi.fn(), rpc: vi.fn() };
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => supabaseStub)
@@ -474,33 +474,18 @@ describe("platform-engine job lifecycle", () => {
     );
   });
 
-  it("completeWebchatJobFromPlatform persists the reply, marks session history, flips the job", async () => {
-    const msgBuilder = makeBuilder({ data: { id: 42 }, error: null });
-    const sessionBuilder = makeBuilder({ data: null, error: null });
-    const jobBuilder = makeBuilder({ data: null, error: null });
-    supabaseStub.from
-      .mockReturnValueOnce(msgBuilder)
-      .mockReturnValueOnce(sessionBuilder)
-      .mockReturnValueOnce(jobBuilder);
-
+  it("completeWebchatJobFromPlatform commits atomically through the RPC (with the history marker)", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: 42, error: null });
     expect(await completeWebchatJobFromPlatform(jobRow, "Reply text")).toBe(42);
-    expect((msgBuilder.insert as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
-      session_id: SESSION,
-      business_id: BIZ,
-      role: "assistant",
-      content: "Reply text"
+    expect(supabaseStub.rpc).toHaveBeenCalledWith("webchat_job_complete_platform", {
+      p_job_id: JOB,
+      p_content: "Reply text",
+      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
     });
-    // Sticky history marker: flips /api/widget/message to the full-tail
-    // input variant on later turns (multi-turn context parity).
-    expect((sessionBuilder.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
-      rowboat_conversation_id: WEBCHAT_ENGINE_HISTORY_MARKER
-    });
-    expect((jobBuilder.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
-      status: "done",
-      assistant_message_id: 42,
-      error_code: null,
-      error_detail: null
-    });
+
+    // bigint may arrive as a string through PostgREST.
+    supabaseStub.rpc.mockResolvedValueOnce({ data: "43", error: null });
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", injected)).toBe(43);
   });
 
   it("reclaimStaleWebchatJobForPlatform steals only a stale PLATFORM claim", async () => {
@@ -531,18 +516,15 @@ describe("platform-engine job lifecycle", () => {
     );
   });
 
-  it("completeWebchatJobFromPlatform tolerates session-bump and job-flip failures (reply already persisted)", async () => {
-    supabaseStub.from
-      .mockReturnValueOnce(makeBuilder({ data: { id: 43 }, error: null }))
-      .mockReturnValueOnce(makeBuilder({ data: null, error: { message: "session down" } }))
-      .mockReturnValueOnce(makeBuilder({ data: null, error: { message: "job down" } }));
-    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", injected)).toBe(43);
-  });
-
-  it("completeWebchatJobFromPlatform surfaces a failed message insert", async () => {
-    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+  it("completeWebchatJobFromPlatform surfaces RPC errors and malformed ids", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: null, error: { message: "x" } });
     await expect(completeWebchatJobFromPlatform(jobRow, "Reply")).rejects.toThrow(
-      "appendWebchatMessage: x"
+      "completeWebchatJobFromPlatform: x"
+    );
+
+    supabaseStub.rpc.mockResolvedValueOnce({ data: "not-a-number", error: null });
+    await expect(completeWebchatJobFromPlatform(jobRow, "Reply")).rejects.toThrow(
+      "non-numeric message id"
     );
   });
 
