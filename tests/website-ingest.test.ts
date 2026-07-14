@@ -1665,6 +1665,51 @@ describe("ingestWebsite", () => {
     expect(requested).not.toContain("https://example.com/never-fetched-sitemap.xml");
   });
 
+  it("seeds sitemap URLs before homepage links so a nav-heavy homepage can't starve sitemap-only pages", async () => {
+    // Bugbot finding: with homepage links seeded first, a homepage carrying
+    // maxPages worth of nav links filled the whole fetch budget and
+    // sitemap-only pages (blog posts etc.) never got queued.
+    const requested: string[] = [];
+    const navLinks = Array.from({ length: 10 }, (_, i) => `/nav-${i}`);
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(
+          urlset([
+            "https://example.com/blog/deep-1",
+            "https://example.com/blog/deep-2",
+            "https://example.com/blog/deep-3"
+          ])
+        );
+      }
+      if (url === "https://example.com/") {
+        return new Response(richBody("home", navLinks), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 4,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+    // All three sitemap-only pages made it into the 4-fetch budget…
+    expect(requested).toContain("https://example.com/blog/deep-1");
+    expect(requested).toContain("https://example.com/blog/deep-2");
+    expect(requested).toContain("https://example.com/blog/deep-3");
+    // …which means no nav link could be fetched (budget = home + 3).
+    expect(requested.some((u) => u.includes("/nav-"))).toBe(false);
+  });
+
   it("stops collecting sitemap URLs at the page cap without fetching further child sitemaps", async () => {
     const requested: string[] = [];
     const many = Array.from({ length: 10 }, (_, i) => `https://example.com/page-${i}`);

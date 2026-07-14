@@ -1092,11 +1092,12 @@ export async function ingestWebsite(
   visited.add(normalized);
   attempted += 1;
   const homepage = await crawlPage(normalized);
-  if (homepage) {
-    if (homepage.text.trim()) pages.push({ url: homepage.url, text: homepage.text });
-    for (const link of homepage.links) enqueue(link);
-  }
 
+  // Sitemap URLs are seeded BEFORE homepage links: the sitemap is the
+  // authoritative full-site map (blog posts, deep pages the nav never
+  // links), while a nav-heavy homepage can carry enough links to fill the
+  // whole fetch budget by itself and starve sitemap-only pages out of the
+  // queue. Homepage links backfill whatever budget the sitemap left.
   if (options.sitemapDiscovery) {
     const sitemapUrls = await discoverSitemapUrls(parsed, fetchImpl, lookup, maxPages);
     if (sitemapUrls.length > 0) {
@@ -1106,6 +1107,11 @@ export async function ingestWebsite(
       });
     }
     for (const url of sitemapUrls) enqueue(url);
+  }
+
+  if (homepage) {
+    if (homepage.text.trim()) pages.push({ url: homepage.url, text: homepage.text });
+    for (const link of homepage.links) enqueue(link);
   }
 
   while (
