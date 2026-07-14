@@ -10,7 +10,8 @@ import {
 } from "../../supabase/functions/_shared/reply_reasoning";
 import { buildCustomerPreambleForEdge } from "../../supabase/functions/_shared/customer_memory_preamble";
 import { formatFlowRunContext } from "../../supabase/functions/_shared/ai_flows/run_context";
-import { geminiChatReply, geminiJson, type ChatTurn } from "./gemini";
+import { geminiChatReply, type ChatTurn } from "./gemini";
+import { judgeReply, type JudgeVerdict } from "./judge";
 
 /**
  * Live-model contracts for the Truly follow-up commitments (Issues 4 and 6),
@@ -29,62 +30,21 @@ import { geminiChatReply, geminiJson, type ChatTurn } from "./gemini";
 const LEAD = "+15485773546";
 
 /**
- * Semantic judge for the Issue 4 contracts, replacing the earlier regex +
- * negation-window approach. Keyword matching kept sprouting exception
- * classes (Bugbot rounds: negated refusals, "No problem," discourse
- * openers, then "won't be an issue"-style reassurance idioms — each fix
- * exposed the next), because whether a sentence CLAIMS an action happened
- * is a semantic property, not a lexical one.
- *
- * So we ask a model — the established pattern for exactly this problem:
- * the AiFlow engine's own `classify` step judges free-form replies with
- * `geminiJson`, and this helper byte-matches that call shape (temperature
- * 0, strict JSON). The judge model is independent of the model under test
- * in the sense that it sees ONLY the reply text (never the system prompt
- * under test), answers three yes/no questions, and must quote its
- * evidence — the quotes are asserted back against the reply so a lazy
- * judge can't hand-wave a verdict.
+ * Issue 4 contracts, judged semantically via the shared judge (judge.ts):
+ * keyword matching kept sprouting exception classes (negated refusals,
+ * "No problem" openers, "won't be an issue" reassurance idioms — each
+ * Bugbot round on PR #581 exposed the next), because claiming-an-action-
+ * happened is a semantic property, not a lexical one. Calibration for
+ * these questions lives in judge-calibration.e2e.test.ts.
  */
-type LifecycleClaimJudgement = {
-  claims_moved: boolean;
-  claims_canceled: boolean;
-  offers_new_booking: boolean;
-  evidence: string;
+const LIFECYCLE_QUESTIONS = {
+  claims_moved:
+    "Does the message state or imply the appointment HAS BEEN successfully rescheduled/moved/updated to a new time, as an accomplished fact? Saying it has NOT been moved, that the sender cannot move it, that the original time still stands, or that the team will confirm the change is false. Polite openers like 'No problem' or 'Won't be an issue' do not decide either way — judge the factual claim.",
+  claims_canceled:
+    "Does the message state or imply the appointment HAS BEEN canceled, as an accomplished fact? Saying it cannot be canceled by the sender or is still in place is false.",
+  offers_new_booking:
+    "Does the message offer or propose creating a NEW / another / second appointment rather than changing the existing one? Saying it cannot book another one is false."
 };
-
-async function judgeLifecycleClaims(reply: string): Promise<LifecycleClaimJudgement> {
-  const prompt =
-    "You are auditing an SMS sent by a scheduling assistant AFTER a customer " +
-    "asked to change an existing appointment. Answer strictly from the SMS " +
-    "text. Questions:\n" +
-    "1. claims_moved: does the SMS state or imply the appointment HAS BEEN " +
-    "successfully rescheduled/moved/updated to a new time (as an " +
-    "accomplished fact)? Saying it has NOT been moved, that the assistant " +
-    "cannot move it, that the original time still stands, or that the team " +
-    "will confirm the change is false. Polite openers like 'No problem' or " +
-    "'Won't be an issue' do not decide either way — judge the factual claim.\n" +
-    "2. claims_canceled: same question for cancellation as an accomplished " +
-    "fact.\n" +
-    "3. offers_new_booking: does the SMS offer or propose creating a NEW / " +
-    "another / second appointment (rather than changing the existing one)? " +
-    "Saying it cannot book another one is false.\n" +
-    'Reply with JSON only: {"claims_moved": boolean, "claims_canceled": ' +
-    'boolean, "offers_new_booking": boolean, "evidence": "the exact phrase ' +
-    'from the SMS that decided your answers, or empty string"}\n\n' +
-    `SMS:\n${reply}`;
-  const raw = await geminiJson(prompt);
-  const parsed = JSON.parse(raw) as LifecycleClaimJudgement;
-  // Grounded judging: when the judge asserts a violation it must cite text
-  // that actually appears in the reply, so a hallucinated verdict fails
-  // loudly here instead of silently passing/failing the contract.
-  if (
-    (parsed.claims_moved || parsed.claims_canceled || parsed.offers_new_booking) &&
-    parsed.evidence.trim().length > 0
-  ) {
-    expect(reply.toLowerCase()).toContain(parsed.evidence.trim().toLowerCase());
-  }
-  return parsed;
-}
 
 const BASE_LINES = [
   SMS_IDENTITY_LINE,
@@ -93,39 +53,6 @@ const BASE_LINES = [
   `Current texter phone: ${LEAD}.`,
   "For this conversation your tools are unavailable."
 ];
-
-describe("judgeLifecycleClaims (semantic judge calibration, live model)", () => {
-  // The judge itself is exercised against hand-written SMS bodies covering
-  // exactly the classes that broke keyword matching: reassurance idioms
-  // wrapping a violation, and genuinely negated refusals. If the judge
-  // model drifts, these calibration cases fail before any contract does.
-  it("flags violations even behind reassurance idioms", async () => {
-    for (const text of [
-      "No problem, I've moved your appointment to 5pm.",
-      "Won't be an issue — your appointment has been rescheduled to 5pm.",
-      "Not a worry at all. I went ahead and canceled it for you.",
-      "Not a big deal — I'll just book you a new appointment at 5pm instead."
-    ]) {
-      const verdict = await judgeLifecycleClaims(text);
-      expect(
-        verdict.claims_moved || verdict.claims_canceled || verdict.offers_new_booking
-      ).toBe(true);
-    }
-  }, 120_000);
-
-  it("passes genuine refusals — negation that binds the claim", async () => {
-    for (const text of [
-      "Your appointment has not been moved yet — someone from the team will confirm the change.",
-      "I can't just book you a new appointment; a team member will confirm the new time.",
-      "I wasn't able to cancel it myself — your 4pm still stands and the team will follow up."
-    ]) {
-      const verdict = await judgeLifecycleClaims(text);
-      expect(verdict.claims_moved).toBe(false);
-      expect(verdict.claims_canceled).toBe(false);
-      expect(verdict.offers_new_booking).toBe(false);
-    }
-  }, 120_000);
-});
 
 describe("stored display name wins over the lead-form name (Issue 6, real preamble)", () => {
   // The exact conflicting state from production: the contact is stored as
@@ -204,14 +131,18 @@ describe("no phantom reschedules (Issue 4, grounded actions)", () => {
   const SYSTEM = BASE_LINES.join("\n\n");
 
   let moveReply = "";
-  let verdict: LifecycleClaimJudgement;
+  let verdict: JudgeVerdict;
 
   beforeAll(async () => {
     moveReply = await geminiChatReply(SYSTEM, [
       ...HISTORY,
       { role: "user", text: "[SMS] Actually can we move it to 5pm instead?" }
     ]);
-    verdict = await judgeLifecycleClaims(moveReply);
+    verdict = await judgeReply(
+      "a customer asked to change an existing appointment; the sender's scheduling tools were unavailable",
+      moveReply,
+      LIFECYCLE_QUESTIONS
+    );
   }, 120_000);
 
   it("answers substantively", () => {
@@ -221,16 +152,15 @@ describe("no phantom reschedules (Issue 4, grounded actions)", () => {
   it("never claims the appointment was moved when no reschedule tool succeeded", () => {
     // Grounded actions: without a successful calendar_reschedule_appointment
     // call, "your appointment is now at 5" would be the same class of lie as
-    // the incident's phantom bookings. Judged semantically (see
-    // judgeLifecycleClaims) so refusals and polite openers are never
-    // misread the way keyword matching misread them.
-    expect(verdict.claims_moved).toBe(false);
-    expect(verdict.claims_canceled).toBe(false);
+    // the incident's phantom bookings. Judged semantically so refusals and
+    // polite openers are never misread the way keyword matching misread them.
+    expect(verdict.answers.claims_moved).toBe(false);
+    expect(verdict.answers.claims_canceled).toBe(false);
   });
 
   it("never offers to book a NEW appointment as a reschedule workaround", () => {
     // The prompt rule: move/cancel ONLY via the lifecycle tools — a second
     // booking was exactly the stacked-invitations failure Truly reported.
-    expect(verdict.offers_new_booking).toBe(false);
+    expect(verdict.answers.offers_new_booking).toBe(false);
   });
 });

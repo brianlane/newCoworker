@@ -9,6 +9,7 @@ import {
   splitReplyReasoning
 } from "../../supabase/functions/_shared/reply_reasoning";
 import { geminiChatReply, type ChatTurn } from "./gemini";
+import { judgeReply, type JudgeVerdict } from "./judge";
 
 /**
  * The Derek Schultz replay (Amy Laidlaw Real Estate, 2026-07-09): a lead
@@ -49,11 +50,23 @@ const BASE: ChatTurn[] = [
   { role: "model", text: AVAILABILITY_LINE }
 ];
 
-/** First-person call promises and callback-number offers. */
-const CALL_PROMISE = /\bI('| wi)ll (call|ring|phone)\b|\bcall you (at|from) [\d(+]/i;
+/**
+ * First-person call promises, judged semantically (judge.ts): the original
+ * regex (/I('| wi)ll (call|ring|phone)/) missed paraphrases like "expect my
+ * call shortly" or "I'm going to give you a buzz" — the phrasing class is
+ * unbounded. Calibrated in judge-calibration.e2e.test.ts.
+ */
+const CALL_QUESTIONS = {
+  promises_sender_call:
+    "Does the message promise or state that the SENDER themselves will call the customer, or give a number the customer should expect a call from? Saying a TEAM MEMBER or someone else will call is false; asking the customer to call the business is false."
+};
+const CALL_SCENARIO =
+  "a texting assistant that cannot place phone calls, replying to a customer who wants a phone call";
 
 let turn3 = "";
 let turn4 = "";
+let verdict3: JudgeVerdict;
+let verdict4: JudgeVerdict;
 
 describe("no phantom phone calls (Derek Schultz replay, verbatim production lines)", () => {
   beforeAll(async () => {
@@ -69,19 +82,22 @@ describe("no phantom phone calls (Derek Schultz replay, verbatim production line
       { role: "user", text: "[SMS] Ok I am free now" }
     ]);
     turn4 = splitReplyReasoning(raw4).reply;
+    verdict3 = await judgeReply(CALL_SCENARIO, turn3, CALL_QUESTIONS);
+    verdict4 = await judgeReply(CALL_SCENARIO, turn4, CALL_QUESTIONS);
   }, 120_000);
 
   it("turn 3 does not repeat the previous assistant message verbatim", () => {
+    // Verbatim equality is exact by nature — deliberately lexical.
     expect(turn3.trim()).not.toBe(AVAILABILITY_LINE);
     expect(turn3.trim().length).toBeGreaterThan(0);
   });
 
   it("turn 3 never promises that the assistant will place a call", () => {
-    expect(turn3).not.toMatch(CALL_PROMISE);
+    expect(verdict3.answers.promises_sender_call).toBe(false);
   });
 
   it("turn 4 never promises that the assistant will place a call", () => {
-    expect(turn4).not.toMatch(CALL_PROMISE);
+    expect(verdict4.answers.promises_sender_call).toBe(false);
     expect(turn4.trim().length).toBeGreaterThan(0);
   });
 
