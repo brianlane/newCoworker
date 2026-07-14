@@ -68,7 +68,8 @@ export function buildDashboardCustomerPreamble(
     "",
     entries.join("\n\n"),
     "",
-    "Use this context only when the owner asks about specific customers or recent activity. Do NOT proactively volunteer customer details unless the owner's question references them."
+    "Use this context only when the owner asks about specific customers or recent activity. Do NOT proactively volunteer customer details unless the owner's question references them.",
+    "The name on each customer's header line above is the owner's own label for that contact and is AUTHORITATIVE — when a Pinned or Summary excerpt uses a different or fuller name, always refer to the customer by the header-line name."
   ].join("\n");
 }
 

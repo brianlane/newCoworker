@@ -52,7 +52,7 @@ export function buildCustomerPreambleForEdge(memory: EdgeCustomerMemoryRow): str
   ];
   if (name) {
     lines.push(
-      `Address this person as "${name}" — this is their stored preferred name and takes precedence over any different or longer name that appears in lead forms, automation context, or earlier messages (unless they explicitly ask you to use another name).`
+      `Address this person as "${name}" — this is their stored preferred name and takes precedence over any different or longer name that appears in lead forms, automation context, earlier messages, or the pinned notes and rolling summary below (unless they explicitly ask you to use another name).`
     );
     lines.push("");
   }

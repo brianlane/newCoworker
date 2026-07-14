@@ -383,6 +383,20 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
     expect(preamble).toMatch(/private from the owner/i);
   });
 
+  it("OWNER_PREAMBLE carries the Truly-review guardrails: stale-date restatement, header-name authority, honest tool results, proactive tool use", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];
+    const preamble = callArgs.inputMessages[0].content;
+    // "tomorrow, July 14" relayed ON July 14 — notes' relative dates rot.
+    expect(preamble).toContain("DATES IN NOTES MAY BE STALE");
+    // Summary's stale full name must not beat the owner-set header name.
+    expect(preamble).toContain("CUSTOMER NAMES");
+    // "Got it. I've updated the name" when the tool didn't update anything.
+    expect(preamble).toContain("TOOL RESULTS ARE THE TRUTH");
+    // Generic re-engagement advice instead of offering to draft the text.
+    expect(preamble).toContain("BE PROACTIVE WITH TOOLS");
+  });
+
   it("OWNER_PREAMBLE forbids fabricating details", async () => {
     await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
     const callArgs = vi.mocked(insertChatJob).mock.calls[0][0];

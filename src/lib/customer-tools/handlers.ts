@@ -20,6 +20,7 @@ import {
   recordInteractionAndIncrement,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
+import { summarizeCustomerMemoryAndLog } from "@/lib/customer-memory/summarizer";
 
 export type CustomerToolResult = {
   ok: boolean;
@@ -79,10 +80,15 @@ export async function lookupCustomerByPhone(
 }
 
 /**
- * `customer_set_display_name` core. Never overwrites a name the OWNER set
- * via the customers UI — agent-discovered names only land when
- * display_name is currently null/empty. Force-creates the customer row via
- * the inbound-path RPC when missing so the write always persists.
+ * `customer_set_display_name` core. Customer surfaces (voice/SMS) never
+ * overwrite a name that is already set — agent-discovered names only land
+ * when display_name is currently null/empty. The DASHBOARD surface is the
+ * owner speaking, so there a rename IS authoritative: it overwrites,
+ * stamps name_source='manual' (same provenance as a contacts-UI edit), and
+ * force-regenerates the rolling summary so the old name doesn't linger in
+ * summary_md (observed live: the coworker kept calling a renamed lead by
+ * the summary's stale full name). Force-creates the customer row via the
+ * inbound-path RPC when missing so the write always persists.
  */
 export async function setCustomerDisplayName(
   businessId: string,
@@ -100,17 +106,25 @@ export async function setCustomerDisplayName(
   // Re-check after the create above: the RPC's `p_display_name` will have
   // already populated display_name on a brand-new row, in which case no
   // follow-up UPDATE is needed.
-  if (existing?.display_name?.trim()) {
-    return {
-      ok: true,
-      data: {
-        updated: false,
-        reason:
-          existing.display_name.trim() === displayName
-            ? "name_already_set_matches"
-            : "name_already_set"
-      }
-    };
+  const current = existing?.display_name?.trim() ?? "";
+  if (current) {
+    if (current === displayName) {
+      return { ok: true, data: { updated: false, reason: "name_already_set_matches" } };
+    }
+    if (channel !== "dashboard") {
+      return { ok: true, data: { updated: false, reason: "name_already_set" } };
+    }
+    await updateCustomerOwnerFields(businessId, phone, {
+      displayName,
+      nameSource: "manual"
+    });
+    // Fire-and-forget: regenerate summary_md so the old name is corrected at
+    // its source, not just on the contact row. `force` bypasses the
+    // threshold/debounce gates (a rename adds no interaction, so the normal
+    // gate would skip). A failure only delays the correction to the next
+    // interaction's summarizer run.
+    void summarizeCustomerMemoryAndLog(businessId, phone, {}, { force: true });
+    return { ok: true, data: { updated: true, previous: current } };
   }
   await updateCustomerOwnerFields(businessId, phone, { displayName });
   return { ok: true, data: { updated: true } };

@@ -19,6 +19,12 @@ vi.mock("@/lib/customer-memory/db", () => ({
   recordInteractionAndIncrement: vi.fn()
 }));
 
+// The handlers module now imports the summarizer (dashboard rename path);
+// keep this suite hermetic — the voice surface must never trigger it.
+vi.mock("@/lib/customer-memory/summarizer", () => ({
+  summarizeCustomerMemoryAndLog: vi.fn().mockResolvedValue(undefined)
+}));
+
 vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
   verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)

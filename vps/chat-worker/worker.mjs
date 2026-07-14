@@ -18,7 +18,12 @@
 //      retry, the worker NULLs out dashboard_chat_threads.rowboat_conversation_id
 //      so the next turn doesn't pay 2x latency on the same dead id.
 //   3. If both attempts fail (or stateless_input_messages is null and
-//      the first attempt failed), the job ends as 'error'.
+//      the first attempt failed) on a RETRYABLE code with claim budget
+//      left, the job is RE-QUEUED (status 'queued', claim cleared) after a
+//      REQUEUE_BACKOFF_MS * attempts pause, so a transient Rowboat outage
+//      wider than the in-turn retry window (observed: a ~30s 500 window)
+//      doesn't dead-end the turn. Non-retryable codes, or the last
+//      allowed attempt failing, end the job as 'error'.
 //
 // Reliability contract ("messages do not drop"):
 //   1. claim_chat_job() is FOR UPDATE SKIP LOCKED — concurrent workers
@@ -64,6 +69,8 @@
 //                                  reclaim our own in-flight job)
 //   WORKER_MAX_ATTEMPTS           (default 3 — hard cap on retries before
 //                                  marking a job permanently errored)
+//   WORKER_REQUEUE_BACKOFF_MS     (default 10000 — pause before a retryable
+//                                  failure is re-queued, × the claim number)
 //   WORKER_VERCEL_BASE_URL        (e.g. https://newcoworker.com — when set
 //                                  AND WORKER_VERCEL_BEARER is set, the
 //                                  worker fires a fire-and-forget POST to
@@ -97,6 +104,15 @@ const STALE_CLAIM_MS = intEnv("WORKER_STALE_CLAIM_MS", 5 * 60 * 1000);
 const SWEEP_INTERVAL_MS = intEnv("WORKER_SWEEP_INTERVAL_MS", 30 * 1000);
 const ROWBOAT_TIMEOUT_MS = intEnv("WORKER_ROWBOAT_TIMEOUT_MS", 4 * 60 * 1000);
 const MAX_ATTEMPTS = intEnv("WORKER_MAX_ATTEMPTS", 3);
+// Backoff before a failed-but-retryable job is re-queued, multiplied by the
+// claim number. Observed live (July 2026, business 690f85c0): Rowboat 500'd
+// for a ~30s window — the in-turn retry (a few seconds apart) failed too, but
+// the owner's manual resend ~45s later succeeded. Spacing re-claims out gives
+// a blipping Rowboat room to recover instead of burning the whole attempts
+// budget inside the same bad window.
+const REQUEUE_BACKOFF_MS = intEnv("WORKER_REQUEUE_BACKOFF_MS", 10 * 1000);
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // Rowboat agent to enter on owner-dashboard turns. MUST match an agent in
 // this tenant's seeded workflow. deploy-client.sh seeds "OwnerCoworker"
 // (= Coworker's tool surface plus owner_append_business_memory), so that's
@@ -1121,6 +1137,41 @@ async function processJob(job) {
   } catch (err) {
     const msg = String(err?.message || "unknown_error");
     const code = msg.split(":")[0];
+    // Transient upstream failure with retry budget left → re-queue instead of
+    // dead-ending the owner's turn. claim_chat_job bumps `attempts` on every
+    // claim and the top of this function enforces MAX_ATTEMPTS, so this can't
+    // loop forever. Strictly `<` so the LAST attempt's failure keeps its real
+    // error code instead of burning one more claim to die as
+    // max_attempts_exceeded. Idempotent from our side: nothing is persisted
+    // until a successful Rowboat response, so re-running the same
+    // input_messages is safe. The UI keeps showing the thinking indicator
+    // ('queued' is in-flight), which beats a dead turn the owner must retype.
+    if (isRetryableErrorCode(code) && job.attempts < MAX_ATTEMPTS) {
+      log("warn", "owner_turn_requeued", {
+        jobId: job.id,
+        attempts: job.attempts,
+        code,
+        durationMs: Date.now() - t0
+      });
+      // The backoff deliberately blocks this worker's drain pass — one tenant
+      // per box, and a Rowboat that just 500'd twice needs breathing room
+      // more than the queue needs throughput.
+      await sleep(REQUEUE_BACKOFF_MS * job.attempts);
+      const { error: requeueErr } = await sb
+        .from("dashboard_chat_jobs")
+        .update({
+          status: "queued",
+          claimed_by: null,
+          claimed_at: null,
+          error_code: code,
+          error_detail: msg.slice(0, 500)
+        })
+        .eq("id", job.id);
+      if (!requeueErr) return;
+      // Fall through to the terminal write — better an honest error than a
+      // job stuck 'processing' until the stale-claim sweep.
+      log("error", "requeue_failed", { jobId: job.id, error: requeueErr.message });
+    }
     log("error", "process_failed", {
       jobId: job.id,
       error: msg,
@@ -1351,6 +1402,30 @@ async function processWebchatJob(job) {
   } catch (err) {
     const msg = String(err?.message || "unknown_error");
     const code = msg.split(":")[0];
+    // Same re-queue-on-transient-failure semantics as processJob above —
+    // claim_webchat_job bumps `attempts`, the top of this function enforces
+    // MAX_ATTEMPTS, and nothing persists before a successful response.
+    if (isRetryableErrorCode(code) && job.attempts < MAX_ATTEMPTS) {
+      log("warn", "webchat_turn_requeued", {
+        jobId: job.id,
+        attempts: job.attempts,
+        code,
+        durationMs: Date.now() - t0
+      });
+      await sleep(REQUEUE_BACKOFF_MS * job.attempts);
+      const { error: requeueErr } = await sb
+        .from("webchat_jobs")
+        .update({
+          status: "queued",
+          claimed_by: null,
+          claimed_at: null,
+          error_code: code,
+          error_detail: msg.slice(0, 500)
+        })
+        .eq("id", job.id);
+      if (!requeueErr) return;
+      log("error", "webchat_requeue_failed", { jobId: job.id, error: requeueErr.message });
+    }
     log("error", "webchat_process_failed", {
       jobId: job.id,
       error: msg,
