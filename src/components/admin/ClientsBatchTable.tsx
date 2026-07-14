@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
-import { DeployButton } from "@/components/dashboard/DeployButton";
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
@@ -144,7 +143,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
     for (const row of selectedRows) {
       try {
         if (action === "redeploy") {
-          // Match the single-row DeployButton semantics: provisioning is
+          // Match the detail-page DeployButton semantics: provisioning is
           // only offered for offline boxes; skip the rest instead of
           // re-running a live tenant's provisioning by accident.
           if (row.status !== "offline") {
@@ -343,8 +342,8 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                   </p>
                 </td>
                 <td className="py-3 px-4 text-parchment/70">
-                  <span className="inline-flex items-center gap-2">
-                    {b.ownerEmail}
+                  <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="break-all">{b.ownerEmail}</span>
                     {b.ownerQuiet && (
                       <span title="Owner hasn't signed in for 90+ days">
                         <Badge variant="error" className="text-[10px]">
@@ -354,10 +353,10 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     )}
                   </span>
                 </td>
-                <td className="py-3 px-4">
+                <td className="py-3 px-4 whitespace-nowrap">
                   <Badge variant={b.tier === "standard" ? "online" : "neutral"}>{b.tier}</Badge>
                 </td>
-                <td className="py-3 px-4">
+                <td className="py-3 px-4 whitespace-nowrap">
                   {!b.subscriptionStatus ? (
                     <Badge variant="neutral">no subscription</Badge>
                   ) : (
@@ -374,7 +373,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     </Badge>
                   )}
                 </td>
-                <td className="py-3 px-4">
+                <td className="py-3 px-4 whitespace-nowrap">
                   {b.marginCents === null ? (
                     <span className="text-xs text-parchment/30">—</span>
                   ) : (
@@ -391,7 +390,7 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     </span>
                   )}
                 </td>
-                <td className="py-3 px-4">
+                <td className="py-3 px-4 whitespace-nowrap">
                   <div className="flex items-center gap-2">
                     <StatusDot
                       status={b.status as "online" | "offline" | "high_load"}
@@ -400,13 +399,12 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     {b.isPaused && <Badge variant="error">paused</Badge>}
                   </div>
                 </td>
-                <td className="py-3 px-4">
+                <td className="py-3 px-4 whitespace-nowrap">
                   <div className="flex items-center gap-3">
                     <a href={`/admin/${b.id}`} className="text-xs text-signal-teal hover:underline">
                       Details
                     </a>
                     <ViewAsButton businessId={b.id} variant="link" />
-                    {b.status === "offline" && <DeployButton businessId={b.id} />}
                   </div>
                 </td>
               </tr>
