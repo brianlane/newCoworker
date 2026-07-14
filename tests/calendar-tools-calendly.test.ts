@@ -519,6 +519,46 @@ describe("findCalendlyScheduledEvent", () => {
     ).not.toBe("not_found");
   });
 
+  it("phone match beats an earlier email-only match when both identities are supplied", async () => {
+    const EV2_URI = "https://api.calendly.com/scheduled_events/EV2";
+    mockUserAndEvents([{ uri: EVENT_URI }, { uri: EV2_URI }]);
+    vi.mocked(nangoProxyForBusiness)
+      // EV1 (earlier): the supplied email but a DIFFERENT SMS number — this
+      // is someone else's booking under a shared/stale email.
+      .mockResolvedValueOnce(
+        inviteesResponse([
+          { email: "joe@acme.com", text_reminder_number: "+15550001111", reschedule_url: "x" }
+        ])
+      )
+      // EV2 (later): the surface-verified phone.
+      .mockResolvedValueOnce(inviteesResponse([MATCHING_INVITEE]));
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+    expect(found).toEqual({
+      event: { eventUri: EV2_URI, eventUuid: "EV2", rescheduleUrl: RESCHEDULE_URL }
+    });
+  });
+
+  it("falls back to the EARLIEST email match when no event matches the phone", async () => {
+    const EV2_URI = "https://api.calendly.com/scheduled_events/EV2";
+    mockUserAndEvents([{ uri: EVENT_URI }, { uri: EV2_URI }]);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce(
+        inviteesResponse([{ email: "joe@acme.com", reschedule_url: RESCHEDULE_URL }])
+      )
+      // A second email match later must not displace the earliest one.
+      .mockResolvedValueOnce(inviteesResponse([{ email: "joe@acme.com", reschedule_url: "y" }]));
+    const found = await findCalendlyScheduledEvent(BIZ, CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+    expect(found).toEqual({
+      event: { eventUri: EVENT_URI, eventUuid: "EV1", rescheduleUrl: RESCHEDULE_URL }
+    });
+  });
+
   it("matches an invitee by email case-insensitively", async () => {
     mockUserAndEvents([{ uri: EVENT_URI }]);
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(

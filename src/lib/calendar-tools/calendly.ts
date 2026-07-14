@@ -309,8 +309,13 @@ export type CalendlyLocatedEvent = {
 };
 
 /**
- * The customer's next upcoming active event, matched by invitee email or
- * SMS number. Returns:
+ * The customer's next upcoming active event, matched by invitee SMS number
+ * or email. When BOTH identities are supplied, a phone match is
+ * authoritative and wins over any email-only match on an earlier event: the
+ * phone is the surface-verified identity (the number that texted us), while
+ * the model-supplied email can be stale or shared — an OR across
+ * earliest-first events would let the wrong booking win (Bugbot on PR #584).
+ * Returns:
  *   - `{ event }` on a match,
  *   - `"not_connected"` when the transport refuses,
  *   - `"not_found"` when no upcoming event has a matching active invitee.
@@ -343,6 +348,23 @@ export async function findCalendlyScheduledEvent(
   const events = ((eventsRes.data as ScheduledEventsBody)?.collection ?? []).filter(
     (e): e is { uri: string } => typeof e?.uri === "string" && e.uri.length > 0
   );
+  const toLocated = (
+    event: { uri: string },
+    eventUuid: string,
+    match: { reschedule_url?: string }
+  ): CalendlyLocatedEvent => ({
+    eventUri: event.uri,
+    eventUuid,
+    rescheduleUrl:
+      typeof match.reschedule_url === "string" && match.reschedule_url.length > 0
+        ? match.reschedule_url
+        : null
+  });
+
+  // Earliest event with an email-only match — used ONLY if no event in the
+  // whole scan matches the phone.
+  let emailFallback: CalendlyLocatedEvent | null = null;
+
   for (const event of events) {
     const eventUuid = event.uri.slice(event.uri.lastIndexOf("/") + 1);
     if (!eventUuid) continue;
@@ -355,31 +377,25 @@ export async function findCalendlyScheduledEvent(
     const invitees = ((inviteesRes.data as InviteesBody)?.collection ?? []).filter(
       (i) => i?.status !== "canceled"
     );
-    const match = invitees.find((i) => {
-      const inviteeEmail = typeof i.email === "string" ? i.email.toLowerCase() : "";
-      const inviteePhone =
-        typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
-      return (
-        (emailLc.length > 0 && inviteeEmail === emailLc) ||
-        (phoneDigits.length > 0 &&
-          inviteePhone.length > 0 &&
-          phoneDigitsMatch(inviteePhone, phoneDigits))
+
+    const phoneMatch =
+      phoneDigits.length > 0
+        ? invitees.find((i) => {
+            const inviteePhone =
+              typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
+            return inviteePhone.length > 0 && phoneDigitsMatch(inviteePhone, phoneDigits);
+          })
+        : undefined;
+    if (phoneMatch) return { event: toLocated(event, eventUuid, phoneMatch) };
+
+    if (!emailFallback && emailLc.length > 0) {
+      const emailMatch = invitees.find(
+        (i) => typeof i.email === "string" && i.email.toLowerCase() === emailLc
       );
-    });
-    if (match) {
-      return {
-        event: {
-          eventUri: event.uri,
-          eventUuid,
-          rescheduleUrl:
-            typeof match.reschedule_url === "string" && match.reschedule_url.length > 0
-              ? match.reschedule_url
-              : null
-        }
-      };
+      if (emailMatch) emailFallback = toLocated(event, eventUuid, emailMatch);
     }
   }
-  return "not_found";
+  return emailFallback ? { event: emailFallback } : "not_found";
 }
 
 /**
