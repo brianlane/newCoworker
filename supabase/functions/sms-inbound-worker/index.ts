@@ -488,6 +488,11 @@ serve(async (req: Request) => {
           // silently eats customer texts. Count-then-send; a failed send
           // releases the counted slot inside the catch below.
           const fwdMeter = await meterOperationalSms(supabase, job.business_id);
+          // Flipped the moment Telnyx ACCEPTS the message: post-send
+          // bookkeeping failures (job completion, prompt insert) re-enter
+          // the catch, and releasing then would refund quota for an SMS
+          // that was actually delivered.
+          let fwdDelivered = false;
           try {
             const fwdRes = await fetch("https://api.telnyx.com/v2/messages", {
               method: "POST",
@@ -497,6 +502,7 @@ serve(async (req: Request) => {
             if (!fwdRes.ok) {
               throw new Error(`telnyx_forward_${fwdRes.status}`);
             }
+            fwdDelivered = true;
             const fwdJson = (await fwdRes.json()) as { data?: { id?: string } };
             const mid = fwdJson.data?.id ?? null;
             await supabase.rpc("complete_sms_inbound_job", {
@@ -541,9 +547,12 @@ serve(async (req: Request) => {
               business_id: job.business_id
             });
           } catch (e) {
-            // The forward never reached the owner — give the counted slot
-            // back (retries re-meter on the next attempt).
-            await releaseOperationalSms(supabase, job.business_id, fwdMeter);
+            // Release ONLY when the forward never reached Telnyx — a
+            // post-send bookkeeping failure must keep the delivered SMS
+            // counted (retries re-meter on the next attempt).
+            if (!fwdDelivered) {
+              await releaseOperationalSms(supabase, job.business_id, fwdMeter);
+            }
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
             // Bound the retry budget just like the Rowboat error path below —

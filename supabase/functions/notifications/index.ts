@@ -342,6 +342,9 @@ serve(async (req: Request) => {
     // Declared OUTSIDE the try so the catch can release the counted slot
     // when the fetch itself throws (network error — nothing left Telnyx).
     const smsMeter = await meterOperationalSms(supa, record.business_id);
+    // Set once Telnyx accepts: a post-send recordRow failure re-enters the
+    // catch, and releasing then would refund quota for a delivered alert.
+    let smsDelivered = false;
     try {
       const body: Record<string, string> = {
         to: targets.phone,
@@ -360,6 +363,8 @@ serve(async (req: Request) => {
       if (!smsRes.ok) {
         // The alert never left Telnyx — give the counted slot back.
         await releaseOperationalSms(supa, record.business_id, smsMeter);
+      } else {
+        smsDelivered = true;
       }
       if (smsRes.ok) {
         await recordRow(
@@ -386,9 +391,11 @@ serve(async (req: Request) => {
         );
       }
     } catch (e) {
-      // Transport-level throw: the alert never left Telnyx — release the
-      // counted slot before recording the failure.
-      await releaseOperationalSms(supa, record.business_id, smsMeter);
+      // Release ONLY when the alert never reached Telnyx — a post-send
+      // recordRow failure must keep the delivered SMS counted.
+      if (!smsDelivered) {
+        await releaseOperationalSms(supa, record.business_id, smsMeter);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`SMS error: ${msg}`);
       await recordRow(
