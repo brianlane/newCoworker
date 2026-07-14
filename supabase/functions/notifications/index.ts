@@ -336,11 +336,13 @@ serve(async (req: Request) => {
       targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
     );
   } else if (telnyxKey && telnyxProfile) {
+    // Owner alerts are METERED against the tenant's monthly pool like all
+    // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
+    // the "you hit your SMS cap" alert must outrun the cap it reports.
+    // Declared OUTSIDE the try so the catch can release the counted slot
+    // when the fetch itself throws (network error — nothing left Telnyx).
+    const smsMeter = await meterOperationalSms(supa, record.business_id);
     try {
-      // Owner alerts are METERED against the tenant's monthly pool like all
-      // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
-      // the "you hit your SMS cap" alert must outrun the cap it reports.
-      const smsMeter = await meterOperationalSms(supa, record.business_id);
       const body: Record<string, string> = {
         to: targets.phone,
         text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
@@ -384,6 +386,9 @@ serve(async (req: Request) => {
         );
       }
     } catch (e) {
+      // Transport-level throw: the alert never left Telnyx — release the
+      // counted slot before recording the failure.
+      await releaseOperationalSms(supa, record.business_id, smsMeter);
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`SMS error: ${msg}`);
       await recordRow(

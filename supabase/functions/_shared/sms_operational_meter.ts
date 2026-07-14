@@ -100,7 +100,17 @@ export async function sendOperationalSms(
   const outcome = businessId
     ? await meterOperationalSms(supabase, businessId)
     : { counted: false, detail: "no_business" };
-  const send = await telnyxSendSms(params);
+  let send: Awaited<ReturnType<typeof telnyxSendSms>>;
+  try {
+    send = await telnyxSendSms(params);
+  } catch (err) {
+    // Transport-level throw (network error): nothing left Telnyx, so give
+    // the counted slot back before surfacing the error to the caller.
+    if (businessId) {
+      await releaseOperationalSms(supabase, businessId, outcome);
+    }
+    throw err;
+  }
   if (!send.ok && businessId) {
     await releaseOperationalSms(supabase, businessId, outcome);
   }

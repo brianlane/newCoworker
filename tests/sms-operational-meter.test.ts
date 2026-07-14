@@ -149,4 +149,33 @@ describe("sendOperationalSms", () => {
     expect(fail.ok).toBe(false);
     expect(s.rpc).not.toHaveBeenCalled();
   });
+
+  it("releases the counted slot when the send transport THROWS (network error)", async () => {
+    const s = supa(async (fn) =>
+      fn === "meter_sms_operational_send"
+        ? { data: { counted: true, source: "plan" }, error: null }
+        : { data: null, error: null }
+    );
+    const throwingFetch = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(
+      sendOperationalSms(s, BIZ, sendParams(throwingFetch as unknown as typeof fetch))
+    ).rejects.toThrow("fetch failed");
+    expect(s.rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
+      p_business_id: BIZ,
+      p_refund_bonus: false
+    });
+  });
+
+  it("rethrows a transport error without releasing when no tenant was metered", async () => {
+    const s = supa(async () => ({ data: null, error: null }));
+    const throwingFetch = vi.fn(async () => {
+      throw new TypeError("fetch failed");
+    });
+    await expect(
+      sendOperationalSms(s, null, sendParams(throwingFetch as unknown as typeof fetch))
+    ).rejects.toThrow("fetch failed");
+    expect(s.rpc).not.toHaveBeenCalled();
+  });
 });
