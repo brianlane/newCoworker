@@ -129,17 +129,30 @@ async function searchProviderEvent(
         params: {
           startDateTime: nowIso,
           endDateTime: endIso,
-          $select: "id,bodyPreview,start",
+          // Full body, not just bodyPreview: booked events carry free-form
+          // notes BEFORE the Attendee/Phone/Email marker lines, and Graph
+          // previews are short — long notes would push the marker out of the
+          // preview and make valid appointments unfindable (Bugbot on
+          // PR #577). The marker (an E.164 or email) substring-matches even
+          // when Graph returns the body HTML-wrapped.
+          $select: "id,bodyPreview,body,start",
           $orderby: "start/dateTime",
           $top: "25"
         }
       });
       const items =
         ((res?.data ?? null) as {
-          value?: Array<{ id?: string; bodyPreview?: string }>;
+          value?: Array<{
+            id?: string;
+            bodyPreview?: string;
+            body?: { content?: string };
+          }>;
         } | null)?.value ?? [];
       const hit = items.find(
-        (e) => typeof e.id === "string" && e.id.length > 0 && (e.bodyPreview ?? "").includes(marker)
+        (e) =>
+          typeof e.id === "string" &&
+          e.id.length > 0 &&
+          `${e.body?.content ?? ""}\n${e.bodyPreview ?? ""}`.includes(marker)
       );
       if (hit?.id) return hit.id;
     } catch (err) {

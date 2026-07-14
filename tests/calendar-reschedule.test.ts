@@ -195,10 +195,22 @@ describe("rescheduleCalendarAppointment", () => {
 
   it("PATCHes the Microsoft event with naive wall time and records an external claim for a searched event", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
-    // Not in the ledger (pre-ledger booking) → provider search finds it.
+    // Not in the ledger (pre-ledger booking) → provider search finds it via
+    // the FULL body: long notes push the Phone: marker out of bodyPreview
+    // (Graph truncates it), so the truncated preview alone must not decide.
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({
-        data: { value: [{ id: "evt-search", bodyPreview: `Attendee: Joe\nPhone: ${PHONE}` }] }
+        data: {
+          value: [
+            {
+              id: "evt-search",
+              bodyPreview: "Very long free-form notes that crowd out the marker…",
+              body: {
+                content: `<html>Very long notes…\nAttendee: Joe\nPhone: ${PHONE}</html>`
+              }
+            }
+          ]
+        }
       } as never)
       .mockResolvedValueOnce({ data: {} } as never);
 
@@ -229,7 +241,8 @@ describe("rescheduleCalendarAppointment", () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-ms" } as never);
     vi.mocked(nangoProxyForBusiness)
-      // Shared view: an event for someone else — no match.
+      // Shared view: an event for someone else — no match (bodyPreview-only
+      // rows still match when short enough; id-less rows are skipped).
       .mockResolvedValueOnce({
         data: { value: [{ id: "evt-other", bodyPreview: "Phone: +15550000000" }, { bodyPreview: PHONE }] }
       } as never)
