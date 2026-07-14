@@ -1,4 +1,11 @@
 -- ---------------------------------------------------------------------------
+-- Version stamp note: the production ledger is ahead of real time (legacy
+-- invented stamps run through 20260805000100), and `supabase db push`
+-- refuses local files that sort before the remote max — so a real
+-- `date -u` stamp cannot deploy until the ledger passes 2026-08-05. This
+-- continues the ledger's sequence (…000000, …000100, …000200), same as the
+-- two migrations merged immediately before it.
+-- ---------------------------------------------------------------------------
 -- Pipelines: named, ordered stage boards for lead state (GoHighLevel-style).
 --
 -- A pipeline is a set of ordered STAGES; each stage is BACKED BY A CONTACT
