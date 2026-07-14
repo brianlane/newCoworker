@@ -51,7 +51,14 @@ const FORMAT_LABELS: Record<AgentItem["output_format"], string> = {
   same_as_input: "Same as input"
 };
 
-export function AgentsManager({ businessId }: { businessId: string }) {
+export function AgentsManager({
+  businessId,
+  initialDraft
+}: {
+  businessId: string;
+  /** When true (`?draft=1`), load the chat-created draft stashed in sessionStorage. */
+  initialDraft?: boolean;
+}) {
   const [agents, setAgents] = useState<AgentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +86,32 @@ export function AgentsManager({ businessId }: { businessId: string }) {
   const [savingRunDoc, setSavingRunDoc] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const runFileRef = useRef<HTMLInputElement | null>(null);
+
+  // Chat hand-off: /dashboard/chat's "create an agent" tool stashes the
+  // draft in sessionStorage then navigates here with ?draft=1. Load it once
+  // into the create form for review, then clear the stash so a refresh
+  // doesn't re-open it. Nothing is saved until the owner clicks Create.
+  useEffect(() => {
+    if (!initialDraft) return;
+    try {
+      const raw = sessionStorage.getItem("agent_create_draft");
+      if (!raw) return;
+      const draft = JSON.parse(raw) as {
+        name?: unknown;
+        instructions?: unknown;
+        outputFormat?: unknown;
+      };
+      if (typeof draft.name === "string" && typeof draft.instructions === "string") {
+        sessionStorage.removeItem("agent_create_draft");
+        setCreateName(draft.name.slice(0, 120));
+        setCreateInstructions(draft.instructions.slice(0, 8000));
+        setCreateFormat(draft.outputFormat === "same_as_input" ? "same_as_input" : "markdown");
+        setShowCreate(true);
+      }
+    } catch {
+      /* malformed/absent draft — fall back to the normal list view */
+    }
+  }, [initialDraft]);
 
   const refresh = useCallback(async () => {
     try {
