@@ -31,7 +31,11 @@ import {
   BUSINESS_CONFIG_SOUL_MD_MAX_CHARS
 } from "@/lib/vault/business-config-markdown-limits";
 import { buildIntakeApplyPlan, replaceWhiteGloveBlock } from "@/lib/white-glove/apply";
-import { getWhiteGloveIntake, markWhiteGloveIntakeApplied } from "@/lib/white-glove/intake";
+import {
+  claimWhiteGloveIntakeForBusiness,
+  getWhiteGloveIntake,
+  markWhiteGloveIntakeApplied
+} from "@/lib/white-glove/intake";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -89,6 +93,18 @@ export async function applyWhiteGloveIntake(
   const business = await getBusiness(args.businessId, db);
   if (!business) {
     throw new WhiteGloveApplyError("business_not_found", "Business not found.");
+  }
+
+  // Atomically CLAIM the intake for this tenant before writing anything.
+  // The read-then-check above is only a fast path — two overlapping applies
+  // targeting different tenants would both pass it; the conditional UPDATE
+  // (unlinked-or-same-business) makes exactly one of them proceed.
+  const claimed = await claimWhiteGloveIntakeForBusiness(intake.id, args.businessId, db);
+  if (!claimed) {
+    throw new WhiteGloveApplyError(
+      "intake_business_mismatch",
+      "This intake was just applied to a different business."
+    );
   }
 
   const plan = buildIntakeApplyPlan(intake.answers, {

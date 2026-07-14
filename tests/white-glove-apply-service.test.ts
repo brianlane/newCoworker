@@ -33,6 +33,7 @@ vi.mock("@/lib/white-glove/intake", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/white-glove/intake")>();
   return {
     ...actual,
+    claimWhiteGloveIntakeForBusiness: vi.fn(),
     getWhiteGloveIntake: vi.fn(),
     markWhiteGloveIntakeApplied: vi.fn()
   };
@@ -51,7 +52,11 @@ import { getBusiness, updateBusinessProfileFields } from "@/lib/db/businesses";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
 import { createAiFlow, getAiFlow, listAiFlows, updateAiFlow } from "@/lib/ai-flows/db";
 import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
-import { getWhiteGloveIntake, markWhiteGloveIntakeApplied } from "@/lib/white-glove/intake";
+import {
+  claimWhiteGloveIntakeForBusiness,
+  getWhiteGloveIntake,
+  markWhiteGloveIntakeApplied
+} from "@/lib/white-glove/intake";
 import type { WhiteGloveIntakeRow } from "@/lib/white-glove/intake";
 import type { IntakeAnswers } from "@/lib/white-glove/template";
 
@@ -114,6 +119,7 @@ describe("applyWhiteGloveIntake", () => {
     vi.mocked(createAiFlow).mockResolvedValue({ id: FLOW_ID } as never);
     vi.mocked(updateAiFlow).mockResolvedValue({ id: FLOW_ID } as never);
     vi.mocked(listAiFlows).mockResolvedValue([]);
+    vi.mocked(claimWhiteGloveIntakeForBusiness).mockResolvedValue(true);
   });
 
   it("guards: unknown intake, not completed, tied elsewhere, unknown business", async () => {
@@ -146,6 +152,23 @@ describe("applyWhiteGloveIntake", () => {
       applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
     ).rejects.toMatchObject({ code: "business_not_found" });
     expect(patchBusinessConfig).not.toHaveBeenCalled();
+  });
+
+  it("loses the atomic claim race cleanly — nothing is written", async () => {
+    // Two overlapping applies to different tenants both pass the read-time
+    // mismatch check; the conditional-UPDATE claim lets exactly one through.
+    vi.mocked(claimWhiteGloveIntakeForBusiness).mockResolvedValue(false);
+    await expect(
+      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
+    ).rejects.toMatchObject({ code: "intake_business_mismatch" });
+    expect(claimWhiteGloveIntakeForBusiness).toHaveBeenCalledWith(
+      INTAKE_ID,
+      BIZ_ID,
+      expect.anything()
+    );
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+    expect(createAiFlow).not.toHaveBeenCalled();
+    expect(markWhiteGloveIntakeApplied).not.toHaveBeenCalled();
   });
 
   it("first apply: writes marker blocks, hours, installs the flow DISABLED, stamps the intake", async () => {

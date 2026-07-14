@@ -12,6 +12,7 @@ import {
   getWhiteGloveIntakeByToken,
   submitWhiteGloveIntake,
   revokeWhiteGloveIntake,
+  claimWhiteGloveIntakeForBusiness,
   markWhiteGloveIntakeApplied,
   whiteGloveIntakeUrl
 } from "@/lib/white-glove/intake";
@@ -24,6 +25,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     select: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    or: vi.fn().mockReturnThis(),
     order: vi.fn().mockResolvedValue({ data: [], error: null }),
     single: vi.fn().mockResolvedValue({ data: null, error: null }),
     maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
@@ -217,6 +219,34 @@ describe("white-glove/intake DB layer", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(revokeWhiteGloveIntake(INTAKE.id)).rejects.toThrow(
       "revokeWhiteGloveIntake: boom"
+    );
+  });
+
+  it("claimWhiteGloveIntakeForBusiness claims unlinked-or-same-business rows atomically", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: [{ id: INTAKE.id }], error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).toBe(true);
+    expect(db.update).toHaveBeenCalledWith({ business_id: "biz-1" });
+    expect(db.eq).toHaveBeenCalledWith("status", "completed");
+    expect(db.or).toHaveBeenCalledWith("business_id.is.null,business_id.eq.biz-1");
+
+    // Another apply already linked a different tenant → the claim loses.
+    for (const data of [[], null]) {
+      const none = mockDb({ select: vi.fn().mockResolvedValue({ data, error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(none as never);
+      expect(await claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).toBe(false);
+    }
+  });
+
+  it("claimWhiteGloveIntakeForBusiness throws on error", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).rejects.toThrow(
+      "claimWhiteGloveIntakeForBusiness: boom"
     );
   });
 

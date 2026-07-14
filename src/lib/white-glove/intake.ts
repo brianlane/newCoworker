@@ -158,6 +158,30 @@ export async function revokeWhiteGloveIntake(
 }
 
 /**
+ * Atomically claim a completed intake for ONE tenant before any apply
+ * writes: the conditional UPDATE links `business_id` only while the intake
+ * is completed AND unlinked (or already linked to this same business), so
+ * two overlapping applies targeting different tenants can never both
+ * proceed — the loser sees `false` before it has written anything.
+ */
+export async function claimWhiteGloveIntakeForBusiness(
+  intakeId: string,
+  businessId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("white_glove_intakes")
+    .update({ business_id: businessId })
+    .eq("id", intakeId)
+    .eq("status", "completed")
+    .or(`business_id.is.null,business_id.eq.${businessId}`)
+    .select("id");
+  if (error) throw new Error(`claimWhiteGloveIntakeForBusiness: ${error.message}`);
+  return ((data as unknown[] | null) ?? []).length > 0;
+}
+
+/**
  * Record a successful apply: link the tenant, stamp `applied_at`, and
  * remember the installed flow so the next apply updates it in place.
  * Guarded on status='completed' — only a completed intake can be applied.
