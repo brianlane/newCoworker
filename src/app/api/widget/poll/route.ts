@@ -28,6 +28,7 @@ import {
   failWebchatJobFromPlatform,
   getWebchatJobById,
   listWebchatMessagesSince,
+  reclaimStaleWebchatJobForPlatform,
   serializeWebchatMessages,
   webchatReplyEngine,
   type WebchatJobRow
@@ -63,8 +64,15 @@ async function runPlatformEngineTurn(
   job: WebchatJobRow,
   business: { id: string; tier: string | null }
 ): Promise<"done" | "error" | null> {
-  const claimed = await claimWebchatJobForPlatform(job.id);
-  if (!claimed) return null; // lost the race — re-read below
+  // Queued → normal claim. Processing → steal only a STALE platform claim
+  // (route crashed mid-turn, or the error-flip below failed) so a wedged
+  // job gets retried on a later poll instead of spinning out the widget's
+  // whole window; a healthy in-flight claim is never stolen.
+  const claimed =
+    job.status === "queued"
+      ? await claimWebchatJobForPlatform(job.id)
+      : await reclaimStaleWebchatJobForPlatform(job.id);
+  if (!claimed) return null; // lost the race / claim still healthy — re-read below
 
   const t0 = Date.now();
   let outcome: "done" | "error" = "error";
@@ -161,12 +169,16 @@ export async function GET(request: Request) {
       }
       jobStatus = job.status;
 
-      if (job.status === "queued" && webchatReplyEngine(ctx.settings) === "gemini") {
+      if (
+        (job.status === "queued" || job.status === "processing") &&
+        webchatReplyEngine(ctx.settings) === "gemini"
+      ) {
         const outcome = await runPlatformEngineTurn(job, ctx.business);
         if (outcome) {
           jobStatus = outcome;
         } else {
-          // Claim lost — someone else is answering; report their progress.
+          // Claim lost / still healthy — someone is answering; report
+          // their progress.
           const reread = await getWebchatJobById(query.jobId);
           jobStatus = reread?.status ?? jobStatus;
         }

@@ -14,7 +14,7 @@ type StubResult = {
  */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gt", "gte", "order", "limit", "insert", "update", "delete"]) {
+  for (const m of ["select", "eq", "gt", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);
@@ -51,12 +51,15 @@ import {
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
+  reclaimStaleWebchatJobForPlatform,
   regenerateWidgetKey,
   serializeWebchatMessages,
   touchWebchatSession,
   updateWebchatSessionContact,
   updateWidgetSettings,
   webchatReplyEngine,
+  WEBCHAT_ENGINE_HISTORY_MARKER,
+  WEBCHAT_PLATFORM_RECLAIM_AFTER_MS,
   WEBCHAT_PLATFORM_WORKER_ID,
   type WebchatMessageRow
 } from "@/lib/webchat/db";
@@ -471,7 +474,7 @@ describe("platform-engine job lifecycle", () => {
     );
   });
 
-  it("completeWebchatJobFromPlatform persists the reply, bumps the session, flips the job", async () => {
+  it("completeWebchatJobFromPlatform persists the reply, marks session history, flips the job", async () => {
     const msgBuilder = makeBuilder({ data: { id: 42 }, error: null });
     const sessionBuilder = makeBuilder({ data: null, error: null });
     const jobBuilder = makeBuilder({ data: null, error: null });
@@ -487,12 +490,45 @@ describe("platform-engine job lifecycle", () => {
       role: "assistant",
       content: "Reply text"
     });
+    // Sticky history marker: flips /api/widget/message to the full-tail
+    // input variant on later turns (multi-turn context parity).
+    expect((sessionBuilder.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      rowboat_conversation_id: WEBCHAT_ENGINE_HISTORY_MARKER
+    });
     expect((jobBuilder.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
       status: "done",
       assistant_message_id: 42,
       error_code: null,
       error_detail: null
     });
+  });
+
+  it("reclaimStaleWebchatJobForPlatform steals only a stale PLATFORM claim", async () => {
+    const now = new Date("2026-07-14T17:00:00Z");
+    const builder = makeBuilder({ data: { id: JOB, status: "processing" }, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    expect(await reclaimStaleWebchatJobForPlatform(JOB, injected, now)).toEqual({
+      id: JOB,
+      status: "processing"
+    });
+    // Guards: processing rows only, the platform's own claimed_by only,
+    // and only claims older than the reclaim window.
+    expect(builder.eq).toHaveBeenCalledWith("status", "processing");
+    expect(builder.eq).toHaveBeenCalledWith("claimed_by", WEBCHAT_PLATFORM_WORKER_ID);
+    expect(builder.lt).toHaveBeenCalledWith(
+      "claimed_at",
+      new Date(now.getTime() - WEBCHAT_PLATFORM_RECLAIM_AFTER_MS).toISOString()
+    );
+  });
+
+  it("reclaimStaleWebchatJobForPlatform returns null when healthy/raced, throws on error", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await reclaimStaleWebchatJobForPlatform(JOB)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(reclaimStaleWebchatJobForPlatform(JOB)).rejects.toThrow(
+      "reclaimStaleWebchatJobForPlatform: x"
+    );
   });
 
   it("completeWebchatJobFromPlatform tolerates session-bump and job-flip failures (reply already persisted)", async () => {

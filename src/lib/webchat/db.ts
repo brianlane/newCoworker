@@ -552,6 +552,28 @@ export async function getWebchatJobById(
 export const WEBCHAT_PLATFORM_WORKER_ID = "platform-gemini-engine";
 
 /**
+ * Sentinel stored in webchat_sessions.rowboat_conversation_id after a
+ * platform-engine reply. The enqueue route treats ANY non-empty value as
+ * "this session has prior history" and switches to the full 20-message
+ * stateless tail — without it, gemini-engine tenants would be stuck on the
+ * 8-message resend tail forever and multi-turn chats would lose context
+ * versus the worker path (Bugbot Medium on PR #592). Harmless if the
+ * tenant later flips back to 'vps': the worker never RESUMES the id (all
+ * webchat turns are stateless-forced) and overwrites it with a real
+ * Rowboat id on its next completed turn.
+ */
+export const WEBCHAT_ENGINE_HISTORY_MARKER = "platform-gemini-engine";
+
+/**
+ * A platform claim older than this is stealable by a later poll. Sized
+ * well past the engine's whole-turn deadline (30s) so a live turn can
+ * never be double-answered; a crashed/killed route (or a failed
+ * error-flip) is retried instead of leaving the job wedged 'processing'
+ * with nobody to reclaim it (gemini tenants have no box-side reclaimer).
+ */
+export const WEBCHAT_PLATFORM_RECLAIM_AFTER_MS = 60_000;
+
+/**
  * Atomically claim a still-queued job for the platform engine. Null when
  * the claim lost (already claimed/answered) — the caller just re-reads.
  */
@@ -580,11 +602,44 @@ export async function claimWebchatJobForPlatform(
 }
 
 /**
- * Persist the engine's reply: assistant message row, session last_seen
- * bump (warn-only, mirrors the worker), job → done. Returns the assistant
- * message id. Mirrors the chat-worker's finishWebchatJob minus the Rowboat
- * continuation marker — the Gemini engine is stateless by construction, so
- * rowboat_conversation_id is left untouched.
+ * Steal a WEDGED platform claim: same conditional-UPDATE lock, but against
+ * a 'processing' row whose platform claim went stale (route crashed
+ * mid-turn, or the error-flip itself failed). Guarded to the platform's
+ * own claimed_by — a box worker's in-flight claim is never stolen (its own
+ * reclaimer owns that). Null when the row is absent, healthy, or raced.
+ */
+export async function reclaimStaleWebchatJobForPlatform(
+  jobId: string,
+  client?: SupabaseClient,
+  now: Date = new Date()
+): Promise<WebchatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const cutoffIso = new Date(now.getTime() - WEBCHAT_PLATFORM_RECLAIM_AFTER_MS).toISOString();
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "processing",
+      claimed_by: WEBCHAT_PLATFORM_WORKER_ID,
+      claimed_at: now.toISOString()
+    })
+    .eq("id", jobId)
+    .eq("status", "processing")
+    .eq("claimed_by", WEBCHAT_PLATFORM_WORKER_ID)
+    .lt("claimed_at", cutoffIso)
+    .select(
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, input_messages, stateless_input_messages"
+    )
+    .maybeSingle();
+  if (error) throw new Error(`reclaimStaleWebchatJobForPlatform: ${error.message}`);
+  return (data as WebchatJobRow | null) ?? null;
+}
+
+/**
+ * Persist the engine's reply: assistant message row, session bump
+ * (last_seen + the sticky history marker; warn-only, mirrors the worker),
+ * job → done. Returns the assistant message id. Mirrors the chat-worker's
+ * finishWebchatJob — the Gemini engine is stateless by construction, so
+ * the stored conversation id is only ever the marker sentinel.
  */
 export async function completeWebchatJobFromPlatform(
   job: Pick<WebchatJobRow, "id" | "session_id" | "business_id">,
@@ -596,7 +651,13 @@ export async function completeWebchatJobFromPlatform(
 
   const { error: sessionErr } = await db
     .from("webchat_sessions")
-    .update({ last_seen_at: new Date().toISOString() })
+    .update({
+      last_seen_at: new Date().toISOString(),
+      // Sticky history marker (see WEBCHAT_ENGINE_HISTORY_MARKER): flips
+      // the enqueue route to the full-tail input variant on later turns,
+      // matching the worker path's multi-turn context behavior.
+      rowboat_conversation_id: WEBCHAT_ENGINE_HISTORY_MARKER
+    })
     .eq("id", job.session_id);
   if (sessionErr) {
     logger.warn("completeWebchatJobFromPlatform: session bump failed", {
