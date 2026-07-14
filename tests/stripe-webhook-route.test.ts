@@ -144,6 +144,26 @@ vi.mock("@/lib/provisioning/orchestrate", () => ({
   orchestrateProvisioning: vi.fn().mockResolvedValue(undefined)
 }));
 
+// Job-ledger wrapper (provisioning_jobs): the route enqueues a durable row
+// then runs the orchestrator THROUGH runProvisioningJob. Mock as a thin
+// passthrough so the existing orchestrateProvisioning assertions keep
+// exercising the exact input mapping.
+vi.mock("@/lib/provisioning/jobs", () => ({
+  enqueueProvisioningJob: vi.fn().mockResolvedValue(undefined),
+  runProvisioningJob: vi.fn(
+    async (
+      job: { business_id: string; tier: string | null; vps_size: string | null; billing_period: string | null },
+      deps: { orchestrate: (input: unknown) => Promise<unknown> }
+    ) =>
+      deps.orchestrate({
+        businessId: job.business_id,
+        tier: job.tier,
+        vpsSize: job.vps_size,
+        billingPeriod: job.billing_period
+      })
+  )
+}));
+
 vi.mock("@/lib/billing/lifecycle-loader", () => ({
   loadLifecycleContextForBusiness: mockLoadLifecycleContext
 }));
@@ -272,6 +292,10 @@ describe("stripe webhook route", () => {
       tier: "starter",
       billingPeriod: "annual"
     });
+    // The orchestrator dispatch is deferred via after() (the bare floating
+    // promise previously died with the function — Truly Jul 8, KYP Jul 14).
+    expect(orchestrateProvisioning).not.toHaveBeenCalled();
+    await flushAfterCallbacks();
     expect(orchestrateProvisioning).toHaveBeenCalledWith({
       businessId: "biz_1",
       tier: "starter",
@@ -2898,6 +2922,7 @@ describe("stripe webhook route", () => {
         error: "schedule api unavailable"
       })
     );
+    await flushAfterCallbacks();
     expect(orchestrateProvisioning).toHaveBeenCalledWith({
       businessId: "biz_4",
       tier: "standard",

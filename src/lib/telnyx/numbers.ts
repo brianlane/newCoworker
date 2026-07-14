@@ -154,11 +154,26 @@ export class TelnyxNumbersClient {
     params.set("filter[limit]", String(Math.min(Math.max(opts.limit ?? 10, 1), 25)));
     if (opts.quickshipOnly) params.set("filter[quickship]", "true");
 
-    const json = await this.request<{ data: AvailablePhoneNumber[] }>(
-      "GET",
-      `/available_phone_numbers?${params.toString()}`
-    );
-    return json.data ?? [];
+    try {
+      const json = await this.request<{ data: AvailablePhoneNumber[] }>(
+        "GET",
+        `/available_phone_numbers?${params.toString()}`
+      );
+      return json.data ?? [];
+    } catch (err) {
+      // Telnyx reports a filter combination with zero inventory as HTTP
+      // 400 code 10031 ("No numbers found for the given filters") rather
+      // than an empty data array. That is a NO-INVENTORY result, not an
+      // API failure: treating it as an error aborted the orchestrator's
+      // whole DID search cascade on the first sold-out area code (KYP Ads
+      // Jul 14 2026 — CA/514 was empty and the signup ended with no number
+      // even though CA had plenty of inventory elsewhere). Real errors
+      // (auth, 5xx, other 4xx codes) still throw.
+      if (err instanceof TelnyxApiError && err.status === 400 && err.body.includes('"10031"')) {
+        return [];
+      }
+      throw err;
+    }
   }
 
   async orderNumbers(opts: OrderNumbersOptions): Promise<NumberOrder> {

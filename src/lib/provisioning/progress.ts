@@ -2,6 +2,7 @@ import { randomUUID } from "crypto";
 import { insertCoworkerLog, type LogRow } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { heartbeatProvisioningJob } from "@/lib/provisioning/jobs";
 import type { CoworkerLog } from "@/lib/db/schema";
 
 export type ProvisioningLogRowStatus = CoworkerLog["status"];
@@ -70,6 +71,12 @@ export async function recordProvisioningProgress(params: {
     message: `[${params.phase} ${percent}%] ${params.message}`,
     payload: { phase: params.phase, percent, source: params.source }
   });
+
+  // Liveness signal for the provisioning watchdog: every progress write —
+  // orchestrator phases AND the in-deploy VPS callbacks — proves the run
+  // is still alive, so the watchdog only re-claims jobs that truly died.
+  // Never throws (see heartbeatProvisioningJob).
+  await heartbeatProvisioningJob(params.businessId);
 
   return row;
 }
