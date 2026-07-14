@@ -82,6 +82,7 @@ import {
   buildApprovalGateOptions
 } from "../_shared/ai_flows/approval_options.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
+import { sendAiflowFailureAlert } from "../_shared/aiflow_failure_alert.ts";
 import { deleteShortLinks, shortenSmsBodyUrls } from "../_shared/sms_short_links.ts";
 import {
   formatInTimeZone,
@@ -5640,6 +5641,21 @@ async function failRun(
       step_index: run.current_step,
       attempt: run.attempt_count
     }
+  });
+  // Opt-in owner alert (aiflow_failure_alerts, default OFF): a dead-lettered
+  // lead-intake run is a lead that arrived and got silence — tell the owner
+  // when they've asked to hear about it. Best-effort; scope (when the caller
+  // had one) carries fresher vars than the persisted context.
+  const ctx = run.context ?? {};
+  await sendAiflowFailureAlert(supabase, {
+    businessId: run.business_id,
+    runId: run.id,
+    flowId: run.flow_id,
+    trigger: (scope?.trigger ?? (ctx as { trigger?: Record<string, unknown> }).trigger) ?? null,
+    vars: (scope?.vars ?? (ctx as { vars?: Record<string, unknown> }).vars) ?? null,
+    error,
+    notifyUrl: `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`,
+    bearer: Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? ""
   });
 }
 

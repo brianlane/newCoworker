@@ -87,6 +87,55 @@ describe("evaluateTriggerConditions", () => {
     >[0];
     expect(evaluateTriggerConditions(conditions, text, "dave@x.com")).toBe(false);
   });
+
+  // ── Production pin: Privyr digest emails must never start a lead flow ────
+  // On 2026-07-11 a Privyr "Daily Client Summary" email started Truly's
+  // lead-intake flow (its subject contains "new leads"), which extracted a
+  // garbage phone and burned five Telnyx 40310 retries. The tightened
+  // trigger set (from lead-forwarding@ + "new lead"; from alerts-noreply@ +
+  // "new lead:") lets both real lead-alert shapes through and rejects the
+  // digest. These are Truly's EXACT production conditions and the real
+  // email shapes — if trigger matching semantics drift, this fails first.
+  describe("Truly Privyr trigger set vs real Privyr email shapes", () => {
+    const primary = [
+      { type: "from_matches" as const, value: "lead-forwarding@privyr.com" },
+      { type: "contains" as const, value: "new lead", caseInsensitive: true }
+    ];
+    const secondary = [
+      { type: "from_matches" as const, value: "alerts-noreply@privyr.com" },
+      { type: "contains" as const, value: "new lead:", caseInsensitive: true }
+    ];
+    const leadForwarding =
+      "New Lead: Fah\nCongrats! You've received a new lead from Muhammad Fahad " +
+      "Lead via Privyr Lead Forms - Auto Lead Name: Fah Phone: +14164560696";
+    const leadAlert =
+      "New Lead: Fahad\nCongrats! You have a new lead from Muhammad Fahad " +
+      "Lead via Privyr Lead Forms - Auto Lead Name: Fahad Phone: +14164560696";
+    const dailySummary =
+      "Daily Client Summary: 31 new leads, 5 uncontacted leads\n" +
+      "Daily Summary for Leads Upcoming Activities No follow-ups due " +
+      "5 uncontacted leads Last 24 hours 31 new leads received " +
+      "UNCONTACTED LEADS There are 5 leads that you haven't contacted yet: Shahid";
+
+    it("a forwarded lead matches the primary trigger", () => {
+      expect(
+        evaluateTriggerConditions(primary, leadForwarding, "lead-forwarding@privyr.com")
+      ).toBe(true);
+    });
+    it("a lead alert matches the secondary trigger", () => {
+      expect(evaluateTriggerConditions(secondary, leadAlert, "alerts-noreply@privyr.com")).toBe(
+        true
+      );
+    });
+    it("the daily digest matches NEITHER trigger despite containing 'new leads'", () => {
+      expect(
+        evaluateTriggerConditions(primary, dailySummary, "alerts-noreply@privyr.com")
+      ).toBe(false);
+      expect(
+        evaluateTriggerConditions(secondary, dailySummary, "alerts-noreply@privyr.com")
+      ).toBe(false);
+    });
+  });
 });
 
 describe("htmlToText", () => {

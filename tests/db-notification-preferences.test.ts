@@ -44,6 +44,8 @@ describe("db/notification-preferences", () => {
     expect(row.dashboard_alerts).toBe(true);
     expect(row.sms_warm_transfer).toBe(true);
     expect(row.image_limit_alerts).toBe(true);
+    // Opt-in by design: failed-run alerts stay silent until the owner asks.
+    expect(row.aiflow_failure_alerts).toBe(false);
     expect(row.category_leads).toBe(true);
     expect(row.category_team).toBe(true);
     expect(row.category_system).toBe(true);
@@ -705,6 +707,41 @@ describe("db/notification-preferences", () => {
     expect(row.image_limit_alerts).toBe(true);
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ image_limit_alerts: true, unsubscribed_at: null })
+    );
+  });
+
+  it("updateNotificationPreferences: enabling aiflow_failure_alerts re-subscribes (clears unsubscribed_at)", async () => {
+    // After "Unsubscribe from all", opting into failure alerts must clear the
+    // unsubscribed flag — otherwise the notifications function would still
+    // treat the business as unsubscribed and skip the delivery the owner just
+    // asked for (Bugbot Medium on PR #587).
+    const startingPrefs = {
+      ...PREFS,
+      aiflow_failure_alerts: false,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, aiflow_failure_alerts: true, unsubscribed_at: null },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const row = await updateNotificationPreferences("biz-1", { aiflow_failure_alerts: true });
+    expect(row.aiflow_failure_alerts).toBe(true);
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ aiflow_failure_alerts: true, unsubscribed_at: null })
     );
   });
 
