@@ -29,6 +29,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
+import { normalizeE164 } from "../_shared/normalize_e164.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -107,7 +108,7 @@ type SupaClient = SupabaseClient<any, any, any>;
 
 async function resolveTargets(supa: SupaClient, businessId: string): Promise<ResolvedTargets> {
   const fallbackEmail = (Deno.env.get("ADMIN_EMAIL") ?? "").trim() || null;
-  const fallbackPhone = (Deno.env.get("TELNYX_OWNER_PHONE") ?? "").trim() || null;
+  const fallbackPhone = normalizeE164(Deno.env.get("TELNYX_OWNER_PHONE") ?? "");
   let prefsEmail: string | null = null;
   let prefsPhone: string | null = null;
   let smsUrgent = true;
@@ -126,7 +127,11 @@ async function resolveTargets(supa: SupaClient, businessId: string): Promise<Res
 
   if (prefs) {
     prefsEmail = ((prefs.alert_email as string | null) ?? "").trim() || null;
-    prefsPhone = ((prefs.phone_number as string | null) ?? "").trim() || null;
+    // Read-time E.164 normalization, mirroring resolveNotificationTargets in
+    // src/lib/notifications/dispatch.ts: pre-validation rows (e.g. a bare
+    // "6026951142") must still deliver instead of failing at Telnyx with
+    // 40310. An uncoercible value degrades to null → honest `no_phone` skip.
+    prefsPhone = normalizeE164(((prefs.phone_number as string | null) ?? "").trim());
     smsUrgent = Boolean(prefs.sms_urgent);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
