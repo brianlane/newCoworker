@@ -90,6 +90,9 @@ describe("buildCustomerPreamble", () => {
     });
     expect(out).toContain('Address this person as "Juhu"');
     expect(out).toContain("takes precedence over any different or longer name");
+    // The precedence must explicitly extend to the pinned notes and rolling
+    // summary below the header — that's where a stale pre-rename name lives.
+    expect(out).toContain("the pinned notes and rolling summary below");
     expect(out).not.toContain("Rolling summary");
     expect(out).not.toContain("Pinned notes");
   });
@@ -265,6 +268,65 @@ describe("summarizeCustomerMemory", () => {
     if (!result.ok) expect(result.reason).toBe("debounced");
   });
 
+  it("force bypasses the below_threshold gate — the dashboard rename path must regenerate even though a rename adds no interaction", async () => {
+    const result = await summarizeCustomerMemory(
+      BIZ,
+      CUSTOMER,
+      deps({
+        memory: memory({ interaction_count: 0 }),
+        smsHistory: [
+          {
+            jobId: "j1",
+            inboundText: "hello",
+            assistantReply: "hi",
+            receivedAt: "2026-05-05T00:00:00Z"
+          }
+        ] as never
+      }),
+      { force: true }
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("force bypasses the debounce gate too — a rename right after a scheduled run must still correct the name", async () => {
+    const result = await summarizeCustomerMemory(
+      BIZ,
+      CUSTOMER,
+      deps({
+        memory: memory({
+          interaction_count: 10,
+          last_summarized_at: "2026-05-06T11:59:50Z"
+        }),
+        nowIso: "2026-05-06T12:00:00Z",
+        smsHistory: [
+          {
+            jobId: "j1",
+            inboundText: "hello",
+            assistantReply: "hi",
+            receivedAt: "2026-05-05T00:00:00Z"
+          }
+        ] as never
+      }),
+      { force: true }
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("force does NOT bypass the content gates — no inputs still means no fabricated summary", async () => {
+    const result = await summarizeCustomerMemory(
+      BIZ,
+      CUSTOMER,
+      deps({
+        memory: memory({ interaction_count: 0 }),
+        smsHistory: [],
+        voiceTurns: []
+      }),
+      { force: true }
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toBe("no_inputs");
+  });
+
   it("returns no_inputs when there is no source material AND no prior summary — never runs an empty prompt that could hallucinate", async () => {
     const result = await summarizeCustomerMemory(
       BIZ,
@@ -328,6 +390,14 @@ describe("summarizeCustomerMemory", () => {
     expect(args.timeoutMs).toBe(60_000);
     expect(args.messages[0]?.role).toBe("system");
     expect(args.messages[0]?.content).toContain("SUMMARIZER MODE");
+    // Summaries are read on later days — relative dates rot ("tomorrow"
+    // written July 13 is wrong by July 14; observed live, Truly July 2026).
+    expect(args.messages[0]?.content).toContain("DATES MUST BE ABSOLUTE");
+    // The owner's label for the contact must win over any name in the
+    // source material or the carried-forward summary.
+    expect(args.messages[0]?.content).toContain(
+      "THE DISPLAY NAME IN THE REQUEST IS AUTHORITATIVE"
+    );
     // Inputs include both SMS + voice content.
     expect(args.messages[1]?.content).toContain("How much for installation?");
     expect(args.messages[1]?.content).toContain("I need another spring");

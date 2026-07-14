@@ -62,6 +62,18 @@ describe("buildDashboardCustomerPreamble", () => {
     expect(out).toContain("Do NOT proactively volunteer customer details");
   });
 
+  it("declares the header-line name AUTHORITATIVE over names inside summary/pinned excerpts — a renamed lead's stale summary name must not win (Truly, July 2026)", () => {
+    const out = buildDashboardCustomerPreamble([
+      memory({
+        display_name: "Juhu",
+        summary_md: "Customer: Muhammad Fahad Juhu, looking for auto insurance.",
+        total_interaction_count: 24
+      })
+    ]);
+    expect(out).toContain("AUTHORITATIVE");
+    expect(out).toContain("always refer to the customer by the header-line name");
+  });
+
   it("emits pinned notes BEFORE the summary excerpt — owner ground truth wins over LLM-generated summary", () => {
     const out = buildDashboardCustomerPreamble([
       memory({

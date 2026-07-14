@@ -89,6 +89,10 @@ Cover, in order:
 3. Stylistic preferences for replies (formal/casual, channel preference, do-not-call windows, etc.).
 4. Open commitments or follow-ups still pending on either side.
 
+DATES MUST BE ABSOLUTE. This summary is read on later days, so relative words rot: "tomorrow" written on July 13 is wrong by July 14. Express every date/time as an absolute date (e.g. "July 14, 1:00 PM EDT"), never "today", "tomorrow", "yesterday", "next week", or similar. When the source material uses a relative word, resolve it against that message's own timestamp (every transcript line above is timestamped) before writing it down.
+
+THE DISPLAY NAME IN THE REQUEST IS AUTHORITATIVE. The customer name given in the "Update the rolling summary for customer …" line (when present) is the business owner's own label for this contact. If the existing summary or the source material uses a different or fuller name, correct the summary to the owner's name — do not carry the old name forward.
+
 Do NOT invent details. If the available context is sparse, output the shortest faithful summary possible. Never speculate about the customer's identity or motives beyond what the source material directly supports.
 
 Do NOT call any tools in this mode — never set a display name, pin a note, send a message, or take any other action. Your ONLY output is the summary text.`;
@@ -150,6 +154,18 @@ export type VoiceTurnEntry = {
   content: string;
 };
 
+export type SummarizeOpts = {
+  /**
+   * Bypass the interaction-count threshold and debounce gates. Used by the
+   * dashboard rename path (setCustomerDisplayName): a rename adds no
+   * interaction, so without `force` the regeneration that corrects the old
+   * name in summary_md would be silently skipped. The content gates
+   * (no_inputs / no_customer_content) still apply — force never causes a
+   * summary to be fabricated from nothing.
+   */
+  force?: boolean;
+};
+
 /**
  * Decide whether to fire the summarizer based on a memory row's
  * counters. Pure helper so callers can gate without re-reading.
@@ -206,7 +222,8 @@ function joinSmsHistory(rows: SmsHistoryEntry[]): string {
 export async function summarizeCustomerMemory(
   businessId: string,
   customerE164: string,
-  deps: SummarizeDeps = {}
+  deps: SummarizeDeps = {},
+  opts: SummarizeOpts = {}
 ): Promise<SummarizeResult> {
   /* c8 ignore start -- per-dep ?? fallbacks are exercised in production
      (no deps supplied) but tests inject every dep for hermeticity. */
@@ -235,14 +252,17 @@ export async function summarizeCustomerMemory(
   // caller can race with the nightly cron and a manual trigger from
   // the customers page — without this guard we'd happily run the
   // summarizer multiple times in parallel, wasting Rowboat capacity
-  // and producing duplicate updated_at bumps.
-  if (memory.interaction_count < SUMMARY_INTERACTION_THRESHOLD) {
-    return { ok: false, reason: "below_threshold" };
-  }
-  if (memory.last_summarized_at) {
-    const lastMs = Date.parse(memory.last_summarized_at);
-    if (Number.isFinite(lastMs) && _now() - lastMs < SUMMARY_DEBOUNCE_MS) {
-      return { ok: false, reason: "debounced" };
+  // and producing duplicate updated_at bumps. `force` (dashboard rename
+  // path) skips these two gates only — the content gates below still hold.
+  if (!opts.force) {
+    if (memory.interaction_count < SUMMARY_INTERACTION_THRESHOLD) {
+      return { ok: false, reason: "below_threshold" };
+    }
+    if (memory.last_summarized_at) {
+      const lastMs = Date.parse(memory.last_summarized_at);
+      if (Number.isFinite(lastMs) && _now() - lastMs < SUMMARY_DEBOUNCE_MS) {
+        return { ok: false, reason: "debounced" };
+      }
     }
   }
 
@@ -437,11 +457,12 @@ export async function summarizeCustomerMemory(
 export async function summarizeCustomerMemoryAndLog(
   businessId: string,
   customerE164: string,
-  deps: SummarizeDeps = {}
+  deps: SummarizeDeps = {},
+  opts: SummarizeOpts = {}
 ): Promise<void> {
   let result: SummarizeResult;
   try {
-    result = await summarizeCustomerMemory(businessId, customerE164, deps);
+    result = await summarizeCustomerMemory(businessId, customerE164, deps, opts);
     /* c8 ignore start -- summarizeCustomerMemory already converts every
        internal throw into a structured { ok: false }. This catch only
        runs if a dependency injection itself throws synchronously. */
