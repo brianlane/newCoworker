@@ -1,4 +1,5 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -58,6 +59,13 @@ export type NotificationPreferenceContactSeeds = {
 /**
  * Derive initial `alert_email` / `phone_number` when creating a prefs row only.
  * Do not reuse for display merging: stored `null` must mean “cleared”, not “fill from auth”.
+ *
+ * Phone seeds are E.164-coerced, never passed through raw: `businesses.phone`
+ * is free-form onboarding input (KYP Ads arrived as the 7-digit "5188192",
+ * Jul 14 2026), and this value is what the alert dispatcher hands Telnyx as
+ * the SMS `to`. A seed that can't be safely coerced is dropped — the form
+ * shows an empty field the owner fills in (and the save route validates) —
+ * instead of pre-filling a number that could never receive an alert.
  */
 export function initialNotificationPreferenceContactsFromSeeds(
   sources: NotificationPreferenceContactSeeds
@@ -66,7 +74,8 @@ export function initialNotificationPreferenceContactsFromSeeds(
     alert_email:
       trimToNull(sources.userEmail) ?? trimToNull(sources.ownerEmail),
     phone_number:
-      trimToNull(sources.authPhone) ?? trimToNull(sources.businessPhone)
+      coerceOwnerPhoneToE164(sources.authPhone) ??
+      coerceOwnerPhoneToE164(sources.businessPhone)
   };
 }
 

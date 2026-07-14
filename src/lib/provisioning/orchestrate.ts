@@ -24,6 +24,7 @@ import { TelnyxNumbersClient } from "@/lib/telnyx/numbers";
 import {
   orderAndAssignDidForBusiness,
   OrderAndAssignError,
+  coerceOwnerPhoneToE164,
   extractNanpAreaCode,
   type PlatformTelnyxDefaults
 } from "@/lib/telnyx/assign-did";
@@ -36,7 +37,10 @@ import {
   assertPlatformTelnyxDefaults,
   readPlatformTelnyxDefaults
 } from "@/lib/telnyx/platform-defaults";
-import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
+import {
+  getBusinessTelnyxSettings,
+  getTelnyxVoiceRouteForBusiness
+} from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
@@ -1714,7 +1718,14 @@ async function runOrchestrator(
   logger.info("Business provisioned and online", { businessId, vpsId });
 
   const notifyEmail = ownerEmail ?? process.env.ADMIN_EMAIL;
-  const notifyPhone = ownerPhone ?? process.env.TELNYX_OWNER_PHONE;
+  // Recipient: the OWNER's phone — the explicit caller override first, then
+  // the phone the owner gave at onboarding (coerced: it's free-form input,
+  // e.g. "5145188192"), then the platform ops phone as the last-resort
+  // fallback (admin-driven provisions with no owner phone on file).
+  const notifyPhone =
+    coerceOwnerPhoneToE164(ownerPhone) ??
+    coerceOwnerPhoneToE164(businessRow?.phone) ??
+    process.env.TELNYX_OWNER_PHONE;
   const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const dashboardUrl = `${siteUrl}/dashboard`;
 
@@ -1735,8 +1746,28 @@ async function runOrchestrator(
 
   if (notifyPhone) {
     try {
-      const cfg = await getTelnyxMessagingForBusiness(businessId);
-      await sendTelnyxSms(cfg, notifyPhone, `Your New Coworker is live! Dashboard: ${dashboardUrl}`);
+      // Sender: the tenant's OWN new DID — their first text from their own
+      // business number. The platform owns no sender number, so there is
+      // deliberately NO env fallback here: falling back to
+      // TELNYX_SMS_FROM_E164 once sent this from ANOTHER tenant's business
+      // number (Amy's DID, Jul 14 2026 — the env value was repointed after
+      // the original platform number was released). A tenant whose DID
+      // auto-order failed skips with an honest log instead.
+      const tenantSettings = await getBusinessTelnyxSettings(businessId);
+      const tenantFrom = tenantSettings?.telnyx_sms_from_e164?.trim();
+      if (!tenantFrom) {
+        logger.warn(
+          "Skipping provisioning SMS: tenant has no DID to send from (assign one from admin, no shared sender exists)",
+          { businessId }
+        );
+      } else {
+        const cfg = await getTelnyxMessagingForBusiness(businessId);
+        await sendTelnyxSms(
+          { ...cfg, fromE164: tenantFrom },
+          notifyPhone,
+          `Your New Coworker is live! Dashboard: ${dashboardUrl}`
+        );
+      }
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {
         error: err instanceof Error ? err.message : String(err)

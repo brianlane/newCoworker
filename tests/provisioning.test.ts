@@ -101,6 +101,12 @@ vi.mock("@/lib/provisioning/stale-tenant-cleanup", () => ({
 
 vi.mock("@/lib/db/telnyx-routes", () => ({
   getTelnyxVoiceRouteForBusiness: vi.fn().mockResolvedValue(null),
+  // The provisioning-live SMS sends from the tenant's OWN DID only (no
+  // shared env sender exists) — default a from-number so the legacy
+  // send-path tests keep exercising the send.
+  getBusinessTelnyxSettings: vi
+    .fn()
+    .mockResolvedValue({ telnyx_sms_from_e164: "+15559990000" }),
   // tendlc-attach.ts persists per-business 10DLC status via this helper —
   // the orchestrator dynamically imports tendlc-attach.ts after a successful
   // DID assign, so we have to provide a stub or every did-assign test path
@@ -116,7 +122,10 @@ import {
   markGatewayTokenDeployed
 } from "@/lib/db/vps-gateway-tokens";
 import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
-import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
+import {
+  getBusinessTelnyxSettings,
+  getTelnyxVoiceRouteForBusiness
+} from "@/lib/db/telnyx-routes";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
 
@@ -622,6 +631,70 @@ describe("provisioning/orchestrate", () => {
     );
     expect(result.vpsId).toBe("42");
     expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("sends the live SMS FROM the tenant's own DID (never a shared env sender)", async () => {
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-own-did", tier: "starter", ownerPhone: "+15145188192" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendTelnyxSms).toHaveBeenCalledWith(
+      expect.objectContaining({ fromE164: "+15559990000" }),
+      "+15145188192",
+      expect.stringContaining("Your New Coworker is live!")
+    );
+  });
+
+  it("skips the live SMS when the tenant has no DID to send from (no env fallback by design)", async () => {
+    // The env-fallback sender once pointed at ANOTHER tenant's business
+    // number (Jul 14 2026) — a tenant without their own DID must skip, not
+    // borrow a sender.
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    vi.mocked(getBusinessTelnyxSettings).mockResolvedValueOnce(null as never);
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-no-did", tier: "starter", ownerPhone: "+15145188192" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the coerced onboarding phone for the SMS recipient", async () => {
+    // KYP Ads (Jul 14 2026): checkout provisions pass no ownerPhone, and the
+    // owner's onboarding phone is free-form ("514-518-8192"). The recipient
+    // must resolve to the OWNER's number, not the platform ops phone.
+    delete process.env.TELNYX_OWNER_PHONE;
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      phone: "514-518-8192"
+    } as never);
+    try {
+      await orchestrateProvisioning(
+        { businessId: "biz-onboard-phone", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      );
+      expect(sendTelnyxSms).toHaveBeenCalledWith(
+        expect.anything(),
+        "+15145188192",
+        expect.stringContaining("Your New Coworker is live!")
+      );
+    } finally {
+      vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+    }
   });
 
   it("skips email notification when neither ownerEmail nor ADMIN_EMAIL is set", async () => {
