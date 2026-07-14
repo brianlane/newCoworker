@@ -52,6 +52,13 @@ import {
   SMS_IDENTITY_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+// Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
+// against the tenant pool like all traffic but never refused (Jul 14 2026).
+import {
+  meterOperationalSms,
+  releaseOperationalSms,
+  sendOperationalSms
+} from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
@@ -475,6 +482,12 @@ serve(async (req: Request) => {
           };
           if (idem) fwdHeaders["Idempotency-Key"] = idem;
 
+          // Safe-Mode forwards are METERED against the tenant's monthly
+          // pool like all traffic (Jul 14 2026 policy: nothing is exempt)
+          // but never refused — Safe Mode exists so a paused AI never
+          // silently eats customer texts. Count-then-send; a failed send
+          // releases the counted slot inside the catch below.
+          const fwdMeter = await meterOperationalSms(supabase, job.business_id);
           try {
             const fwdRes = await fetch("https://api.telnyx.com/v2/messages", {
               method: "POST",
@@ -528,6 +541,9 @@ serve(async (req: Request) => {
               business_id: job.business_id
             });
           } catch (e) {
+            // The forward never reached the owner — give the counted slot
+            // back (retries re-meter on the next attempt).
+            await releaseOperationalSms(supabase, job.business_id, fwdMeter);
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
             // Bound the retry budget just like the Rowboat error path below —
@@ -709,7 +725,7 @@ serve(async (req: Request) => {
               const customerLabel =
                 (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||
                 fromE164;
-              const send = await telnyxSendSms({
+              const send = await sendOperationalSms(supabase, job.business_id, {
                 apiKey,
                 messagingProfileId: fwdProfile,
                 fromE164: fwdFrom,

@@ -30,6 +30,10 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import {
+  meterOperationalSms,
+  releaseOperationalSms
+} from "../_shared/sms_operational_meter.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -333,8 +337,10 @@ serve(async (req: Request) => {
     );
   } else if (telnyxKey && telnyxProfile) {
     try {
-      // Platform-initiated owner alert (same class as /api/rowboat urgent SMS): not metered against
-      // the business monthly pool.
+      // Owner alerts are METERED against the tenant's monthly pool like all
+      // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
+      // the "you hit your SMS cap" alert must outrun the cap it reports.
+      const smsMeter = await meterOperationalSms(supa, record.business_id);
       const body: Record<string, string> = {
         to: targets.phone,
         text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
@@ -349,6 +355,10 @@ serve(async (req: Request) => {
         },
         body: JSON.stringify(body)
       });
+      if (!smsRes.ok) {
+        // The alert never left Telnyx — give the counted slot back.
+        await releaseOperationalSms(supa, record.business_id, smsMeter);
+      }
       if (smsRes.ok) {
         await recordRow(
           supa,

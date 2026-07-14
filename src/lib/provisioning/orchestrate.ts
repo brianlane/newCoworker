@@ -1762,10 +1762,13 @@ async function runOrchestrator(
         );
       } else {
         const cfg = await getTelnyxMessagingForBusiness(businessId);
+        // Metered like every send (nothing is exempt), in operational mode:
+        // counted against the pool but never refused at the cap.
         await sendTelnyxSms(
           { ...cfg, fromE164: tenantFrom },
           notifyPhone,
-          `Your New Coworker is live! Dashboard: ${dashboardUrl}`
+          `Your New Coworker is live! Dashboard: ${dashboardUrl}`,
+          { meterBusinessId: businessId, meterMode: "operational" }
         );
       }
     } catch (err) {
