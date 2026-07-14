@@ -98,6 +98,28 @@ describe("/api/business/create — anonymous Stripe-first flow", () => {
     expect(createBusiness).not.toHaveBeenCalled();
   });
 
+  it("idempotent retry with a legacy junk phone still succeeds (validation runs only on the INSERT path, which persists it)", async () => {
+    // Bugbot Medium on this PR: a pre-validation signup retry can still carry
+    // the junk phone in its payload. The existing-row branch never persists
+    // the phone, so rejecting there would strand the retry without a fresh
+    // onboardingToken.
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Acme Realty",
+      owner_email: PENDING_EMAIL,
+      tier: "starter",
+      status: "offline",
+      hostinger_vps_id: null,
+      created_at: new Date().toISOString()
+    } as never);
+
+    const res = await POST(jsonRequest(baseBody({ phone: "5188192" })));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual({ businessId: BIZ, onboardingToken: ONBOARDING_TOKEN });
+    expect(createBusiness).not.toHaveBeenCalled();
+  });
+
   it("blank/absent phone stays optional — no phone persisted, no rejection", async () => {
     const res = await POST(jsonRequest(baseBody({ phone: "   " })));
     expect(res.status).toBe(200);
