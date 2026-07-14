@@ -21,6 +21,7 @@ vi.mock("@/lib/db/configs", () => ({
 vi.mock("@/lib/ai-flows/db", () => ({
   createAiFlow: vi.fn(),
   getAiFlow: vi.fn(),
+  listAiFlows: vi.fn(),
   updateAiFlow: vi.fn()
 }));
 
@@ -48,7 +49,7 @@ import {
 } from "@/lib/white-glove/apply";
 import { getBusiness, updateBusinessProfileFields } from "@/lib/db/businesses";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
-import { createAiFlow, getAiFlow, updateAiFlow } from "@/lib/ai-flows/db";
+import { createAiFlow, getAiFlow, listAiFlows, updateAiFlow } from "@/lib/ai-flows/db";
 import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import { getWhiteGloveIntake, markWhiteGloveIntakeApplied } from "@/lib/white-glove/intake";
 import type { WhiteGloveIntakeRow } from "@/lib/white-glove/intake";
@@ -112,6 +113,7 @@ describe("applyWhiteGloveIntake", () => {
     });
     vi.mocked(createAiFlow).mockResolvedValue({ id: FLOW_ID } as never);
     vi.mocked(updateAiFlow).mockResolvedValue({ id: FLOW_ID } as never);
+    vi.mocked(listAiFlows).mockResolvedValue([]);
   });
 
   it("guards: unknown intake, not completed, tied elsewhere, unknown business", async () => {
@@ -228,6 +230,52 @@ describe("applyWhiteGloveIntake", () => {
     expect(result.flowCreated).toBe(true);
     expect(updateAiFlow).not.toHaveBeenCalled();
     expect(createAiFlow).toHaveBeenCalled();
+  });
+
+  it("retry after a failed stamp finds the flow BY NAME instead of duplicating it", async () => {
+    // Previous apply created the flow but died before markWhiteGloveIntakeApplied
+    // → the intake carries no applied_flow_id, yet the flow exists.
+    vi.mocked(listAiFlows).mockResolvedValue([
+      { id: "other-flow", name: "Some other automation" },
+      { id: FLOW_ID, name: INTAKE_FOLLOW_UP_FLOW_NAME }
+    ] as never);
+
+    const result = await applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID });
+    expect(result).toMatchObject({ flowId: FLOW_ID, flowCreated: false });
+    expect(getAiFlow).not.toHaveBeenCalled();
+    expect(updateAiFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: FLOW_ID }),
+      expect.anything()
+    );
+    expect(createAiFlow).not.toHaveBeenCalled();
+  });
+
+  it("merges parsed hours over the tenant's existing days instead of replacing them", async () => {
+    // Owner configured Saturday in Settings; the dayless intake ("11am to
+    // 6pm" → Mon–Fri) must not wipe it.
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ_ID,
+      name: "KYP Ads",
+      business_hours: {
+        sat: { open: "10:00", close: "14:00" },
+        mon: { open: "08:00", close: "12:00" },
+        bogus_key: "dropped by the tolerant parser"
+      }
+    } as never);
+
+    await applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID });
+    expect(updateBusinessProfileFields).toHaveBeenCalledWith(
+      BIZ_ID,
+      {
+        business_hours: expect.objectContaining({
+          sat: { open: "10:00", close: "14:00" },
+          // The intake's Mon–Fri window wins over the stale Monday hours.
+          mon: { open: "11:00", close: "18:00" },
+          fri: { open: "11:00", close: "18:00" }
+        })
+      },
+      expect.anything()
+    );
   });
 
   it("handles a missing config row (fresh vault) and unparseable hours", async () => {
