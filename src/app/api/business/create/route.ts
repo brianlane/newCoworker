@@ -7,6 +7,7 @@ import {
   updateBusinessTimezone
 } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { normalizePreferredAreaCode } from "@/lib/telnyx/did-search-plan";
 import { teamSizeBucketToInt } from "@/lib/onboarding/intakeOptions";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
@@ -121,6 +122,29 @@ export async function POST(request: Request) {
       );
     }
 
+    // Normalize the owner phone to E.164 BEFORE it persists. `businesses.phone`
+    // feeds the DID search's owner-local area-code tier, the Canada fee/profile
+    // classification, and the forwarding-number default at provisioning — all
+    // of which silently degrade on a junk value (KYP Ads Jul 14 2026: a
+    // 7-digit "5188192" sailed through signup, so the forward default stayed
+    // blank and the owner-local DID tier was skipped). Optional field: blank
+    // stays blank; a PROVIDED value must coerce or the signup form gets
+    // actionable feedback instead of a landmine row. Deliberately checked
+    // AFTER the idempotent existing-row branch above: that path never
+    // persists the phone, and rejecting there would strand a retry that
+    // still carries a legacy junk value (Bugbot Medium on this PR).
+    let phone: string | undefined;
+    if (body.phone !== undefined && body.phone.trim()) {
+      const coerced = coerceOwnerPhoneToE164(body.phone);
+      if (!coerced) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Phone number must include the area code, e.g. +1 (555) 123-4567 (10-digit US/Canada numbers are accepted without the +1)."
+        );
+      }
+      phone = coerced;
+    }
+
     const business = await createBusiness({
       id: body.businessId,
       name: body.name,
@@ -128,7 +152,7 @@ export async function POST(request: Request) {
       tier: body.tier,
       businessType: body.businessType,
       ownerName: body.ownerName,
-      phone: body.phone,
+      phone,
       preferredAreaCode: normalizePreferredAreaCode(body.preferredAreaCode),
       websiteUrl: body.websiteUrl,
       serviceArea: body.serviceArea,
