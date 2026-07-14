@@ -11,7 +11,12 @@ import {
   type BusinessHours,
   type BusinessHoursDay
 } from "@/lib/business-profile/profile";
-import { BUSINESS_TYPE_OPTIONS } from "@/lib/onboarding/businessTypes";
+import {
+  BUSINESS_TYPE_OPTIONS,
+  BUSINESS_TYPE_OTHER_VALUE,
+  deriveBusinessTypeSelection,
+  serializeBusinessTypeSelection
+} from "@/lib/onboarding/businessTypes";
 
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
 
@@ -109,8 +114,11 @@ export function BusinessProfileForm({
         <label className="block">
           <span className="block text-xs font-medium text-parchment/60 mb-1">Industry</span>
           <select
-            value={businessType}
-            onChange={(e) => setBusinessType(e.target.value)}
+            value={deriveBusinessTypeSelection(businessType).selection}
+            onChange={(e) => {
+              const { otherText } = deriveBusinessTypeSelection(businessType);
+              setBusinessType(serializeBusinessTypeSelection(e.target.value, otherText));
+            }}
             className="w-full rounded-lg border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment focus:border-signal-teal focus:outline-none"
           >
             <option value="">Select an industry…</option>
@@ -121,6 +129,19 @@ export function BusinessProfileForm({
             ))}
           </select>
         </label>
+        {deriveBusinessTypeSelection(businessType).selection === BUSINESS_TYPE_OTHER_VALUE && (
+          <Input
+            label="What kind of business?"
+            value={deriveBusinessTypeSelection(businessType).otherText}
+            onChange={(e) =>
+              setBusinessType(
+                serializeBusinessTypeSelection(BUSINESS_TYPE_OTHER_VALUE, e.target.value)
+              )
+            }
+            maxLength={120}
+            placeholder="e.g. Drone Photography, Notary Services"
+          />
+        )}
 
         <div>
           <span className="block text-xs font-medium text-parchment/60 mb-2">Business hours</span>

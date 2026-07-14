@@ -79,6 +79,24 @@ describe("notifications/dispatch", () => {
     expect(t.phone).toBe("+15555550199");
   });
 
+  it("resolveNotificationTargets coerces a stored bare 10-digit phone to E.164 at read time (pre-validation rows must still deliver — Amy's '6026951142', July 2026)", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      phone_number: "6026951142"
+    } as never);
+    const t = await resolveNotificationTargets(BIZ);
+    expect(t.phone).toBe("+16026951142");
+  });
+
+  it("resolveNotificationTargets treats an uncoercible stored phone as no phone (falls back to the operator env number instead of failing at Telnyx)", async () => {
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      phone_number: "555-1234"
+    } as never);
+    const t = await resolveNotificationTargets(BIZ);
+    expect(t.phone).toBe("+15555550100");
+  });
+
   it("resolveNotificationTargets falls back to owner_email when prefs.alert_email is null", async () => {
     const t = await resolveNotificationTargets(BIZ);
     expect(t.email).toBe("owner@example.com");

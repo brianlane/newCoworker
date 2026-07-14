@@ -7,6 +7,7 @@ import {
   updateNotificationPreferences
 } from "@/lib/db/notification-preferences";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import { z } from "zod";
 
 const patchSchema = z.object({
@@ -99,11 +100,32 @@ export async function POST(request: Request) {
         : unsubscribed_at === "clear" || unsubscribed_at === null
           ? null
           : undefined;
+    // Normalize the alert phone to E.164 BEFORE it persists. This field is
+    // handed verbatim to Telnyx as the SMS `to` — a raw "6026951142" saved
+    // here sat dormant for a month and then failed the tenant's first urgent
+    // alert with Telnyx 40310 "Invalid 'to' address" (Amy, July 2026). NANP
+    // coercion (bare 10-digit → +1) keeps the common US/Canada input working;
+    // anything we can't safely coerce is rejected with actionable feedback
+    // instead of stored as a landmine.
+    let resolvedPhone: string | null | undefined;
+    if (phone_number !== undefined) {
+      const trimmed = phone_number?.trim() || "";
+      if (!trimmed) {
+        resolvedPhone = null;
+      } else {
+        const coerced = coerceOwnerPhoneToE164(trimmed);
+        if (!coerced) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            "Alert phone must be a valid number in international format, e.g. +1 555 123 4567 (10-digit US/Canada numbers are accepted without the +1)."
+          );
+        }
+        resolvedPhone = coerced;
+      }
+    }
     const patch = {
       ...rest,
-      ...(phone_number !== undefined
-        ? { phone_number: phone_number?.trim() ? phone_number.trim() : null }
-        : {}),
+      ...(resolvedPhone !== undefined ? { phone_number: resolvedPhone } : {}),
       ...(alert_email !== undefined
         ? { alert_email: alert_email?.trim() ? alert_email.trim() : null }
         : {}),

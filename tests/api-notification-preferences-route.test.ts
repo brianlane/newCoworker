@@ -153,6 +153,59 @@ describe("api/notifications/preferences route", () => {
     );
   });
 
+  it("coerces a bare 10-digit US/Canada phone to E.164 before persisting (Amy's '6026951142' failed its first urgent SMS as Telnyx 40310)", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          phone_number: "602-695-1142"
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({ phone_number: "+16026951142" })
+    );
+  });
+
+  it("preserves an already-E.164 phone as-is", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          phone_number: "+14164560696"
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({ phone_number: "+14164560696" })
+    );
+  });
+
+  it("rejects a phone that cannot be safely coerced to E.164 instead of storing a landmine", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          phone_number: "555-1234"
+        })
+      })
+    );
+    const body = await response.json();
+    expect(response.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
   it("passes email_digest_weekly through to the update", async () => {
     const response = await POST(
       new Request("http://localhost/api/notifications/preferences", {

@@ -19,7 +19,10 @@ const schema = z.object({
   tier: z.enum(["starter", "standard", "enterprise"]),
   ownerEmail: z.string().email().optional(),
   signupUserId: z.string().uuid().optional(),
-  businessType: z.string().optional(),
+  // Known slug or free-text custom industry (onboarding "Other" flow);
+  // capped to match /api/account/business-profile so a value saved at
+  // signup never becomes unsaveable from Settings later.
+  businessType: z.string().trim().max(120).optional(),
   ownerName: z.string().optional(),
   phone: z.string().optional(),
   /**

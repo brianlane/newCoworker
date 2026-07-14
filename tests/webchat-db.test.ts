@@ -14,7 +14,7 @@ type StubResult = {
  */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gt", "gte", "order", "limit", "insert", "update", "delete"]) {
+  for (const m of ["select", "eq", "gt", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);
@@ -24,7 +24,7 @@ function makeBuilder(result: StubResult) {
   return b;
 }
 
-const supabaseStub = { from: vi.fn() };
+const supabaseStub = { from: vi.fn(), rpc: vi.fn() };
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => supabaseStub)
@@ -32,9 +32,12 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   appendWebchatMessage,
+  claimWebchatJobForPlatform,
+  completeWebchatJobFromPlatform,
   countWebchatUserMessagesSince,
   createWebchatSession,
   deleteWebchatMessage,
+  failWebchatJobFromPlatform,
   getOrCreateWidgetSettings,
   getWebchatJobById,
   getWebchatJobForUserMessage,
@@ -48,11 +51,16 @@ import {
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
+  reclaimStaleWebchatJobForPlatform,
   regenerateWidgetKey,
   serializeWebchatMessages,
   touchWebchatSession,
   updateWebchatSessionContact,
   updateWidgetSettings,
+  webchatReplyEngine,
+  WEBCHAT_ENGINE_HISTORY_MARKER,
+  WEBCHAT_PLATFORM_RECLAIM_AFTER_MS,
+  WEBCHAT_PLATFORM_WORKER_ID,
   type WebchatMessageRow
 } from "@/lib/webchat/db";
 
@@ -417,5 +425,125 @@ describe("webchat_jobs accessors", () => {
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
     await expect(getWebchatJobById(JOB)).rejects.toThrow("getWebchatJobById: x");
+  });
+
+  it("getWebchatJobById selects the pre-built turn inputs for the Gemini engine", async () => {
+    const builder = makeBuilder({ data: { id: JOB }, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await getWebchatJobById(JOB);
+    const selected = (builder.select as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(selected).toContain("input_messages");
+    expect(selected).toContain("stateless_input_messages");
+  });
+});
+
+describe("webchatReplyEngine", () => {
+  it("reads 'gemini' only when stored exactly, defaulting everything else to 'vps'", () => {
+    expect(webchatReplyEngine({ reply_engine: "gemini" })).toBe("gemini");
+    expect(webchatReplyEngine({ reply_engine: "vps" })).toBe("vps");
+    expect(webchatReplyEngine({})).toBe("vps");
+    expect(webchatReplyEngine({ reply_engine: undefined })).toBe("vps");
+  });
+});
+
+describe("platform-engine job lifecycle", () => {
+  const jobRow = { id: JOB, session_id: SESSION, business_id: BIZ };
+
+  it("claimWebchatJobForPlatform claims a queued job with the conditional update", async () => {
+    const builder = makeBuilder({ data: { id: JOB, status: "processing" }, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    expect(await claimWebchatJobForPlatform(JOB)).toEqual({ id: JOB, status: "processing" });
+    const patch = (builder.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(patch).toMatchObject({
+      status: "processing",
+      claimed_by: WEBCHAT_PLATFORM_WORKER_ID
+    });
+    expect(typeof patch.claimed_at).toBe("string");
+    // The queued-only filter IS the race lock against a live worker.
+    expect(builder.eq).toHaveBeenCalledWith("id", JOB);
+    expect(builder.eq).toHaveBeenCalledWith("status", "queued");
+  });
+
+  it("claimWebchatJobForPlatform returns null on a lost race, throws on error", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await claimWebchatJobForPlatform(JOB, injected)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(claimWebchatJobForPlatform(JOB)).rejects.toThrow(
+      "claimWebchatJobForPlatform: x"
+    );
+  });
+
+  it("completeWebchatJobFromPlatform commits atomically through the RPC (with the history marker)", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: 42, error: null });
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply text")).toBe(42);
+    expect(supabaseStub.rpc).toHaveBeenCalledWith("webchat_job_complete_platform", {
+      p_job_id: JOB,
+      p_content: "Reply text",
+      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+    });
+
+    // bigint may arrive as a string through PostgREST.
+    supabaseStub.rpc.mockResolvedValueOnce({ data: "43", error: null });
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", injected)).toBe(43);
+  });
+
+  it("reclaimStaleWebchatJobForPlatform steals only a stale PLATFORM claim", async () => {
+    const now = new Date("2026-07-14T17:00:00Z");
+    const builder = makeBuilder({ data: { id: JOB, status: "processing" }, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    expect(await reclaimStaleWebchatJobForPlatform(JOB, injected, now)).toEqual({
+      id: JOB,
+      status: "processing"
+    });
+    // Guards: processing rows only, the platform's own claimed_by only,
+    // and only claims older than the reclaim window.
+    expect(builder.eq).toHaveBeenCalledWith("status", "processing");
+    expect(builder.eq).toHaveBeenCalledWith("claimed_by", WEBCHAT_PLATFORM_WORKER_ID);
+    expect(builder.lt).toHaveBeenCalledWith(
+      "claimed_at",
+      new Date(now.getTime() - WEBCHAT_PLATFORM_RECLAIM_AFTER_MS).toISOString()
+    );
+  });
+
+  it("reclaimStaleWebchatJobForPlatform returns null when healthy/raced, throws on error", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await reclaimStaleWebchatJobForPlatform(JOB)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(reclaimStaleWebchatJobForPlatform(JOB)).rejects.toThrow(
+      "reclaimStaleWebchatJobForPlatform: x"
+    );
+  });
+
+  it("completeWebchatJobFromPlatform surfaces RPC errors and malformed ids", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: null, error: { message: "x" } });
+    await expect(completeWebchatJobFromPlatform(jobRow, "Reply")).rejects.toThrow(
+      "completeWebchatJobFromPlatform: x"
+    );
+
+    supabaseStub.rpc.mockResolvedValueOnce({ data: "not-a-number", error: null });
+    await expect(completeWebchatJobFromPlatform(jobRow, "Reply")).rejects.toThrow(
+      "non-numeric message id"
+    );
+  });
+
+  it("failWebchatJobFromPlatform bounds the taxonomy and guards to THIS claim generation", async () => {
+    const builder = makeBuilder({ data: null, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await failWebchatJobFromPlatform(JOB, "c".repeat(200), "d".repeat(600), "2026-07-14T17:00:00Z");
+    const patch = (builder.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(patch.status).toBe("error");
+    expect((patch.error_code as string).length).toBe(100);
+    expect((patch.error_detail as string).length).toBe(500);
+    // Never stamps 'error' over a committed reply or a fresh reclaim.
+    expect(builder.eq).toHaveBeenCalledWith("status", "processing");
+    expect(builder.eq).toHaveBeenCalledWith("claimed_by", WEBCHAT_PLATFORM_WORKER_ID);
+    expect(builder.eq).toHaveBeenCalledWith("claimed_at", "2026-07-14T17:00:00Z");
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(
+      failWebchatJobFromPlatform(JOB, "code", "detail", "2026-07-14T17:00:00Z", injected)
+    ).rejects.toThrow("failWebchatJobFromPlatform: x");
   });
 });

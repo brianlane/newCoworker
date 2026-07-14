@@ -14,6 +14,8 @@ import { mintWidgetKey } from "@/lib/webchat/keys";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+export type WebchatReplyEngine = "vps" | "gemini";
+
 export type ChatWidgetSettingsRow = {
   business_id: string;
   enabled: boolean;
@@ -22,9 +24,23 @@ export type ChatWidgetSettingsRow = {
   allowed_origins: string[];
   require_contact_form: boolean;
   theme: unknown | null;
+  /**
+   * Who answers widget turns: 'vps' = the box chat-worker (default),
+   * 'gemini' = the platform-side direct responder (no VPS required) —
+   * see src/lib/webchat/gemini-engine.ts. Admin-only knob; optional on
+   * the type for rows read before 20260805000100_webchat_reply_engine.
+   */
+  reply_engine?: WebchatReplyEngine;
   created_at: string;
   updated_at: string;
 };
+
+/** Defensive read of the reply engine: anything but 'gemini' means 'vps'. */
+export function webchatReplyEngine(
+  settings: Pick<ChatWidgetSettingsRow, "reply_engine">
+): WebchatReplyEngine {
+  return settings.reply_engine === "gemini" ? "gemini" : "vps";
+}
 
 export type WebchatSessionRow = {
   id: string;
@@ -63,6 +79,16 @@ export type WebchatJobRow = {
   error_detail: string | null;
   created_at: string;
   completed_at: string | null;
+  /**
+   * Pre-built turn input (see /api/widget/message). Present only on reads
+   * that select them (getWebchatJobById) — the Gemini reply engine consumes
+   * stateless_input_messages ?? input_messages, the same precedence the
+   * chat-worker applies to its always-stateless turns.
+   */
+  input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
+  stateless_input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
+  /** Present on platform claim/reclaim reads — identifies THIS claim generation. */
+  claimed_at?: string | null;
 };
 
 /**
@@ -146,6 +172,7 @@ export type WidgetSettingsPatch = {
   allowed_origins?: string[];
   require_contact_form?: boolean;
   theme?: unknown | null;
+  reply_engine?: WebchatReplyEngine;
 };
 
 export async function updateWidgetSettings(
@@ -506,10 +533,169 @@ export async function getWebchatJobById(
   const { data, error } = await db
     .from("webchat_jobs")
     .select(
-      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at"
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, input_messages, stateless_input_messages"
     )
     .eq("id", jobId)
     .maybeSingle();
   if (error) throw new Error(`getWebchatJobById: ${error.message}`);
   return (data as WebchatJobRow | null) ?? null;
+}
+
+// ---------------------------------------------------------------------
+// Platform-side (Gemini reply engine) job lifecycle. The box chat-worker
+// claims via the claim_webchat_job RPC; the platform engine claims with a
+// conditional UPDATE — the `status = 'queued'` filter is the lock, so a
+// worker that somehow raced us matches zero rows and exactly one engine
+// ever answers a job.
+// ---------------------------------------------------------------------
+
+/** claimed_by marker for platform-engine claims (worker ids are hostnames). */
+export const WEBCHAT_PLATFORM_WORKER_ID = "platform-gemini-engine";
+
+/**
+ * Sentinel stored in webchat_sessions.rowboat_conversation_id after a
+ * platform-engine reply. The enqueue route treats ANY non-empty value as
+ * "this session has prior history" and switches to the full 20-message
+ * stateless tail — without it, gemini-engine tenants would be stuck on the
+ * 8-message resend tail forever and multi-turn chats would lose context
+ * versus the worker path (Bugbot Medium on PR #592). Harmless if the
+ * tenant later flips back to 'vps': the worker never RESUMES the id (all
+ * webchat turns are stateless-forced) and overwrites it with a real
+ * Rowboat id on its next completed turn.
+ */
+export const WEBCHAT_ENGINE_HISTORY_MARKER = "platform-gemini-engine";
+
+/**
+ * A platform claim older than this is stealable by a later poll. Sized
+ * well past the engine's whole-turn deadline (30s) so a live turn can
+ * never be double-answered; a crashed/killed route (or a failed
+ * error-flip) is retried instead of leaving the job wedged 'processing'
+ * with nobody to reclaim it (gemini tenants have no box-side reclaimer).
+ */
+export const WEBCHAT_PLATFORM_RECLAIM_AFTER_MS = 60_000;
+
+/**
+ * Atomically claim a still-queued job for the platform engine. Null when
+ * the claim lost (already claimed/answered) — the caller just re-reads.
+ */
+export async function claimWebchatJobForPlatform(
+  jobId: string,
+  client?: SupabaseClient
+): Promise<WebchatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const nowIso = new Date().toISOString();
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "processing",
+      claimed_by: WEBCHAT_PLATFORM_WORKER_ID,
+      claimed_at: nowIso,
+      started_at: nowIso
+    })
+    .eq("id", jobId)
+    .eq("status", "queued")
+    .select(
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, claimed_at, input_messages, stateless_input_messages"
+    )
+    .maybeSingle();
+  if (error) throw new Error(`claimWebchatJobForPlatform: ${error.message}`);
+  return (data as WebchatJobRow | null) ?? null;
+}
+
+/**
+ * Steal a WEDGED platform claim: same conditional-UPDATE lock, but against
+ * a 'processing' row whose platform claim went stale (route crashed
+ * mid-turn, or the error-flip itself failed). Guarded to the platform's
+ * own claimed_by — a box worker's in-flight claim is never stolen (its own
+ * reclaimer owns that). Null when the row is absent, healthy, or raced.
+ */
+export async function reclaimStaleWebchatJobForPlatform(
+  jobId: string,
+  client?: SupabaseClient,
+  now: Date = new Date()
+): Promise<WebchatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const cutoffIso = new Date(now.getTime() - WEBCHAT_PLATFORM_RECLAIM_AFTER_MS).toISOString();
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "processing",
+      claimed_by: WEBCHAT_PLATFORM_WORKER_ID,
+      claimed_at: now.toISOString()
+    })
+    .eq("id", jobId)
+    .eq("status", "processing")
+    .eq("claimed_by", WEBCHAT_PLATFORM_WORKER_ID)
+    .lt("claimed_at", cutoffIso)
+    .select(
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, claimed_at, input_messages, stateless_input_messages"
+    )
+    .maybeSingle();
+  if (error) throw new Error(`reclaimStaleWebchatJobForPlatform: ${error.message}`);
+  return (data as WebchatJobRow | null) ?? null;
+}
+
+/**
+ * Persist the engine's reply ATOMICALLY via the
+ * `webchat_job_complete_platform` RPC: assistant message + session bump
+ * (last_seen + the sticky history marker) + job → done, one transaction.
+ * Returns the assistant message id.
+ *
+ * Atomicity is load-bearing (Bugbot High on PR #592): with separate
+ * writes, "message inserted but job flip failed" left a 'processing' row
+ * the stale-claim reclaim would answer AGAIN — duplicate assistant reply,
+ * double Gemini billing. The RPC makes partial states impossible, and a
+ * replay against an already-done job idempotently returns the original
+ * message id.
+ */
+export async function completeWebchatJobFromPlatform(
+  job: Pick<WebchatJobRow, "id">,
+  content: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db.rpc("webchat_job_complete_platform", {
+    p_job_id: job.id,
+    p_content: content,
+    p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+  });
+  if (error) throw new Error(`completeWebchatJobFromPlatform: ${error.message}`);
+  const msgId = Number(data);
+  if (!Number.isFinite(msgId)) {
+    throw new Error(`completeWebchatJobFromPlatform: non-numeric message id ${String(data)}`);
+  }
+  return msgId;
+}
+
+/**
+ * Flip a platform-claimed job to error (the widget shows its retry copy).
+ * Guarded to rows still processing under THIS claim generation
+ * (`claimed_at` is the token): after a stale reclaim, two requests can
+ * briefly hold the same turn, and the slow loser's catch path must never
+ * stamp 'error' over a job the winner committed as 'done' (Bugbot High on
+ * PR #592) — nor over a fresh claim a later reclaimer took. A raced flip
+ * matches zero rows, which is exactly right.
+ */
+export async function failWebchatJobFromPlatform(
+  jobId: string,
+  code: string,
+  detail: string,
+  /** The failing claim's own claimed_at (from claim/reclaim). */
+  claimedAt: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "error",
+      error_code: code.slice(0, 100),
+      error_detail: detail.slice(0, 500),
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", jobId)
+    .eq("status", "processing")
+    .eq("claimed_by", WEBCHAT_PLATFORM_WORKER_ID)
+    .eq("claimed_at", claimedAt);
+  if (error) throw new Error(`failWebchatJobFromPlatform: ${error.message}`);
 }

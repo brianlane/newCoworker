@@ -34,6 +34,7 @@ import {
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
+import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import {
   notificationCategoryEnabled,
   resolveNotificationCategory,
@@ -93,7 +94,7 @@ export async function resolveNotificationTargets(
   businessId: string
 ): Promise<ResolvedTargets> {
   const fallbackEmail = process.env.ADMIN_EMAIL?.trim() || null;
-  const fallbackPhone = process.env.TELNYX_OWNER_PHONE?.trim() || null;
+  const fallbackPhone = coerceOwnerPhoneToE164(process.env.TELNYX_OWNER_PHONE);
   let prefsEmail: string | null = null;
   let prefsPhone: string | null = null;
   let smsUrgent = true;
@@ -113,7 +114,21 @@ export async function resolveNotificationTargets(
   try {
     const prefs = await getOrCreateNotificationPreferences(businessId);
     prefsEmail = prefs.alert_email?.trim() || null;
-    prefsPhone = prefs.phone_number?.trim() || null;
+    // Normalize to E.164 at READ time, not just at save time: rows written
+    // before the preferences route validated (observed live: Amy's
+    // "6026951142", saved June 2026, failed its first urgent SMS with Telnyx
+    // 40310 "Invalid 'to' address" a month later) must still deliver.
+    // NANP coercion only — a bare 10-digit number becomes +1XXXXXXXXXX; an
+    // ambiguous value we can't safely coerce is treated as no phone (the
+    // dispatch writes an honest `skipped: no_phone` row) rather than sent to
+    // Telnyx to fail.
+    const rawPrefsPhone = prefs.phone_number?.trim() || null;
+    prefsPhone = coerceOwnerPhoneToE164(rawPrefsPhone);
+    if (rawPrefsPhone && !prefsPhone) {
+      logger.warn("resolveNotificationTargets: stored alert phone is not coercible to E.164", {
+        businessId
+      });
+    }
     smsUrgent = prefs.sms_urgent;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;
