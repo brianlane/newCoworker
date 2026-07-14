@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { NEEDS_HUMAN_TAG } from "../../supabase/functions/_shared/needs_human";
+import { formatFlowAnswerNote } from "../../supabase/functions/_shared/ai_flows/run_context";
 import { REASONING_MARKER } from "../../supabase/functions/_shared/reply_reasoning";
 import {
   enqueueSmsJob,
@@ -33,6 +34,10 @@ import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
 
 const LEAD = "+14165550188";
 const INBOUND_TEXT = "Was supposed to of been Apil 17th but they would not Renew it";
+/** The flow's last outbound text (seeded below) — the fresh-thread anchor
+ * quotes it inside the user turn. */
+const FLOW_LAST_MESSAGE =
+  "Thanks for sharing that - Approximately when does your current policy renew?";
 
 let db: SupabaseClient;
 let rowboat: FakeRowboat;
@@ -98,7 +103,7 @@ async function seedLeadWithContext(name: string): Promise<{ biz: string }> {
     business_id: biz,
     to_e164: LEAD,
     from_e164: "+14165550000",
-    body: "Thanks for sharing that - Approximately when does your current policy renew?",
+    body: FLOW_LAST_MESSAGE,
     source: "ai_flow"
   });
   if (logErr) throw new Error(logErr.message);
@@ -153,7 +158,12 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(call.authorization).toBe("Bearer itest-rowboat-bearer");
     const system = call.body.messages.find((m) => m.role === "system");
     const user = call.body.messages.find((m) => m.role === "user");
-    expect(user?.content).toBe(`[SMS] ${INBOUND_TEXT}`);
+    // Fresh thread + a flow that just texted this lead → the worker anchors
+    // the last automated message INSIDE the user turn (formatFlowAnswerNote,
+    // the 2026-07-14 Truly fix), above the [SMS] line.
+    expect(user?.content).toBe(
+      `${formatFlowAnswerNote(FLOW_LAST_MESSAGE)}\n\n[SMS] ${INBOUND_TEXT}`
+    );
     // Identity/tooling lines and the texter's number...
     expect(system?.content).toContain(`Current texter phone: ${LEAD}`);
     // ...cross-channel memory, including the preferred-name addressing rule
