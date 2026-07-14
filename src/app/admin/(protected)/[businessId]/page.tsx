@@ -33,6 +33,7 @@ import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
 import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
 import { PrivacyPanel } from "@/components/admin/PrivacyPanel";
+import { DeletedItemsPanel } from "@/components/admin/DeletedItemsPanel";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
@@ -387,6 +388,14 @@ export default async function BusinessDetailPage({
           businessId={businessId}
           initialRetentionDays={business.data_retention_days ?? null}
         />
+      </Card>
+
+      {/* Owner-deleted items (soft deletes) — view + restore */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Deleted items
+        </h2>
+        <DeletedItemsPanel businessId={businessId} />
       </Card>
 
       {/* Team (read-only; BizBlasts' business-show "Users" panel) */}

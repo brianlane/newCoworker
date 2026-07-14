@@ -4,14 +4,20 @@ import {
   getNotifications,
   getUnreadNotificationCount,
   markNotificationRead,
-  markAllNotificationsRead
+  markAllNotificationsRead,
+  softDeleteNotification
 } from "@/lib/db/notifications";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+vi.mock("@/lib/residency/row-delete", () => ({
+  softDeleteContentRows: vi.fn()
+}));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 const MOCK_NOTIF = {
   id: "notif-uuid-1",
@@ -135,12 +141,26 @@ describe("db/notifications", () => {
     expect(limit).toHaveBeenCalledWith(20);
   });
 
-  it("getUnreadNotificationCount returns count and filters by status='sent'", async () => {
-    const chain = {
+  /**
+   * The unread-count chain now ends with TWO .is() calls
+   * (read_at, then deleted_at): the first must return the chain,
+   * the second resolves the query.
+   */
+  function unreadCountChain(result: { count: number | null; error: { message: string } | null }) {
+    const chain: Record<string, ReturnType<typeof vi.fn>> = {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      is: vi.fn().mockResolvedValue({ count: 4, error: null })
+      // Residency-mode lookup (from("businesses")…maybeSingle) shares this
+      // mock; null data resolves to central ("supabase") mode.
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+      is: vi.fn()
     };
+    chain.is.mockReturnValueOnce(chain).mockResolvedValueOnce(result);
+    return chain;
+  }
+
+  it("getUnreadNotificationCount returns count and filters by status='sent'", async () => {
+    const chain = unreadCountChain({ count: 4, error: null });
     const db = { from: vi.fn().mockReturnValue(chain) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await getUnreadNotificationCount("biz-uuid-1")).toBe(4);
@@ -148,25 +168,19 @@ describe("db/notifications", () => {
     expect(chain.eq).toHaveBeenCalledWith("business_id", "biz-uuid-1");
     expect(chain.eq).toHaveBeenCalledWith("status", "sent");
     expect(chain.is).toHaveBeenCalledWith("read_at", null);
+    // Soft-deleted rows must never inflate the bell badge.
+    expect(chain.is).toHaveBeenCalledWith("deleted_at", null);
   });
 
   it("getUnreadNotificationCount returns 0 when count is null", async () => {
-    const chain = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      is: vi.fn().mockResolvedValue({ count: null, error: null })
-    };
+    const chain = unreadCountChain({ count: null, error: null });
     const db = { from: vi.fn().mockReturnValue(chain) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await getUnreadNotificationCount("biz-uuid-1")).toBe(0);
   });
 
   it("getUnreadNotificationCount throws on error", async () => {
-    const chain = {
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      is: vi.fn().mockResolvedValue({ count: null, error: { message: "boom" } })
-    };
+    const chain = unreadCountChain({ count: null, error: { message: "boom" } });
     const db = { from: vi.fn().mockReturnValue(chain) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(getUnreadNotificationCount("biz-uuid-1")).rejects.toThrow(
@@ -255,5 +269,39 @@ describe("db/notifications", () => {
     const db = { from: vi.fn().mockReturnValue(chain) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(markAllNotificationsRead("biz")).rejects.toThrow("markAllNotificationsRead");
+  });
+
+  it("getNotifications filters out soft-deleted rows", async () => {
+    const limit = vi.fn().mockResolvedValue({ data: [], error: null });
+    const is = vi.fn().mockReturnThis();
+    const db = { ...mockDb(), is, limit };
+    await getNotifications("biz-uuid-1", 20, db as never);
+    expect(is).toHaveBeenCalledWith("deleted_at", null);
+  });
+
+  it("softDeleteNotification delegates to the residency-aware soft delete", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 1, box: null });
+    const db = mockDb();
+    const count = await softDeleteNotification("biz-uuid-1", "notif-uuid-1", "user-1", db as never);
+    expect(count).toBe(1);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      "biz-uuid-1",
+      "notifications",
+      [{ column: "id", op: "eq", value: "notif-uuid-1" }],
+      "user-1",
+      { client: db }
+    );
+  });
+
+  it("softDeleteNotification counts box-only stamps (vps-mode purged central)", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 0, box: 1 });
+    expect(await softDeleteNotification("biz", "n1", null)).toBe(1);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      "biz",
+      "notifications",
+      [{ column: "id", op: "eq", value: "n1" }],
+      null,
+      {}
+    );
   });
 });

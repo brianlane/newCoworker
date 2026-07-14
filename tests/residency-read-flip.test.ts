@@ -75,7 +75,10 @@ describe("email-log vps reads", () => {
     expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
       table: "email_log",
       columns: expect.arrayContaining(["id", "body_preview", "created_at"]),
-      filters: [{ column: "business_id", op: "eq", value: BIZ }],
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "deleted_at", op: "is", value: null }
+      ],
       order: [{ column: "created_at", ascending: false }],
       limit: 10
     });
@@ -146,6 +149,7 @@ describe("notifications vps reads", () => {
       table: "notifications",
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
+        { column: "deleted_at", op: "is", value: null },
         { column: "read_at", op: "is", value: null }
       ],
       order: [{ column: "created_at", ascending: false }],
@@ -153,7 +157,10 @@ describe("notifications vps reads", () => {
     });
     await getNotifications(BIZ, 7, centralDb({}));
     expect(vi.mocked(readMovedRows).mock.calls[1][1]).toMatchObject({
-      filters: [{ column: "business_id", op: "eq", value: BIZ }],
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "deleted_at", op: "is", value: null }
+      ],
       limit: 7
     });
     // Options object with no limit falls back to the default 20.
@@ -169,7 +176,8 @@ describe("notifications vps reads", () => {
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
         { column: "status", op: "eq", value: "sent" },
-        { column: "read_at", op: "is", value: null }
+        { column: "read_at", op: "is", value: null },
+        { column: "deleted_at", op: "is", value: null }
       ]
     });
   });
@@ -199,7 +207,7 @@ describe("voice-transcripts vps reads", () => {
     vi.mocked(isVpsReadMode).mockResolvedValue(false);
     const maybeSingle = vi.fn(async () => ({ data: { id: "t-central" }, error: null }));
     const chain: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "in"]) chain[m] = vi.fn(() => chain);
+    for (const m of ["select", "eq", "is", "in"]) chain[m] = vi.fn(() => chain);
     chain.maybeSingle = maybeSingle;
     chain.order = vi.fn(() => chain);
     chain.limit = vi.fn(async () => ({ data: [{ id: "t-central" }], error: null }));
@@ -241,7 +249,8 @@ describe("voice-transcripts vps reads", () => {
       table: "voice_call_transcripts",
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
-        { column: "caller_e164", op: "in", value: ["+1555", "+1556"] }
+        { column: "caller_e164", op: "in", value: ["+1555", "+1556"] },
+        { column: "deleted_at", op: "is", value: null }
       ],
       // nullsFirst:false mirrors the central supabase-js ordering exactly.
       order: [{ column: "started_at", ascending: false, nullsFirst: false }],
@@ -291,7 +300,7 @@ describe("analytics vps reads", () => {
   function analyticsCentralDb(resultsByTable: Record<string, unknown> = {}) {
     const builder = (table: string) => {
       const chain: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "neq", "gte", "lt", "order", "limit"]) {
+      for (const m of ["select", "eq", "neq", "is", "gte", "lt", "order", "limit"]) {
         chain[m] = vi.fn(() => chain);
       }
       chain.maybeSingle = vi.fn(async () => ({
@@ -362,6 +371,7 @@ describe("analytics vps reads", () => {
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
         { column: "status", op: "neq", value: "missed" },
+        { column: "deleted_at", op: "is", value: null },
         { column: "started_at", op: "gte", value: "2026-07-03T00:00:00.000Z" },
         { column: "started_at", op: "lt", value: "2026-07-04T00:00:00.000Z" }
       ],
@@ -373,6 +383,7 @@ describe("analytics vps reads", () => {
       table: "sms_outbound_log",
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
+        { column: "deleted_at", op: "is", value: null },
         { column: "created_at", op: "gte", value: "2026-07-03T00:00:00.000Z" },
         { column: "created_at", op: "lt", value: "2026-07-04T00:00:00.000Z" }
       ]
@@ -394,6 +405,7 @@ describe("analytics vps reads", () => {
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
         { column: "status", op: "neq", value: "missed" },
+        { column: "deleted_at", op: "is", value: null },
         { column: "started_at", op: "gte", value: "2026-07-02T00:00:00.000Z" }
       ]
     });
@@ -429,6 +441,7 @@ describe("analytics vps reads", () => {
         { column: "business_id", op: "eq", value: BIZ },
         { column: "direction", op: "eq", value: "inbound" },
         { column: "status", op: "neq", value: "missed" },
+        { column: "deleted_at", op: "is", value: null },
         { column: "started_at", op: "gte", value: expect.any(String) }
       ]
     });
@@ -497,7 +510,10 @@ describe("sms-history vps reads (outbound log only)", () => {
     ]);
     expect(vi.mocked(readMovedRows).mock.calls[0][1]).toMatchObject({
       table: "sms_outbound_log",
-      filters: [{ column: "business_id", op: "eq", value: BIZ }]
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "deleted_at", op: "is", value: null }
+      ]
     });
   });
 
@@ -526,7 +542,8 @@ describe("sms-history vps reads (outbound log only)", () => {
       columns: expect.arrayContaining(["to_e164", "body", "source"]),
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
-        { column: "to_e164", op: "eq", value: "+1555" }
+        { column: "to_e164", op: "eq", value: "+1555" },
+        { column: "deleted_at", op: "is", value: null }
       ],
       order: [{ column: "created_at", ascending: false }],
       limit: 50

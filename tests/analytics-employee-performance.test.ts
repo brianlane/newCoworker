@@ -47,7 +47,7 @@ function makeClient(resultsByTable: Record<string, QueryResult>) {
   const chains: Record<string, unknown> = {};
   const from = vi.fn((table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "neq", "gte", "lt", "order", "limit"]) {
+    for (const m of ["select", "eq", "neq", "is", "gte", "lt", "order", "limit"]) {
       chain[m] = vi.fn(() => chain);
     }
     (chain as { then: unknown }).then = (onF: (v: QueryResult) => unknown) =>

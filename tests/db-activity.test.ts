@@ -504,6 +504,7 @@ function chainResult(result: { data: unknown; error: unknown }) {
     in: vi.fn().mockReturnThis(),
     or: vi.fn().mockReturnThis(),
     not: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
     lt: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),

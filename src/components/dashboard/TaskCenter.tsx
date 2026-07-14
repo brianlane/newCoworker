@@ -52,7 +52,43 @@ const STATUS_TONE: Record<string, string> = {
   awaiting_reply: "bg-spark-orange/15 text-spark-orange"
 };
 
-function RunLine({ run }: { run: TaskRunView }) {
+function RunLine({
+  run,
+  businessId,
+  onDismissed
+}: {
+  run: TaskRunView;
+  businessId: string;
+  onDismissed: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "dismissing" | "error">("idle");
+
+  async function dismiss() {
+    if (
+      !window.confirm(
+        `Dismiss this task? "${run.flowName}" stops for this lead and nothing further sends.`
+      )
+    ) {
+      return;
+    }
+    setState("dismissing");
+    try {
+      const res = await fetch(`/api/aiflows/runs/${encodeURIComponent(run.id)}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId })
+      });
+      const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+      if (!res.ok || !json?.ok) {
+        setState("error");
+        return;
+      }
+      onDismissed();
+    } catch {
+      setState("error");
+    }
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <Workflow className="h-3.5 w-3.5 text-parchment/40" />
@@ -79,6 +115,18 @@ function RunLine({ run }: { run: TaskRunView }) {
           <Hourglass className="h-3 w-3" />
           until <LocalDateTime iso={run.waitingUntil} />
         </span>
+      )}
+      <button
+        type="button"
+        data-testid="task-dismiss"
+        onClick={() => void dismiss()}
+        disabled={state === "dismissing"}
+        className="ml-auto text-[11px] font-medium text-parchment/40 hover:text-spark-orange disabled:opacity-50 cursor-pointer"
+      >
+        {state === "dismissing" ? "Dismissing…" : "Dismiss"}
+      </button>
+      {state === "error" && (
+        <span className="text-[11px] text-spark-orange">Couldn&apos;t dismiss — try again.</span>
       )}
     </div>
   );
@@ -110,7 +158,15 @@ function ReasoningLine({ r }: { r: TaskReasoningView }) {
   );
 }
 
-function TaskCard({ task }: { task: TaskCardData }) {
+function TaskCard({
+  task,
+  businessId,
+  onChanged
+}: {
+  task: TaskCardData;
+  businessId: string;
+  onChanged: () => void;
+}) {
   const [showVars, setShowVars] = useState(false);
   return (
     <Card className="space-y-3">
@@ -142,7 +198,7 @@ function TaskCard({ task }: { task: TaskCardData }) {
       {task.runs.length > 0 ? (
         <div className="space-y-1.5">
           {task.runs.map((run) => (
-            <RunLine key={run.id} run={run} />
+            <RunLine key={run.id} run={run} businessId={businessId} onDismissed={onChanged} />
           ))}
         </div>
       ) : (
@@ -347,7 +403,12 @@ export function TaskCenter({
       )}
 
       {tasks?.map((task) => (
-        <TaskCard key={task.e164} task={task} />
+        <TaskCard
+          key={task.e164}
+          task={task}
+          businessId={businessId}
+          onChanged={() => void load(scope)}
+        />
       ))}
     </div>
   );

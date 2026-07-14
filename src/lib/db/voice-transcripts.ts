@@ -8,6 +8,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -76,7 +77,10 @@ export async function listTranscriptsForBusiness(
   if (vpsReadMode) {
     return await readMovedRows<VoiceCallTranscriptRow>(businessId, {
       table: "voice_call_transcripts",
-      filters: [{ column: "business_id", op: "eq", value: businessId }],
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "deleted_at", op: "is", value: null }
+      ],
       order: [{ column: "created_at", ascending: false }],
       limit
     });
@@ -85,6 +89,7 @@ export async function listTranscriptsForBusiness(
     .from("voice_call_transcripts")
     .select("*")
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listTranscriptsForBusiness: ${error.message}`);
@@ -103,7 +108,8 @@ export async function getTranscriptByCallControlId(
       table: "voice_call_transcripts",
       filters: [
         { column: "business_id", op: "eq", value: businessId },
-        { column: "call_control_id", op: "eq", value: callControlId }
+        { column: "call_control_id", op: "eq", value: callControlId },
+        { column: "deleted_at", op: "is", value: null }
       ],
       limit: 1
     });
@@ -114,6 +120,7 @@ export async function getTranscriptByCallControlId(
     .select("*")
     .eq("business_id", businessId)
     .eq("call_control_id", callControlId)
+    .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new Error(`getTranscriptByCallControlId: ${error.message}`);
   return (data as VoiceCallTranscriptRow | null) ?? null;
@@ -140,7 +147,8 @@ export async function getTranscriptById(
       table: "voice_call_transcripts",
       filters: [
         { column: "business_id", op: "eq", value: businessId },
-        { column: "id", op: "eq", value: id }
+        { column: "id", op: "eq", value: id },
+        { column: "deleted_at", op: "is", value: null }
       ],
       limit: 1
     });
@@ -151,6 +159,7 @@ export async function getTranscriptById(
     .select("*")
     .eq("business_id", businessId)
     .eq("id", id)
+    .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new Error(`getTranscriptById: ${error.message}`);
   return (data as VoiceCallTranscriptRow | null) ?? null;
@@ -191,6 +200,30 @@ export async function listTurns(
 }
 
 /**
+ * Owner-facing delete of one call (transcript + its turns): SOFT
+ * (deleted_at stamp on the transcript row, residency-aware,
+ * admin-restorable) but indistinguishable from a hard delete in the
+ * dashboard — every reader above filters the stamp, and turns are only
+ * ever reached through their (now hidden) parent. Returns the stamped-row
+ * count (0 when unknown/already deleted; idempotent).
+ */
+export async function softDeleteTranscript(
+  businessId: string,
+  transcriptId: string,
+  deletedBy: string | null,
+  client?: SupabaseClient
+): Promise<number> {
+  const result = await softDeleteContentRows(
+    businessId,
+    "voice_call_transcripts",
+    [{ column: "id", op: "eq", value: transcriptId }],
+    deletedBy,
+    client ? { client } : {}
+  );
+  return Math.max(result.central, result.box ?? 0);
+}
+
+/**
  * Cross-link helper for the per-customer detail page (Phase 4b).
  *
  * Returns recent transcripts for one (business_id, caller_e164) pair,
@@ -222,7 +255,8 @@ export async function listTranscriptsForCaller(
       table: "voice_call_transcripts",
       filters: [
         { column: "business_id", op: "eq", value: businessId },
-        { column: "caller_e164", op: "in", value: callers }
+        { column: "caller_e164", op: "in", value: callers },
+        { column: "deleted_at", op: "is", value: null }
       ],
       // Match the central path's `nullsFirst: false` exactly — Postgres
       // defaults DESC to NULLS FIRST, which would float null-started calls
@@ -236,6 +270,7 @@ export async function listTranscriptsForCaller(
     .select("*")
     .eq("business_id", businessId)
     .in("caller_e164", callers)
+    .is("deleted_at", null)
     .order("started_at", { ascending: false, nullsFirst: false })
     .limit(limit);
   if (error) throw new Error(`listTranscriptsForCaller: ${error.message}`);

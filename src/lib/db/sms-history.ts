@@ -27,6 +27,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -245,6 +246,7 @@ export async function listConversationsForBusiness(
     .from("sms_inbound_jobs")
     .select(SMS_JOB_SELECT)
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
   if (error) {
@@ -256,7 +258,10 @@ export async function listConversationsForBusiness(
     outboundRows = await readMovedRows<OutboundLogRow>(businessId, {
       table: "sms_outbound_log",
       columns: OUTBOUND_LOG_COLUMNS,
-      filters: [{ column: "business_id", op: "eq", value: businessId }],
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "deleted_at", op: "is", value: null }
+      ],
       order: [{ column: "created_at", ascending: false }],
       limit: Math.min(limit * 4, MAX_LIST_LIMIT * 4)
     });
@@ -265,6 +270,7 @@ export async function listConversationsForBusiness(
       .from("sms_outbound_log")
       .select(OUTBOUND_LOG_SELECT)
       .eq("business_id", businessId)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false })
       .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
     if (outboundError) {
@@ -370,6 +376,7 @@ export async function listMessagesForCustomer(
     .from("sms_inbound_jobs")
     .select(SMS_JOB_SELECT)
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(Math.min(limit * 4, MAX_LIST_LIMIT * 4));
   if (error) {
@@ -384,7 +391,8 @@ export async function listMessagesForCustomer(
       columns: OUTBOUND_LOG_COLUMNS,
       filters: [
         { column: "business_id", op: "eq", value: businessId },
-        { column: "to_e164", op: "eq", value: customerE164 }
+        { column: "to_e164", op: "eq", value: customerE164 },
+        { column: "deleted_at", op: "is", value: null }
       ],
       order: [{ column: "created_at", ascending: false }],
       limit: Math.min(limit, MAX_LIST_LIMIT)
@@ -395,6 +403,7 @@ export async function listMessagesForCustomer(
       .select(OUTBOUND_LOG_SELECT)
       .eq("business_id", businessId)
       .eq("to_e164", customerE164)
+      .is("deleted_at", null)
       .order("created_at", { ascending: false })
       .limit(Math.min(limit, MAX_LIST_LIMIT));
     if (outboundError) {
@@ -471,4 +480,87 @@ export async function listMessagesForCustomer(
 function clampLimit(raw: number | undefined): number {
   const n = typeof raw === "number" && Number.isFinite(raw) ? raw : DEFAULT_LIST_LIMIT;
   return Math.max(1, Math.min(n, MAX_LIST_LIMIT));
+}
+
+/**
+ * Owner-facing "delete conversation": SOFT-deletes every message exchanged
+ * with one customer number (deleted_at stamp, admin-restorable) while
+ * behaving exactly like a hard delete in the dashboard — both readers above
+ * filter the stamp. The contact row is deliberately untouched (it has its
+ * own delete on the customers page).
+ *
+ * Covers both storage sources of a thread:
+ *   - `sms_inbound_jobs` (central engine table): stamped by the
+ *     denormalized `customer_e164` column, plus a paged payload-parse
+ *     fallback for legacy rows that predate the column (they render in the
+ *     thread via payload parsing, so they must hide with it).
+ *   - `sms_outbound_log` (residency-moved): stamped via the residency-aware
+ *     helper so vps-mode tenants' box copies hide too.
+ */
+export async function softDeleteSmsConversation(
+  businessId: string,
+  customerE164: string,
+  deletedBy: string | null,
+  client?: SupabaseClient
+): Promise<{ inboundJobs: number; outboundSends: number }> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const stamp = { deleted_at: new Date().toISOString(), deleted_by: deletedBy };
+
+  // 1) Inbound jobs with the denormalized customer column.
+  const { data: stamped, error } = await db
+    .from("sms_inbound_jobs")
+    .update(stamp)
+    .eq("business_id", businessId)
+    .eq("customer_e164", customerE164)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) throw new Error(`softDeleteSmsConversation: ${error.message}`);
+  let inboundJobs = Array.isArray(stamped) ? stamped.length : 0;
+
+  // 2) Legacy rows (customer_e164 NULL, pre-Phase-2) still render in the
+  // thread through payload parsing — page them and match the same way the
+  // reader does. Ids are collected first, stamped after, so stamping never
+  // disturbs the pagination.
+  const PAGE = 500;
+  const legacyIds: string[] = [];
+  for (let offset = 0; ; offset += PAGE) {
+    const { data: page, error: pageError } = await db
+      .from("sms_inbound_jobs")
+      .select("id, payload")
+      .eq("business_id", businessId)
+      .is("customer_e164", null)
+      .is("deleted_at", null)
+      .order("id", { ascending: true })
+      .range(offset, offset + PAGE - 1);
+    if (pageError) throw new Error(`softDeleteSmsConversation: ${pageError.message}`);
+    const rows = (page as Array<{ id: string; payload: Record<string, unknown> }> | null) ?? [];
+    for (const row of rows) {
+      if (customerE164FromPayload(row.payload) === customerE164) legacyIds.push(row.id);
+    }
+    if (rows.length < PAGE) break;
+  }
+  if (legacyIds.length > 0) {
+    const { data: legacyStamped, error: legacyError } = await db
+      .from("sms_inbound_jobs")
+      .update(stamp)
+      .eq("business_id", businessId)
+      .in("id", legacyIds)
+      .select("id");
+    if (legacyError) throw new Error(`softDeleteSmsConversation: ${legacyError.message}`);
+    inboundJobs += Array.isArray(legacyStamped) ? legacyStamped.length : 0;
+  }
+
+  // 3) Worker-initiated sends (residency-aware: central + box).
+  const outbound = await softDeleteContentRows(
+    businessId,
+    "sms_outbound_log",
+    [{ column: "to_e164", op: "eq", value: customerE164 }],
+    deletedBy,
+    { client: db }
+  );
+
+  return {
+    inboundJobs,
+    outboundSends: Math.max(outbound.central, outbound.box ?? 0)
+  };
 }

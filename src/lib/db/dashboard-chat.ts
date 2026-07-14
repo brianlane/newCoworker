@@ -75,6 +75,7 @@ export async function getActiveThread(
     .select("*")
     .eq("business_id", businessId)
     .eq("is_active", true)
+    .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new Error(`getActiveThread: ${error.message}`);
   return (data as DashboardChatThreadRow | null) ?? null;
@@ -97,6 +98,7 @@ export async function getThreadById(
     .from("dashboard_chat_threads")
     .select("*")
     .eq("id", threadId)
+    .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new Error(`getThreadById: ${error.message}`);
   return (data as DashboardChatThreadRow | null) ?? null;
@@ -227,6 +229,7 @@ export async function listThreadsForBusiness(
       "id, business_id, rowboat_conversation_id, rowboat_state, title, is_active, created_at, updated_at, summary_md, summary_message_count, dashboard_chat_messages(count)"
     )
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("updated_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listThreadsForBusiness: ${error.message}`);
@@ -369,6 +372,45 @@ export async function updateThreadConversation(
     .update(update)
     .eq("id", threadId);
   if (error) throw new Error(`updateThreadConversation: ${error.message}`);
+}
+
+/**
+ * Owner-facing thread delete: SOFT (deleted_at stamp, admin-restorable) but
+ * indistinguishable from a hard delete in the dashboard — every reader
+ * above filters the stamp, and messages are only reachable through their
+ * (now hidden) parent thread. The same UPDATE flips `is_active` off so a
+ * deleted active thread can't block the one-active-per-business partial
+ * unique index; the next POST simply starts a fresh conversation.
+ *
+ * Central-only write by design: dashboard chat is engine state whose reads
+ * stay central in every residency mode (see residency-purge notes), and the
+ * write journal replicates the stamp to a dual/vps box copy.
+ *
+ * Returns the stamped-row count (0 when unknown/already deleted or owned by
+ * another business — idempotent, IDOR-safe on the business_id predicate).
+ */
+export async function softDeleteThread(
+  businessId: string,
+  threadId: string,
+  deletedBy: string | null,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const nowIso = new Date().toISOString();
+  const { data, error } = await db
+    .from("dashboard_chat_threads")
+    .update({
+      deleted_at: nowIso,
+      deleted_by: deletedBy,
+      is_active: false,
+      updated_at: nowIso
+    })
+    .eq("id", threadId)
+    .eq("business_id", businessId)
+    .is("deleted_at", null)
+    .select("id");
+  if (error) throw new Error(`softDeleteThread: ${error.message}`);
+  return (data ?? []).length;
 }
 
 /** Flip the current active thread to inactive so the next POST makes a new one. */

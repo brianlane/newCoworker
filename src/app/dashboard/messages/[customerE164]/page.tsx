@@ -23,6 +23,7 @@ import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
 import { SmsThreadComposer } from "@/components/dashboard/SmsThreadComposer";
 import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
+import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
 
 export const dynamic = "force-dynamic";
 
@@ -107,7 +108,15 @@ export default async function SmsThreadPage({
         >
           ← Back to text history
         </Link>
-        <h1 className="text-2xl font-bold text-parchment mt-2">SMS thread</h1>
+        <div className="mt-2 flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold text-parchment">SMS thread</h1>
+          <DeleteItemButton
+            url={`/api/dashboard/messages/${encodeURIComponent(customerE164)}?businessId=${encodeURIComponent(business.id)}`}
+            confirmMessage="Delete this entire conversation from your history? The contact itself is kept."
+            redirectTo="/dashboard/messages"
+            label="Delete conversation"
+          />
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
           {/* A known contact links through to their profile page; a bare
               number with no contact row has no page to land on. */}

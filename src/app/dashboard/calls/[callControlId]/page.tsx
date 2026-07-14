@@ -27,6 +27,7 @@ import {
 } from "@/components/dashboard/voice-transcript-helpers";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
+import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 
@@ -102,7 +103,15 @@ export default async function CallTranscriptPage({
         >
           ← Back to call history
         </Link>
-        <h1 className="text-2xl font-bold text-parchment mt-2">Call transcript</h1>
+        <div className="mt-2 flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-bold text-parchment">Call transcript</h1>
+          <DeleteItemButton
+            url={`/api/dashboard/calls/${transcript.id}?businessId=${encodeURIComponent(business.id)}`}
+            confirmMessage="Delete this call and its transcript from your history?"
+            redirectTo="/dashboard/calls"
+            label="Delete call"
+          />
+        </div>
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-parchment/60">
           <CallDirectionBadge direction={transcript.direction} />
           {memory ? (

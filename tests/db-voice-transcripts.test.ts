@@ -13,6 +13,10 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
+vi.mock("@/lib/residency/row-delete", () => ({
+  softDeleteContentRows: vi.fn()
+}));
+
 import {
   getTranscriptByCallControlId,
   getTranscriptById,
@@ -20,14 +24,17 @@ import {
   listTranscriptsForCaller,
   listTurns,
   listVoiceTurnsForCustomer,
+  softDeleteTranscript,
   DEFAULT_LIST_LIMIT,
   MAX_LIST_LIMIT
 } from "@/lib/db/voice-transcripts";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type Chain = {
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  is: ReturnType<typeof vi.fn>;
   in: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
@@ -38,6 +45,7 @@ function chain(): Chain {
   const c: Chain = {
     select: vi.fn(() => c),
     eq: vi.fn(() => c),
+    is: vi.fn(() => c),
     in: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
@@ -81,6 +89,8 @@ describe("db/voice-transcripts — listTranscriptsForBusiness", () => {
     ).resolves.toEqual([TRANSCRIPT]);
     expect(db.from).toHaveBeenCalledWith("voice_call_transcripts");
     expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    // Soft-deleted calls must never show in call history.
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
     expect(c.order).toHaveBeenCalledWith("created_at", { ascending: false });
     expect(c.limit).toHaveBeenCalledWith(DEFAULT_LIST_LIMIT);
   });
@@ -198,6 +208,33 @@ describe("db/voice-transcripts — getTranscriptById", () => {
     defaultClientSpy.mockReturnValue(makeDb(c));
     await getTranscriptById(BIZ, TRANSCRIPT.id);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("db/voice-transcripts — softDeleteTranscript", () => {
+  it("delegates to the residency-aware soft delete with an id filter", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 1, box: null });
+    const db = makeDb(chain());
+    expect(await softDeleteTranscript(BIZ, "t-1", "user-1", db as never)).toBe(1);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      BIZ,
+      "voice_call_transcripts",
+      [{ column: "id", op: "eq", value: "t-1" }],
+      "user-1",
+      { client: db }
+    );
+  });
+
+  it("counts box-only stamps (vps-mode purged central) and defaults deps", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 0, box: 1 });
+    expect(await softDeleteTranscript(BIZ, "t-1", null)).toBe(1);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      BIZ,
+      "voice_call_transcripts",
+      [{ column: "id", op: "eq", value: "t-1" }],
+      null,
+      {}
+    );
   });
 });
 

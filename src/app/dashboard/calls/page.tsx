@@ -115,7 +115,7 @@ export default async function DashboardCallsPage() {
           </div>
         </Card>
       ) : (
-        <CallsList rows={rows} />
+        <CallsList rows={rows} businessId={business.id} />
       )}
     </div>
   );

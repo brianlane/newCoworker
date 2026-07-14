@@ -16,6 +16,7 @@ import {
   listThreadsForBusiness,
   reactivateThread,
   serializeChatMessages,
+  softDeleteThread,
   touchChatActivity,
   updateThreadConversation,
   updateThreadSummary
@@ -29,6 +30,7 @@ type Chain = {
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   neq: ReturnType<typeof vi.fn>;
+  is: ReturnType<typeof vi.fn>;
   lte: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
@@ -44,6 +46,7 @@ function chain(): Chain {
     upsert: vi.fn(() => c),
     eq: vi.fn(() => c),
     neq: vi.fn(() => c),
+    is: vi.fn(() => c),
     lte: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn(() => c),
@@ -94,6 +97,49 @@ describe("db/dashboard-chat — threads", () => {
     expect(db.from).toHaveBeenCalledWith("dashboard_chat_threads");
     expect(c.eq).toHaveBeenNthCalledWith(1, "business_id", BIZ);
     expect(c.eq).toHaveBeenNthCalledWith(2, "is_active", true);
+    // Soft-deleted threads must never resurface as the active conversation.
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
+  });
+
+  it("softDeleteThread stamps deleted_at + deactivates, scoped to the business", async () => {
+    const c = chain();
+    c.select.mockResolvedValueOnce({ data: [{ id: "thread-1" }], error: null });
+    const db = makeDb(c);
+    await expect(softDeleteThread(BIZ, "thread-1", "user-1", db as never)).resolves.toBe(1);
+    expect(c.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deleted_by: "user-1",
+        deleted_at: expect.any(String),
+        is_active: false
+      })
+    );
+    expect(c.eq).toHaveBeenCalledWith("id", "thread-1");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
+  });
+
+  it("softDeleteThread returns 0 for unknown/foreign threads and throws on db error", async () => {
+    const c1 = chain();
+    c1.select.mockResolvedValueOnce({ data: [], error: null });
+    await expect(softDeleteThread(BIZ, "nope", null, makeDb(c1) as never)).resolves.toBe(0);
+
+    const c0 = chain();
+    c0.select.mockResolvedValueOnce({ data: null, error: null });
+    await expect(softDeleteThread(BIZ, "nope", null, makeDb(c0) as never)).resolves.toBe(0);
+
+    const c2 = chain();
+    c2.select.mockResolvedValueOnce({ data: null, error: { message: "boom" } });
+    await expect(softDeleteThread(BIZ, "t", null, makeDb(c2) as never)).rejects.toThrow(
+      /softDeleteThread: boom/
+    );
+  });
+
+  it("softDeleteThread falls back to the default service client", async () => {
+    const c = chain();
+    c.select.mockResolvedValueOnce({ data: [], error: null });
+    defaultClientSpy.mockReturnValueOnce(makeDb(c));
+    await expect(softDeleteThread(BIZ, "t", null)).resolves.toBe(0);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 
   it("getActiveThread returns null when absent, throws on db error", async () => {

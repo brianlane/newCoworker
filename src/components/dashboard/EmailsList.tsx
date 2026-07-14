@@ -194,7 +194,8 @@ function ReadingPane({
   canReply,
   emailContacts,
   onClose,
-  onReply
+  onReply,
+  onDeleted
 }: {
   row: EmailLogRow;
   businessId: string;
@@ -202,9 +203,30 @@ function ReadingPane({
   emailContacts: EmailContacts;
   onClose: () => void;
   onReply: () => void;
+  onDeleted: () => void;
 }) {
   const meta = sourceMeta(row.source);
   const [state, setState] = useState<BodyState>({ status: "loading" });
+  const [deleteState, setDeleteState] = useState<"idle" | "deleting" | "error">("idle");
+
+  async function deleteEmail() {
+    if (!window.confirm("Delete this email from your history?")) return;
+    setDeleteState("deleting");
+    try {
+      const res = await fetch(
+        `/api/dashboard/emails/${row.id}?businessId=${encodeURIComponent(businessId)}`,
+        { method: "DELETE" }
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) {
+        setDeleteState("error");
+        return;
+      }
+      onDeleted();
+    } catch {
+      setDeleteState("error");
+    }
+  }
 
   useEffect(() => {
     const controller = new AbortController();
@@ -273,6 +295,15 @@ function ReadingPane({
             </button>
           )}
           <button
+            type="button"
+            data-testid="email-delete"
+            onClick={() => void deleteEmail()}
+            disabled={deleteState === "deleting"}
+            className="rounded-lg border border-spark-orange/40 px-3 py-1 text-xs font-semibold text-spark-orange transition-colors hover:bg-spark-orange/10 disabled:opacity-50"
+          >
+            {deleteState === "deleting" ? "Deleting…" : "Delete"}
+          </button>
+          <button
             onClick={onClose}
             aria-label="Close"
             className="text-parchment/40 hover:text-parchment text-xl leading-none"
@@ -281,6 +312,9 @@ function ReadingPane({
           </button>
         </div>
       </div>
+      {deleteState === "error" && (
+        <p className="mb-3 text-xs text-spark-orange">Couldn&apos;t delete — try again.</p>
+      )}
 
       <h2 className="text-lg font-bold text-parchment mb-4 break-words">
         {row.subject || "(no subject)"}
@@ -832,6 +866,12 @@ export function EmailsList({
                 subject: replySubject(selected)
               })
             }
+            onDeleted={() => {
+              setSelectedId(null);
+              // Re-fetch the server rows so the deleted email drops out of
+              // the list immediately.
+              router.refresh();
+            }}
           />
         </div>
       )}

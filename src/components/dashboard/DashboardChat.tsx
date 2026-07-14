@@ -850,6 +850,33 @@ export function DashboardChat({ businessId, businessName }: Props) {
     }
   }
 
+  async function handleDeleteThread(threadId: string) {
+    if (sending) return;
+    if (!window.confirm("Delete this conversation? It disappears from your history.")) return;
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/dashboard/chat/threads/${encodeURIComponent(threadId)}`,
+        { method: "DELETE" }
+      );
+      const env = await parseEnvelope<{ ok: boolean }>(res);
+      if (!env.ok) {
+        setError(env.error.message);
+        return;
+      }
+      // If the deleted thread was on screen (active or archived), reset the
+      // pane to "ready for a new conversation" — its messages are gone.
+      if (viewingThreadId === threadId || activeThreadId === threadId) {
+        setMessages([]);
+        setViewingThreadId(null);
+        if (activeThreadId === threadId) setActiveThreadId(null);
+      }
+      setThreads((prev) => prev.filter((t) => t.id !== threadId));
+    } catch {
+      setError("Network error.");
+    }
+  }
+
   async function handleNewConversation() {
     if (sending) return;
     if (
@@ -939,7 +966,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                 {threads.map((t) => {
                   const selected = t.id === viewingThreadId;
                   return (
-                    <li key={t.id}>
+                    <li key={t.id} className="group relative">
                       <button
                         type="button"
                         onClick={() => selectThread(t.id)}
@@ -963,6 +990,16 @@ export function DashboardChat({ businessId, businessName }: Props) {
                             {t.messageCount} {t.messageCount === 1 ? "message" : "messages"}
                           </span>
                         </div>
+                      </button>
+                      <button
+                        type="button"
+                        aria-label="Delete conversation"
+                        data-testid="thread-delete"
+                        onClick={() => void handleDeleteThread(t.id)}
+                        disabled={sending || loadingThread}
+                        className="absolute right-1.5 top-1.5 hidden group-hover:inline-flex items-center justify-center rounded px-1 text-parchment/40 hover:text-spark-orange text-sm leading-none disabled:opacity-50 cursor-pointer"
+                      >
+                        ×
                       </button>
                     </li>
                   );

@@ -13,16 +13,23 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: (...a: unknown[]) => defaultClientSpy(...a)
 }));
 
+vi.mock("@/lib/residency/row-delete", () => ({
+  softDeleteContentRows: vi.fn()
+}));
+
 import {
   customerE164FromPayload,
   inboundTextFromPayload,
   listConversationsForBusiness,
-  listMessagesForCustomer
+  listMessagesForCustomer,
+  softDeleteSmsConversation
 } from "@/lib/db/sms-history";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type Chain = {
   select: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  is: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
 };
@@ -31,6 +38,7 @@ function chain(): Chain {
   const c: Chain = {
     select: vi.fn(() => c),
     eq: vi.fn(() => c),
+    is: vi.fn(() => c),
     order: vi.fn(() => c),
     limit: vi.fn()
   };
@@ -1159,5 +1167,160 @@ describe("listMessagesForCustomer", () => {
     // After expansion the 12-message chronological list ends with
     // t0,r0,t1,r1,...,t5,r5. Slice(-3) → r4, t5, r5.
     expect(result.map((m) => m.content)).toEqual(["r4", "t5", "r5"]);
+  });
+});
+
+describe("softDeleteSmsConversation", () => {
+  const CUST = "+15551111111";
+
+  /**
+   * The helper hits sms_inbound_jobs three ways, in order:
+   *   1. UPDATE by denormalized customer_e164 (update → eq → eq → is → select)
+   *   2. legacy page SELECT (select → eq → is → is → order → range)
+   *   3. optional legacy UPDATE by id set (update → eq → in → select)
+   */
+  function updateChain(result: { data: unknown; error: { message: string } | null }) {
+    const c: Record<string, ReturnType<typeof vi.fn>> = {
+      update: vi.fn(() => c),
+      eq: vi.fn(() => c),
+      is: vi.fn(() => c),
+      in: vi.fn(() => c),
+      select: vi.fn().mockResolvedValue(result)
+    };
+    return c;
+  }
+
+  function pageChain(pages: Array<{ data: unknown; error: { message: string } | null }>) {
+    const range = vi.fn();
+    for (const p of pages) range.mockResolvedValueOnce(p);
+    const c: Record<string, ReturnType<typeof vi.fn>> = {
+      select: vi.fn(() => c),
+      eq: vi.fn(() => c),
+      is: vi.fn(() => c),
+      order: vi.fn(() => c),
+      range
+    };
+    return c;
+  }
+
+  function deleteDb(chains: Array<Record<string, ReturnType<typeof vi.fn>>>) {
+    let call = 0;
+    return { from: vi.fn(() => chains[Math.min(call++, chains.length - 1)]) };
+  }
+
+  beforeEach(() => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 2, box: null });
+  });
+
+  it("stamps jobs by customer_e164 and outbound sends via the residency helper", async () => {
+    const byColumn = updateChain({ data: [{ id: "j1" }, { id: "j2" }], error: null });
+    const legacyPage = pageChain([{ data: [], error: null }]);
+    const db = deleteDb([byColumn, legacyPage]);
+
+    const result = await softDeleteSmsConversation("biz", CUST, "user-1", db as never);
+    expect(result).toEqual({ inboundJobs: 2, outboundSends: 2 });
+    expect(byColumn.update).toHaveBeenCalledWith(
+      expect.objectContaining({ deleted_by: "user-1", deleted_at: expect.any(String) })
+    );
+    expect(byColumn.eq).toHaveBeenCalledWith("business_id", "biz");
+    expect(byColumn.eq).toHaveBeenCalledWith("customer_e164", CUST);
+    expect(byColumn.is).toHaveBeenCalledWith("deleted_at", null);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      "biz",
+      "sms_outbound_log",
+      [{ column: "to_e164", op: "eq", value: CUST }],
+      "user-1",
+      { client: db }
+    );
+  });
+
+  it("catches legacy NULL-column rows by parsing their payloads (paged)", async () => {
+    const byColumn = updateChain({ data: [], error: null });
+    // Two pages: a full 500-row page of other customers' legacy rows, then a
+    // short page containing one matching legacy row.
+    const fullPage = Array.from({ length: 500 }, (_, i) => ({
+      id: `other-${i}`,
+      payload: envelope({ from: { phone_number: "+15559999999" }, text: "x" })
+    }));
+    const legacyPage = pageChain([
+      { data: fullPage, error: null },
+      {
+        data: [{ id: "legacy-1", payload: envelope({ from: CUST, text: "old" }) }],
+        error: null
+      }
+    ]);
+    const legacyUpdate = updateChain({ data: [{ id: "legacy-1" }], error: null });
+    const db = deleteDb([byColumn, legacyPage, legacyPage, legacyUpdate]);
+
+    const result = await softDeleteSmsConversation("biz", CUST, null, db as never);
+    expect(result.inboundJobs).toBe(1);
+    expect(legacyUpdate.in).toHaveBeenCalledWith("id", ["legacy-1"]);
+    expect(legacyUpdate.update).toHaveBeenCalledWith(
+      expect.objectContaining({ deleted_by: null })
+    );
+  });
+
+  it("treats a null-data legacy update result as zero stamped rows", async () => {
+    const byColumn = updateChain({ data: [], error: null });
+    const legacyPage = pageChain([
+      {
+        data: [{ id: "legacy-1", payload: envelope({ from: CUST, text: "old" }) }],
+        error: null
+      }
+    ]);
+    const legacyUpdate = updateChain({ data: null, error: null });
+    const db = deleteDb([byColumn, legacyPage, legacyUpdate]);
+    const result = await softDeleteSmsConversation("biz", CUST, null, db as never);
+    expect(result.inboundJobs).toBe(0);
+  });
+
+  it("counts box-only outbound stamps (vps-mode purged central)", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 0, box: 3 });
+    const byColumn = updateChain({ data: null, error: null });
+    const legacyPage = pageChain([{ data: null, error: null }]);
+    const db = deleteDb([byColumn, legacyPage]);
+    const result = await softDeleteSmsConversation("biz", CUST, null, db as never);
+    expect(result).toEqual({ inboundJobs: 0, outboundSends: 3 });
+  });
+
+  it("throws on the customer-column update error", async () => {
+    const byColumn = updateChain({ data: null, error: { message: "boom" } });
+    const db = deleteDb([byColumn]);
+    await expect(softDeleteSmsConversation("biz", CUST, null, db as never)).rejects.toThrow(
+      "softDeleteSmsConversation: boom"
+    );
+  });
+
+  it("throws on a legacy page error", async () => {
+    const byColumn = updateChain({ data: [], error: null });
+    const legacyPage = pageChain([{ data: null, error: { message: "page-fail" } }]);
+    const db = deleteDb([byColumn, legacyPage]);
+    await expect(softDeleteSmsConversation("biz", CUST, null, db as never)).rejects.toThrow(
+      "softDeleteSmsConversation: page-fail"
+    );
+  });
+
+  it("throws on the legacy id-set update error", async () => {
+    const byColumn = updateChain({ data: [], error: null });
+    const legacyPage = pageChain([
+      {
+        data: [{ id: "legacy-1", payload: envelope({ from: CUST, text: "old" }) }],
+        error: null
+      }
+    ]);
+    const legacyUpdate = updateChain({ data: null, error: { message: "upd-fail" } });
+    const db = deleteDb([byColumn, legacyPage, legacyUpdate]);
+    await expect(softDeleteSmsConversation("biz", CUST, null, db as never)).rejects.toThrow(
+      "softDeleteSmsConversation: upd-fail"
+    );
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const byColumn = updateChain({ data: [], error: null });
+    const legacyPage = pageChain([{ data: [], error: null }]);
+    defaultClientSpy.mockReturnValue(deleteDb([byColumn, legacyPage]));
+    const result = await softDeleteSmsConversation("biz", CUST, null);
+    expect(result.inboundJobs).toBe(0);
+    expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
