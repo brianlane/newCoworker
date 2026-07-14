@@ -78,12 +78,18 @@ async function searchProviderEvent(
   marker: string
 ): Promise<string | null> {
   if (!marker) return null;
-  // Case-insensitive matching: the caller may hold a lowercased email (the
-  // ledger key shape) while the event body stores the form's original
-  // casing — a case mismatch must not turn into booking_not_found (Bugbot
-  // on PR #577). Phones are digits either way.
-  const markerLc = marker.toLowerCase();
-  const containsMarker = (haystack: string) => haystack.toLowerCase().includes(markerLc);
+  // Bounded, case-insensitive matching (Bugbot on PR #577):
+  //  - case-insensitive because the caller may hold a lowercased email (the
+  //    ledger key shape) while the event body stores the form's casing;
+  //  - boundary-guarded because a raw substring would let one attendee's
+  //    marker match inside a longer value ("joe@acme.com" inside
+  //    "notjoe@acme.com", or an E.164 as the prefix of a longer number) and
+  //    mutate the wrong event.
+  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  // Lookahead allows a bare trailing period (sentence end) but rejects a
+  // continuation like ".au" or further digits/letters.
+  const markerRe = new RegExp(`(?<![\\w.+@])${escaped}(?!\\.?[\\w@])`, "i");
+  const containsMarker = (haystack: string) => markerRe.test(haystack);
   const nowIso = new Date().toISOString();
   const endIso = new Date(Date.now() + SEARCH_WINDOW_DAYS * 86_400_000).toISOString();
   const shared = await getSharedCalendar(businessId);
@@ -282,7 +288,11 @@ export async function rescheduleCalendarAppointment(
           end: { dateTime: wallClockInZone(endInstant, eventTimezone), timeZone: eventTimezone }
         }
       });
-      if (!res) return { ok: false, detail: "calendar_not_connected" };
+      // The connection resolved moments ago, so a falsy proxy response here
+      // is a failed MUTATION, not a missing calendar — reporting
+      // calendar_not_connected would steer the model to "you cannot change
+      // any appointment" (Bugbot on PR #577).
+      if (!res) return { ok: false, detail: "calendar_reschedule_failed" };
     }
 
     // Keep the slot ledger matching the provider event so a later duplicate
@@ -356,7 +366,9 @@ export async function cancelCalendarAppointment(
         endpoint: `/v1.0/me/events/${encodeURIComponent(located.eventId)}`,
         method: "DELETE"
       });
-      if (!res) return { ok: false, detail: "calendar_not_connected" };
+      // Same rationale as the reschedule PATCH: the calendar exists — this
+      // is a failed mutation, not a disconnected calendar.
+      if (!res) return { ok: false, detail: "calendar_cancel_failed" };
     }
 
     // Ledger cleanup covers BOTH resolution paths: the caller's own claim row

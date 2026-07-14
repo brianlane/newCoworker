@@ -329,13 +329,33 @@ describe("rescheduleCalendarAppointment", () => {
     expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
   });
 
-  it("a null Microsoft PATCH response maps to calendar_not_connected", async () => {
+  it("a null Microsoft PATCH response is a FAILED MUTATION, never calendar_not_connected", async () => {
+    // The connection resolved moments earlier — misreporting it as missing
+    // would steer the model to "you cannot change any appointment".
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
     vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
-      detail: "calendar_not_connected"
+      detail: "calendar_reschedule_failed"
+    });
+  });
+
+  it("marker matching is boundary-guarded: a longer number or wrapping email never matches", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        value: [
+          // The lead's E.164 as a PREFIX of a longer number — not a match.
+          { id: "evt-longer", bodyPreview: `Phone: ${PHONE}789` },
+          // The email marker inside a longer address — not a match either.
+          { id: "evt-wrapped", bodyPreview: "Email: notjoe@acme.com" }
+        ]
+      }
+    } as never);
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
+      ok: false,
+      detail: "booking_not_found"
     });
   });
 
@@ -501,13 +521,13 @@ describe("cancelCalendarAppointment", () => {
     expect(vi.mocked(deleteBookingClaimsByEvent)).toHaveBeenCalledWith(BIZ, "evt-search");
   });
 
-  it("a null Microsoft DELETE response maps to calendar_not_connected", async () => {
+  it("a null Microsoft DELETE response is a FAILED MUTATION, never calendar_not_connected", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
     vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
       ok: false,
-      detail: "calendar_not_connected"
+      detail: "calendar_cancel_failed"
     });
   });
 
