@@ -17,6 +17,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { getBusiness } from "@/lib/db/businesses";
 import {
   countBusinessAgents,
+  deleteBusinessAgent,
   insertBusinessAgent,
   listBusinessAgents
 } from "@/lib/agents/db";
@@ -83,6 +84,18 @@ export async function POST(request: Request) {
       instructions: body.data.instructions.trim(),
       output_format: body.data.outputFormat
     });
+
+    // Serial re-check closes the pre-insert cap race: concurrent creates can
+    // each pass the count above, so anyone who lands past the cap rolls
+    // their own row back (same pattern as the documents upload route).
+    const afterInsert = await countBusinessAgents(body.data.businessId);
+    if (afterInsert > limit) {
+      await deleteBusinessAgent(body.data.businessId, agent.id);
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `Agent limit reached for your plan (${limit}). Delete an agent or upgrade to add more.`
+      );
+    }
     return successResponse({ agent });
   } catch (err) {
     return handleRouteError(err);

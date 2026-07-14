@@ -124,6 +124,10 @@ export function AgentsManager({ businessId }: { businessId: string }) {
     setDraftFormat(agent.output_format);
     setRuns([]);
     setRunDocumentId("");
+    // Clear any attachment left over from another agent's run panel — the
+    // file input is shared across panels and runAgent prefers it over the
+    // document picker.
+    if (runFileRef.current) runFileRef.current.value = "";
     setOpenRunId(null);
     setNotice(null);
     setError(null);

@@ -158,42 +158,82 @@ export async function POST(request: Request, context: RouteContext) {
       }
     }
 
-    const run = await insertAgentRun({
-      id: runId,
-      agent_id: agent.id,
-      business_id: businessId,
-      source: "manual",
-      input_document_id: input.documentId,
-      input_filename: input.filename,
-      input_mime_type: input.mimeType,
-      input_storage_path: inputStoragePath
-    });
+    // Best-effort compensation: an aborted run must not leave an orphaned
+    // archived input (no row pointing at it) in the bucket.
+    const removeArchivedInput = async (): Promise<void> => {
+      if (!inputStoragePath) return;
+      const { error: removeError } = await db.storage
+        .from(BUSINESS_DOCS_BUCKET)
+        .remove([inputStoragePath]);
+      if (removeError) {
+        logger.warn("agents/run: orphan input cleanup failed", {
+          businessId,
+          inputStoragePath,
+          error: removeError.message
+        });
+      }
+    };
 
-    const result = await executeAgentRun({
-      businessId,
-      agent: { instructions: agent.instructions, output_format: agent.output_format },
-      inputFilename: input.filename,
-      inputMime: input.mimeType,
-      data: input.data
-    });
-
-    if (result.ok) {
-      await patchAgentRun(businessId, runId, {
-        status: "succeeded",
-        output_md: result.outputMd,
-        output_filename: result.outputFilename,
-        output_mime_type: result.outputMime,
-        error_detail: null,
-        prompt_tokens: result.usage?.promptTokens ?? null,
-        output_tokens: result.usage?.outputTokens ?? null,
-        completed_at: new Date().toISOString()
+    let run;
+    try {
+      run = await insertAgentRun({
+        id: runId,
+        agent_id: agent.id,
+        business_id: businessId,
+        source: "manual",
+        input_document_id: input.documentId,
+        input_filename: input.filename,
+        input_mime_type: input.mimeType,
+        input_storage_path: inputStoragePath
       });
-    } else {
+    } catch (err) {
+      await removeArchivedInput();
+      throw err;
+    }
+
+    try {
+      const result = await executeAgentRun({
+        businessId,
+        agent: { instructions: agent.instructions, output_format: agent.output_format },
+        inputFilename: input.filename,
+        inputMime: input.mimeType,
+        data: input.data
+      });
+
+      if (result.ok) {
+        await patchAgentRun(businessId, runId, {
+          status: "succeeded",
+          output_md: result.outputMd,
+          output_filename: result.outputFilename,
+          output_mime_type: result.outputMime,
+          error_detail: null,
+          prompt_tokens: result.usage?.promptTokens ?? null,
+          output_tokens: result.usage?.outputTokens ?? null,
+          completed_at: new Date().toISOString()
+        });
+      } else {
+        await patchAgentRun(businessId, runId, {
+          status: "failed",
+          error_detail: RUN_ERROR_MESSAGES[result.error] ?? result.error,
+          completed_at: new Date().toISOString()
+        });
+      }
+    } catch (err) {
+      // Never leave the row stuck in 'running': a patch/DB failure after the
+      // model call still stamps a terminal state (best-effort — if even this
+      // write fails, the thrown error below is the honest signal).
       await patchAgentRun(businessId, runId, {
         status: "failed",
-        error_detail: RUN_ERROR_MESSAGES[result.error] ?? result.error,
+        error_detail: "The run could not be recorded — try again",
         completed_at: new Date().toISOString()
+      }).catch((patchErr) => {
+        logger.warn("agents/run: failed-state stamp failed", {
+          businessId,
+          runId,
+          error: patchErr instanceof Error ? patchErr.message : String(patchErr)
+        });
       });
+      throw err;
     }
 
     const finalRun = (await getAgentRun(businessId, runId)) ?? run;
