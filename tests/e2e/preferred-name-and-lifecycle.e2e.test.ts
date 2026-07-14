@@ -33,8 +33,12 @@ const LEAD = "+15485773546";
  * same sentence, mark it as a REFUSAL rather than a success claim ("your
  * appointment has not been moved yet", "I can't just book another
  * appointment"). Live-model tests must not fail the model for complying.
+ *
+ * Deliberately EXCLUDES standalone "no": discourse openers ("No problem,
+ * I've moved it") don't negate the claim that follows — treating them as
+ * negation would let a real phantom-move claim pass (Bugbot on PR #581).
  */
-const NEGATION_TAIL = /\b(not|no|never|cannot|can'?t|couldn'?t|unable|won'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|didn'?t|don'?t|doesn'?t)\b[^.!?\n]*$/i;
+const NEGATION_TAIL = /\b(not|never|cannot|can'?t|couldn'?t|unable|won'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|didn'?t|don'?t|doesn'?t)\b[^.!?\n]*$/i;
 
 /** True when `claimRe` matches somewhere WITHOUT a preceding negation. */
 function claimsWithoutNegation(text: string, claimRe: RegExp): boolean {
