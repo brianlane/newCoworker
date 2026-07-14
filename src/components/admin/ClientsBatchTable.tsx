@@ -399,13 +399,9 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                     {b.isPaused && <Badge variant="error">paused</Badge>}
                   </div>
                 </td>
+                {/* No "Details" link — the business name is the navigation. */}
                 <td className="py-3 px-4 whitespace-nowrap">
-                  <div className="flex items-center gap-3">
-                    <a href={`/admin/${b.id}`} className="text-xs text-signal-teal hover:underline">
-                      Details
-                    </a>
-                    <ViewAsButton businessId={b.id} variant="link" />
-                  </div>
+                  <ViewAsButton businessId={b.id} variant="link" />
                 </td>
               </tr>
             ))}

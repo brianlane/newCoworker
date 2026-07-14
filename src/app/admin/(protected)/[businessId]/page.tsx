@@ -132,7 +132,10 @@ export default async function BusinessDetailPage({
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div className="flex items-start justify-between">
+      {/* The action buttons never split across lines: the group is nowrap
+          and, when a long business name leaves no room, drops below the
+          title as one right-aligned unit (header-level flex-wrap). */}
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="flex items-center gap-4">
           <div>
             <h1 className="text-2xl font-bold text-parchment">{business.name}</h1>
@@ -146,7 +149,7 @@ export default async function BusinessDetailPage({
             {business.tier}
           </Badge>
         </div>
-        <div className="flex flex-wrap items-start justify-end gap-2">
+        <div className="ml-auto flex shrink-0 items-start gap-2">
           {/* Deploy moved off the All Clients table — offline boxes are
               (re)provisioned from here now. */}
           {business.status === "offline" && <DeployButton businessId={businessId} />}
