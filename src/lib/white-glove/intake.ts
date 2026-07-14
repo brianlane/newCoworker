@@ -34,6 +34,10 @@ export type WhiteGloveIntakeRow = {
   created_by: string;
   created_at: string;
   completed_at: string | null;
+  /** When an admin last applied this intake to a tenant; null = never. */
+  applied_at: string | null;
+  /** The follow-up flow the apply installed (re-applies update it in place). */
+  applied_flow_id: string | null;
 };
 
 export async function createWhiteGloveIntake(
@@ -151,6 +155,29 @@ export async function revokeWhiteGloveIntake(
     .select("id");
   if (error) throw new Error(`revokeWhiteGloveIntake: ${error.message}`);
   return ((data as unknown[] | null) ?? []).length > 0;
+}
+
+/**
+ * Record a successful apply: link the tenant, stamp `applied_at`, and
+ * remember the installed flow so the next apply updates it in place.
+ * Guarded on status='completed' — only a completed intake can be applied.
+ */
+export async function markWhiteGloveIntakeApplied(
+  intakeId: string,
+  data: { businessId: string; flowId: string },
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("white_glove_intakes")
+    .update({
+      business_id: data.businessId,
+      applied_at: new Date().toISOString(),
+      applied_flow_id: data.flowId
+    })
+    .eq("id", intakeId)
+    .eq("status", "completed");
+  if (error) throw new Error(`markWhiteGloveIntakeApplied: ${error.message}`);
 }
 
 /** The emailable public questionnaire link for an intake. */

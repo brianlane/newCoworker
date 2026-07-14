@@ -12,6 +12,7 @@ import {
   getWhiteGloveIntakeByToken,
   submitWhiteGloveIntake,
   revokeWhiteGloveIntake,
+  markWhiteGloveIntakeApplied,
   whiteGloveIntakeUrl
 } from "@/lib/white-glove/intake";
 import type { IntakeAnswers } from "@/lib/white-glove/template";
@@ -217,6 +218,38 @@ describe("white-glove/intake DB layer", () => {
     await expect(revokeWhiteGloveIntake(INTAKE.id)).rejects.toThrow(
       "revokeWhiteGloveIntake: boom"
     );
+  });
+
+  it("markWhiteGloveIntakeApplied stamps the apply on COMPLETED rows only", async () => {
+    // The update chain ends on the second .eq() — resolve the row there.
+    const db = mockDb();
+    db.eq = vi
+      .fn()
+      .mockReturnValueOnce(db)
+      .mockResolvedValueOnce({ error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await markWhiteGloveIntakeApplied(INTAKE.id, { businessId: "biz-1", flowId: "flow-1" });
+    expect(db.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz-1",
+        applied_flow_id: "flow-1",
+        applied_at: expect.any(String)
+      })
+    );
+    expect(db.eq).toHaveBeenCalledWith("id", INTAKE.id);
+    expect(db.eq).toHaveBeenCalledWith("status", "completed");
+  });
+
+  it("markWhiteGloveIntakeApplied throws on error", async () => {
+    const db = mockDb();
+    db.eq = vi
+      .fn()
+      .mockReturnValueOnce(db)
+      .mockResolvedValueOnce({ error: { message: "boom" } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(
+      markWhiteGloveIntakeApplied(INTAKE.id, { businessId: "biz-1", flowId: "flow-1" })
+    ).rejects.toThrow("markWhiteGloveIntakeApplied: boom");
   });
 
   it("whiteGloveIntakeUrl builds the public link from the app URL (set and unset)", () => {

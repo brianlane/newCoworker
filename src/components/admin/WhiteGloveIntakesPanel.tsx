@@ -14,27 +14,189 @@
  * (/admin/intake-doc/<id>) that their answers generated.
  */
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Button } from "@/components/ui/Button";
-import { INDUSTRY_OPTIONS } from "@/lib/white-glove/template";
+import { INDUSTRY_OPTIONS, type IntakeAnswers } from "@/lib/white-glove/template";
+import { buildIntakeApplyPlan } from "@/lib/white-glove/apply";
 
 export type IntakeView = {
   id: string;
   business_name: string;
+  industry: string;
   recipient_email: string | null;
+  business_id: string | null;
+  answers: IntakeAnswers | null;
   status: "sent" | "completed" | "revoked";
   created_at: string;
   completed_at: string | null;
+  applied_at: string | null;
   intakeUrl: string;
 };
 
-export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: IntakeView[] }) {
+export type ApplyBusinessOption = {
+  id: string;
+  name: string;
+  ownerEmail: string;
+};
+
+/**
+ * Preview + confirm for applying a completed intake to a tenant. The preview
+ * is computed CLIENT-SIDE from the same pure mapper the server apply uses
+ * (`buildIntakeApplyPlan`), so what the admin reads is what gets written.
+ */
+function ApplyIntakeSection({
+  intake,
+  businesses,
+  onApplied,
+  onError
+}: {
+  intake: IntakeView;
+  businesses: ApplyBusinessOption[];
+  onApplied: (notice: string) => void;
+  onError: (message: string) => void;
+}) {
+  const suggested = useMemo(() => {
+    if (intake.business_id) return intake.business_id;
+    const byName = businesses.find(
+      (b) => b.name.trim().toLowerCase() === intake.business_name.trim().toLowerCase()
+    );
+    if (byName) return byName.id;
+    const email = intake.recipient_email?.toLowerCase();
+    const byEmail = email
+      ? businesses.find((b) => b.ownerEmail.toLowerCase() === email)
+      : undefined;
+    return byEmail?.id ?? "";
+  }, [intake, businesses]);
+
+  const [businessId, setBusinessId] = useState(suggested);
+  const [applying, setApplying] = useState(false);
+
+  const plan = useMemo(() => {
+    if (!intake.answers) return null;
+    try {
+      return buildIntakeApplyPlan(intake.answers, {
+        businessName: intake.business_name,
+        industry: intake.industry
+      });
+    } catch {
+      // A malformed stored answer set can't be applied; the server would
+      // reject it too — surface that instead of a broken preview.
+      return null;
+    }
+  }, [intake]);
+
+  async function apply() {
+    if (!businessId) {
+      onError("Pick the business to apply this build to");
+      return;
+    }
+    setApplying(true);
+    try {
+      const res = await fetch(`/api/admin/white-glove-intakes/${intake.id}/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId })
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        onError(json.error?.message ?? "Applying the build failed");
+      } else {
+        const flowCreated: boolean = json.data?.flowCreated ?? false;
+        const hoursApplied: boolean = json.data?.businessHoursApplied ?? false;
+        onApplied(
+          (flowCreated
+            ? "Build applied — the follow-up flow was installed DISABLED; enable it after the owner approves the wording."
+            : "Build re-applied — the existing follow-up flow was updated in place.") +
+            (hoursApplied ? "" : " (Business hours couldn't be parsed; they were written to memory only.)")
+        );
+      }
+    } catch {
+      onError("Network error");
+    } finally {
+      setApplying(false);
+    }
+  }
+
+  if (!plan) {
+    return (
+      <p className="text-xs text-clay-red">
+        These answers can&apos;t be turned into a build plan — apply manually from the
+        build document.
+      </p>
+    );
+  }
+
+  const flowSummary = `${plan.flow.name} — ${plan.flow.definition.steps.length} steps, installed disabled for review`;
+
+  return (
+    <div className="space-y-2 rounded-md border border-parchment/10 bg-deep-ink/50 p-2">
+      <div className="flex flex-wrap items-end gap-2">
+        <label className="flex flex-col gap-1 text-xs text-parchment/60">
+          Apply to business
+          <select
+            className="rounded-md bg-deep-ink/80 border border-parchment/20 text-parchment text-sm px-2 py-1.5 w-72"
+            value={businessId}
+            onChange={(e) => setBusinessId(e.target.value)}
+            disabled={Boolean(intake.business_id)}
+          >
+            <option value="">Pick a business…</option>
+            {businesses.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name} ({b.ownerEmail})
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button onClick={apply} disabled={applying || !businessId} size="sm">
+          {applying ? "Applying…" : intake.applied_at ? "Re-apply build" : "Apply build"}
+        </Button>
+      </div>
+      {intake.applied_at && (
+        <p className="text-xs text-parchment/40">
+          Re-applying replaces the previous white-glove block and updates the installed
+          flow in place — the owner&apos;s own edits outside the block are untouched.
+        </p>
+      )}
+      <details className="text-xs text-parchment/60">
+        <summary className="cursor-pointer select-none">
+          Preview what will be written
+        </summary>
+        <div className="mt-2 space-y-2">
+          <p className="text-parchment/40">Follow-up flow: {flowSummary}</p>
+          <p className="text-parchment/40">
+            Business hours:{" "}
+            {plan.businessHours
+              ? "parsed and applied to the business profile"
+              : "couldn't be parsed — kept as text in memory only"}
+          </p>
+          <p className="text-parchment/40">soul.md block:</p>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
+            {plan.soulBlock}
+          </pre>
+          <p className="text-parchment/40">memory.md block:</p>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded bg-deep-ink/80 p-2 font-mono text-[10px] text-parchment/60">
+            {plan.memoryBlock}
+          </pre>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+export function WhiteGloveIntakesPanel({
+  initialIntakes,
+  businesses = []
+}: {
+  initialIntakes: IntakeView[];
+  businesses?: ApplyBusinessOption[];
+}) {
   const [intakes, setIntakes] = useState<IntakeView[]>(initialIntakes);
   const [businessName, setBusinessName] = useState("");
   const [industry, setIndustry] = useState("other");
   const [email, setEmail] = useState("");
   const [loading, setLoading] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [applyOpenId, setApplyOpenId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -92,10 +254,14 @@ export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: Int
           const view: IntakeView = {
             id: created.id,
             business_name: created.business_name,
+            industry: created.industry ?? "other",
             recipient_email: created.recipient_email,
+            business_id: created.business_id ?? null,
+            answers: null,
             status: created.status,
             created_at: created.created_at,
             completed_at: created.completed_at,
+            applied_at: null,
             intakeUrl
           };
           setIntakes((prev) => [view, ...prev.filter((i) => i.id !== view.id)]);
@@ -212,6 +378,10 @@ export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: Int
                     {i.status === "completed"
                       ? `Completed ${
                           i.completed_at ? new Date(i.completed_at).toLocaleDateString() : ""
+                        }${
+                          i.applied_at
+                            ? ` — applied ${new Date(i.applied_at).toLocaleDateString()}`
+                            : ""
                         }`
                       : i.status === "revoked"
                         ? "Revoked"
@@ -220,12 +390,28 @@ export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: Int
                 </div>
                 <div className="flex shrink-0 gap-2">
                   {i.status === "completed" && (
-                    <a
-                      href={`/admin/intake-doc/${i.id}`}
-                      className="text-sm text-signal-teal hover:underline"
-                    >
-                      View build document →
-                    </a>
+                    <>
+                      <Button
+                        onClick={() =>
+                          setApplyOpenId((prev) => (prev === i.id ? null : i.id))
+                        }
+                        disabled={loading}
+                        size="sm"
+                        variant="ghost"
+                      >
+                        {applyOpenId === i.id
+                          ? "Close"
+                          : i.applied_at
+                            ? "Re-apply to business…"
+                            : "Apply to business…"}
+                      </Button>
+                      <a
+                        href={`/admin/intake-doc/${i.id}`}
+                        className="text-sm text-signal-teal hover:underline"
+                      >
+                        View build document →
+                      </a>
+                    </>
                   )}
                   {i.status === "sent" && (
                     <>
@@ -251,6 +437,22 @@ export function WhiteGloveIntakesPanel({ initialIntakes }: { initialIntakes: Int
               </div>
               {i.status === "sent" && (
                 <p className="break-all font-mono text-[10px] text-parchment/30">{i.intakeUrl}</p>
+              )}
+              {i.status === "completed" && applyOpenId === i.id && (
+                <ApplyIntakeSection
+                  intake={i}
+                  businesses={businesses}
+                  onApplied={async (msg) => {
+                    setError(null);
+                    setNotice(msg);
+                    setApplyOpenId(null);
+                    await refresh();
+                  }}
+                  onError={(msg) => {
+                    setNotice(null);
+                    setError(msg);
+                  }}
+                />
               )}
             </li>
           ))}
