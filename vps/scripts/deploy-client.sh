@@ -291,17 +291,21 @@ esac
 # local model routinely took >20s for the first SMS reply. Gemini bills per
 # token, so the SMS Edge worker shares the owner-chat $10/period fuse and
 # falls back to the `CoworkerLocal` (Qwen) twin once the COMBINED spend trips
-# the cap. Default bumped 2.5-flash-lite → 3.1-flash-lite after the
-# 2026-07-14 Truly incident: 2.5-flash-lite ignored a system preamble that
-# contained the exact answer context and replied context-blind ("I need a bit
-# more context" to a lead's renewal date). 3.1-flash-lite reads the same
-# prompt correctly, is faster, and costs $0.25/$1.50 per 1M (~2.5x lite, still
-# ~5x under 2.5-flash) — priced in _shared/chat_spend_cap.ts +
-# src/lib/billing/ai-spend-meter.ts. Same keyless safety fallback as
-# OWNER_CHAT_MODEL: a gemini-* tag needs GOOGLE_API_KEY (the llm-router 503s
-# gemini-* without one), so degrade to the local tag on a keyless host.
-# Override SMS_CHAT_MODEL to a local tag to keep SMS fully local.
-SMS_CHAT_MODEL_DEFAULT="gemini-3.1-flash-lite"
+# the cap. Default bumped 2.5-flash-lite → 2.5-flash after the 2026-07-14
+# Truly incident: 2.5-flash-lite ignored a system preamble that contained the
+# exact answer context and replied context-blind ("I need a bit more context"
+# to a lead's renewal date); 2.5-flash reads the same prompt correctly
+# ($0.30/$2.50 per 1M, priced in _shared/chat_spend_cap.ts +
+# src/lib/billing/ai-spend-meter.ts). Gemini 3.x models are NOT usable on
+# this path yet: their OpenAI-compat tool calls require thought_signature
+# round-tripping that Rowboat's AI SDK drops, so the SECOND turn of any
+# tool-calling conversation 400s ("Function call is missing a
+# thought_signature") — verified live on the Truly box, 2026-07-14. Same
+# keyless safety fallback as OWNER_CHAT_MODEL: a gemini-* tag needs
+# GOOGLE_API_KEY (the llm-router 503s gemini-* without one), so degrade to
+# the local tag on a keyless host. Override SMS_CHAT_MODEL to a local tag to
+# keep SMS fully local.
+SMS_CHAT_MODEL_DEFAULT="gemini-2.5-flash"
 SMS_CHAT_MODEL=${SMS_CHAT_MODEL:-${SMS_CHAT_MODEL_DEFAULT}}
 case "${SMS_CHAT_MODEL}" in
   gemini-*)
