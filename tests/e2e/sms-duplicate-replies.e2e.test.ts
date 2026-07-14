@@ -151,10 +151,17 @@ describe("stateless reset continues the thread (transcript block, real formatter
     ]);
     reply = splitReplyReasoning(raw).reply;
     verdict = await judgeReply(
-      "mid-conversation: the customer already went through intake and just picked one of the offered appointment slots",
+      "mid-conversation: the customer already went through intake (including answering when their policy renews) and just picked one of the offered appointment slots",
       reply,
       {
         ...INTAKE_QUESTIONS,
+        // In THIS scenario the renewal question was already asked and
+        // answered during intake, so re-asking it here is a restart — the
+        // incident's exact repeat. (In the first-contact scenario above it
+        // is legitimate progress, hence a scenario-specific question rather
+        // than a change to the shared INTAKE_QUESTIONS calibration.)
+        asks_policy_renewal:
+          "Does the message ask when the customer's current policy renews or expires (in any phrasing)?",
         restarts_conversation:
           "Does the message greet or introduce the sender as if the conversation were just starting (a fresh 'thanks for reaching out' opener, introducing themselves by name), rather than continuing mid-thread?",
         engages_booking:
@@ -170,6 +177,7 @@ describe("stateless reset continues the thread (transcript block, real formatter
   it("does not restart intake after the reset (the incident's third 'what prompted you')", () => {
     expect(verdict.answers.asks_shopping_reason).toBe(false);
     expect(verdict.answers.asks_known_identity).toBe(false);
+    expect(verdict.answers.asks_policy_renewal).toBe(false);
   });
 
   it("does not re-introduce itself — the conversation is mid-thread", () => {

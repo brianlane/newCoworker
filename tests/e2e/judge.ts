@@ -63,9 +63,16 @@ export async function judgeReply(
   const answers: Record<string, boolean> = {};
   for (const k of keys) answers[k] = parsed[k] === true;
   const evidence = typeof parsed.evidence === "string" ? parsed.evidence : "";
-  // Grounded judging: a YES must cite text that actually appears.
-  if (Object.values(answers).some(Boolean) && evidence.trim().length > 0) {
-    expect(reply.toLowerCase()).toContain(evidence.trim().toLowerCase());
+  // Grounded judging: EVERY yes verdict must cite text that actually
+  // appears in the reply — an evidence-less yes is treated as a judge
+  // failure, not a verdict (Bugbot on PR #581: an empty string previously
+  // skipped the check, weakening the anti-hallucination guard).
+  // Whitespace-normalized on both sides so a judge that collapses the
+  // reply's line breaks inside its quote still grounds correctly.
+  if (Object.values(answers).some(Boolean)) {
+    const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, " ").trim();
+    expect(normalize(evidence).length).toBeGreaterThan(0);
+    expect(normalize(reply)).toContain(normalize(evidence));
   }
   return { answers, evidence };
 }
