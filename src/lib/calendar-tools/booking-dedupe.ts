@@ -1,4 +1,5 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import { logger } from "@/lib/logger";
 
 /**
@@ -204,6 +205,12 @@ export type UpcomingBookingClaim = {
   id: string;
   eventId: string;
   startAt: string;
+  /**
+   * The row's stored attendee key — set by the phone-tolerant lookup, where
+   * it can differ from the caller's key (different phone formatting at
+   * booking time). Ledger mutations should prefer it when present.
+   */
+  attendeeKey?: string;
 };
 
 /**
@@ -233,6 +240,62 @@ export async function findUpcomingBookingClaim(
     return { id: row.id, eventId: row.event_id, startAt: row.start_at };
   } catch (err) {
     logger.warn("booking-dedupe: upcoming lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/** Upcoming phone-keyed rows scanned by the tolerant lookup. */
+const PHONE_LOOKUP_SCAN = 50;
+
+/**
+ * Phone-tolerant fallback for findUpcomingBookingClaim: the exact-key lookup
+ * misses when the booking stored one phone shape (E.164 from the SMS
+ * surface) and the lifecycle call passes another (national/pretty-printed
+ * from the model). Scans the business's upcoming phone-keyed rows and
+ * matches on digits with country-code tolerance (Bugbot on PR #584). The
+ * returned claim carries the ROW's attendee key so ledger mutations target
+ * the right row. Null on no match or any read error.
+ */
+export async function findUpcomingBookingClaimByPhone(
+  businessId: string,
+  phone: string
+): Promise<UpcomingBookingClaim | null> {
+  const callerDigits = digitsOf(phone);
+  if (!callerDigits) return null;
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("id, event_id, start_at, attendee_key")
+      .eq("business_id", businessId)
+      .like("attendee_key", "phone:%")
+      .not("event_id", "is", null)
+      .gte("start_at", new Date().toISOString())
+      .order("start_at", { ascending: true })
+      .limit(PHONE_LOOKUP_SCAN);
+    if (error || !data) return null;
+    for (const raw of data as Array<{
+      id: string;
+      event_id: string;
+      start_at: string;
+      attendee_key: string;
+    }>) {
+      const rowDigits = digitsOf(raw.attendee_key.slice("phone:".length));
+      if (rowDigits.length > 0 && phoneDigitsMatch(rowDigits, callerDigits)) {
+        return {
+          id: raw.id,
+          eventId: raw.event_id,
+          startAt: raw.start_at,
+          attendeeKey: raw.attendee_key
+        };
+      }
+    }
+    return null;
+  } catch (err) {
+    logger.warn("booking-dedupe: phone-tolerant lookup threw", {
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });

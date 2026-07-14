@@ -7,6 +7,7 @@ import {
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
+  findUpcomingBookingClaimByPhone,
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -260,6 +261,18 @@ async function mutateGoogleEvent(
 const NOT_SUPPORTED_PROVIDERS = new Set(["caldav"]);
 
 /**
+ * Ledger resolution for Vagaro (its ONLY resolution path — the v1 client
+ * has no search-by-customer surface): exact attendee key first, then the
+ * phone-tolerant fallback, since the booking may have stored a differently
+ * formatted phone than the lifecycle call passes (Bugbot on PR #584).
+ */
+async function findVagaroClaim(businessId: string, attendeeKey: string, phone: string) {
+  const exact = await findUpcomingBookingClaim(businessId, attendeeKey);
+  if (exact) return exact;
+  return phone ? findUpcomingBookingClaimByPhone(businessId, phone) : null;
+}
+
+/**
  * Move the attendee's upcoming appointment to a new time IN PLACE. The
  * provider sends the attendee an UPDATED invitation for the same event —
  * never a second invite plus a lingering original.
@@ -293,9 +306,7 @@ export async function rescheduleCalendarAppointment(
     }
 
     if (conn.provider === "vagaro") {
-      // Ledger-only resolution: Vagaro bookings stamp the appointment id at
-      // booking time and the client has no search-by-customer surface.
-      const claim = await findUpcomingBookingClaim(businessId, attendeeKey);
+      const claim = await findVagaroClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
       const moved = await rescheduleVagaroAppointment(
         businessId,
@@ -306,7 +317,9 @@ export async function rescheduleCalendarAppointment(
       if (moved.ok) {
         await rescheduleBookingClaim(
           businessId,
-          attendeeKey,
+          // The row's own key when the phone-tolerant fallback resolved it —
+          // conflict cleanup must target the key the row is stored under.
+          claim.attendeeKey ?? attendeeKey,
           claim.id,
           new Date(args.newStartIso).toISOString()
         );
@@ -414,7 +427,7 @@ export async function cancelCalendarAppointment(
     }
 
     if (conn.provider === "vagaro") {
-      const claim = await findUpcomingBookingClaim(businessId, attendeeKey);
+      const claim = await findVagaroClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
       const canceled = await cancelVagaroAppointment(businessId, claim.eventId);
       if (canceled.ok) await deleteBookingClaim(claim.id);

@@ -266,9 +266,10 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
   }
   if (detail === "vagaro_auth_failed") {
     return (
-      "The Vagaro connection was rejected, so the appointment was NOT changed. Call " +
-      "notify_team so the owner can reconnect Vagaro, and tell the customer a team " +
-      "member will confirm the change. Never book a duplicate appointment as a workaround."
+      `The Vagaro connection was rejected, so the appointment was NOT ${verb === "cancel" ? "canceled" : "changed"}. ` +
+      "Call notify_team so the owner can reconnect Vagaro, and tell the customer a team " +
+      `member will handle the ${verb === "cancel" ? "cancellation" : "change"}. Never book a ` +
+      "duplicate appointment as a workaround."
     );
   }
   if (detail === "calendar_reschedule_failed" || detail === "calendar_cancel_failed") {

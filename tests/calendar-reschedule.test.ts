@@ -6,6 +6,7 @@ vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.f
 vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   bookingAttendeeKey: vi.fn(() => "phone:+15485773546"),
   findUpcomingBookingClaim: vi.fn(),
+  findUpcomingBookingClaimByPhone: vi.fn(),
   rescheduleBookingClaim: vi.fn(),
   deleteBookingClaim: vi.fn(),
   deleteBookingClaimsByEvent: vi.fn(),
@@ -36,6 +37,7 @@ import {
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
+  findUpcomingBookingClaimByPhone,
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -88,6 +90,7 @@ beforeEach(() => {
   vi.mocked(nangoProxyForBusiness).mockReset();
   vi.mocked(getSharedCalendar).mockResolvedValue(null);
   vi.mocked(findUpcomingBookingClaim).mockResolvedValue(null);
+  vi.mocked(findUpcomingBookingClaimByPhone).mockResolvedValue(null);
 });
 
 describe("rescheduleCalendarAppointment", () => {
@@ -197,6 +200,44 @@ describe("rescheduleCalendarAppointment", () => {
       detail: "booking_not_found"
     });
     expect(vi.mocked(rescheduleVagaroAppointment)).not.toHaveBeenCalled();
+    // The tolerant fallback ran (a phone exists) — it just found nothing.
+    expect(vi.mocked(findUpcomingBookingClaimByPhone)).toHaveBeenCalledWith(BIZ, PHONE);
+  });
+
+  it("Vagaro: the phone-tolerant fallback resolves format drift and moves the ROW's key", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    // Exact key misses (booking stored a different phone shape) …
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(null);
+    // … the digits-tolerant lookup finds the row, carrying ITS stored key.
+    vi.mocked(findUpcomingBookingClaimByPhone).mockResolvedValue({
+      ...CLAIM,
+      attendeeKey: "phone:5485773546"
+    });
+    vi.mocked(rescheduleVagaroAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "evt-1" }
+    } as never);
+
+    expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
+    // Ledger move targets the key the row is stored under, not the caller's.
+    expect(vi.mocked(rescheduleBookingClaim)).toHaveBeenCalledWith(
+      BIZ,
+      "phone:5485773546",
+      "claim-1",
+      "2026-07-15T20:00:00.000Z"
+    );
+  });
+
+  it("Vagaro: no tolerant fallback without a phone (email-only identity)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    expect(
+      await rescheduleCalendarAppointment(BIZ, {
+        newStartIso: RESCHEDULE_ARGS.newStartIso,
+        newEndIso: RESCHEDULE_ARGS.newEndIso,
+        attendeeEmail: "joe@acme.com"
+      })
+    ).toEqual({ ok: false, detail: "booking_not_found" });
+    expect(vi.mocked(findUpcomingBookingClaimByPhone)).not.toHaveBeenCalled();
   });
 
   it("booking_not_found when neither the ledger nor the provider search locates an event", async () => {
@@ -604,6 +645,18 @@ describe("cancelCalendarAppointment", () => {
       detail: "booking_not_found"
     });
     expect(vi.mocked(cancelVagaroAppointment)).not.toHaveBeenCalled();
+  });
+
+  it("Vagaro: the phone-tolerant fallback resolves format drift on cancel", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaimByPhone).mockResolvedValue({
+      ...CLAIM,
+      attendeeKey: "phone:5485773546"
+    });
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({ ok: true } as never);
+    expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(true);
+    expect(vi.mocked(cancelVagaroAppointment)).toHaveBeenCalledWith(BIZ, "evt-1");
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
   });
 
   it("booking_not_found when nothing locates the event", async () => {

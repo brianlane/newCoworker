@@ -31,6 +31,10 @@ import {
   CALENDLY_DIRECT_KEY,
   type ResolvedVoiceConnection
 } from "@/lib/voice-tools/connections";
+// Country-code-tolerant phone comparison: our side holds E.164 ("+1548…")
+// while Calendly may store the invitee's number nationally ("548…") or vice
+// versa, so exact digit equality misses real matches (Bugbot on PR #584).
+import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
 
 /** Calendly rejects availability queries spanning more than 7 days. */
@@ -260,31 +264,6 @@ type SchedulingLinkBody = {
 /** Upcoming events scanned when matching the customer. */
 const LIFECYCLE_EVENT_SCAN = 20;
 
-/** Digits-only comparison for phone markers ("+1 (548) 577-3546" ≈ +15485773546). */
-function digitsOf(value: string): string {
-  return value.replace(/\D/g, "");
-}
-
-/**
- * The shortest digit string that still identifies a subscriber (national
- * significant numbers are 7+ digits everywhere); anything shorter is too
- * ambiguous to suffix-match safely.
- */
-const MIN_PHONE_MATCH_DIGITS = 7;
-
-/**
- * Country-code-tolerant phone comparison: our side holds E.164 ("+1548…")
- * while Calendly may store the invitee's number nationally ("548…") or vice
- * versa, so exact digit equality misses real matches (Bugbot on PR #584).
- * Suffix containment with a minimum length keeps "5773546" from matching an
- * unrelated number while letting the country-code variants agree.
- */
-function phoneDigitsMatch(a: string, b: string): boolean {
-  if (a.length < MIN_PHONE_MATCH_DIGITS || b.length < MIN_PHONE_MATCH_DIGITS) {
-    return a.length > 0 && a === b;
-  }
-  return a.endsWith(b) || b.endsWith(a);
-}
 
 type ScheduledEventsBody = {
   collection?: Array<{ uri?: string; start_time?: string }>;
