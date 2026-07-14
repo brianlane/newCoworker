@@ -90,6 +90,16 @@ describe("custom business type selection helpers", () => {
     );
   });
 
+  it("stores custom text of exactly 'other' as the display label so it doesn't collide with the sentinel", () => {
+    const stored = serializeBusinessTypeSelection(BUSINESS_TYPE_OTHER_VALUE, " other ");
+    expect(stored).toBe("Other");
+    expect(deriveBusinessTypeSelection(stored)).toEqual({
+      selection: BUSINESS_TYPE_OTHER_VALUE,
+      otherText: "Other"
+    });
+    expect(isBusinessTypeSelectionComplete(stored)).toBe(true);
+  });
+
   it("round-trips custom text through serialize → derive", () => {
     const stored = serializeBusinessTypeSelection(BUSINESS_TYPE_OTHER_VALUE, "Notary Services");
     expect(deriveBusinessTypeSelection(stored)).toEqual({

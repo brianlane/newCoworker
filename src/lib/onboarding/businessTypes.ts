@@ -170,7 +170,14 @@ export function serializeBusinessTypeSelection(selection: string, otherText: str
   if (!selection) return "";
   if (selection === BUSINESS_TYPE_OTHER_VALUE) {
     const trimmed = otherText.trim();
-    return trimmed || BUSINESS_TYPE_OTHER_VALUE;
+    if (!trimmed) return BUSINESS_TYPE_OTHER_VALUE;
+    // Custom text of exactly "other" would collide with the bare
+    // in-flight sentinel: it would derive back to empty text (wiping the
+    // input) and keep the advance gate closed even though the user typed
+    // an answer. Store the display-cased label instead — "Other" is not a
+    // slug, so it round-trips as custom text.
+    if (trimmed === BUSINESS_TYPE_OTHER_VALUE) return BUSINESS_TYPE_LABELS.other;
+    return trimmed;
   }
   return selection;
 }

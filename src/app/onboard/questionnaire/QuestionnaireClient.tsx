@@ -890,6 +890,7 @@ function QuestionnaireForm() {
                         )
                       }
                       placeholder="e.g. Drone Photography, Notary Services"
+                      maxLength={120}
                       required
                     />
                   </div>
