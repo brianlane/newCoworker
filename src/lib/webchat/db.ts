@@ -11,8 +11,11 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { mintWidgetKey } from "@/lib/webchat/keys";
+import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+export type WebchatReplyEngine = "vps" | "gemini";
 
 export type ChatWidgetSettingsRow = {
   business_id: string;
@@ -22,9 +25,23 @@ export type ChatWidgetSettingsRow = {
   allowed_origins: string[];
   require_contact_form: boolean;
   theme: unknown | null;
+  /**
+   * Who answers widget turns: 'vps' = the box chat-worker (default),
+   * 'gemini' = the platform-side direct responder (no VPS required) —
+   * see src/lib/webchat/gemini-engine.ts. Admin-only knob; optional on
+   * the type for rows read before 20260714163753_webchat_reply_engine.
+   */
+  reply_engine?: WebchatReplyEngine;
   created_at: string;
   updated_at: string;
 };
+
+/** Defensive read of the reply engine: anything but 'gemini' means 'vps'. */
+export function webchatReplyEngine(
+  settings: Pick<ChatWidgetSettingsRow, "reply_engine">
+): WebchatReplyEngine {
+  return settings.reply_engine === "gemini" ? "gemini" : "vps";
+}
 
 export type WebchatSessionRow = {
   id: string;
@@ -63,6 +80,14 @@ export type WebchatJobRow = {
   error_detail: string | null;
   created_at: string;
   completed_at: string | null;
+  /**
+   * Pre-built turn input (see /api/widget/message). Present only on reads
+   * that select them (getWebchatJobById) — the Gemini reply engine consumes
+   * stateless_input_messages ?? input_messages, the same precedence the
+   * chat-worker applies to its always-stateless turns.
+   */
+  input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
+  stateless_input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
 };
 
 /**
@@ -146,6 +171,7 @@ export type WidgetSettingsPatch = {
   allowed_origins?: string[];
   require_contact_form?: boolean;
   theme?: unknown | null;
+  reply_engine?: WebchatReplyEngine;
 };
 
 export async function updateWidgetSettings(
@@ -506,10 +532,117 @@ export async function getWebchatJobById(
   const { data, error } = await db
     .from("webchat_jobs")
     .select(
-      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at"
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, input_messages, stateless_input_messages"
     )
     .eq("id", jobId)
     .maybeSingle();
   if (error) throw new Error(`getWebchatJobById: ${error.message}`);
   return (data as WebchatJobRow | null) ?? null;
+}
+
+// ---------------------------------------------------------------------
+// Platform-side (Gemini reply engine) job lifecycle. The box chat-worker
+// claims via the claim_webchat_job RPC; the platform engine claims with a
+// conditional UPDATE — the `status = 'queued'` filter is the lock, so a
+// worker that somehow raced us matches zero rows and exactly one engine
+// ever answers a job.
+// ---------------------------------------------------------------------
+
+/** claimed_by marker for platform-engine claims (worker ids are hostnames). */
+export const WEBCHAT_PLATFORM_WORKER_ID = "platform-gemini-engine";
+
+/**
+ * Atomically claim a still-queued job for the platform engine. Null when
+ * the claim lost (already claimed/answered) — the caller just re-reads.
+ */
+export async function claimWebchatJobForPlatform(
+  jobId: string,
+  client?: SupabaseClient
+): Promise<WebchatJobRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const nowIso = new Date().toISOString();
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "processing",
+      claimed_by: WEBCHAT_PLATFORM_WORKER_ID,
+      claimed_at: nowIso,
+      started_at: nowIso
+    })
+    .eq("id", jobId)
+    .eq("status", "queued")
+    .select(
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, input_messages, stateless_input_messages"
+    )
+    .maybeSingle();
+  if (error) throw new Error(`claimWebchatJobForPlatform: ${error.message}`);
+  return (data as WebchatJobRow | null) ?? null;
+}
+
+/**
+ * Persist the engine's reply: assistant message row, session last_seen
+ * bump (warn-only, mirrors the worker), job → done. Returns the assistant
+ * message id. Mirrors the chat-worker's finishWebchatJob minus the Rowboat
+ * continuation marker — the Gemini engine is stateless by construction, so
+ * rowboat_conversation_id is left untouched.
+ */
+export async function completeWebchatJobFromPlatform(
+  job: Pick<WebchatJobRow, "id" | "session_id" | "business_id">,
+  content: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const msg = await appendWebchatMessage(job.session_id, job.business_id, "assistant", content, {}, db);
+
+  const { error: sessionErr } = await db
+    .from("webchat_sessions")
+    .update({ last_seen_at: new Date().toISOString() })
+    .eq("id", job.session_id);
+  if (sessionErr) {
+    logger.warn("completeWebchatJobFromPlatform: session bump failed", {
+      sessionId: job.session_id,
+      error: sessionErr.message
+    });
+  }
+
+  const { error: jobErr } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "done",
+      assistant_message_id: msg.id,
+      completed_at: new Date().toISOString(),
+      error_code: null,
+      error_detail: null
+    })
+    .eq("id", job.id);
+  if (jobErr) {
+    // Reply already persisted (the visitor's next poll renders it); the
+    // stuck 'processing' row is telemetry noise, not data loss — same
+    // acceptance as the worker's webchat_job_update_failed path.
+    logger.error("completeWebchatJobFromPlatform: job status flip failed", {
+      jobId: job.id,
+      error: jobErr.message
+    });
+  }
+  return msg.id;
+}
+
+/** Flip a platform-claimed job to error (the widget shows its retry copy). */
+export async function failWebchatJobFromPlatform(
+  jobId: string,
+  code: string,
+  detail: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("webchat_jobs")
+    .update({
+      status: "error",
+      error_code: code.slice(0, 100),
+      error_detail: detail.slice(0, 500),
+      completed_at: new Date().toISOString()
+    })
+    .eq("id", jobId);
+  if (error) throw new Error(`failWebchatJobFromPlatform: ${error.message}`);
 }

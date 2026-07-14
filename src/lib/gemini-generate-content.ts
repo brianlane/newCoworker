@@ -66,7 +66,12 @@ export type GeminiGenerateTextResult = {
   usage: GeminiUsage | null;
 };
 
-function extractGeminiUsage(json: unknown): GeminiUsage | null {
+/**
+ * Parse billed token counts out of a generateContent response body.
+ * Exported for the function-calling chat client (src/lib/gemini-chat.ts),
+ * which shares the exact usage semantics (thinking tokens billed as output).
+ */
+export function extractGeminiUsage(json: unknown): GeminiUsage | null {
   const meta = (json as { usageMetadata?: Record<string, unknown> })?.usageMetadata;
   if (!meta || typeof meta !== "object") return null;
   const prompt = Number(meta["promptTokenCount"] ?? 0);

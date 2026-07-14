@@ -54,6 +54,8 @@ import { byosBoxId } from "@/lib/provisioning/byos";
 import { getActiveVpsSshKey } from "@/lib/db/vps-ssh-keys";
 import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
+import { WebchatEnginePanel } from "@/components/admin/WebchatEnginePanel";
+import { getWidgetSettingsForBusiness, webchatReplyEngine } from "@/lib/webchat/db";
 
 export const dynamic = "force-dynamic";
 
@@ -92,6 +94,9 @@ export default async function BusinessDetailPage({
   ]);
   const postureReport = await getLatestVpsPostureReport(businessId);
   const teamMembers = await listBusinessMembers(businessId);
+  // Widget settings for the Web chat card. Best-effort read — the page
+  // must render even if the row is missing (owner never enabled it).
+  const widgetSettings = await getWidgetSettingsForBusiness(businessId).catch(() => null);
 
   if (!business) notFound();
 
@@ -597,6 +602,20 @@ export default async function BusinessDetailPage({
               />
             </div>
           )}
+      </Card>
+
+      {/* Web chat widget: status + reply engine (VPS worker vs platform Gemini) */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Web chat
+        </h2>
+        <WebchatEnginePanel
+          key={`${businessId}:${widgetSettings ? webchatReplyEngine(widgetSettings) : "vps"}`}
+          businessId={businessId}
+          initialEngine={widgetSettings ? webchatReplyEngine(widgetSettings) : "vps"}
+          widgetConfigured={!!widgetSettings}
+          widgetEnabled={widgetSettings?.enabled ?? false}
+        />
       </Card>
 
       {/* Voice / SMS DID */}

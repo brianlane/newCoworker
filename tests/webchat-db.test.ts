@@ -32,9 +32,12 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   appendWebchatMessage,
+  claimWebchatJobForPlatform,
+  completeWebchatJobFromPlatform,
   countWebchatUserMessagesSince,
   createWebchatSession,
   deleteWebchatMessage,
+  failWebchatJobFromPlatform,
   getOrCreateWidgetSettings,
   getWebchatJobById,
   getWebchatJobForUserMessage,
@@ -53,6 +56,8 @@ import {
   touchWebchatSession,
   updateWebchatSessionContact,
   updateWidgetSettings,
+  webchatReplyEngine,
+  WEBCHAT_PLATFORM_WORKER_ID,
   type WebchatMessageRow
 } from "@/lib/webchat/db";
 
@@ -417,5 +422,106 @@ describe("webchat_jobs accessors", () => {
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
     await expect(getWebchatJobById(JOB)).rejects.toThrow("getWebchatJobById: x");
+  });
+
+  it("getWebchatJobById selects the pre-built turn inputs for the Gemini engine", async () => {
+    const builder = makeBuilder({ data: { id: JOB }, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await getWebchatJobById(JOB);
+    const selected = (builder.select as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(selected).toContain("input_messages");
+    expect(selected).toContain("stateless_input_messages");
+  });
+});
+
+describe("webchatReplyEngine", () => {
+  it("reads 'gemini' only when stored exactly, defaulting everything else to 'vps'", () => {
+    expect(webchatReplyEngine({ reply_engine: "gemini" })).toBe("gemini");
+    expect(webchatReplyEngine({ reply_engine: "vps" })).toBe("vps");
+    expect(webchatReplyEngine({})).toBe("vps");
+    expect(webchatReplyEngine({ reply_engine: undefined })).toBe("vps");
+  });
+});
+
+describe("platform-engine job lifecycle", () => {
+  const jobRow = { id: JOB, session_id: SESSION, business_id: BIZ };
+
+  it("claimWebchatJobForPlatform claims a queued job with the conditional update", async () => {
+    const builder = makeBuilder({ data: { id: JOB, status: "processing" }, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    expect(await claimWebchatJobForPlatform(JOB)).toEqual({ id: JOB, status: "processing" });
+    const patch = (builder.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(patch).toMatchObject({
+      status: "processing",
+      claimed_by: WEBCHAT_PLATFORM_WORKER_ID
+    });
+    expect(typeof patch.claimed_at).toBe("string");
+    // The queued-only filter IS the race lock against a live worker.
+    expect(builder.eq).toHaveBeenCalledWith("id", JOB);
+    expect(builder.eq).toHaveBeenCalledWith("status", "queued");
+  });
+
+  it("claimWebchatJobForPlatform returns null on a lost race, throws on error", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await claimWebchatJobForPlatform(JOB, injected)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(claimWebchatJobForPlatform(JOB)).rejects.toThrow(
+      "claimWebchatJobForPlatform: x"
+    );
+  });
+
+  it("completeWebchatJobFromPlatform persists the reply, bumps the session, flips the job", async () => {
+    const msgBuilder = makeBuilder({ data: { id: 42 }, error: null });
+    const sessionBuilder = makeBuilder({ data: null, error: null });
+    const jobBuilder = makeBuilder({ data: null, error: null });
+    supabaseStub.from
+      .mockReturnValueOnce(msgBuilder)
+      .mockReturnValueOnce(sessionBuilder)
+      .mockReturnValueOnce(jobBuilder);
+
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply text")).toBe(42);
+    expect((msgBuilder.insert as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      session_id: SESSION,
+      business_id: BIZ,
+      role: "assistant",
+      content: "Reply text"
+    });
+    expect((jobBuilder.update as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      status: "done",
+      assistant_message_id: 42,
+      error_code: null,
+      error_detail: null
+    });
+  });
+
+  it("completeWebchatJobFromPlatform tolerates session-bump and job-flip failures (reply already persisted)", async () => {
+    supabaseStub.from
+      .mockReturnValueOnce(makeBuilder({ data: { id: 43 }, error: null }))
+      .mockReturnValueOnce(makeBuilder({ data: null, error: { message: "session down" } }))
+      .mockReturnValueOnce(makeBuilder({ data: null, error: { message: "job down" } }));
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", injected)).toBe(43);
+  });
+
+  it("completeWebchatJobFromPlatform surfaces a failed message insert", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(completeWebchatJobFromPlatform(jobRow, "Reply")).rejects.toThrow(
+      "appendWebchatMessage: x"
+    );
+  });
+
+  it("failWebchatJobFromPlatform bounds the stored taxonomy, throws on error", async () => {
+    const builder = makeBuilder({ data: null, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await failWebchatJobFromPlatform(JOB, "c".repeat(200), "d".repeat(600));
+    const patch = (builder.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(patch.status).toBe("error");
+    expect((patch.error_code as string).length).toBe(100);
+    expect((patch.error_detail as string).length).toBe(500);
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(failWebchatJobFromPlatform(JOB, "code", "detail", injected)).rejects.toThrow(
+      "failWebchatJobFromPlatform: x"
+    );
   });
 });
