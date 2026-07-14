@@ -4,6 +4,13 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import {
+  BUSINESS_TYPE_OPTIONS,
+  BUSINESS_TYPE_OTHER_VALUE,
+  deriveBusinessTypeSelection,
+  isBusinessTypeSelectionComplete,
+  serializeBusinessTypeSelection
+} from "@/lib/onboarding/businessTypes";
 
 type Tier = "starter" | "standard" | "enterprise";
 type VpsSize = "kvm1" | "kvm2" | "kvm4" | "kvm8";
@@ -60,7 +67,10 @@ export function CreateClientModal() {
           tier,
           ownerName,
           phone,
-          businessType,
+          // Business type is optional here (unlike onboarding), so a bare
+          // "Other" pick with no custom text — the in-flight sentinel —
+          // must not be persisted as a placeholder industry.
+          businessType: isBusinessTypeSelectionComplete(businessType) ? businessType : "",
           // Hardware pin is an enterprise-deal knob; other tiers always
           // provision on the tier default.
           ...(tier === "enterprise" && vpsSize ? { vpsSize } : {})
@@ -184,13 +194,44 @@ export function CreateClientModal() {
                 />
               </div>
 
-              <Input
-                label="Business Type"
-                value={businessType}
-                onChange={(e) => setBusinessType(e.target.value)}
-                placeholder="Roofing, HVAC, Plumbing…"
-                autoComplete="off"
-              />
+              <div className="flex flex-col gap-1">
+                <label
+                  htmlFor="create-client-business-type"
+                  className="text-sm font-medium text-parchment/80"
+                >
+                  Business Type
+                </label>
+                <select
+                  id="create-client-business-type"
+                  value={deriveBusinessTypeSelection(businessType).selection}
+                  onChange={(e) => {
+                    const { otherText } = deriveBusinessTypeSelection(businessType);
+                    setBusinessType(serializeBusinessTypeSelection(e.target.value, otherText));
+                  }}
+                  className="rounded-lg border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment focus:border-signal-teal focus:outline-none"
+                >
+                  <option value="">Select an industry…</option>
+                  {BUSINESS_TYPE_OPTIONS.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {deriveBusinessTypeSelection(businessType).selection === BUSINESS_TYPE_OTHER_VALUE && (
+                <Input
+                  label="What kind of business?"
+                  value={deriveBusinessTypeSelection(businessType).otherText}
+                  onChange={(e) =>
+                    setBusinessType(
+                      serializeBusinessTypeSelection(BUSINESS_TYPE_OTHER_VALUE, e.target.value)
+                    )
+                  }
+                  maxLength={120}
+                  placeholder="e.g. Drone Photography, Notary Services"
+                  autoComplete="off"
+                />
+              )}
 
               {error && <p className="text-xs text-spark-orange">{error}</p>}
 
