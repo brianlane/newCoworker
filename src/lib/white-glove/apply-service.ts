@@ -34,8 +34,10 @@ import { buildIntakeApplyPlan, replaceWhiteGloveBlock } from "@/lib/white-glove/
 import {
   claimWhiteGloveIntakeForBusiness,
   getWhiteGloveIntake,
-  markWhiteGloveIntakeApplied
+  markWhiteGloveIntakeApplied,
+  releaseWhiteGloveIntakeClaim
 } from "@/lib/white-glove/intake";
+import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -95,24 +97,15 @@ export async function applyWhiteGloveIntake(
     throw new WhiteGloveApplyError("business_not_found", "Business not found.");
   }
 
-  // Atomically CLAIM the intake for this tenant before writing anything.
-  // The read-then-check above is only a fast path — two overlapping applies
-  // targeting different tenants would both pass it; the conditional UPDATE
-  // (unlinked-or-same-business) makes exactly one of them proceed.
-  const claimed = await claimWhiteGloveIntakeForBusiness(intake.id, args.businessId, db);
-  if (!claimed) {
-    throw new WhiteGloveApplyError(
-      "intake_business_mismatch",
-      "This intake was just applied to a different business."
-    );
-  }
-
   const plan = buildIntakeApplyPlan(intake.answers, {
     businessName: intake.business_name,
     industry: intake.industry
   });
 
-  // 1. Vault blocks (marker-replace; loud failure over silent truncation).
+  // Vault blocks (marker-replace) with the cap check BEFORE the claim below,
+  // so every typed refusal leaves the intake exactly as it was found — a
+  // vault_over_limit must never pin an unlinked intake to a business that
+  // received nothing. Loud failure over silent truncation.
   const config = await getBusinessConfig(args.businessId, db);
   const soulMd = replaceWhiteGloveBlock(config?.soul_md ?? "", plan.soulBlock);
   const memoryMd = replaceWhiteGloveBlock(config?.memory_md ?? "", plan.memoryBlock);
@@ -128,7 +121,62 @@ export async function applyWhiteGloveIntake(
       `Applying would push memory.md over its ${BUSINESS_CONFIG_MEMORY_MD_MAX_CHARS}-character limit; trim it first.`
     );
   }
-  await patchBusinessConfig(args.businessId, { soul_md: soulMd, memory_md: memoryMd }, db);
+
+  // Atomically CLAIM the intake for this tenant before writing anything.
+  // The read-then-check above is only a fast path — two overlapping applies
+  // targeting different tenants would both pass it; the conditional UPDATE
+  // (unlinked-or-same-business) makes exactly one of them proceed.
+  const wasUnlinked = intake.business_id === null;
+  const claimed = await claimWhiteGloveIntakeForBusiness(intake.id, args.businessId, db);
+  if (!claimed) {
+    throw new WhiteGloveApplyError(
+      "intake_business_mismatch",
+      "This intake was just applied to a different business."
+    );
+  }
+
+  try {
+    return await performApplyWrites({
+      businessId: args.businessId,
+      intake,
+      plan,
+      business,
+      soulMd,
+      memoryMd,
+      db
+    });
+  } catch (err) {
+    // A write failed mid-apply. When THIS call took the claim on a
+    // previously-unlinked intake, release it (guarded on same-business +
+    // never-applied) so a failed apply doesn't pin the intake to a tenant
+    // forever; best-effort — the original error is what the admin needs.
+    if (wasUnlinked) {
+      try {
+        await releaseWhiteGloveIntakeClaim(intake.id, args.businessId, db);
+      } catch (releaseErr) {
+        logger.warn("white-glove apply: claim release failed (intake stays linked)", {
+          intakeId: intake.id,
+          error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr)
+        });
+      }
+    }
+    throw err;
+  }
+}
+
+async function performApplyWrites(args: {
+  businessId: string;
+  intake: NonNullable<Awaited<ReturnType<typeof getWhiteGloveIntake>>>;
+  plan: ReturnType<typeof buildIntakeApplyPlan>;
+  business: NonNullable<Awaited<ReturnType<typeof getBusiness>>>;
+  soulMd: string;
+  memoryMd: string;
+  db: SupabaseClient;
+}): Promise<ApplyWhiteGloveIntakeResult> {
+  const { businessId, intake, plan, business, soulMd, memoryMd, db } = args;
+
+  // 1. Vault blocks (cap-checked by the caller before the claim).
+  await patchBusinessConfig(businessId, { soul_md: soulMd, memory_md: memoryMd }, db);
 
   // 2. Business hours (only when the free text parsed) + profile_md refresh
   //    so prompt composition picks the change up. Parsed days are MERGED over
@@ -191,7 +239,7 @@ export async function applyWhiteGloveIntake(
   }
 
   // 4. Stamp the apply on the intake row.
-  await markWhiteGloveIntakeApplied(args.intakeId, { businessId: args.businessId, flowId }, db);
+  await markWhiteGloveIntakeApplied(intake.id, { businessId, flowId }, db);
 
   return { flowId, flowCreated, businessHoursApplied };
 }

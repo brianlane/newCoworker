@@ -35,9 +35,14 @@ vi.mock("@/lib/white-glove/intake", async (importOriginal) => {
     ...actual,
     claimWhiteGloveIntakeForBusiness: vi.fn(),
     getWhiteGloveIntake: vi.fn(),
-    markWhiteGloveIntakeApplied: vi.fn()
+    markWhiteGloveIntakeApplied: vi.fn(),
+    releaseWhiteGloveIntakeClaim: vi.fn()
   };
 });
+
+vi.mock("@/lib/logger", () => ({
+  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() }
+}));
 
 import {
   applyWhiteGloveIntake,
@@ -55,8 +60,10 @@ import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import {
   claimWhiteGloveIntakeForBusiness,
   getWhiteGloveIntake,
-  markWhiteGloveIntakeApplied
+  markWhiteGloveIntakeApplied,
+  releaseWhiteGloveIntakeClaim
 } from "@/lib/white-glove/intake";
+import { logger } from "@/lib/logger";
 import type { WhiteGloveIntakeRow } from "@/lib/white-glove/intake";
 import type { IntakeAnswers } from "@/lib/white-glove/template";
 
@@ -314,7 +321,7 @@ describe("applyWhiteGloveIntake", () => {
     expect((patch.soul_md as string).startsWith(WHITE_GLOVE_BLOCK_START)).toBe(true);
   });
 
-  it("fails loudly (before any write) when a vault doc would exceed its cap", async () => {
+  it("fails loudly BEFORE the claim when a vault doc would exceed its cap", async () => {
     vi.mocked(getBusinessConfig).mockResolvedValue({
       business_id: BIZ_ID,
       soul_md: "x".repeat(31_900),
@@ -327,6 +334,8 @@ describe("applyWhiteGloveIntake", () => {
       applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
     ).rejects.toMatchObject({ code: "vault_over_limit" });
     expect(patchBusinessConfig).not.toHaveBeenCalled();
+    // The refusal happens before the claim, so it never pins the intake.
+    expect(claimWhiteGloveIntakeForBusiness).not.toHaveBeenCalled();
 
     vi.mocked(getBusinessConfig).mockResolvedValue({
       business_id: BIZ_ID,
@@ -340,5 +349,51 @@ describe("applyWhiteGloveIntake", () => {
       applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
     ).rejects.toMatchObject({ code: "vault_over_limit" });
     expect(patchBusinessConfig).not.toHaveBeenCalled();
+    expect(claimWhiteGloveIntakeForBusiness).not.toHaveBeenCalled();
+  });
+
+  it("releases a freshly taken claim when a write fails mid-apply", async () => {
+    // Intake was UNLINKED before this call; the vault write blows up after
+    // the claim → the claim is released so the intake isn't pinned forever.
+    vi.mocked(patchBusinessConfig).mockRejectedValue(new Error("db down"));
+    await expect(
+      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
+    ).rejects.toThrow("db down");
+    expect(releaseWhiteGloveIntakeClaim).toHaveBeenCalledWith(
+      INTAKE_ID,
+      BIZ_ID,
+      expect.anything()
+    );
+  });
+
+  it("keeps the link when a write fails on an ALREADY-linked intake", async () => {
+    vi.mocked(getWhiteGloveIntake).mockResolvedValue(intakeRow({ business_id: BIZ_ID }));
+    vi.mocked(patchBusinessConfig).mockRejectedValue(new Error("db down"));
+    await expect(
+      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
+    ).rejects.toThrow("db down");
+    expect(releaseWhiteGloveIntakeClaim).not.toHaveBeenCalled();
+  });
+
+  it("a failed claim release only warns — the original error still surfaces", async () => {
+    vi.mocked(patchBusinessConfig).mockRejectedValue(new Error("db down"));
+    vi.mocked(releaseWhiteGloveIntakeClaim).mockRejectedValue(new Error("release failed"));
+    await expect(
+      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
+    ).rejects.toThrow("db down");
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("claim release failed"),
+      expect.objectContaining({ intakeId: INTAKE_ID, error: "release failed" })
+    );
+
+    // Non-Error rejection values are stringified for the log.
+    vi.mocked(releaseWhiteGloveIntakeClaim).mockRejectedValue("weird failure");
+    await expect(
+      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
+    ).rejects.toThrow("db down");
+    expect(logger.warn).toHaveBeenLastCalledWith(
+      expect.stringContaining("claim release failed"),
+      expect.objectContaining({ error: "weird failure" })
+    );
   });
 });
