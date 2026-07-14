@@ -84,7 +84,7 @@ describe("api/admin/white-glove-intakes/[id]/apply route", () => {
     expect(applyWhiteGloveIntake).not.toHaveBeenCalled();
   });
 
-  it("maps apply errors: not-found → 404, conflict-class → 409; no sync on failure", async () => {
+  it("maps typed apply errors (pre-write) without scheduling a sync", async () => {
     vi.mocked(applyWhiteGloveIntake).mockRejectedValue(
       new WhiteGloveApplyError("intake_not_found", "Intake not found.")
     );
@@ -98,10 +98,16 @@ describe("api/admin/white-glove-intakes/[id]/apply route", () => {
     expect(conflict.status).toBe(409);
     const body = await conflict.json();
     expect(body.error.message).toContain("completed questionnaire");
+    // Typed errors are all thrown before the first tenant write.
+    expect(scheduleVaultSync).not.toHaveBeenCalled();
+  });
 
+  it("still re-seeds the vault when an untyped error lands mid-apply", async () => {
+    // A DB hiccup after the vault write: central Supabase already holds the
+    // new blocks, so the box must be re-seeded even though the route 500s.
     vi.mocked(applyWhiteGloveIntake).mockRejectedValue(new Error("db down"));
     const boom = await POST(applyRequest({ businessId: BIZ_ID }), routeParams(INTAKE_ID));
     expect(boom.status).toBe(500);
-    expect(scheduleVaultSync).not.toHaveBeenCalled();
+    expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ_ID);
   });
 });

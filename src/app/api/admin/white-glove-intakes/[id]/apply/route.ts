@@ -32,27 +32,37 @@ export async function POST(
     const intakeId = idSchema.parse(id);
     const body = bodySchema.parse(await request.json());
 
-    const result = await applyWhiteGloveIntake({
-      intakeId,
-      businessId: body.businessId
-    });
+    try {
+      const result = await applyWhiteGloveIntake({
+        intakeId,
+        businessId: body.businessId
+      });
 
-    // Post-response re-seed: the vault write already landed in Supabase; this
-    // pushes it to the tenant box so the live agent stops answering from the
-    // pre-apply prompt.
-    scheduleVaultSync(body.businessId);
+      // Post-response re-seed: the vault write landed in Supabase; this
+      // pushes it to the tenant box so the live agent stops answering from
+      // the pre-apply prompt.
+      scheduleVaultSync(body.businessId);
 
-    return successResponse(result);
+      return successResponse(result);
+    } catch (err) {
+      if (err instanceof WhiteGloveApplyError) {
+        // Every typed apply error is thrown BEFORE the first tenant write
+        // (guards + the vault-cap check), so there is nothing to re-seed.
+        const status =
+          err.code === "intake_not_found" || err.code === "business_not_found"
+            ? "NOT_FOUND"
+            : "CONFLICT";
+        return errorResponse(status, err.message);
+      }
+      // An untyped failure can land MID-apply — the vault write may already
+      // be committed centrally. Re-seed anyway (idempotent) so the tenant
+      // box never keeps serving pre-apply grounding behind a 500.
+      scheduleVaultSync(body.businessId);
+      throw err;
+    }
   } catch (err) {
     if (err instanceof z.ZodError) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");
-    }
-    if (err instanceof WhiteGloveApplyError) {
-      const status =
-        err.code === "intake_not_found" || err.code === "business_not_found"
-          ? "NOT_FOUND"
-          : "CONFLICT";
-      return errorResponse(status, err.message);
     }
     return handleRouteError(err);
   }
