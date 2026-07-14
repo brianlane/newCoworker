@@ -8,6 +8,7 @@ import {
   BUSINESS_TYPE_OPTIONS,
   BUSINESS_TYPE_OTHER_VALUE,
   deriveBusinessTypeSelection,
+  isBusinessTypeSelectionComplete,
   serializeBusinessTypeSelection
 } from "@/lib/onboarding/businessTypes";
 
@@ -66,7 +67,10 @@ export function CreateClientModal() {
           tier,
           ownerName,
           phone,
-          businessType,
+          // Business type is optional here (unlike onboarding), so a bare
+          // "Other" pick with no custom text — the in-flight sentinel —
+          // must not be persisted as a placeholder industry.
+          businessType: isBusinessTypeSelectionComplete(businessType) ? businessType : "",
           // Hardware pin is an enterprise-deal knob; other tiers always
           // provision on the tier default.
           ...(tier === "enterprise" && vpsSize ? { vpsSize } : {})
