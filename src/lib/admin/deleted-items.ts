@@ -155,10 +155,12 @@ export async function listDeletedItems(
     )
   ]);
 
-  // Inbound jobs are central-only.
+  // Inbound jobs are central-only. `payload` rides along so legacy rows
+  // (customer_e164 NULL — the delete stamped them by payload matching) can
+  // still be folded into their conversation below.
   const { data: inboundData, error: inboundError } = await db
     .from("sms_inbound_jobs")
-    .select("id, customer_e164, deleted_at, deleted_by")
+    .select("id, customer_e164, payload, deleted_at, deleted_by")
     .eq("business_id", businessId)
     .not("deleted_at", "is", null)
     .order("deleted_at", { ascending: false })
@@ -235,7 +237,12 @@ export async function listDeletedItems(
   };
   for (const o of outboundSms) foldSms(str(o.to_e164), String(o.deleted_at), str(o.deleted_by));
   for (const j of inboundSms) {
-    foldSms(str(j.customer_e164), String(j.deleted_at), str(j.deleted_by));
+    // Legacy rows predate the denormalized column — identify them the same
+    // way the reader and the delete did, by parsing the Telnyx payload.
+    const e164 =
+      str(j.customer_e164) ??
+      customerE164FromPayload(j.payload as Record<string, unknown> | null);
+    foldSms(e164, String(j.deleted_at), str(j.deleted_by));
   }
   for (const [e164, agg] of conversations) {
     items.push({

@@ -123,8 +123,17 @@ describe("listDeletedItems (central mode)", () => {
       sms_inbound_jobs: chain("limit", {
         data: [
           { id: "j1", customer_e164: "+1555", deleted_at: "2026-07-07T00:00:00Z", deleted_by: "u1" },
-          // Legacy row without the denormalized column — skipped in the fold.
-          { id: "j2", customer_e164: null, deleted_at: "2026-07-07T00:00:00Z", deleted_by: "u1" }
+          // Legacy row without the denormalized column — folded via its
+          // payload, the same identification the reader and delete use.
+          {
+            id: "j2",
+            customer_e164: null,
+            payload: { data: { payload: { from: { phone_number: "+1555" }, text: "old" } } },
+            deleted_at: "2026-07-07T00:00:00Z",
+            deleted_by: "u1"
+          },
+          // Unparseable legacy row (no payload) — nothing to fold it into.
+          { id: "j3", customer_e164: null, deleted_at: "2026-07-07T00:00:00Z", deleted_by: "u1" }
         ],
         error: null
       })
@@ -139,13 +148,14 @@ describe("listDeletedItems (central mode)", () => {
       "chat_thread"
     ]);
     const sms = items[0];
-    // 2 outbound + 1 inbound folded; newest stamp wins the sort key.
+    // 2 outbound + 1 inbound + 1 legacy inbound folded; newest stamp wins
+    // the sort key.
     expect(sms).toMatchObject({
       id: "+1555",
-      rowCount: 3,
+      rowCount: 4,
       deletedAt: "2026-07-13T00:00:00Z",
       deletedBy: "u2",
-      summary: "SMS conversation with +1555 (3 messages)"
+      summary: "SMS conversation with +1555 (4 messages)"
     });
     expect(items[1].summary).toBe("Received email: Quote please — jane@x.com");
     expect(items[2].summary).toContain("Inbound call with +1555 · completed · 2026-07-01");

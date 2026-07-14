@@ -55,10 +55,13 @@ const STATUS_TONE: Record<string, string> = {
 function RunLine({
   run,
   businessId,
+  canDismiss,
   onDismissed
 }: {
   run: TaskRunView;
   businessId: string;
+  /** Manager+ only — the cancel endpoint requires manage_aiflows. */
+  canDismiss: boolean;
   onDismissed: () => void;
 }) {
   const [state, setState] = useState<"idle" | "dismissing" | "error">("idle");
@@ -116,15 +119,17 @@ function RunLine({
           until <LocalDateTime iso={run.waitingUntil} />
         </span>
       )}
-      <button
-        type="button"
-        data-testid="task-dismiss"
-        onClick={() => void dismiss()}
-        disabled={state === "dismissing"}
-        className="ml-auto text-[11px] font-medium text-parchment/40 hover:text-spark-orange disabled:opacity-50 cursor-pointer"
-      >
-        {state === "dismissing" ? "Dismissing…" : "Dismiss"}
-      </button>
+      {canDismiss && (
+        <button
+          type="button"
+          data-testid="task-dismiss"
+          onClick={() => void dismiss()}
+          disabled={state === "dismissing"}
+          className="ml-auto text-[11px] font-medium text-parchment/40 hover:text-spark-orange disabled:opacity-50 cursor-pointer"
+        >
+          {state === "dismissing" ? "Dismissing…" : "Dismiss"}
+        </button>
+      )}
       {state === "error" && (
         <span className="text-[11px] text-spark-orange">Couldn&apos;t dismiss — try again.</span>
       )}
@@ -161,10 +166,12 @@ function ReasoningLine({ r }: { r: TaskReasoningView }) {
 function TaskCard({
   task,
   businessId,
+  canDismissRuns,
   onChanged
 }: {
   task: TaskCardData;
   businessId: string;
+  canDismissRuns: boolean;
   onChanged: () => void;
 }) {
   const [showVars, setShowVars] = useState(false);
@@ -198,7 +205,13 @@ function TaskCard({
       {task.runs.length > 0 ? (
         <div className="space-y-1.5">
           {task.runs.map((run) => (
-            <RunLine key={run.id} run={run} businessId={businessId} onDismissed={onChanged} />
+            <RunLine
+              key={run.id}
+              run={run}
+              businessId={businessId}
+              canDismiss={canDismissRuns}
+              onDismissed={onChanged}
+            />
           ))}
         </div>
       ) : (
@@ -302,12 +315,15 @@ function TaskCard({
 export function TaskCenter({
   businessId,
   defaultScope,
-  hasLinkedEmployee
+  hasLinkedEmployee,
+  canDismissRuns
 }: {
   businessId: string;
   /** Staff with a linked roster member start on "mine"; everyone else "all". */
   defaultScope: Scope;
   hasLinkedEmployee: boolean;
+  /** Manager+ (manage_aiflows) — gates the Dismiss-task action. */
+  canDismissRuns: boolean;
 }) {
   const [scope, setScope] = useState<Scope>(defaultScope);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
@@ -407,6 +423,7 @@ export function TaskCenter({
           key={task.e164}
           task={task}
           businessId={businessId}
+          canDismissRuns={canDismissRuns}
           onChanged={() => void load(scope)}
         />
       ))}
