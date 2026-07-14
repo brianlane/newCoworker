@@ -569,6 +569,52 @@ describe("updateCaldavEventTime", () => {
     expect(body).not.toContain("SEQUENCE:1\r\n");
   });
 
+  it("rewrites ONLY the VEVENT when a VTIMEZONE block precedes it", async () => {
+    // Servers routinely prepend a VTIMEZONE whose STANDARD/DAYLIGHT
+    // sub-components carry their own DTSTART lines — those must survive
+    // untouched while the event's parameterized times are rewritten.
+    const withTimezone =
+      "BEGIN:VCALENDAR\r\n" +
+      "VERSION:2.0\r\n" +
+      "BEGIN:VTIMEZONE\r\n" +
+      "TZID:America/Phoenix\r\n" +
+      "BEGIN:STANDARD\r\n" +
+      "DTSTART:19670430T020000\r\n" +
+      "TZOFFSETFROM:-0700\r\n" +
+      "TZOFFSETTO:-0700\r\n" +
+      "END:STANDARD\r\n" +
+      "END:VTIMEZONE\r\n" +
+      "BEGIN:VEVENT\r\n" +
+      `UID:${UID}\r\n` +
+      "DTSTAMP:20260713T000000Z\r\n" +
+      "DTSTART;TZID=America/Phoenix:20260714T090000\r\n" +
+      "DTEND;TZID=America/Phoenix:20260714T093000\r\n" +
+      "SUMMARY:Consult with $Amy\r\n" +
+      "END:VEVENT\r\n" +
+      "END:VCALENDAR\r\n";
+    const { impl, calls } = fetchSequence([response(200, withTimezone), response(204)]);
+    await updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl });
+    const body = calls[1].init.body as string;
+    // The timezone definition's DTSTART is untouched.
+    expect(body).toContain("DTSTART:19670430T020000");
+    // The EVENT's times were rewritten.
+    expect(body).toContain("DTSTART:20260715T200000Z");
+    expect(body).toContain("DTEND:20260715T203000Z");
+    // A literal `$` in event text never triggers replacement expansion.
+    expect(body).toContain("SUMMARY:Consult with $Amy");
+    expect(body).toMatch(new RegExp(`UID:${UID}\\r\\nSEQUENCE:1`));
+  });
+
+  it("refuses a body without a VEVENT component", async () => {
+    const noEvent =
+      "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VTIMEZONE\r\nTZID:X\r\nEND:VTIMEZONE\r\nEND:VCALENDAR\r\n";
+    const { impl, calls } = fetchSequence([response(200, noEvent)]);
+    await expect(
+      updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl })
+    ).rejects.toMatchObject({ code: "request_failed" });
+    expect(calls).toHaveLength(1); // GET only — no PUT went out
+  });
+
   it("rejects a path-unsafe UID before any request", async () => {
     const { impl } = fetchSequence([response(200)]);
     await expect(

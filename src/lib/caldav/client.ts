@@ -550,23 +550,35 @@ export async function updateCaldavEventTime(
     );
   }
 
-  // Property lines are matched with optional parameters (DTSTART;TZID=…:).
-  // Our own bookings write unfolded single-line values, and DTSTART/DTEND/
-  // DTSTAMP/SEQUENCE values are never long enough to fold in practice.
+  // Rewrite ONLY inside the VEVENT block: servers routinely prepend a
+  // VTIMEZONE component whose STANDARD/DAYLIGHT sub-components carry their
+  // own DTSTART lines — a whole-body replace would retime the TIMEZONE
+  // definition and leave the event untouched while still reporting success
+  // (Bugbot High on PR #590). Property lines are matched with optional
+  // parameters (DTSTART;TZID=…:); our own bookings write unfolded
+  // single-line values, and these values are never long enough to fold.
+  const eventBlockRe = /BEGIN:VEVENT[\s\S]*?END:VEVENT/;
+  const eventBlock = got.body.match(eventBlockRe)?.[0];
+  if (!eventBlock) {
+    throw new CaldavApiError("request_failed", "CalDAV event body has no VEVENT component");
+  }
   const stamp = icalUtcStamp(new Date());
-  let ical = got.body
+  let vevent = eventBlock
     .replace(/^DTSTART(?:;[^:\r\n]*)?:.*$/m, `DTSTART:${icalUtcStamp(new Date(startIso))}`)
     .replace(/^DTEND(?:;[^:\r\n]*)?:.*$/m, `DTEND:${icalUtcStamp(new Date(endIso))}`)
     .replace(/^DTSTAMP(?:;[^:\r\n]*)?:.*$/m, `DTSTAMP:${stamp}`);
-  if (!/^DTSTART:/m.test(ical) || !/^DTEND:/m.test(ical)) {
-    // A resource without both times (e.g. all-day VALUE=DATE that our
-    // replace missed, or a stray non-event) must not be blind-PUT.
+  if (!/^DTSTART:/m.test(vevent) || !/^DTEND:/m.test(vevent)) {
+    // An event without both times (e.g. DURATION instead of DTEND) must not
+    // be blind-PUT half-retimed.
     throw new CaldavApiError("request_failed", "CalDAV event body has no usable DTSTART/DTEND");
   }
-  const seq = ical.match(/^SEQUENCE(?:;[^:\r\n]*)?:(\d+)\s*$/m);
-  ical = seq
-    ? ical.replace(/^SEQUENCE(?:;[^:\r\n]*)?:\d+\s*$/m, `SEQUENCE:${Number(seq[1]) + 1}`)
-    : ical.replace(/^(UID(?:;[^:\r\n]*)?:.*)$/m, `$1\r\nSEQUENCE:1`);
+  const seq = vevent.match(/^SEQUENCE(?:;[^:\r\n]*)?:(\d+)\s*$/m);
+  vevent = seq
+    ? vevent.replace(/^SEQUENCE(?:;[^:\r\n]*)?:\d+\s*$/m, `SEQUENCE:${Number(seq[1]) + 1}`)
+    : vevent.replace(/^(UID(?:;[^:\r\n]*)?:.*)$/m, `$1\r\nSEQUENCE:1`);
+  // Replacer function: a literal `$` in event text must never trigger
+  // replacement-pattern expansion.
+  const ical = got.body.replace(eventBlockRe, () => vevent);
 
   const put = await caldavRequest(
     creds,
