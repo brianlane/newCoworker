@@ -122,6 +122,44 @@ function jobInboundText(payload: Record<string, unknown> | null): string {
   return inner ? inboundSmsBody(inner) : "";
 }
 
+/** Cap on numbers queried per contact (primary + merged-away aliases). */
+export const TIMELINE_MAX_NUMBERS = 6;
+
+/**
+ * Every number this contact's history may live under: the queried number
+ * plus the profile's surviving primary and merged-away aliases
+ * (merge_customer_memories moves the PROFILE, not the per-number message
+ * logs — so a merged contact's SMS/call rows stay keyed on the old
+ * number). Best-effort: on any failure the queried number alone is used.
+ */
+async function resolveContactNumbers(
+  supabase: AnyClient,
+  businessId: string,
+  contactE164: string
+): Promise<string[]> {
+  const numbers = [contactE164];
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("customer_e164, alias_e164s")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
+      .maybeSingle();
+    if (error) {
+      console.error("contact_context: contact resolve", error);
+      return numbers;
+    }
+    const row = data as { customer_e164?: string | null; alias_e164s?: string[] | null } | null;
+    if (row?.customer_e164) numbers.push(row.customer_e164);
+    for (const alias of row?.alias_e164s ?? []) {
+      if (typeof alias === "string" && alias) numbers.push(alias);
+    }
+  } catch (e) {
+    console.error("contact_context: contact resolve", e);
+  }
+  return [...new Set(numbers)].slice(0, TIMELINE_MAX_NUMBERS);
+}
+
 /**
  * Load + format the merged timeline for one contact. Best-effort: any
  * failure returns null and the caller proceeds without it. Per-source
@@ -142,6 +180,11 @@ export async function loadContactTimeline(
     const sinceIso = new Date(
       Date.now() - CONTACT_TIMELINE_LOOKBACK_HOURS * 3_600_000
     ).toISOString();
+    // Merged-alias awareness: a contact whose old number was merged into
+    // another profile keeps its message/call rows keyed on the OLD number,
+    // so the timeline must query every number the profile spans (Bugbot on
+    // PR #608 — the surfaced number alone missed the primary's history).
+    const numbers = await resolveContactNumbers(supabase, businessId, contactE164);
     const events: ContactTimelineEvent[] = [];
 
     // Inbound SMS — every stored job for this contact, including rows an
@@ -150,7 +193,7 @@ export async function loadContactTimeline(
       .from("sms_inbound_jobs")
       .select("created_at, payload")
       .eq("business_id", businessId)
-      .eq("customer_e164", contactE164)
+      .in("customer_e164", numbers)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(TIMELINE_MAX_EVENTS);
@@ -176,7 +219,7 @@ export async function loadContactTimeline(
       .from("sms_outbound_log")
       .select("created_at, body")
       .eq("business_id", businessId)
-      .eq("to_e164", contactE164)
+      .in("to_e164", numbers)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(TIMELINE_MAX_EVENTS);
@@ -199,7 +242,7 @@ export async function loadContactTimeline(
       .from("voice_call_transcripts")
       .select("started_at, created_at, direction, summary, status")
       .eq("business_id", businessId)
-      .eq("caller_e164", contactE164)
+      .in("caller_e164", numbers)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(3);

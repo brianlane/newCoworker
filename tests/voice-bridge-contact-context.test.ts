@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   CONTACT_TIMELINE_LOOKBACK_HOURS as SHARED_LOOKBACK,
   TIMELINE_MAX_EVENTS as SHARED_MAX_EVENTS,
@@ -100,12 +100,16 @@ describe("loader parity (same wire shape against the same fake client)", () => {
     const next = () => results[idx++] ?? { data: null, error: null };
     const from = (table: string) => {
       const builder: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "neq", "gte", "order", "limit"]) {
+      for (const m of ["select", "eq", "neq", "in", "or", "gte", "order", "limit"]) {
         builder[m] = (...args: unknown[]) => {
           calls.push({ table, name: m, args });
           return builder;
         };
       }
+      builder["maybeSingle"] = () => {
+        calls.push({ table, name: "maybeSingle", args: [] });
+        return Promise.resolve(next());
+      };
       builder["then"] = (resolve: (v: unknown) => unknown) =>
         Promise.resolve(next()).then(resolve);
       return builder;
@@ -117,6 +121,8 @@ describe("loader parity (same wire shape against the same fake client)", () => {
   }
 
   const RESULTS: Scripted[] = [
+    // contacts resolve: a merged profile so alias expansion is in the wire.
+    { data: { customer_e164: "+15550009999", alias_e164s: [LEAD] } },
     {
       data: [
         { created_at: "2026-07-14T17:10:22Z", payload: { data: { payload: { text: "July 23, 2026" } } } }
@@ -162,11 +168,37 @@ describe("loader parity (same wire shape against the same fake client)", () => {
   });
 
   it("both return null for an empty window and on a blown-up client", async () => {
-    const empty1 = makeDb([{ data: [] }, { data: [] }, { data: [] }]);
-    const empty2 = makeDb([{ data: [] }, { data: [] }, { data: [] }]);
+    const empty1 = makeDb([{ data: null }, { data: [] }, { data: [] }, { data: [] }]);
+    const empty2 = makeDb([{ data: null }, { data: [] }, { data: [] }, { data: [] }]);
     expect(await loadContactTimeline(empty1.db, BIZ, LEAD)).toBeNull();
     expect(await loadVoiceContactTimeline(empty2.db, BIZ, LEAD)).toBeNull();
     expect(await loadContactTimeline(empty1.db, BIZ, "")).toBeNull();
     expect(await loadVoiceContactTimeline(empty2.db, BIZ, "")).toBeNull();
+  });
+
+  it("a contact-resolve blow-up degrades both loaders identically (queried number only)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const throwingResolve = () => {
+      let first = true;
+      return {
+        from: (table: string) => {
+          if (table === "contacts" && first) {
+            first = false;
+            throw new Error("resolve boom");
+          }
+          const builder: Record<string, unknown> = {};
+          for (const m of ["select", "eq", "neq", "in", "or", "gte", "order", "limit"]) {
+            builder[m] = () => builder;
+          }
+          builder["then"] = (resolve: (v: unknown) => unknown) =>
+            Promise.resolve({ data: [], error: null }).then(resolve);
+          return builder;
+        }
+      };
+    };
+    expect(await loadContactTimeline(throwingResolve(), BIZ, LEAD)).toBeNull();
+    expect(await loadVoiceContactTimeline(throwingResolve(), BIZ, LEAD)).toBeNull();
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 });

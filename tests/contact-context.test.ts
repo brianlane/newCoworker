@@ -92,12 +92,16 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "neq", "gte", "order", "limit"]) {
+    for (const m of ["select", "eq", "neq", "in", "or", "gte", "order", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
       };
     }
+    builder["maybeSingle"] = () => {
+      calls.push({ table, name: "maybeSingle", args: [] });
+      return Promise.resolve(next());
+    };
     builder["then"] = (resolve: (v: unknown) => unknown) => Promise.resolve(next()).then(resolve);
     return builder;
   };
@@ -106,6 +110,9 @@ function makeDb(results: Scripted[]) {
     calls
   };
 }
+
+/** The contact-resolve result for a plain (unmerged) contact. */
+const PLAIN_CONTACT: Scripted = { data: { customer_e164: LEAD, alias_e164s: [] } };
 
 /** A stored inbound job envelope the way telnyx-sms-inbound persists it. */
 function inboundJob(text: string, createdAt: string) {
@@ -121,6 +128,7 @@ describe("loadContactTimeline", () => {
 
   it("merges inbound (incl. flow-suppressed), outbound (all sources), and call summaries", async () => {
     const { db, calls } = makeDb([
+      PLAIN_CONTACT,
       // sms_inbound_jobs — newest-first, exactly like PostgREST returns.
       {
         data: [
@@ -168,18 +176,59 @@ describe("loadContactTimeline", () => {
 
     // Wire shape: per-contact + lookback filters on all three sources; the
     // outbound query must NOT filter on source (the contact experienced
-    // every send as one thread).
+    // every send as one thread). The contact-number filter is an IN over
+    // the profile's numbers (merged-alias awareness).
     expect(calls.filter((c) => c.name === "gte")).toHaveLength(3);
-    const outboundEqs = calls.filter((c) => c.table === "sms_outbound_log" && c.name === "eq");
-    expect(outboundEqs.map((c) => c.args[0])).toEqual(["business_id", "to_e164"]);
-    const voiceEqs = calls.filter(
-      (c) => c.table === "voice_call_transcripts" && c.name === "eq"
-    );
-    expect(voiceEqs.map((c) => c.args[0])).toEqual(["business_id", "caller_e164"]);
+    const ins = calls.filter((c) => c.name === "in");
+    expect(ins.map((c) => [c.table, c.args[0]])).toEqual([
+      ["sms_inbound_jobs", "customer_e164"],
+      ["sms_outbound_log", "to_e164"],
+      ["voice_call_transcripts", "caller_e164"]
+    ]);
+    for (const c of ins) expect(c.args[1]).toEqual([LEAD]);
+  });
+
+  it("a merged contact's timeline spans the queried alias, the primary, and other aliases", async () => {
+    const { db, calls } = makeDb([
+      {
+        data: {
+          customer_e164: "+15550009999",
+          alias_e164s: [LEAD, "+15550008888", "", 42 as unknown as string]
+        }
+      },
+      { data: [inboundJob("from the old number", "2026-07-14T17:09:21Z")] },
+      { data: [{ created_at: "2026-07-14T17:10:05Z", body: "to the new number" }] },
+      { data: [] }
+    ]);
+    const text = await loadContactTimeline(db, BIZ, LEAD);
+    expect(text).toContain("from the old number");
+    expect(text).toContain("to the new number");
+    const ins = calls.filter((c) => c.name === "in");
+    // Queried number first, then the surviving primary, then usable aliases
+    // (deduped; blank/non-string aliases dropped).
+    for (const c of ins) {
+      expect(c.args[1]).toEqual([LEAD, "+15550009999", "+15550008888"]);
+    }
+  });
+
+  it("a contact-resolve failure degrades to the queried number alone", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, calls } = makeDb([
+      { data: null, error: { message: "resolve boom" } },
+      { data: [inboundJob("still works", "2026-07-14T17:09:21Z")] },
+      { data: [] },
+      { data: [] }
+    ]);
+    const text = await loadContactTimeline(db, BIZ, LEAD);
+    expect(text).toContain("still works");
+    const ins = calls.filter((c) => c.name === "in");
+    for (const c of ins) expect(c.args[1]).toEqual([LEAD]);
+    err.mockRestore();
   });
 
   it("excludes the inbound job being processed (its text is the current user message)", async () => {
     const { db, calls } = makeDb([
+      PLAIN_CONTACT,
       { data: [inboundJob("earlier text", "2026-07-14T17:09:21Z")] },
       { data: [] },
       { data: [] }
@@ -192,6 +241,7 @@ describe("loadContactTimeline", () => {
   it("per-source failures degrade to that source missing, never the whole block", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const { db } = makeDb([
+      PLAIN_CONTACT,
       { data: null, error: { message: "inbound boom" } },
       { data: [{ created_at: "2026-07-14T17:09:03Z", body: "Hi Alex!" }] },
       { data: null, error: { message: "voice boom" } }
@@ -202,6 +252,7 @@ describe("loadContactTimeline", () => {
 
     // Outbound is the failing source this time; the other two still land.
     const { db: db2 } = makeDb([
+      PLAIN_CONTACT,
       { data: [inboundJob("still here", "2026-07-14T17:09:21Z")] },
       { data: null, error: { message: "outbound boom" } },
       { data: [] }
@@ -214,6 +265,7 @@ describe("loadContactTimeline", () => {
 
   it("empty results across every source → null; unusable rows are dropped", async () => {
     const { db } = makeDb([
+      PLAIN_CONTACT,
       // Unusable inbound: no payload text; and a row with no timestamp.
       {
         data: [
@@ -226,13 +278,20 @@ describe("loadContactTimeline", () => {
     ]);
     expect(await loadContactTimeline(db, BIZ, LEAD)).toBeNull();
 
-    // Null data arms on all three sources (PostgREST can return data:null).
-    const { db: db2 } = makeDb([{ data: null }, { data: null }, { data: null }]);
+    // Null data arms everywhere: no contact row (a first-ever inbound has
+    // none yet) and PostgREST data:null on all three sources.
+    const { db: db2 } = makeDb([
+      { data: null },
+      { data: null },
+      { data: null },
+      { data: null }
+    ]);
     expect(await loadContactTimeline(db2, BIZ, LEAD)).toBeNull();
   });
 
   it("a call with neither started_at nor created_at is dropped; blank summaries fall to the placeholder", async () => {
     const { db } = makeDb([
+      PLAIN_CONTACT,
       { data: [] },
       { data: [] },
       {

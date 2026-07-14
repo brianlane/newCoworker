@@ -73,14 +73,9 @@ export async function lookupCustomerByPhone(
   let recentInteractions: string | null = null;
   try {
     const db = await createSupabaseServiceClient();
-    // The surviving profile number may differ from the queried alias —
-    // the timeline tables key on the number messages actually flowed over,
-    // so query with the caller's phone AND fall back to the primary.
-    recentInteractions =
-      (await loadContactTimeline(db, businessId, phone)) ??
-      (phone === memory.customer_e164
-        ? null
-        : await loadContactTimeline(db, businessId, memory.customer_e164));
+    // The loader is alias-aware: it resolves the profile's primary +
+    // merged-away numbers itself, so one call covers a merged contact.
+    recentInteractions = await loadContactTimeline(db, businessId, phone);
   } catch (e) {
     console.error("lookupCustomerByPhone: timeline load failed", e);
   }

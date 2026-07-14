@@ -88,34 +88,17 @@ describe("lookupCustomerByPhone", () => {
     const result = await lookupCustomerByPhone(BIZ, PHONE);
     const customer = (result.data as { customer: Record<string, unknown> }).customer;
     expect(customer.recentInteractions).toContain("July 23, 2026");
+    // One call with the queried number — the loader itself is alias-aware
+    // (it resolves the profile's primary + merged numbers).
+    expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledWith(
       { mocked: "client" },
       BIZ,
       PHONE
     );
-    // Queried number IS the primary — no alias fallback lookup.
-    expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledTimes(1);
   });
 
-  it("falls back to the surviving primary number when the queried alias has no timeline", async () => {
-    vi.mocked(getCustomerMemory).mockResolvedValueOnce(
-      memory({ customer_e164: "+15550009999", alias_e164s: [PHONE] })
-    );
-    vi.mocked(loadContactTimeline)
-      .mockResolvedValueOnce(null) // queried (alias) number: nothing
-      .mockResolvedValueOnce("- [Contact (SMS)] via the primary number");
-    const result = await lookupCustomerByPhone(BIZ, PHONE);
-    const customer = (result.data as { customer: Record<string, unknown> }).customer;
-    expect(customer.recentInteractions).toContain("via the primary number");
-    expect(vi.mocked(loadContactTimeline)).toHaveBeenNthCalledWith(
-      2,
-      { mocked: "client" },
-      BIZ,
-      "+15550009999"
-    );
-  });
-
-  it("omits recentInteractions when there is no timeline (primary number, nothing recent)", async () => {
+  it("omits recentInteractions when there is no timeline (nothing recent)", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValueOnce(memory());
     vi.mocked(loadContactTimeline).mockResolvedValueOnce(null);
     const result = await lookupCustomerByPhone(BIZ, PHONE);

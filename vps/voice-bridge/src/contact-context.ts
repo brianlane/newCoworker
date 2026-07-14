@@ -120,6 +120,43 @@ export function voiceJobInboundText(payload: Record<string, unknown> | null): st
   return "";
 }
 
+/** Cap on numbers queried per caller (primary + merged-away aliases). */
+export const TIMELINE_MAX_NUMBERS = 6;
+
+/**
+ * Every number this caller's history may live under (queried number +
+ * surviving primary + merged-away aliases) — mirror of the shared module's
+ * resolveContactNumbers; message/call rows stay keyed on the number they
+ * flowed over, so a merged caller needs all of them. Best-effort.
+ */
+async function resolveContactNumbers(
+  supabase: AnyClient,
+  businessId: string,
+  contactE164: string
+): Promise<string[]> {
+  const numbers = [contactE164];
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("customer_e164, alias_e164s")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
+      .maybeSingle();
+    if (error) {
+      console.error("contact-context: contact resolve", error);
+      return numbers;
+    }
+    const row = data as { customer_e164?: string | null; alias_e164s?: string[] | null } | null;
+    if (row?.customer_e164) numbers.push(row.customer_e164);
+    for (const alias of row?.alias_e164s ?? []) {
+      if (typeof alias === "string" && alias) numbers.push(alias);
+    }
+  } catch (e) {
+    console.error("contact-context: contact resolve", e);
+  }
+  return [...new Set(numbers)].slice(0, TIMELINE_MAX_NUMBERS);
+}
+
 /**
  * Load + format the merged timeline for one caller. Best-effort: any
  * failure returns null and the call proceeds without it; per-source
@@ -135,13 +172,14 @@ export async function loadVoiceContactTimeline(
     const sinceIso = new Date(
       Date.now() - CONTACT_TIMELINE_LOOKBACK_HOURS * 3_600_000
     ).toISOString();
+    const numbers = await resolveContactNumbers(supabase, businessId, contactE164);
     const events: ContactTimelineEvent[] = [];
 
     const inbound = await supabase
       .from("sms_inbound_jobs")
       .select("created_at, payload")
       .eq("business_id", businessId)
-      .eq("customer_e164", contactE164)
+      .in("customer_e164", numbers)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(TIMELINE_MAX_EVENTS);
@@ -161,7 +199,7 @@ export async function loadVoiceContactTimeline(
       .from("sms_outbound_log")
       .select("created_at, body")
       .eq("business_id", businessId)
-      .eq("to_e164", contactE164)
+      .in("to_e164", numbers)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(TIMELINE_MAX_EVENTS);
@@ -181,7 +219,7 @@ export async function loadVoiceContactTimeline(
       .from("voice_call_transcripts")
       .select("started_at, created_at, direction, summary, status")
       .eq("business_id", businessId)
-      .eq("caller_e164", contactE164)
+      .in("caller_e164", numbers)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(3);
