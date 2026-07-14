@@ -8,7 +8,9 @@ const schema = z.object({
   name: z.string().min(1),
   ownerEmail: z.string().email(),
   tier: z.enum(["starter", "standard", "enterprise"]),
-  businessType: z.string().optional(),
+  // Known slug or free-text custom industry (the modal's "Other" flow);
+  // capped to match /api/business/create and /api/account/business-profile.
+  businessType: z.string().trim().max(120).optional(),
   ownerName: z.string().optional(),
   phone: z.string().optional(),
   /**
