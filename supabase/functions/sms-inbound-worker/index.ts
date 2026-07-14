@@ -43,6 +43,7 @@ import {
   formatFlowAnswerNote,
   loadFlowRunContextDetailed
 } from "../_shared/ai_flows/run_context.ts";
+import { loadContactTimeline } from "../_shared/contact_context.ts";
 import { loadRecentSmsTranscript } from "../_shared/sms_transcript.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
 import {
@@ -932,10 +933,25 @@ serve(async (req: Request) => {
       // replays the real history there.
       const lastFlowMessage =
         flowDetail.recentMessages[flowDetail.recentMessages.length - 1] ?? "";
-      flowAnswerNote =
-        !thread?.rowboat_conversation_id?.trim() && lastFlowMessage
-          ? formatFlowAnswerNote(lastFlowMessage)
-          : null;
+      const freshThread = !thread?.rowboat_conversation_id?.trim();
+      flowAnswerNote = freshThread && lastFlowMessage
+        ? formatFlowAnswerNote(lastFlowMessage)
+        : null;
+      // Cross-channel timeline, FRESH THREADS ONLY: a conversation Rowboat
+      // hasn't rooted yet starts with zero history — and mid-conversation
+      // the rolling summary (contacts.summary_md) is typically still empty
+      // (the summarize sweep runs later), which is exactly the window the
+      // 2026-07-14 Truly turn fell into. The merged timeline (SMS both
+      // directions INCLUDING flow-suppressed inbounds + recent call
+      // summaries) covers it raw. Continued threads skip it: Rowboat holds
+      // its own SMS history there, and re-sending it every turn would bloat
+      // the prompt and contradict the server-side thread; cross-channel
+      // recency stays reachable there through customer_lookup_by_phone.
+      const contactTimeline = freshThread
+        ? await loadContactTimeline(supabase, job.business_id, fromE164, {
+            excludeInboundJobId: job.id
+          })
+        : null;
       // The texter's E.164 is ALWAYS stated, even on first contact with no
       // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
       // caller context, so the customer tools require an explicit `phone`
@@ -947,7 +963,7 @@ serve(async (req: Request) => {
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
       const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${conversationQualityLine}\n\n${dateLine}\n\n${phoneLine}`;
-      customerPreamble = [dateAndPhoneLines, memoryPreamble, flowContext]
+      customerPreamble = [dateAndPhoneLines, memoryPreamble, contactTimeline, flowContext]
         .filter((part): part is string => Boolean(part))
         .join("\n\n");
       // Decision-engine capture (PRD Ch. 6): ask the model to end its reply

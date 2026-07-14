@@ -286,10 +286,11 @@ describe("api/checkout route", () => {
         canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
       })
     );
-    // The fresher phone is written back to the row so PROVISIONING (which
+    // The fresher phone is written back to the row — COERCED to E.164, the
+    // only shape /api/business/create persists now — so PROVISIONING (which
     // classifies from the row) buys the number in the same country the fee
     // was billed for.
-    expect(updateBusinessPhone).toHaveBeenCalledWith(businessId, "4164560696");
+    expect(updateBusinessPhone).toHaveBeenCalledWith(businessId, "+14164560696");
   });
 
   it("classifies from the stored row when the phone write-back fails (billing matches provisioning)", async () => {
@@ -329,13 +330,13 @@ describe("api/checkout route", () => {
     expect(call && "canadaFee" in call).toBe(false);
   });
 
-  it("uses the draft phone without a write when it matches the stored row", async () => {
+  it("uses the draft phone without a write when it matches the stored row (coercion-aware: raw draft vs E.164 row)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifySignupIdentity).mockResolvedValue(true);
     vi.mocked(getBusiness).mockResolvedValue({
       id: businessId,
       owner_email: `pending+${businessId}@onboarding.local`,
-      phone: "4164560696",
+      phone: "+14164560696",
       timezone: "America/Toronto"
     } as never);
     vi.mocked(getOnboardingDraft).mockResolvedValue({
@@ -360,6 +361,47 @@ describe("api/checkout route", () => {
     const response = await POST(request);
     expect(response.status).toBe(200);
     expect(updateBusinessPhone).not.toHaveBeenCalled();
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }
+      })
+    );
+  });
+
+  it("never writes an uncoercible legacy-draft phone to the row (classification falls to the timezone signal)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "+16025551234",
+      timezone: "America/Toronto"
+    } as never);
+    // Pre-validation draft carrying a 7-digit fragment (the KYP Ads shape).
+    vi.mocked(getOnboardingDraft).mockResolvedValue({
+      business_id: businessId,
+      draft_token: "33333333-3333-4333-8333-333333333333",
+      payload: { phone: "5188192" }
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId,
+        draftToken: "33333333-3333-4333-8333-333333333333"
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(updateBusinessPhone).not.toHaveBeenCalled();
+    // The junk phone yields no NPA, so detection falls through to the
+    // Canadian timezone → fee still applies.
     expect(createCheckoutSession).toHaveBeenCalledWith(
       expect.objectContaining({
         canadaFee: { monthlyCents: 499, billingPeriod: "monthly" }

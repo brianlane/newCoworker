@@ -44,16 +44,16 @@ import type { TaskCardData } from "@/app/api/dashboard/tasks/route";
 
 type Scope = "mine" | "all";
 
-/** Column accents per palette color (dot + column top border). */
-const COLOR_CLASSES: Record<StageColor, { dot: string; border: string }> = {
-  teal: { dot: "bg-teal-400", border: "border-t-teal-400/60" },
-  green: { dot: "bg-green-400", border: "border-t-green-400/60" },
-  orange: { dot: "bg-orange-400", border: "border-t-orange-400/60" },
-  rose: { dot: "bg-rose-400", border: "border-t-rose-400/60" },
-  violet: { dot: "bg-violet-400", border: "border-t-violet-400/60" },
-  sky: { dot: "bg-sky-400", border: "border-t-sky-400/60" },
-  amber: { dot: "bg-amber-400", border: "border-t-amber-400/60" },
-  slate: { dot: "bg-slate-400", border: "border-t-slate-400/60" }
+/** Column accents per palette color (dot + top border + background fill). */
+const COLOR_CLASSES: Record<StageColor, { dot: string; border: string; bg: string }> = {
+  teal: { dot: "bg-teal-400", border: "border-t-teal-400/60", bg: "bg-teal-400/10" },
+  green: { dot: "bg-green-400", border: "border-t-green-400/60", bg: "bg-green-400/10" },
+  orange: { dot: "bg-orange-400", border: "border-t-orange-400/60", bg: "bg-orange-400/10" },
+  rose: { dot: "bg-rose-400", border: "border-t-rose-400/60", bg: "bg-rose-400/10" },
+  violet: { dot: "bg-violet-400", border: "border-t-violet-400/60", bg: "bg-violet-400/10" },
+  sky: { dot: "bg-sky-400", border: "border-t-sky-400/60", bg: "bg-sky-400/10" },
+  amber: { dot: "bg-amber-400", border: "border-t-amber-400/60", bg: "bg-amber-400/10" },
+  slate: { dot: "bg-slate-400", border: "border-t-slate-400/60", bg: "bg-slate-400/10" }
 };
 
 const RUN_STATUS_LABEL: Record<string, string> = {
@@ -367,9 +367,11 @@ export function PipelineBoard({
         />
       )}
 
-      {/* The board */}
+      {/* The board. The scroll strip carries the sidebar's panel treatment
+          (same bg/border as the Sign out button) so the columns read as one
+          surface instead of floating on the page background. */}
       {pipeline && (
-        <div className="flex items-start gap-3 overflow-x-auto pb-2">
+        <div className="flex items-start gap-3 overflow-x-auto rounded-lg border border-parchment/10 bg-parchment/5 p-3">
           {pipeline.stages.map((stage) => {
             const cards = columns.get(stage.id) ?? [];
             const colors = COLOR_CLASSES[stage.color];
@@ -388,9 +390,11 @@ export function PipelineBoard({
                   const e164 = e.dataTransfer.getData("text/plain");
                   if (e164) void moveCard(e164, stage.id);
                 }}
-                className={`rounded-lg border border-t-2 bg-deep-ink/30 transition-colors ${colors.border} ${
+                // The stage color fills the whole column; the drop cue is a
+                // ring so it never fights the color fill.
+                className={`rounded-lg border border-t-2 transition-colors ${colors.border} ${colors.bg} ${
                   dragOverStage === stage.id
-                    ? "border-signal-teal/60 bg-signal-teal/5"
+                    ? "border-signal-teal/60 ring-1 ring-signal-teal/40"
                     : "border-parchment/10"
                 } ${isCollapsed ? "w-12 shrink-0" : "w-72 shrink-0"}`}
               >

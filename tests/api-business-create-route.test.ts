@@ -81,6 +81,53 @@ describe("/api/business/create — anonymous Stripe-first flow", () => {
     );
   });
 
+  it("coerces a free-form owner phone to E.164 before persisting (KYP Ads: junk phone silently degraded DID search + forward default)", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "(602) 695-1142" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: "+16026951142" })
+    );
+  });
+
+  it("rejects an uncoercible phone with an actionable 400 instead of storing it", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "5188192" })));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toContain("area code");
+    expect(createBusiness).not.toHaveBeenCalled();
+  });
+
+  it("idempotent retry with a legacy junk phone still succeeds (validation runs only on the INSERT path, which persists it)", async () => {
+    // Bugbot Medium on this PR: a pre-validation signup retry can still carry
+    // the junk phone in its payload. The existing-row branch never persists
+    // the phone, so rejecting there would strand the retry without a fresh
+    // onboardingToken.
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Acme Realty",
+      owner_email: PENDING_EMAIL,
+      tier: "starter",
+      status: "offline",
+      hostinger_vps_id: null,
+      created_at: new Date().toISOString()
+    } as never);
+
+    const res = await POST(jsonRequest(baseBody({ phone: "5188192" })));
+    const body = await res.json();
+    expect(res.status).toBe(200);
+    expect(body.data).toEqual({ businessId: BIZ, onboardingToken: ONBOARDING_TOKEN });
+    expect(createBusiness).not.toHaveBeenCalled();
+  });
+
+  it("blank/absent phone stays optional — no phone persisted, no rejection", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "   " })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: undefined })
+    );
+  });
+
   it("is idempotent when the same anonymous caller retries with a businessId already pending", async () => {
     // Simulates the failure-then-retry path: a previous request inserted
     // the row with the pending sentinel email, but the client never got

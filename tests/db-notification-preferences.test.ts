@@ -66,15 +66,40 @@ describe("db/notification-preferences", () => {
     );
   });
 
-  it("initialNotificationPreferenceContactsFromSeeds fills from user and auth phone", () => {
+  it("initialNotificationPreferenceContactsFromSeeds fills from user email and E.164-coerces phones", () => {
     const c = initialNotificationPreferenceContactsFromSeeds({
       userEmail: "u@example.com",
+      // Too short to be a real number — coercion drops it and the seed
+      // falls through to the (coercible) business phone.
       authPhone: "+1999",
       ownerEmail: "owner@biz.com",
       businessPhone: "5551112222"
     });
     expect(c.alert_email).toBe("u@example.com");
-    expect(c.phone_number).toBe("+1999");
+    expect(c.phone_number).toBe("+15551112222");
+  });
+
+  it("initialNotificationPreferenceContactsFromSeeds prefers a coercible auth phone", () => {
+    const c = initialNotificationPreferenceContactsFromSeeds({
+      userEmail: null,
+      authPhone: "+19995550123",
+      ownerEmail: null,
+      businessPhone: "5551112222"
+    });
+    expect(c.phone_number).toBe("+19995550123");
+  });
+
+  it("initialNotificationPreferenceContactsFromSeeds drops uncoercible phone seeds (KYP 7-digit regression)", () => {
+    // businesses.phone arrived as the 7-digit "5188192" (Jul 14 2026) —
+    // seeding it verbatim pre-filled an alert phone Telnyx could never
+    // deliver to. An uncoercible seed must leave the field empty instead.
+    const c = initialNotificationPreferenceContactsFromSeeds({
+      userEmail: null,
+      authPhone: null,
+      ownerEmail: null,
+      businessPhone: "5188192"
+    });
+    expect(c.phone_number).toBeNull();
   });
 
   it("initialNotificationPreferenceContactsFromSeeds skips blank and trims sources", () => {
@@ -105,7 +130,7 @@ describe("db/notification-preferences", () => {
       businessPhone: "5550001111"
     });
     expect(c.alert_email).toBe("u@prio.com");
-    expect(c.phone_number).toBe("5550001111");
+    expect(c.phone_number).toBe("+15550001111");
   });
 
   it("initialNotificationPreferenceContactsFromSeeds treats blank strings like null", () => {
@@ -123,9 +148,11 @@ describe("db/notification-preferences", () => {
         userEmail: "",
         authPhone: " ",
         ownerEmail: "",
+        // Not a phone number at all — coercion drops it rather than
+        // persisting a value Telnyx would reject at send time.
         businessPhone: "final-phone "
       })
-    ).toEqual({ alert_email: null, phone_number: "final-phone" });
+    ).toEqual({ alert_email: null, phone_number: null });
   });
   it("mergeNotificationContactsForDisplay fills null stored fields from account seeds", () => {
     const merged = mergeNotificationContactsForDisplay(
