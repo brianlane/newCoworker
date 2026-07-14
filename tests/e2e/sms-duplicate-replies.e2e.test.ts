@@ -11,6 +11,7 @@ import {
 import { formatFlowRunContext } from "../../supabase/functions/_shared/ai_flows/run_context";
 import { formatSmsTranscript } from "../../supabase/functions/_shared/sms_transcript";
 import { geminiChatReply } from "./gemini";
+import { judgeReply, type JudgeVerdict } from "./judge";
 
 /**
  * The Juhu replay (Truly Insurance, 2026-07-13): during a Gemini outage the
@@ -67,12 +68,24 @@ const BASE_LINES = [
   "For this conversation your tools are unavailable."
 ];
 
-/** "What prompted you…" in any phrasing close enough to be a repeat. */
-const PROMPTED_QUESTION = /what (prompted|made|led) you/i;
+/**
+ * Semantic intake contracts, judged by the shared judge (judge.ts) instead
+ * of phrasing regexes: /what (prompted|made|led) you/ passed paraphrases
+ * like "may I ask the reason you're shopping?" — the class of re-asked
+ * questions is unbounded, so a model judges it. Calibrated in
+ * judge-calibration.e2e.test.ts.
+ */
+const INTAKE_QUESTIONS = {
+  asks_shopping_reason:
+    "Does the message ask AGAIN, in any phrasing, the general opener 'what prompted/made you shop around or reach out today?' — i.e. re-asking their MOTIVE for getting in touch, which they effectively answered by stating what they need? Asking a DEEPER or MORE SPECIFIC follow-up (what kind of policy, new policy vs renewal, coverage details, timing) is false — that is progress, not a re-ask.",
+  asks_known_identity:
+    "Does the message ask the customer to provide or confirm their own name, phone number, or email (in any phrasing)?"
+};
 
 describe("no re-sent automation messages (Juhu replay, real flow-context block)", () => {
   const SYSTEM = [...BASE_LINES, FLOW_CONTEXT].join("\n\n") + REASONING_PROMPT_INSTRUCTION;
   let reply = "";
+  let verdict: JudgeVerdict;
 
   beforeAll(async () => {
     // The exact turn that produced the verbatim duplicate in production:
@@ -82,6 +95,11 @@ describe("no re-sent automation messages (Juhu replay, real flow-context block)"
       { role: "user", text: "[SMS] I'm looking for auto" }
     ]);
     reply = splitReplyReasoning(raw).reply;
+    verdict = await judgeReply(
+      "the customer already told an automated intake they need auto insurance, and the automation already collected their name, phone, and email",
+      reply,
+      INTAKE_QUESTIONS
+    );
   }, 120_000);
 
   it("answers substantively", () => {
@@ -89,6 +107,8 @@ describe("no re-sent automation messages (Juhu replay, real flow-context block)"
   });
 
   it("never repeats an already-sent automated message verbatim (the production duplicate)", () => {
+    // Verbatim/prefix equality is exact by nature — deliberately NOT
+    // delegated to the judge (see judge.ts header).
     for (const sent of FLOW_MESSAGES) {
       expect(reply.trim()).not.toBe(sent);
       // Prefix match catches near-verbatim resends with a trailing tweak.
@@ -97,15 +117,11 @@ describe("no re-sent automation messages (Juhu replay, real flow-context block)"
   });
 
   it("never re-asks the flow's opener — it was asked AND answered", () => {
-    // vars.reply_text carries the lead's answer ("I need auto insurance"),
-    // and the context block marks the question as already delivered.
-    expect(reply).not.toMatch(PROMPTED_QUESTION);
+    expect(verdict.answers.asks_shopping_reason).toBe(false);
   });
 
   it("never re-asks for identity the automation already collected", () => {
-    // lead_name / lead_phone / lead_email are KNOWN vars in the block.
-    expect(reply).not.toMatch(/what('| i)s your (name|phone|number|email)/i);
-    expect(reply).not.toMatch(/(can|could) (i|you) (get|have|confirm) your (name|phone|number|email)/i);
+    expect(verdict.answers.asks_known_identity).toBe(false);
   });
 });
 
@@ -125,6 +141,7 @@ describe("stateless reset continues the thread (transcript block, real formatter
   ])!;
   const SYSTEM = [...BASE_LINES, FLOW_CONTEXT, TRANSCRIPT].join("\n\n") + REASONING_PROMPT_INSTRUCTION;
   let reply = "";
+  let verdict: JudgeVerdict;
 
   beforeAll(async () => {
     // Production failure shape: the stateless retry saw ONLY this line and
@@ -133,6 +150,24 @@ describe("stateless reset continues the thread (transcript block, real formatter
       { role: "user", text: "[SMS] Please book July 13 4pm" }
     ]);
     reply = splitReplyReasoning(raw).reply;
+    verdict = await judgeReply(
+      "mid-conversation: the customer already went through intake (including answering when their policy renews) and just picked one of the offered appointment slots",
+      reply,
+      {
+        ...INTAKE_QUESTIONS,
+        // In THIS scenario the renewal question was already asked and
+        // answered during intake, so re-asking it here is a restart — the
+        // incident's exact repeat. (In the first-contact scenario above it
+        // is legitimate progress, hence a scenario-specific question rather
+        // than a change to the shared INTAKE_QUESTIONS calibration.)
+        asks_policy_renewal:
+          "Does the message ask when the customer's current policy renews or expires (in any phrasing)?",
+        restarts_conversation:
+          "Does the message greet or introduce the sender as if the conversation were just starting (a fresh 'thanks for reaching out' opener, introducing themselves by name), rather than continuing mid-thread?",
+        engages_booking:
+          "Does the message engage with the customer's appointment/booking request (confirming, working on, or discussing the requested time)?"
+      }
+    );
   }, 120_000);
 
   it("answers substantively", () => {
@@ -140,18 +175,16 @@ describe("stateless reset continues the thread (transcript block, real formatter
   });
 
   it("does not restart intake after the reset (the incident's third 'what prompted you')", () => {
-    expect(reply).not.toMatch(PROMPTED_QUESTION);
-    expect(reply).not.toMatch(/when does your (current )?policy renew/i);
+    expect(verdict.answers.asks_shopping_reason).toBe(false);
+    expect(verdict.answers.asks_known_identity).toBe(false);
+    expect(verdict.answers.asks_policy_renewal).toBe(false);
   });
 
   it("does not re-introduce itself — the conversation is mid-thread", () => {
-    expect(reply).not.toMatch(/thanks for (reaching out|contacting|requesting)/i);
-    expect(reply).not.toMatch(/\bI('| a)m Emma\b/i);
+    expect(verdict.answers.restarts_conversation).toBe(false);
   });
 
   it("stays on the booking thread it can see in the transcript", () => {
-    // The customer picked one of the offered slots; the reply must engage
-    // with the booking (time/booking words), not pivot to fresh intake.
-    expect(reply).toMatch(/4:00|4 ?pm|book|appointment|call/i);
+    expect(verdict.answers.engages_booking).toBe(true);
   });
 });
