@@ -24,6 +24,7 @@ import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
 import { NudgeOwnerButton } from "@/components/admin/NudgeOwnerButton";
 import { StripeDiagnosticsPanel } from "@/components/admin/StripeDiagnosticsPanel";
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
+import { DeployButton } from "@/components/dashboard/DeployButton";
 import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
@@ -146,6 +147,9 @@ export default async function BusinessDetailPage({
           </Badge>
         </div>
         <div className="flex flex-wrap items-start justify-end gap-2">
+          {/* Deploy moved off the All Clients table — offline boxes are
+              (re)provisioned from here now. */}
+          {business.status === "offline" && <DeployButton businessId={businessId} />}
           <ViewAsButton businessId={businessId} />
           <DeleteClientButton businessId={businessId} businessName={business.name} />
           {subscription && subscription.status === "active" && (
