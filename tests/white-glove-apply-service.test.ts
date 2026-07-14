@@ -35,14 +35,9 @@ vi.mock("@/lib/white-glove/intake", async (importOriginal) => {
     ...actual,
     claimWhiteGloveIntakeForBusiness: vi.fn(),
     getWhiteGloveIntake: vi.fn(),
-    markWhiteGloveIntakeApplied: vi.fn(),
-    releaseWhiteGloveIntakeClaim: vi.fn()
+    markWhiteGloveIntakeApplied: vi.fn()
   };
 });
-
-vi.mock("@/lib/logger", () => ({
-  logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() }
-}));
 
 import {
   applyWhiteGloveIntake,
@@ -60,10 +55,8 @@ import { refreshBusinessProfileMdAndLog } from "@/lib/business-profile/refresh";
 import {
   claimWhiteGloveIntakeForBusiness,
   getWhiteGloveIntake,
-  markWhiteGloveIntakeApplied,
-  releaseWhiteGloveIntakeClaim
+  markWhiteGloveIntakeApplied
 } from "@/lib/white-glove/intake";
-import { logger } from "@/lib/logger";
 import type { WhiteGloveIntakeRow } from "@/lib/white-glove/intake";
 import type { IntakeAnswers } from "@/lib/white-glove/template";
 
@@ -352,48 +345,15 @@ describe("applyWhiteGloveIntake", () => {
     expect(claimWhiteGloveIntakeForBusiness).not.toHaveBeenCalled();
   });
 
-  it("releases a freshly taken claim when a write fails mid-apply", async () => {
-    // Intake was UNLINKED before this call; the vault write blows up after
-    // the claim → the claim is released so the intake isn't pinned forever.
+  it("keeps the claim when a write fails mid-apply (re-apply to the SAME tenant heals)", async () => {
+    // Data may already have landed on this tenant, so the claim must stay:
+    // releasing it would let a later apply re-point the intake at a
+    // different business while this one holds partial build data.
     vi.mocked(patchBusinessConfig).mockRejectedValue(new Error("db down"));
     await expect(
       applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
     ).rejects.toThrow("db down");
-    expect(releaseWhiteGloveIntakeClaim).toHaveBeenCalledWith(
-      INTAKE_ID,
-      BIZ_ID,
-      expect.anything()
-    );
-  });
-
-  it("keeps the link when a write fails on an ALREADY-linked intake", async () => {
-    vi.mocked(getWhiteGloveIntake).mockResolvedValue(intakeRow({ business_id: BIZ_ID }));
-    vi.mocked(patchBusinessConfig).mockRejectedValue(new Error("db down"));
-    await expect(
-      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
-    ).rejects.toThrow("db down");
-    expect(releaseWhiteGloveIntakeClaim).not.toHaveBeenCalled();
-  });
-
-  it("a failed claim release only warns — the original error still surfaces", async () => {
-    vi.mocked(patchBusinessConfig).mockRejectedValue(new Error("db down"));
-    vi.mocked(releaseWhiteGloveIntakeClaim).mockRejectedValue(new Error("release failed"));
-    await expect(
-      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
-    ).rejects.toThrow("db down");
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("claim release failed"),
-      expect.objectContaining({ intakeId: INTAKE_ID, error: "release failed" })
-    );
-
-    // Non-Error rejection values are stringified for the log.
-    vi.mocked(releaseWhiteGloveIntakeClaim).mockRejectedValue("weird failure");
-    await expect(
-      applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BIZ_ID })
-    ).rejects.toThrow("db down");
-    expect(logger.warn).toHaveBeenLastCalledWith(
-      expect.stringContaining("claim release failed"),
-      expect.objectContaining({ error: "weird failure" })
-    );
+    expect(claimWhiteGloveIntakeForBusiness).toHaveBeenCalled();
+    expect(markWhiteGloveIntakeApplied).not.toHaveBeenCalled();
   });
 });

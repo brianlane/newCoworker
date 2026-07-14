@@ -182,27 +182,6 @@ export async function claimWhiteGloveIntakeForBusiness(
 }
 
 /**
- * Release a claim taken by {@link claimWhiteGloveIntakeForBusiness} when the
- * apply aborted before writing anything to the tenant. Guarded on the SAME
- * business and `applied_at is null`, so it can never unlink an intake that
- * some apply actually completed (or one claimed by a different apply).
- */
-export async function releaseWhiteGloveIntakeClaim(
-  intakeId: string,
-  businessId: string,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
-    .from("white_glove_intakes")
-    .update({ business_id: null })
-    .eq("id", intakeId)
-    .eq("business_id", businessId)
-    .is("applied_at", null);
-  if (error) throw new Error(`releaseWhiteGloveIntakeClaim: ${error.message}`);
-}
-
-/**
  * Record a successful apply: link the tenant, stamp `applied_at`, and
  * remember the installed flow so the next apply updates it in place.
  * Guarded on status='completed' — only a completed intake can be applied.

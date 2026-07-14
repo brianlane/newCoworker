@@ -34,10 +34,8 @@ import { buildIntakeApplyPlan, replaceWhiteGloveBlock } from "@/lib/white-glove/
 import {
   claimWhiteGloveIntakeForBusiness,
   getWhiteGloveIntake,
-  markWhiteGloveIntakeApplied,
-  releaseWhiteGloveIntakeClaim
+  markWhiteGloveIntakeApplied
 } from "@/lib/white-glove/intake";
-import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -126,7 +124,13 @@ export async function applyWhiteGloveIntake(
   // The read-then-check above is only a fast path — two overlapping applies
   // targeting different tenants would both pass it; the conditional UPDATE
   // (unlinked-or-same-business) makes exactly one of them proceed.
-  const wasUnlinked = intake.business_id === null;
+  //
+  // Every typed refusal is thrown BEFORE this claim, so a refused apply
+  // leaves the intake exactly as it was found. A failure AFTER the claim is
+  // a write failure — data may already have landed on this tenant — so the
+  // claim deliberately stays in place: re-applying to the SAME business is
+  // the idempotent recovery, and the mismatch guard keeps a half-built
+  // tenant's intake from ever being re-pointed at a different one.
   const claimed = await claimWhiteGloveIntakeForBusiness(intake.id, args.businessId, db);
   if (!claimed) {
     throw new WhiteGloveApplyError(
@@ -135,33 +139,15 @@ export async function applyWhiteGloveIntake(
     );
   }
 
-  try {
-    return await performApplyWrites({
-      businessId: args.businessId,
-      intake,
-      plan,
-      business,
-      soulMd,
-      memoryMd,
-      db
-    });
-  } catch (err) {
-    // A write failed mid-apply. When THIS call took the claim on a
-    // previously-unlinked intake, release it (guarded on same-business +
-    // never-applied) so a failed apply doesn't pin the intake to a tenant
-    // forever; best-effort — the original error is what the admin needs.
-    if (wasUnlinked) {
-      try {
-        await releaseWhiteGloveIntakeClaim(intake.id, args.businessId, db);
-      } catch (releaseErr) {
-        logger.warn("white-glove apply: claim release failed (intake stays linked)", {
-          intakeId: intake.id,
-          error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr)
-        });
-      }
-    }
-    throw err;
-  }
+  return performApplyWrites({
+    businessId: args.businessId,
+    intake,
+    plan,
+    business,
+    soulMd,
+    memoryMd,
+    db
+  });
 }
 
 async function performApplyWrites(args: {
