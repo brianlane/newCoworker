@@ -28,6 +28,7 @@ import {
   markProvisioningJobRunning,
   retryStalledProvisioningJob,
   runProvisioningJob,
+  settleExhaustedProvisioningJobs,
   PROVISIONING_STALE_AFTER_MS,
   type ProvisioningJobRow
 } from "@/lib/provisioning/jobs";
@@ -321,16 +322,70 @@ describe("runProvisioningJob", () => {
   });
 });
 
+describe("settleExhaustedProvisioningJobs", () => {
+  it("returns settled business ids / [] / throws on RPC error", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: [JOB_ROW], error: null });
+    expect(await settleExhaustedProvisioningJobs()).toEqual([BIZ]);
+    expect(supabaseStub.rpc).toHaveBeenCalledWith("settle_exhausted_provisioning_jobs", {
+      p_stale_ms: PROVISIONING_STALE_AFTER_MS
+    });
+
+    supabaseStub.rpc.mockResolvedValueOnce({ data: null, error: null });
+    expect(await settleExhaustedProvisioningJobs(60_000, injected)).toEqual([]);
+
+    supabaseStub.rpc.mockResolvedValueOnce({ data: null, error: { message: "x" } });
+    await expect(settleExhaustedProvisioningJobs()).rejects.toThrow(
+      "settleExhaustedProvisioningJobs: x"
+    );
+  });
+});
+
 describe("retryStalledProvisioningJob", () => {
   const okResult = { hostingerBillingSubscriptionId: null };
+  const noExhausted = () => vi.fn(async () => [] as string[]);
 
   it("is idle when nothing is stalled", async () => {
     const result = await retryStalledProvisioningJob({
       claim: vi.fn(async () => null),
+      settleExhausted: noExhausted(),
       getBusinessStatus: vi.fn(async () => "offline"),
       orchestrate: vi.fn(async () => okResult)
     });
     expect(result).toEqual({ kind: "idle" });
+  });
+
+  it("flips exhausted zombies to failed and reports them even on an idle tick", async () => {
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => null),
+      settleExhausted: vi.fn(async () => ["biz-dead-1", "biz-dead-2"]),
+      getBusinessStatus: vi.fn(async () => "offline"),
+      orchestrate: vi.fn(async () => okResult)
+    });
+    expect(result).toEqual({ kind: "idle", exhaustedFailed: ["biz-dead-1", "biz-dead-2"] });
+  });
+
+  it("attaches exhausted ids to non-idle outcomes and tolerates settle failures", async () => {
+    const retried = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => JOB_ROW),
+      settleExhausted: vi.fn(async () => ["biz-dead"]),
+      getBusinessStatus: vi.fn(async () => "offline"),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome: vi.fn(async () => undefined)
+    });
+    expect(retried).toMatchObject({ kind: "retried", exhaustedFailed: ["biz-dead"] });
+
+    // Settle failures (Error and string shapes) never block the tick.
+    for (const boom of [new Error("settle rpc down"), "settle string down"]) {
+      const result = await retryStalledProvisioningJob({
+        claim: vi.fn(async () => null),
+        settleExhausted: vi.fn(async () => {
+          throw boom;
+        }),
+        getBusinessStatus: vi.fn(async () => "offline"),
+        orchestrate: vi.fn(async () => okResult)
+      });
+      expect(result).toEqual({ kind: "idle" });
+    }
   });
 
   it.each(["online", "high_load"] as const)(
@@ -353,6 +408,7 @@ describe("retryStalledProvisioningJob", () => {
   it("tolerates a settle failure on the already-online path (Error and string shapes)", async () => {
     const result = await retryStalledProvisioningJob({
       claim: vi.fn(async () => JOB_ROW),
+      settleExhausted: noExhausted(),
       getBusinessStatus: vi.fn(async () => "online"),
       orchestrate: vi.fn(async () => okResult),
       markOutcome: vi.fn(async () => {
@@ -363,6 +419,7 @@ describe("retryStalledProvisioningJob", () => {
 
     const result2 = await retryStalledProvisioningJob({
       claim: vi.fn(async () => JOB_ROW),
+      settleExhausted: noExhausted(),
       getBusinessStatus: vi.fn(async () => "online"),
       orchestrate: vi.fn(async () => okResult),
       markOutcome: vi.fn(async () => {
@@ -377,6 +434,7 @@ describe("retryStalledProvisioningJob", () => {
     const orchestrate = vi.fn(async () => okResult);
     const result = await retryStalledProvisioningJob({
       claim: vi.fn(async () => JOB_ROW),
+      settleExhausted: noExhausted(),
       getBusinessStatus: vi.fn(async () => "offline"),
       orchestrate,
       markOutcome
@@ -389,6 +447,7 @@ describe("retryStalledProvisioningJob", () => {
   it("reports a failed retry (attempts already bumped by the claim)", async () => {
     const result = await retryStalledProvisioningJob({
       claim: vi.fn(async () => JOB_ROW),
+      settleExhausted: noExhausted(),
       getBusinessStatus: vi.fn(async () => null),
       orchestrate: vi.fn(async () => {
         throw new Error("still broken");
@@ -406,6 +465,7 @@ describe("retryStalledProvisioningJob", () => {
   it("stringifies non-Error retry failures", async () => {
     const result = await retryStalledProvisioningJob({
       claim: vi.fn(async () => JOB_ROW),
+      settleExhausted: noExhausted(),
       getBusinessStatus: vi.fn(async () => "offline"),
       orchestrate: vi.fn(async () => {
         throw "plain failure";

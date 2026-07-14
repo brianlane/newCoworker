@@ -183,6 +183,25 @@ export async function claimStalledProvisioningJob(
   return rows.length > 0 ? rows[0] : null;
 }
 
+/**
+ * Flip attempts-exhausted, heartbeat-stale jobs to 'failed' (Bugbot Medium
+ * on PR #598: they otherwise sit 'running' forever once the watchdog stops
+ * claiming them). Returns the settled business ids so the watchdog tick
+ * can surface them in telemetry — an exhausted job is a tenant a human
+ * must now look at.
+ */
+export async function settleExhaustedProvisioningJobs(
+  staleAfterMs: number = PROVISIONING_STALE_AFTER_MS,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db.rpc("settle_exhausted_provisioning_jobs", {
+    p_stale_ms: staleAfterMs
+  });
+  if (error) throw new Error(`settleExhaustedProvisioningJobs: ${error.message}`);
+  return ((data as ProvisioningJobRow[] | null) ?? []).map((row) => row.business_id);
+}
+
 // ---------------------------------------------------------------------
 // Runners
 // ---------------------------------------------------------------------
@@ -261,16 +280,21 @@ export async function runProvisioningJob(
 
 export type RetryStalledProvisioningDeps = {
   claim?: typeof claimStalledProvisioningJob;
+  settleExhausted?: typeof settleExhaustedProvisioningJobs;
   getBusinessStatus: (businessId: string) => Promise<string | null>;
   orchestrate: OrchestrateFn;
   markOutcome?: typeof markProvisioningJobOutcome;
 };
 
-export type RetryStalledProvisioningResult =
+export type RetryStalledProvisioningResult = (
   | { kind: "idle" }
   | { kind: "already_online"; businessId: string }
   | { kind: "retried"; businessId: string; attempts: number }
-  | { kind: "retry_failed"; businessId: string; attempts: number; error: string };
+  | { kind: "retry_failed"; businessId: string; attempts: number; error: string }
+) & {
+  /** Business ids whose exhausted jobs this tick flipped to 'failed'. */
+  exhaustedFailed?: string[];
+};
 
 /**
  * One watchdog tick: claim one stalled job and re-run it.
@@ -284,12 +308,27 @@ export type RetryStalledProvisioningResult =
 export async function retryStalledProvisioningJob(
   deps: RetryStalledProvisioningDeps
 ): Promise<RetryStalledProvisioningResult> {
-  /* c8 ignore next 2 -- trivial production-default fallbacks; tests inject */
+  /* c8 ignore next 3 -- trivial production-default fallbacks; tests inject */
   const claim = deps.claim ?? claimStalledProvisioningJob;
+  const settleExhausted = deps.settleExhausted ?? settleExhaustedProvisioningJobs;
   const markOutcome = deps.markOutcome ?? markProvisioningJobOutcome;
 
+  // Terminal-state hygiene first: attempts-exhausted zombies flip to
+  // 'failed' so ops sees them (telemetry carries the ids) instead of a
+  // forever-'running' row the claim below correctly ignores. Best-effort.
+  let exhaustedFailed: string[] = [];
+  try {
+    exhaustedFailed = await settleExhausted();
+  } catch (err) {
+    logger.warn("provisioning watchdog: exhausted-job settle failed", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  const withExhausted = <T extends RetryStalledProvisioningResult>(result: T): T =>
+    exhaustedFailed.length > 0 ? { ...result, exhaustedFailed } : result;
+
   const job = await claim();
-  if (!job) return { kind: "idle" };
+  if (!job) return withExhausted({ kind: "idle" });
 
   const status = await deps.getBusinessStatus(job.business_id);
   if (status === "online" || status === "high_load") {
@@ -299,7 +338,7 @@ export async function retryStalledProvisioningJob(
         error: err instanceof Error ? err.message : String(err)
       });
     });
-    return { kind: "already_online", businessId: job.business_id };
+    return withExhausted({ kind: "already_online", businessId: job.business_id });
   }
 
   try {
@@ -308,14 +347,14 @@ export async function retryStalledProvisioningJob(
       { orchestrate: deps.orchestrate, markOutcome },
       { alreadyClaimed: true }
     );
-    return { kind: "retried", businessId: job.business_id, attempts: job.attempts };
+    return withExhausted({ kind: "retried", businessId: job.business_id, attempts: job.attempts });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    return {
+    return withExhausted({
       kind: "retry_failed",
       businessId: job.business_id,
       attempts: job.attempts,
       error: message
-    };
+    });
   }
 }

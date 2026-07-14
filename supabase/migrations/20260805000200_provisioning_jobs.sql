@@ -104,6 +104,44 @@ revoke all on function claim_stalled_provisioning_job(int) from public;
 grant execute on function claim_stalled_provisioning_job(int) to service_role;
 
 -- ---------------------------------------------------------------------
+-- Zombie settle: a job that burned every attempt and died again has no
+-- terminal write of its own — without this it would sit 'running'
+-- forever, invisible to "what failed?" queries, while the watchdog
+-- (correctly) refuses to claim it. Flip such rows to 'failed' so the
+-- terminal state is honest and the watchdog telemetry alerts ops. Same
+-- staleness signal as the claim so an exhausted-but-still-alive final
+-- attempt is never failed out from under itself.
+-- ---------------------------------------------------------------------
+create or replace function settle_exhausted_provisioning_jobs(p_stale_ms int)
+returns setof provisioning_jobs
+language plpgsql
+security definer
+set search_path = pg_catalog, public
+as $$
+begin
+  return query
+  update provisioning_jobs
+  set status = 'failed',
+      last_error = coalesce(
+        last_error,
+        'retries exhausted (' || attempts || '/' || max_attempts || ') without a terminal outcome'
+      ),
+      completed_at = now(),
+      updated_at = now()
+  where status in ('queued', 'running')
+    and attempts >= max_attempts
+    and coalesce(heartbeat_at, started_at, enqueued_at) < now() - (p_stale_ms || ' milliseconds')::interval
+  returning *;
+end;
+$$;
+
+comment on function settle_exhausted_provisioning_jobs is
+  'Flip attempts-exhausted, heartbeat-stale provisioning jobs to failed so they surface as terminal instead of sitting running forever after the watchdog stops claiming them.';
+
+revoke all on function settle_exhausted_provisioning_jobs(int) from public;
+grant execute on function settle_exhausted_provisioning_jobs(int) to service_role;
+
+-- ---------------------------------------------------------------------
 -- Schedule: provisioning-watchdog every 5 minutes. Same Edge-bridge
 -- pattern as vps-billing-posture. The bridge's own timeout may stop
 -- awaiting a long retry run — harmless, the Next route runs to completion.

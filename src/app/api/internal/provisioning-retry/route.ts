@@ -67,7 +67,7 @@ export async function POST(request: Request): Promise<Response> {
       }
     });
 
-    if (result.kind !== "idle") {
+    if (result.kind !== "idle" || result.exhaustedFailed) {
       logger.info("provisioning watchdog tick", result);
       // Telemetry so ops dashboards/alerts can watch recovery activity —
       // a retry firing at all means an inline provision died.
