@@ -29,7 +29,7 @@ export type ChatWidgetSettingsRow = {
    * Who answers widget turns: 'vps' = the box chat-worker (default),
    * 'gemini' = the platform-side direct responder (no VPS required) —
    * see src/lib/webchat/gemini-engine.ts. Admin-only knob; optional on
-   * the type for rows read before 20260714163753_webchat_reply_engine.
+   * the type for rows read before 20260805000100_webchat_reply_engine.
    */
   reply_engine?: WebchatReplyEngine;
   created_at: string;
