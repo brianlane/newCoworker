@@ -23,6 +23,9 @@ import {
 } from "@/lib/customer-memory/db";
 import { listTranscriptsForCaller } from "@/lib/db/voice-transcripts";
 import { listEmailLogForAddress } from "@/lib/db/email-log";
+import { getContactActivity, type ActivityItem } from "@/lib/db/activity";
+import { Badge } from "@/components/ui/Badge";
+import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
 import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
 import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailComposer";
@@ -83,7 +86,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   // as ONE parallel group. This matters doubly for residency (vps-mode)
   // tenants, where each read is a tunnel round-trip to their box —
   // serially these were ~5 RTTs, now the page pays one.
-  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers] =
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems] =
     await Promise.all([
       listSmsHistoryForCustomer(business.id, memory.customer_e164, {
         limit: 50,
@@ -110,7 +113,19 @@ export default async function CustomerDetailPage({ params }: Props) {
       ).catch(() => new Map<string, ContactName>()),
       // Roster for the "Owned by" picker; tolerated so a roster-table error
       // never blocks the profile page.
-      listTeamMembers(business.id, db).catch(() => [])
+      listTeamMembers(business.id, db).catch(() => []),
+      // Unified activity timeline (calls, texts, emails, AiFlow runs where
+      // this person is the lead); tolerated so a feed error never blocks
+      // the profile page.
+      getContactActivity(
+        business.id,
+        {
+          e164s: [memory.customer_e164, ...(memory.alias_e164s ?? [])],
+          email: memory.email
+        },
+        {},
+        db
+      ).catch(() => [] as ActivityItem[])
     ]);
   // Merge is "same person, two numbers" — only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
@@ -227,6 +242,52 @@ export default async function CustomerDetailPage({ params }: Props) {
           candidates={mergeCandidates}
         />
       )}
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-parchment">Activity</h2>
+          {/* Bidirectional: the task board's cards link here, and a lead in
+              motion (tagged, or with AiFlow runs in the feed) links back to
+              its card on the board. */}
+          {((memory.tags ?? []).length > 0 ||
+            activityItems.some((i) => i.kind === "aiflow")) && (
+            <Link
+              href={`/dashboard/tasks?lead=${encodeURIComponent(memory.customer_e164)}`}
+              className="text-xs text-claw-green hover:underline"
+            >
+              View on task board →
+            </Link>
+          )}
+        </div>
+        {activityItems.length === 0 ? (
+          <p className="text-xs text-parchment/50">
+            No recent activity for this contact.
+          </p>
+        ) : (
+          <ul className="divide-y divide-parchment/10">
+            {activityItems.map((item) => (
+              <li key={item.id}>
+                <Link
+                  href={item.href}
+                  className="flex items-center justify-between gap-3 py-2 group"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm text-parchment/90 truncate group-hover:text-signal-teal transition-colors">
+                      {item.label}
+                    </p>
+                    <p className="text-[10px] uppercase tracking-wide text-parchment/40">
+                      <LocalDateTime iso={item.at} />
+                    </p>
+                  </div>
+                  <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
+                    {ACTIVITY_BADGE[item.kind].label}
+                  </Badge>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
 
       {memory.summary_md?.trim() ? (
         <Card>

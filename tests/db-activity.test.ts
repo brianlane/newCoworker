@@ -5,11 +5,15 @@ import {
   collectActivityItems,
   getRecentActivity,
   getActivityFeedPage,
+  getContactActivity,
+  getActivityForContacts,
   activityWindowDays,
   parseActivityKindsParam,
   parseActivityDaysParam,
   ACTIVITY_KINDS,
   DEFAULT_ACTIVITY_LIMIT,
+  DEFAULT_CONTACT_ACTIVITY_LIMIT,
+  CONTACT_ACTIVITY_RUN_SCAN,
   ACTIVITY_FEED_MAX,
   ACTIVITY_WINDOW_DAYS,
   ACTIVITY_WINDOW_DAYS_STARTER,
@@ -409,6 +413,54 @@ describe("buildActivityFeed", () => {
   });
 });
 
+describe("collectActivityItems — contactE164 attribution", () => {
+  it("stamps the person's number on calls, texts, customers, and lead-stamped flows", () => {
+    const items = collectActivityItems(
+      emptyInput({
+        calls: [
+          { caller_e164: "+15550001111", status: "ok", started_at: "2026-01-09T00:00:00Z" },
+          // Unknown caller: no contact to attribute to.
+          { caller_e164: null, status: "missed", started_at: "2026-01-08T00:00:00Z" }
+        ],
+        smsInbound: [{ payload: smsPayload("+15550002222"), created_at: "2026-01-07T00:00:00Z" }],
+        smsReplies: [{ payload: smsPayload("+15550002222"), updated_at: "2026-01-06T00:00:00Z" }],
+        smsOutbound: [{ to_e164: "+15550003333", created_at: "2026-01-05T00:00:00Z" }],
+        customers: [
+          { display_name: null, customer_e164: "+15550004444", created_at: "2026-01-04T00:00:00Z" }
+        ],
+        flows: [
+          {
+            id: "run-1",
+            flow_id: "flow-a",
+            status: "completed",
+            created_at: "2026-01-03T00:00:00Z",
+            ai_flows: null,
+            lead_e164: "+15550005555"
+          },
+          // Business-wide feed rows never resolve the lead: stays unattributed.
+          {
+            id: "run-2",
+            flow_id: "flow-b",
+            status: "completed",
+            created_at: "2026-01-02T00:00:00Z",
+            ai_flows: null
+          }
+        ]
+      })
+    );
+    expect(items.map((i) => i.contactE164)).toEqual([
+      "+15550001111",
+      undefined,
+      "+15550002222",
+      "+15550002222",
+      "+15550003333",
+      "+15550005555",
+      undefined,
+      "+15550004444"
+    ]);
+  });
+});
+
 describe("collectActivityItems", () => {
   it("returns every source unranked (no alert reservation/cap)", () => {
     const items = collectActivityItems(
@@ -449,6 +501,8 @@ function chainResult(result: { data: unknown; error: unknown }) {
   return {
     select: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    in: vi.fn().mockReturnThis(),
+    or: vi.fn().mockReturnThis(),
     not: vi.fn().mockReturnThis(),
     gte: vi.fn().mockReturnThis(),
     lt: vi.fn().mockReturnThis(),
@@ -1127,5 +1181,331 @@ describe("paginateFullActivityFeed", () => {
       })
     );
     expect(none.nextBefore).toBeNull();
+  });
+});
+
+describe("getContactActivity", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
+
+  it("returns empty without querying when the target has no numbers and no email", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    const items = await getContactActivity("biz-1", { e164s: [], email: null }, {}, db as never);
+    expect(items).toEqual([]);
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it("treats a blank email as absent and skips the email source", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getContactActivity(
+      "biz-1",
+      { e164s: ["+15550001111"], email: "   " },
+      {},
+      db as never
+    );
+    expect(db.from.mock.calls.map((c) => c[0])).not.toContain("email_log");
+  });
+
+  it("queries only email_log when the target is email-only", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      email_log: {
+        data: [
+          {
+            direction: "inbound",
+            from_email: "lead@example.com",
+            to_email: "biz@mail.newcoworker.com",
+            subject: "Quote?",
+            created_at: "2026-02-01T10:00:00Z"
+          }
+        ],
+        error: null
+      }
+    });
+    const items = await getContactActivity(
+      "biz-1",
+      { e164s: [], email: "lead@example.com" },
+      {},
+      db as never
+    );
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual(["email_log"]);
+    expect(db.from.mock.results[0].value.or).toHaveBeenCalledWith(
+      "to_email.eq.lead@example.com,from_email.eq.lead@example.com"
+    );
+    expect(items.map((i) => i.kind)).toEqual(["email_inbound"]);
+  });
+
+  it("scopes every phone-keyed source to the contact's numbers (aliases included)", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      voice_call_transcripts: {
+        data: [{ caller_e164: "+15550002222", status: "completed", started_at: "2026-02-01T10:00:00Z" }],
+        error: null
+      },
+      sms_outbound_log: {
+        data: [{ to_e164: "+15550001111", created_at: "2026-02-01T09:00:00Z" }],
+        error: null
+      }
+    });
+    const numbers = ["+15550001111", "+15550002222"];
+    const items = await getContactActivity("biz-1", { e164s: numbers }, {}, db as never);
+
+    // Duplicate-free IN() filter on each phone-keyed source.
+    const tables = db.from.mock.calls.map((c) => c[0]);
+    expect(tables).toEqual([
+      "voice_call_transcripts",
+      "sms_inbound_jobs",
+      "sms_inbound_jobs",
+      "sms_outbound_log",
+      "ai_flow_runs"
+    ]);
+    expect(db.from.mock.results[0].value.in).toHaveBeenCalledWith("caller_e164", numbers);
+    expect(db.from.mock.results[1].value.in).toHaveBeenCalledWith("customer_e164", numbers);
+    expect(db.from.mock.results[3].value.in).toHaveBeenCalledWith("to_e164", numbers);
+    expect(items.map((i) => i.kind)).toEqual(["call", "sms_outbound"]);
+    expect(items.every((i) => i.contactE164)).toBe(true);
+  });
+
+  it("de-duplicates numbers and drops empty strings before querying", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    await getContactActivity(
+      "biz-1",
+      { e164s: ["+15550001111", "+15550001111", ""] },
+      {},
+      db as never
+    );
+    expect(db.from.mock.results[0].value.in).toHaveBeenCalledWith("caller_e164", ["+15550001111"]);
+  });
+
+  it("keeps only AiFlow runs whose lead is this contact and stamps contactE164", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      ai_flow_runs: {
+        data: [
+          // Lead extracted into vars: this contact.
+          {
+            id: "run-1",
+            flow_id: "flow-a",
+            status: "completed",
+            context: { vars: { lead_phone: "+15550001111" } },
+            created_at: "2026-02-01T10:00:00Z",
+            ai_flows: { name: "Lead intake" }
+          },
+          // Someone else's lead: excluded.
+          {
+            id: "run-2",
+            flow_id: "flow-a",
+            status: "completed",
+            context: { trigger: { from: "+19998887777" } },
+            created_at: "2026-02-01T09:00:00Z",
+            ai_flows: { name: "Lead intake" }
+          },
+          // No lead at all (schedule run): excluded.
+          {
+            id: "run-3",
+            flow_id: "flow-b",
+            status: "completed",
+            context: null,
+            created_at: "2026-02-01T08:00:00Z",
+            ai_flows: { name: "Nightly" }
+          }
+        ],
+        error: null
+      }
+    });
+    const items = await getContactActivity(
+      "biz-1",
+      { e164s: ["+15550001111"] },
+      {},
+      db as never
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      kind: "aiflow",
+      label: "AiFlow: Lead intake (completed)",
+      contactE164: "+15550001111"
+    });
+    // The run scan is bounded, not per-item limited.
+    const flowChain = db.from.mock.results[4].value;
+    expect(flowChain.limit).toHaveBeenCalledWith(CONTACT_ACTIVITY_RUN_SCAN);
+  });
+
+  it("sorts newest-first across sources and caps at the limit", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      voice_call_transcripts: {
+        data: [
+          { caller_e164: "+15550001111", status: "ok", started_at: "2026-02-03T00:00:00Z" },
+          { caller_e164: "+15550001111", status: "ok", started_at: "2026-02-01T00:00:00Z" }
+        ],
+        error: null
+      },
+      sms_outbound_log: {
+        data: [{ to_e164: "+15550001111", created_at: "2026-02-02T00:00:00Z" }],
+        error: null
+      }
+    });
+    const items = await getContactActivity(
+      "biz-1",
+      { e164s: ["+15550001111"] },
+      { limit: 2 },
+      db as never
+    );
+    expect(items.map((i) => i.at)).toEqual(["2026-02-03T00:00:00Z", "2026-02-02T00:00:00Z"]);
+    // Per-source caps honor the explicit limit.
+    expect(db.from.mock.results[0].value.limit).toHaveBeenCalledWith(2);
+  });
+
+  it("shows resolved names, tolerates a resolver failure, and honors windowDays", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-01T00:00:00Z"));
+    try {
+      const named = mockDbByTable({
+        ...ALL_EMPTY,
+        sms_outbound_log: {
+          data: [{ to_e164: "+15550001111", created_at: "2026-05-31T00:00:00Z" }],
+          error: null
+        }
+      });
+      vi.mocked(resolveContactNames).mockResolvedValue(
+        new Map<string, ContactName>([["+15550001111", { name: "Mike Haas", kind: "customer" }]])
+      );
+      const items = await getContactActivity(
+        "biz-1",
+        { e164s: ["+15550001111"] },
+        { windowDays: 7 },
+        named as never
+      );
+      expect(items[0].label).toBe("Text to Mike Haas");
+      expect(named.from.mock.results[0].value.gte).toHaveBeenCalledWith(
+        "started_at",
+        "2026-05-25T00:00:00.000Z"
+      );
+
+      const failing = mockDbByTable({
+        ...ALL_EMPTY,
+        sms_outbound_log: {
+          data: [{ to_e164: "+15550001111", created_at: "2026-05-31T00:00:00Z" }],
+          error: null
+        }
+      });
+      vi.mocked(resolveContactNames).mockRejectedValue(new Error("resolver down"));
+      const fallback = await getContactActivity(
+        "biz-1",
+        { e164s: ["+15550001111"] },
+        {},
+        failing as never
+      );
+      expect(fallback[0].label).toBe("Text to +15550001111");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("creates a service client and uses the default limit when none is passed", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const items = await getContactActivity("biz-1", { e164s: ["+15550001111"] });
+    expect(items).toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    expect(db.from.mock.results[0].value.limit).toHaveBeenCalledWith(
+      DEFAULT_CONTACT_ACTIVITY_LIMIT
+    );
+  });
+});
+
+describe("getActivityForContacts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
+  });
+
+  it("returns an empty map without querying for an empty phone list", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    const map = await getActivityForContacts("biz-1", ["", ""], {}, db as never);
+    expect(map.size).toBe(0);
+    expect(db.from).not.toHaveBeenCalled();
+  });
+
+  it("groups items per contact, newest first, capped at perContact", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      voice_call_transcripts: {
+        data: [
+          { caller_e164: "+15550001111", status: "ok", started_at: "2026-02-05T00:00:00Z" },
+          { caller_e164: "+15550002222", status: "ok", started_at: "2026-02-04T00:00:00Z" }
+        ],
+        error: null
+      },
+      sms_outbound_log: {
+        data: [
+          { to_e164: "+15550001111", created_at: "2026-02-03T00:00:00Z" },
+          { to_e164: "+15550001111", created_at: "2026-02-02T00:00:00Z" },
+          { to_e164: "+15550001111", created_at: "2026-02-01T00:00:00Z" }
+        ],
+        error: null
+      }
+    });
+    const map = await getActivityForContacts(
+      "biz-1",
+      ["+15550001111", "+15550002222"],
+      { perContact: 2 },
+      db as never
+    );
+    expect(map.get("+15550001111")!.map((i) => i.at)).toEqual([
+      "2026-02-05T00:00:00Z",
+      "2026-02-03T00:00:00Z"
+    ]);
+    expect(map.get("+15550002222")!.map((i) => i.kind)).toEqual(["call"]);
+    // Batched: one IN() query per source over ALL phones.
+    expect(db.from.mock.calls.map((c) => c[0])).toEqual([
+      "voice_call_transcripts",
+      "sms_inbound_jobs",
+      "sms_inbound_jobs",
+      "sms_outbound_log"
+    ]);
+    expect(db.from.mock.results[0].value.in).toHaveBeenCalledWith("caller_e164", [
+      "+15550001111",
+      "+15550002222"
+    ]);
+  });
+
+  it("skips unattributable rows and labels with the provided contact names", async () => {
+    const db = mockDbByTable({
+      ...ALL_EMPTY,
+      voice_call_transcripts: {
+        // A null caller can't be attributed to any contact.
+        data: [{ caller_e164: null, status: "missed", started_at: "2026-02-05T00:00:00Z" }],
+        error: null
+      },
+      sms_outbound_log: {
+        data: [{ to_e164: "+15550001111", created_at: "2026-02-03T00:00:00Z" }],
+        error: null
+      }
+    });
+    const map = await getActivityForContacts(
+      "biz-1",
+      ["+15550001111"],
+      {
+        contactNames: new Map<string, ContactName>([
+          ["+15550001111", { name: "Mike Haas", kind: "customer" }]
+        ])
+      },
+      db as never
+    );
+    expect([...map.keys()]).toEqual(["+15550001111"]);
+    expect(map.get("+15550001111")![0].label).toBe("Text to Mike Haas");
+  });
+
+  it("creates a service client and applies default caps when none are passed", async () => {
+    const db = mockDbByTable(ALL_EMPTY);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const map = await getActivityForContacts("biz-1", ["+15550001111"]);
+    expect(map.size).toBe(0);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+    // Default scan cap of 200 rows per source.
+    expect(db.from.mock.results[0].value.limit).toHaveBeenCalledWith(200);
   });
 });

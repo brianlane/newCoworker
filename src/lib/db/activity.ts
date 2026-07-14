@@ -18,6 +18,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { customerE164FromPayload } from "@/lib/db/sms-history";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { taskLeadPhone } from "@/lib/ai-flows/tasks";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -42,6 +43,12 @@ export type ActivityItem = {
   href: string;
   /** ISO timestamp used for ordering and display. */
   at: string;
+  /**
+   * The person this event belongs to (E.164), when the source row carries
+   * one. Lets feed surfaces deep-link to the contact page / task board, and
+   * lets contact-scoped consumers group items by person.
+   */
+  contactE164?: string;
 };
 
 export type ActivityCallRow = {
@@ -92,6 +99,12 @@ export type ActivityFlowRow = {
   status: string;
   created_at: string;
   ai_flows: { name: string } | { name: string }[] | null;
+  /**
+   * The run's lead phone, when the caller resolved it (contact-scoped
+   * fetches do; the business-wide feed leaves it unset to avoid parsing
+   * every run's context).
+   */
+  lead_e164?: string | null;
 };
 
 export type ActivityCustomerRow = {
@@ -217,7 +230,8 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: "call",
       label: `Call: ${c.caller_e164 ? named(c.caller_e164) : "unknown caller"} (${c.status})`,
       href: "/dashboard/calls",
-      at: c.started_at
+      at: c.started_at,
+      ...(c.caller_e164 ? { contactE164: c.caller_e164 } : {})
     });
   });
 
@@ -229,7 +243,8 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: "sms_inbound",
       label: `Text from ${named(cp)}`,
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
-      at: r.created_at
+      at: r.created_at,
+      contactE164: cp
     });
   });
 
@@ -244,7 +259,8 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: "sms_outbound",
       label: `Text to ${named(cp)}`,
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
-      at: r.updated_at
+      at: r.updated_at,
+      contactE164: cp
     });
   });
 
@@ -255,7 +271,8 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: "sms_outbound",
       label: `Text to ${named(r.to_e164)}`,
       href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
-      at: r.created_at
+      at: r.created_at,
+      contactE164: r.to_e164
     });
   });
 
@@ -290,7 +307,8 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       // Deep-link to this exact run on the flow's runs page so clicking a
       // failed run opens its steps/error (and screenshots), not the flow list.
       href: `/dashboard/aiflows/runs?flowId=${encodeURIComponent(r.flow_id)}&run=${encodeURIComponent(r.id)}`,
-      at: r.created_at
+      at: r.created_at,
+      ...(r.lead_e164 ? { contactE164: r.lead_e164 } : {})
     });
   });
 
@@ -305,7 +323,8 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: "customer",
       label: `New customer: ${who}`,
       href: `/dashboard/customers/${encodeURIComponent(r.customer_e164)}`,
-      at: r.created_at
+      at: r.created_at,
+      contactE164: r.customer_e164
     });
   });
 
@@ -755,4 +774,238 @@ export async function getActivityFeedPage(
     before = page.nextBefore;
   }
   return page;
+}
+
+// ─── Contact-scoped activity ────────────────────────────────────────────────
+
+/** Default item cap for the contact page's Activity card. */
+export const DEFAULT_CONTACT_ACTIVITY_LIMIT = 20;
+
+/**
+ * How many recent runs to scan when resolving a contact's AiFlow activity.
+ * Runs are keyed to a lead only inside their JSON context (see
+ * {@link taskLeadPhone}), so we fetch a bounded recent window and filter in
+ * process instead of pushing a JSON-path predicate to the database.
+ */
+export const CONTACT_ACTIVITY_RUN_SCAN = 100;
+
+export type ContactActivityTarget = {
+  /** The contact's primary number plus any merged-in aliases. */
+  e164s: string[];
+  /** Linked email address; adds email_log traffic to the timeline. */
+  email?: string | null;
+};
+
+/**
+ * One person's unified activity timeline: their calls, texts (both
+ * directions), email traffic, and the AiFlow runs where they are the lead —
+ * newest first, capped at `limit`. This is the contact-page/task-card
+ * counterpart of {@link getRecentActivity}: same sources, same item shapes,
+ * scoped to one contact's numbers + email instead of the whole business.
+ *
+ * Chat / new-customer / alert sources are intentionally absent: dashboard
+ * chat has no counterpart person, and the profile header already shows the
+ * contact's own creation. Failed sources degrade to empty (rowsOf) so one
+ * broken table never blanks the card.
+ */
+export async function getContactActivity(
+  businessId: string,
+  target: ContactActivityTarget,
+  opts: { limit?: number; windowDays?: number } = {},
+  client?: SupabaseClient
+): Promise<ActivityItem[]> {
+  const numbers = [...new Set(target.e164s.filter(Boolean))];
+  const email = target.email?.trim() || null;
+  if (numbers.length === 0 && !email) return [];
+
+  const db = client ?? (await createSupabaseServiceClient());
+  const limit = opts.limit ?? DEFAULT_CONTACT_ACTIVITY_LIMIT;
+  const windowDays = opts.windowDays ?? ACTIVITY_WINDOW_DAYS;
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  const none = Promise.resolve({ data: [], error: null });
+
+  const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, flowRes] = await Promise.all([
+    numbers.length === 0
+      ? none
+      : db
+          .from("voice_call_transcripts")
+          .select("caller_e164, status, started_at")
+          .eq("business_id", businessId)
+          .in("caller_e164", numbers)
+          .gte("started_at", since)
+          .order("started_at", { ascending: false })
+          .limit(limit),
+    numbers.length === 0
+      ? none
+      : db
+          .from("sms_inbound_jobs")
+          .select("payload, created_at")
+          .eq("business_id", businessId)
+          .in("customer_e164", numbers)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(limit),
+    numbers.length === 0
+      ? none
+      : db
+          .from("sms_inbound_jobs")
+          .select("payload, updated_at")
+          .eq("business_id", businessId)
+          .in("customer_e164", numbers)
+          .not("assistant_reply_text", "is", null)
+          .gte("updated_at", since)
+          .order("updated_at", { ascending: false })
+          .limit(limit),
+    numbers.length === 0
+      ? none
+      : db
+          .from("sms_outbound_log")
+          .select("to_e164, created_at")
+          .eq("business_id", businessId)
+          .in("to_e164", numbers)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(limit),
+    // Address values are z.email()-validated on write (no commas/parens), so
+    // they are safe inside the PostgREST or() filter string.
+    !email
+      ? none
+      : db
+          .from("email_log")
+          .select("direction, to_email, from_email, subject, created_at")
+          .eq("business_id", businessId)
+          .or(`to_email.eq.${email},from_email.eq.${email}`)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(limit),
+    numbers.length === 0
+      ? none
+      : db
+          .from("ai_flow_runs")
+          .select("id, flow_id, status, context, created_at, ai_flows(name)")
+          .eq("business_id", businessId)
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(CONTACT_ACTIVITY_RUN_SCAN)
+  ]);
+
+  // Keep only the runs whose lead is this contact, stamping the lead number
+  // onto the row so the produced items carry contactE164.
+  const flows = rowsOf<ActivityFlowRow & { context: Record<string, unknown> | null }>(flowRes)
+    .map((r) => ({ ...r, lead_e164: taskLeadPhone(r.context ?? {}) }))
+    .filter((r) => r.lead_e164 !== null && numbers.includes(r.lead_e164));
+
+  const contactNames = await resolveContactNames(businessId, numbers, db).catch(
+    () => new Map<string, ContactName>()
+  );
+
+  const items = collectActivityItems({
+    calls: rowsOf<ActivityCallRow>(callsRes),
+    smsInbound: rowsOf<ActivitySmsInboundRow>(smsInRes),
+    smsReplies: rowsOf<ActivitySmsReplyRow>(smsReplyRes),
+    smsOutbound: rowsOf<ActivitySmsOutboundRow>(smsOutRes),
+    emails: rowsOf<ActivityEmailRow>(emailRes),
+    chat: [],
+    flows,
+    customers: [],
+    alerts: [],
+    contactNames,
+    limit
+  });
+  return items.sort(byRecency).slice(0, limit);
+}
+
+/**
+ * Batched recent activity for MANY contacts at once (the Task Center's
+ * per-card timeline): one IN(...) query per source instead of a query
+ * fan-out per card. Returns a map keyed by the item's own number — callers
+ * with merged profiles fold alias keys into the primary themselves (they
+ * hold the alias table; this function deliberately doesn't).
+ *
+ * Sources are calls + texts only: those are the person-keyed columns that
+ * batch cleanly, and they're what a task card needs to answer "what
+ * happened with this lead lately?". Email needs a per-contact address and
+ * flow runs need context parsing — both stay on the single-contact path
+ * ({@link getContactActivity}).
+ */
+export async function getActivityForContacts(
+  businessId: string,
+  phones: string[],
+  opts: {
+    perContact?: number;
+    windowDays?: number;
+    /** Total rows fetched per source across ALL contacts. */
+    scanLimit?: number;
+    contactNames?: Map<string, ContactName>;
+  } = {},
+  client?: SupabaseClient
+): Promise<Map<string, ActivityItem[]>> {
+  const numbers = [...new Set(phones.filter(Boolean))];
+  if (numbers.length === 0) return new Map();
+
+  const db = client ?? (await createSupabaseServiceClient());
+  const perContact = opts.perContact ?? 3;
+  const windowDays = opts.windowDays ?? ACTIVITY_WINDOW_DAYS;
+  const scanLimit = opts.scanLimit ?? 200;
+  const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+
+  const [callsRes, smsInRes, smsReplyRes, smsOutRes] = await Promise.all([
+    db
+      .from("voice_call_transcripts")
+      .select("caller_e164, status, started_at")
+      .eq("business_id", businessId)
+      .in("caller_e164", numbers)
+      .gte("started_at", since)
+      .order("started_at", { ascending: false })
+      .limit(scanLimit),
+    db
+      .from("sms_inbound_jobs")
+      .select("payload, created_at")
+      .eq("business_id", businessId)
+      .in("customer_e164", numbers)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(scanLimit),
+    db
+      .from("sms_inbound_jobs")
+      .select("payload, updated_at")
+      .eq("business_id", businessId)
+      .in("customer_e164", numbers)
+      .not("assistant_reply_text", "is", null)
+      .gte("updated_at", since)
+      .order("updated_at", { ascending: false })
+      .limit(scanLimit),
+    db
+      .from("sms_outbound_log")
+      .select("to_e164, created_at")
+      .eq("business_id", businessId)
+      .in("to_e164", numbers)
+      .gte("created_at", since)
+      .order("created_at", { ascending: false })
+      .limit(scanLimit)
+  ]);
+
+  const items = collectActivityItems({
+    calls: rowsOf<ActivityCallRow>(callsRes),
+    smsInbound: rowsOf<ActivitySmsInboundRow>(smsInRes),
+    smsReplies: rowsOf<ActivitySmsReplyRow>(smsReplyRes),
+    smsOutbound: rowsOf<ActivitySmsOutboundRow>(smsOutRes),
+    emails: [],
+    chat: [],
+    flows: [],
+    customers: [],
+    alerts: [],
+    contactNames: opts.contactNames,
+    limit: scanLimit
+  }).sort(byRecency);
+
+  const byContact = new Map<string, ActivityItem[]>();
+  for (const item of items) {
+    if (!item.contactE164) continue;
+    const list = byContact.get(item.contactE164) ?? [];
+    if (list.length >= perContact) continue;
+    list.push(item);
+    byContact.set(item.contactE164, list);
+  }
+  return byContact;
 }
