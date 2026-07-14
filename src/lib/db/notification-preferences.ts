@@ -13,6 +13,11 @@ export type NotificationPreferencesRow = {
   sms_warm_transfer: boolean;
   /** Alert the owner when a coworker hits its per-session image-generation limit. */
   image_limit_alerts: boolean;
+  /**
+   * Opt-in (default false): notify the owner when a lead-intake AiFlow run
+   * fails permanently (dead-letter), so a dead automation is never silent.
+   */
+  aiflow_failure_alerts: boolean;
   /** Category filter: new-lead captures (see lib/notifications/categories.ts). */
   category_leads: boolean;
   /** Category filter: team-notify pings. */
@@ -104,6 +109,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "dashboard_alerts"
     | "sms_warm_transfer"
     | "image_limit_alerts"
+    | "aiflow_failure_alerts"
     | "category_leads"
     | "category_team"
     | "category_system"
@@ -123,6 +129,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   dashboard_alerts: true,
   sms_warm_transfer: true,
   image_limit_alerts: true,
+  aiflow_failure_alerts: false,
   category_leads: true,
   category_team: true,
   category_system: true,
@@ -223,6 +230,7 @@ export async function updateNotificationPreferences(
     "dashboard_alerts",
     "sms_warm_transfer",
     "image_limit_alerts",
+    "aiflow_failure_alerts",
     "category_leads",
     "category_team",
     "category_system",

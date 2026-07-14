@@ -44,6 +44,8 @@ describe("db/notification-preferences", () => {
     expect(row.dashboard_alerts).toBe(true);
     expect(row.sms_warm_transfer).toBe(true);
     expect(row.image_limit_alerts).toBe(true);
+    // Opt-in by design: failed-run alerts stay silent until the owner asks.
+    expect(row.aiflow_failure_alerts).toBe(false);
     expect(row.category_leads).toBe(true);
     expect(row.category_team).toBe(true);
     expect(row.category_system).toBe(true);

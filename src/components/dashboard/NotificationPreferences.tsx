@@ -48,6 +48,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
   const [smsWarmTransfer, setSmsWarmTransfer] = useState(initial.sms_warm_transfer);
   const [imageLimitAlerts, setImageLimitAlerts] = useState(initial.image_limit_alerts);
+  const [aiflowFailureAlerts, setAiflowFailureAlerts] = useState(
+    initial.aiflow_failure_alerts ?? false
+  );
   const [categoryLeads, setCategoryLeads] = useState(initial.category_leads ?? true);
   const [categoryTeam, setCategoryTeam] = useState(initial.category_team ?? true);
   const [categorySystem, setCategorySystem] = useState(initial.category_system ?? true);
@@ -69,6 +72,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setDashboardAlerts(initial.dashboard_alerts);
     setSmsWarmTransfer(initial.sms_warm_transfer);
     setImageLimitAlerts(initial.image_limit_alerts);
+    setAiflowFailureAlerts(initial.aiflow_failure_alerts ?? false);
     setCategoryLeads(initial.category_leads ?? true);
     setCategoryTeam(initial.category_team ?? true);
     setCategorySystem(initial.category_system ?? true);
@@ -87,6 +91,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setDashboardAlerts(prefs.dashboard_alerts);
     setSmsWarmTransfer(prefs.sms_warm_transfer);
     setImageLimitAlerts(prefs.image_limit_alerts);
+    setAiflowFailureAlerts(prefs.aiflow_failure_alerts ?? false);
     setCategoryLeads(prefs.category_leads ?? true);
     setCategoryTeam(prefs.category_team ?? true);
     setCategorySystem(prefs.category_system ?? true);
@@ -113,6 +118,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           dashboard_alerts: dashboardAlerts,
           sms_warm_transfer: smsWarmTransfer,
           image_limit_alerts: imageLimitAlerts,
+          aiflow_failure_alerts: aiflowFailureAlerts,
           category_leads: categoryLeads,
           category_team: categoryTeam,
           category_system: categorySystem,
@@ -153,6 +159,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           dashboard_alerts: false,
           sms_warm_transfer: false,
           image_limit_alerts: false,
+          aiflow_failure_alerts: false,
           unsubscribed_at: "now"
         })
       });
@@ -232,6 +239,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Alert you when a coworker hits its image generation limit (3 per conversation)."
           checked={imageLimitAlerts}
           onChange={setImageLimitAlerts}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="AiFlow failure alerts"
+          description="Alert you when a lead-intake AiFlow run fails permanently, so a dead automation is never silent. Off unless you opt in."
+          checked={aiflowFailureAlerts}
+          onChange={setAiflowFailureAlerts}
           disabled={loading || unsubscribing}
         />
       </div>

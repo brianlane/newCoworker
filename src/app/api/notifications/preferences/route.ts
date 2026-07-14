@@ -18,6 +18,7 @@ const patchSchema = z.object({
   dashboard_alerts: z.boolean().optional(),
   sms_warm_transfer: z.boolean().optional(),
   image_limit_alerts: z.boolean().optional(),
+  aiflow_failure_alerts: z.boolean().optional(),
   category_leads: z.boolean().optional(),
   category_team: z.boolean().optional(),
   category_system: z.boolean().optional(),

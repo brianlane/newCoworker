@@ -217,6 +217,10 @@ serve(async (req: Request) => {
   // to the owner — say who and why, not "URGENT sms_needs_human".
   const needsHumanLabel = String(record.log_payload?.contact_label ?? "a texter");
   const needsHumanReason = String(record.log_payload?.reason ?? "").trim();
+  // AiFlow failure alerts (opt-in, _shared/aiflow_failure_alert.ts): a
+  // lead-intake automation died — say which lead and why, not a raw task_type.
+  const aiflowLeadLabel = String(record.log_payload?.lead_label ?? "a lead");
+  const aiflowReason = String(record.log_payload?.reason ?? "").trim();
   const summary =
     record.task_type === "sms_cap_reached"
       ? "Monthly SMS limit reached; outbound texting is paused. Buy an SMS pack from Billing to resume."
@@ -226,7 +230,9 @@ serve(async (req: Request) => {
           ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
           : record.task_type === "sms_needs_human"
             ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? ` — ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
-            : `URGENT ${record.task_type}`;
+            : record.task_type === "aiflow_run_failed"
+              ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? ` — ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
+              : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
   // `https://example.com//dashboard` if the env var was set with one.
@@ -256,6 +262,12 @@ serve(async (req: Request) => {
     // untaggable contacts — see _shared/needs_human.ts.
     ...(record.task_type === "sms_needs_human" && record.log_payload?.contact_e164
       ? { contactE164: String(record.log_payload.contact_e164) }
+      : {}),
+    // AiFlow failure alerts stamp the run so the alert module's per-run
+    // dedupe (payload->>runId) can find prior delivered pages — see
+    // _shared/aiflow_failure_alert.ts.
+    ...(record.task_type === "aiflow_run_failed" && record.log_payload?.run_id
+      ? { runId: String(record.log_payload.run_id) }
       : {})
   };
   const errors: string[] = [];
