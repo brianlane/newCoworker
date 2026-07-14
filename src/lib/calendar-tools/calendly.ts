@@ -265,6 +265,27 @@ function digitsOf(value: string): string {
   return value.replace(/\D/g, "");
 }
 
+/**
+ * The shortest digit string that still identifies a subscriber (national
+ * significant numbers are 7+ digits everywhere); anything shorter is too
+ * ambiguous to suffix-match safely.
+ */
+const MIN_PHONE_MATCH_DIGITS = 7;
+
+/**
+ * Country-code-tolerant phone comparison: our side holds E.164 ("+1548…")
+ * while Calendly may store the invitee's number nationally ("548…") or vice
+ * versa, so exact digit equality misses real matches (Bugbot on PR #584).
+ * Suffix containment with a minimum length keeps "5773546" from matching an
+ * unrelated number while letting the country-code variants agree.
+ */
+function phoneDigitsMatch(a: string, b: string): boolean {
+  if (a.length < MIN_PHONE_MATCH_DIGITS || b.length < MIN_PHONE_MATCH_DIGITS) {
+    return a.length > 0 && a === b;
+  }
+  return a.endsWith(b) || b.endsWith(a);
+}
+
 type ScheduledEventsBody = {
   collection?: Array<{ uri?: string; start_time?: string }>;
 };
@@ -340,7 +361,9 @@ export async function findCalendlyScheduledEvent(
         typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
       return (
         (emailLc.length > 0 && inviteeEmail === emailLc) ||
-        (phoneDigits.length > 0 && inviteePhone.length > 0 && inviteePhone === phoneDigits)
+        (phoneDigits.length > 0 &&
+          inviteePhone.length > 0 &&
+          phoneDigitsMatch(inviteePhone, phoneDigits))
       );
     });
     if (match) {

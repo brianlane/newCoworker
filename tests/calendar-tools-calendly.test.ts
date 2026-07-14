@@ -478,6 +478,47 @@ describe("findCalendlyScheduledEvent", () => {
     });
   });
 
+  it("matches across country-code variants (national vs E.164) but never on loose suffixes", async () => {
+    // Calendly stored the NATIONAL form; our side holds E.164 — still a match.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "(548) 577-3546" }])
+    );
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).not.toBe("not_found");
+
+    // The reverse: Calendly stored E.164, the caller passed the national form.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([MATCHING_INVITEE])
+    );
+    expect(
+      await findCalendlyScheduledEvent(BIZ, CONN, { phone: "548-577-3546" })
+    ).not.toBe("not_found");
+
+    // A DIFFERENT number sharing no suffix must not match.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "+15550001111" }])
+    );
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
+
+    // Short strings (below 7 digits) only match on EXACT equality — a bare
+    // suffix of a real number is too ambiguous to act on.
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "773546" }])
+    );
+    expect(await findCalendlyScheduledEvent(BIZ, CONN, { phone: PHONE })).toBe("not_found");
+
+    mockUserAndEvents([{ uri: EVENT_URI }]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
+      inviteesResponse([{ ...MATCHING_INVITEE, text_reminder_number: "773546" }])
+    );
+    expect(
+      await findCalendlyScheduledEvent(BIZ, CONN, { phone: "77-35-46" })
+    ).not.toBe("not_found");
+  });
+
   it("matches an invitee by email case-insensitively", async () => {
     mockUserAndEvents([{ uri: EVENT_URI }]);
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(
