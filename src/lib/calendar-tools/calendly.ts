@@ -416,7 +416,11 @@ export async function cancelCalendlyAppointment(
     method: "POST",
     data: { reason: "Canceled at the customer's request via the business's assistant." }
   });
-  if (!res) return { ok: false, detail: "calendar_not_connected" };
+  // The locate steps succeeded moments ago, so an unusable response here is
+  // a failed MUTATION on a connected account — reporting it as a missing
+  // calendar would steer the model to "you cannot cancel any appointment"
+  // (Bugbot on PR #584; same rationale as the Graph mutations on PR #577).
+  if (!res) return { ok: false, detail: "calendar_cancel_failed" };
 
   return {
     ok: true,

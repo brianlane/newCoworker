@@ -646,14 +646,16 @@ describe("cancelCalendlyAppointment", () => {
     expect(cancelCall.method).toBe("POST");
   });
 
-  it("is not_connected when the cancellation POST is refused", async () => {
+  it("a refused cancellation POST is a FAILED MUTATION, never calendar_not_connected", async () => {
+    // The locate steps just succeeded — misreporting a missing calendar
+    // would steer the model to "you cannot cancel any appointment".
     mockUserAndEvents([{ uri: EVENT_URI }]);
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce(inviteesResponse([MATCHING_INVITEE]))
       .mockResolvedValueOnce(null as never);
     expect(await cancelCalendlyAppointment(BIZ, CONN, { phone: PHONE })).toEqual({
       ok: false,
-      detail: "calendar_not_connected"
+      detail: "calendar_cancel_failed"
     });
   });
 });
