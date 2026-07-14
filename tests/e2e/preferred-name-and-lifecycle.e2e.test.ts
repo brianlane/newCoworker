@@ -28,6 +28,24 @@ import { geminiChatReply, type ChatTurn } from "./gemini";
 
 const LEAD = "+15485773546";
 
+/**
+ * Negation words that, appearing shortly before a matched claim inside the
+ * same sentence, mark it as a REFUSAL rather than a success claim ("your
+ * appointment has not been moved yet", "I can't just book another
+ * appointment"). Live-model tests must not fail the model for complying.
+ */
+const NEGATION_TAIL = /\b(not|no|never|cannot|can'?t|couldn'?t|unable|won'?t|haven'?t|hasn'?t|isn'?t|wasn'?t|didn'?t|don'?t|doesn'?t)\b[^.!?\n]*$/i;
+
+/** True when `claimRe` matches somewhere WITHOUT a preceding negation. */
+function claimsWithoutNegation(text: string, claimRe: RegExp): boolean {
+  const global = new RegExp(claimRe.source, claimRe.flags.includes("g") ? claimRe.flags : claimRe.flags + "g");
+  for (const match of text.matchAll(global)) {
+    const before = text.slice(Math.max(0, (match.index ?? 0) - 80), match.index ?? 0);
+    if (!NEGATION_TAIL.test(before)) return true;
+  }
+  return false;
+}
+
 const BASE_LINES = [
   SMS_IDENTITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
@@ -128,16 +146,26 @@ describe("no phantom reschedules (Issue 4, grounded actions)", () => {
   it("never claims the appointment was moved when no reschedule tool succeeded", () => {
     // Grounded actions: without a successful calendar_reschedule_appointment
     // call, "your appointment is now at 5" would be the same class of lie as
-    // the incident's phantom bookings.
-    expect(moveReply).not.toMatch(
-      /\b(is|has been|been|now|successfully)\s+(rescheduled|moved|changed|updated)\b/i
-    );
-    expect(moveReply).not.toMatch(/\bI('ve| have)\s+(rescheduled|moved|changed|updated)\b/i);
+    // the incident's phantom bookings. Negation-aware: a compliant refusal
+    // ("your appointment has NOT been moved yet") must not count as a claim.
+    expect(
+      claimsWithoutNegation(
+        moveReply,
+        /\b(is|has been|been|now|successfully)\s+(rescheduled|moved|changed|updated)\b/i
+      )
+    ).toBe(false);
+    expect(
+      claimsWithoutNegation(moveReply, /\bI('ve| have)\s+(rescheduled|moved|changed|updated)\b/i)
+    ).toBe(false);
   });
 
   it("never offers to book a NEW appointment as a reschedule workaround", () => {
     // The prompt rule: move/cancel ONLY via the lifecycle tools — a second
     // booking was exactly the stacked-invitations failure Truly reported.
-    expect(moveReply).not.toMatch(/book (you )?(a )?(new|another|second)\b/i);
+    // Negation-aware for the same reason: "I can't just book another
+    // appointment" is compliance, not a workaround offer.
+    expect(claimsWithoutNegation(moveReply, /book (you )?(a )?(new|another|second)\b/i)).toBe(
+      false
+    );
   });
 });
