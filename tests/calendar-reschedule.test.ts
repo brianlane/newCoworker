@@ -351,7 +351,9 @@ describe("rescheduleCalendarAppointment", () => {
           items: [
             { id: "evt-fuzzy", description: "unrelated event that q matched loosely" },
             { id: "evt-bare" }, // no description at all — also rejected
-            { id: "evt-mail", description: "Attendee: Joe\nEmail: joe@acme.com" }
+            // Stored with the form's original casing; the lowercased marker
+            // must still match (case-insensitive verification).
+            { id: "evt-mail", description: "Attendee: Joe\nEmail: Joe@Acme.com" }
           ]
         }
       } as never)

@@ -78,6 +78,12 @@ async function searchProviderEvent(
   marker: string
 ): Promise<string | null> {
   if (!marker) return null;
+  // Case-insensitive matching: the caller may hold a lowercased email (the
+  // ledger key shape) while the event body stores the form's original
+  // casing — a case mismatch must not turn into booking_not_found (Bugbot
+  // on PR #577). Phones are digits either way.
+  const markerLc = marker.toLowerCase();
+  const containsMarker = (haystack: string) => haystack.toLowerCase().includes(markerLc);
   const nowIso = new Date().toISOString();
   const endIso = new Date(Date.now() + SEARCH_WINDOW_DAYS * 86_400_000).toISOString();
   const shared = await getSharedCalendar(businessId);
@@ -97,7 +103,10 @@ async function searchProviderEvent(
             timeMin: nowIso,
             singleEvents: "true",
             orderBy: "startTime",
-            maxResults: "10"
+            // q already narrows server-side to marker matches; a generous
+            // page keeps a busy calendar's valid booking from falling past
+            // it without pagination (Bugbot on PR #577).
+            maxResults: "50"
           }
         });
         const items =
@@ -110,9 +119,7 @@ async function searchProviderEvent(
         // else's event (Bugbot on PR #577).
         const hit = items.find(
           (e) =>
-            typeof e.id === "string" &&
-            e.id.length > 0 &&
-            (e.description ?? "").includes(marker)
+            typeof e.id === "string" && e.id.length > 0 && containsMarker(e.description ?? "")
         );
         if (hit?.id) return hit.id;
       } catch (err) {
@@ -168,7 +175,7 @@ async function searchProviderEvent(
         (e) =>
           typeof e.id === "string" &&
           e.id.length > 0 &&
-          `${e.body?.content ?? ""}\n${e.bodyPreview ?? ""}`.includes(marker)
+          containsMarker(`${e.body?.content ?? ""}\n${e.bodyPreview ?? ""}`)
       );
       if (hit?.id) return hit.id;
     } catch (err) {
