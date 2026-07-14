@@ -191,40 +191,23 @@ export async function POST(request: Request, context: RouteContext) {
       throw err;
     }
 
+    // executeAgentRun never throws for expected failures — it returns
+    // { ok: false } and the terminal patch below records it. The try/catch
+    // layering exists for UNEXPECTED throws (executor bug, DB failure on the
+    // terminal write) so the row can never stick in 'running'.
+    let result;
     try {
-      const result = await executeAgentRun({
+      result = await executeAgentRun({
         businessId,
         agent: { instructions: agent.instructions, output_format: agent.output_format },
         inputFilename: input.filename,
         inputMime: input.mimeType,
         data: input.data
       });
-
-      if (result.ok) {
-        await patchAgentRun(businessId, runId, {
-          status: "succeeded",
-          output_md: result.outputMd,
-          output_filename: result.outputFilename,
-          output_mime_type: result.outputMime,
-          error_detail: null,
-          prompt_tokens: result.usage?.promptTokens ?? null,
-          output_tokens: result.usage?.outputTokens ?? null,
-          completed_at: new Date().toISOString()
-        });
-      } else {
-        await patchAgentRun(businessId, runId, {
-          status: "failed",
-          error_detail: RUN_ERROR_MESSAGES[result.error] ?? result.error,
-          completed_at: new Date().toISOString()
-        });
-      }
     } catch (err) {
-      // Never leave the row stuck in 'running': a patch/DB failure after the
-      // model call still stamps a terminal state (best-effort — if even this
-      // write fails, the thrown error below is the honest signal).
       await patchAgentRun(businessId, runId, {
         status: "failed",
-        error_detail: "The run could not be recorded — try again",
+        error_detail: "The run failed unexpectedly — try again",
         completed_at: new Date().toISOString()
       }).catch((patchErr) => {
         logger.warn("agents/run: failed-state stamp failed", {
@@ -234,6 +217,53 @@ export async function POST(request: Request, context: RouteContext) {
         });
       });
       throw err;
+    }
+
+    const terminalPatch = result.ok
+      ? {
+          status: "succeeded" as const,
+          output_md: result.outputMd,
+          output_filename: result.outputFilename,
+          output_mime_type: result.outputMime,
+          error_detail: null,
+          prompt_tokens: result.usage?.promptTokens ?? null,
+          output_tokens: result.usage?.outputTokens ?? null,
+          completed_at: new Date().toISOString()
+        }
+      : {
+          status: "failed" as const,
+          error_detail: RUN_ERROR_MESSAGES[result.error] ?? result.error,
+          completed_at: new Date().toISOString()
+        };
+    try {
+      await patchAgentRun(businessId, runId, terminalPatch);
+    } catch (firstErr) {
+      // The spend is already metered and (on success) the artifact exists —
+      // worth a second identical write before giving up on it. Only after
+      // the retry also fails do we fall back to a minimal failed stamp
+      // (smaller payload, so it can survive a size/content-related failure)
+      // rather than leaving the row 'running' forever.
+      logger.warn("agents/run: terminal patch failed; retrying", {
+        businessId,
+        runId,
+        error: firstErr instanceof Error ? firstErr.message : String(firstErr)
+      });
+      try {
+        await patchAgentRun(businessId, runId, terminalPatch);
+      } catch (retryErr) {
+        await patchAgentRun(businessId, runId, {
+          status: "failed",
+          error_detail: "The result could not be saved — run the agent again",
+          completed_at: new Date().toISOString()
+        }).catch((stampErr) => {
+          logger.warn("agents/run: failed-state stamp failed", {
+            businessId,
+            runId,
+            error: stampErr instanceof Error ? stampErr.message : String(stampErr)
+          });
+        });
+        throw retryErr;
+      }
     }
 
     const finalRun = (await getAgentRun(businessId, runId)) ?? run;

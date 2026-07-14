@@ -31,8 +31,10 @@ export const dynamic = "force-dynamic";
 
 const createSchema = z.object({
   businessId: z.string().uuid(),
-  name: z.string().min(1).max(AGENT_NAME_MAX_CHARS),
-  instructions: z.string().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS),
+  // trim() BEFORE min(1) so whitespace-only input is rejected, not persisted
+  // as an empty string.
+  name: z.string().trim().min(1).max(AGENT_NAME_MAX_CHARS),
+  instructions: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS),
   outputFormat: z.enum(["markdown", "same_as_input"]).default("markdown")
 });
 
@@ -80,8 +82,8 @@ export async function POST(request: Request) {
 
     const agent = await insertBusinessAgent({
       business_id: body.data.businessId,
-      name: body.data.name.trim(),
-      instructions: body.data.instructions.trim(),
+      name: body.data.name,
+      instructions: body.data.instructions,
       output_format: body.data.outputFormat
     });
 

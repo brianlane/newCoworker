@@ -25,8 +25,10 @@ export const dynamic = "force-dynamic";
 
 const patchSchema = z.object({
   businessId: z.string().uuid(),
-  name: z.string().min(1).max(AGENT_NAME_MAX_CHARS).optional(),
-  instructions: z.string().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS).optional(),
+  // trim() BEFORE min(1) so whitespace-only input is rejected, not persisted
+  // as an empty string.
+  name: z.string().trim().min(1).max(AGENT_NAME_MAX_CHARS).optional(),
+  instructions: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS).optional(),
   outputFormat: z.enum(["markdown", "same_as_input"]).optional(),
   enabled: z.boolean().optional()
 });
@@ -54,8 +56,8 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (!existing) return errorResponse("NOT_FOUND", "Agent not found", 404);
 
     const patch: BusinessAgentPatch = {};
-    if (body.data.name !== undefined) patch.name = body.data.name.trim();
-    if (body.data.instructions !== undefined) patch.instructions = body.data.instructions.trim();
+    if (body.data.name !== undefined) patch.name = body.data.name;
+    if (body.data.instructions !== undefined) patch.instructions = body.data.instructions;
     if (body.data.outputFormat !== undefined) patch.output_format = body.data.outputFormat;
     if (body.data.enabled !== undefined) patch.enabled = body.data.enabled;
     if (Object.keys(patch).length === 0) {
