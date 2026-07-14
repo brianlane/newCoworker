@@ -10,6 +10,7 @@ import {
   assertSafeCaldavUrl,
   caldavRequest,
   createCaldavEvent,
+  deleteCaldavEvent,
   discoverEventCalendars,
   escapeICalText,
   extractCalendarData,
@@ -22,6 +23,7 @@ import {
   pickPreferredCalendar,
   stripXmlNamespaces,
   unfoldICalLines,
+  updateCaldavEventTime,
   verifyCaldavConnection
 } from "@/lib/caldav/client";
 
@@ -507,6 +509,130 @@ describe("createCaldavEvent", () => {
     await expect(
       createCaldavEvent(CREDS, CAL_URL, EVENT, { fetchImpl: impl })
     ).rejects.toMatchObject({ code: "request_failed", status: 409 });
+  });
+});
+
+describe("updateCaldavEventTime", () => {
+  const CAL_URL = "https://p42-caldav.icloud.com/123/calendars/home/";
+  const UID = "newcoworker-abc-123";
+  const NEW_START = "2026-07-15T20:00:00.000Z";
+  const NEW_END = "2026-07-15T20:30:00.000Z";
+
+  const STORED_ICAL =
+    "BEGIN:VCALENDAR\r\n" +
+    "VERSION:2.0\r\n" +
+    "PRODID:-//NewCoworker//Calendar Integration//EN\r\n" +
+    "BEGIN:VEVENT\r\n" +
+    `UID:${UID}\r\n` +
+    "DTSTAMP:20260713T000000Z\r\n" +
+    "DTSTART:20260714T160000Z\r\n" +
+    "DTEND:20260714T163000Z\r\n" +
+    "SUMMARY:Consult with Amy\r\n" +
+    "DESCRIPTION:Attendee: Amy\\nPhone: +16025550147\r\n" +
+    "STATUS:CONFIRMED\r\n" +
+    "END:VEVENT\r\n" +
+    "END:VCALENDAR\r\n";
+
+  it("GETs the resource, rewrites the times in place, and PUTs it back", async () => {
+    const { impl, calls } = fetchSequence([response(200, STORED_ICAL), response(204)]);
+    await updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl });
+
+    expect(calls[0].url).toBe(`${CAL_URL}${UID}.ics`);
+    expect(calls[0].init.method).toBe("GET");
+    expect(calls[1].init.method).toBe("PUT");
+    // No If-None-Match on the update PUT — it must overwrite the resource.
+    expect((calls[1].init.headers as Record<string, string>)["If-None-Match"]).toBeUndefined();
+
+    const body = calls[1].init.body as string;
+    expect(body).toContain("DTSTART:20260715T200000Z");
+    expect(body).toContain("DTEND:20260715T203000Z");
+    // Everything else survives untouched; SEQUENCE:1 is introduced after UID
+    // so clients treat this as an update to the SAME event.
+    expect(body).toContain("SUMMARY:Consult with Amy");
+    expect(body).toContain("DESCRIPTION:Attendee: Amy\\nPhone: +16025550147");
+    expect(body).toMatch(new RegExp(`UID:${UID}\\r\\nSEQUENCE:1`));
+    expect(body).not.toContain("DTSTAMP:20260713T000000Z");
+  });
+
+  it("increments an existing SEQUENCE and rewrites parameterized times", async () => {
+    const withSeqAndTzid = STORED_ICAL
+      .replace("DTSTART:20260714T160000Z", "DTSTART;TZID=America/Phoenix:20260714T090000")
+      .replace("DTEND:20260714T163000Z", "DTEND;TZID=America/Phoenix:20260714T093000")
+      .replace("STATUS:CONFIRMED\r\n", "STATUS:CONFIRMED\r\nSEQUENCE:2\r\n");
+    const { impl, calls } = fetchSequence([response(200, withSeqAndTzid), response(200)]);
+    await updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl });
+    const body = calls[1].init.body as string;
+    // The TZID parameter is dropped in favor of a plain UTC instant.
+    expect(body).toContain("DTSTART:20260715T200000Z");
+    expect(body).toContain("DTEND:20260715T203000Z");
+    expect(body).toContain("SEQUENCE:3");
+    expect(body).not.toContain("SEQUENCE:1\r\n");
+  });
+
+  it("rejects a path-unsafe UID before any request", async () => {
+    const { impl } = fetchSequence([response(200)]);
+    await expect(
+      updateCaldavEventTime(CREDS, CAL_URL, "../escape", NEW_START, NEW_END, { fetchImpl: impl })
+    ).rejects.toMatchObject({ code: "request_failed" });
+    expect(impl).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a missing resource with the 404 status", async () => {
+    const { impl } = fetchSequence([response(404, "gone")]);
+    await expect(
+      updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl })
+    ).rejects.toMatchObject({ code: "request_failed", status: 404 });
+  });
+
+  it("refuses to blind-PUT a body without usable DTSTART/DTEND", async () => {
+    const dateOnly = STORED_ICAL
+      .replace("DTSTART:20260714T160000Z\r\n", "DTSTART;VALUE=DATE:20260714\r\n")
+      .replace("DTEND:20260714T163000Z\r\n", "");
+    // The DTSTART;VALUE=DATE line gets rewritten, but DTEND is absent — the
+    // guard must refuse rather than PUT an event we cannot fully retime.
+    const { impl, calls } = fetchSequence([response(200, dateOnly)]);
+    await expect(
+      updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl })
+    ).rejects.toMatchObject({ code: "request_failed" });
+    expect(calls).toHaveLength(1); // GET only — no PUT went out
+  });
+
+  it("throws when the server refuses the PUT", async () => {
+    const { impl } = fetchSequence([response(200, STORED_ICAL), response(412, "precondition")]);
+    await expect(
+      updateCaldavEventTime(CREDS, CAL_URL, UID, NEW_START, NEW_END, { fetchImpl: impl })
+    ).rejects.toMatchObject({ code: "request_failed", status: 412 });
+  });
+});
+
+describe("deleteCaldavEvent", () => {
+  const CAL_URL = "https://p42-caldav.icloud.com/123/calendars/home/";
+
+  it("DELETEs the event resource", async () => {
+    const { impl, calls } = fetchSequence([response(204)]);
+    await deleteCaldavEvent(CREDS, CAL_URL, "newcoworker-abc-123", { fetchImpl: impl });
+    expect(calls[0].url).toBe(`${CAL_URL}newcoworker-abc-123.ics`);
+    expect(calls[0].init.method).toBe("DELETE");
+  });
+
+  it("treats a 404 as success (idempotent cancel) but rejects other failures", async () => {
+    const gone = fetchSequence([response(404)]);
+    await expect(
+      deleteCaldavEvent(CREDS, CAL_URL, "newcoworker-abc-123", { fetchImpl: gone.impl })
+    ).resolves.toBeUndefined();
+
+    const refused = fetchSequence([response(423, "locked")]);
+    await expect(
+      deleteCaldavEvent(CREDS, CAL_URL, "newcoworker-abc-123", { fetchImpl: refused.impl })
+    ).rejects.toMatchObject({ code: "request_failed", status: 423 });
+  });
+
+  it("rejects a path-unsafe UID before any request", async () => {
+    const { impl } = fetchSequence([response(204)]);
+    await expect(
+      deleteCaldavEvent(CREDS, CAL_URL, "../escape", { fetchImpl: impl })
+    ).rejects.toMatchObject({ code: "request_failed" });
+    expect(impl).not.toHaveBeenCalled();
   });
 });
 

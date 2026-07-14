@@ -24,9 +24,11 @@ import {
 import {
   CaldavApiError,
   createCaldavEvent,
+  deleteCaldavEvent,
   discoverEventCalendars,
   fetchCaldavBusy,
   pickPreferredCalendar,
+  updateCaldavEventTime,
   type BusyBlock
 } from "@/lib/caldav/client";
 import type { CalendarToolResult } from "@/lib/calendar-tools/handlers";
@@ -146,5 +148,78 @@ export async function bookCaldavAppointment(
     };
   } catch (err) {
     return failureResult(err, "calendar_book_failed");
+  }
+}
+
+/**
+ * `calendar_reschedule_appointment` core for CalDAV connections: rewrites
+ * DTSTART/DTEND on the SAME event resource (SEQUENCE bumped so subscribed
+ * clients show an update, not a new event). The event UID comes from the
+ * caller — resolved via the booking ledger, since CalDAV has no
+ * search-by-attendee surface in this client.
+ *
+ * A 404 on the resource means the event was deleted on the provider side
+ * after the ledger row was written → booking_not_found, so the model asks
+ * to re-confirm instead of claiming a move that touched nothing.
+ */
+export async function rescheduleCaldavAppointment(
+  businessId: string,
+  eventUid: string,
+  newStartIso: string,
+  newEndIso: string
+): Promise<CalendarToolResult> {
+  try {
+    const row = await getActiveCaldavConnection(businessId);
+    if (!row) return { ok: false, detail: "calendar_not_connected" };
+    const calendar = await resolveCalendar(row);
+    if (!calendar) return { ok: false, detail: "calendar_not_connected" };
+
+    await updateCaldavEventTime(
+      credentialsOf(row),
+      calendar.url,
+      eventUid,
+      newStartIso,
+      newEndIso
+    );
+    return {
+      ok: true,
+      data: {
+        eventId: eventUid,
+        provider: "caldav",
+        startIso: new Date(newStartIso).toISOString(),
+        endIso: new Date(newEndIso).toISOString(),
+        rescheduled: true
+      }
+    };
+  } catch (err) {
+    if (err instanceof CaldavApiError && err.status === 404) {
+      return { ok: false, detail: "booking_not_found" };
+    }
+    return failureResult(err, "calendar_reschedule_failed");
+  }
+}
+
+/**
+ * `calendar_cancel_appointment` core for CalDAV connections: DELETEs the
+ * event resource. The client treats a 404 as success (the event is gone
+ * either way), so a retried cancel stays idempotent.
+ */
+export async function cancelCaldavAppointment(
+  businessId: string,
+  eventUid: string
+): Promise<CalendarToolResult> {
+  try {
+    const row = await getActiveCaldavConnection(businessId);
+    if (!row) return { ok: false, detail: "calendar_not_connected" };
+    const calendar = await resolveCalendar(row);
+    if (!calendar) return { ok: false, detail: "calendar_not_connected" };
+
+    await deleteCaldavEvent(credentialsOf(row), calendar.url, eventUid);
+    return {
+      ok: true,
+      data: { eventId: eventUid, provider: "caldav", canceled: true }
+    };
+  } catch (err) {
+    return failureResult(err, "calendar_cancel_failed");
   }
 }

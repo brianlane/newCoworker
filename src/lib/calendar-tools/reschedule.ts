@@ -24,6 +24,10 @@ import {
   cancelVagaroAppointment,
   rescheduleVagaroAppointment
 } from "@/lib/calendar-tools/vagaro";
+import {
+  cancelCaldavAppointment,
+  rescheduleCaldavAppointment
+} from "@/lib/calendar-tools/caldav";
 import { logger } from "@/lib/logger";
 
 /**
@@ -44,8 +48,9 @@ import { logger } from "@/lib/logger";
  *     invitee's own reschedule link (`reschedule_link_created`) because
  *     Calendly cannot move an event on the invitee's behalf — mirrors the
  *     `booking_link_created` booking contract.
- *   - CalDAV returns `not_supported` so the model hands off to the team
- *     instead of pretending.
+ *   - CalDAV: the SAME .ics resource is rewritten in place (reschedule) or
+ *     DELETEd (cancel). Resolution is ledger-only, like Vagaro — the client
+ *     has no search-by-attendee surface.
  *
  * Event resolution: the `calendar_booking_dedupe` ledger row (stamped at
  * booking) is the primary key — no provider search needed. Bookings that
@@ -258,15 +263,14 @@ async function mutateGoogleEvent(
   return false;
 }
 
-const NOT_SUPPORTED_PROVIDERS = new Set(["caldav"]);
-
 /**
- * Ledger resolution for Vagaro (its ONLY resolution path — the v1 client
- * has no search-by-customer surface): exact attendee key first, then the
- * phone-tolerant fallback, since the booking may have stored a differently
- * formatted phone than the lifecycle call passes (Bugbot on PR #584).
+ * Ledger resolution for Vagaro and CalDAV (their ONLY resolution path —
+ * neither client has a search-by-customer surface): exact attendee key
+ * first, then the phone-tolerant fallback, since the booking may have
+ * stored a differently formatted phone than the lifecycle call passes
+ * (Bugbot on PR #584).
  */
-async function findVagaroClaim(businessId: string, attendeeKey: string, phone: string) {
+async function findLedgerOnlyClaim(businessId: string, attendeeKey: string, phone: string) {
   const exact = await findUpcomingBookingClaim(businessId, attendeeKey);
   if (exact) return exact;
   return phone ? findUpcomingBookingClaimByPhone(businessId, phone) : null;
@@ -288,9 +292,6 @@ export async function rescheduleCalendarAppointment(
   try {
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) return { ok: false, detail: "calendar_not_connected" };
-    if (NOT_SUPPORTED_PROVIDERS.has(conn.provider)) {
-      return { ok: false, detail: "reschedule_not_supported" };
-    }
 
     const phone = (args.attendeePhone ?? fallbackPhone ?? "").trim();
     const marker = phone || (args.attendeeEmail ?? "").trim();
@@ -305,15 +306,23 @@ export async function rescheduleCalendarAppointment(
       });
     }
 
-    if (conn.provider === "vagaro") {
-      const claim = await findVagaroClaim(businessId, attendeeKey, phone);
+    if (conn.provider === "vagaro" || conn.provider === "caldav") {
+      const claim = await findLedgerOnlyClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
-      const moved = await rescheduleVagaroAppointment(
-        businessId,
-        claim.eventId,
-        args.newStartIso,
-        args.newEndIso
-      );
+      const moved =
+        conn.provider === "vagaro"
+          ? await rescheduleVagaroAppointment(
+              businessId,
+              claim.eventId,
+              args.newStartIso,
+              args.newEndIso
+            )
+          : await rescheduleCaldavAppointment(
+              businessId,
+              claim.eventId,
+              args.newStartIso,
+              args.newEndIso
+            );
       if (moved.ok) {
         await rescheduleBookingClaim(
           businessId,
@@ -323,6 +332,11 @@ export async function rescheduleCalendarAppointment(
           claim.id,
           new Date(args.newStartIso).toISOString()
         );
+      } else if (moved.detail === "booking_not_found") {
+        // The provider event is gone (deleted upstream) but the ledger row
+        // survived — drop it so the stale claim can't shadow the slot or
+        // resolve future lifecycle calls to a dead event.
+        await deleteBookingClaim(claim.id);
       }
       return moved;
     }
@@ -409,9 +423,6 @@ export async function cancelCalendarAppointment(
   try {
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) return { ok: false, detail: "calendar_not_connected" };
-    if (NOT_SUPPORTED_PROVIDERS.has(conn.provider)) {
-      return { ok: false, detail: "cancel_not_supported" };
-    }
 
     const phone = (args.attendeePhone ?? fallbackPhone ?? "").trim();
     const marker = phone || (args.attendeeEmail ?? "").trim();
@@ -426,11 +437,18 @@ export async function cancelCalendarAppointment(
       });
     }
 
-    if (conn.provider === "vagaro") {
-      const claim = await findVagaroClaim(businessId, attendeeKey, phone);
+    if (conn.provider === "vagaro" || conn.provider === "caldav") {
+      const claim = await findLedgerOnlyClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
-      const canceled = await cancelVagaroAppointment(businessId, claim.eventId);
-      if (canceled.ok) await deleteBookingClaim(claim.id);
+      let canceled: CalendarToolResult;
+      if (conn.provider === "vagaro") {
+        canceled = await cancelVagaroAppointment(businessId, claim.eventId);
+      } else {
+        canceled = await cancelCaldavAppointment(businessId, claim.eventId);
+      }
+      if (canceled.ok) {
+        await deleteBookingClaim(claim.id);
+      }
       return canceled;
     }
 

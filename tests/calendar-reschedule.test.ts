@@ -24,6 +24,10 @@ vi.mock("@/lib/calendar-tools/vagaro", () => ({
   cancelVagaroAppointment: vi.fn(),
   rescheduleVagaroAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/caldav", () => ({
+  cancelCaldavAppointment: vi.fn(),
+  rescheduleCaldavAppointment: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn() } }));
 
 import {
@@ -49,6 +53,10 @@ import {
   cancelVagaroAppointment,
   rescheduleVagaroAppointment
 } from "@/lib/calendar-tools/vagaro";
+import {
+  cancelCaldavAppointment,
+  rescheduleCaldavAppointment
+} from "@/lib/calendar-tools/caldav";
 
 /**
  * Appointment lifecycle cores (Truly Issue 4): a reschedule PATCHes the
@@ -111,13 +119,57 @@ describe("rescheduleCalendarAppointment", () => {
     });
   });
 
-  it("refuses CalDAV as not supported", async () => {
+  it("CalDAV: moves the ledger-resolved event and shifts the claim on success", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const moved = {
+      ok: true,
+      data: { eventId: "evt-1", provider: "caldav", rescheduled: true }
+    } as never;
+    vi.mocked(rescheduleCaldavAppointment).mockResolvedValue(moved);
+
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toBe(moved);
+    expect(vi.mocked(rescheduleCaldavAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      "evt-1",
+      RESCHEDULE_ARGS.newStartIso,
+      RESCHEDULE_ARGS.newEndIso
+    );
+    expect(vi.mocked(rescheduleBookingClaim)).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+15485773546",
+      "claim-1",
+      "2026-07-15T20:00:00.000Z"
+    );
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(rescheduleVagaroAppointment)).not.toHaveBeenCalled();
+  });
+
+  it("CalDAV: booking_not_found without a ledger claim (no provider search exists)", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
-      detail: "reschedule_not_supported"
+      detail: "booking_not_found"
     });
-    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    expect(vi.mocked(rescheduleCaldavAppointment)).not.toHaveBeenCalled();
+  });
+
+  it("CalDAV: drops the stale claim when the provider event vanished upstream", async () => {
+    // The ledger row survived but the .ics was deleted on the server: the
+    // core reports booking_not_found and the dead claim must not keep
+    // resolving future lifecycle calls to a gone event.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(rescheduleCaldavAppointment).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+    expect(vi.mocked(rescheduleBookingClaim)).not.toHaveBeenCalled();
   });
 
   it("Calendly: delegates to the reschedule-link core with the caller's identity", async () => {
@@ -571,12 +623,42 @@ describe("cancelCalendarAppointment", () => {
     });
   });
 
-  it("refuses CalDAV as not supported", async () => {
+  it("CalDAV: cancels the ledger-resolved event and drops the claim", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const canceled = {
+      ok: true,
+      data: { eventId: "evt-1", provider: "caldav", canceled: true }
+    } as never;
+    vi.mocked(cancelCaldavAppointment).mockResolvedValue(canceled);
+
+    expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toBe(canceled);
+    expect(vi.mocked(cancelCaldavAppointment)).toHaveBeenCalledWith(BIZ, "evt-1");
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+    expect(vi.mocked(cancelVagaroAppointment)).not.toHaveBeenCalled();
+  });
+
+  it("CalDAV: keeps the claim when the provider cancel fails", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(cancelCaldavAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_cancel_failed"
+    } as never);
+    expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
+      ok: false,
+      detail: "calendar_cancel_failed"
+    });
+    expect(vi.mocked(deleteBookingClaim)).not.toHaveBeenCalled();
+  });
+
+  it("CalDAV: booking_not_found without a ledger claim", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
       ok: false,
-      detail: "cancel_not_supported"
+      detail: "booking_not_found"
     });
+    expect(vi.mocked(cancelCaldavAppointment)).not.toHaveBeenCalled();
   });
 
   it("Calendly: delegates to the API-side cancellation core", async () => {

@@ -463,9 +463,7 @@ export async function createCaldavEvent(
   opts: CaldavRequestOptions = {}
 ): Promise<{ eventUid: string }> {
   // The UID doubles as the resource filename — keep it path-safe.
-  if (!/^[\w.@-]+$/.test(event.uid)) {
-    throw new CaldavApiError("request_failed", "CalDAV event UID contains invalid characters");
-  }
+  assertSafeEventUid(event.uid);
   const ical =
     "BEGIN:VCALENDAR\r\n" +
     "VERSION:2.0\r\n" +
@@ -483,7 +481,7 @@ export async function createCaldavEvent(
     "END:VEVENT\r\n" +
     "END:VCALENDAR\r\n";
 
-  const eventUrl = `${calendarUrl.replace(/\/+$/, "")}/${event.uid}.ics`;
+  const eventUrl = eventResourceUrl(calendarUrl, event.uid);
   const res = await caldavRequest(
     creds,
     {
@@ -505,6 +503,113 @@ export async function createCaldavEvent(
     );
   }
   return { eventUid: event.uid };
+}
+
+/** UID sanity shared by create and the lifecycle helpers (path safety). */
+function assertSafeEventUid(uid: string): void {
+  if (!/^[\w.@-]+$/.test(uid)) {
+    throw new CaldavApiError("request_failed", "CalDAV event UID contains invalid characters");
+  }
+}
+
+/** The event resource URL our bookings PUT to (UID doubles as filename). */
+function eventResourceUrl(calendarUrl: string, uid: string): string {
+  return `${calendarUrl.replace(/\/+$/, "")}/${uid}.ics`;
+}
+
+/**
+ * Move an existing event IN PLACE: GET the resource, rewrite DTSTART/DTEND
+ * (bumping DTSTAMP and SEQUENCE so clients treat it as an update to the
+ * SAME event), PUT it back. Every other property — SUMMARY, DESCRIPTION,
+ * anything the server added — survives untouched.
+ *
+ * Throws CaldavApiError("request_failed", 404) when the resource is gone;
+ * callers map that to booking_not_found.
+ */
+export async function updateCaldavEventTime(
+  creds: CaldavCredentials,
+  calendarUrl: string,
+  uid: string,
+  startIso: string,
+  endIso: string,
+  opts: CaldavRequestOptions = {}
+): Promise<void> {
+  assertSafeEventUid(uid);
+  const url = eventResourceUrl(calendarUrl, uid);
+
+  const got = await caldavRequest(
+    creds,
+    { url, method: "GET", headers: { Accept: "text/calendar" } },
+    opts
+  );
+  if (got.status < 200 || got.status > 299) {
+    throw new CaldavApiError(
+      "request_failed",
+      `CalDAV event fetch failed (${got.status})`,
+      got.status
+    );
+  }
+
+  // Property lines are matched with optional parameters (DTSTART;TZID=…:).
+  // Our own bookings write unfolded single-line values, and DTSTART/DTEND/
+  // DTSTAMP/SEQUENCE values are never long enough to fold in practice.
+  const stamp = icalUtcStamp(new Date());
+  let ical = got.body
+    .replace(/^DTSTART(?:;[^:\r\n]*)?:.*$/m, `DTSTART:${icalUtcStamp(new Date(startIso))}`)
+    .replace(/^DTEND(?:;[^:\r\n]*)?:.*$/m, `DTEND:${icalUtcStamp(new Date(endIso))}`)
+    .replace(/^DTSTAMP(?:;[^:\r\n]*)?:.*$/m, `DTSTAMP:${stamp}`);
+  if (!/^DTSTART:/m.test(ical) || !/^DTEND:/m.test(ical)) {
+    // A resource without both times (e.g. all-day VALUE=DATE that our
+    // replace missed, or a stray non-event) must not be blind-PUT.
+    throw new CaldavApiError("request_failed", "CalDAV event body has no usable DTSTART/DTEND");
+  }
+  const seq = ical.match(/^SEQUENCE(?:;[^:\r\n]*)?:(\d+)\s*$/m);
+  ical = seq
+    ? ical.replace(/^SEQUENCE(?:;[^:\r\n]*)?:\d+\s*$/m, `SEQUENCE:${Number(seq[1]) + 1}`)
+    : ical.replace(/^(UID(?:;[^:\r\n]*)?:.*)$/m, `$1\r\nSEQUENCE:1`);
+
+  const put = await caldavRequest(
+    creds,
+    {
+      url,
+      method: "PUT",
+      headers: { "Content-Type": "text/calendar; charset=utf-8" },
+      body: ical
+    },
+    opts
+  );
+  if (![200, 201, 204].includes(put.status)) {
+    throw new CaldavApiError(
+      "request_failed",
+      `CalDAV event update failed (${put.status})`,
+      put.status
+    );
+  }
+}
+
+/**
+ * Delete an event resource. A 404 counts as success — the event is gone
+ * either way, and a retried cancel must not fail the second time.
+ */
+export async function deleteCaldavEvent(
+  creds: CaldavCredentials,
+  calendarUrl: string,
+  uid: string,
+  opts: CaldavRequestOptions = {}
+): Promise<void> {
+  assertSafeEventUid(uid);
+  const res = await caldavRequest(
+    creds,
+    { url: eventResourceUrl(calendarUrl, uid), method: "DELETE" },
+    opts
+  );
+  if (![200, 202, 204, 404].includes(res.status)) {
+    throw new CaldavApiError(
+      "request_failed",
+      `CalDAV event delete failed (${res.status})`,
+      res.status
+    );
+  }
 }
 
 export type CaldavVerification =

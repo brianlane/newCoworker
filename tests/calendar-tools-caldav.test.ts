@@ -11,8 +11,10 @@ vi.mock("@/lib/caldav/client", async () => {
   return {
     ...actual,
     createCaldavEvent: vi.fn(),
+    deleteCaldavEvent: vi.fn(),
     discoverEventCalendars: vi.fn(),
-    fetchCaldavBusy: vi.fn()
+    fetchCaldavBusy: vi.fn(),
+    updateCaldavEventTime: vi.fn()
   };
 });
 vi.mock("@/lib/logger", () => ({
@@ -26,12 +28,16 @@ import {
 import {
   CaldavApiError,
   createCaldavEvent,
+  deleteCaldavEvent,
   discoverEventCalendars,
-  fetchCaldavBusy
+  fetchCaldavBusy,
+  updateCaldavEventTime
 } from "@/lib/caldav/client";
 import {
   bookCaldavAppointment,
-  getCaldavBusyBlocks
+  cancelCaldavAppointment,
+  getCaldavBusyBlocks,
+  rescheduleCaldavAppointment
 } from "@/lib/calendar-tools/caldav";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -240,6 +246,132 @@ describe("bookCaldavAppointment", () => {
     expect(await bookCaldavAppointment(BIZ, ARGS)).toEqual({
       ok: false,
       detail: "calendar_book_failed"
+    });
+  });
+});
+
+describe("rescheduleCaldavAppointment", () => {
+  const UID = "newcoworker-abc";
+  const NEW_START = "2026-07-15T20:00:00.000Z";
+  const NEW_END = "2026-07-15T20:30:00.000Z";
+
+  it("returns calendar_not_connected without a row or resolvable calendar", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(null);
+    expect(await rescheduleCaldavAppointment(BIZ, UID, NEW_START, NEW_END)).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue({
+      ...ROW,
+      calendar_url: null
+    } as never);
+    vi.mocked(discoverEventCalendars).mockResolvedValue([]);
+    expect(await rescheduleCaldavAppointment(BIZ, UID, NEW_START, NEW_END)).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+    expect(updateCaldavEventTime).not.toHaveBeenCalled();
+  });
+
+  it("rewrites the SAME event resource, normalizing times to ISO instants", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(ROW as never);
+    expect(
+      // Offset form: the core must normalize to the UTC instant.
+      await rescheduleCaldavAppointment(BIZ, UID, "2026-07-15T13:00:00-07:00", "2026-07-15T13:30:00-07:00")
+    ).toEqual({
+      ok: true,
+      data: {
+        eventId: UID,
+        provider: "caldav",
+        startIso: NEW_START,
+        endIso: NEW_END,
+        rescheduled: true
+      }
+    });
+    expect(updateCaldavEventTime).toHaveBeenCalledWith(
+      { serverUrl: ROW.server_url, username: ROW.username, password: ROW.password },
+      "https://p42.example.com/cals/work/",
+      UID,
+      "2026-07-15T13:00:00-07:00",
+      "2026-07-15T13:30:00-07:00"
+    );
+  });
+
+  it("maps a 404 on the resource to booking_not_found (event deleted upstream)", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(ROW as never);
+    vi.mocked(updateCaldavEventTime).mockRejectedValue(
+      new CaldavApiError("request_failed", "gone", 404)
+    );
+    expect(await rescheduleCaldavAppointment(BIZ, UID, NEW_START, NEW_END)).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+  });
+
+  it("maps auth errors to calendar_not_connected and others to calendar_reschedule_failed", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(ROW as never);
+    vi.mocked(updateCaldavEventTime).mockRejectedValue(new CaldavApiError("auth_failed", "no"));
+    expect(await rescheduleCaldavAppointment(BIZ, UID, NEW_START, NEW_END)).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+
+    vi.mocked(updateCaldavEventTime).mockRejectedValue(new Error("server 500"));
+    expect(await rescheduleCaldavAppointment(BIZ, UID, NEW_START, NEW_END)).toEqual({
+      ok: false,
+      detail: "calendar_reschedule_failed"
+    });
+  });
+});
+
+describe("cancelCaldavAppointment", () => {
+  const UID = "newcoworker-abc";
+
+  it("returns calendar_not_connected without a row or resolvable calendar", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(null);
+    expect(await cancelCaldavAppointment(BIZ, UID)).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue({
+      ...ROW,
+      calendar_url: null
+    } as never);
+    vi.mocked(discoverEventCalendars).mockResolvedValue([]);
+    expect(await cancelCaldavAppointment(BIZ, UID)).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+    expect(deleteCaldavEvent).not.toHaveBeenCalled();
+  });
+
+  it("deletes the event resource", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(ROW as never);
+    expect(await cancelCaldavAppointment(BIZ, UID)).toEqual({
+      ok: true,
+      data: { eventId: UID, provider: "caldav", canceled: true }
+    });
+    expect(deleteCaldavEvent).toHaveBeenCalledWith(
+      { serverUrl: ROW.server_url, username: ROW.username, password: ROW.password },
+      "https://p42.example.com/cals/work/",
+      UID
+    );
+  });
+
+  it("maps auth errors to calendar_not_connected and others to calendar_cancel_failed", async () => {
+    vi.mocked(getActiveCaldavConnection).mockResolvedValue(ROW as never);
+    vi.mocked(deleteCaldavEvent).mockRejectedValue(new CaldavApiError("blocked_url", "no"));
+    expect(await cancelCaldavAppointment(BIZ, UID)).toEqual({
+      ok: false,
+      detail: "calendar_not_connected"
+    });
+
+    vi.mocked(deleteCaldavEvent).mockRejectedValue(new Error("server 500"));
+    expect(await cancelCaldavAppointment(BIZ, UID)).toEqual({
+      ok: false,
+      detail: "calendar_cancel_failed"
     });
   });
 });
