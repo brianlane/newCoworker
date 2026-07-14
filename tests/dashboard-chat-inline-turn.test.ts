@@ -341,6 +341,19 @@ describe("runInlineChatTurn — creation tools", () => {
     }
   });
 
+  it("keeps accumulated drafts when a LATER model step fails (compile spend is real)", async () => {
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("create_agent", { name: "A", instructions: "B" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs(), { chatStep });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.drafts).toHaveLength(1);
+      expect(res.content).toContain("prepared a draft");
+    }
+  });
+
   it("bounds the tool loop at MAX_TOOL_STEPS", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) =>
       toolStep("create_agent", { name: "A", instructions: "B" })

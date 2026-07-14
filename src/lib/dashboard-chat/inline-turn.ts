@@ -275,6 +275,12 @@ export async function runInlineChatTurn(
         step,
         error: detail
       });
+      // A wrap-up step that fails AFTER a tool already produced drafts must
+      // not discard them — the compile spend is real and the draft is the
+      // deliverable. Degrade to the stock hand-off line instead of failing
+      // the turn (which would drop the cards and, on text turns, bounce the
+      // whole turn to the worker).
+      if (drafts.length > 0) break;
       return { ok: false, error: "model_failed", detail };
     } finally {
       clearTimeout(timer);

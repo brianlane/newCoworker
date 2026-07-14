@@ -72,13 +72,14 @@ function readyDoc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumen
   };
 }
 
-const ENV_KEYS = ["GOOGLE_API_KEY", "AIFLOW_COMPILE_MODEL"] as const;
+const ENV_KEYS = ["GOOGLE_API_KEY", "GEMINI_API_KEY", "AIFLOW_COMPILE_MODEL"] as const;
 const savedEnv: Record<string, string | undefined> = {};
 
 beforeEach(() => {
   vi.clearAllMocks();
   for (const k of ENV_KEYS) savedEnv[k] = process.env[k];
   process.env.GOOGLE_API_KEY = "test-key";
+  delete process.env.GEMINI_API_KEY;
   delete process.env.AIFLOW_COMPILE_MODEL;
   meter.mockResolvedValue(undefined);
 });
@@ -101,13 +102,23 @@ function generateSeq(...texts: string[]) {
 const noDocs = vi.fn(async () => [] as BusinessDocumentRow[]);
 
 describe("compileAiFlowFromDescription — configuration & happy path", () => {
-  it("reports not_configured without an API key", async () => {
+  it("reports not_configured without an API key (and accepts GEMINI_API_KEY alone)", async () => {
     delete process.env.GOOGLE_API_KEY;
     const res = await compileAiFlowFromDescription(
       { businessId: BIZ, description: "notify me" },
       { generate: vi.fn(), fetchDocuments: noDocs }
     );
     expect(res).toMatchObject({ ok: false, error: "not_configured" });
+
+    // Key parity with the inline chat surfaces: either env name works.
+    process.env.GEMINI_API_KEY = "alt";
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res2 = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "notify me" },
+      { generate, fetchDocuments: noDocs }
+    );
+    expect(res2.ok).toBe(true);
+    expect(generate.mock.calls[0][0].apiKey).toBe("alt");
   });
 
   it("compiles a valid definition first try and meters the call", async () => {

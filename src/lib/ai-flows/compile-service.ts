@@ -84,7 +84,9 @@ export async function compileAiFlowFromDescription(
   const fetchDocuments = deps.fetchDocuments ?? listBusinessDocuments;
   /* c8 ignore stop */
 
-  const apiKey = process.env.GOOGLE_API_KEY ?? "";
+  // Same key resolution as every other Gemini surface (document ingest, the
+  // inline chat turn): either env name configures the platform.
+  const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) {
     return {
       ok: false,
