@@ -50,6 +50,14 @@ export const VOICE_CUSTOMER_MEMORY_MAX_CHARS = 800;
  */
 export const VOICE_FLOW_CONTEXT_MAX_CHARS = 900;
 
+/**
+ * Hard cap on the inline cross-channel recent-interactions block
+ * (contact-context.ts) — same 12 KB-ceiling discipline. 1400 chars fits the
+ * header plus roughly the last half-dozen clipped SMS/call lines, which is
+ * the window a caller mid-thread actually references.
+ */
+export const VOICE_RECENT_INTERACTIONS_MAX_CHARS = 1400;
+
 export function systemInstructionForBusiness(
   businessName: string,
   hasTransfer: boolean,
@@ -59,7 +67,8 @@ export function systemInstructionForBusiness(
   businessTimezone?: string | null,
   callerIdentity?: CallerIdentity,
   hasEndCall = false,
-  flowContextNote?: string
+  flowContextNote?: string,
+  recentInteractionsNote?: string
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -210,6 +219,22 @@ export function systemInstructionForBusiness(
       const clipped =
         trimmed.length > VOICE_FLOW_CONTEXT_MAX_CHARS
           ? trimmed.slice(0, VOICE_FLOW_CONTEXT_MAX_CHARS - 1) + "…"
+          : trimmed;
+      base.push("\n" + clipped);
+    }
+  }
+
+  // Cross-channel recent-interactions timeline (contact-context.ts): the
+  // raw SMS/call window from the last hours, covering the gap where the
+  // rolling summary above is still empty (the summarize sweep hasn't run).
+  // Last so the freshest, most literal context reads as the final word.
+  // Customer persona only, same rationale as the flow note.
+  if (!isStaff && recentInteractionsNote) {
+    const trimmed = recentInteractionsNote.trim();
+    if (trimmed.length > 0) {
+      const clipped =
+        trimmed.length > VOICE_RECENT_INTERACTIONS_MAX_CHARS
+          ? trimmed.slice(0, VOICE_RECENT_INTERACTIONS_MAX_CHARS - 1) + "…"
           : trimmed;
       base.push("\n" + clipped);
     }

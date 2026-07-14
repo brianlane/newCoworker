@@ -161,6 +161,7 @@ export {
   systemInstructionForBusiness,
   VOICE_CUSTOMER_MEMORY_MAX_CHARS,
   VOICE_FLOW_CONTEXT_MAX_CHARS,
+  VOICE_RECENT_INTERACTIONS_MAX_CHARS,
   type CallerIdentity
 } from "./system-instruction.js";
 import { systemInstructionForBusiness, type CallerIdentity } from "./system-instruction.js";
@@ -245,6 +246,14 @@ export type GeminiBridgeOptions = {
    * the prompt is identical to the pre-bridge shape.
    */
   flowContextNote?: string;
+  /**
+   * Optional per-caller cross-channel recent-interactions timeline
+   * (contact-context.ts loadVoiceContactTimeline): the caller's raw SMS
+   * thread + recent call summaries from the last hours, covering the gap
+   * where the rolling summary is still empty. Clipped in
+   * system-instruction.ts to VOICE_RECENT_INTERACTIONS_MAX_CHARS.
+   */
+  recentInteractionsNote?: string;
   /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
@@ -1040,7 +1049,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.businessTimezone,
             opts.callerIdentity,
             hasEndCall,
-            opts.flowContextNote
+            opts.flowContextNote,
+            opts.recentInteractionsNote
           ),
       tools: toolsForSession
     },
