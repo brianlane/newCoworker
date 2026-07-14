@@ -119,7 +119,7 @@ export async function PATCH(
           return successResponse({ stage });
         }
         case "update_stage": {
-          const result = await updateStage(businessId, body.stageId, {
+          const result = await updateStage(businessId, pipelineId, body.stageId, {
             ...(body.name !== undefined ? { name: body.name } : {}),
             ...(body.color !== undefined ? { color: body.color } : {})
           });
@@ -132,6 +132,7 @@ export async function PATCH(
         case "delete_stage": {
           const result = await deleteStage(
             businessId,
+            pipelineId,
             body.stageId,
             body.destinationStageId ?? null
           );

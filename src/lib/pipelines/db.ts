@@ -37,12 +37,12 @@ export class PipelineError extends Error {
 }
 
 /**
- * How many tagged contacts a bulk retag scans. Tag matching is
- * case-insensitive, which PostgREST array operators can't express, so we
- * pull the tagged rows and filter in process — bounded to keep the
- * operation predictable on tag-heavy tenants.
+ * Page size for the bulk-retag scan. Tag matching is case-insensitive,
+ * which PostgREST array operators can't express, so we page through every
+ * tagged contact (keyset on id) and filter in process — no tenant-size cap,
+ * bounded memory per page.
  */
-export const RETAG_SCAN_LIMIT = 2000;
+export const RETAG_PAGE_SIZE = 1000;
 
 type PipelineRow = { id: string; business_id: string; name: string; position: number };
 type StageRow = {
@@ -275,6 +275,22 @@ async function getStages(
   return (data ?? []) as StageRow[];
 }
 
+/** Assert the pipeline exists under this business (tenant-scoped). */
+async function assertPipelineOwned(
+  db: SupabaseClient,
+  businessId: string,
+  pipelineId: string
+): Promise<void> {
+  const { data, error } = await db
+    .from("pipelines")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("id", pipelineId)
+    .maybeSingle();
+  if (error) throw new Error(`pipeline lookup: ${error.message}`);
+  if (!data) throw new PipelineError("not_found", "Pipeline not found.");
+}
+
 /** Add a stage at the end of the board. */
 export async function addStage(
   businessId: string,
@@ -284,6 +300,10 @@ export async function addStage(
 ): Promise<PipelineStage> {
   const db = client ?? (await createSupabaseServiceClient());
   const name = cleanStageName(stage.name);
+  // A stageless result can't distinguish "empty pipeline" from "someone
+  // else's pipeline UUID" — verify ownership before writing a row that
+  // would pair this business_id with a foreign pipeline_id.
+  await assertPipelineOwned(db, businessId, pipelineId);
   const siblings = await getStages(db, businessId, pipelineId);
   if (siblings.length >= MAX_STAGES_PER_PIPELINE) {
     throw new PipelineError(
@@ -312,16 +332,23 @@ export async function addStage(
   return toStage(data as StageRow);
 }
 
-/** One stage row by id, tenant-scoped. */
+/**
+ * One stage row by id, scoped to the tenant AND the pipeline named in the
+ * request path — a stage id from a different board (even the same
+ * business's) is a not-found, so the URL can never lie about what a call
+ * mutates.
+ */
 async function getStage(
   db: SupabaseClient,
   businessId: string,
+  pipelineId: string,
   stageId: string
 ): Promise<StageRow> {
   const { data, error } = await db
     .from("pipeline_stages")
     .select(STAGE_COLUMNS)
     .eq("business_id", businessId)
+    .eq("pipeline_id", pipelineId)
     .eq("id", stageId)
     .maybeSingle();
   if (error) throw new Error(`pipeline stage: ${error.message}`);
@@ -331,8 +358,10 @@ async function getStage(
 
 /**
  * Swap `fromTag` for `toTag` on every tagged contact of the business.
- * Case-insensitive; bounded by {@link RETAG_SCAN_LIMIT}. Returns the number
- * of contacts updated.
+ * Case-insensitive. Pages through the whole tenant (keyset on id, ordered
+ * pages of {@link RETAG_PAGE_SIZE}) so large tenants are fully retagged —
+ * a capped scan would silently strand contacts on the old tag. Returns the
+ * number of contacts updated.
  */
 async function retagContacts(
   db: SupabaseClient,
@@ -340,28 +369,36 @@ async function retagContacts(
   fromTag: string,
   toTag: string
 ): Promise<number> {
-  const { data, error } = await db
-    .from("contacts")
-    .select("id, tags")
-    .eq("business_id", businessId)
-    .neq("tags", "{}")
-    .limit(RETAG_SCAN_LIMIT);
-  if (error) throw new Error(`retagContacts: ${error.message}`);
   const fromKey = fromTag.trim().toLowerCase();
   let updated = 0;
-  for (const row of (data ?? []) as Array<{ id: string; tags: string[] | null }>) {
-    const tags = Array.isArray(row.tags) ? row.tags : [];
-    if (!tags.some((t) => t.trim().toLowerCase() === fromKey)) continue;
-    const kept = tags.filter((t) => t.trim().toLowerCase() !== fromKey);
-    const next = normalizeContactTags([...kept, toTag]);
-    const { error: updErr } = await db
+  let afterId: string | null = null;
+  for (;;) {
+    let query = db
       .from("contacts")
-      .update({ tags: next, updated_at: new Date().toISOString() })
-      .eq("id", row.id);
-    if (updErr) throw new Error(`retagContacts: update: ${updErr.message}`);
-    updated += 1;
+      .select("id, tags")
+      .eq("business_id", businessId)
+      .neq("tags", "{}")
+      .order("id", { ascending: true })
+      .limit(RETAG_PAGE_SIZE);
+    if (afterId) query = query.gt("id", afterId);
+    const { data, error } = await query;
+    if (error) throw new Error(`retagContacts: ${error.message}`);
+    const rows = (data ?? []) as Array<{ id: string; tags: string[] | null }>;
+    for (const row of rows) {
+      const tags = Array.isArray(row.tags) ? row.tags : [];
+      if (!tags.some((t) => t.trim().toLowerCase() === fromKey)) continue;
+      const kept = tags.filter((t) => t.trim().toLowerCase() !== fromKey);
+      const next = normalizeContactTags([...kept, toTag]);
+      const { error: updErr } = await db
+        .from("contacts")
+        .update({ tags: next, updated_at: new Date().toISOString() })
+        .eq("id", row.id);
+      if (updErr) throw new Error(`retagContacts: update: ${updErr.message}`);
+      updated += 1;
+    }
+    if (rows.length < RETAG_PAGE_SIZE) return updated;
+    afterId = rows[rows.length - 1]!.id;
   }
-  return updated;
 }
 
 /**
@@ -372,19 +409,20 @@ async function retagContacts(
  */
 export async function updateStage(
   businessId: string,
+  pipelineId: string,
   stageId: string,
   patch: { name?: string; color?: string },
   client?: SupabaseClient
 ): Promise<{ stage: PipelineStage; retagged: number }> {
   const db = client ?? (await createSupabaseServiceClient());
-  const stage = await getStage(db, businessId, stageId);
+  const stage = await getStage(db, businessId, pipelineId, stageId);
 
   const updates: Record<string, string> = { updated_at: new Date().toISOString() };
   let renamedFrom: string | null = null;
   if (patch.name !== undefined) {
     const name = cleanStageName(patch.name);
     if (name !== stage.name) {
-      const siblings = await getStages(db, businessId, stage.pipeline_id);
+      const siblings = await getStages(db, businessId, pipelineId);
       if (
         siblings.some(
           (s) => s.id !== stageId && s.name.toLowerCase() === name.toLowerCase()
@@ -456,22 +494,21 @@ export async function reorderStages(
  */
 export async function deleteStage(
   businessId: string,
+  pipelineId: string,
   stageId: string,
   destinationStageId: string | null,
   client?: SupabaseClient
 ): Promise<{ retagged: number }> {
   const db = client ?? (await createSupabaseServiceClient());
-  const stage = await getStage(db, businessId, stageId);
+  const stage = await getStage(db, businessId, pipelineId, stageId);
 
   let destination: StageRow | null = null;
   if (destinationStageId) {
     if (destinationStageId === stageId) {
       throw new PipelineError("invalid", "Destination must be a different stage.");
     }
-    destination = await getStage(db, businessId, destinationStageId);
-    if (destination.pipeline_id !== stage.pipeline_id) {
-      throw new PipelineError("invalid", "Destination must be on the same pipeline.");
-    }
+    // Same pipeline is guaranteed by the pipeline-scoped lookup itself.
+    destination = await getStage(db, businessId, pipelineId, destinationStageId);
   }
 
   const { error } = await db

@@ -18,6 +18,7 @@ import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { Card } from "@/components/ui/Card";
 import { TasksWorkspace } from "@/components/dashboard/TasksWorkspace";
 
@@ -71,8 +72,17 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   const canManagePipelines = ctx.role === "owner" || ctx.role === "manager";
   const rawLead = (await searchParams).lead ?? null;
   // Same shape the contact routes accept; anything else is ignored.
-  const highlightLead =
+  let highlightLead =
     rawLead && /^(\+[1-9]\d{6,15}|\d{3,8})$/.test(rawLead) ? rawLead : null;
+  // The deep link may carry a merged-away ALIAS while board cards are keyed
+  // on the surviving profile's primary — resolve alias-aware so the
+  // highlight still lands. Best-effort: an unknown number stays as-is.
+  if (highlightLead) {
+    const memory = await getCustomerMemory(ctx.businessId, highlightLead).catch(
+      () => null
+    );
+    if (memory) highlightLead = memory.customer_e164;
+  }
 
   return (
     <div className="max-w-6xl space-y-6">

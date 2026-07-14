@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   PipelineError,
-  RETAG_SCAN_LIMIT,
+  RETAG_PAGE_SIZE,
   listPipelines,
   createPipeline,
   renamePipeline,
@@ -39,6 +39,7 @@ function chain(result: Result) {
     "delete",
     "eq",
     "neq",
+    "gt",
     "in",
     "order",
     "limit",
@@ -365,8 +366,12 @@ describe("renamePipeline / deletePipeline", () => {
 describe("addStage", () => {
   beforeEach(() => vi.clearAllMocks());
 
+  /** Ownership assertion result all happy-path addStage mocks share. */
+  const OWNED = { data: { id: "p1" }, error: null };
+
   it("appends after the last position and clamps the color", async () => {
     const db = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [
         { data: [S1, S2], error: null }, // siblings
         { data: { ...S1, id: "s3", name: "Won", color: "green", position: 2 }, error: null }
@@ -381,6 +386,7 @@ describe("addStage", () => {
 
   it("starts at position 0 on an empty pipeline and creates a client when needed", async () => {
     const db = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [
         { data: [], error: null },
         { data: { ...S1, id: "s9", position: 0 }, error: null }
@@ -394,8 +400,24 @@ describe("addStage", () => {
     );
   });
 
+  it("refuses a pipeline the business does not own (and surfaces lookup errors)", async () => {
+    // An empty-sibling result must NOT be treated as an empty pipeline when
+    // the pipeline row itself isn't this tenant's.
+    const foreign = mockDb({ pipelines: [{ data: null, error: null }] });
+    await expect(
+      addStage("biz-1", "someone-elses-pipeline", { name: "A" }, foreign as never)
+    ).rejects.toMatchObject({ code: "not_found" });
+    expect(foreign.from).toHaveBeenCalledTimes(1);
+
+    const badLookup = mockDb({ pipelines: [{ data: null, error: { message: "own" } }] });
+    await expect(addStage("biz-1", "p1", { name: "A" }, badLookup as never)).rejects.toThrow(
+      "pipeline lookup: own"
+    );
+  });
+
   it("rejects the stage cap, duplicates, invalid names, and query errors", async () => {
     const full = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [
         {
           data: Array.from({ length: MAX_STAGES_PER_PIPELINE }, (_, i) => ({
@@ -412,7 +434,7 @@ describe("addStage", () => {
       `at most ${MAX_STAGES_PER_PIPELINE} stages`
     );
 
-    const dup = mockDb({ pipeline_stages: [{ data: [S1], error: null }] });
+    const dup = mockDb({ pipelines: [OWNED], pipeline_stages: [{ data: [S1], error: null }] });
     await expect(addStage("biz-1", "p1", { name: "new lead" }, dup as never)).rejects.toThrow(
       'A stage named "new lead" already exists.'
     );
@@ -426,6 +448,7 @@ describe("addStage", () => {
     ).rejects.toThrow("Stage names");
 
     const badSiblings = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [{ data: null, error: { message: "sib" } }]
     });
     await expect(addStage("biz-1", "p1", { name: "A" }, badSiblings as never)).rejects.toThrow(
@@ -433,6 +456,7 @@ describe("addStage", () => {
     );
 
     const badInsert = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [
         { data: [], error: null },
         { data: null, error: { message: "ins" } }
@@ -443,6 +467,7 @@ describe("addStage", () => {
     );
 
     const noRow = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [
         { data: [], error: null },
         { data: null, error: null }
@@ -455,6 +480,7 @@ describe("addStage", () => {
 
   it("tolerates null sibling rows", async () => {
     const db = mockDb({
+      pipelines: [OWNED],
       pipeline_stages: [
         { data: null, error: null },
         { data: { ...S1, id: "s9", position: 0 }, error: null }
@@ -477,6 +503,7 @@ describe("updateStage", () => {
     });
     const { stage, retagged } = await updateStage(
       "biz-1",
+      "p1",
       "s1",
       { color: "rose" },
       db as never
@@ -493,7 +520,7 @@ describe("updateStage", () => {
         { data: S1, error: null }
       ]
     });
-    const { retagged } = await updateStage("biz-1", "s1", { name: "New Lead" }, db as never);
+    const { retagged } = await updateStage("biz-1", "p1", "s1", { name: "New Lead" }, db as never);
     expect(retagged).toBe(0);
   });
 
@@ -507,6 +534,7 @@ describe("updateStage", () => {
     });
     const { stage, retagged } = await updateStage(
       "biz-1",
+      "p1",
       "s1",
       { name: "NEW LEAD" },
       db as never
@@ -536,16 +564,55 @@ describe("updateStage", () => {
     });
     const { stage, retagged } = await updateStage(
       "biz-1",
+      "p1",
       "s1",
       { name: "Fresh Lead" },
       db as never
     );
     expect(stage.name).toBe("Fresh Lead");
     expect(retagged).toBe(1);
-    expect(db.chains.contacts[0].limit).toHaveBeenCalledWith(RETAG_SCAN_LIMIT);
+    expect(db.chains.contacts[0].limit).toHaveBeenCalledWith(RETAG_PAGE_SIZE);
     expect(db.chains.contacts[1].update).toHaveBeenCalledWith(
       expect.objectContaining({ tags: ["VIP", "Fresh Lead"] })
     );
+  });
+
+  it("pages the retag scan through the whole tenant (keyset on id)", async () => {
+    // Page 1 is exactly full (forcing a second fetch); the tagged rows are
+    // spread across both pages so the count proves both were processed.
+    const page1 = Array.from({ length: RETAG_PAGE_SIZE }, (_, i) => ({
+      id: `c${String(i).padStart(4, "0")}`,
+      tags: i === 7 ? ["New Lead"] : ["VIP"]
+    }));
+    const page2 = [{ id: "c9999", tags: ["new lead"] }];
+    const db = mockDb({
+      pipeline_stages: [
+        { data: S1, error: null }, // getStage
+        { data: [S1], error: null }, // siblings
+        { data: { ...S1, name: "Fresh" }, error: null } // update
+      ],
+      contacts: [
+        { data: page1, error: null }, // scan page 1
+        { data: null, error: null }, // c0007 update
+        { data: page2, error: null }, // scan page 2
+        { data: null, error: null } // c9999 update
+      ]
+    });
+    const { retagged } = await updateStage(
+      "biz-1",
+      "p1",
+      "s1",
+      { name: "Fresh" },
+      db as never
+    );
+    expect(retagged).toBe(2);
+    // First scan has no cursor; second scan keysets past page 1's last id.
+    expect(db.chains.contacts[0].gt).not.toHaveBeenCalled();
+    expect(db.chains.contacts[2].gt).toHaveBeenCalledWith(
+      "id",
+      page1[page1.length - 1]!.id
+    );
+    expect(db.chains.contacts[0].limit).toHaveBeenCalledWith(RETAG_PAGE_SIZE);
   });
 
   it("rejects renaming onto an existing sibling and surfaces errors", async () => {
@@ -556,16 +623,16 @@ describe("updateStage", () => {
       ]
     });
     await expect(
-      updateStage("biz-1", "s1", { name: "contacted" }, dup as never)
+      updateStage("biz-1", "p1", "s1", { name: "contacted" }, dup as never)
     ).rejects.toThrow('A stage named "contacted" already exists.');
 
     const missing = mockDb({ pipeline_stages: [{ data: null, error: null }] });
-    await expect(updateStage("biz-1", "s1", {}, missing as never)).rejects.toMatchObject({
+    await expect(updateStage("biz-1", "p1", "s1", {}, missing as never)).rejects.toMatchObject({
       code: "not_found"
     });
 
     const badRead = mockDb({ pipeline_stages: [{ data: null, error: { message: "read" } }] });
-    await expect(updateStage("biz-1", "s1", {}, badRead as never)).rejects.toThrow(
+    await expect(updateStage("biz-1", "p1", "s1", {}, badRead as never)).rejects.toThrow(
       "pipeline stage: read"
     );
 
@@ -576,7 +643,7 @@ describe("updateStage", () => {
       ]
     });
     await expect(
-      updateStage("biz-1", "s1", { color: "rose" }, badWrite as never)
+      updateStage("biz-1", "p1", "s1", { color: "rose" }, badWrite as never)
     ).rejects.toThrow("updateStage: write");
 
     const noRow = mockDb({
@@ -585,12 +652,12 @@ describe("updateStage", () => {
         { data: null, error: null }
       ]
     });
-    await expect(updateStage("biz-1", "s1", { color: "rose" }, noRow as never)).rejects.toThrow(
+    await expect(updateStage("biz-1", "p1", "s1", { color: "rose" }, noRow as never)).rejects.toThrow(
       "updateStage: update returned no row"
     );
 
     const invalid = mockDb({ pipeline_stages: [{ data: S1, error: null }] });
-    await expect(updateStage("biz-1", "s1", { name: " " }, invalid as never)).rejects.toThrow(
+    await expect(updateStage("biz-1", "p1", "s1", { name: " " }, invalid as never)).rejects.toThrow(
       "Stage names"
     );
   });
@@ -604,7 +671,7 @@ describe("updateStage", () => {
       ],
       contacts: [{ data: null, error: null }]
     });
-    const { retagged } = await updateStage("biz-1", "s1", { name: "Fresh" }, db as never);
+    const { retagged } = await updateStage("biz-1", "p1", "s1", { name: "Fresh" }, db as never);
     expect(retagged).toBe(0);
   });
 
@@ -618,7 +685,7 @@ describe("updateStage", () => {
       contacts: [{ data: null, error: { message: "scan" } }]
     });
     await expect(
-      updateStage("biz-1", "s1", { name: "Fresh" }, badScan as never)
+      updateStage("biz-1", "p1", "s1", { name: "Fresh" }, badScan as never)
     ).rejects.toThrow("retagContacts: scan");
 
     const badUpdate = mockDb({
@@ -633,7 +700,7 @@ describe("updateStage", () => {
       ]
     });
     await expect(
-      updateStage("biz-1", "s1", { name: "Fresh" }, badUpdate as never)
+      updateStage("biz-1", "p1", "s1", { name: "Fresh" }, badUpdate as never)
     ).rejects.toThrow("retagContacts: update: upd");
   });
 
@@ -645,7 +712,7 @@ describe("updateStage", () => {
       ]
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await updateStage("biz-1", "s1", {});
+    await updateStage("biz-1", "p1", "s1", {});
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
@@ -717,7 +784,7 @@ describe("deleteStage", () => {
         { data: null, error: null } // delete
       ]
     });
-    const { retagged } = await deleteStage("biz-1", "s1", null, db as never);
+    const { retagged } = await deleteStage("biz-1", "p1", "s1", null, db as never);
     expect(retagged).toBe(0);
     expect(db.from.mock.calls.map((c) => c[0])).toEqual([
       "pipeline_stages",
@@ -743,7 +810,7 @@ describe("deleteStage", () => {
         { data: null, error: null }
       ]
     });
-    const { retagged } = await deleteStage("biz-1", "s1", "s2", db as never);
+    const { retagged } = await deleteStage("biz-1", "p1", "s1", "s2", db as never);
     expect(retagged).toBe(2);
     // c1: swap. c2: already had the destination tag; de-dup keeps one copy.
     expect(db.chains.contacts[1].update).toHaveBeenCalledWith(
@@ -756,18 +823,20 @@ describe("deleteStage", () => {
 
   it("rejects self/cross-pipeline destinations and surfaces delete errors", async () => {
     const self = mockDb({ pipeline_stages: [{ data: S1, error: null }] });
-    await expect(deleteStage("biz-1", "s1", "s1", self as never)).rejects.toThrow(
+    await expect(deleteStage("biz-1", "p1", "s1", "s1", self as never)).rejects.toThrow(
       "different stage"
     );
 
+    // A destination on another pipeline never resolves: the lookup is scoped
+    // to the URL's pipeline, so it comes back not_found.
     const cross = mockDb({
       pipeline_stages: [
         { data: S1, error: null },
-        { data: { ...S2, pipeline_id: "p9" }, error: null }
+        { data: null, error: null }
       ]
     });
-    await expect(deleteStage("biz-1", "s1", "s2", cross as never)).rejects.toThrow(
-      "same pipeline"
+    await expect(deleteStage("biz-1", "p1", "s1", "s9", cross as never)).rejects.toMatchObject(
+      { code: "not_found" }
     );
 
     const badDelete = mockDb({
@@ -776,7 +845,7 @@ describe("deleteStage", () => {
         { data: null, error: { message: "del" } }
       ]
     });
-    await expect(deleteStage("biz-1", "s1", null, badDelete as never)).rejects.toThrow(
+    await expect(deleteStage("biz-1", "p1", "s1", null, badDelete as never)).rejects.toThrow(
       "deleteStage: del"
     );
   });
@@ -789,7 +858,7 @@ describe("deleteStage", () => {
       ]
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await deleteStage("biz-1", "s1", null);
+    await deleteStage("biz-1", "p1", "s1", null);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
