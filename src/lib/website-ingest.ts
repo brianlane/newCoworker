@@ -1204,10 +1204,15 @@ export async function ingestWebsite(
 
   // Same per-page gate on the final result: without it, a titles-only crawl
   // would "succeed" with a garbage summary whenever the reader fallback is
-  // unavailable (disabled, down, or itself blocked).
+  // unavailable (disabled, down, or itself blocked). When the homepage
+  // itself failed with an actionable error (CDN/WAF 403 etc.), that detail
+  // is the real story — a few low-signal shells recovered from sitemap
+  // subpages must not mask it behind a generic empty_content.
   const finalRichestPageChars = pages.reduce((max, page) => Math.max(max, page.text.length), 0);
   if (finalRichestPageChars < WEBSITE_INGEST_MIN_CORPUS_CHARS) {
-    return { ok: false, error: "empty_content" };
+    return homepageErrorDetail
+      ? { ok: false, error: "fetch_failed", detail: homepageErrorDetail }
+      : { ok: false, error: "empty_content" };
   }
 
   // Per-page budget: a lone page (or Jina fallback) can use the whole

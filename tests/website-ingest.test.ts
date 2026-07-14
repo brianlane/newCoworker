@@ -1953,6 +1953,38 @@ describe("ingestWebsite", () => {
     expect(summarize).not.toHaveBeenCalled();
   });
 
+  it("surfaces the homepage CDN error detail even when low-signal sitemap subpages were fetched", async () => {
+    // Bugbot finding: homepage 403 (actionable CDN/WAF story) + sitemap
+    // subpages returning SPA shells made `pages` non-empty, so the ingest
+    // reported a generic empty_content and hid the 403 detail the owner
+    // needs to act on.
+    const shell = "<html><head><title>Shell Title</title></head><body><div id=\"root\"></div></body></html>";
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(urlset(["https://example.com/app-page"]));
+      }
+      if (url === "https://example.com/") {
+        return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+      }
+      return new Response(shell, { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      maxPages: 5,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("fetch_failed");
+      expect(res.detail).toMatch(/HTTP 403/);
+    }
+  });
+
   it("caps total fetch attempts at maxPages even when every page is textless (BFS can't run away)", async () => {
     // Bugbot finding: budgeting on pages-with-text let a site of textless,
     // link-rich pages keep fetching until the deadline/byte budget. Every
