@@ -15,6 +15,7 @@
  * re-derive it.
  */
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
@@ -527,20 +528,37 @@ export default async function BillingPage(props: {
         )}
       </Card>
 
+      {/* Deliberately unpriced (matches the public /pricing card): interest
+          routes to the contact form as a sales lead and a specialist quotes
+          from there. Only admin-authored custom offers below are payable. */}
       {whiteGloveOffers.length > 0 && (
-        <UsagePacks
-          title="White-glove onboarding"
-          description="One-time, hands-on onboarding with a specialist. Either package opens a 30-day priority call & video support line."
-          checkoutPath="/api/billing/white-glove/checkout"
-          packs={whiteGloveOffers.map((p) => ({
-            id: p.id,
-            label: p.name,
-            priceUsd: p.priceUsd,
-            subline: p.description
-          }))}
-          canPurchase={canPurchase}
-          disabledReason={disabledReason}
-        />
+        <Card>
+          <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">
+            White-glove onboarding
+          </h2>
+          <p className="mt-1 text-xs text-parchment/50">
+            One-time, hands-on onboarding with a specialist. Either package opens a 30-day
+            priority call &amp; video support line. Tell us you&apos;re interested and a
+            specialist will reach out with a quote.
+          </p>
+          <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+            {whiteGloveOffers.map((pkg) => (
+              <div
+                key={pkg.id}
+                className="rounded-lg border border-parchment/15 bg-deep-ink/40 p-4 flex flex-col gap-2"
+              >
+                <p className="text-xs text-parchment/50 uppercase tracking-wider">{pkg.name}</p>
+                <p className="text-[11px] text-parchment/40">{pkg.description}</p>
+                <Link
+                  href="/contact?topic=white-glove"
+                  className="mt-auto inline-flex items-center justify-center rounded-md bg-claw-green px-3 py-1.5 text-sm font-semibold text-deep-ink transition-all duration-150 hover:bg-opacity-90"
+                >
+                  Contact us
+                </Link>
+              </div>
+            ))}
+          </div>
+        </Card>
       )}
 
       {customWhiteGloveOffers.length > 0 && (
