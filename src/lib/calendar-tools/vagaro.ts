@@ -18,8 +18,10 @@
 import { getActiveVagaroConnection, type VagaroConnectionRow } from "@/lib/db/vagaro-connections";
 import {
   createVagaroAppointment,
+  deleteVagaroAppointment,
   listVagaroServices,
   searchVagaroAvailability,
+  updateVagaroAppointmentTime,
   VagaroApiError,
   type VagaroService
 } from "@/lib/vagaro/client";
@@ -181,6 +183,67 @@ export async function bookVagaroAppointment(
         serviceId: service.id,
         serviceName: service.name
       }
+    };
+  } catch (err) {
+    if (err instanceof VagaroApiError && err.code === "auth_failed") {
+      return { ok: false, detail: "vagaro_auth_failed" };
+    }
+    throw err;
+  }
+}
+
+/**
+ * `calendar_reschedule_appointment` core for Vagaro connections: moves the
+ * located appointment IN PLACE on the merchant's book. The appointment id
+ * comes from the caller (resolved via the booking ledger); no Vagaro-side
+ * search exists in v1 — a ledger-less booking surfaces booking_not_found
+ * upstream.
+ */
+export async function rescheduleVagaroAppointment(
+  businessId: string,
+  appointmentId: string,
+  newStartIso: string,
+  newEndIso: string
+): Promise<CalendarToolResult> {
+  const conn = await getActiveVagaroConnection(businessId);
+  if (!conn) return { ok: false, detail: "calendar_not_connected" };
+  try {
+    await updateVagaroAppointmentTime(
+      conn,
+      appointmentId,
+      new Date(newStartIso).toISOString(),
+      new Date(newEndIso).toISOString()
+    );
+    return {
+      ok: true,
+      data: {
+        eventId: appointmentId,
+        provider: "vagaro",
+        startIso: new Date(newStartIso).toISOString(),
+        endIso: new Date(newEndIso).toISOString(),
+        rescheduled: true
+      }
+    };
+  } catch (err) {
+    if (err instanceof VagaroApiError && err.code === "auth_failed") {
+      return { ok: false, detail: "vagaro_auth_failed" };
+    }
+    throw err;
+  }
+}
+
+/** `calendar_cancel_appointment` core for Vagaro connections. */
+export async function cancelVagaroAppointment(
+  businessId: string,
+  appointmentId: string
+): Promise<CalendarToolResult> {
+  const conn = await getActiveVagaroConnection(businessId);
+  if (!conn) return { ok: false, detail: "calendar_not_connected" };
+  try {
+    await deleteVagaroAppointment(conn, appointmentId);
+    return {
+      ok: true,
+      data: { eventId: appointmentId, provider: "vagaro", canceled: true }
     };
   } catch (err) {
     if (err instanceof VagaroApiError && err.code === "auth_failed") {

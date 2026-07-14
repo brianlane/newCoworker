@@ -1063,7 +1063,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_reschedule_appointment",
-      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation — this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset.",
+      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation — this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — send that link so the customer picks the new time themselves; never state the reschedule is done.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1169,7 +1169,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_reschedule_appointment",
-      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place — never book a second appointment to change a time. Times must be ISO 8601 with timezone offset.",
+      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place — never book a second appointment to change a time. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — share that link so the invitee picks the new time themselves.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",

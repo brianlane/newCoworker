@@ -15,6 +15,14 @@ vi.mock("@/lib/calendar-tools/handlers", () => ({
   resolveToolTimezone: vi.fn(async () => "America/New_York"),
   wallClockInZone: vi.fn((d: Date, tz: string) => `wall(${d.toISOString()},${tz})`)
 }));
+vi.mock("@/lib/calendar-tools/calendly", () => ({
+  cancelCalendlyAppointment: vi.fn(),
+  createCalendlyRescheduleLink: vi.fn()
+}));
+vi.mock("@/lib/calendar-tools/vagaro", () => ({
+  cancelVagaroAppointment: vi.fn(),
+  rescheduleVagaroAppointment: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn() } }));
 
 import {
@@ -31,6 +39,14 @@ import {
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
+import {
+  cancelCalendlyAppointment,
+  createCalendlyRescheduleLink
+} from "@/lib/calendar-tools/calendly";
+import {
+  cancelVagaroAppointment,
+  rescheduleVagaroAppointment
+} from "@/lib/calendar-tools/vagaro";
 
 /**
  * Appointment lifecycle cores (Truly Issue 4): a reschedule PATCHes the
@@ -53,6 +69,8 @@ const MS_CONN = {
   providerConfigKey: "microsoft-calendar"
 } as never;
 const CALENDLY_CONN = { provider: "calendly", connectionId: "c", providerConfigKey: "k" } as never;
+const VAGARO_CONN = { provider: "vagaro", connectionId: "v", providerConfigKey: "vk" } as never;
+const CALDAV_CONN = { provider: "caldav", connectionId: "d", providerConfigKey: "dk" } as never;
 
 const RESCHEDULE_ARGS = {
   newStartIso: "2026-07-15T20:00:00.000Z",
@@ -90,13 +108,95 @@ describe("rescheduleCalendarAppointment", () => {
     });
   });
 
-  it("refuses link/booking-system providers as not supported (v1)", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+  it("refuses CalDAV as not supported", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
     expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
       ok: false,
       detail: "reschedule_not_supported"
     });
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("Calendly: delegates to the reschedule-link core with the caller's identity", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    const linkResult = {
+      ok: true,
+      detail: "reschedule_link_created",
+      data: { rescheduleLink: "https://calendly.com/reschedulings/abc" }
+    } as never;
+    vi.mocked(createCalendlyRescheduleLink).mockResolvedValue(linkResult);
+
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toBe(linkResult);
+    expect(vi.mocked(createCalendlyRescheduleLink)).toHaveBeenCalledWith(BIZ, CALENDLY_CONN, {
+      phone: PHONE,
+      email: null
+    });
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    // No ledger writes: Calendly link bookings never hold ledger rows.
+    expect(vi.mocked(rescheduleBookingClaim)).not.toHaveBeenCalled();
+  });
+
+  it("Calendly: forwards the attendee email when provided", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(createCalendlyRescheduleLink).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    await rescheduleCalendarAppointment(BIZ, {
+      ...RESCHEDULE_ARGS,
+      attendeeEmail: "joe@acme.com"
+    });
+    expect(vi.mocked(createCalendlyRescheduleLink)).toHaveBeenCalledWith(BIZ, CALENDLY_CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+  });
+
+  it("Vagaro: moves the ledger-resolved appointment and shifts the claim on success", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const moved = {
+      ok: true,
+      data: { eventId: "evt-1", provider: "vagaro", rescheduled: true }
+    } as never;
+    vi.mocked(rescheduleVagaroAppointment).mockResolvedValue(moved);
+
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toBe(moved);
+    expect(vi.mocked(rescheduleVagaroAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      "evt-1",
+      RESCHEDULE_ARGS.newStartIso,
+      RESCHEDULE_ARGS.newEndIso
+    );
+    expect(vi.mocked(rescheduleBookingClaim)).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+15485773546",
+      "claim-1",
+      "2026-07-15T20:00:00.000Z"
+    );
+  });
+
+  it("Vagaro: keeps the claim in place when the provider move fails", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(rescheduleVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "vagaro_auth_failed"
+    } as never);
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
+      ok: false,
+      detail: "vagaro_auth_failed"
+    });
+    expect(vi.mocked(rescheduleBookingClaim)).not.toHaveBeenCalled();
+  });
+
+  it("Vagaro: booking_not_found without a ledger claim (no provider search exists)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+    expect(vi.mocked(rescheduleVagaroAppointment)).not.toHaveBeenCalled();
   });
 
   it("booking_not_found when neither the ledger nor the provider search locates an event", async () => {
@@ -430,12 +530,80 @@ describe("cancelCalendarAppointment", () => {
     });
   });
 
-  it("refuses link/booking-system providers as not supported (v1)", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+  it("refuses CalDAV as not supported", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
       ok: false,
       detail: "cancel_not_supported"
     });
+  });
+
+  it("Calendly: delegates to the API-side cancellation core", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    const canceled = {
+      ok: true,
+      data: { eventId: "uuid-1", provider: "calendly", canceled: true }
+    } as never;
+    vi.mocked(cancelCalendlyAppointment).mockResolvedValue(canceled);
+
+    expect(await cancelCalendarAppointment(BIZ, { ...CANCEL_ARGS, attendeeEmail: "joe@acme.com" })).toBe(
+      canceled
+    );
+    expect(vi.mocked(cancelCalendlyAppointment)).toHaveBeenCalledWith(BIZ, CALENDLY_CONN, {
+      phone: PHONE,
+      email: "joe@acme.com"
+    });
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+  });
+
+  it("Calendly: null email when the model omits it", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(cancelCalendlyAppointment).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(cancelCalendlyAppointment)).toHaveBeenCalledWith(BIZ, CALENDLY_CONN, {
+      phone: PHONE,
+      email: null
+    });
+  });
+
+  it("Vagaro: cancels the ledger-resolved appointment and drops the claim", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const canceled = {
+      ok: true,
+      data: { eventId: "evt-1", provider: "vagaro", canceled: true }
+    } as never;
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue(canceled);
+
+    expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toBe(canceled);
+    expect(vi.mocked(cancelVagaroAppointment)).toHaveBeenCalledWith(BIZ, "evt-1");
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
+  it("Vagaro: keeps the claim when the provider cancel fails", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_cancel_failed"
+    } as never);
+    expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
+      ok: false,
+      detail: "calendar_cancel_failed"
+    });
+    expect(vi.mocked(deleteBookingClaim)).not.toHaveBeenCalled();
+  });
+
+  it("Vagaro: booking_not_found without a ledger claim", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+    expect(vi.mocked(cancelVagaroAppointment)).not.toHaveBeenCalled();
   });
 
   it("booking_not_found when nothing locates the event", async () => {
