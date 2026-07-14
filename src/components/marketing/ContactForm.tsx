@@ -9,11 +9,26 @@ const INPUT_CLASSES =
 
 const LABEL_CLASSES = "mb-2 block text-sm font-medium text-parchment/70";
 
+type Props = {
+  defaultSubject?: string;
+  /** Prefill for signed-in owners arriving from dashboard CTAs. */
+  defaultName?: string;
+  defaultEmail?: string;
+  defaultBusinessName?: string;
+  defaultMessage?: string;
+};
+
 /**
  * Client-side contact form that posts to /api/contact. Includes a hidden
  * honeypot field that the API answers 200 for but discards.
  */
-export function ContactForm({ defaultSubject }: { defaultSubject?: string }) {
+export function ContactForm({
+  defaultSubject,
+  defaultName,
+  defaultEmail,
+  defaultBusinessName,
+  defaultMessage
+}: Props) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -87,6 +102,7 @@ export function ContactForm({ defaultSubject }: { defaultSubject?: string }) {
             required
             maxLength={120}
             autoComplete="name"
+            defaultValue={defaultName}
             className={INPUT_CLASSES}
           />
         </div>
@@ -101,6 +117,7 @@ export function ContactForm({ defaultSubject }: { defaultSubject?: string }) {
             required
             maxLength={254}
             autoComplete="email"
+            defaultValue={defaultEmail}
             className={INPUT_CLASSES}
           />
         </div>
@@ -116,6 +133,7 @@ export function ContactForm({ defaultSubject }: { defaultSubject?: string }) {
           type="text"
           maxLength={160}
           autoComplete="organization"
+          defaultValue={defaultBusinessName}
           className={INPUT_CLASSES}
         />
       </div>
@@ -145,6 +163,7 @@ export function ContactForm({ defaultSubject }: { defaultSubject?: string }) {
           required
           rows={4}
           maxLength={5000}
+          defaultValue={defaultMessage}
           placeholder="Tell us how we can help: support, enterprise plans, white-glove onboarding, partnerships, or anything else."
           className={`${INPUT_CLASSES} resize-none`}
         />

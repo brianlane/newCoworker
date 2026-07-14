@@ -1,6 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Briefcase, LifeBuoy, Mail, Users } from "lucide-react";
+import { getAuthUser } from "@/lib/auth";
+import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { ContactForm } from "@/components/marketing/ContactForm";
@@ -57,13 +60,64 @@ const topics = [
 
 /**
  * Known ?topic= values map to a prefilled form subject so CTAs elsewhere
- * (e.g. the white-glove lead button on /pricing) land as labeled leads.
+ * (e.g. the white-glove lead button on /pricing and /dashboard/billing) land
+ * as labeled leads. The message template gets the business name when the
+ * visitor is a signed-in owner, so the lead arrives ready to send.
  */
 const TOPIC_SUBJECTS: Record<string, string> = {
   "white-glove": "White-glove onboarding",
   enterprise: "Enterprise inquiry",
   support: "Support request"
 };
+
+const TOPIC_MESSAGES: Record<string, (businessName: string | null) => string> = {
+  "white-glove": (businessName) =>
+    `Hi, I'm interested in white-glove onboarding${businessName ? ` for ${businessName}` : ""}. Please reach out to talk through setup, number porting, training, and pricing.`,
+  enterprise: (businessName) =>
+    `Hi, I'd like to talk about an Enterprise plan${businessName ? ` for ${businessName}` : ""}. Please reach out with next steps.`,
+  support: (businessName) =>
+    `Hi, I need help with${businessName ? ` ${businessName}'s` : " my"} account. Here's what's going on: `
+};
+
+/**
+ * Prefill for signed-in visitors: their email, plus the active business's
+ * owner name + business name. Best-effort — any failure (signed out, no
+ * business, DB hiccup) just renders the empty public form.
+ */
+async function resolvePrefill(): Promise<{
+  name?: string;
+  email?: string;
+  businessName?: string;
+}> {
+  try {
+    const user = await getAuthUser();
+    if (!user?.email) return {};
+    const businessId = await resolveActiveBusinessId(user);
+    if (!businessId) return { email: user.email };
+    const db = await createSupabaseServiceClient();
+    const { data } = await db
+      .from("businesses")
+      .select("name, owner_name, owner_email")
+      .eq("id", businessId)
+      .maybeSingle();
+    const row = (data ?? null) as {
+      name?: string | null;
+      owner_name?: string | null;
+      owner_email?: string | null;
+    } | null;
+    // Team members reach the business too — only claim the owner's name for
+    // the "Name" field when the login actually is the owner.
+    const isOwner =
+      (row?.owner_email ?? "").trim().toLowerCase() === user.email.trim().toLowerCase();
+    return {
+      name: isOwner ? row?.owner_name?.trim() || undefined : undefined,
+      email: user.email,
+      businessName: row?.name?.trim() || undefined
+    };
+  } catch {
+    return {};
+  }
+}
 
 export default async function ContactPage({
   searchParams
@@ -72,6 +126,11 @@ export default async function ContactPage({
 }) {
   const { topic } = await searchParams;
   const defaultSubject = topic ? TOPIC_SUBJECTS[topic] : undefined;
+  const prefill = await resolvePrefill();
+  const defaultMessage =
+    topic && TOPIC_MESSAGES[topic]
+      ? TOPIC_MESSAGES[topic](prefill.businessName ?? null)
+      : undefined;
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
@@ -108,7 +167,13 @@ export default async function ContactPage({
           </div>
 
           <div className="w-full flex-shrink-0 lg:max-w-md">
-            <ContactForm defaultSubject={defaultSubject} />
+            <ContactForm
+              defaultSubject={defaultSubject}
+              defaultName={prefill.name}
+              defaultEmail={prefill.email}
+              defaultBusinessName={prefill.businessName}
+              defaultMessage={defaultMessage}
+            />
           </div>
         </div>
       </section>
