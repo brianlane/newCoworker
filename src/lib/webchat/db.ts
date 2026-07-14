@@ -87,6 +87,8 @@ export type WebchatJobRow = {
    */
   input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
   stateless_input_messages?: Array<{ role: WebchatMessageRole; content: string }> | null;
+  /** Present on platform claim/reclaim reads — identifies THIS claim generation. */
+  claimed_at?: string | null;
 };
 
 /**
@@ -593,7 +595,7 @@ export async function claimWebchatJobForPlatform(
     .eq("id", jobId)
     .eq("status", "queued")
     .select(
-      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, input_messages, stateless_input_messages"
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, claimed_at, input_messages, stateless_input_messages"
     )
     .maybeSingle();
   if (error) throw new Error(`claimWebchatJobForPlatform: ${error.message}`);
@@ -626,7 +628,7 @@ export async function reclaimStaleWebchatJobForPlatform(
     .eq("claimed_by", WEBCHAT_PLATFORM_WORKER_ID)
     .lt("claimed_at", cutoffIso)
     .select(
-      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, input_messages, stateless_input_messages"
+      "id, business_id, session_id, user_message_id, status, attempts, assistant_message_id, error_code, error_detail, created_at, completed_at, claimed_at, input_messages, stateless_input_messages"
     )
     .maybeSingle();
   if (error) throw new Error(`reclaimStaleWebchatJobForPlatform: ${error.message}`);
@@ -665,11 +667,21 @@ export async function completeWebchatJobFromPlatform(
   return msgId;
 }
 
-/** Flip a platform-claimed job to error (the widget shows its retry copy). */
+/**
+ * Flip a platform-claimed job to error (the widget shows its retry copy).
+ * Guarded to rows still processing under THIS claim generation
+ * (`claimed_at` is the token): after a stale reclaim, two requests can
+ * briefly hold the same turn, and the slow loser's catch path must never
+ * stamp 'error' over a job the winner committed as 'done' (Bugbot High on
+ * PR #592) — nor over a fresh claim a later reclaimer took. A raced flip
+ * matches zero rows, which is exactly right.
+ */
 export async function failWebchatJobFromPlatform(
   jobId: string,
   code: string,
   detail: string,
+  /** The failing claim's own claimed_at (from claim/reclaim). */
+  claimedAt: string,
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -681,6 +693,9 @@ export async function failWebchatJobFromPlatform(
       error_detail: detail.slice(0, 500),
       completed_at: new Date().toISOString()
     })
-    .eq("id", jobId);
+    .eq("id", jobId)
+    .eq("status", "processing")
+    .eq("claimed_by", WEBCHAT_PLATFORM_WORKER_ID)
+    .eq("claimed_at", claimedAt);
   if (error) throw new Error(`failWebchatJobFromPlatform: ${error.message}`);
 }

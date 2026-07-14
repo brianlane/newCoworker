@@ -99,10 +99,17 @@ async function runPlatformEngineTurn(
       error: errorMessage
     });
     try {
-      await failWebchatJobFromPlatform(job.id, errorMessage.split(":")[0], errorMessage);
+      // claimed_at is the claim-generation token: a slow loser after a
+      // stale reclaim can never stamp 'error' over another request's
+      // committed reply or fresh claim.
+      await failWebchatJobFromPlatform(
+        job.id,
+        errorMessage.split(":")[0],
+        errorMessage,
+        claimed.claimed_at ?? ""
+      );
     } catch (failErr) {
-      // The job stays 'processing'; the widget's poll window ends with its
-      // generic slow-turn copy. Loud log — nothing else to do inline.
+      // The job stays 'processing' until the stale reclaim retries it.
       logger.error("widget/poll: gemini engine job fail-flip failed", {
         jobId: job.id,
         error: failErr instanceof Error ? failErr.message : String(failErr)

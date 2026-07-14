@@ -528,18 +528,22 @@ describe("platform-engine job lifecycle", () => {
     );
   });
 
-  it("failWebchatJobFromPlatform bounds the stored taxonomy, throws on error", async () => {
+  it("failWebchatJobFromPlatform bounds the taxonomy and guards to THIS claim generation", async () => {
     const builder = makeBuilder({ data: null, error: null });
     supabaseStub.from.mockReturnValueOnce(builder);
-    await failWebchatJobFromPlatform(JOB, "c".repeat(200), "d".repeat(600));
+    await failWebchatJobFromPlatform(JOB, "c".repeat(200), "d".repeat(600), "2026-07-14T17:00:00Z");
     const patch = (builder.update as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(patch.status).toBe("error");
     expect((patch.error_code as string).length).toBe(100);
     expect((patch.error_detail as string).length).toBe(500);
+    // Never stamps 'error' over a committed reply or a fresh reclaim.
+    expect(builder.eq).toHaveBeenCalledWith("status", "processing");
+    expect(builder.eq).toHaveBeenCalledWith("claimed_by", WEBCHAT_PLATFORM_WORKER_ID);
+    expect(builder.eq).toHaveBeenCalledWith("claimed_at", "2026-07-14T17:00:00Z");
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
-    await expect(failWebchatJobFromPlatform(JOB, "code", "detail", injected)).rejects.toThrow(
-      "failWebchatJobFromPlatform: x"
-    );
+    await expect(
+      failWebchatJobFromPlatform(JOB, "code", "detail", "2026-07-14T17:00:00Z", injected)
+    ).rejects.toThrow("failWebchatJobFromPlatform: x");
   });
 });
