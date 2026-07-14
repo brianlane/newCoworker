@@ -1,0 +1,143 @@
+# Supabase project config.
+#
+# Only the [functions.*] sections are authoritative right now — we use this
+# file to pin `verify_jwt` per edge function so a plain `supabase functions
+# deploy <name>` from any developer machine doesn't flip the gateway JWT
+# check on/off depending on local CLI defaults.
+#
+# Background: the Supabase CLI's default for `verify_jwt` changed over time
+# (older versions defaulted OFF, newer default ON). `voice-bridge-health-alerts`
+# was deployed before this file existed and picked up `verify_jwt = true`,
+# which caused the pg_cron bearer (a plain hex `INTERNAL_CRON_SECRET`, NOT a
+# JWT) to fail at the edge gateway with `UNAUTHORIZED_INVALID_JWT_FORMAT`
+# before our own `assertCronAuth` ever ran. The fix is to deploy with
+# `verify_jwt = false` because every function below authenticates its own
+# callers (cron Bearer, Telnyx Ed25519 signature, shared webhook token, or
+# Rowboat gateway token).
+
+project_id = "glwmorjxzkzpcfffwvkk"
+
+# ── Scheduled cron workers ──────────────────────────────────────────────
+# All four are invoked by `pg_cron` with `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
+# The bearer is a 64-char hex string, not a signed JWT. Each function
+# validates it via `_shared/cron_auth.ts::assertCronAuth`.
+
+[functions.sms-inbound-worker]
+verify_jwt = false
+
+# Drains queued AiFlow runs (queued -> running -> done|failed). Invoked by
+# pg_cron with the plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so
+# the gateway JWT check must stay OFF — same rationale as the workers above.
+[functions.ai-flow-worker]
+verify_jwt = false
+
+[functions.voice-settlement-sweep]
+verify_jwt = false
+
+[functions.voice-low-balance-alerts]
+verify_jwt = false
+
+[functions.voice-bridge-health-alerts]
+verify_jwt = false
+
+[functions.subscription-grace-sweep]
+verify_jwt = false
+
+[functions.tendlc-attach-retry]
+verify_jwt = false
+
+# Dispatches due owner-scheduled texts (scheduled_sms). Invoked by pg_cron with
+# the plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
+# JWT check must stay OFF — same rationale as the workers above.
+[functions.scheduled-sms-sweep]
+verify_jwt = false
+
+# Dispatches AI call-summary generation for completed voice transcripts.
+# Invoked by pg_cron with the plain-hex INTERNAL_CRON_SECRET bearer
+# (assertCronAuth), so the gateway JWT check must stay OFF.
+[functions.call-summary-sweep]
+verify_jwt = false
+
+# The cron workers below were historically deployed one-by-one with an
+# explicit `--no-verify-jwt` flag and never got a config.toml pin. CI now
+# bulk-deploys EVERY function on each merge to main, so each one must be
+# pinned here — an unpinned function would pick up the CLI default (JWT
+# check ON) and the plain-hex pg_cron bearer would start bouncing at the
+# gateway with UNAUTHORIZED_INVALID_JWT_FORMAT. All of them authenticate
+# via `_shared/cron_auth.ts::assertCronAuth`.
+
+[functions.aiflow-library-refresh]
+verify_jwt = false
+
+[functions.analytics-snapshot-sweep]
+verify_jwt = false
+
+[functions.chat-spend-velocity-alerts]
+verify_jwt = false
+
+[functions.customer-memory-summarize-sweep]
+verify_jwt = false
+
+[functions.data-retention-sweep]
+verify_jwt = false
+
+[functions.document-expiration-sweep]
+verify_jwt = false
+
+[functions.hardware-escalation-advisor]
+verify_jwt = false
+
+[functions.platform-cost-sync]
+verify_jwt = false
+
+[functions.residency-replay]
+verify_jwt = false
+
+[functions.webhook-dispatcher]
+verify_jwt = false
+
+# ── Telnyx webhooks (voice + SMS) ───────────────────────────────────────
+# These are public webhooks from Telnyx's egress IPs. Authentication is an
+# Ed25519 signature verified in `_shared/telnyx_webhook.ts`; there is no
+# JWT in the request. Routing from Mission Control goes through
+# `telnyx-voice-dispatch` which then forwards to the two handlers below.
+
+[functions.telnyx-voice-dispatch]
+verify_jwt = false
+
+[functions.telnyx-voice-inbound]
+verify_jwt = false
+
+[functions.telnyx-voice-call-end]
+verify_jwt = false
+
+# Outbound origination for `outbound_call` AiFlows. NOT a Telnyx webhook — it is
+# invoked server-to-server from the app's Place call route with a service-role
+# bearer that the function checks itself (timing-safe compare), so the gateway
+# JWT check stays OFF like the rest of the voice functions.
+[functions.telnyx-voice-originate]
+verify_jwt = false
+
+[functions.telnyx-voice-failover]
+verify_jwt = false
+
+[functions.telnyx-sms-inbound]
+verify_jwt = false
+
+# ── Provisioning + owner notifications webhook ──────────────────────────
+# Authenticated via `NOTIFICATIONS_WEBHOOK_TOKEN` header check; no JWT.
+
+[functions.notifications]
+verify_jwt = false
+
+# Daily/weekly digest emails. Invoked by pg_cron with the plain-hex
+# INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway JWT check must
+# stay OFF — same rationale as the cron workers above.
+[functions.notifications-digest]
+verify_jwt = false
+
+# Daily fleet VPS billing-posture check. Invoked by pg_cron with the
+# plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
+# JWT check must stay OFF — same rationale as the cron workers above.
+[functions.vps-billing-posture]
+verify_jwt = false
