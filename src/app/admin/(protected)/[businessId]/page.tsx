@@ -145,7 +145,7 @@ export default async function BusinessDetailPage({
             {business.tier}
           </Badge>
         </div>
-        <div className="flex flex-col gap-2 items-end">
+        <div className="flex flex-wrap items-start justify-end gap-2">
           <ViewAsButton businessId={businessId} />
           <DeleteClientButton businessId={businessId} businessName={business.name} />
           {subscription && subscription.status === "active" && (

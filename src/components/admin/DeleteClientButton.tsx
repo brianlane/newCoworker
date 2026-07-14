@@ -52,7 +52,7 @@ export function DeleteClientButton({ businessId, businessName }: { businessId: s
 
   if (confirming) {
     return (
-      <div className="space-y-2">
+      <div className="w-full max-w-md space-y-2">
         <p className="text-xs text-spark-orange">
           Force-cancel and wipe <strong>{businessName}</strong>? This cancels Stripe + Hostinger
           billing, tears down the VPS, wipes tenant data, and disables the owner&apos;s login.
