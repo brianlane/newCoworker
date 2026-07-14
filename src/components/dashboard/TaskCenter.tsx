@@ -19,6 +19,7 @@ import {
   Bell,
   CheckCircle2,
   Flag,
+  History,
   Hourglass,
   RefreshCw,
   Tag,
@@ -192,6 +193,38 @@ function TaskCard({ task }: { task: TaskCardData }) {
               ))}
             </dl>
           )}
+        </div>
+      )}
+
+      {/* Recent cross-channel activity (calls + texts), linking back to the
+          contact's full timeline — the tasks side of the bidirectional
+          activity <-> contact/task navigation. */}
+      {task.activity.length > 0 && (
+        <div className="space-y-1">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-medium text-parchment/50">
+              <History className="h-3 w-3" /> Recent activity
+            </div>
+            <Link
+              href={`/dashboard/customers/${encodeURIComponent(task.e164)}`}
+              className="text-[11px] text-signal-teal hover:underline"
+            >
+              Full activity →
+            </Link>
+          </div>
+          {task.activity.map((a) => (
+            <div key={a.id} className="flex flex-wrap items-center gap-2 text-xs">
+              <Link
+                href={a.href}
+                className="text-parchment/70 hover:text-signal-teal hover:underline"
+              >
+                {a.label}
+              </Link>
+              <span className="text-[10px] text-parchment/35">
+                <LocalDateTime iso={a.at} />
+              </span>
+            </div>
+          ))}
         </div>
       )}
 

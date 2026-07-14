@@ -33,6 +33,7 @@ import {
 import { runTriggerEntries, runVarEntries, type RunDataEntry } from "@/lib/ai-flows/run-stats";
 import type { FlowStep } from "@/lib/ai-flows/schema";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { getActivityForContacts, type ActivityItem } from "@/lib/db/activity";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,7 @@ const querySchema = z.object({
 const MAX_TASKS = 60;
 const MAX_RUNS = 200;
 const REASONING_PER_TASK = 3;
+const ACTIVITY_PER_TASK = 3;
 
 type RunRow = {
   id: string;
@@ -94,6 +96,8 @@ export type TaskCardData = {
   claimedBy: string | null;
   vars: RunDataEntry[];
   reasoning: TaskReasoningView[];
+  /** The lead's newest cross-channel events (calls + texts), newest first. */
+  activity: ActivityItem[];
   lastActivityAt: string;
 };
 
@@ -339,6 +343,24 @@ export async function GET(request: Request) {
       () => new Map<string, ContactName>()
     );
 
+    // Recent cross-channel activity per lead, batched over every card's
+    // numbers (primary + merge aliases) in one IN() query per source.
+    // Best-effort: a feed error never blocks the board.
+    const activityNumbers = [
+      ...new Set(
+        [...contactsByPhone.values()].flatMap((c) => [
+          c.customer_e164,
+          ...(c.alias_e164s ?? [])
+        ])
+      )
+    ];
+    const activityByPhone = await getActivityForContacts(
+      businessId,
+      activityNumbers,
+      { perContact: ACTIVITY_PER_TASK, contactNames },
+      db
+    ).catch(() => new Map<string, ActivityItem[]>());
+
     // ── Compose the cards ──────────────────────────────────────────────────
     const cards: TaskCardData[] = [];
     for (const [phone, contact] of contactsByPhone) {
@@ -401,6 +423,12 @@ export async function GET(request: Request) {
         [contact.updated_at, ...leadRuns.map((r) => r.updated_at)].sort().at(-1) ??
         contact.updated_at;
 
+      // Fold alias-keyed activity into the primary's card (merged profiles).
+      const activity = [phone, ...(contact.alias_e164s ?? [])]
+        .flatMap((n) => activityByPhone.get(n) ?? [])
+        .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+        .slice(0, ACTIVITY_PER_TASK);
+
       cards.push({
         e164: phone,
         name:
@@ -417,6 +445,7 @@ export async function GET(request: Request) {
         claimedBy,
         vars: vars.slice(0, 20),
         reasoning: reasoningByPhone.get(phone) ?? [],
+        activity,
         lastActivityAt
       });
     }

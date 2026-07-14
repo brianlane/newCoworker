@@ -92,22 +92,41 @@ export function ActivityList({
           <ul className="divide-y divide-parchment/10">
             {visible.map((item) => (
               <li key={item.id}>
-                <a
-                  href={item.href}
-                  className="flex items-center justify-between gap-3 py-3 group"
-                >
-                  <div className="min-w-0">
+                <div className="flex items-center justify-between gap-3 py-3 group">
+                  <a href={item.href} className="min-w-0 flex-1">
                     <p className="text-sm text-parchment truncate group-hover:text-signal-teal transition-colors">
                       {item.label}
                     </p>
                     <p className="text-xs text-parchment/40">
                       <LocalDateTime iso={item.at} />
                     </p>
+                  </a>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {/* Person-keyed events cross-link both directions: the
+                        contact profile and their card on the task board. */}
+                    {item.contactE164 && (
+                      <>
+                        <a
+                          href={`/dashboard/customers/${encodeURIComponent(item.contactE164)}`}
+                          className="text-[11px] text-parchment/50 hover:text-signal-teal hover:underline"
+                          title="Open this person's contact profile"
+                        >
+                          Contact
+                        </a>
+                        <a
+                          href={`/dashboard/tasks?lead=${encodeURIComponent(item.contactE164)}`}
+                          className="text-[11px] text-parchment/50 hover:text-signal-teal hover:underline"
+                          title="Find this person on the task board"
+                        >
+                          Board
+                        </a>
+                      </>
+                    )}
+                    <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
+                      {ACTIVITY_BADGE[item.kind].label}
+                    </Badge>
                   </div>
-                  <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
-                    {ACTIVITY_BADGE[item.kind].label}
-                  </Badge>
-                </a>
+                </div>
               </li>
             ))}
           </ul>
