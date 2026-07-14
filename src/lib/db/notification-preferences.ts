@@ -260,7 +260,8 @@ export async function updateNotificationPreferences(
       patch.email_urgent === true ||
       patch.dashboard_alerts === true ||
       patch.sms_warm_transfer === true ||
-      patch.image_limit_alerts === true);
+      patch.image_limit_alerts === true ||
+      patch.aiflow_failure_alerts === true);
   if (reSubscribed) {
     update.unsubscribed_at = null;
   }
