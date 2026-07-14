@@ -2,6 +2,7 @@ import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
 import { createSubscription, findCheckoutBlockingSubscription } from "@/lib/db/subscriptions";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import {
   getBusiness,
@@ -260,21 +261,28 @@ export async function POST(request: Request) {
     // draft read/write failure falls back to the row.
     let draftPhone: string | null = null;
     if (body.draftToken) {
+      // `candidate` feeds fee CLASSIFICATION (free-form ok: an uncoercible
+      // value just falls through to the timezone signal). `syncable` gates
+      // the row WRITE: /api/business/create now persists only coerced E.164,
+      // and this retry path must not re-write legacy-draft junk over it.
       let candidate: string | null = null;
+      let syncable: string | null = null;
       try {
         const draft = await getOnboardingDraft(body.businessId, body.draftToken);
         const p = (draft?.payload as { phone?: unknown } | null)?.phone;
-        candidate = typeof p === "string" && p.trim() ? p : null;
+        const raw = typeof p === "string" && p.trim() ? p : null;
+        syncable = coerceOwnerPhoneToE164(raw);
+        candidate = syncable ?? raw;
       } catch (err) {
         logger.warn("checkout: draft read for Canada-fee detection failed (using business row)", {
           businessId: body.businessId,
           error: err instanceof Error ? err.message : String(err)
         });
       }
-      if (candidate && feeBusiness && candidate !== feeBusiness.phone) {
+      if (syncable && feeBusiness && syncable !== feeBusiness.phone) {
         try {
-          await updateBusinessPhone(body.businessId, candidate);
-          draftPhone = candidate;
+          await updateBusinessPhone(body.businessId, syncable);
+          draftPhone = syncable;
         } catch (err) {
           // Billing must classify from the same value provisioning will read.
           // If the row couldn't be synced, keep classifying from the (stale)

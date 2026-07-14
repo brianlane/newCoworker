@@ -36,6 +36,7 @@ import {
 } from "@/lib/db/telnyx-routes";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -85,34 +86,10 @@ export function normalizeE164(input: string): string {
   return stripped;
 }
 
-/**
- * Best-effort coercion for free-form phone strings collected during onboarding
- * (which has no country-code requirement on the form). Mirrors the Edge-side
- * normalizer in `supabase/functions/_shared/normalize_e164.ts` — accepts a
- * leading `+`, otherwise assumes NANP for bare 10-digit / `1`-prefixed
- * 11-digit inputs and refuses the rest. Returns `null` on anything that
- * can't be safely coerced; never throws. Use this when the source data is
- * "owner-typed onboarding phone" and a wrong guess would route SMS to the
- * wrong country.
- */
-export function coerceOwnerPhoneToE164(raw: string | null | undefined): string | null {
-  if (!raw) return null;
-  const trimmed = raw.trim();
-  if (!trimmed) return null;
-  const cleaned = trimmed.replace(/[^\d+]/g, "");
-  if (!cleaned) return null;
-  let candidate: string;
-  if (cleaned.startsWith("+")) {
-    candidate = cleaned;
-  } else if (cleaned.length === 10) {
-    candidate = `+1${cleaned}`;
-  } else if (cleaned.length === 11 && cleaned.startsWith("1")) {
-    candidate = `+${cleaned}`;
-  } else {
-    return null;
-  }
-  return /^\+[1-9]\d{7,14}$/.test(candidate) ? candidate : null;
-}
+// Moved to src/lib/phone/e164.ts (dependency-free, client-bundle-safe) so
+// the onboarding questionnaire can validate with the same coercion; re-
+// exported here so the existing server-side importers keep working.
+export { coerceOwnerPhoneToE164 };
 
 /**
  * Extract the NANP area code (NPA) from a free-form onboarding phone string.

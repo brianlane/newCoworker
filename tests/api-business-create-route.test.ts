@@ -81,6 +81,31 @@ describe("/api/business/create — anonymous Stripe-first flow", () => {
     );
   });
 
+  it("coerces a free-form owner phone to E.164 before persisting (KYP Ads: junk phone silently degraded DID search + forward default)", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "(602) 695-1142" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: "+16026951142" })
+    );
+  });
+
+  it("rejects an uncoercible phone with an actionable 400 instead of storing it", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "5188192" })));
+    const body = await res.json();
+    expect(res.status).toBe(400);
+    expect(body.error.code).toBe("VALIDATION_ERROR");
+    expect(body.error.message).toContain("area code");
+    expect(createBusiness).not.toHaveBeenCalled();
+  });
+
+  it("blank/absent phone stays optional — no phone persisted, no rejection", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "   " })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: undefined })
+    );
+  });
+
   it("is idempotent when the same anonymous caller retries with a businessId already pending", async () => {
     // Simulates the failure-then-retry path: a previous request inserted
     // the row with the pending sentinel email, but the client never got

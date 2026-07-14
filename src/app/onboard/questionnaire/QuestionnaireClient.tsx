@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/Button";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
 import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import {
   DRAFT_STORAGE_KEY,
   ONBOARD_STORAGE_KEY,
@@ -711,6 +712,26 @@ function QuestionnaireForm() {
       if (!isValidEmailAddress(signupEmail)) {
         setError("Please enter a valid email address");
         return;
+      }
+      // Phone is optional, but a PROVIDED value must coerce to E.164 — the
+      // same check /api/business/create enforces. Catching it here (with the
+      // field still on screen) beats a server rejection at "Proceed to
+      // Payment" two steps later. A 7-digit number that slipped through
+      // pre-validation left a real tenant with no forwarding default and no
+      // owner-local DID tier (KYP Ads, Jul 14 2026).
+      if (form.phone.trim()) {
+        const coercedPhone = coerceOwnerPhoneToE164(form.phone);
+        if (!coercedPhone) {
+          setError(
+            "Please enter your full phone number including area code, e.g. +1 (555) 123-4567."
+          );
+          return;
+        }
+        // Normalize in place so the draft, the Canada-fee preview, and
+        // checkout all read the exact value the server will persist.
+        if (coercedPhone !== form.phone) {
+          update("phone", coercedPhone);
+        }
       }
 
       // UX preflight against the email-uniqueness gate. The real
