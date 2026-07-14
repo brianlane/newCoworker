@@ -174,6 +174,61 @@ describe("callSmsRowboatWithStatelessFallback — happy path", () => {
       { role: "user", content: "[SMS] hello" }
     ]);
   });
+
+  it("userTurnNote rides INSIDE the user message, above the [SMS] line", async () => {
+    // Fresh-thread flow anchor (2026-07-14 Truly incident): the small SMS
+    // model ignored context that lived only in the system preamble but
+    // honors it adjacent to the user turn. The note must never become a
+    // separate system message — Gemini's OpenAI-compat keeps only the last
+    // system message pre-merge, and the note's whole point is proximity.
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("noted", "conv-1")));
+    await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "July 23, 2026",
+        conversationId: null,
+        state: null,
+        timeoutMs: 60_000,
+        customerPreamble: "Automation context: ...",
+        userTurnNote:
+          '(Note: the last automated message to this texter was: "when does your policy renew?" — read their message below as a likely answer to it.)'
+      },
+      fetchStub
+    );
+    const body = JSON.parse(String(fetchStub.mock.calls[0]?.[1]?.body));
+    expect(body.messages).toEqual([
+      { role: "system", content: "Automation context: ..." },
+      {
+        role: "user",
+        content:
+          '(Note: the last automated message to this texter was: "when does your policy renew?" — read their message below as a likely answer to it.)' +
+          "\n\n[SMS] July 23, 2026"
+      }
+    ]);
+  });
+
+  it("a blank userTurnNote leaves the user message untouched", async () => {
+    const fetchStub = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse(rowboatReply("ok", "conv-1")));
+    await callSmsRowboatWithStatelessFallback(
+      {
+        chatUrl: ROWBOAT_URL,
+        bearer: BEARER,
+        userText: "hello",
+        conversationId: null,
+        state: null,
+        timeoutMs: 60_000,
+        userTurnNote: "   "
+      },
+      fetchStub
+    );
+    const body = JSON.parse(String(fetchStub.mock.calls[0]?.[1]?.body));
+    expect(body.messages).toEqual([{ role: "user", content: "[SMS] hello" }]);
+  });
 });
 
 describe("callSmsRowboatWithStatelessFallback — stateless retry on stale continuation", () => {

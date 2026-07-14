@@ -153,6 +153,27 @@ export function formatFlowRunContext(
 }
 
 /**
+ * One-line note the SMS worker prepends to the USER turn (not the system
+ * preamble) on a freshly-rooted conversation whose contact an automation
+ * just texted. The 2026-07-14 Truly incident (lead Alex) showed the small
+ * SMS model ignoring the system-preamble automation context entirely: the
+ * flow asked "when does your policy renew?", the lead answered
+ * "July 23, 2026", and the model replied "I need a bit more context" — with
+ * the question sitting in its system prompt. The same model reads the note
+ * reliably when it is adjacent to the user message, so the worker anchors
+ * the LAST automated message right next to the turn it likely answers.
+ */
+export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
+  const trimmed = lastFlowMessage.trim();
+  if (!trimmed) return null;
+  return (
+    `(Note: the last automated message to this texter was: ` +
+    `"${truncate(trimmed, MAX_LAST_MESSAGE_CHARS)}" — read their message below ` +
+    `as a likely answer to it.)`
+  );
+}
+
+/**
  * Business-wide digest for owner-facing dashboard chat: one line per recent
  * run so the owner's assistant knows what the automations have been doing.
  */
@@ -238,6 +259,17 @@ function toSnapshot(row: RunRow, names: Map<string, string>): FlowRunSnapshot {
   };
 }
 
+export type FlowRunContextDetailed = {
+  /** The formatted system-preamble block (null = nothing to say). */
+  block: string | null;
+  /** The raw automated messages recently texted to this contact, oldest
+   * first — the same bodies the block quotes. Callers that anchor context
+   * next to the user turn (formatFlowAnswerNote) need the newest one raw. */
+  recentMessages: string[];
+};
+
+const EMPTY_DETAILED: FlowRunContextDetailed = { block: null, recentMessages: [] };
+
 /**
  * Load + format the per-contact block. Best-effort: any failure returns
  * null so the reply path proceeds with plain customer-memory context.
@@ -247,7 +279,19 @@ export async function loadFlowRunContext(
   businessId: string,
   contactE164: string
 ): Promise<string | null> {
-  if (!contactE164) return null;
+  return (await loadFlowRunContextDetailed(supabase, businessId, contactE164)).block;
+}
+
+/**
+ * Detailed variant of loadFlowRunContext: the formatted block PLUS the raw
+ * recent flow messages, from one set of queries. Same best-effort contract.
+ */
+export async function loadFlowRunContextDetailed(
+  supabase: AnyClient,
+  businessId: string,
+  contactE164: string
+): Promise<FlowRunContextDetailed> {
+  if (!contactE164) return EMPTY_DETAILED;
   try {
     const sinceIso = new Date(
       Date.now() - FLOW_CONTEXT_LOOKBACK_HOURS * 3_600_000
@@ -267,7 +311,7 @@ export async function loadFlowRunContext(
       .limit(MAX_RUNS_PER_CONTACT);
     if (error) {
       console.error("run_context: run lookup", error);
-      return null;
+      return EMPTY_DETAILED;
     }
     const rows = liveRuns((data ?? []) as RunRow[]);
     const names = await loadFlowNames(supabase, [...new Set(rows.map((r) => r.flow_id))]);
@@ -297,10 +341,18 @@ export async function loadFlowRunContext(
         .reverse();
     }
 
-    return formatFlowRunContext(snapshots, recentFlowMessages);
+    return {
+      block: formatFlowRunContext(snapshots, recentFlowMessages),
+      // The formatter caps at MAX_FLOW_MESSAGES from the end; mirror it so
+      // recentMessages is exactly what the block quoted.
+      recentMessages: recentFlowMessages
+        .map((m) => m.trim())
+        .filter((m) => m.length > 0)
+        .slice(-MAX_FLOW_MESSAGES)
+    };
   } catch (e) {
-    console.error("loadFlowRunContext", e);
-    return null;
+    console.error("loadFlowRunContextDetailed", e);
+    return EMPTY_DETAILED;
   }
 }
 

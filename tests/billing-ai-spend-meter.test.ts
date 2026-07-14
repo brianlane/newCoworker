@@ -49,6 +49,8 @@ describe("geminiPriceFor", () => {
   it("returns the listed price for known models (trimming whitespace)", () => {
     expect(geminiPriceFor(" gemini-2.5-flash-lite ")).toEqual({ in: 0.1, out: 0.4 });
     expect(geminiPriceFor("gemini-2.5-flash")).toEqual({ in: 0.3, out: 2.5 });
+    // The SMS Coworker default since the 2026-07-14 Truly incident.
+    expect(geminiPriceFor("gemini-3.1-flash-lite")).toEqual({ in: 0.25, out: 1.5 });
     expect(geminiPriceFor("gemini-3-flash-preview")).toEqual(
       GEMINI_PRICES_PER_1M["gemini-3-flash"]
     );
