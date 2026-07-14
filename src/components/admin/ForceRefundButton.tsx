@@ -54,7 +54,7 @@ export function ForceRefundButton({
 
   if (confirming) {
     return (
-      <div className="space-y-2">
+      <div className="w-full max-w-md space-y-2">
         <p className="text-xs text-spark-orange">
           Refund the latest Stripe charge on <strong>{businessName}</strong> and start the
           30-day grace window? This cancels Stripe + Hostinger billing, tears down the VPS,

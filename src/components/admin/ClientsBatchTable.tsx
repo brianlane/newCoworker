@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
 import { DeployButton } from "@/components/dashboard/DeployButton";
+import { ViewAsButton } from "@/components/admin/ViewAsButton";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
   clientsCsv,
@@ -400,10 +401,11 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                   </div>
                 </td>
                 <td className="py-3 px-4">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-3">
                     <a href={`/admin/${b.id}`} className="text-xs text-signal-teal hover:underline">
                       Details
                     </a>
+                    <ViewAsButton businessId={b.id} variant="link" />
                     {b.status === "offline" && <DeployButton businessId={b.id} />}
                   </div>
                 </td>
