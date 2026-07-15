@@ -61,7 +61,8 @@ const RUN_STATUS_LABEL: Record<string, string> = {
   running: "Running",
   awaiting_approval: "Needs approval",
   awaiting_agent: "Offered to team",
-  awaiting_reply: "Awaiting reply"
+  awaiting_reply: "Awaiting reply",
+  awaiting_call: "AI call in progress"
 };
 
 type ApiEnvelope<T> = {

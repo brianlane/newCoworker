@@ -3,6 +3,7 @@ import {
   encodeOutboundClientState,
   outboundSessionContext,
   parseOutboundClientState,
+  parsePlaceCallPayload,
   resolveOutboundCallPlan
 } from "../supabase/functions/_shared/voice_outbound";
 import { parseHandoffClientState } from "../supabase/functions/_shared/voice_handoff";
@@ -153,5 +154,113 @@ describe("outboundSessionContext", () => {
       captureFields: []
     });
     expect(ctx.ai_takeover).not.toHaveProperty("capture_fields");
+  });
+
+  it("carries a place_ai_call transfer config + parked-run link into the session", () => {
+    const ctx = outboundSessionContext({
+      toE164: "+19178628675",
+      notifyE164: "+16026951142",
+      persona: "Amy's assistant",
+      captureFields: null,
+      transfer: {
+        toE164: "+16025245719",
+        preSmsBody: "LIVE TRANSFER incoming — pick up!",
+        agentName: "Dave Lane"
+      },
+      flowRun: { runId: "run-1", saveAs: "call_outcome", marker: "__called_c1", stepIndex: 4 }
+    });
+    expect(ctx.transfer).toEqual({
+      to_e164: "+16025245719",
+      pre_sms_body: "LIVE TRANSFER incoming — pick up!",
+      agent_name: "Dave Lane"
+    });
+    expect(ctx.flow_run).toEqual({
+      run_id: "run-1",
+      save_as: "call_outcome",
+      marker: "__called_c1",
+      step_index: 4
+    });
+  });
+
+  it("a bare transfer target omits the optional pre-alert/name keys", () => {
+    const ctx = outboundSessionContext({
+      toE164: "+19178628675",
+      notifyE164: "+16026951142",
+      persona: null,
+      captureFields: null,
+      transfer: { toE164: "+16025245719" }
+    });
+    expect(ctx.transfer).toEqual({ to_e164: "+16025245719" });
+    expect(ctx).not.toHaveProperty("flow_run");
+  });
+});
+
+describe("parsePlaceCallPayload", () => {
+  const BASE = { toE164: "+17572390150", notifyE164: "+16026951142" };
+
+  it("parses a full payload", () => {
+    const plan = parsePlaceCallPayload({
+      ...BASE,
+      persona: "Hi, Amy's office!",
+      captureFields: ["best time", " ", 7],
+      transfer: {
+        toE164: "+16025245719",
+        preSmsBody: "pick up!",
+        agentName: "Dave Lane"
+      },
+      flowRun: { runId: "run-1", saveAs: "call_outcome", marker: "__called_c1", stepIndex: 4 }
+    });
+    expect(plan).toEqual({
+      toE164: "+17572390150",
+      notifyE164: "+16026951142",
+      persona: "Hi, Amy's office!",
+      captureFields: ["best time"],
+      transfer: { toE164: "+16025245719", preSmsBody: "pick up!", agentName: "Dave Lane" },
+      flowRun: { runId: "run-1", saveAs: "call_outcome", marker: "__called_c1", stepIndex: 4 }
+    });
+  });
+
+  it("parses a minimal payload (no persona/captureFields/transfer/flowRun)", () => {
+    expect(parsePlaceCallPayload(BASE)).toEqual({
+      toE164: "+17572390150",
+      notifyE164: "+16026951142",
+      persona: null,
+      captureFields: null
+    });
+  });
+
+  it("drops a capture list that filters to empty and a transfer with only a target", () => {
+    const plan = parsePlaceCallPayload({
+      ...BASE,
+      captureFields: ["  "],
+      transfer: { toE164: "+16025245719", preSmsBody: "  ", agentName: "" }
+    });
+    expect(plan?.captureFields).toBeNull();
+    expect(plan?.transfer).toEqual({ toE164: "+16025245719" });
+  });
+
+  it("rejects non-objects and missing callee/notify", () => {
+    expect(parsePlaceCallPayload(null)).toBeNull();
+    expect(parsePlaceCallPayload("x")).toBeNull();
+    expect(parsePlaceCallPayload({ notifyE164: "+16026951142" })).toBeNull();
+    expect(parsePlaceCallPayload({ toE164: "+17572390150" })).toBeNull();
+  });
+
+  it("rejects a transfer without a target (half-read configs must not dial)", () => {
+    expect(parsePlaceCallPayload({ ...BASE, transfer: {} })).toBeNull();
+    expect(parsePlaceCallPayload({ ...BASE, transfer: null })).toBeNull();
+  });
+
+  it("rejects a malformed flowRun link", () => {
+    for (const flowRun of [
+      null,
+      {},
+      { runId: "run-1", saveAs: "v", marker: "m" }, // no stepIndex
+      { runId: "run-1", saveAs: "v", marker: "m", stepIndex: -1 },
+      { runId: "run-1", saveAs: "v", marker: "m", stepIndex: 1.5 },
+      { runId: "", saveAs: "v", marker: "m", stepIndex: 0 }
+    ]) {
+      expect(parsePlaceCallPayload({ ...BASE, flowRun })).toBeNull();
+    }
   });
 });

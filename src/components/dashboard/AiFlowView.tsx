@@ -555,6 +555,43 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Saves the result as" value={step.saveAs} mono />
         </>
       );
+    case "place_ai_call":
+      return (
+        <>
+          <Row label="Calls" value={`{{vars.${step.toVar}}}`} mono />
+          <Row label="AI opens with" value={step.personaTemplate} />
+          <Row
+            label="Texts summary to"
+            value={voiceTarget(step.notifyE164, step.notifyRef)}
+            mono={Boolean(step.notifyE164)}
+          />
+          {step.transfer && (
+            <Row
+              label="Live-transfers to (when it's a good time)"
+              value={voiceTarget(step.transfer.toE164, step.transfer.toRef)}
+              mono={Boolean(step.transfer.toE164)}
+            />
+          )}
+          {step.transfer?.preSmsTemplate && (
+            <Row label="Heads-up text before the transfer" value={step.transfer.preSmsTemplate} />
+          )}
+          {step.captureFields && step.captureFields.length > 0 && (
+            <div className="space-y-1">
+              <div className="text-xs font-medium text-parchment/50">Captures from the callee</div>
+              <div className="flex flex-wrap gap-1.5">
+                {step.captureFields.map((f, i) => (
+                  <Chip key={i}>{f}</Chip>
+                ))}
+              </div>
+            </div>
+          )}
+          <Row
+            label="Saves the call outcome as"
+            value={`${step.saveAs ?? "call_outcome"} (transferred / answered / no_answer / not_placed / failed)`}
+            mono
+          />
+        </>
+      );
     case "goal":
       return (
         <>

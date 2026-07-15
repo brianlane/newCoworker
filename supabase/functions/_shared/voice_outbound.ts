@@ -20,7 +20,35 @@ import type { AiFlowDefinition, FlowStep } from "./ai_flows/types.ts";
 
 export const OUTBOUND_CS_PREFIX = "vob";
 
-/** Config resolved from a flow's single outbound_call step. */
+/**
+ * Live-transfer config carried on a per-call (place_ai_call) origination: the
+ * bridge registers a transfer tool that texts `preSmsBody` to the target and
+ * warm-transfers the live callee to `toE164`. Numbers are fully resolved by
+ * the worker before origination (the edge never sees a ContactRef).
+ */
+export type OutboundCallTransfer = {
+  toE164: string;
+  /** Pre-rendered pre-alert SMS body ("" / absent = no pre-alert). */
+  preSmsBody?: string;
+  /** Display name the AI speaks ("one moment while I get Dave on the line"). */
+  agentName?: string;
+};
+
+/**
+ * Link back to the parked ai_flow_runs row a place_ai_call step created, so
+ * the voice path (bridge transfer tool, call-end hangup handler) can resume
+ * the run with the call outcome.
+ */
+export type OutboundFlowRunLink = {
+  runId: string;
+  /** context.vars key that receives the outcome. */
+  saveAs: string;
+  /** Per-step resolution marker stamped alongside the outcome. */
+  marker: string;
+  stepIndex: number;
+};
+
+/** Config resolved from a flow's single outbound_call step (or a per-call payload). */
 export type OutboundCallPlan = {
   /** Default callee (may be overridden per placed call). Empty when unset. */
   toE164: string;
@@ -28,6 +56,10 @@ export type OutboundCallPlan = {
   notifyE164: string;
   persona: string | null;
   captureFields: string[] | null;
+  /** place_ai_call only: live-transfer config. */
+  transfer?: OutboundCallTransfer;
+  /** place_ai_call only: the parked run to resume with the outcome. */
+  flowRun?: OutboundFlowRunLink;
 };
 
 /** Plain-text client_state stamped on the dial: `vob:<businessId>:<sessionId>`. */
@@ -101,6 +133,19 @@ export type OutboundSessionContext = {
     persona?: string;
     capture_fields?: string[];
   };
+  /** place_ai_call only: the bridge registers a live-transfer tool from this. */
+  transfer?: {
+    to_e164: string;
+    pre_sms_body?: string;
+    agent_name?: string;
+  };
+  /** place_ai_call only: the parked run the voice path resumes with the outcome. */
+  flow_run?: {
+    run_id: string;
+    save_as: string;
+    marker: string;
+    step_index: number;
+  };
 };
 
 /**
@@ -110,6 +155,8 @@ export type OutboundSessionContext = {
  * post-call summary + transcript to `notify_e164`. Without this the bridge finds
  * no `ai_takeover` context and falls back to the default receptionist persona
  * (and never sends the summary), so the outbound flow's whole purpose is lost.
+ * A place_ai_call plan additionally carries the transfer config and the parked
+ * run link so the voice path can transfer + resume.
  */
 export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionContext {
   const ai_takeover: OutboundSessionContext["ai_takeover"] = { notify_e164: plan.notifyE164 };
@@ -117,5 +164,72 @@ export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionC
   if (plan.captureFields && plan.captureFields.length > 0) {
     ai_takeover.capture_fields = plan.captureFields;
   }
-  return { outbound: true, ai_takeover };
+  const ctx: OutboundSessionContext = { outbound: true, ai_takeover };
+  if (plan.transfer) {
+    ctx.transfer = {
+      to_e164: plan.transfer.toE164,
+      ...(plan.transfer.preSmsBody ? { pre_sms_body: plan.transfer.preSmsBody } : {}),
+      ...(plan.transfer.agentName ? { agent_name: plan.transfer.agentName } : {})
+    };
+  }
+  if (plan.flowRun) {
+    ctx.flow_run = {
+      run_id: plan.flowRun.runId,
+      save_as: plan.flowRun.saveAs,
+      marker: plan.flowRun.marker,
+      step_index: plan.flowRun.stepIndex
+    };
+  }
+  return ctx;
+}
+
+/**
+ * Parse + validate a per-call origination payload (the `call` object a
+ * place_ai_call worker step POSTs to telnyx-voice-originate) into an
+ * OutboundCallPlan. Returns null when the payload is not usable — a
+ * malformed internal call is a caller bug, and dialing with a half-read
+ * config (e.g. a dropped transfer) would silently run the wrong call.
+ */
+export function parsePlaceCallPayload(raw: unknown): OutboundCallPlan | null {
+  if (!raw || typeof raw !== "object") return null;
+  const c = raw as Record<string, unknown>;
+  const toE164 = typeof c.toE164 === "string" ? c.toE164.trim() : "";
+  const notifyE164 = typeof c.notifyE164 === "string" ? c.notifyE164.trim() : "";
+  if (!toE164 || !notifyE164) return null;
+  const persona = typeof c.persona === "string" && c.persona.trim() ? c.persona.trim() : null;
+  const captureFields = Array.isArray(c.captureFields)
+    ? c.captureFields.filter((f): f is string => typeof f === "string" && f.trim().length > 0)
+    : null;
+  const plan: OutboundCallPlan = {
+    toE164,
+    notifyE164,
+    persona,
+    captureFields: captureFields && captureFields.length > 0 ? captureFields : null
+  };
+  if (c.transfer !== undefined) {
+    const t = c.transfer as Record<string, unknown> | null;
+    const transferTo = t && typeof t.toE164 === "string" ? t.toE164.trim() : "";
+    if (!transferTo) return null;
+    plan.transfer = {
+      toE164: transferTo,
+      ...(typeof t!.preSmsBody === "string" && t!.preSmsBody.trim()
+        ? { preSmsBody: t!.preSmsBody.trim() }
+        : {}),
+      ...(typeof t!.agentName === "string" && t!.agentName.trim()
+        ? { agentName: t!.agentName.trim() }
+        : {})
+    };
+  }
+  if (c.flowRun !== undefined) {
+    const f = c.flowRun as Record<string, unknown> | null;
+    const runId = f && typeof f.runId === "string" ? f.runId.trim() : "";
+    const saveAs = f && typeof f.saveAs === "string" ? f.saveAs.trim() : "";
+    const marker = f && typeof f.marker === "string" ? f.marker.trim() : "";
+    const stepIndex = f && typeof f.stepIndex === "number" ? f.stepIndex : NaN;
+    if (!runId || !saveAs || !marker || !Number.isInteger(stepIndex) || stepIndex < 0) {
+      return null;
+    }
+    plan.flowRun = { runId, saveAs, marker, stepIndex };
+  }
+  return plan;
 }

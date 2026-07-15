@@ -21,6 +21,16 @@ import type {
   StepCondition
 } from "./types.ts";
 
+/**
+ * What a place_ai_call step's saveAs var holds when the callee's phone is
+ * missing/unusable or origination refused before dialing. A named sentinel —
+ * not "" — so when/branch conditions can test it.
+ */
+export const CALL_NOT_PLACED_SENTINEL = "not_placed";
+
+/** Timeout sentinel for a place_ai_call whose end webhook never arrived. */
+export const CALL_NO_ANSWER_SENTINEL = "no_answer";
+
 export type StepScope = {
   vars?: Record<string, unknown>;
   trigger?: Record<string, unknown>;
@@ -452,6 +462,32 @@ export type StepAction =
       kind: "goal";
       label: string;
       reachedVia: string;
+    }
+  | {
+      /**
+       * Place an outbound AI call and PARK the run until it ends. The planner
+       * resolves the callee phone and renders the persona/pre-alert templates;
+       * the worker owns the IO (dial ledger, origination call, park). The
+       * notify/transfer refs pass through UNRESOLVED (only the worker can
+       * reach the roster/contacts tables). `marker` is the per-step
+       * resolution flag (stamped by the resume paths alongside `saveAs`).
+       * `skipReason` set means the callee phone was unusable — the worker
+       * stamps the not_placed sentinel and skips instead of failing (a
+       * lead-data gap is not a flow bug), mirroring send_sms.
+       */
+      kind: "place_ai_call";
+      to: string;
+      persona: string;
+      notifyE164?: string;
+      notifyRef?: ContactRef;
+      transferToE164?: string;
+      transferToRef?: ContactRef;
+      /** Rendered pre-alert SMS body ("" = none configured). */
+      preSmsBody: string;
+      captureFields?: string[];
+      saveAs: string;
+      marker: string;
+      skipReason?: string;
     };
 
 export type StepPlan =
@@ -1016,6 +1052,46 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ok: true,
         action: { kind: "wait_for_reply", from: e164, saveAs, marker, timeoutMinutes }
       };
+    }
+    case "place_ai_call": {
+      const saveAs = step.saveAs ?? "call_outcome";
+      // Resolution is tracked PER STEP (like wait_for_reply): the resume
+      // paths stamp this marker alongside the outcome var, so re-entry after
+      // the call completes the step instead of dialing again.
+      const marker = `__called_${step.id}`;
+      if (scope.vars?.[marker] !== undefined) {
+        return { ok: true, action: { kind: "set_vars", vars: {} } };
+      }
+      const persona = renderTemplate(step.personaTemplate, scope, { collapseEmpty: true }).trim();
+      if (!persona) {
+        return { ok: false, error: "place_ai_call: call script is empty after templating" };
+      }
+      const preSmsBody = step.transfer?.preSmsTemplate
+        ? renderTemplate(step.transfer.preSmsTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
+      const base = {
+        kind: "place_ai_call" as const,
+        persona,
+        ...(step.notifyE164 ? { notifyE164: step.notifyE164 } : {}),
+        ...(step.notifyRef ? { notifyRef: step.notifyRef } : {}),
+        ...(step.transfer?.toE164 ? { transferToE164: step.transfer.toE164 } : {}),
+        ...(step.transfer?.toRef ? { transferToRef: step.transfer.toRef } : {}),
+        preSmsBody,
+        ...(step.captureFields && step.captureFields.length > 0
+          ? { captureFields: step.captureFields }
+          : {}),
+        saveAs,
+        marker
+      };
+      const raw = scope.vars?.[step.toVar];
+      const phone = typeof raw === "string" ? raw.trim() : "";
+      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      if (!e164) {
+        // A lead-data gap, not a flow bug: skip with the not_placed sentinel
+        // instead of failing a run that can still notify/branch usefully.
+        return { ok: true, action: { ...base, to: "", skipReason: "no_callee_phone" } };
+      }
+      return { ok: true, action: { ...base, to: e164 } };
     }
     case "branch": {
       // Evaluate the arms top to bottom (first match wins, else on no match)

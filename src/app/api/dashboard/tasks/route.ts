@@ -369,7 +369,9 @@ export async function GET(request: Request) {
         const flow = flowsById.get(run.flow_id);
         const pos = runPosition(flow?.steps ?? [], run.current_step);
         const waitingUntil =
-          run.status === "awaiting_reply" || run.status === "awaiting_agent"
+          run.status === "awaiting_reply" ||
+          run.status === "awaiting_agent" ||
+          run.status === "awaiting_call"
             ? run.respond_by_at
             : run.status === "queued"
               ? run.earliest_claim_at

@@ -43,6 +43,7 @@ const STATUS_STYLES: Record<string, string> = {
   awaiting_approval: "bg-spark-orange/15 text-spark-orange",
   awaiting_agent: "bg-spark-orange/15 text-spark-orange",
   awaiting_reply: "bg-spark-orange/15 text-spark-orange",
+  awaiting_call: "bg-spark-orange/15 text-spark-orange",
   done: "bg-claw-green/15 text-claw-green",
   failed: "bg-red-500/15 text-red-400",
   canceled: "bg-parchment/10 text-parchment/40"
@@ -54,6 +55,7 @@ const STATUS_STYLES: Record<string, string> = {
 const STATUS_LABELS: Record<string, string> = {
   awaiting_agent: "Awaiting employee",
   awaiting_reply: "Awaiting their reply",
+  awaiting_call: "AI call in progress",
   canceled: "Stopped"
 };
 
@@ -75,7 +77,8 @@ const STOPPABLE_STATUSES = new Set([
   "running",
   "awaiting_approval",
   "awaiting_agent",
-  "awaiting_reply"
+  "awaiting_reply",
+  "awaiting_call"
 ]);
 
 export type AiFlowRef = { id: string; name: string };
@@ -628,6 +631,12 @@ export function AiFlowRunsManager({
                     <p className="text-xs text-parchment/50">
                       Waiting for its sending window (quiet hours / business hours);
                       resumes at {new Date(r.earliest_claim_at).toLocaleString()}
+                    </p>
+                  )}
+                  {r.status === "awaiting_call" && r.respond_by_at && (
+                    <p className="text-xs text-parchment/50">
+                      AI call in progress — the outcome lands when the call ends (by{" "}
+                      {new Date(r.respond_by_at).toLocaleString()} at the latest)
                     </p>
                   )}
                   {r.status === "awaiting_reply" && r.respond_by_at && (

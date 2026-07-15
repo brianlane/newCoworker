@@ -126,6 +126,16 @@ export type IntakeCapability = {
   persona?: string;
   /** Lead fields to collect (defaults to name, phone, address, timeframe, notes). */
   captureFields?: string[];
+  /**
+   * place_ai_call live transfer: when true (and the host wired a transfer
+   * capability), the intake session ALSO gets the transfer tool — the flow
+   * explicitly authorized connecting this callee to a person once they
+   * confirm it's a good time. Off for classic HomeLight intake, which is
+   * capture-only by design.
+   */
+  allowTransfer?: boolean;
+  /** Display name of the transfer target ("one moment while I get Dave on the line"). */
+  transferAgentName?: string;
 };
 
 export type { CapturedLead } from "./intake.js";
@@ -945,11 +955,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     });
   }
-  if (!intake && opts.transfer) {
+  // The transfer tool: receptionist/staff sessions get the classic
+  // ask-for-a-human wording; an intake session gets it ONLY when the flow
+  // explicitly authorized a live transfer (place_ai_call), with wording tied
+  // to the "is now a good time?" confirmation instead of caller escalation.
+  if (opts.transfer && (!intake || intake.allowTransfer)) {
+    const transferTargetName = intake?.transferAgentName?.trim();
     declarations.push({
       name: "transfer_to_owner",
-      description:
-        "Warm-transfer the live phone call to the business owner/staff. Call ONLY when the caller explicitly asks for a human, indicates urgency, or raises a matter you cannot handle. Before calling this tool, briefly reassure the caller you're connecting them now.",
+      description: intake
+        ? `Warm-transfer this live call to ${transferTargetName || "the team member handling this lead"}. Call ONLY after the person confirms that now is a good time to talk. Before calling this tool, tell them one moment while you get ${transferTargetName || "the right person"} on the line.`
+        : "Warm-transfer the live phone call to the business owner/staff. Call ONLY when the caller explicitly asks for a human, indicates urgency, or raises a matter you cannot handle. Before calling this tool, briefly reassure the caller you're connecting them now.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -1038,7 +1054,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             intake.persona,
             opts.businessTimezone,
             intakeCaptureFields,
-            hasEndCall
+            hasEndCall,
+            intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -1131,7 +1148,12 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
                 const opener =
                   (intake.persona && intake.persona.trim()) ||
                   `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
-                greetingText = `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
+                // A transfer-enabled (place_ai_call) session follows its own
+                // call script instead of the capture checklist — pushing the
+                // intake questionnaire here would fight the flow's script.
+                greetingText = intake.allowTransfer
+                  ? `[Coordinator — speak aloud now] The person has just answered the phone. Greet them warmly with your opening line ("${opener}") and follow your call script.`
+                  : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
               } else if (greetIsStaff) {
                 // Owner vs team wording, and handle staff WITHOUT a stored name
                 // (otherwise they'd get the customer receptionist greeting that

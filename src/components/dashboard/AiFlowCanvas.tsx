@@ -89,6 +89,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   http_call: "read",
   sleep: "wait",
   wait_for_reply: "wait",
+  place_ai_call: "voice",
   branch: "branch",
   goal: "goal",
   math: "read",
@@ -128,6 +129,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   http_call: <Webhook className="h-4 w-4" />,
   sleep: <Timer className="h-4 w-4" />,
   wait_for_reply: <Hourglass className="h-4 w-4" />,
+  place_ai_call: <Phone className="h-4 w-4" />,
   branch: <GitBranch className="h-4 w-4" />,
   goal: <Flag className="h-4 w-4" />,
   math: <Calculator className="h-4 w-4" />,
@@ -238,6 +240,10 @@ function stepSubtitle(step: FlowStep): string {
       return "AI captures the lead";
     case "outbound_call":
       return step.toRef?.label ?? step.toE164 ?? "AI places the call";
+    case "place_ai_call": {
+      const transferTo = step.transfer?.toRef?.label ?? step.transfer?.toE164;
+      return `calls {{vars.${step.toVar}}}${transferTo ? ` · can transfer to ${transferTo}` : ""}`;
+    }
   }
 }
 

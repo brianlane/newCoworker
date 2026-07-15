@@ -41,7 +41,8 @@ const STATUS_LABEL: Record<string, string> = {
   running: "Running",
   awaiting_approval: "Waiting for approval",
   awaiting_agent: "Offered to the team",
-  awaiting_reply: "Waiting for their reply"
+  awaiting_reply: "Waiting for their reply",
+  awaiting_call: "AI call in progress"
 };
 
 const STATUS_TONE: Record<string, string> = {
@@ -49,7 +50,8 @@ const STATUS_TONE: Record<string, string> = {
   running: "bg-signal-teal/15 text-signal-teal",
   awaiting_approval: "bg-spark-orange/15 text-spark-orange",
   awaiting_agent: "bg-spark-orange/15 text-spark-orange",
-  awaiting_reply: "bg-spark-orange/15 text-spark-orange"
+  awaiting_reply: "bg-spark-orange/15 text-spark-orange",
+  awaiting_call: "bg-spark-orange/15 text-spark-orange"
 };
 
 function RunLine({

@@ -66,6 +66,8 @@ function statusPhrase(status: string): string {
       return "in progress";
     case "awaiting_reply":
       return "waiting for this contact's reply";
+    case "awaiting_call":
+      return "on an AI phone call with this contact";
     case "awaiting_approval":
       return "waiting on an owner approval";
     case "awaiting_agent":

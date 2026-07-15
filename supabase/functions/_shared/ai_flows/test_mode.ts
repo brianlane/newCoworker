@@ -152,6 +152,28 @@ export function simulateTestAction(
         saved: { [action.saveAs]: TEST_REPLY_TEXT },
         no_reply_sentinel: NO_REPLY_SENTINEL
       };
+    case "place_ai_call": {
+      // No call is placed (voice minutes are metered). Resolve instantly with
+      // the outcome the configured happy path would produce — "transferred"
+      // when a live transfer is configured, else "answered" — so the
+      // follow-up gating downstream plays out its success branch. A planner
+      // skip (no usable callee phone) mirrors the live not_placed sentinel.
+      if (action.skipReason) {
+        scope.vars[action.saveAs] = "not_placed";
+        scope.vars[action.marker] = "1";
+        return { simulated: "place_ai_call", skipped: action.skipReason };
+      }
+      const outcome = action.transferToE164 || action.transferToRef ? "transferred" : "answered";
+      scope.vars[action.saveAs] = outcome;
+      scope.vars[action.marker] = "1";
+      return {
+        simulated: "place_ai_call",
+        to: action.to,
+        persona: action.persona,
+        ...(action.preSmsBody ? { pre_alert: action.preSmsBody } : {}),
+        saved: { [action.saveAs]: outcome }
+      };
+    }
     default:
       return null;
   }

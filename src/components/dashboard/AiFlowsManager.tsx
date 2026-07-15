@@ -512,6 +512,16 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, minutes: 300 };
     case "wait_for_reply":
       return { id, type, phoneVar: examples.contactVar, saveAs: "reply_text", timeoutMinutes: 300 };
+    case "place_ai_call":
+      return {
+        id,
+        type,
+        toVar: examples.contactVar,
+        personaTemplate:
+          "Hi, I'm calling with the office. How are you today? We're following up — is now a good time to talk?",
+        notifyE164: "",
+        saveAs: "call_outcome"
+      };
     case "goal":
       return { id, type, label: "Appointment booked", events: [{ kind: "appointment_booked" }] };
     case "math":
@@ -737,6 +747,31 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
       ...step,
       toE164,
       notifyE164: step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
+      captureFields: captureFields.length > 0 ? captureFields : undefined
+    };
+  }
+  // place_ai_call: ref-wins cleanup on the notify number and the transfer
+  // target, blank capture-detail rows dropped (same conventions as
+  // voice_ai_intake/outbound_call); a transfer with no target at all is
+  // dropped so the semantic "no target" message never fires on an untouched
+  // optional block.
+  if (step.type === "place_ai_call") {
+    const captureFields = (step.captureFields ?? []).map((f) => f.trim()).filter(Boolean);
+    const transferTo = step.transfer?.toRef
+      ? undefined
+      : step.transfer?.toE164?.trim() || undefined;
+    const transfer =
+      step.transfer && (transferTo || step.transfer.toRef)
+        ? {
+            ...step.transfer,
+            toE164: transferTo,
+            preSmsTemplate: step.transfer.preSmsTemplate?.trim() || undefined
+          }
+        : undefined;
+    return {
+      ...step,
+      notifyE164: step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
+      transfer,
       captureFields: captureFields.length > 0 ? captureFields : undefined
     };
   }
@@ -4247,6 +4282,91 @@ function StepFields({
           the saved reply becomes &quot;no_reply&quot; — add a follow-up step with the condition
           &quot;{step.saveAs ?? "reply_text"} equals no_reply&quot; to send a nudge, and another
           with &quot;not equals no_reply&quot; for when they did reply.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "place_ai_call") {
+    const transferOn = step.transfer !== undefined;
+    return (
+      <div className="space-y-2">
+        <Field
+          label="Phone variable to call (from an earlier step)"
+          value={step.toVar}
+          onChange={(v) => patchStep(index, { toVar: v })}
+          help='The variable holding their phone number, e.g. "lead_phone".'
+        />
+        <Field
+          label="What the AI says (opening script)"
+          value={step.personaTemplate}
+          onChange={(v) => patchStep(index, { personaTemplate: v })}
+          textarea
+          help="How the AI opens and what the call is about. You can reuse details earlier steps found, e.g. {{vars.lead_name}}."
+        />
+        <ContactRefPicker
+          label="Text the summary to (E.164, e.g. +16025551234)"
+          placeholder="+16025551234"
+          textValue={step.notifyE164 ?? ""}
+          refValue={step.notifyRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { notifyRef: ref, notifyE164: undefined })}
+          help="After the call, the AI texts this number a summary and transcript."
+        />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={transferOn}
+            onChange={(ev) =>
+              patchStep(index, {
+                transfer: ev.target.checked ? { toE164: "" } : undefined
+              })
+            }
+          />
+          Live-transfer the call to a person when they say it&apos;s a good time
+        </label>
+        {transferOn && (
+          <div className="space-y-2 rounded border border-parchment/10 p-2">
+            <ContactRefPicker
+              label="Transfer the call to (E.164, e.g. +16025551234)"
+              placeholder="+16025551234"
+              textValue={step.transfer?.toE164 ?? ""}
+              refValue={step.transfer?.toRef}
+              people={people}
+              onChangeText={(v) =>
+                patchStep(index, {
+                  transfer: { ...step.transfer, toE164: v.trim() ? v.trim() : undefined }
+                })
+              }
+              onChangeRef={(ref) =>
+                patchStep(index, {
+                  transfer: { ...step.transfer, toRef: ref, toE164: undefined }
+                })
+              }
+              help="When the person confirms now is a good time, the AI connects them to this number."
+            />
+            <Field
+              label="Heads-up text sent to them as the transfer starts (optional)"
+              value={step.transfer?.preSmsTemplate ?? ""}
+              onChange={(v) =>
+                patchStep(index, {
+                  transfer: { ...step.transfer, preSmsTemplate: v.trim() ? v : undefined }
+                })
+              }
+              textarea
+              help='e.g. "LIVE TRANSFER incoming — {{vars.lead_name}} ({{vars.lead_phone}}). Pick up!"'
+            />
+          </div>
+        )}
+        <Field
+          label="Save the call outcome as"
+          value={step.saveAs ?? "call_outcome"}
+          onChange={(v) => patchStep(index, { saveAs: v.trim() ? v : undefined })}
+          help="Later steps can branch on it: transferred / answered / no_answer / not_placed / failed."
+        />
+        <p className="text-[11px] text-parchment/40">
+          The workflow pauses while the call happens and continues once it ends, with the
+          outcome saved. Calls use your voice minutes like any other AI call.
         </p>
       </div>
     );
