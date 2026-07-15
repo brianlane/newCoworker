@@ -1589,13 +1589,29 @@ if [[ -n "${CLOUDFLARE_TUNNEL_TOKEN:-}" ]]; then
     # /etc/systemd/system/cloudflared.service ... if you are really sure,
     # you can do `cloudflared service uninstall`"). Re-running deploy on
     # an already-provisioned VPS used to surface this as a fatal exit
-    # code, masking real downstream failures. Treat re-installs as a
-    # restart instead — the token is encoded into the existing unit and
-    # only changes during a manual rotation, which an operator handles
-    # explicitly via `cloudflared service uninstall && deploy-client.sh`.
-    log "cloudflared service already installed; restarting to pick up any compose changes"
-    systemctl enable cloudflared || true
-    systemctl restart cloudflared || true
+    # code, masking real downstream failures — so same-tenant re-deploys
+    # treat the existing unit as a restart.
+    #
+    # BUT the unit's baked-in token must match the token THIS deploy was
+    # given. On a pool-adopted box the unit is left over from the previous
+    # tenant, so "just restart" keeps serving the OLD tenant's tunnel while
+    # the new tenant's hostnames point at a connector-less tunnel — every
+    # request 530s (KYP Ads, Jul 15 2026: the owner's first SMS
+    # dead-lettered with rowboat_http_530). Compare tokens and reinstall
+    # when they differ.
+    EXISTING_TOKEN=$(grep -oE -- '--token[= ][^" ]+' /etc/systemd/system/cloudflared.service 2>/dev/null | head -1 | sed -E 's/^--token[= ]//' || true)
+    if [[ "${EXISTING_TOKEN}" == "${CLOUDFLARE_TUNNEL_TOKEN}" ]]; then
+      log "cloudflared service already installed with this tunnel token; restarting to pick up any compose changes"
+      systemctl enable cloudflared || true
+      systemctl restart cloudflared || true
+    else
+      log "cloudflared unit exists but token differs (adopted/rotated box) — reinstalling with this tenant's tunnel token"
+      cloudflared service uninstall || true
+      systemctl daemon-reload || true
+      cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
+      systemctl enable cloudflared
+      systemctl restart cloudflared
+    fi
   else
     log "Configuring cloudflared tunnel..."
     cloudflared service install "${CLOUDFLARE_TUNNEL_TOKEN}"
