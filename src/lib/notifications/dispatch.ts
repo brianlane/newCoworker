@@ -351,9 +351,14 @@ export async function dispatchUrgentNotification(
     const text = input.smsBody ?? `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
     try {
       const config = await getTelnyxMessagingForBusiness(input.businessId);
-      // Platform-initiated owner alert: do not consume the business monthly SMS pool
-      // (cf. customer-initiated / AI replies).
-      await sendTelnyxSms(config, targets.phone, text);
+      // Owner alerts are METERED like everything else (nothing is exempt —
+      // Jul 14 2026 policy) but never REFUSED: "operational" mode counts
+      // the send (plan/bonus/overage) without the hard stop, so the cap
+      // alert itself can outrun the cap it reports.
+      await sendTelnyxSms(config, targets.phone, text, {
+        meterBusinessId: input.businessId,
+        meterMode: "operational"
+      });
       results.push(
         await recordRow(input.businessId, "sms", "sent", summary, kind, {
           ...payload,

@@ -52,6 +52,12 @@ import {
   SMS_IDENTITY_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+// Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
+// against the tenant pool like all traffic but never refused (Jul 14 2026).
+import {
+  meterOperationalSms,
+  sendOperationalSms
+} from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
@@ -493,6 +499,16 @@ serve(async (req: Request) => {
               p_rowboat_conversation_id: null,
               p_last_error: "safe_mode_forwarded"
             });
+            // Safe-Mode forwards are METERED against the tenant's monthly
+            // pool like all traffic (Jul 14 2026 policy: nothing is exempt)
+            // but never refused. Metered AFTER the job completes — not
+            // before the send — so the count lands exactly once: a
+            // pre-completion failure retries the whole job, and the retry's
+            // replayed send is deduped by the Telnyx Idempotency-Key
+            // (metering up front would count every retry for one delivered
+            // forward). A meter failure here under-counts one message
+            // (logged inside the helper) rather than risking double-charge.
+            await meterOperationalSms(supabase, job.business_id);
             await clearJobReplyCache(supabase, job.id);
             // A forward_owner contact keeps their reply relay in Safe Mode:
             // the Safe-Mode forward above already put the text on the owner's
@@ -528,6 +544,9 @@ serve(async (req: Request) => {
               business_id: job.business_id
             });
           } catch (e) {
+            // Nothing to release: the meter only runs after the job
+            // completed, and completion is the last throw-capable step
+            // before it — a failure here means nothing was counted.
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
             // Bound the retry budget just like the Rowboat error path below —
@@ -709,7 +728,7 @@ serve(async (req: Request) => {
               const customerLabel =
                 (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||
                 fromE164;
-              const send = await telnyxSendSms({
+              const send = await sendOperationalSms(supabase, job.business_id, {
                 apiKey,
                 messagingProfileId: fwdProfile,
                 fromE164: fwdFrom,

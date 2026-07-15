@@ -26,6 +26,10 @@ import {
   telnyxWebhookClientIp,
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
+// Operational sends (acks, compliance replies, owner forwards) are METERED
+// against the tenant's monthly pool like all traffic (Jul 14 2026 policy)
+// but never refused — see _shared/sms_operational_meter.ts.
+import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
   evaluateSmsTrigger,
@@ -715,7 +719,7 @@ async function consumeRacedOfferReply(
       (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
     if (telnyxApiKey && ackProfile && from) {
       const text = "Thanks — looks like this lead's already been handled.";
-      const send = await telnyxSendSms({
+      const send = await sendOperationalSms(supabase, businessId, {
         apiKey: telnyxApiKey,
         messagingProfileId: ackProfile,
         fromE164: ackFrom,
@@ -825,7 +829,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   const ack = async (text: string, keySuffix: string): Promise<void> => {
     let ackSent: string | null = null;
     if (canAck) {
-      const send = await telnyxSendSms({
+      const send = await sendOperationalSms(supabase, businessId, {
         apiKey: telnyxApiKey,
         messagingProfileId: ackProfile,
         fromE164: ackFrom,
@@ -1098,7 +1102,7 @@ async function tryStaleOfferAck(args: StaleOfferAckArgs): Promise<Response | nul
   const ackText = staleOfferAckText(stale);
   let ackSent: string | null = null;
   if (canAck) {
-    const send = await telnyxSendSms({
+    const send = await sendOperationalSms(supabase, businessId, {
       apiKey: telnyxApiKey,
       messagingProfileId: ackProfile,
       fromE164: ackFrom,
@@ -1188,7 +1192,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   const ack = async (text: string, keySuffix: string): Promise<void> => {
     let ackSent: string | null = null;
     if (canAck) {
-      const send = await telnyxSendSms({
+      const send = await sendOperationalSms(supabase, businessId, {
         apiKey: telnyxApiKey,
         messagingProfileId: ackProfile,
         fromE164: ackFrom,
@@ -1591,7 +1595,7 @@ serve(async (req: Request) => {
         }
       }
       if (canAutoReply) {
-        const send = await telnyxSendSms({
+        const send = await sendOperationalSms(supabase, businessId, {
           apiKey: telnyxApiKey,
           messagingProfileId,
           fromE164: smsFromE164,
@@ -1628,7 +1632,7 @@ serve(async (req: Request) => {
 
     if (isHelpKeyword(bodyNorm)) {
       if (canAutoReply) {
-        const send = await telnyxSendSms({
+        const send = await sendOperationalSms(supabase, businessId, {
           apiKey: telnyxApiKey,
           messagingProfileId,
           fromE164: smsFromE164,
@@ -1679,7 +1683,7 @@ serve(async (req: Request) => {
         }
       }
       if (canAutoReply) {
-        const send = await telnyxSendSms({
+        const send = await sendOperationalSms(supabase, businessId, {
           apiKey: telnyxApiKey,
           messagingProfileId,
           fromE164: smsFromE164,
@@ -2040,7 +2044,7 @@ serve(async (req: Request) => {
                       : "Canceled — I stopped the whole workflow.";
               let ackSent: string | null = null;
               if (canAck) {
-                const send = await telnyxSendSms({
+                const send = await sendOperationalSms(supabase, businessId, {
                   apiKey: telnyxApiKey,
                   messagingProfileId: ackProfile,
                   fromE164: ackFrom,
@@ -2340,7 +2344,7 @@ serve(async (req: Request) => {
         if (telnyxApiKey && fwdProfile && ownerCell && from !== ownerCell) {
           const rawBody = inboundSmsBody(payload).slice(0, 1000);
           const who = member.name?.trim() || from;
-          const send = await telnyxSendSms({
+          const send = await sendOperationalSms(supabase, businessId, {
             apiKey: telnyxApiKey,
             messagingProfileId: fwdProfile,
             fromE164: fwdFrom,
@@ -2541,7 +2545,7 @@ serve(async (req: Request) => {
       });
       if (logErr) console.error("owner relay outbound log", logErr);
       const ack = buildOwnerReplyAck(customerLabel);
-      const ackSend = await telnyxSendSms({
+      const ackSend = await sendOperationalSms(supabase, businessId, {
         apiKey: telnyxApiKey,
         messagingProfileId: relayProfile,
         fromE164: relayFrom,
@@ -2658,7 +2662,7 @@ serve(async (req: Request) => {
         // + destination.
         const canForward = Boolean(telnyxApiKey && fwdProfile && gate.forwardToE164);
         if (canForward) {
-          const send = await telnyxSendSms({
+          const send = await sendOperationalSms(supabase, businessId, {
             apiKey: telnyxApiKey,
             messagingProfileId: fwdProfile,
             fromE164: fwdFrom,

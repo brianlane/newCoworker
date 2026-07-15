@@ -646,7 +646,10 @@ describe("provisioning/orchestrate", () => {
     expect(sendTelnyxSms).toHaveBeenCalledWith(
       expect.objectContaining({ fromE164: "+15559990000" }),
       "+15145188192",
-      expect.stringContaining("Your New Coworker is live!")
+      expect.stringContaining("Your New Coworker is live!"),
+      // Metered like every send (nothing exempt), operational mode: counted
+      // against the pool but never refused at the cap.
+      { meterBusinessId: "biz-own-did", meterMode: "operational" }
     );
   });
 
@@ -690,7 +693,8 @@ describe("provisioning/orchestrate", () => {
       expect(sendTelnyxSms).toHaveBeenCalledWith(
         expect.anything(),
         "+15145188192",
-        expect.stringContaining("Your New Coworker is live!")
+        expect.stringContaining("Your New Coworker is live!"),
+        expect.objectContaining({ meterMode: "operational" })
       );
     } finally {
       vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);

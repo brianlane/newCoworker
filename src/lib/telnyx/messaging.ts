@@ -122,11 +122,29 @@ export type SendTelnyxSmsOptions = {
   /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
   idempotencyKey?: string;
   /**
-   * When set, atomically reserves one outbound SMS against this business's monthly cap (Postgres row lock + pre-increment)
-   * before calling Telnyx. Omit for platform-operational messages (e.g. owner alerts) so they do not consume the customer's pool.
-   * If the HTTP request fails after a reserve, the slot is released so quota is not consumed.
+   * When set, meters one outbound SMS against this business's monthly pool
+   * before calling Telnyx. If the HTTP request fails after metering, the
+   * slot is released so quota is not consumed.
+   *
+   * NOTHING is exempt from metering (Jul 14 2026 policy) — the difference
+   * between traffic classes is only what happens AT the cap, via
+   * `meterMode`.
    */
   meterBusinessId?: string;
+  /**
+   * How the cap applies to the metered send (requires `meterBusinessId`):
+   *
+   *   - "reserve" (default) — customer-facing traffic: row-locked reserve
+   *     via try_reserve_sms_outbound_slot; over-cap sends are REFUSED
+   *     (throws "Monthly SMS limit reached").
+   *   - "operational" — owner/platform/compliance traffic (alerts,
+   *     provisioning notices, teammate acks): counts via
+   *     meter_sms_operational_send — plan slot, bonus spill, or explicit
+   *     overage — but is never refused and never throttled. The cap alert
+   *     must outrun the cap it reports, and STOP/HELP/START replies are
+   *     legally required.
+   */
+  meterMode?: "reserve" | "operational";
   /**
    * Per-business outbound throttle (application-level MPS cap, §16). Call sms_outbound_
    * rate_check before the send. Defaults to 10 messages / second per business (aligns
@@ -196,8 +214,26 @@ export async function sendTelnyxSms(
   let reservedSlot = false;
   let reservedFromBonus = false;
   const businessId = options?.meterBusinessId;
+  const meterMode = options?.meterMode ?? "reserve";
 
-  if (businessId) {
+  if (businessId && meterMode === "operational") {
+    // Owner/platform/compliance traffic: ALWAYS counted, never refused and
+    // never throttled (the cap alert must outrun the cap it reports).
+    // Metering failures log-and-continue for the same reason.
+    meterClient = await createSupabaseServiceClient();
+    const { data: res, error } = await meterClient.rpc("meter_sms_operational_send", {
+      p_business_id: businessId
+    });
+    if (error) {
+      console.warn("sendTelnyxSms: operational meter failed (send continues)", error.message);
+    } else {
+      const counted = res as { counted?: boolean; source?: string } | null;
+      if (counted?.counted === true) {
+        reservedSlot = true;
+        reservedFromBonus = counted.source === "bonus";
+      }
+    }
+  } else if (businessId) {
     meterClient = await createSupabaseServiceClient();
 
     // Throughput throttle first: refuses fast when a runaway notification loop would
