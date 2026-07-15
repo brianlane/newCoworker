@@ -8,6 +8,7 @@ import {
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
+  findZoomMeetingIdByEvent,
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -28,6 +29,10 @@ import {
   cancelCaldavAppointment,
   rescheduleCaldavAppointment
 } from "@/lib/calendar-tools/caldav";
+import {
+  deleteZoomMeetingForBooking,
+  updateZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
 import { logger } from "@/lib/logger";
 
 /**
@@ -78,6 +83,13 @@ type LocatedEvent = {
   eventId: string;
   /** Ledger row backing the event; null when found via provider search. */
   claimId: string | null;
+  /**
+   * Zoom meeting created with the booking. Ledger hits read it off the
+   * claim row; provider-search hits recover it from the event's row under
+   * a different attendee key (findZoomMeetingIdByEvent). Reschedule/cancel
+   * move/delete it with the event, best-effort.
+   */
+  zoomMeetingId: string | null;
 };
 
 /** How far ahead the provider-search fallback scans for the booking. */
@@ -224,9 +236,17 @@ async function locateUpcomingAppointment(
   marker: string
 ): Promise<LocatedEvent | null> {
   const claim = await findUpcomingBookingClaim(businessId, attendeeKey);
-  if (claim) return { eventId: claim.eventId, claimId: claim.id };
+  if (claim) {
+    return { eventId: claim.eventId, claimId: claim.id, zoomMeetingId: claim.zoomMeetingId };
+  }
   const eventId = await searchProviderEvent(businessId, conn, marker);
-  return eventId ? { eventId, claimId: null } : null;
+  if (!eventId) return null;
+  // The event may still hold a ledger row under a DIFFERENT attendee key
+  // (booked by phone, rescheduled by email) carrying the booking's Zoom
+  // meeting — capture it NOW, before the callers' by-event ledger cleanup
+  // deletes that row, so the meeting still moves/dies with the event.
+  const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, eventId);
+  return { eventId, claimId: null, zoomMeetingId };
 }
 
 /**
@@ -332,6 +352,14 @@ export async function rescheduleCalendarAppointment(
           claim.id,
           new Date(args.newStartIso).toISOString()
         );
+        // Move the booking's Zoom meeting with it (best-effort; only CalDAV
+        // bookings carry one on this path — Vagaro bookings are Zoom-free).
+        if (claim.zoomMeetingId) {
+          await updateZoomMeetingForBooking(businessId, claim.zoomMeetingId, {
+            startIso: args.newStartIso,
+            endIso: args.newEndIso
+          });
+        }
       } else if (moved.detail === "booking_not_found") {
         // The provider event is gone (deleted upstream) but the ledger row
         // survived — drop it so the stale claim can't shadow the slot or
@@ -392,6 +420,17 @@ export async function rescheduleCalendarAppointment(
       );
     }
 
+    // Move the booking's Zoom meeting with the event (best-effort). Both
+    // resolution paths can carry one: a ledger hit reads it off the claim
+    // row; a provider-search hit captured it from the event's row under a
+    // different key before the cleanup above deleted that row.
+    if (located.zoomMeetingId) {
+      await updateZoomMeetingForBooking(businessId, located.zoomMeetingId, {
+        startIso: args.newStartIso,
+        endIso: args.newEndIso
+      });
+    }
+
     return {
       ok: true,
       data: {
@@ -448,6 +487,11 @@ export async function cancelCalendarAppointment(
       }
       if (canceled.ok) {
         await deleteBookingClaim(claim.id);
+        // Delete the booking's Zoom meeting with it (best-effort; only
+        // CalDAV bookings carry one here — Vagaro bookings are Zoom-free).
+        if (claim.zoomMeetingId) {
+          await deleteZoomMeetingForBooking(businessId, claim.zoomMeetingId);
+        }
       }
       return canceled;
     }
@@ -476,6 +520,11 @@ export async function cancelCalendarAppointment(
       await deleteBookingClaim(located.claimId);
     } else {
       await deleteBookingClaimsByEvent(businessId, located.eventId);
+    }
+
+    // Delete the booking's Zoom meeting with the event (best-effort).
+    if (located.zoomMeetingId) {
+      await deleteZoomMeetingForBooking(businessId, located.zoomMeetingId);
     }
 
     return {

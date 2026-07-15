@@ -170,13 +170,22 @@ const CONFIRM_RETRY_DELAY_MS = 250;
  * working moments, at which point duplicate suppression is best-effort by
  * the module's fail-open contract.
  */
-export async function confirmBookingDedupe(claimId: string, eventId: string): Promise<void> {
+export async function confirmBookingDedupe(
+  claimId: string,
+  eventId: string,
+  zoomMeetingId?: string | null
+): Promise<void> {
   for (let attempt = 1; attempt <= CONFIRM_MAX_ATTEMPTS; attempt += 1) {
     try {
       const supabase = await createSupabaseServiceClient();
       const { error } = await supabase
         .from("calendar_booking_dedupe")
-        .update({ event_id: eventId })
+        .update({
+          event_id: eventId,
+          // The booking's Zoom meeting (when one was created) rides on the
+          // same row so reschedule/cancel can move/delete it with the event.
+          ...(zoomMeetingId ? { zoom_meeting_id: zoomMeetingId } : {})
+        })
         .eq("id", claimId);
       if (!error) return;
       logger.warn("booking-dedupe: confirm attempt failed", {
@@ -205,6 +214,8 @@ export type UpcomingBookingClaim = {
   id: string;
   eventId: string;
   startAt: string;
+  /** Zoom meeting created with this booking; null for non-video bookings. */
+  zoomMeetingId: string | null;
   /**
    * The row's stored attendee key — set by the phone-tolerant lookup, where
    * it can differ from the caller's key (different phone formatting at
@@ -227,7 +238,7 @@ export async function findUpcomingBookingClaim(
     const supabase = await createSupabaseServiceClient();
     const { data, error } = await supabase
       .from("calendar_booking_dedupe")
-      .select("id, event_id, start_at")
+      .select("id, event_id, start_at, zoom_meeting_id")
       .eq("business_id", businessId)
       .eq("attendee_key", attendeeKey)
       .not("event_id", "is", null)
@@ -236,8 +247,18 @@ export async function findUpcomingBookingClaim(
       .limit(1)
       .maybeSingle();
     if (error || !data) return null;
-    const row = data as { id: string; event_id: string; start_at: string };
-    return { id: row.id, eventId: row.event_id, startAt: row.start_at };
+    const row = data as {
+      id: string;
+      event_id: string;
+      start_at: string;
+      zoom_meeting_id: string | null;
+    };
+    return {
+      id: row.id,
+      eventId: row.event_id,
+      startAt: row.start_at,
+      zoomMeetingId: row.zoom_meeting_id ?? null
+    };
   } catch (err) {
     logger.warn("booking-dedupe: upcoming lookup threw", {
       businessId,
@@ -269,7 +290,7 @@ export async function findUpcomingBookingClaimByPhone(
     const supabase = await createSupabaseServiceClient();
     const { data, error } = await supabase
       .from("calendar_booking_dedupe")
-      .select("id, event_id, start_at, attendee_key")
+      .select("id, event_id, start_at, attendee_key, zoom_meeting_id")
       .eq("business_id", businessId)
       .like("attendee_key", "phone:%")
       .not("event_id", "is", null)
@@ -282,6 +303,7 @@ export async function findUpcomingBookingClaimByPhone(
       event_id: string;
       start_at: string;
       attendee_key: string;
+      zoom_meeting_id: string | null;
     }>) {
       const rowDigits = digitsOf(raw.attendee_key.slice("phone:".length));
       if (rowDigits.length > 0 && phoneDigitsMatch(rowDigits, callerDigits)) {
@@ -289,6 +311,7 @@ export async function findUpcomingBookingClaimByPhone(
           id: raw.id,
           eventId: raw.event_id,
           startAt: raw.start_at,
+          zoomMeetingId: raw.zoom_meeting_id ?? null,
           attendeeKey: raw.attendee_key
         };
       }
@@ -379,6 +402,39 @@ export async function deleteBookingClaim(claimId: string): Promise<void> {
       claimId,
       error: err instanceof Error ? err.message : String(err)
     });
+  }
+}
+
+/**
+ * The Zoom meeting recorded for a provider event under ANY attendee key.
+ * Used by the provider-search resolution path in reschedule/cancel: the
+ * caller's own key missed (booked by phone, canceled by email), but the
+ * event's ledger row — about to be dropped by deleteBookingClaimsByEvent —
+ * may still carry the booking's Zoom meeting id, and the meeting must move
+ * or die with the event. Best-effort: null means "no meeting to touch".
+ */
+export async function findZoomMeetingIdByEvent(
+  businessId: string,
+  eventId: string
+): Promise<string | null> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("zoom_meeting_id")
+      .eq("business_id", businessId)
+      .eq("event_id", eventId)
+      .not("zoom_meeting_id", "is", null)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    return (data as { zoom_meeting_id: string | null }).zoom_meeting_id ?? null;
+  } catch (err) {
+    logger.warn("booking-dedupe: zoom-by-event lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
   }
 }
 
