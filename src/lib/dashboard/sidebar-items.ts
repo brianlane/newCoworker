@@ -27,6 +27,8 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "chat", label: "Chat", href: "/dashboard/chat" },
   { key: "calls", label: "Calls", href: "/dashboard/calls" },
   { key: "messages", label: "Texts", href: "/dashboard/messages" },
+  { key: "aiflows", label: "AiFlows", href: "/dashboard/aiflows" },
+  { key: "agents", label: "Agents", href: "/dashboard/agents" },
   { key: "webchat", label: "Web chat", href: "/dashboard/webchat" },
   { key: "emails", label: "Emails", href: "/dashboard/emails" },
   { key: "customers", label: "Contacts", href: "/dashboard/customers" },
@@ -34,8 +36,6 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "memory", label: "Memory", href: "/dashboard/memory" },
   { key: "import-export", label: "Import / Export", href: "/dashboard/import-export" },
   { key: "integrations", label: "Integrations", href: "/dashboard/integrations" },
-  { key: "aiflows", label: "AiFlows", href: "/dashboard/aiflows" },
-  { key: "agents", label: "Agents", href: "/dashboard/agents" },
   { key: "billing", label: "Billing", href: "/dashboard/billing" },
   { key: "settings", label: "Settings", href: "/dashboard/settings", locked: true },
   { key: "notifications", label: "Notifications", href: "/dashboard/notifications", locked: true }
