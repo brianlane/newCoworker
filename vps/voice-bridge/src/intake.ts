@@ -54,7 +54,8 @@ export function intakeSystemInstruction(
   captureFields: string[],
   hasEndCall = false,
   transfer?: { agentName?: string },
-  outboundCall = false
+  outboundCall = false,
+  contextNote?: string
 ): string {
   const opener = intakeOpener(
     businessName,
@@ -115,6 +116,15 @@ export function intakeSystemInstruction(
       outboundCall
         ? `When you have what you need (or they're not interested), thank them for their time and wrap up politely.`
         : `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
+    );
+  }
+  // Known details (a place_ai_call step's rendered contextTemplate): the AI
+  // must never ask for something the flow already extracted — "why are you
+  // asking my name if you already have it?" (live test, Jul 15 2026).
+  if (contextNote && contextNote.trim()) {
+    lines.push(
+      `What you ALREADY KNOW about this person: ${contextNote.trim()}`,
+      "This OVERRIDES any collect list above: NEVER ask for a detail listed there — you already have it. Use their name naturally, record known details straight into `capture_lead` without asking, and only ask about what is genuinely missing. If a known detail matters, confirm it in passing instead of asking for it fresh."
     );
   }
   if (hasEndCall) {

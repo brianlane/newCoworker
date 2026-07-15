@@ -837,6 +837,12 @@ const nonBranchStepMembers = [
     toVar: varName,
     /** Greeting/script template the AI opens the call with. */
     personaTemplate: z.string().min(1).max(2000),
+    /**
+     * What the AI already knows about the person (templated) — injected into
+     * the call prompt with a never-re-ask rule, so the AI doesn't ask for
+     * details the flow already extracted.
+     */
+    contextTemplate: z.string().min(1).max(2000).optional(),
     // Post-call summary recipient: exactly one of notifyE164 / notifyRef.
     notifyE164: e164.optional(),
     notifyRef: contactRefSchema.optional(),
@@ -1297,9 +1303,10 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "run_agent":
       return [step.input];
-    // The call script and the transfer pre-alert both render against run vars.
+    // The call script, known-details note, and transfer pre-alert all render
+    // against run vars.
     case "place_ai_call":
-      return [step.personaTemplate, step.transfer?.preSmsTemplate ?? ""];
+      return [step.personaTemplate, step.contextTemplate ?? "", step.transfer?.preSmsTemplate ?? ""];
     case "extract_url":
     case "browse_extract":
     case "extract_text":

@@ -128,6 +128,13 @@ export type IntakeCapability = {
   /** Lead fields to collect (defaults to name, phone, address, timeframe, notes). */
   captureFields?: string[];
   /**
+   * What the AI already KNOWS about the person (a place_ai_call step's
+   * rendered contextTemplate) — injected into the system prompt with a
+   * never-re-ask rule so the AI doesn't ask for details the flow already
+   * extracted.
+   */
+  contextNote?: string;
+  /**
    * place_ai_call live transfer: when true (and the host wired a transfer
    * capability), the intake session ALSO gets the transfer tool — the flow
    * explicitly authorized connecting this callee to a person once they
@@ -1153,7 +1160,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             intakeCaptureFields,
             hasEndCall,
             intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
-            opts.direction === "outbound"
+            opts.direction === "outbound",
+            intake.contextNote
           )
         : systemInstructionForBusiness(
             opts.businessName,

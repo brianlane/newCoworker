@@ -161,6 +161,7 @@ describe("outboundSessionContext", () => {
       toE164: "+19178628675",
       notifyE164: "+16026951142",
       persona: "Amy's assistant",
+      contextNote: "Their name: Bryan.",
       captureFields: null,
       transfer: {
         toE164: "+16025245719",
@@ -169,6 +170,7 @@ describe("outboundSessionContext", () => {
       },
       flowRun: { runId: "run-1", saveAs: "call_outcome", marker: "__called_c1", stepIndex: 4 }
     });
+    expect(ctx.ai_takeover.context_note).toBe("Their name: Bryan.");
     expect(ctx.transfer).toEqual({
       to_e164: "+16025245719",
       pre_sms_body: "LIVE TRANSFER incoming — pick up!",
@@ -202,6 +204,7 @@ describe("parsePlaceCallPayload", () => {
     const plan = parsePlaceCallPayload({
       ...BASE,
       persona: "Hi, Amy's office!",
+      contextNote: "Their name: Bryan.",
       captureFields: ["best time", " ", 7],
       transfer: {
         toE164: "+16025245719",
@@ -214,10 +217,17 @@ describe("parsePlaceCallPayload", () => {
       toE164: "+17572390150",
       notifyE164: "+16026951142",
       persona: "Hi, Amy's office!",
+      contextNote: "Their name: Bryan.",
       captureFields: ["best time"],
       transfer: { toE164: "+16025245719", preSmsBody: "pick up!", agentName: "Dave Lane" },
       flowRun: { runId: "run-1", saveAs: "call_outcome", marker: "__called_c1", stepIndex: 4 }
     });
+  });
+
+  it("drops a blank contextNote", () => {
+    expect(parsePlaceCallPayload({ ...BASE, contextNote: "  " })).not.toHaveProperty(
+      "contextNote"
+    );
   });
 
   it("parses a minimal payload (no persona/captureFields/transfer/flowRun)", () => {

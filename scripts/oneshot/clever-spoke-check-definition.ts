@@ -42,12 +42,22 @@ export function buildSpokeCheckDefinition(opts: SpokeCheckOptions): unknown {
     leadLine +
     "\nThey said now is a good time; connecting them to you.";
 
+  // Everything the flow already extracted rides into the call prompt with a
+  // never-re-ask rule, so the AI greets the lead by name and never asks for
+  // details it already has (address, offers — and never their phone).
+  const contextTemplate =
+    "Their name: {{vars.lead_name}}. " +
+    "Property address: {{vars.lead_address}}. " +
+    "Clever cash offers on their home: {{vars.cash_offers}}. " +
+    `The team member who will speak with them: ${opts.agentName}.`;
+
   const placeCall = (id: string): FlowStep =>
     ({
       id,
       type: "place_ai_call",
       toVar: "lead_phone",
       personaTemplate,
+      contextTemplate,
       notifyRef: opts.agentRef,
       transfer: { toRef: opts.agentRef, preSmsTemplate },
       captureFields: ["best time to call back", "notes"],

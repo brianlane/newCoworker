@@ -111,6 +111,22 @@ describe("intakeSystemInstruction", () => {
     expect(withTransfer).not.toContain("call you right back");
   });
 
+  it("a known-details note lands with a never-re-ask rule (any variant)", () => {
+    const note = "Their name: Bryan. Property: 123 Main St.";
+    for (const instr of [
+      intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true, note),
+      intakeSystemInstruction("Acme", undefined, null, [], false, { agentName: "Dave" }, true, note)
+    ]) {
+      expect(instr).toContain("ALREADY KNOW");
+      expect(instr).toContain(note);
+      expect(instr).toContain("This OVERRIDES any collect list above");
+      expect(instr).toContain("NEVER ask for a detail listed there");
+    }
+    // Absent/blank note → no known-details block at all.
+    const bare = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true, "  ");
+    expect(bare).not.toContain("ALREADY KNOW");
+  });
+
   it("the inbound live-transfer intake keeps the callback-number ask and opener", () => {
     const instr = intakeSystemInstruction("Acme", undefined, null, []);
     expect(instr).toContain("taking a live seller lead");
