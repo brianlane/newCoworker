@@ -77,15 +77,18 @@ export async function GET(request: NextRequest) {
     const accountName = await getUserName(longLived).catch(() => null);
 
     // A reconnect resets an ACTIVE connection back to pending, which clears
-    // its Page — unsubscribe that Page first (best-effort, like DELETE) so
-    // Meta stops delivering leadgen events nobody will route, and the Page
-    // is genuinely released before another pick.
+    // its Page. Capture the previous Page BEFORE the reset, persist first,
+    // and only then unsubscribe (best-effort, like DELETE): if the DB write
+    // fails, the row is still active AND still subscribed (consistent); if
+    // the unsubscribe fails, stray deliveries are ignored because the row
+    // is no longer active.
     const existing = await getMetaConnection(businessId);
+
+    await savePendingMetaConnection({ businessId, userToken: longLived, accountName });
+
     if (existing?.page_id && existing.pageToken) {
       await unsubscribePage(existing.page_id, existing.pageToken);
     }
-
-    await savePendingMetaConnection({ businessId, userToken: longLived, accountName });
 
     return dashboardRedirect(request, { meta: "connected" });
   } catch (err) {

@@ -48,10 +48,14 @@ create unique index if not exists uq_meta_connections_business
   on public.meta_connections (business_id);
 
 -- A Page routes webhooks to exactly one tenant: two businesses may not hold
--- the same Page in the connected state at once.
+-- the same Page at once. Deliberately NOT scoped to is_active — a paused
+-- connection keeps its Page claim (Meta remains subscribed; deliveries are
+-- refused while paused), so re-enabling can never hit a unique violation
+-- because someone else grabbed the Page in the meantime. Only disconnecting
+-- (row deletion) or a reconnect reset frees the slot.
 create unique index if not exists uq_meta_connections_page
   on public.meta_connections (page_id)
-  where page_id is not null and is_active;
+  where page_id is not null;
 
 alter table public.meta_connections enable row level security;
 -- No policies: service_role bypasses RLS; anon/authenticated get an
