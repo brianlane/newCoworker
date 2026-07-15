@@ -690,6 +690,21 @@ describe("provisioning/orchestrate", () => {
     expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
   });
 
+  it("tolerates a non-Error throw from the outbound-log write", async () => {
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    outboundLogInsert.mockRejectedValueOnce("string boom");
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-log-throw", tier: "starter", ownerPhone: "+15145188192" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+  });
+
   it("skips the live SMS when the tenant has no DID to send from (no env fallback by design)", async () => {
     // The env-fallback sender once pointed at ANOTHER tenant's business
     // number (Jul 14 2026) — a tenant without their own DID must skip, not
