@@ -73,6 +73,43 @@ describe("classify step live", () => {
       );
     }
   );
+
+  it(
+    "classifies EVERY first reply recorded in Truly's run history the way production did",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      // The complete distinct set of real lead first-replies from
+      // ai_flow_runs for flow 70be1676 (as of 2026-07-14), with the intent
+      // production recorded. New recorded replies belong in this corpus.
+      const recorded: Array<[string, string]> = [
+        ["Hi i am looking for a auto quote", "gave_info"], // Junaid 2b7ce0c7
+        ["I need Auto and home insurance quote", "gave_info"], // Shahid 38d17410
+        ["I need auto insurance ", "gave_info"], // Juhu 70d90bc7
+        ["I am looking for auto insurance", "gave_info"] // Alex 5820f7f0
+      ];
+      for (const [reply, intent] of recorded) {
+        expect(await classify(reply), reply).toBe(intent);
+      }
+    }
+  );
+
+  it(
+    "classifies Dawnia's recorded late reply as wants_a_call under the late-fork question",
+    { retry: 1, timeout: 60_000 },
+    async () => {
+      // Run 5575c2b2: the reply the pre-patch dead end dropped. The late
+      // fork uses its own question wording — pin the recorded utterance
+      // against THAT prompt, not the first-reply one.
+      const raw = await geminiJson(
+        buildClassifyPrompt(
+          TRULY_CATEGORIES,
+          "I would like to book a call ",
+          "An insurance lead was nudged about reviewing their options. This is their reply."
+        )
+      );
+      expect(parseClassifyChoice(raw, TRULY_CATEGORIES)).toBe("wants_a_call");
+    }
+  );
 });
 
 describe("extract_text step live", () => {
