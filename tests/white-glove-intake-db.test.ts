@@ -12,6 +12,8 @@ import {
   getWhiteGloveIntakeByToken,
   submitWhiteGloveIntake,
   revokeWhiteGloveIntake,
+  claimWhiteGloveIntakeForBusiness,
+  markWhiteGloveIntakeApplied,
   whiteGloveIntakeUrl
 } from "@/lib/white-glove/intake";
 import type { IntakeAnswers } from "@/lib/white-glove/template";
@@ -23,6 +25,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     select: vi.fn().mockReturnThis(),
     update: vi.fn().mockReturnThis(),
     eq: vi.fn().mockReturnThis(),
+    or: vi.fn().mockReturnThis(),
     order: vi.fn().mockResolvedValue({ data: [], error: null }),
     single: vi.fn().mockResolvedValue({ data: null, error: null }),
     maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
@@ -217,6 +220,75 @@ describe("white-glove/intake DB layer", () => {
     await expect(revokeWhiteGloveIntake(INTAKE.id)).rejects.toThrow(
       "revokeWhiteGloveIntake: boom"
     );
+  });
+
+  it("claimWhiteGloveIntakeForBusiness claims atomically with an apply lease", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: [{ id: INTAKE.id }], error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).toBe(true);
+    expect(db.update).toHaveBeenCalledWith({
+      business_id: "biz-1",
+      apply_started_at: expect.any(String)
+    });
+    expect(db.eq).toHaveBeenCalledWith("status", "completed");
+    expect(db.or).toHaveBeenCalledWith("business_id.is.null,business_id.eq.biz-1");
+    // The lease guard: refuse while another apply's fresh stamp exists.
+    expect(db.or).toHaveBeenCalledWith(
+      expect.stringMatching(/^apply_started_at\.is\.null,apply_started_at\.lt\./)
+    );
+
+    // Linked to a different tenant, or a fresh lease → the claim loses.
+    for (const data of [[], null]) {
+      const none = mockDb({ select: vi.fn().mockResolvedValue({ data, error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(none as never);
+      expect(await claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).toBe(false);
+    }
+  });
+
+  it("claimWhiteGloveIntakeForBusiness throws on error", async () => {
+    const db = mockDb({
+      select: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).rejects.toThrow(
+      "claimWhiteGloveIntakeForBusiness: boom"
+    );
+  });
+
+  it("markWhiteGloveIntakeApplied stamps the apply on COMPLETED rows only", async () => {
+    // The update chain ends on the second .eq() — resolve the row there.
+    const db = mockDb();
+    db.eq = vi
+      .fn()
+      .mockReturnValueOnce(db)
+      .mockResolvedValueOnce({ error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await markWhiteGloveIntakeApplied(INTAKE.id, { businessId: "biz-1", flowId: "flow-1" });
+    expect(db.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz-1",
+        applied_flow_id: "flow-1",
+        applied_at: expect.any(String),
+        // Success releases the apply lease.
+        apply_started_at: null
+      })
+    );
+    expect(db.eq).toHaveBeenCalledWith("id", INTAKE.id);
+    expect(db.eq).toHaveBeenCalledWith("status", "completed");
+  });
+
+  it("markWhiteGloveIntakeApplied throws on error", async () => {
+    const db = mockDb();
+    db.eq = vi
+      .fn()
+      .mockReturnValueOnce(db)
+      .mockResolvedValueOnce({ error: { message: "boom" } });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(
+      markWhiteGloveIntakeApplied(INTAKE.id, { businessId: "biz-1", flowId: "flow-1" })
+    ).rejects.toThrow("markWhiteGloveIntakeApplied: boom");
   });
 
   it("whiteGloveIntakeUrl builds the public link from the app URL (set and unset)", () => {

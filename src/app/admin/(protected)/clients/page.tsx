@@ -116,11 +116,20 @@ export default async function AdminClientsPage() {
           initialIntakes={intakes.map((i) => ({
             id: i.id,
             business_name: i.business_name,
+            industry: i.industry,
             recipient_email: i.recipient_email,
+            business_id: i.business_id,
+            answers: i.answers,
             status: i.status,
             created_at: i.created_at,
             completed_at: i.completed_at,
+            applied_at: i.applied_at,
             intakeUrl: whiteGloveIntakeUrl(i)
+          }))}
+          businesses={businesses.map((b) => ({
+            id: b.id,
+            name: b.name,
+            ownerEmail: b.owner_email
           }))}
         />
       </Card>
