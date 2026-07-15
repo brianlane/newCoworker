@@ -39,11 +39,13 @@ import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   recordForwardedCall,
+  type ForwardedCallLogResult,
   type ForwardedCallOutcome
 } from "../_shared/forwarded_call_log.ts";
 import { sendMissedCallAutotext } from "../_shared/missed_call_autotext.ts";
 import { maybeSendMissedCallSpikeAlert } from "../_shared/missed_call_spike.ts";
 import { systemLog } from "../_shared/system_log.ts";
+import { meterForwardedCallSeconds } from "../_shared/forwarded_call_meter.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -810,6 +812,19 @@ async function handleHandoffLifecycle(
       outcome: priorStatus === "bridged" ? "answered" : "missed",
       context: "handoff_chain"
     });
+    // Meter the A-leg's carrier time when a human answered the chain. The
+    // platform pays Telnyx for this answered leg's full duration and no
+    // reservation ever existed for it (only the ai_intake takeover reserves,
+    // and that settles through the normal path). Post-hoc, idempotent,
+    // never refuses.
+    if (priorStatus === "bridged") {
+      await meterForwardedCallSeconds(supabase, {
+        businessId: sessEnd.business_id,
+        callControlId,
+        reportedSeconds: parseCallDurationSeconds(payload),
+        context: "handoff_chain"
+      });
+    }
   }
   // An AI takeover reserved voice budget for this A-leg, so its hangup MUST flow
   // into settlement (signal 1 of 2) to bill the Gemini minutes. Human-only
@@ -1036,6 +1051,10 @@ async function sendWarmTransferNotifications(
  * the `voice_call_blocked` ledger row (answer-rate card + spike counter), and
  * the once-per-day missed-call spike alert. Never throws — logging must not
  * break webhook handling (settlement/handoff advancement).
+ *
+ * Returns the call-log record status (null on an unexpected throw) so callers
+ * can detect `superseded` — a missed-cause hangup on a call a human actually
+ * answered (call.bridged landed first) — and still meter its carrier time.
  */
 async function logForwardedCallOutcome(
   deps: HandoffDeps,
@@ -1049,7 +1068,7 @@ async function logForwardedCallOutcome(
     /** Ledger/telemetry tag: which forwarding path produced this outcome. */
     context: string;
   }
-): Promise<void> {
+): Promise<ForwardedCallLogResult["status"] | null> {
   const { supabase } = deps;
   try {
     const rec = await recordForwardedCall(supabase, {
@@ -1068,11 +1087,11 @@ async function logForwardedCallOutcome(
       // feature for log consistency. The error is loud here for ops.
       console.error("forwarded call log failed", args.context, rec.reason);
     }
-    if (args.outcome !== "missed") return;
+    if (args.outcome !== "missed") return rec.status;
     // `superseded`: an answered row already exists for this call (missed is
     // insert-only, so a reordered/duplicate hangup can't downgrade it) — the
     // human DID answer, so the missed-call follow-ups must not fire.
-    if (rec.status === "superseded") return;
+    if (rec.status === "superseded") return rec.status;
 
     const missedAt = new Date();
     const autotext = await sendMissedCallAutotext(supabase, {
@@ -1118,8 +1137,10 @@ async function logForwardedCallOutcome(
         missed_calls_today: spike.count
       });
     }
+    return rec.status;
   } catch (err) {
     console.error("logForwardedCallOutcome threw", args.context, err);
+    return null;
   }
 }
 
@@ -1195,7 +1216,7 @@ async function handleWarmTransferLifecycle(
   // write is superseded and the follow-ups are skipped — the cause alone is
   // not proof nobody answered. Missed → caller auto-text + blocked ledger +
   // spike.
-  await logForwardedCallOutcome(deps, {
+  const recStatus = await logForwardedCallOutcome(deps, {
     businessId: wt.businessId,
     callControlId: legId,
     callerE164: wt.callerE164 || null,
@@ -1204,6 +1225,24 @@ async function handleWarmTransferLifecycle(
     outcome: answered ? "answered" : "missed",
     context: "warm_transfer"
   });
+  // Meter the human leg's carrier time against the tenant's voice pool.
+  // Nothing is exempt from metering: the platform pays Telnyx for this leg's
+  // full duration whether the AI or a human did the talking. Every single-leg
+  // transfer path funnels through here (AI transfer_to_owner, caller-rule
+  // transfers, safe-mode forwards), so this one hook covers them all. Metered
+  // when the human answered — including the `superseded` reorder case (a
+  // non-normal_clearing hangup after call.bridged recorded the answer).
+  // Missed legs bill nothing (the carrier doesn't charge unanswered legs).
+  // Post-hoc and idempotent per leg; never refuses — the reserve gate and the
+  // safe-mode pre-check refuse the NEXT call once the pool is spent.
+  if (answered || recStatus === "superseded") {
+    await meterForwardedCallSeconds(deps.supabase, {
+      businessId: wt.businessId,
+      callControlId: legId,
+      reportedSeconds: parseCallDurationSeconds(payload),
+      context: "warm_transfer"
+    });
+  }
   return {
     handled: true,
     response: jsonOk(answered ? "wt_answered_hangup" : "wt_failed")
