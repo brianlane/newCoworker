@@ -86,6 +86,9 @@ export function simulateTestAction(
       // No model call is made (budget-metered); the saveAs var gets a visible
       // placeholder so later templates render distinguishably.
       if (action.skipReason) {
+        // Live skips stamp the var "" — mirror that so later when-guards and
+        // templates behave identically in test and production.
+        scope.vars[action.saveAs] = "";
         return { simulated: "run_agent", skipped: action.skipReason };
       }
       scope.vars[action.saveAs] = "(test run: agent output placeholder)";

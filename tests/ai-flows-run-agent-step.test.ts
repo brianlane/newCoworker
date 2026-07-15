@@ -192,13 +192,15 @@ describe("run_agent — test-mode simulation", () => {
     expect(simulated).toEqual({ simulated: "run_agent", agentId: AGENT_ID, input: "text" });
   });
 
-  it("simulated skips read as skips (no placeholder stamped)", () => {
+  it("simulated skips read as skips and stamp the var empty (live-run parity)", () => {
     const scope = { vars: {} as Record<string, unknown> };
     const simulated = simulateTestAction(
       { kind: "run_agent", agentId: AGENT_ID, input: "", saveAs: "agent_output", skipReason: "no_input" },
       scope
     );
     expect(simulated).toEqual({ simulated: "run_agent", skipped: "no_input" });
-    expect(scope.vars.agent_output).toBeUndefined();
+    // The live skip path sets {{vars.agent_output}} = "" — the simulation
+    // must match so when-guards behave identically in test and production.
+    expect(scope.vars.agent_output).toBe("");
   });
 });

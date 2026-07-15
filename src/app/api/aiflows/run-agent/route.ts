@@ -71,13 +71,33 @@ export async function POST(request: Request) {
       input_mime_type: "text/plain"
     });
 
-    const result = await executeAgentRun({
-      businessId: body.businessId,
-      agent: { instructions: agent.instructions, output_format: agent.output_format },
-      inputFilename: "flow-input.txt",
-      inputMime: "text/plain",
-      data: Buffer.from(body.input, "utf8")
-    });
+    // executeAgentRun never throws for expected failures; an UNEXPECTED
+    // throw after the insert must still stamp the history row failed —
+    // otherwise it sticks in 'running' and the worker's 500-retry could
+    // pile up additional orphaned rows.
+    let result;
+    try {
+      result = await executeAgentRun({
+        businessId: body.businessId,
+        agent: { instructions: agent.instructions, output_format: agent.output_format },
+        inputFilename: "flow-input.txt",
+        inputMime: "text/plain",
+        data: Buffer.from(body.input, "utf8")
+      });
+    } catch (execErr) {
+      await patchAgentRun(body.businessId, runId, {
+        status: "failed",
+        error_detail: "The run failed unexpectedly",
+        completed_at: new Date().toISOString()
+      }).catch((patchErr) => {
+        logger.warn("aiflows/run-agent: failed-state stamp failed", {
+          businessId: body.businessId,
+          runId,
+          error: patchErr instanceof Error ? patchErr.message : String(patchErr)
+        });
+      });
+      throw execErr;
+    }
 
     const terminalPatch = result.ok
       ? {
