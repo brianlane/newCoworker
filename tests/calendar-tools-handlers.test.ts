@@ -1130,6 +1130,20 @@ describe("bookCalendarAppointment — Zoom decorator", () => {
     });
   });
 
+  it("deletes the meeting and drops the join link when the create confirms no event id", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    // Truthy proxy response, but no event id — not a confirmed booking.
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(result.ok).toBe(true);
+    expect(result.data).not.toHaveProperty("zoomJoinUrl");
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+  });
+
   it("cleans up the meeting when the Google create returns no connection", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);

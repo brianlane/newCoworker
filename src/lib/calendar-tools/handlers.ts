@@ -701,7 +701,13 @@ async function bookOnProvider(
       });
     }
 
-    // The event now exists and references the meeting — no longer an orphan.
+    // A truthy proxy response WITHOUT an event id is not a confirmed booking:
+    // nothing references the meeting and the ledger row never confirms, so
+    // the meeting is deleted (same rule as the CalDAV branch) and the result
+    // carries no join link.
+    if (!eventId && zoomMeeting) {
+      await deleteZoomMeetingForBooking(businessId, zoomMeeting.meetingId);
+    }
     orphanZoomMeetingId = null;
     return {
       ok: true,
@@ -710,7 +716,7 @@ async function bookOnProvider(
         htmlLink,
         provider: conn.provider,
         calendar: shared ? "shared" : "primary",
-        ...zoomData
+        ...(eventId ? zoomData : {})
       }
     };
   } catch (err) {
