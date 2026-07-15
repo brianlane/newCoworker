@@ -1112,6 +1112,8 @@ async function runStep(
       return sendEmailStep(supabase, run, index, scope, action);
     case "share_document":
       return shareDocumentStep(supabase, run, index, scope, action);
+    case "run_agent":
+      return runAgentStep(scope, run, action);
     case "notify_owner":
       return notifyOwnerStep(supabase, run, action);
     case "http_call":
@@ -4350,6 +4352,75 @@ async function deliverFlowEmail(
   return {
     kind: "ok",
     result: { to: action.to, emailId, attached: attachment !== null }
+  };
+}
+
+/**
+ * run_agent: hand the rendered input to the platform's gateway-guarded
+ * run-agent endpoint, which re-checks the agent exists + is enabled,
+ * executes the transformation on central Gemini, meters the spend into the
+ * shared AI budget, records the agent_runs history row (source='flow'),
+ * and returns the artifact — stamped here into {{vars.<saveAs>}}.
+ */
+async function runAgentStep(
+  scope: Scope,
+  run: RunRow,
+  action: Extract<StepAction, { kind: "run_agent" }>
+): Promise<StepOutcome> {
+  const label = action.agentName ? `agent "${action.agentName}"` : "agent";
+  // Templated input rendered to nothing: the lead/run simply has no content
+  // to transform — skip (var lands ""), don't fail the flow.
+  if (action.skipReason) {
+    scope.vars[action.saveAs] = "";
+    appendActionTaken(scope, `skipped ${label} run (${action.skipReason})`);
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!base || !token) {
+    return { kind: "fail", error: "run_agent: platform proxy not configured" };
+  }
+  const res = await fetch(`${base}/api/aiflows/run-agent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      businessId: run.business_id,
+      agentId: action.agentId,
+      input: action.input,
+      flowRunId: run.id
+    })
+  });
+  // 5xx = transport/platform fault → throw so the run retries. 2xx/4xx carry
+  // a { ok, detail } body: ok:false there is a permanent setup/budget error
+  // (agent missing/disabled, budget exhausted, model refused) → fail without
+  // burning retries on a deterministic outcome.
+  if (res.status >= 500) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`run_agent: platform call ${res.status}: ${body.slice(0, 200)}`);
+  }
+  let parsed: { ok?: boolean; detail?: string; data?: { output?: string; runId?: string } };
+  try {
+    parsed = (await res.json()) as typeof parsed;
+  } catch {
+    throw new Error("run_agent: platform call returned an invalid body");
+  }
+  if (!parsed.ok || typeof parsed.data?.output !== "string") {
+    return {
+      kind: "fail",
+      error: `run_agent: ${label} run failed (${parsed.detail ?? `http ${res.status}`})`
+    };
+  }
+  scope.vars[action.saveAs] = parsed.data.output;
+  appendActionTaken(scope, `ran ${label} (${parsed.data.output.length} chars → {{vars.${action.saveAs}}})`);
+  return {
+    kind: "ok",
+    result: {
+      agentId: action.agentId,
+      ...(action.agentName ? { agentName: action.agentName } : {}),
+      agent_run_id: parsed.data.runId ?? null,
+      output_chars: parsed.data.output.length,
+      saved_as: action.saveAs
+    }
   };
 }
 

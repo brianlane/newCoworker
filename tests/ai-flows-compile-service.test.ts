@@ -154,6 +154,109 @@ describe("compileAiFlowFromDescription — configuration & happy path", () => {
     expect(call.userText).not.toContain("Internal");
   });
 
+  it("offers ENABLED agents to the model (disabled filtered, summaries clipped)", async () => {
+    const AGENT_ID = "44444444-4444-4444-8444-444444444444";
+    const fetchAgents = vi.fn(async () => [
+      {
+        id: AGENT_ID,
+        business_id: BIZ,
+        name: "Intake summarizer",
+        instructions: `Summarize   the\nintake ${"x".repeat(300)}`,
+        output_format: "markdown" as const,
+        enabled: true,
+        created_at: "now",
+        updated_at: "now"
+      },
+      {
+        id: "55555555-5555-4555-8555-555555555555",
+        business_id: BIZ,
+        name: "Disabled agent",
+        instructions: "n/a",
+        output_format: "markdown" as const,
+        enabled: false,
+        created_at: "now",
+        updated_at: "now"
+      }
+    ]);
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "summarize inbound leads" },
+      { generate, fetchDocuments: noDocs, fetchAgents }
+    );
+    expect(res.ok).toBe(true);
+    const userText = generate.mock.calls[0][0].userText;
+    expect(userText).toContain(AGENT_ID);
+    expect(userText).toContain("Intake summarizer");
+    expect(userText).not.toContain("Disabled agent");
+    // Whitespace-collapsed and clipped to 160 chars.
+    expect(userText).not.toContain("Summarize   the");
+  });
+
+  it("compiles without agents when the list read fails (Error and non-Error throws)", async () => {
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "notify me" },
+      {
+        generate: generateSeq(VALID_DEFINITION_JSON),
+        fetchDocuments: noDocs,
+        fetchAgents: vi.fn(async () => {
+          throw new Error("agents db down");
+        })
+      }
+    );
+    expect(res.ok).toBe(true);
+
+    const generate2 = generateSeq(VALID_DEFINITION_JSON);
+    const res2 = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "notify me" },
+      {
+        generate: generate2,
+        fetchDocuments: noDocs,
+        fetchAgents: vi.fn(async () => {
+          throw "string failure";
+        })
+      }
+    );
+    expect(res2.ok).toBe(true);
+    expect(generate2.mock.calls[0][0].userText).toContain("none saved");
+  });
+
+  it("run_agent bindings are validated against the DB (repair fed the issue)", async () => {
+    const AGENT_ID = "44444444-4444-4444-8444-444444444444";
+    const withBadAgent = JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "run_agent",
+          agentId: "99999999-9999-4999-8999-999999999999",
+          input: "hello",
+          saveAs: "out"
+        }
+      ]
+    });
+    const fetchAgents = vi.fn(async () => [
+      {
+        id: AGENT_ID,
+        business_id: BIZ,
+        name: "Real agent",
+        instructions: "Summarize.",
+        output_format: "markdown" as const,
+        enabled: true,
+        created_at: "now",
+        updated_at: "now"
+      }
+    ]);
+    const generate = generateSeq(withBadAgent, VALID_DEFINITION_JSON);
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "run my agent" },
+      { generate, fetchDocuments: noDocs, fetchAgents }
+    );
+    expect(res.ok).toBe(true);
+    expect(generate.mock.calls[1][0].userText).toContain("FAILED validation");
+    expect(generate.mock.calls[1][0].userText).toContain("doesn't exist");
+  });
+
   it("compiles without documents when the list read fails (Error and non-Error throws)", async () => {
     const fetchDocuments = vi.fn(async () => {
       throw new Error("db down");
@@ -363,6 +466,37 @@ describe("compileAiFlowFromDescription — self-repair & salvage", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.definition.steps.some((s) => s.type === "share_document")).toBe(true);
+      expect(res.warnings.some((w) => w.includes("db down"))).toBe(false);
+    }
+  });
+
+  it("an agent-validation failure during salvage degrades to no extra warnings", async () => {
+    const withAgentAndJunk = JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "run_agent",
+          agentId: "44444444-4444-4444-8444-444444444444",
+          input: "hello",
+          saveAs: "out"
+        },
+        { id: "s2", type: "made_up_step" }
+      ]
+    });
+    const fetchAgents = vi
+      .fn<() => Promise<never[]>>()
+      .mockResolvedValueOnce([])
+      .mockRejectedValue(new Error("agents db down mid-salvage"));
+    const generate = generateSeq(withAgentAndJunk, "garbage");
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "run my agent" },
+      { generate, fetchDocuments: noDocs, fetchAgents }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.definition.steps.some((s) => s.type === "run_agent")).toBe(true);
       expect(res.warnings.some((w) => w.includes("db down"))).toBe(false);
     }
   });

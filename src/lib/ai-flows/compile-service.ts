@@ -29,10 +29,13 @@ import {
   buildFlowRepairUserText,
   extractFlowJson,
   humanizeCompileIssues,
+  type CompileAgentOption,
   type CompileDocumentOption
 } from "@/lib/ai-flows/compile";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
 import { documentEligibleFor } from "@/lib/documents/core";
+import { listBusinessAgents, type BusinessAgentRow } from "@/lib/agents/db";
+import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
 import {
   AiFlowValidationError,
   parseAiFlowDefinition,
@@ -50,6 +53,8 @@ export type CompileFlowDeps = {
   generate?: GeminiCall;
   /** Injectable documents lookup (tests). */
   fetchDocuments?: (businessId: string) => Promise<BusinessDocumentRow[]>;
+  /** Injectable agents lookup (tests). */
+  fetchAgents?: (businessId: string) => Promise<BusinessAgentRow[]>;
 };
 
 export type CompileFlowResult =
@@ -82,6 +87,7 @@ export async function compileAiFlowFromDescription(
   /* c8 ignore start -- production defaults; tests inject */
   const generate = deps.generate ?? geminiGenerateTextDetailed;
   const fetchDocuments = deps.fetchDocuments ?? listBusinessDocuments;
+  const fetchAgents = deps.fetchAgents ?? listBusinessAgents;
   /* c8 ignore stop */
 
   // Same key resolution as every other Gemini surface (document ingest, the
@@ -118,7 +124,26 @@ export async function compileAiFlowFromDescription(
     });
   }
 
-  const userText = buildFlowCompileUserText(args.description, compileDocuments);
+  // Agents the model may bind run_agent steps to: enabled only. Same
+  // degrade-on-read-failure posture as documents.
+  let compileAgents: CompileAgentOption[] = [];
+  try {
+    const agents = await fetchAgents(args.businessId);
+    compileAgents = agents
+      .filter((a) => a.enabled)
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        instructionsSummary: a.instructions.replace(/\s+/g, " ").trim().slice(0, 160)
+      }));
+  } catch (agentErr) {
+    logger.warn("aiflow compile: agent list failed; compiling without agents", {
+      businessId: args.businessId,
+      error: agentErr instanceof Error ? agentErr.message : String(agentErr)
+    });
+  }
+
+  const userText = buildFlowCompileUserText(args.description, compileDocuments, compileAgents);
   let raw: string;
   let usage: GeminiUsage | null;
   try {
@@ -193,8 +218,10 @@ export async function compileAiFlowFromDescription(
     const documentIssues = await validateShareDocumentSteps(args.businessId, definition, {
       fetchDocuments
     });
-    if (documentIssues.length > 0) {
-      throw new AiFlowValidationError("Invalid AiFlow definition", documentIssues);
+    const agentIssues = await validateRunAgentSteps(args.businessId, definition, { fetchAgents });
+    const bindingIssues = [...documentIssues, ...agentIssues];
+    if (bindingIssues.length > 0) {
+      throw new AiFlowValidationError("Invalid AiFlow definition", bindingIssues);
     }
     return definition;
   };
@@ -229,7 +256,8 @@ export async function compileAiFlowFromDescription(
         description: args.description,
         candidateJson: JSON.stringify(candidate),
         issues: err.issues,
-        documents: compileDocuments
+        documents: compileDocuments,
+        agents: compileAgents
       });
       const { text: repairedRaw, usage: repairUsage } = await generate({
         apiKey,
@@ -288,7 +316,10 @@ export async function compileAiFlowFromDescription(
         salvaged.definition,
         { fetchDocuments }
       ).catch(() => [] as string[]);
-      const warnings = [...salvaged.warnings, ...salvageDocumentIssues];
+      const salvageAgentIssues = await validateRunAgentSteps(args.businessId, salvaged.definition, {
+        fetchAgents
+      }).catch(() => [] as string[]);
+      const warnings = [...salvaged.warnings, ...salvageDocumentIssues, ...salvageAgentIssues];
       void recordSystemLog({
         businessId: args.businessId,
         source: "app",

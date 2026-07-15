@@ -292,6 +292,24 @@ export type StepAction =
       /** Send via the owner's connected mailbox instead of platform Resend. */
       fromConnectionId?: string;
     }
+  | {
+      /**
+       * Run a saved Agent on flow content: the worker POSTs the rendered
+       * input to the platform's gateway-guarded run-agent endpoint (which
+       * re-checks the agent exists + is enabled, executes on central
+       * Gemini, meters the spend, and records the agent_runs row) and
+       * stamps the returned artifact into {{vars.<saveAs>}}.
+       */
+      kind: "run_agent";
+      agentId: string;
+      /** Editor display hint — used in failure notes when the agent row is gone. */
+      agentName?: string;
+      /** Rendered input text. */
+      input: string;
+      saveAs: string;
+      /** Templated input resolved to nothing usable → skip, not fail. */
+      skipReason?: string;
+    }
   | { kind: "notify_owner"; message: string }
   | { kind: "await_approval"; prompt: string }
   | {
@@ -750,6 +768,26 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         };
       }
       return { ok: true, action: { ...base, to: toRaw } };
+    }
+    case "run_agent": {
+      const input = renderTemplate(step.input, scope, { collapseEmpty: true }).trim();
+      const base = {
+        kind: "run_agent" as const,
+        agentId: step.agentId,
+        ...(step.agentName ? { agentName: step.agentName } : {}),
+        saveAs: step.saveAs
+      };
+      // Same lead-data-gap semantics as send_sms recipients: a TEMPLATED
+      // input that rendered to nothing plans a SKIP (the var lands ""); a
+      // literal empty input can't pass the schema's min(1), so this only
+      // fires for genuinely missing run data.
+      if (!input) {
+        if (step.input.includes("{{")) {
+          return { ok: true, action: { ...base, input: "", skipReason: "no_input" } };
+        }
+        return { ok: false, error: "run_agent: input is empty after templating" };
+      }
+      return { ok: true, action: { ...base, input } };
     }
     case "send_email": {
       const to = renderTemplate(step.to, scope).trim();

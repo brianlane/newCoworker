@@ -75,6 +75,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s11","type":"update_contact","phoneVar":"lead_phone","removeTags":["New Lead"],"addTags":["Contacted"]}   // move the contact between lead-status tags on the Contacts page (removals apply before additions; at least one of addTags/removeTags)',
   '  {"id":"s12","type":"classify","textVar":"reply_text","question":"The lead was asked why they are shopping","categories":[{"value":"wants_a_call","description":"asks to talk/book/call"},{"value":"not_interested","description":"declines or asks to stop"}],"saveAs":"intent"}   // sort a message into EXACTLY ONE category value (2-8, snake_case); nothing-fits lands as "unclear" — pair with a branch step whose arms match each value (and an unclear/else path)',
   '  {"id":"s13","type":"generate_image","promptTemplate":"A clean flyer for {{vars.listing_address}}...","saveAs":"flyer_url"}   // create an AI-generated image and save a link to it as {{vars.flyer_url}}; ONLY include this step when the user explicitly asks for an image to be created (it is expensive and draws from the shared AI budget). Deliver it with a later send_sms carrying "mediaUrlVar":"flyer_url" (goes out as a picture message) or by templating the URL into a send_email body. To EDIT a photo instead of creating from scratch, add "inputImageTemplate":"{{trigger.image}}" — that is the photo attached to the triggering text (MMS) or coworker-mailbox email — and describe the change in promptTemplate (e.g. "Show this face aged 20 years"); {{trigger.image}} is empty when no photo was attached, in which case the step generates from scratch',
+  '  {"id":"s15","type":"run_agent","agentId":"<uuid copied EXACTLY from the AVAILABLE AGENTS list>","input":"{{trigger.windowText}}","saveAs":"agent_output"}   // run one of the owner\'s saved Agents (a reusable AI instruction set) on flow content — the rendered input text is transformed per the agent\'s instructions and the result lands in {{vars.<saveAs>}} for later steps (a send_email body, notify_owner, ...). ONLY emit this step when the user message contains an AVAILABLE AGENTS list with a matching agent — copy its agentId EXACTLY; NEVER invent or placeholder the uuid, and when no listed agent matches, leave the step out entirely',
   '  {"id":"s14","type":"share_document","documentId":"<uuid copied EXACTLY from the AVAILABLE DOCUMENTS list>","to":"{{vars.lead_phone}}","via":"sms","messageTemplate":"Here is our price sheet: {{share_url}}","saveAs":"price_sheet_url"}   // text ("via":"sms", to = a phone) or email ("via":"email", to = an email address) the lead an expiring link to one of the business uploaded documents (price sheet, policy, contract, brochure). Use this — never paste document contents into a send_sms body — whenever the user says to send their price sheet / policy / brochure / packet. The literal token {{share_url}} in messageTemplate marks where the link goes (omit it and the link is appended); optional "saveAs" exposes the link to later steps. ONLY emit this step when the user message contains an AVAILABLE DOCUMENTS list with a matching document — copy its documentId EXACTLY; NEVER invent or placeholder the uuid, and when no listed document matches, leave the step out entirely',
   "",
   "Voice steps (ONLY under a voice trigger; a voice flow uses exactly ONE",
@@ -234,12 +235,40 @@ export function buildAvailableDocumentsBlock(documents: CompileDocumentOption[])
   );
 }
 
+/** One saved agent the compiler may bind a run_agent step to. */
+export type CompileAgentOption = {
+  id: string;
+  name: string;
+  /** First line(s) of the instructions, for matching intent. */
+  instructionsSummary: string;
+};
+
+/**
+ * Render the AVAILABLE AGENTS block for the compile/repair user text. Only
+ * enabled agents belong here (the caller filters); an explicit "(none)"
+ * line tells the model to omit run_agent steps rather than invent a uuid —
+ * the same NEVER-invent contract as documents and connection ids.
+ */
+export function buildAvailableAgentsBlock(agents: CompileAgentOption[]): string {
+  if (agents.length === 0) {
+    return "AVAILABLE AGENTS: (none saved — do not emit run_agent steps)";
+  }
+  const lines = agents.map(
+    (a) =>
+      `- agentId: ${a.id} — "${a.name}"${a.instructionsSummary ? `: ${a.instructionsSummary}` : ""}`
+  );
+  return ["AVAILABLE AGENTS (for run_agent steps; copy agentId exactly):", ...lines].join("\n");
+}
+
 export function buildFlowCompileUserText(
   description: string,
-  documents: CompileDocumentOption[] = []
+  documents: CompileDocumentOption[] = [],
+  agents: CompileAgentOption[] = []
 ): string {
   return [
     buildAvailableDocumentsBlock(documents),
+    "",
+    buildAvailableAgentsBlock(agents),
     "",
     `Automation description:\n${description.trim()}`
   ].join("\n");
@@ -256,6 +285,7 @@ export function buildFlowRepairUserText(input: {
   candidateJson: string;
   issues: string[];
   documents?: CompileDocumentOption[];
+  agents?: CompileAgentOption[];
 }): string {
   return [
     "Your previous automation definition FAILED validation. Fix ONLY the",
@@ -269,6 +299,8 @@ export function buildFlowRepairUserText(input: {
     input.candidateJson,
     "",
     buildAvailableDocumentsBlock(input.documents ?? []),
+    "",
+    buildAvailableAgentsBlock(input.agents ?? []),
     "",
     "Original automation description:",
     input.description.trim()
