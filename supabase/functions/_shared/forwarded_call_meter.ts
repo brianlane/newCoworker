@@ -26,6 +26,7 @@ import { resolveEnterpriseVoiceReservation } from "./enterprise_limits.ts";
 import { VOICE_RES_LIMITS } from "./voice_reservation_limits.ts";
 import { deriveMonthlyQuotaWindow } from "./billing_period_window.ts";
 import { telemetryRecord } from "./telemetry.ts";
+import { STRIPE_PERIOD_ROLLOVER_GRACE_MS } from "./stripe_voice_period.ts";
 
 type QueryResult = { data: unknown; error: { message: string } | null };
 
@@ -59,7 +60,13 @@ export type ForwardedMeterResult =
   | { status: "zero" }
   | {
       status: "skipped";
-      reason: "no_business" | "no_period_bounds" | "rpc_error" | "no_call" | "no_duration";
+      reason:
+        | "no_business"
+        | "no_period_bounds"
+        | "period_stale"
+        | "rpc_error"
+        | "no_call"
+        | "no_duration";
     };
 
 function tierCapSecondsFor(tier: string, enterpriseLimitsRaw: unknown): number {
@@ -122,15 +129,18 @@ export async function meterForwardedCallSeconds(
 
     const { data: sub } = await supabase
       .from("subscriptions")
-      .select("stripe_current_period_start")
+      .select("stripe_current_period_start, stripe_current_period_end")
       .eq("business_id", businessId)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const periodStartRaw =
-      ((sub as { stripe_current_period_start?: unknown } | null)
-        ?.stripe_current_period_start as string | null) ?? null;
-    if (!periodStartRaw) {
+    const subRow = sub as {
+      stripe_current_period_start?: unknown;
+      stripe_current_period_end?: unknown;
+    } | null;
+    const periodStartRaw = (subRow?.stripe_current_period_start as string | null) ?? null;
+    const periodEndRaw = (subRow?.stripe_current_period_end as string | null) ?? null;
+    if (!periodStartRaw || !periodEndRaw) {
       await telemetryRecord(supabase, "voice_forwarded_meter_skipped", {
         business_id: businessId,
         call_control_id: callControlId,
@@ -138,6 +148,20 @@ export async function meterForwardedCallSeconds(
         reason: "no_period_bounds"
       });
       return { status: "skipped", reason: "no_period_bounds" };
+    }
+    // A cache past its period end would derive a month-window key for the OLD
+    // Stripe period — a different usage row than the reserve gate (which JIT-
+    // refreshes) reads, so the commit would be invisible to the cap. Skip with
+    // telemetry instead; ops can backfill once the cache refreshes. Same
+    // staleness rule as checkVoiceBudgetAvailable.
+    if (Date.now() > new Date(periodEndRaw).getTime() + STRIPE_PERIOD_ROLLOVER_GRACE_MS) {
+      await telemetryRecord(supabase, "voice_forwarded_meter_skipped", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        context,
+        reason: "period_stale"
+      });
+      return { status: "skipped", reason: "period_stale" };
     }
 
     // Same month-window key as voice_reserve/checkVoiceBudgetAvailable — the

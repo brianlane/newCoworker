@@ -36,7 +36,10 @@ function makeSupabase(cfg: {
               limit: () => ({
                 maybeSingle: async () =>
                   cfg.subscription ?? {
-                    data: { stripe_current_period_start: "2026-07-01T00:00:00Z" },
+                    data: {
+                      stripe_current_period_start: "2026-07-01T00:00:00Z",
+                      stripe_current_period_end: new Date(Date.now() + 86_400_000).toISOString()
+                    },
                     error: null
                   }
               })
@@ -201,6 +204,41 @@ describe("meterForwardedCallSeconds", () => {
       status: "skipped",
       reason: "no_period_bounds"
     });
+  });
+
+  it("skips with no_period_bounds when the cached period has no end", async () => {
+    const { supabase } = makeSupabase({
+      subscription: {
+        data: {
+          stripe_current_period_start: "2026-07-01T00:00:00Z",
+          stripe_current_period_end: null
+        },
+        error: null
+      }
+    });
+    expect(await meterForwardedCallSeconds(supabase, base)).toEqual({
+      status: "skipped",
+      reason: "no_period_bounds"
+    });
+  });
+
+  it("skips with period_stale when the cache is past its period end (never writes the old row)", async () => {
+    // A stale cache would derive the OLD period's month-window key — a
+    // different usage row than the (JIT-refreshing) reserve gate reads.
+    const { supabase, rpcCalls } = makeSupabase({
+      subscription: {
+        data: {
+          stripe_current_period_start: "2026-05-01T00:00:00Z",
+          stripe_current_period_end: new Date(Date.now() - 10 * 60_000).toISOString()
+        },
+        error: null
+      }
+    });
+    expect(await meterForwardedCallSeconds(supabase, base)).toEqual({
+      status: "skipped",
+      reason: "period_stale"
+    });
+    expect(rpcCalls.filter((c) => c.fn === "voice_meter_forwarded_call")).toHaveLength(0);
   });
 
   it("skips with rpc_error when the meter RPC fails", async () => {
