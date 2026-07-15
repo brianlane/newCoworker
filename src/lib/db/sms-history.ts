@@ -531,10 +531,14 @@ export async function softDeleteSmsConversation(
   if (error) throw new Error(`softDeleteSmsConversation: ${error.message}`);
   let inboundJobs = Array.isArray(stamped) ? stamped.length : 0;
 
-  // 3) Legacy rows (customer_e164 NULL, pre-Phase-2) still render in the
-  // thread through payload parsing — page them and match the same way the
-  // reader does. Ids are collected first, stamped after, so stamping never
-  // disturbs the pagination.
+  // 3) The thread reader identifies rows by PARSING THE PAYLOAD, not by the
+  // denormalized column — so any still-visible row the column pass missed
+  // (legacy NULL columns, or a column value that diverged from the payload,
+  // e.g. normalization differences) must be caught the same way the reader
+  // finds it. Page every live row, match payloads, stamp by id. Ids are
+  // collected first, stamped after, so stamping never disturbs the
+  // pagination; rows pass 1 already stamped no longer match the
+  // deleted_at-is-null page filter.
   const PAGE = 500;
   const legacyIds: string[] = [];
   for (let offset = 0; ; offset += PAGE) {
@@ -542,7 +546,6 @@ export async function softDeleteSmsConversation(
       .from("sms_inbound_jobs")
       .select("id, payload")
       .eq("business_id", businessId)
-      .is("customer_e164", null)
       .is("deleted_at", null)
       .order("id", { ascending: true })
       .range(offset, offset + PAGE - 1);

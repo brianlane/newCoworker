@@ -315,8 +315,9 @@ export async function restoreDeletedItem(
       if (error) throw new Error(`restoreDeletedItem(sms_inbound_jobs): ${error.message}`);
       let inbound = Array.isArray(data) ? data.length : 0;
 
-      // Legacy rows (customer_e164 NULL) were stamped by payload matching in
-      // the delete; restore them symmetrically — paged, ids collected first.
+      // Rows the delete stamped by PAYLOAD matching (legacy NULL columns, or
+      // a column value that diverged from the payload) are restored the same
+      // way — page every still-stamped row, match payloads, un-stamp by id.
       const PAGE = 500;
       const legacyIds: string[] = [];
       for (let offset = 0; ; offset += PAGE) {
@@ -324,7 +325,6 @@ export async function restoreDeletedItem(
           .from("sms_inbound_jobs")
           .select("id, payload")
           .eq("business_id", businessId)
-          .is("customer_e164", null)
           .not("deleted_at", "is", null)
           .order("id", { ascending: true })
           .range(offset, offset + PAGE - 1);
