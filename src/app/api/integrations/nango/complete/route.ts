@@ -9,6 +9,10 @@ import {
   readConnectionEndUserId,
   workspaceConnectionMetadataFromNangoConnection
 } from "@/lib/nango/server";
+import {
+  fetchProviderAccountIdentity,
+  providerAccountMetadata
+} from "@/lib/nango/account-identity";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -53,15 +57,36 @@ export async function POST(request: Request) {
       parsed.providerConfigKey,
       parsed.connectionId
     );
+    const mergedMetadata = {
+      ...(existing?.metadata ?? {}),
+      ...workspaceConnectionMetadataFromNangoConnection(connection)
+    };
     await upsertWorkspaceOAuthConnection({
       businessId: parsed.businessId,
       providerConfigKey: parsed.providerConfigKey,
       connectionId: parsed.connectionId,
-      metadata: {
-        ...(existing?.metadata ?? {}),
-        ...workspaceConnectionMetadataFromNangoConnection(connection)
-      }
+      metadata: mergedMetadata
     });
+
+    // Nango's end_user is whoever was logged into OUR dashboard — not the
+    // account picked on the provider's consent screen. Ask the provider for
+    // the real account identity so two connections on the same integration
+    // are distinguishable. Best-effort AFTER the row exists (the proxy
+    // verifies the link against the stored row); a failed probe just leaves
+    // the provider-name fallback label.
+    const identity = await fetchProviderAccountIdentity(parsed.businessId, {
+      connectionId: parsed.connectionId,
+      providerConfigKey: parsed.providerConfigKey
+    });
+    const identityMetadata = providerAccountMetadata(identity);
+    if (Object.keys(identityMetadata).length > 0) {
+      await upsertWorkspaceOAuthConnection({
+        businessId: parsed.businessId,
+        providerConfigKey: parsed.providerConfigKey,
+        connectionId: parsed.connectionId,
+        metadata: { ...mergedMetadata, ...identityMetadata }
+      });
+    }
 
     return successResponse({ connected: true });
   } catch (err) {

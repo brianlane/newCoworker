@@ -47,6 +47,14 @@ function connectionPrimaryLabel(
   sameProviderCount: number
 ): string {
   const m = c.metadata ?? {};
+  // The real account behind the OAuth grant (probed from the provider after
+  // connect). The end_user_* keys are only the dashboard login that started
+  // the session — identical across every account — so they are last-resort
+  // fallbacks for legacy rows.
+  const accountEmail = m.provider_account_email;
+  const accountName = m.provider_account_display_name;
+  if (typeof accountEmail === "string" && accountEmail.length > 0) return accountEmail;
+  if (typeof accountName === "string" && accountName.length > 0) return accountName;
   const email = m.end_user_email;
   const displayName = m.end_user_display_name;
   if (typeof email === "string" && email.length > 0) return email;
@@ -161,6 +169,7 @@ export function NangoEmailIntegrationActions({ businessId, connections }: Props)
           {connections.map((c) => {
             const sameN = countsByProvider.get(c.providerConfigKey) ?? 1;
             const primary = connectionPrimaryLabel(c, sameN);
+            const provider = providerLabel(c.providerConfigKey);
             return (
               <li
                 key={c.id}
@@ -169,7 +178,8 @@ export function NangoEmailIntegrationActions({ businessId, connections }: Props)
                 <span className="text-parchment/70">
                   <span className="text-parchment/90">{primary}</span>
                   <span className="text-parchment/40 text-xs block sm:inline sm:ml-1">
-                    · {new Date(c.createdAt).toLocaleDateString()}
+                    {primary === provider ? "" : `· ${provider} `}·{" "}
+                    {new Date(c.createdAt).toLocaleDateString()}
                   </span>
                 </span>
                 <Button

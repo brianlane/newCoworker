@@ -38,7 +38,16 @@ beforeEach(() => {
 });
 
 describe("connectionEmail", () => {
-  it("prefers `email`", () => {
+  it("prefers provider_account_email (the real account) over everything", () => {
+    expect(
+      connectionEmail({
+        provider_account_email: "real@gmail.com",
+        email: "a@x.com",
+        end_user_email: "login@dashboard.com"
+      })
+    ).toBe("real@gmail.com");
+  });
+  it("prefers `email` over end_user keys", () => {
     expect(connectionEmail({ email: "a@x.com", end_user_email: "b@x.com" })).toBe("a@x.com");
   });
   it("falls back to end_user_email then end_user_display_name", () => {

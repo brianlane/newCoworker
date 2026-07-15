@@ -992,11 +992,13 @@ export function AiFlowsManager({
           json.data
             .filter((c) => EMAIL_CONNECTION_KEYS.includes(c.providerConfigKey))
             .map((c) => {
-              // Prefer an explicit `email`, but Nango Connect-UI connections
-              // store the address under `end_user_email` / `end_user_display_name`
-              // instead, so fall back to those before showing a bare provider key.
+              // `provider_account_email` is the REAL account behind the OAuth
+              // grant. `end_user_*` are the dashboard login that started the
+              // connect session (identical for every account the owner
+              // connects) — legacy-row fallbacks only.
               const m = c.metadata ?? {};
               const email =
+                (typeof m.provider_account_email === "string" && m.provider_account_email) ||
                 (typeof m.email === "string" && m.email) ||
                 (typeof m.end_user_email === "string" && m.end_user_email) ||
                 (typeof m.end_user_display_name === "string" && m.end_user_display_name) ||
