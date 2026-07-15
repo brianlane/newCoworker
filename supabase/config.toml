@@ -17,6 +17,19 @@
 
 project_id = "glwmorjxzkzpcfffwvkk"
 
+# ── OAuth 2.1 server (Claude connector / MCP authentication) ────────────
+# Supabase Auth acts as the OAuth 2.1 authorization server for the remote
+# MCP server at /api/mcp: MCP clients (Claude) self-register via dynamic
+# client registration, run the PKCE authorization flow, and land users on
+# our consent page at <Site URL>/oauth/consent (src/app/oauth/consent).
+# This section drives LOCAL `supabase start`; production is the dashboard
+# toggle under Authentication → OAuth Server (enable server + dynamic
+# registration, set the authorization path to /oauth/consent).
+[auth.oauth_server]
+enabled = true
+authorization_url_path = "/oauth/consent"
+allow_dynamic_registration = true
+
 # ── Scheduled cron workers ──────────────────────────────────────────────
 # All four are invoked by `pg_cron` with `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
 # The bearer is a 64-char hex string, not a signed JWT. Each function
