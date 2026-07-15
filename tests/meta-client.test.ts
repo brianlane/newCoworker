@@ -14,17 +14,21 @@ import {
   MetaApiError,
   META_GRAPH_BASE_URL,
   META_STATE_TTL_MS,
+  MESSENGER_MAX_TEXT_LENGTH,
   buildMetaLoginUrl,
   createMetaOAuthState,
   exchangeCodeForToken,
   exchangeForLongLivedToken,
   fetchLead,
   flattenLeadFields,
+  getLinkedInstagramAccount,
+  getMessengerProfile,
   getMetaAppId,
   getMetaAppSecret,
   getUserName,
   listManagedPages,
   metaCallbackUrl,
+  sendMessengerMessage,
   subscribePageToLeadgen,
   unsubscribePage,
   verifyMetaOAuthState,
@@ -144,7 +148,7 @@ describe("buildMetaLoginUrl", () => {
     const url = new URL(
       buildMetaLoginUrl({ redirectUri: "https://x.test/cb", state: "signed-state" })
     );
-    expect(url.origin + url.pathname).toBe("https://www.facebook.com/v24.0/dialog/oauth");
+    expect(url.origin + url.pathname).toBe("https://www.facebook.com/v25.0/dialog/oauth");
     expect(url.searchParams.get("client_id")).toBe(APP_ID);
     expect(url.searchParams.get("redirect_uri")).toBe("https://x.test/cb");
     expect(url.searchParams.get("state")).toBe("signed-state");
@@ -159,7 +163,7 @@ describe("token exchanges", () => {
     expect(await exchangeCodeForToken("the-code", "https://x.test/cb")).toBe("short-tok");
     const [url] = fetchMock.mock.calls[0] as [string];
     const parsed = new URL(url);
-    expect(parsed.pathname).toBe("/v24.0/oauth/access_token");
+    expect(parsed.pathname).toBe("/v25.0/oauth/access_token");
     expect(parsed.searchParams.get("code")).toBe("the-code");
     expect(parsed.searchParams.get("client_secret")).toBe(APP_SECRET);
     expect(parsed.searchParams.get("redirect_uri")).toBe("https://x.test/cb");
@@ -283,14 +287,14 @@ describe("listManagedPages", () => {
 });
 
 describe("subscribePageToLeadgen", () => {
-  it("POSTs subscribed_fields=leadgen and requires success:true", async () => {
+  it("POSTs the full subscribed field set and requires success:true", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true }));
     await subscribePageToLeadgen("p1", "page-tok");
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(init.method).toBe("POST");
     const parsed = new URL(url);
-    expect(parsed.pathname).toBe("/v24.0/p1/subscribed_apps");
-    expect(parsed.searchParams.get("subscribed_fields")).toBe("leadgen");
+    expect(parsed.pathname).toBe("/v25.0/p1/subscribed_apps");
+    expect(parsed.searchParams.get("subscribed_fields")).toBe("leadgen,messages,messaging_postbacks");
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: false }));
     await expect(subscribePageToLeadgen("p1", "page-tok")).rejects.toThrow(
@@ -308,6 +312,106 @@ describe("unsubscribePage", () => {
 
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
     await expect(unsubscribePage("p1", "page-tok")).resolves.toBeUndefined();
+  });
+});
+
+describe("sendMessengerMessage", () => {
+  it("POSTs the Send API payload and returns the message id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { message_id: "mid-1" }));
+    const result = await sendMessengerMessage("p1", "page-tok", "psid-1", "Hello!");
+    expect(result).toEqual({ messageId: "mid-1" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/v25.0/p1/messages");
+    expect(parsed.searchParams.get("recipient")).toBe('{"id":"psid-1"}');
+    expect(parsed.searchParams.get("messaging_type")).toBe("RESPONSE");
+    expect(JSON.parse(parsed.searchParams.get("message") ?? "{}")).toEqual({
+      text: "Hello!"
+    });
+  });
+
+  it("truncates over-limit text and tolerates a missing message id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    const long = "x".repeat(MESSENGER_MAX_TEXT_LENGTH + 50);
+    const result = await sendMessengerMessage("p1", "page-tok", "psid-1", long);
+    expect(result).toEqual({ messageId: null });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    const message = JSON.parse(
+      new URL(url).searchParams.get("message") ?? "{}"
+    ) as { text: string };
+    expect(message.text.length).toBe(MESSENGER_MAX_TEXT_LENGTH);
+    expect(message.text.endsWith("…")).toBe(true);
+  });
+});
+
+describe("getMessengerProfile", () => {
+  it("joins messenger first/last names and uses IG name/username fields", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { first_name: "Jane", last_name: "Doe" })
+    );
+    expect(await getMessengerProfile("tok", "psid-1", "messenger")).toEqual({
+      name: "Jane Doe"
+    });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(new URL(url).searchParams.get("fields")).toBe("first_name,last_name");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { username: "janedoe" }));
+    expect(await getMessengerProfile("tok", "igsid-1", "instagram")).toEqual({
+      name: "janedoe"
+    });
+    const [url2] = fetchMock.mock.calls[1] as [string];
+    expect(new URL(url2).searchParams.get("fields")).toBe("name,username");
+  });
+
+  it("prefers a full name field and swallows lookup failures", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { name: "Jane D", username: "jd" }));
+    expect(await getMessengerProfile("tok", "igsid-1", "instagram")).toEqual({
+      name: "Jane D"
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await getMessengerProfile("tok", "psid-1", "messenger")).toEqual({ name: null });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "nope" }));
+    expect(await getMessengerProfile("tok", "psid-1", "messenger")).toEqual({ name: null });
+  });
+});
+
+describe("getLinkedInstagramAccount", () => {
+  it("returns the linked IG account, null username tolerated", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { instagram_business_account: { id: "ig-1", username: "biz" } })
+    );
+    expect(await getLinkedInstagramAccount("tok", "p1")).toEqual({
+      id: "ig-1",
+      username: "biz"
+    });
+    const [url] = fetchMock.mock.calls[0] as [string];
+    expect(new URL(url).searchParams.get("fields")).toBe(
+      "instagram_business_account{id,username}"
+    );
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { instagram_business_account: { id: "ig-2" } })
+    );
+    expect(await getLinkedInstagramAccount("tok", "p1")).toEqual({
+      id: "ig-2",
+      username: null
+    });
+  });
+
+  it("returns null when no account is linked or the lookup fails", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await getLinkedInstagramAccount("tok", "p1")).toBeNull();
+
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { instagram_business_account: { username: "no-id" } })
+    );
+    expect(await getLinkedInstagramAccount("tok", "p1")).toBeNull();
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
+    expect(await getLinkedInstagramAccount("tok", "p1")).toBeNull();
   });
 });
 

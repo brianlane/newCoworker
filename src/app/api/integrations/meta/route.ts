@@ -24,6 +24,7 @@ import {
   setMetaConnectionActive
 } from "@/lib/db/meta-connections";
 import {
+  getLinkedInstagramAccount,
   listManagedPages,
   subscribePageToLeadgen,
   unsubscribePage
@@ -116,13 +117,19 @@ export async function POST(request: Request) {
     // the owner can retry — we never store an unsubscribed "active" row.
     await subscribePageToLeadgen(page.id, page.accessToken);
 
+    // Linked IG professional account (best-effort — pages without one, or
+    // tokens missing the instagram scopes, simply skip Instagram DMs).
+    const instagram = await getLinkedInstagramAccount(page.accessToken, page.id);
+
     let row;
     try {
       row = await activateMetaConnection({
         businessId: body.businessId,
         pageId: page.id,
         pageName: page.name,
-        pageToken: page.accessToken
+        pageToken: page.accessToken,
+        instagramAccountId: instagram?.id ?? null,
+        instagramUsername: instagram?.username ?? null
       });
     } catch (err) {
       // Roll the Meta side back (best-effort) so a failed activation never

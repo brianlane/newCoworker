@@ -16,6 +16,14 @@ export type SidebarItemDef = {
    * Notifications carries the unread badge.
    */
   locked?: boolean;
+  /**
+   * Conditional items only render for businesses with an ACTIVE Meta
+   * (Facebook) connection — the dashboard layout computes the flag per
+   * request and filters via filterSidebarItemsForBusiness. Saved layouts
+   * are additive-keyed, so the item slotting in later (after the owner
+   * connects Facebook) never breaks an existing customization.
+   */
+  requiresMetaConnection?: boolean;
 };
 
 export const SIDEBAR_ITEMS: SidebarItemDef[] = [
@@ -27,6 +35,12 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "chat", label: "Chat", href: "/dashboard/chat" },
   { key: "calls", label: "Calls", href: "/dashboard/calls" },
   { key: "messages", label: "Texts", href: "/dashboard/messages" },
+  {
+    key: "messenger",
+    label: "Messenger",
+    href: "/dashboard/messenger",
+    requiresMetaConnection: true
+  },
   { key: "aiflows", label: "AiFlows", href: "/dashboard/aiflows" },
   { key: "agents", label: "Agents", href: "/dashboard/agents" },
   { key: "webchat", label: "Web chat", href: "/dashboard/webchat" },
@@ -40,3 +54,18 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "settings", label: "Settings", href: "/dashboard/settings", locked: true },
   { key: "notifications", label: "Notifications", href: "/dashboard/notifications", locked: true }
 ];
+
+/**
+ * Drop conditional items the business hasn't unlocked (currently just the
+ * Messenger inbox, gated on an active Meta connection). Applied by the
+ * dashboard layout (nav render) AND the Settings sidebar customizer, so a
+ * not-yet-connected business never sees the item anywhere.
+ */
+export function filterSidebarItemsForBusiness<T extends SidebarItemDef>(
+  items: T[],
+  flags: { metaConnected: boolean }
+): T[] {
+  return items.filter(
+    (item) => !item.requiresMetaConnection || flags.metaConnected
+  );
+}

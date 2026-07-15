@@ -543,6 +543,27 @@ App Review (Advanced Access for `leads_retrieval` + page permissions), only
 Facebook accounts holding a role on the app can connect; the bridges remain
 the everyone-works-today path.
 
+### Messenger + Instagram DM conversation channel
+
+A connected Page's Messenger (and linked Instagram professional account's DM)
+conversations are answered automatically: `entry[].messaging[]` events arrive
+on the same `/api/webhooks/meta` callback, land in
+`messenger_conversations`/`messenger_messages` (Meta `mid` dedupes
+redeliveries), and enqueue `messenger_jobs` reply jobs. The internal worker
+(`/api/internal/messenger-worker`, kicked inline by the webhook + swept
+per-minute via the `messenger-jobs-sweep` Edge cron) runs the platform Gemini
+engine (`src/lib/messenger/engine.ts` — same persona vault, spend fuse, and
+restricted customer tool surface as webchat, with lead capture landing on the
+conversation + contacts with `last_channel='messenger'`) and replies through
+the Messenger Send API with the tenant's page token. Sends are refused once
+Meta's **24-hour standard messaging window** closes — nudges beyond it ride
+SMS once the AI captures a phone number. A NEW conversation also fires a
+first-contact webhook flow event (`source: "facebook_messenger"` /
+`"instagram_dm"`, conversation id as the idempotency key). The owner's
+Messenger inbox lives at `/dashboard/messenger` (with manual replies through
+the same window-gated send path); its sidebar item only renders for
+businesses with an active Meta connection.
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”
