@@ -135,7 +135,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   if (businessId) {
     try {
       const metaConnection = await getPublicMetaConnection(businessId);
-      metaConnected = metaConnection?.status === "active";
+      // is_active matters too: a soft-paused integration stops webhook
+      // routing and sends, so the inbox must disappear with it.
+      metaConnected = metaConnection?.status === "active" && metaConnection.is_active;
     } catch (err) {
       logger.warn("dashboard layout: meta connection read failed; hiding Messenger nav", {
         businessId,

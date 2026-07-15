@@ -15,7 +15,8 @@ export default async function SidebarSettingsPage() {
   let metaConnected = false;
   if (business?.id) {
     const metaConnection = await getPublicMetaConnection(business.id).catch(() => null);
-    metaConnected = metaConnection?.status === "active";
+    metaConnected =
+      metaConnection?.status === "active" && metaConnection.is_active === true;
   }
   const layout = filterSidebarItemsForBusiness(await getSidebarLayout(user.userId), {
     metaConnected

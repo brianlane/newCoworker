@@ -63,7 +63,9 @@ export default async function DashboardMessengerPage() {
   }
 
   const connection = await getPublicMetaConnection(business.id).catch(() => null);
-  if (connection?.status !== "active") {
+  // Same gate as the sidebar: paused (is_active=false) connections stop
+  // webhook routing and sends, so the inbox points back to Integrations.
+  if (connection?.status !== "active" || !connection.is_active) {
     return (
       <div className="space-y-6 max-w-4xl">
         {header}

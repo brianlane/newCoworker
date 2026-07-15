@@ -216,22 +216,33 @@ export async function processMessengerJobs(
       try {
         await complete(job.id, turn.reply, historyMaxMessageId);
       } catch (err) {
-        // The reply already reached the lead — losing the commit means the
-        // reclaim path may retry the turn. Loud log so it never hides.
-        logger.error("messenger worker: commit failed AFTER send", {
+        // The reply already reached the lead. The job must NOT stay
+        // 'processing': the stale reclaim would requeue it and a retry
+        // would run a second turn and send a duplicate reply. Flip it to a
+        // terminal error instead — the assistant row is missing from the
+        // transcript (loud log), but the lead never sees a double-send.
+        logger.error("messenger worker: commit failed AFTER send; failing job to prevent duplicate reply", {
           jobId: job.id,
           conversationId: conversation.id,
           error: err instanceof Error ? err.message : String(err)
         });
-        summary.failed += 1;
+        await failJob("commit_failed_after_send", err instanceof Error ? err.message : String(err));
         continue;
       }
       summary.replied += 1;
     } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      // Terminal conditions must not burn retries: no_input means there is
+      // nothing to answer (e.g. the owner's manual reply is the newest
+      // turn), no_key means the platform is misconfigured — retrying
+      // cannot change either.
+      if (detail === "messenger_engine_no_input" || detail === "messenger_engine_no_key") {
+        await failJob(detail === "messenger_engine_no_input" ? "no_input" : "no_api_key", detail);
+        continue;
+      }
       // Transient failure (Gemini blip, Send API 5xx): requeue while the
       // claim RPC's attempts bound still allows retries; the final
       // attempt's failure sticks as an error.
-      const detail = err instanceof Error ? err.message : String(err);
       if (job.attempts < 3) {
         summary.failed += 1;
         try {

@@ -134,6 +134,15 @@ comment on table public.messenger_jobs is
 -- Atomic claim of the next queued job (any tenant — the worker is a
 -- platform surface). Jobs at max attempts are flipped to error rather
 -- than claimed, so a poison message can never wedge the queue.
+--
+-- ONE turn per conversation at a time: concurrent worker invocations
+-- (the webhook's inline kick racing the cron sweep) must never both
+-- answer the same conversation, or the lead gets two AI replies. Two
+-- guards enforce it: candidates whose conversation already has a
+-- 'processing' job are excluded, and the conversation row itself is
+-- locked (FOR UPDATE ... SKIP LOCKED) so two claims racing BEFORE
+-- either commit serialize on the conversation — the loser skips the
+-- candidate instead of double-claiming.
 -- ---------------------------------------------------------------------
 create or replace function public.claim_messenger_job(p_worker_id text)
 returns setof public.messenger_jobs
@@ -144,12 +153,18 @@ as $$
 declare
   v_id uuid;
 begin
-  select id into v_id
-  from public.messenger_jobs
-  where status = 'queued'
-    and attempts < 3
-  order by created_at
-  for update skip locked
+  select j.id into v_id
+  from public.messenger_jobs j
+  join public.messenger_conversations c on c.id = j.conversation_id
+  where j.status = 'queued'
+    and j.attempts < 3
+    and not exists (
+      select 1 from public.messenger_jobs p
+      where p.conversation_id = j.conversation_id
+        and p.status = 'processing'
+    )
+  order by j.created_at
+  for update of j, c skip locked
   limit 1;
 
   if v_id is null then
@@ -169,7 +184,7 @@ end;
 $$;
 
 comment on function public.claim_messenger_job is
-  'Atomic FOR UPDATE SKIP LOCKED claim of the next queued Messenger reply job (attempts < 3). Returns 0 or 1 row.';
+  'Atomic FOR UPDATE SKIP LOCKED claim of the next queued Messenger reply job (attempts < 3), serialized per conversation (skips conversations with a processing job; locks the conversation row against racing claims). Returns 0 or 1 row.';
 
 revoke all on function public.claim_messenger_job(text) from public;
 grant execute on function public.claim_messenger_job(text) to service_role;

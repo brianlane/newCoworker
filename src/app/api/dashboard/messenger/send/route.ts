@@ -14,11 +14,13 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
   appendMessengerMessage,
+  deleteMessengerMessage,
   getMessengerConversationById,
   messengerWindowOpen
 } from "@/lib/messenger/db";
 import { getActiveMetaConnectionByPageId } from "@/lib/db/meta-connections";
 import { sendMessengerMessage, MESSENGER_MAX_TEXT_LENGTH } from "@/lib/meta/client";
+import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
@@ -52,19 +54,39 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", "Facebook is no longer connected");
     }
 
-    await sendMessengerMessage(
-      conversation.page_id,
-      connection.pageToken,
-      conversation.psid,
-      body.text
-    );
-
+    // Transcript row FIRST, then the external send: if the Send API fails,
+    // the row is compensating-deleted, so a retried click can never
+    // deliver a duplicate the thread doesn't show (the reverse order
+    // would let a successful send vanish from the transcript on a failed
+    // append and tempt a duplicate resend).
     const message = await appendMessengerMessage({
       conversationId: conversation.id,
       businessId: body.businessId,
       role: "owner",
       content: body.text
     });
+
+    try {
+      await sendMessengerMessage(
+        conversation.page_id,
+        connection.pageToken,
+        conversation.psid,
+        body.text
+      );
+    } catch (sendErr) {
+      if (message) {
+        try {
+          await deleteMessengerMessage(message.id);
+        } catch (cleanupErr) {
+          logger.error("messenger manual reply: send-failed cleanup failed; transcript shows an undelivered reply", {
+            conversationId: conversation.id,
+            messageId: message.id,
+            error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+          });
+        }
+      }
+      throw sendErr;
+    }
 
     return successResponse({ messageId: message?.id ?? null });
   } catch (err) {

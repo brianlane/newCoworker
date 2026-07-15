@@ -34,10 +34,12 @@ vi.mock("@/lib/meta/client", () => ({
 const upsertMessengerConversationMock = vi.fn();
 const appendMessengerMessageMock = vi.fn();
 const insertMessengerJobMock = vi.fn();
+const deleteMessengerMessageMock = vi.fn();
 vi.mock("@/lib/messenger/db", () => ({
   upsertMessengerConversation: (input: unknown) => upsertMessengerConversationMock(input),
   appendMessengerMessage: (input: unknown) => appendMessengerMessageMock(input),
-  insertMessengerJob: (input: unknown) => insertMessengerJobMock(input)
+  insertMessengerJob: (input: unknown) => insertMessengerJobMock(input),
+  deleteMessengerMessage: (id: number) => deleteMessengerMessageMock(id)
 }));
 
 const processWebhookFlowEventMock = vi.fn();
@@ -65,6 +67,7 @@ beforeEach(() => {
   upsertMessengerConversationMock.mockReset();
   appendMessengerMessageMock.mockReset();
   insertMessengerJobMock.mockReset();
+  deleteMessengerMessageMock.mockReset().mockResolvedValue(undefined);
   processWebhookFlowEventMock.mockReset();
 });
 
@@ -439,6 +442,24 @@ describe("processMetaMessageEvent", () => {
     });
     appendMessengerMessageMock.mockResolvedValue({ id: 3 });
     insertMessengerJobMock.mockRejectedValue("job insert string failure");
+    expect(await processMetaMessageEvent(EVENT)).toBe(false);
+    // Compensating delete: the orphan message row (no reply job would ever
+    // answer it) is removed so a Meta redelivery can re-ingest cleanly.
+    expect(deleteMessengerMessageMock).toHaveBeenCalledWith(3);
+  });
+
+  it("logs (but survives) a failed compensating delete after a job-insert failure", async () => {
+    getActiveMetaConnectionByPageIdMock.mockResolvedValue(CONNECTION);
+    upsertMessengerConversationMock.mockResolvedValue({
+      conversation: CONVERSATION,
+      isNew: false
+    });
+    appendMessengerMessageMock.mockResolvedValue({ id: 3 });
+    insertMessengerJobMock.mockRejectedValue(new Error("job insert fail"));
+    deleteMessengerMessageMock.mockRejectedValue(new Error("cleanup fail"));
+    expect(await processMetaMessageEvent(EVENT)).toBe(false);
+
+    deleteMessengerMessageMock.mockRejectedValue("cleanup string fail");
     expect(await processMetaMessageEvent(EVENT)).toBe(false);
   });
 });

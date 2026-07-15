@@ -254,7 +254,9 @@ describe("processMessengerJobs", () => {
     await expect(processMessengerJobs({}, requeueBroken)).resolves.toBeTruthy();
   });
 
-  it("logs loudly when the commit fails AFTER the send (no error flip)", async () => {
+  it("flips the job to a terminal error when the commit fails AFTER the send", async () => {
+    // The reply already reached the lead — leaving the job 'processing'
+    // would let the stale reclaim retry the turn and double-send.
     const deps = makeDeps({
       complete: vi.fn(async () => {
         throw new Error("commit fail");
@@ -262,8 +264,59 @@ describe("processMessengerJobs", () => {
     });
     const summary = await processMessengerJobs({}, deps);
     expect(summary).toMatchObject({ claimed: 1, replied: 0, failed: 1 });
-    expect(deps.fail).not.toHaveBeenCalled();
+    expect(deps.fail).toHaveBeenCalledWith(
+      "job-1",
+      "commit_failed_after_send",
+      "commit fail",
+      "2026-07-15T20:05:00Z"
+    );
     expect(deps.requeue).not.toHaveBeenCalled();
+
+    // Non-Error commit failures flip the same way.
+    const stringy = makeDeps({
+      complete: vi.fn(async () => {
+        throw "commit string fail";
+      })
+    });
+    await processMessengerJobs({}, stringy);
+    expect(stringy.fail).toHaveBeenCalledWith(
+      "job-1",
+      "commit_failed_after_send",
+      "commit string fail",
+      "2026-07-15T20:05:00Z"
+    );
+  });
+
+  it("fails no-input and no-key turns terminally instead of burning retries", async () => {
+    const noInput = makeDeps({
+      runTurn: vi.fn(async () => {
+        throw new Error("messenger_engine_no_input");
+      })
+    });
+    const summary = await processMessengerJobs({}, noInput);
+    expect(summary).toMatchObject({ failed: 1, replied: 0 });
+    expect(noInput.fail).toHaveBeenCalledWith(
+      "job-1",
+      "no_input",
+      "messenger_engine_no_input",
+      "2026-07-15T20:05:00Z"
+    );
+    expect(noInput.requeue).not.toHaveBeenCalled();
+    expect(noInput.send).not.toHaveBeenCalled();
+
+    const noKey = makeDeps({
+      runTurn: vi.fn(async () => {
+        throw new Error("messenger_engine_no_key");
+      })
+    });
+    await processMessengerJobs({}, noKey);
+    expect(noKey.fail).toHaveBeenCalledWith(
+      "job-1",
+      "no_api_key",
+      "messenger_engine_no_key",
+      "2026-07-15T20:05:00Z"
+    );
+    expect(noKey.requeue).not.toHaveBeenCalled();
   });
 
   it("tolerates a failing error-flip and a failing stale reclaim", async () => {
@@ -313,14 +366,6 @@ describe("processMessengerJobs", () => {
       })
     });
     expect((await processMessengerJobs({}, merge)).replied).toBe(1);
-
-    // Commit failing with a string after the send.
-    const commit = makeDeps({
-      complete: vi.fn(async () => {
-        throw "commit string failure";
-      })
-    });
-    expect((await processMessengerJobs({}, commit)).failed).toBe(1);
 
     // Requeue failing with a string.
     const requeue = makeDeps({

@@ -256,6 +256,22 @@ export async function appendMessengerMessage(
   return data as MessengerMessageRow;
 }
 
+/**
+ * Compensating delete for enqueue-failed paths (webchat's
+ * deleteWebchatMessage rationale): a stored inbound message whose reply
+ * job failed to insert is removed so the transcript never carries a
+ * message no worker will ever answer — and a Meta redelivery can
+ * re-ingest it cleanly past the mid dedupe.
+ */
+export async function deleteMessengerMessage(
+  messageId: number,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("messenger_messages").delete().eq("id", messageId);
+  if (error) throw new Error(`deleteMessengerMessage: ${error.message}`);
+}
+
 export async function listMessengerMessages(
   conversationId: string,
   opts: { limit?: number } = {},

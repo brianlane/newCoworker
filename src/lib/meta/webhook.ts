@@ -25,6 +25,7 @@ import {
 import { fetchLead } from "@/lib/meta/client";
 import {
   appendMessengerMessage,
+  deleteMessengerMessage,
   insertMessengerJob,
   upsertMessengerConversation,
   type MessengerPlatform
@@ -323,11 +324,28 @@ export async function processMetaMessageEvent(event: MetaMessageEvent): Promise<
       }
     }
 
-    await insertMessengerJob({
-      businessId: connection.business_id,
-      conversationId: conversation.id,
-      userMessageId: message.id
-    });
+    try {
+      await insertMessengerJob({
+        businessId: connection.business_id,
+        conversationId: conversation.id,
+        userMessageId: message.id
+      });
+    } catch (jobErr) {
+      // Compensating delete: a stored message with no reply job would
+      // never be answered (we ack Meta 200 either way), and its mid row
+      // would block a redelivery from re-ingesting. Removing it keeps the
+      // transcript consistent with what the engine will actually answer.
+      try {
+        await deleteMessengerMessage(message.id);
+      } catch (cleanupErr) {
+        logger.error("meta message job-insert cleanup failed; orphan transcript row", {
+          businessId: connection.business_id,
+          messageId: message.id,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
+        });
+      }
+      throw jobErr;
+    }
     return true;
   } catch (err) {
     logger.warn("meta message processing failed", {

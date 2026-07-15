@@ -14,6 +14,7 @@ import {
   appendMessengerMessage,
   claimMessengerJob,
   completeMessengerJob,
+  deleteMessengerMessage,
   failMessengerJob,
   getMessengerConversationById,
   insertMessengerJob,
@@ -320,6 +321,19 @@ describe("appendMessengerMessage", () => {
   });
 });
 
+describe("deleteMessengerMessage", () => {
+  it("deletes by id and throws on error", async () => {
+    const c = chain({ error: null });
+    (c as unknown as { delete: unknown }).delete = vi.fn(() => c);
+    await deleteMessengerMessage(3, makeDb(c));
+    expect(c.eq).toHaveBeenCalledWith("id", 3);
+
+    const c2 = chain({ error: { message: "del fail" } });
+    (c2 as unknown as { delete: unknown }).delete = vi.fn(() => c2);
+    await expect(deleteMessengerMessage(3, makeDb(c2))).rejects.toThrow(/del fail/);
+  });
+});
+
 describe("listMessengerMessages", () => {
   it("fetches newest-first bounded, presents oldest-first; throws on error", async () => {
     const c = chain({ data: [{ id: 3 }, { id: 2 }, { id: 1 }], error: null });
@@ -474,6 +488,8 @@ describe("default service client", () => {
     await failMessengerJob("job-1", "x", "y", "2026-07-15T20:00:00Z");
     await requeueMessengerJob("job-1", "2026-07-15T20:00:00Z");
     expect(await reclaimStaleMessengerJobs()).toBe(2);
+    (c as unknown as { delete: unknown }).delete = vi.fn(() => c);
+    await deleteMessengerMessage(1);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
