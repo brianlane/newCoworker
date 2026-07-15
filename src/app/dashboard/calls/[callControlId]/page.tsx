@@ -168,7 +168,9 @@ export default async function CallTranscriptPage({
           <p className="text-sm text-parchment/70 leading-relaxed">
             {transcript.status === "missed"
               ? "This call was forwarded to a team member but wasn't answered."
-              : "This call was forwarded to a team member and answered; no AI transcript exists for it."}
+              : turns.length > 0
+                ? "The AI answered and transferred this call to a team member. Only the conversation before the transfer is transcribed below."
+                : "This call was forwarded to a team member and answered; no AI transcript exists for it."}
             {transcript.forwarded_to_e164 && (
               <>
                 {" "}
@@ -192,7 +194,11 @@ export default async function CallTranscriptPage({
         </Card>
       )}
 
-      {transcript.call_kind === "forwarded" ? null : turns.length === 0 ? (
+      {/* Forwarded calls CAN have transcript turns: when the AI answers and
+          then invokes transfer_to_owner, the pre-transfer exchange (greeting,
+          caller request, handoff line) is transcribed. Hide the turns card
+          only when there is genuinely nothing to show (ring-time forwards). */}
+      {transcript.call_kind === "forwarded" && turns.length === 0 ? null : turns.length === 0 ? (
         <Card>
           <p className="text-sm text-parchment/60 text-center py-6">
             No transcript turns recorded for this call yet.
