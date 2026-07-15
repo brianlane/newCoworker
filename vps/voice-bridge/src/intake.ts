@@ -10,6 +10,27 @@ export const DEFAULT_INTAKE_CAPTURE_FIELDS = ["name", "phone", "address", "timef
 export type CapturedLead = Record<string, string>;
 
 /**
+ * The opening line an intake session leads with: the configured persona, or
+ * a mode-appropriate default. SHARED by the system instruction and the
+ * bridge's coordinator greeting cue so the two can never quote different
+ * openers (the cue literally reads the line aloud). The inbound default
+ * promises a call-back (the seller phoned in and expects one); on a call WE
+ * placed (outbound / transfer) that promise is mixed messaging, so the
+ * outbound default just states the follow-up.
+ */
+export function intakeOpener(
+  businessName: string,
+  persona: string | undefined,
+  mode: "inbound" | "outbound"
+): string {
+  const configured = persona && persona.trim();
+  if (configured) return configured;
+  return mode === "outbound"
+    ? `Hi, this is ${businessName}'s office, reaching out with a quick follow-up — do you have a moment?`
+    : `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
+}
+
+/**
  * System instruction for the HomeLight AI-takeover intake call. The live seller
  * was just connected (we pressed 1) after both Dave and Amy missed the warm
  * transfer, so the assistant's whole job is a short, warm intake: confirm who
@@ -19,6 +40,12 @@ export type CapturedLead = Record<string, string>;
  * the instruction pivots: the persona IS the call script, the goal is asking
  * whether now is a good time, and a yes leads to the `transfer_to_owner` tool
  * instead of the capture checklist (capture_lead stays available for notes).
+ *
+ * With `outboundCall` (WE dialed them — outbound_call / place_ai_call), the
+ * framing flips from "a live lead was connected to you" to "your call was
+ * just answered", and the checklist must NOT ask for a callback number — we
+ * literally just called it (the first live test's exact complaint: "why do
+ * you need my number if you just called it?").
  */
 export function intakeSystemInstruction(
   businessName: string,
@@ -26,19 +53,45 @@ export function intakeSystemInstruction(
   businessTimezone: string | null | undefined,
   captureFields: string[],
   hasEndCall = false,
-  transfer?: { agentName?: string }
+  transfer?: { agentName?: string },
+  outboundCall = false
 ): string {
-  const opener =
-    (persona && persona.trim()) ||
-    `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
-  const fields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
+  const opener = intakeOpener(
+    businessName,
+    persona,
+    outboundCall || transfer ? "outbound" : "inbound"
+  );
+  const allFields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
+  // On a call WE placed, "phone" must not be in the collect list either —
+  // listing it would contradict the never-ask-for-their-number rule below
+  // (the default field set includes it for the inbound live-transfer case).
+  // A list that filters to empty (capture_fields: ["phone"]) degrades to
+  // free-form notes so the collect sentence never renders an empty list.
+  const outboundFields = allFields.filter((f) => f.trim().toLowerCase() !== "phone");
+  const fields =
+    outboundCall || transfer
+      ? outboundFields.length > 0
+        ? outboundFields
+        : ["notes"]
+      : allFields;
+  // Barge-in/echo guard: Gemini Live restarts its scripted opener when the
+  // callee's "Hello?" lands mid-greeting (or right after), which callers hear
+  // as being greeted twice (first live test, Jul 15 2026).
+  const greetOnce =
+    "Say your opening line only ONCE. If they speak while you're saying it, or you were interrupted, never restart it — acknowledge what they said and continue from where the conversation actually is.";
+  // On a call WE placed, the number is by definition reachable — asking for
+  // it reads as a bot non-sequitur.
+  const noNumberAsk =
+    "You called them on their own phone just now, so NEVER ask for their phone number — only note a different number if they volunteer one.";
   const lines: string[] = [];
   if (transfer) {
     const agent = transfer.agentName?.trim() || "the team member handling this";
     lines.push(
       `You are the phone assistant for ${businessName}, making a follow-up call the office asked you to place. The person has just answered.`,
       `Open with this, warmly and naturally: "${opener}"`,
+      greetOnce,
       "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure — this is a real person who didn't expect a call, so let them respond before moving on.",
+      noNumberAsk,
       `Your goal: after your opening and their response, explain what you're following up about (as your opening line describes) and ask whether now is a good time to talk. If they say YES, tell them "one moment while I get ${agent} on the line", then call the \`transfer_to_owner\` tool to connect them.`,
       `If it's NOT a good time, ask when would work better, note it via the \`capture_lead\` tool (fields: ${fields.join(", ")} — record whatever you learn), thank them, and wrap up politely. Never pressure them.`,
       "If they ask to stop being contacted, apologize briefly, promise to pass that on, capture it in `capture_lead` notes, and end the call.",
@@ -46,13 +99,22 @@ export function intakeSystemInstruction(
     );
   } else {
     lines.push(
-      `You are the phone assistant for ${businessName}, taking a live seller lead that was just connected to you.`,
+      outboundCall
+        ? `You are the phone assistant for ${businessName}, making a call the office asked you to place. The person has just answered.`
+        : `You are the phone assistant for ${businessName}, taking a live seller lead that was just connected to you.`,
       `Open with this, warmly and naturally: "${opener}"`,
-      "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient — this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
-      `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
+      greetOnce,
+      outboundCall
+        ? "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure — this is a real person who didn't expect a call, so let them respond before moving on."
+        : "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient — this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
+      outboundCall
+        ? `Collect these details naturally, one or two at a time, confirming as you go: ${fields.join(", ")}. ${noNumberAsk}`
+        : `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
       "As soon as you have any of these details, call the `capture_lead` tool with what you have (you can call it again as you learn more). Always call it before you say goodbye.",
       "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud.",
-      `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
+      outboundCall
+        ? `When you have what you need (or they're not interested), thank them for their time and wrap up politely.`
+        : `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
     );
   }
   if (hasEndCall) {

@@ -9,6 +9,7 @@ import { decodeTelnyxMediaPayload } from "./rtp-frame.js";
 import { type VaultSnapshot } from "./vault-loader.js";
 import {
   DEFAULT_INTAKE_CAPTURE_FIELDS,
+  intakeOpener,
   intakeSystemInstruction,
   type CapturedLead
 } from "./intake.js";
@@ -892,15 +893,24 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       const greetIsStaff = greetIdentity != null && greetIdentity.kind !== "customer";
       let greetingText: string;
       if (intake) {
-        const opener =
-          (intake.persona && intake.persona.trim()) ||
-          `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
-        // A transfer-enabled (place_ai_call) session follows its own
-        // call script instead of the capture checklist — pushing the
-        // intake questionnaire here would fight the flow's script.
+        const outboundIntake = intake.allowTransfer || opts.direction === "outbound";
+        // Shared with intakeSystemInstruction so the cue can never quote a
+        // different opening line than the system prompt scripted.
+        const opener = intakeOpener(
+          opts.businessName,
+          intake.persona,
+          outboundIntake ? "outbound" : "inbound"
+        );
+        // "Only once / never restart" mirrors the system instruction's
+        // barge-in guard on every variant. A transfer-enabled session
+        // follows its call script; a plain outbound call runs its capture
+        // checklist WITHOUT the callback-number ask (we just dialed their
+        // number); the inbound seller intake keeps the full checklist.
         greetingText = intake.allowTransfer
-          ? `[Coordinator — speak aloud now] The person has just answered the phone. Greet them warmly with your opening line ("${opener}") and follow your call script.`
-          : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
+          ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and follow your call script.`
+          : opts.direction === "outbound"
+            ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and continue per your instructions, calling capture_lead as you learn details. Never ask for their phone number.`
+            : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") — say it only once, never restart it — and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
       } else if (greetIsStaff) {
         // Owner vs team wording, and handle staff WITHOUT a stored name
         // (otherwise they'd get the customer receptionist greeting that
@@ -985,10 +995,24 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   };
 
   const intake = opts.intake;
-  const intakeCaptureFields =
+  // On a call WE placed (outbound / place_ai_call transfer), the never-ask-
+  // for-their-number rule extends to the tool surface: "phone" is filtered
+  // out of the capture schema so the tool itself can't prompt the model to
+  // ask for a callback number (empty after filtering degrades to notes,
+  // mirroring intakeSystemInstruction). Inbound keeps the full default set.
+  const intakeIsOutbound = Boolean(intake?.allowTransfer) || opts.direction === "outbound";
+  const configuredCaptureFields =
     intake?.captureFields && intake.captureFields.length > 0
       ? intake.captureFields
       : DEFAULT_INTAKE_CAPTURE_FIELDS;
+  const outboundCaptureFields = configuredCaptureFields.filter(
+    (f) => f.trim().toLowerCase() !== "phone"
+  );
+  const intakeCaptureFields = intakeIsOutbound
+    ? outboundCaptureFields.length > 0
+      ? outboundCaptureFields
+      : ["notes"]
+    : configuredCaptureFields;
   // Lead fields accumulated from `capture_lead` calls; surfaced via getLead()
   // so index.ts can text the owner a structured summary after the call.
   const leadData: CapturedLead = {};
@@ -1002,6 +1026,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     // post-call SMS already key off intakeCaptureFields).
     const KNOWN_FIELD_DESCRIPTIONS: Record<string, string> = {
       name: "Seller's full name.",
+      // Outbound sessions never carry a "phone" field (filtered above), so
+      // this callback wording can only surface on inbound intake.
       phone: "Best callback phone number.",
       address: "Property address they're selling.",
       timeframe: "Roughly when they want to sell (e.g. 'ASAP', '3 months', '6-12 months').",
@@ -1016,8 +1042,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
     declarations.push({
       name: "capture_lead",
-      description:
-        "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
+      description: intakeIsOutbound
+        ? "Record details you learn on this call for the office's follow-up notes. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye. Never ask for their phone number — you called them on it."
+        : "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
       parameters: {
         type: Type.OBJECT,
         properties: captureProperties,
@@ -1125,7 +1152,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.businessTimezone,
             intakeCaptureFields,
             hasEndCall,
-            intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined
+            intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
+            opts.direction === "outbound"
           )
         : systemInstructionForBusiness(
             opts.businessName,

@@ -46,12 +46,77 @@ describe("intakeSystemInstruction", () => {
     expect(instr).toContain("capture_lead");
     // Never hang up on a successfully transferred call.
     expect(instr).toContain("never after a successful transfer");
+    // Barge-in guard + no callback-number non-sequitur (first live test).
+    expect(instr).toContain("only ONCE");
+    expect(instr).toContain("NEVER ask for their phone number");
   });
 
   it("transfer mode without an agent name uses a generic handle", () => {
     const instr = intakeSystemInstruction("Acme", undefined, null, [], false, {});
     expect(instr).toContain("the team member handling this");
     expect(instr).not.toContain("end_call");
+  });
+
+  it("every variant carries the greet-once barge-in guard", () => {
+    for (const instr of [
+      intakeSystemInstruction("Acme", undefined, null, []),
+      intakeSystemInstruction("Acme", undefined, null, [], false, {}),
+      intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true)
+    ]) {
+      expect(instr).toContain("only ONCE");
+      expect(instr).toContain("never restart it");
+    }
+  });
+
+  it("an outbound call (we dialed) reframes the intake and never asks for their number", () => {
+    const instr = intakeSystemInstruction(
+      "Amy Laidlaw",
+      "Hi, quick call from Amy's office!",
+      null,
+      ["name", "timeframe"],
+      false,
+      undefined,
+      true
+    );
+    expect(instr).toContain("making a call the office asked you to place");
+    expect(instr).toContain("The person has just answered");
+    expect(instr).toContain("NEVER ask for their phone number");
+    expect(instr).not.toContain("best callback number");
+    expect(instr).not.toContain("call them back shortly");
+    // Capture still works for the fields the flow configured.
+    expect(instr).toContain("name, timeframe");
+    expect(instr).toContain("capture_lead");
+  });
+
+  it("outbound collect lists drop 'phone' (defaults and explicit), degrading to notes", () => {
+    // Default field set includes phone — outbound must not list it (Bugbot:
+    // listing it contradicts the never-ask rule in the same paragraph).
+    const defaults = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
+    expect(defaults).toContain("name, address, timeframe, notes");
+    expect(defaults).not.toContain("name, phone,");
+    // Same for the transfer script's capture-fields mention.
+    const transfer = intakeSystemInstruction("Acme", undefined, null, ["phone", "best time"], false, {});
+    expect(transfer).toContain("fields: best time —");
+    // A list that is ONLY phone degrades to notes, never an empty list.
+    const onlyPhone = intakeSystemInstruction("Acme", undefined, null, ["phone"], false, undefined, true);
+    expect(onlyPhone).toContain("confirming as you go: notes.");
+  });
+
+  it("outbound default opener drops the call-you-right-back promise", () => {
+    const outbound = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
+    expect(outbound).toContain("reaching out with a quick follow-up");
+    expect(outbound).not.toContain("call you right back");
+    const withTransfer = intakeSystemInstruction("Acme", undefined, null, [], false, {});
+    expect(withTransfer).toContain("reaching out with a quick follow-up");
+    expect(withTransfer).not.toContain("call you right back");
+  });
+
+  it("the inbound live-transfer intake keeps the callback-number ask and opener", () => {
+    const instr = intakeSystemInstruction("Acme", undefined, null, []);
+    expect(instr).toContain("taking a live seller lead");
+    expect(instr).toContain("best callback number");
+    expect(instr).toContain("call you right back");
+    expect(instr).toContain("name, phone, address, timeframe, notes");
   });
 });
 
