@@ -38,15 +38,40 @@ export const TRIGGER = {
 };
 
 /**
- * The tenant's enabled production definition (ai_flows row
- * 70be1676-cb42-4419-a414-bd3136e56be6), WITH the post-incident ordering
- * fix applied by scripts/oneshot/patch-truly-renewal-wait-order.ts: the
- * intent_fork else-arm runs continue_convo → tag_engaged → wait_renewal
- * (30m) → renewal_ack → offer_team, and the offer template carries the
- * captured renewal answer. The incident shape had wait_renewal AFTER
- * offer_team, so the run was parked awaiting_agent when Alex answered and
- * the wait never saw the message. Keep this fixture in lockstep with the
- * oneshot's output.
+ * Tightened wants_a_call category (patch-truly-classify-call-intent, live
+ * 2026-07-15): the old "asks to talk to someone…" wording made flash-lite
+ * read "I need help with home coverage" as a call request (the word "help"
+ * pattern-matches wanting a human) and skip the renewal question.
+ */
+const WANTS_A_CALL_DESC =
+  "explicitly asks for a call or conversation (e.g. 'call me', 'can someone call', " +
+  "'let's talk', asks to book or schedule a time). Merely stating what coverage or " +
+  "help they need is NOT this category.";
+
+const NY_QUIET = { resumeAt: "08:00", timezone: "America/New_York", noSendAfter: "21:00" };
+const NY_OFFER_WINDOW = {
+  quietEnd: "08:30",
+  timezone: "America/New_York",
+  quietStart: "21:00",
+  graceMinutes: 15
+};
+
+/**
+ * The tenant's production definition (ai_flows row
+ * 70be1676-cb42-4419-a414-bd3136e56be6) as of 2026-07-15, i.e. WITH all
+ * three post-incident oneshots applied:
+ *   - patch-truly-renewal-wait-order: intent_fork else-arm runs
+ *     continue_convo → tag_engaged → wait_renewal (30m) BEFORE any routing
+ *     (the incident shape had wait_renewal after offer_team, so the run was
+ *     parked awaiting_agent when Alex answered).
+ *   - patch-truly-renewal-reply-fork: the renewal reply and the post-nudge2
+ *     reply are classified (classify_renewal → renewal_fork,
+ *     classify_reply3 → reply3_fork) instead of blindly acked — "can
+ *     someone call me right now" works at every wait, "stop texting"
+ *     closes out politely.
+ *   - patch-truly-classify-call-intent: wants_a_call tightened /
+ *     gave_info widened on every classify (see WANTS_A_CALL_DESC).
+ * Keep this fixture in lockstep with the oneshots' output.
  */
 export const TRULY_PRIVYR_FLOW = {
   steps: [
@@ -132,7 +157,7 @@ export const TRULY_PRIVYR_FLOW = {
               categories: [
                 {
                   value: "wants_a_call",
-                  description: "asks to talk to someone, book, schedule, or be called now"
+                  description: WANTS_A_CALL_DESC
                 },
                 {
                   value: "not_interested",
@@ -140,7 +165,9 @@ export const TRULY_PRIVYR_FLOW = {
                 },
                 {
                   value: "gave_info",
-                  description: "answered the question - a reason, renewal timing, or other details"
+                  description:
+                    "answered the question or shared their situation - what coverage they " +
+                    "need, a reason, renewal timing, or other details"
                 }
               ]
             },
@@ -262,42 +289,127 @@ export const TRULY_PRIVYR_FLOW = {
                   timeoutMinutes: 30
                 },
                 {
-                  id: "renewal_ack",
-                  to: "{{vars.lead_phone}}",
-                  body:
-                    "Perfect, thank you {{vars.lead_name}} — I've noted that for your " +
-                    "broker. One of our licensed brokers will reach out shortly to review " +
-                    "your options. If a specific day or time works best for a call, just " +
-                    "reply here and let me know.",
-                  type: "send_sms",
+                  id: "classify_renewal",
+                  type: "classify",
                   when: { var: "renewal_timing", notEquals: "no_reply" },
-                  quietHours: {
-                    resumeAt: "08:00",
-                    timezone: "America/New_York",
-                    noSendAfter: "21:00"
-                  }
+                  saveAs: "renewal_intent",
+                  textVar: "renewal_timing",
+                  question:
+                    "An insurance lead was just asked approximately when their current " +
+                    "policy renews. This is their reply.",
+                  categories: [
+                    { value: "wants_a_call", description: WANTS_A_CALL_DESC },
+                    {
+                      value: "not_interested",
+                      description: "declines, says they're all set, or asks to stop texting"
+                    },
+                    {
+                      value: "gave_info",
+                      description:
+                        "answered the question or shared their situation - what coverage " +
+                        "they need, renewal timing, a date, or other details"
+                    }
+                  ]
                 },
                 {
-                  id: "offer_team",
-                  type: "route_to_team",
-                  offerWindow: {
-                    quietEnd: "08:30",
-                    timezone: "America/New_York",
-                    quietStart: "21:00",
-                    graceMinutes: 15
-                  },
-                  offerTemplate:
-                    "New Truly lead (Privyr): {{vars.lead_name}} ({{vars.lead_phone}}) - " +
-                    '{{vars.product}}. They just replied: "{{vars.reply_text}}". ' +
-                    'Renewal: "{{vars.renewal_timing}}". Reply 1 to ' +
-                    "claim or 2 to pass by {{offer.deadline}}. The assistant is booking them a call.",
-                  responseMinutes: 10,
-                  preferContactOwner: true,
-                  claimedNotifyTemplate:
-                    "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}).",
-                  ownerFallbackTemplate:
-                    "No broker claimed {{vars.lead_name}} ({{vars.lead_phone}}) - " +
-                    "{{vars.product}}. Back to you."
+                  id: "renewal_fork",
+                  type: "branch",
+                  question: "What does the renewal reply actually ask for?",
+                  branches: [
+                    {
+                      id: "arm_renewal_call",
+                      label: "Wants a call",
+                      condition: { var: "renewal_intent", equals: "wants_a_call" },
+                      steps: [
+                        {
+                          id: "renewal_call_ack",
+                          to: "{{vars.lead_phone}}",
+                          body:
+                            "You got it, {{vars.lead_name}} - I'm getting a licensed " +
+                            "broker to call you right away.",
+                          type: "send_sms",
+                          quietHours: NY_QUIET
+                        },
+                        {
+                          id: "offer_team_renewal_call",
+                          type: "route_to_team",
+                          offerWindow: NY_OFFER_WINDOW,
+                          offerTemplate:
+                            "Hot Truly lead (Privyr) - WANTS A CALL NOW: {{vars.lead_name}} " +
+                            '({{vars.lead_phone}}) - {{vars.product}}. They replied: ' +
+                            '"{{vars.renewal_timing}}". Reply 1 to claim or 2 to pass by ' +
+                            "{{offer.deadline}}.",
+                          responseMinutes: 10,
+                          preferContactOwner: true,
+                          claimedNotifyTemplate:
+                            "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}) - call requested.",
+                          ownerFallbackTemplate:
+                            "No broker claimed {{vars.lead_name}} ({{vars.lead_phone}}) - " +
+                            "they asked for a call NOW. Back to you."
+                        }
+                      ]
+                    },
+                    {
+                      id: "arm_renewal_not_interested",
+                      label: "Not interested",
+                      condition: { var: "renewal_intent", equals: "not_interested" },
+                      steps: [
+                        {
+                          id: "renewal_polite_close",
+                          to: "{{vars.lead_phone}}",
+                          body:
+                            "No problem at all, {{vars.lead_name}} - thanks for letting us " +
+                            "know. If anything changes, we'd be happy to help. Have a great day!",
+                          type: "send_sms",
+                          quietHours: NY_QUIET
+                        },
+                        {
+                          id: "renewal_tag_lost",
+                          type: "update_contact",
+                          addTags: ["Lost"],
+                          phoneVar: "lead_phone",
+                          removeTags: ["New Lead", "Contacted", "Engaged"]
+                        },
+                        {
+                          id: "renewal_lost_note",
+                          type: "notify_owner",
+                          message:
+                            "{{vars.lead_name}} ({{vars.lead_phone}}) said they're not " +
+                            'interested - closed out politely and tagged Lost. Their reply: "{{vars.renewal_timing}}"'
+                        }
+                      ]
+                    }
+                  ],
+                  else: [
+                    {
+                      id: "renewal_ack",
+                      to: "{{vars.lead_phone}}",
+                      body:
+                        "Perfect, thank you {{vars.lead_name}}! A licensed broker will " +
+                        "reach out shortly to review your options. If a specific day or " +
+                        "time works best for a call, just tell me here.",
+                      type: "send_sms",
+                      when: { var: "renewal_timing", notEquals: "no_reply" },
+                      quietHours: NY_QUIET
+                    },
+                    {
+                      id: "offer_team",
+                      type: "route_to_team",
+                      offerWindow: NY_OFFER_WINDOW,
+                      offerTemplate:
+                        "New Truly lead (Privyr): {{vars.lead_name}} ({{vars.lead_phone}}) - " +
+                        '{{vars.product}}. They just replied: "{{vars.reply_text}}". ' +
+                        'Renewal: "{{vars.renewal_timing}}". Reply 1 to ' +
+                        "claim or 2 to pass by {{offer.deadline}}. The assistant is booking them a call.",
+                      responseMinutes: 10,
+                      preferContactOwner: true,
+                      claimedNotifyTemplate:
+                        "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}).",
+                      ownerFallbackTemplate:
+                        "No broker claimed {{vars.lead_name}} ({{vars.lead_phone}}) - " +
+                        "{{vars.product}}. Back to you."
+                    }
+                  ]
                 }
               ]
             }
@@ -349,7 +461,7 @@ export const TRULY_PRIVYR_FLOW = {
                   categories: [
                     {
                       value: "wants_a_call",
-                      description: "asks to talk to someone, book, schedule, or be called now"
+                      description: WANTS_A_CALL_DESC
                     },
                     {
                       value: "not_interested",
@@ -514,27 +626,144 @@ export const TRULY_PRIVYR_FLOW = {
               removeTags: ["Contacted"]
             },
             {
-              id: "final_touch",
-              to: "{{vars.lead_phone}}",
-              body:
-                "Hi {{vars.lead_name}}, we'll leave you be for now — if you'd ever like a " +
-                "no-pressure review of your insurance options, just reply here and we'll " +
-                "pick up right where we left off. Thanks for considering Truly Insurance!",
-              type: "send_sms",
-              when: { var: "reply3", equals: "no_reply" },
-              quietHours: {
-                resumeAt: "08:00",
-                timezone: "America/New_York",
-                noSendAfter: "21:00"
-              }
+              id: "classify_reply3",
+              type: "classify",
+              when: { var: "reply3", notEquals: "no_reply" },
+              saveAs: "reply3_intent",
+              textVar: "reply3",
+              question:
+                "An insurance lead went quiet, received a final check-in about reviewing " +
+                "their options, and this is their eventual reply.",
+              categories: [
+                { value: "wants_a_call", description: WANTS_A_CALL_DESC },
+                {
+                  value: "not_interested",
+                  description: "declines, says they're all set, or asks to stop texting"
+                },
+                {
+                  value: "gave_info",
+                  description:
+                    "answered the question or shared their situation - what coverage " +
+                    "they need, renewal timing, a date, or other details"
+                }
+              ]
             },
             {
-              id: "tag_inactive",
-              type: "update_contact",
-              when: { var: "reply3", equals: "no_reply" },
-              addTags: ["Inactive"],
-              phoneVar: "lead_phone",
-              removeTags: ["New Lead", "Contacted", "Engaged"]
+              id: "reply3_fork",
+              type: "branch",
+              question: "What does the lead's eventual reply ask for?",
+              branches: [
+                {
+                  id: "arm_reply3_call",
+                  label: "Wants a call",
+                  condition: { var: "reply3_intent", equals: "wants_a_call" },
+                  steps: [
+                    {
+                      id: "reply3_call_ack",
+                      to: "{{vars.lead_phone}}",
+                      body:
+                        "You got it, {{vars.lead_name}} - I'm getting a licensed broker " +
+                        "to call you right away.",
+                      type: "send_sms",
+                      quietHours: NY_QUIET
+                    },
+                    {
+                      id: "offer_team_reply3_call",
+                      type: "route_to_team",
+                      offerWindow: NY_OFFER_WINDOW,
+                      offerTemplate:
+                        "Hot Truly lead (Privyr) - WANTS A CALL NOW: {{vars.lead_name}} " +
+                        '({{vars.lead_phone}}) - {{vars.product}}. They replied to the ' +
+                        'final check-in: "{{vars.reply3}}". Reply 1 to claim or 2 to pass ' +
+                        "by {{offer.deadline}}.",
+                      responseMinutes: 10,
+                      preferContactOwner: true,
+                      claimedNotifyTemplate:
+                        "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}) - call requested.",
+                      ownerFallbackTemplate:
+                        "No broker claimed {{vars.lead_name}} ({{vars.lead_phone}}) - " +
+                        "they asked for a call NOW. Back to you."
+                    }
+                  ]
+                },
+                {
+                  id: "arm_reply3_not_interested",
+                  label: "Not interested",
+                  condition: { var: "reply3_intent", equals: "not_interested" },
+                  steps: [
+                    {
+                      id: "reply3_polite_close",
+                      to: "{{vars.lead_phone}}",
+                      body:
+                        "No problem at all, {{vars.lead_name}} - thanks for letting us " +
+                        "know. If anything changes, we'd be happy to help. Have a great day!",
+                      type: "send_sms",
+                      quietHours: NY_QUIET
+                    },
+                    {
+                      id: "reply3_tag_lost",
+                      type: "update_contact",
+                      addTags: ["Lost"],
+                      phoneVar: "lead_phone",
+                      removeTags: ["New Lead", "Contacted", "Engaged"]
+                    },
+                    {
+                      id: "reply3_lost_note",
+                      type: "notify_owner",
+                      message:
+                        "{{vars.lead_name}} ({{vars.lead_phone}}) said they're not " +
+                        'interested - closed out politely and tagged Lost. Their reply: "{{vars.reply3}}"'
+                    }
+                  ]
+                }
+              ],
+              else: [
+                {
+                  id: "reply3_continue",
+                  to: "{{vars.lead_phone}}",
+                  body:
+                    "Thanks for getting back to us, {{vars.lead_name}} - one of our " +
+                    "licensed brokers will follow up with you shortly.",
+                  type: "send_sms",
+                  when: { var: "reply3", notEquals: "no_reply" },
+                  quietHours: NY_QUIET
+                },
+                {
+                  id: "offer_team_reply3",
+                  type: "route_to_team",
+                  when: { var: "reply3", notEquals: "no_reply" },
+                  offerWindow: NY_OFFER_WINDOW,
+                  offerTemplate:
+                    "Revived Truly lead (Privyr): {{vars.lead_name}} ({{vars.lead_phone}}) - " +
+                    '{{vars.product}}. They replied to the final check-in: "{{vars.reply3}}". ' +
+                    "Reply 1 to claim or 2 to pass by {{offer.deadline}}.",
+                  responseMinutes: 10,
+                  preferContactOwner: true,
+                  claimedNotifyTemplate:
+                    "{{agent.name}} claimed {{vars.lead_name}} ({{vars.lead_phone}}).",
+                  ownerFallbackTemplate:
+                    "No broker claimed revived lead {{vars.lead_name}} ({{vars.lead_phone}}). Back to you."
+                },
+                {
+                  id: "final_touch",
+                  to: "{{vars.lead_phone}}",
+                  body:
+                    "Hi {{vars.lead_name}}, we'll leave you be for now — if you'd ever like a " +
+                    "no-pressure review of your insurance options, just reply here and we'll " +
+                    "pick up right where we left off. Thanks for considering Truly Insurance!",
+                  type: "send_sms",
+                  when: { var: "reply3", equals: "no_reply" },
+                  quietHours: NY_QUIET
+                },
+                {
+                  id: "tag_inactive",
+                  type: "update_contact",
+                  when: { var: "reply3", equals: "no_reply" },
+                  addTags: ["Inactive"],
+                  phoneVar: "lead_phone",
+                  removeTags: ["New Lead", "Contacted", "Engaged"]
+                }
+              ]
             }
           ]
         }

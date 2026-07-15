@@ -44,12 +44,25 @@ beforeAll(async () => {
   //
   // Recorded reply provenance:
   //   Junaid run 2b7ce0c7: "Hi i am looking for a auto quote"
+  //   Alex incident (2026-07-14): "Our policy will renew on July 23, 2026"
   //   Juhu run 70d90bc7 renewal answer: "I want to reschedule appointment "
   //   Dawnia run 5575c2b2 late reply: "I would like to book a call "
   //   Shahid run 38d17410: "I need Auto and home insurance quote"
+  //   Brian live test (2026-07-15, NCW Flow Test): "Can someone call me right now"
   await walkWith("gave_info", [
     { text: "Hi i am looking for a auto quote", atMinutes: 0.5 },
+    { text: "Our policy will renew on July 23, 2026", atMinutes: 2 }
+  ]);
+  await walkWith("renewal_wants_call", [
+    { text: "Hi i am looking for a auto quote", atMinutes: 0.5 },
+    // Juhu's recorded renewal answer: under the tightened categories a
+    // reschedule ask is a call/booking request, not a renewal answer.
     { text: "I want to reschedule appointment ", atMinutes: 2 }
+  ]);
+  await walkWith("renewal_not_interested", [
+    { text: "Hi i am looking for a auto quote", atMinutes: 0.5 },
+    // Synthetic: no recorded renewal-stage opt-out exists yet.
+    { text: "Actually I'm all set, please stop texting", atMinutes: 2 }
   ]);
   await walkWith("wants_call", [
     // No first-reply call request exists in the run history; Dawnia's
@@ -87,23 +100,53 @@ beforeAll(async () => {
     // finally answers inside wait3 — the only path that runs late_engaged_2.
     { text: "Sorry for the delay - yes I'm still interested", atMinutes: 1700 }
   ]);
+  await walkWith("reply3_wants_call", [
+    // Brian's live-test utterance placed after nudge2: the reply3_fork's
+    // hot-call arm ("call me now" must work at EVERY wait).
+    { text: "Can someone call me right now", atMinutes: 1700 }
+  ]);
+  await walkWith("reply3_not_interested", [
+    { text: "Please don't contact me again", atMinutes: 1700 }
+  ]);
 }, 600_000);
 
 describe("first-reply arms (recorded replies, live classify)", () => {
-  it("Junaid's 'auto quote' reply takes the gave_info else-arm and captures Juhu's non-date renewal answer", () => {
+  it("Junaid's 'auto quote' reply takes the gave_info else-arm and captures Alex's renewal date", () => {
     const w = walks.gave_info;
     expect(w.vars.intent).toBe("gave_info");
     expect(stepOf(w, "continue_convo").status).toBe("done");
     expect(stepOf(w, "tag_engaged").status).toBe("done");
-    // Juhu's recorded renewal answer is prose, not a date — the flow must
-    // capture and acknowledge it all the same (run 70d90bc7 did).
-    expect(w.vars.renewal_timing).toBe("I want to reschedule appointment ");
+    expect(w.vars.renewal_timing).toBe("Our policy will renew on July 23, 2026");
+    expect(w.vars.renewal_intent).toBe("gave_info");
     expect(stepOf(w, "renewal_ack").status).toBe("done");
     expect(stepOf(w, "offer_team").status).toBe("done");
     expect(String(stepOf(w, "offer_team").result.offer)).toContain(
       'Renewal: "{{vars.renewal_timing}}"'
     );
     expect(w.fellThroughToGenericPath).toEqual([]);
+  });
+
+  it("Juhu's renewal-stage reschedule ask takes the renewal hot-call arm, not a blind ack (run 70d90bc7's fixed path)", () => {
+    const w = walks.renewal_wants_call;
+    expect(w.vars.renewal_intent).toBe("wants_a_call");
+    expect(stepOf(w, "renewal_call_ack").status).toBe("done");
+    expect(stepOf(w, "offer_team_renewal_call").status).toBe("done");
+    expect(String(stepOf(w, "offer_team_renewal_call").result.offer)).toContain(
+      "WANTS A CALL NOW"
+    );
+    // The blind-ack path must NOT also fire.
+    expect(stepOf(w, "renewal_ack").status).toBe("skipped");
+    expect(stepOf(w, "offer_team").status).toBe("skipped");
+  });
+
+  it("a renewal-stage opt-out closes politely with the Lost tag instead of a cheerful ack", () => {
+    const w = walks.renewal_not_interested;
+    expect(w.vars.renewal_intent).toBe("not_interested");
+    expect(stepOf(w, "renewal_polite_close").status).toBe("done");
+    expect(stepOf(w, "renewal_tag_lost").status).toBe("done");
+    expect(stepOf(w, "renewal_lost_note").status).toBe("done");
+    expect(stepOf(w, "renewal_ack").status).toBe("skipped");
+    expect(stepOf(w, "offer_team").status).toBe("skipped");
   });
 
   it("a call request takes the wants_a_call arm: ack + hot-lead routing, no renewal question", () => {
@@ -183,12 +226,37 @@ describe("silent + late-reply arms (the Dawnia incident family)", () => {
     expect(stepOf(w, "late_call_ack").status).toBe("skipped");
   });
 
-  it("a reply after the SECOND nudge re-engages the contact instead of closing them out", () => {
+  it("a reply after the SECOND nudge re-engages, acks, and routes instead of closing them out", () => {
     const w = walks.reply_after_second_nudge;
     expect(w.vars.reply2).toBe(NO_REPLY_SENTINEL);
     expect(w.vars.reply3).toBe("Sorry for the delay - yes I'm still interested");
     expect(stepOf(w, "late_engaged_2").status).toBe("done");
+    expect(w.vars.reply3_intent).toBe("gave_info");
+    expect(stepOf(w, "reply3_continue").status).toBe("done");
+    expect(stepOf(w, "offer_team_reply3").status).toBe("done");
     expect(stepOf(w, "final_touch").status).toBe("skipped");
+    expect(stepOf(w, "tag_inactive").status).toBe("skipped");
+  });
+
+  it("Brian's 'call me right now' works at the LAST wait too: reply3 hot-call arm", () => {
+    const w = walks.reply3_wants_call;
+    expect(w.vars.reply3_intent).toBe("wants_a_call");
+    expect(stepOf(w, "reply3_call_ack").status).toBe("done");
+    expect(stepOf(w, "offer_team_reply3_call").status).toBe("done");
+    expect(String(stepOf(w, "offer_team_reply3_call").result.offer)).toContain(
+      "WANTS A CALL NOW"
+    );
+    expect(stepOf(w, "reply3_continue").status).toBe("skipped");
+    expect(stepOf(w, "final_touch").status).toBe("skipped");
+  });
+
+  it("an opt-out at the last wait closes politely with the Lost tag", () => {
+    const w = walks.reply3_not_interested;
+    expect(w.vars.reply3_intent).toBe("not_interested");
+    expect(stepOf(w, "reply3_polite_close").status).toBe("done");
+    expect(stepOf(w, "reply3_tag_lost").status).toBe("done");
+    expect(stepOf(w, "reply3_lost_note").status).toBe("done");
+    expect(stepOf(w, "reply3_continue").status).toBe("skipped");
     expect(stepOf(w, "tag_inactive").status).toBe("skipped");
   });
 });
@@ -196,7 +264,7 @@ describe("silent + late-reply arms (the Dawnia incident family)", () => {
 describe("every action item in the flow is covered", () => {
   it("each step id in the VERBATIM definition executes (done) in at least one walk", () => {
     const allStepIds = flattenSteps(trulyFlowSteps()).map((e) => e.step.id);
-    expect(allStepIds.length).toBeGreaterThanOrEqual(39);
+    expect(allStepIds.length).toBeGreaterThanOrEqual(55);
     const executed = new Set<string>();
     for (const w of Object.values(walks)) {
       for (const s of w.steps) if (s.status === "done") executed.add(s.id);
