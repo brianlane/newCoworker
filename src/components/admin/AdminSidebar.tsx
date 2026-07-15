@@ -9,12 +9,14 @@ import {
   DollarSign,
   Receipt,
   Gauge,
-  Activity
+  Activity,
+  MessageSquare
 } from "lucide-react";
 
 const adminNavItems = [
   { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { label: "All Clients", href: "/admin/clients", icon: Users },
+  { label: "Web chat", href: "/admin/webchat", icon: MessageSquare },
   { label: "Revenue", href: "/admin/revenue", icon: DollarSign },
   { label: "Costs", href: "/admin/costs", icon: Receipt },
   { label: "Usage", href: "/admin/usage", icon: Gauge },
