@@ -995,10 +995,24 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   };
 
   const intake = opts.intake;
-  const intakeCaptureFields =
+  // On a call WE placed (outbound / place_ai_call transfer), the never-ask-
+  // for-their-number rule extends to the tool surface: "phone" is filtered
+  // out of the capture schema so the tool itself can't prompt the model to
+  // ask for a callback number (empty after filtering degrades to notes,
+  // mirroring intakeSystemInstruction). Inbound keeps the full default set.
+  const intakeIsOutbound = Boolean(intake?.allowTransfer) || opts.direction === "outbound";
+  const configuredCaptureFields =
     intake?.captureFields && intake.captureFields.length > 0
       ? intake.captureFields
       : DEFAULT_INTAKE_CAPTURE_FIELDS;
+  const outboundCaptureFields = configuredCaptureFields.filter(
+    (f) => f.trim().toLowerCase() !== "phone"
+  );
+  const intakeCaptureFields = intakeIsOutbound
+    ? outboundCaptureFields.length > 0
+      ? outboundCaptureFields
+      : ["notes"]
+    : configuredCaptureFields;
   // Lead fields accumulated from `capture_lead` calls; surfaced via getLead()
   // so index.ts can text the owner a structured summary after the call.
   const leadData: CapturedLead = {};
@@ -1012,6 +1026,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     // post-call SMS already key off intakeCaptureFields).
     const KNOWN_FIELD_DESCRIPTIONS: Record<string, string> = {
       name: "Seller's full name.",
+      // Outbound sessions never carry a "phone" field (filtered above), so
+      // this callback wording can only surface on inbound intake.
       phone: "Best callback phone number.",
       address: "Property address they're selling.",
       timeframe: "Roughly when they want to sell (e.g. 'ASAP', '3 months', '6-12 months').",
@@ -1026,8 +1042,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
     declarations.push({
       name: "capture_lead",
-      description:
-        "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
+      description: intakeIsOutbound
+        ? "Record details you learn on this call for the office's follow-up notes. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye. Never ask for their phone number — you called them on it."
+        : "Record details about this seller lead so the owner can call them back. Call as soon as you learn any field, and again as you learn more. Always call before saying goodbye.",
       parameters: {
         type: Type.OBJECT,
         properties: captureProperties,
