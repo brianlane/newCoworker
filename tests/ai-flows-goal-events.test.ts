@@ -184,11 +184,12 @@ describe("applyGoalEvent", () => {
 
     // Candidate query is status-bounded and lead-matched.
     const inCalls = calls.filter((c) => c.name === "in" && c.table === "ai_flow_runs");
-    expect(inCalls[0].args).toEqual(["status", ["queued", "awaiting_reply"]]);
+    expect(inCalls[0].args).toEqual(["status", ["queued", "awaiting_reply", "awaiting_call"]]);
     const orCall = calls.find((c) => c.name === "or");
     expect(String(orCall!.args[0])).toContain("context->trigger->>from");
     expect(String(orCall!.args[0])).toContain("lead_phone");
     expect(String(orCall!.args[0])).toContain("waiting_reply");
+    expect(String(orCall!.args[0])).toContain("waiting_call");
 
     // The jump: forward to the goal's flat index, park state cleared, the
     // reached-via var stamped.
@@ -252,6 +253,67 @@ describe("applyGoalEvent", () => {
     expect(ctx.vars.__waited_w1).toBe("1");
     expect(ctx.vars[goalReachedVar("g1")]).toBe("appointment_booked");
     expect(ctx.waiting_reply.result).toBe(GOAL_JUMP_SKIP);
+  });
+
+  it("awaiting_call runs get waiting_call.result and the dial marker stamped (never re-dials)", async () => {
+    const steps = [sms("s0"), goal("g1", [{ kind: "appointment_booked" }])];
+    const { db, calls } = makeDb([
+      {
+        data: [
+          runRow({
+            status: "awaiting_call",
+            current_step: 0,
+            context: {
+              vars: { lead_phone: LEAD },
+              waiting_call: { to: LEAD, save_as: "call_outcome", marker: "__called_c1" }
+            }
+          })
+        ],
+        error: null
+      },
+      { data: [flowRow("f1", steps)], error: null },
+      { data: [{ id: "r1" }], error: null },
+      { data: null, error: null } // skip upsert for s0
+    ]);
+    expect(await applyGoalEvent(db, BIZ, LEAD, { kind: "appointment_booked" })).toEqual({
+      jumpedRuns: 1
+    });
+    const update = calls.find((c) => c.name === "update" && c.table === "ai_flow_runs")!
+      .args[0] as Record<string, unknown>;
+    const ctx = update.context as {
+      vars: Record<string, unknown>;
+      waiting_call: Record<string, unknown>;
+    };
+    // The marker guarantees the place_ai_call step is a no-op on any
+    // re-entry — a goal jump must never cause a second dial.
+    expect(ctx.vars.__called_c1).toBe("1");
+    expect(ctx.vars[goalReachedVar("g1")]).toBe("appointment_booked");
+    expect(ctx.waiting_call.result).toBe(GOAL_JUMP_SKIP);
+    expect(ctx).not.toHaveProperty("waiting_reply");
+  });
+
+  it("an awaiting_call run without a stored marker still jumps (defensive)", async () => {
+    const steps = [sms("s0"), goal("g1", [{ kind: "replied" }])];
+    const { db, calls } = makeDb([
+      {
+        data: [
+          runRow({
+            status: "awaiting_call",
+            current_step: 0,
+            context: { vars: { lead_phone: LEAD }, waiting_call: { to: LEAD } }
+          })
+        ],
+        error: null
+      },
+      { data: [flowRow("f1", steps)], error: null },
+      { data: [{ id: "r1" }], error: null },
+      { data: null, error: null }
+    ]);
+    expect(await applyGoalEvent(db, BIZ, LEAD, { kind: "replied" })).toEqual({ jumpedRuns: 1 });
+    const update = calls.find((c) => c.name === "update" && c.table === "ai_flow_runs")!
+      .args[0] as Record<string, unknown>;
+    const ctx = update.context as { waiting_call: Record<string, unknown> };
+    expect(ctx.waiting_call.result).toBe(GOAL_JUMP_SKIP);
   });
 
   it("excludeRunIds keeps the freshly-resumed wait run on its authored path", async () => {
