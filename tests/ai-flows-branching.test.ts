@@ -172,9 +172,31 @@ describe("branch step authoring schema", () => {
       branches: Array<{ steps: unknown[] }>;
       else: unknown[];
     };
-    branch.branches[0].steps = manySteps("a", 25);
-    branch.branches[1].steps = manySteps("b", 25);
-    expect(issuesOf(flow).join("\n")).toMatch(/limit is 50/);
+    // Each steps list is capped at 25 items, so exceed the definition-wide
+    // total via nested branches: 2 arms x (24 + nested branch holding 75) > 150.
+    const nestedBranch = (prefix: string) => ({
+      id: `${prefix}_nb`,
+      type: "branch",
+      question: "More?",
+      branches: [
+        {
+          id: `${prefix}_nb_y`,
+          label: "Yes",
+          condition: { var: "insurance_type", contains: "auto" },
+          steps: manySteps(`${prefix}y`, 25)
+        },
+        {
+          id: `${prefix}_nb_n`,
+          label: "No",
+          condition: { var: "insurance_type", contains: "home" },
+          steps: manySteps(`${prefix}n`, 25)
+        }
+      ],
+      else: manySteps(`${prefix}e`, 25)
+    });
+    branch.branches[0].steps = [...manySteps("a", 24), nestedBranch("a")];
+    branch.branches[1].steps = [...manySteps("b", 24), nestedBranch("b")];
+    expect(issuesOf(flow).join("\n")).toMatch(/limit is 150/);
   });
 
   it("accepts a branch `when` guard and checks its var scope", () => {
