@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   provisionVpsForBusiness,
@@ -1382,5 +1385,37 @@ describe("resolvePriceItemId", () => {
   it("returns null when the requested period is missing", () => {
     const thin = [{ id: "p", name: "p", category: "VPS", prices: [] }];
     expect(resolvePriceItemId(thin, "p")).toBeNull();
+  });
+});
+
+describe("deploy-client.sh cloudflared tunnel step (contract)", () => {
+  // Read the tracked script directly — the cloudflared step runs on the VPS
+  // at provision time, so vitest can only pin its shape, not execute it.
+  const script = readFileSync(
+    join(dirname(fileURLToPath(import.meta.url)), "..", "vps", "scripts", "deploy-client.sh"),
+    "utf8"
+  );
+
+  it("reinstalls cloudflared when the existing unit's token differs (pool adoption)", () => {
+    // KYP Ads (Jul 15 2026): an adopted box kept the PREVIOUS tenant's
+    // cloudflared unit, so "restart, don't reinstall" left it serving the old
+    // tunnel while the new tenant's hostnames 530'd (first owner SMS
+    // dead-lettered with rowboat_http_530). The step must compare the unit's
+    // baked-in token with the token THIS deploy received and reinstall on
+    // mismatch.
+    expect(script).toMatch(/EXISTING_TOKEN=\$\(grep -oE -- '--token/);
+    expect(script).toMatch(
+      /if \[\[ "\$\{EXISTING_TOKEN\}" == "\$\{CLOUDFLARE_TUNNEL_TOKEN\}" \]\]/
+    );
+    expect(script).toMatch(/cloudflared service uninstall \|\| true/);
+    expect(script).toMatch(
+      /cloudflared service install "\$\{CLOUDFLARE_TUNNEL_TOKEN\}"/
+    );
+  });
+
+  it("same-token re-deploys stay a cheap restart (no uninstall)", () => {
+    expect(script).toMatch(
+      /already installed with this tunnel token; restarting/
+    );
   });
 });
