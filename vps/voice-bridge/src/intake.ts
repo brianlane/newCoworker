@@ -124,7 +124,7 @@ export function intakeSystemInstruction(
   if (contextNote && contextNote.trim()) {
     lines.push(
       `What you ALREADY KNOW about this person: ${contextNote.trim()}`,
-      "NEVER ask for any detail listed there — you already have it. Use their name naturally, and if a known detail matters, confirm it in passing instead of asking for it fresh."
+      "This OVERRIDES any collect list above: NEVER ask for a detail listed there — you already have it. Use their name naturally, record known details straight into `capture_lead` without asking, and only ask about what is genuinely missing. If a known detail matters, confirm it in passing instead of asking for it fresh."
     );
   }
   if (hasEndCall) {

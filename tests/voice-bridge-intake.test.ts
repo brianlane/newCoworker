@@ -119,7 +119,8 @@ describe("intakeSystemInstruction", () => {
     ]) {
       expect(instr).toContain("ALREADY KNOW");
       expect(instr).toContain(note);
-      expect(instr).toContain("NEVER ask for any detail listed there");
+      expect(instr).toContain("This OVERRIDES any collect list above");
+      expect(instr).toContain("NEVER ask for a detail listed there");
     }
     // Absent/blank note → no known-details block at all.
     const bare = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true, "  ");
