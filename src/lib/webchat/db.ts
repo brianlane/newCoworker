@@ -703,12 +703,16 @@ export type WebchatJobStatRow = {
   created_at: string;
 };
 
+/** Page size for the session-stats read (PostgREST clamps ~1000/query). */
+export const WEBCHAT_JOB_STATS_PAGE_SIZE = 1000;
+
 /**
  * Stats for EXACTLY the given sessions — the caller passes the session
  * ids it is displaying, so per-row spend and the page totals share one
  * scope. (A business-wide "recent N jobs" window could silently exclude a
  * listed conversation's turns on a busy tenant — Bugbot Medium on PR
- * #648.)
+ * #648.) Reads in pages until exhausted, so no fixed row cap can truncate
+ * the aggregation either.
  */
 export async function listWebchatJobStatsForSessions(
   sessionIds: string[],
@@ -716,16 +720,23 @@ export async function listWebchatJobStatsForSessions(
 ): Promise<WebchatJobStatRow[]> {
   if (sessionIds.length === 0) return [];
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("webchat_jobs")
-    .select(
-      "session_id, status, cost_micros, model, prompt_tokens, output_tokens, tool_rounds, refused_over_cap, created_at"
-    )
-    .in("session_id", sessionIds)
-    .order("created_at", { ascending: false })
-    .limit(10_000);
-  if (error) throw new Error(`listWebchatJobStatsForSessions: ${error.message}`);
-  return (data as WebchatJobStatRow[] | null) ?? [];
+  const rows: WebchatJobStatRow[] = [];
+  for (let offset = 0; ; offset += WEBCHAT_JOB_STATS_PAGE_SIZE) {
+    const { data, error } = await db
+      .from("webchat_jobs")
+      .select(
+        "session_id, status, cost_micros, model, prompt_tokens, output_tokens, tool_rounds, refused_over_cap, created_at"
+      )
+      .in("session_id", sessionIds)
+      // Stable page order: id is unique, so paging can't skip/duplicate
+      // rows when new jobs land mid-read (created_at is not unique).
+      .order("id", { ascending: true })
+      .range(offset, offset + WEBCHAT_JOB_STATS_PAGE_SIZE - 1);
+    if (error) throw new Error(`listWebchatJobStatsForSessions: ${error.message}`);
+    const page = (data as WebchatJobStatRow[] | null) ?? [];
+    rows.push(...page);
+    if (page.length < WEBCHAT_JOB_STATS_PAGE_SIZE) return rows;
+  }
 }
 
 /**

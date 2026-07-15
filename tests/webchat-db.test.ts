@@ -14,7 +14,7 @@ type StubResult = {
  */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "in", "gt", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
+  for (const m of ["select", "eq", "in", "gt", "gte", "lt", "order", "limit", "range", "insert", "update", "delete"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);
@@ -60,6 +60,7 @@ import {
   updateWidgetSettings,
   webchatReplyEngine,
   WEBCHAT_ENGINE_HISTORY_MARKER,
+  WEBCHAT_JOB_STATS_PAGE_SIZE,
   WEBCHAT_PLATFORM_RECLAIM_AFTER_MS,
   WEBCHAT_PLATFORM_WORKER_ID,
   type WebchatMessageRow
@@ -287,6 +288,7 @@ describe("webchat_sessions accessors", () => {
     supabaseStub.from.mockReturnValueOnce(builder);
     expect(await listWebchatJobStatsForSessions([SESSION])).toEqual(rows);
     expect(builder.in).toHaveBeenCalledWith("session_id", [SESSION]);
+    expect(builder.range).toHaveBeenCalledWith(0, WEBCHAT_JOB_STATS_PAGE_SIZE - 1);
 
     // Empty input short-circuits with no query at all.
     vi.mocked(supabaseStub.from).mockClear();
@@ -300,6 +302,27 @@ describe("webchat_sessions accessors", () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
     await expect(listWebchatJobStatsForSessions([SESSION])).rejects.toThrow(
       "listWebchatJobStatsForSessions: x"
+    );
+  });
+
+  it("listWebchatJobStatsForSessions pages past the per-query row clamp", async () => {
+    // A full first page signals more rows; the short second page ends it.
+    const fullPage = Array.from({ length: WEBCHAT_JOB_STATS_PAGE_SIZE }, (_, i) => ({
+      session_id: SESSION,
+      cost_micros: i
+    }));
+    const tail = [{ session_id: SESSION, cost_micros: 9999 }];
+    const first = makeBuilder({ data: fullPage, error: null });
+    const second = makeBuilder({ data: tail, error: null });
+    supabaseStub.from.mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    const out = await listWebchatJobStatsForSessions([SESSION]);
+    expect(out).toHaveLength(WEBCHAT_JOB_STATS_PAGE_SIZE + 1);
+    expect(out.at(-1)).toEqual(tail[0]);
+    expect(first.range).toHaveBeenCalledWith(0, WEBCHAT_JOB_STATS_PAGE_SIZE - 1);
+    expect(second.range).toHaveBeenCalledWith(
+      WEBCHAT_JOB_STATS_PAGE_SIZE,
+      2 * WEBCHAT_JOB_STATS_PAGE_SIZE - 1
     );
   });
 });

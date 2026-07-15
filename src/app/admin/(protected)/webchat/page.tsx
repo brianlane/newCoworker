@@ -148,8 +148,10 @@ export default async function AdminSiteWebchatPage() {
   const leadsCaptured = sessions.filter(
     (s) => s.visitor_name || s.visitor_email || s.visitor_phone
   ).length;
+  // Divide by every LISTED conversation (zero-spend ones included) so the
+  // "avg · listed conversations" label is literally true.
   const avgPerConversation =
-    agg.bySession.size > 0 ? agg.totalCostMicros / agg.bySession.size : 0;
+    sessions.length > 0 ? agg.totalCostMicros / sessions.length : 0;
 
   return (
     <div className="space-y-6 max-w-5xl">
