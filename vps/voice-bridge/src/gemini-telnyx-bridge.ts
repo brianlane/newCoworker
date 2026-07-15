@@ -860,6 +860,76 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   };
 
   let session!: Session;
+  // The greeting cue races session assignment: Gemini can deliver
+  // `setupComplete` while `ai.live.connect` is still awaiting (the SDK calls
+  // onmessage from inside connect), so the handler may run before `session`
+  // is assigned. These flags let the handler defer the cue to right after
+  // connect resolves instead of throwing on an undefined session.
+  let sessionAssigned = false;
+  let greetingPending = false;
+
+  /**
+   * Prompt the model to speak its opening line. Idempotent (greetingTriggered)
+   * and only called with `session` assigned.
+   *
+   * This MUST go through `sendRealtimeInput({ text })`, not
+   * `sendClientContent`. The caller's audio is streamed via
+   * `sendRealtimeInput` with Gemini's automatic VAD, so the whole session
+   * lives in the "realtime" turn regime. Injecting a manual
+   * `sendClientContent` turn mixes the two turn models: the greeting turn
+   * itself succeeds, but the *next* auto-VAD turn (the caller's first real
+   * reply) is then rejected by the server with WS close 1007 "Request
+   * contains an invalid argument." — i.e. the AI speaks its opening line and
+   * the call dies the moment the caller answers. `sendRealtimeInput({ text })`
+   * injects the greeting cue inside the realtime stream, keeping every turn
+   * consistent.
+   */
+  const sendGreetingCue = (): void => {
+    if (diag.greetingTriggered) return;
+    diag.greetingTriggered = true;
+    try {
+      const greetIdentity = opts.callerIdentity;
+      const greetIsStaff = greetIdentity != null && greetIdentity.kind !== "customer";
+      let greetingText: string;
+      if (intake) {
+        const opener =
+          (intake.persona && intake.persona.trim()) ||
+          `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
+        // A transfer-enabled (place_ai_call) session follows its own
+        // call script instead of the capture checklist — pushing the
+        // intake questionnaire here would fight the flow's script.
+        greetingText = intake.allowTransfer
+          ? `[Coordinator — speak aloud now] The person has just answered the phone. Greet them warmly with your opening line ("${opener}") and follow your call script.`
+          : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
+      } else if (greetIsStaff) {
+        // Owner vs team wording, and handle staff WITHOUT a stored name
+        // (otherwise they'd get the customer receptionist greeting that
+        // contradicts the staff system instruction).
+        const staffName = greetIdentity!.name?.trim();
+        const role =
+          greetIdentity!.kind === "owner" ? "the business owner" : "a member of the team";
+        const subject = staffName
+          ? `${staffName} (${role}, not a customer)`
+          : `${role} (not a customer)`;
+        const example = staffName
+          ? `e.g. "Hey ${staffName}, what can I do for you?"`
+          : `e.g. "Hey, what can I do for you?"`;
+        greetingText = `[Coordinator — speak aloud now] ${subject} has just connected. Greet them warmly${staffName ? " by name" : ""} in one short sentence (${example}) — do not run the customer intake script — and wait for their reply.`;
+      } else {
+        greetingText = `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`;
+      }
+      session.sendRealtimeInput({ text: greetingText });
+      console.log("gemini-bridge: greeting prompt sent", {
+        callControlId: opts.callControlId
+      });
+      emitDiag("voice_bridge_gemini_greeting_sent", { method: "sendRealtimeInput" });
+    } catch (err) {
+      console.error("gemini-bridge: greeting prompt failed", err);
+      emitDiag("voice_bridge_gemini_greeting_failed", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
 
   const teardown = async () => {
     // Two-part teardown:
@@ -1127,61 +1197,18 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           // this nudge they hear silence after ringback (no audio activity
           // means VAD never marks a turn complete and the model stays mute).
           //
-          // This MUST go through `sendRealtimeInput({ text })`, not
-          // `sendClientContent`. The caller's audio is streamed via
-          // `sendRealtimeInput` with Gemini's automatic VAD, so the whole
-          // session lives in the "realtime" turn regime. Injecting a manual
-          // `sendClientContent` turn mixes the two turn models: the greeting
-          // turn itself succeeds, but the *next* auto-VAD turn (the caller's
-          // first real reply) is then rejected by the server with WS close
-          // 1007 "Request contains an invalid argument." — i.e. the AI speaks
-          // its opening line and the call dies the moment the caller answers.
-          // `sendRealtimeInput({ text })` injects the greeting cue inside the
-          // realtime stream, keeping every turn consistent.
-          if (!diag.greetingTriggered) {
-            diag.greetingTriggered = true;
-            try {
-              const greetIdentity = opts.callerIdentity;
-              const greetIsStaff = greetIdentity != null && greetIdentity.kind !== "customer";
-              let greetingText: string;
-              if (intake) {
-                const opener =
-                  (intake.persona && intake.persona.trim()) ||
-                  `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
-                // A transfer-enabled (place_ai_call) session follows its own
-                // call script instead of the capture checklist — pushing the
-                // intake questionnaire here would fight the flow's script.
-                greetingText = intake.allowTransfer
-                  ? `[Coordinator — speak aloud now] The person has just answered the phone. Greet them warmly with your opening line ("${opener}") and follow your call script.`
-                  : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
-              } else if (greetIsStaff) {
-                // Owner vs team wording, and handle staff WITHOUT a stored name
-                // (otherwise they'd get the customer receptionist greeting that
-                // contradicts the staff system instruction).
-                const staffName = greetIdentity!.name?.trim();
-                const role =
-                  greetIdentity!.kind === "owner" ? "the business owner" : "a member of the team";
-                const subject = staffName
-                  ? `${staffName} (${role}, not a customer)`
-                  : `${role} (not a customer)`;
-                const example = staffName
-                  ? `e.g. "Hey ${staffName}, what can I do for you?"`
-                  : `e.g. "Hey, what can I do for you?"`;
-                greetingText = `[Coordinator — speak aloud now] ${subject} has just connected. Greet them warmly${staffName ? " by name" : ""} in one short sentence (${example}) — do not run the customer intake script — and wait for their reply.`;
-              } else {
-                greetingText = `[Coordinator — speak aloud now] The caller has just connected. Greet them warmly in one short sentence (e.g. "Hi, thanks for calling ${opts.businessName} — how can I help?") and wait for their reply.`;
-              }
-              session.sendRealtimeInput({ text: greetingText });
-              console.log("gemini-bridge: greeting prompt sent", {
-                callControlId: opts.callControlId
-              });
-              emitDiag("voice_bridge_gemini_greeting_sent", { method: "sendRealtimeInput" });
-            } catch (err) {
-              console.error("gemini-bridge: greeting prompt failed", err);
-              emitDiag("voice_bridge_gemini_greeting_failed", {
-                error: err instanceof Error ? err.message : String(err)
-              });
-            }
+          // `setupComplete` can be delivered WHILE `ai.live.connect` is still
+          // awaiting (the SDK invokes onmessage from inside connect), i.e.
+          // before the outer `session` variable is assigned — sending here
+          // would throw and the caller would sit in silence until VAD picks
+          // up their voice (the 45-seconds-of-dead-air bug on outbound
+          // calls, Jul 15 2026). Defer to sendGreetingCue(), which runs now
+          // when the session is already assigned, or right after connect
+          // resolves otherwise.
+          if (sessionAssigned) {
+            sendGreetingCue();
+          } else {
+            greetingPending = true;
           }
         }
         handleModelToolCalls(message);
@@ -1266,6 +1293,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     }
   });
+
+  sessionAssigned = true;
+  // Flush a greeting cue that raced connect: `setupComplete` frequently
+  // arrives while `ai.live.connect` is still awaiting (the SDK dispatches
+  // onmessage from inside connect), in which case the handler deferred the
+  // cue because `session` wasn't assigned yet. Send it now — without this
+  // the callee hears silence until VAD reacts to THEIR voice.
+  if (greetingPending) {
+    greetingPending = false;
+    sendGreetingCue();
+  }
 
   // Tap the Live session's outbound WebSocket so the close telemetry shows the
   // exact frame sequence we sent (debug for the unreproducible 1007).
