@@ -68,10 +68,17 @@ const db = createClient(
 type Row = { id: string; name: string; enabled: boolean; definition: AiFlowDefinition };
 type AnyStep = Record<string, unknown>;
 
+// Final category wording (already includes patch-truly-classify-call-intent's
+// tightening) so running THIS script alone never re-inserts the loose
+// "asks to talk to someone" phrasing that misrouted "I need help with home
+// coverage" as a call request.
 const CLASSIFY_CATEGORIES = [
   {
     value: "wants_a_call",
-    description: "asks to talk to someone, book, schedule, or be called now"
+    description:
+      "explicitly asks for a call or conversation (e.g. 'call me', 'can someone call', " +
+      "'let's talk', asks to book or schedule a time). Merely stating what coverage or " +
+      "help they need is NOT this category."
   },
   {
     value: "not_interested",
@@ -79,7 +86,9 @@ const CLASSIFY_CATEGORIES = [
   },
   {
     value: "gave_info",
-    description: "answered the question - renewal timing, a date, or other details"
+    description:
+      "answered the question or shared their situation - what coverage they need, " +
+      "renewal timing, a date, or other details"
   }
 ];
 
