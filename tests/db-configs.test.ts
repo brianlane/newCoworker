@@ -3,6 +3,7 @@ import {
   upsertBusinessConfig,
   getBusinessConfig,
   setBusinessWebsiteMd,
+  setBusinessWebsiteCrawlReport,
   patchBusinessConfig
 } from "@/lib/db/configs";
 
@@ -172,6 +173,41 @@ describe("db/configs", () => {
   it("setBusinessWebsiteMd reuses the provided client", async () => {
     const { db, upsertChain } = raceSafeDb();
     await setBusinessWebsiteMd("biz", "md", db as never);
+    expect(upsertChain.upsert).toHaveBeenCalled();
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  // --- setBusinessWebsiteCrawlReport ---
+
+  it("setBusinessWebsiteCrawlReport patches website_crawl_report only (race-safe)", async () => {
+    const { db, upsertChain, updateChain } = raceSafeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const report = {
+      crawledAt: "2026-07-14T00:00:00.000Z",
+      source: "crawl" as const,
+      pages: [{ url: "https://example.com/", chars: 512 }]
+    };
+    await setBusinessWebsiteCrawlReport("biz-uuid-1", report);
+
+    expect(upsertChain.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ business_id: "biz-uuid-1" }),
+      { onConflict: "business_id", ignoreDuplicates: true }
+    );
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.website_crawl_report).toEqual(report);
+    // The report write must never clobber the vault fields.
+    expect(payload.website_md).toBeUndefined();
+    expect(payload.soul_md).toBeUndefined();
+  });
+
+  it("setBusinessWebsiteCrawlReport reuses the provided client", async () => {
+    const { db, upsertChain } = raceSafeDb();
+    await setBusinessWebsiteCrawlReport(
+      "biz",
+      { crawledAt: "2026-07-14T00:00:00.000Z", source: "pasted_html", pages: [] },
+      db as never
+    );
     expect(upsertChain.upsert).toHaveBeenCalled();
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });

@@ -79,7 +79,8 @@ describe("/api/onboard/website-preview", () => {
       websiteMd: "# Phoenix Realty\n- Buy and sell homes in Phoenix metro.",
       pagesCrawled: 4,
       bytesDownloaded: 18_432,
-      finalUrl: "https://www.phoenixareasbestrealtor.com/"
+      finalUrl: "https://www.phoenixareasbestrealtor.com/",
+      pages: [{ url: "https://www.phoenixareasbestrealtor.com/", chars: 900 }]
     });
 
     const res = await POST(
@@ -125,7 +126,8 @@ describe("/api/onboard/website-preview", () => {
         websiteMd: "x",
         pagesCrawled: 1,
         bytesDownloaded: 1,
-        finalUrl: "https://example.com/"
+        finalUrl: "https://example.com/",
+        pages: [{ url: "https://example.com/", chars: 300 }]
       });
       await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: TRUSTED_APP_URL }));
       expect(ingestWebsite).toHaveBeenCalledWith(
@@ -144,7 +146,8 @@ describe("/api/onboard/website-preview", () => {
         websiteMd: "x",
         pagesCrawled: 1,
         bytesDownloaded: 1,
-        finalUrl: "https://example.com/"
+        finalUrl: "https://example.com/",
+        pages: [{ url: "https://example.com/", chars: 300 }]
       });
       await POST(
         jsonRequest({ websiteUrl: "https://example.com" }, { referer: `${TRUSTED_APP_URL}/onboard/questionnaire` })
@@ -161,7 +164,8 @@ describe("/api/onboard/website-preview", () => {
         websiteMd: "x",
         pagesCrawled: 1,
         bytesDownloaded: 1,
-        finalUrl: "https://example.com/"
+        finalUrl: "https://example.com/",
+        pages: [{ url: "https://example.com/", chars: 300 }]
       });
       await POST(jsonRequest({ websiteUrl: "https://example.com" }));
       expect(ingestWebsite).toHaveBeenCalledWith(
@@ -179,7 +183,8 @@ describe("/api/onboard/website-preview", () => {
         websiteMd: "x",
         pagesCrawled: 1,
         bytesDownloaded: 1,
-        finalUrl: "https://example.com/"
+        finalUrl: "https://example.com/",
+        pages: [{ url: "https://example.com/", chars: 300 }]
       });
       await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: "https://attacker.example" }));
       expect(ingestWebsite).toHaveBeenCalledWith(
@@ -196,7 +201,8 @@ describe("/api/onboard/website-preview", () => {
         websiteMd: "x",
         pagesCrawled: 1,
         bytesDownloaded: 1,
-        finalUrl: "https://example.com/"
+        finalUrl: "https://example.com/",
+        pages: [{ url: "https://example.com/", chars: 300 }]
       });
       await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: "not a url" }));
       expect(ingestWebsite).toHaveBeenCalledWith(
@@ -213,7 +219,8 @@ describe("/api/onboard/website-preview", () => {
         websiteMd: "x",
         pagesCrawled: 1,
         bytesDownloaded: 1,
-        finalUrl: "https://example.com/"
+        finalUrl: "https://example.com/",
+        pages: [{ url: "https://example.com/", chars: 300 }]
       });
       await POST(jsonRequest({ websiteUrl: "https://example.com" }, { origin: TRUSTED_APP_URL }));
       expect(ingestWebsite).toHaveBeenCalledWith(
@@ -279,7 +286,8 @@ describe("/api/onboard/website-preview", () => {
       websiteMd: "x",
       pagesCrawled: 1,
       bytesDownloaded: 100,
-      finalUrl: "https://example.com/"
+      finalUrl: "https://example.com/",
+      pages: [{ url: "https://example.com/", chars: 300 }]
     });
     await POST(
       jsonRequest({ websiteUrl: "https://example.com" }, { "x-forwarded-for": "203.0.113.4, 10.0.0.1" })

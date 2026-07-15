@@ -56,6 +56,7 @@ export default async function MemoryPage() {
             initialMemory={config.memory_md}
             initialWebsiteUrl={business?.website_url ?? ""}
             initialWebsiteMd={config.website_md ?? ""}
+            initialCrawlReport={config.website_crawl_report ?? null}
           />
           <DocumentsManager businessId={businessId!} />
         </>

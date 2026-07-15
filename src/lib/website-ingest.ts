@@ -152,7 +152,21 @@ export type WebsiteIngestSuccess = {
   pagesCrawled: number;
   bytesDownloaded: number;
   finalUrl: string;
+  /** Every page that contributed text to the summary, in crawl order. */
+  pages: Array<{ url: string; chars: number }>;
 };
+
+/**
+ * Live crawl telemetry emitted through `WebsiteIngestOptions.onProgress`.
+ * The ingest route streams these to the dashboard as NDJSON so owners can
+ * watch each page get crawled (GHL-style "N pages crawled") instead of
+ * staring at a spinner for a minute.
+ */
+export type WebsiteIngestProgressEvent =
+  | { type: "sitemap_found"; count: number }
+  | { type: "page_fetched"; url: string; bytes: number; index: number }
+  | { type: "page_failed"; url: string }
+  | { type: "summarizing"; pages: number };
 
 export type WebsiteIngestFailure = {
   ok: false;
@@ -187,6 +201,12 @@ export interface WebsiteIngestOptions {
   crawlDeadlineMs?: number;
   /** Cumulative download budget. Defaults to {@link WEBSITE_INGEST_MAX_TOTAL_BYTES}. */
   maxTotalBytes?: number;
+  /**
+   * Live progress callback (see {@link WebsiteIngestProgressEvent}). Called
+   * synchronously from the crawl loop — keep it cheap (the ingest route just
+   * enqueues an NDJSON line).
+   */
+  onProgress?: (event: WebsiteIngestProgressEvent) => void;
   /**
    * When true, skip the robots.txt fetch and the per-page
    * `isPathAllowed` check. Intended ONLY for owner-consented contexts
@@ -1017,6 +1037,8 @@ export async function ingestWebsite(
 
   const crawlDeadlineAt = Date.now() + (options.crawlDeadlineMs ?? WEBSITE_INGEST_CRAWL_DEADLINE_MS);
   const maxTotalBytes = options.maxTotalBytes ?? WEBSITE_INGEST_MAX_TOTAL_BYTES;
+  const onProgress = options.onProgress;
+  let fetchedCount = 0;
   const queue: string[] = [];
   // The crawl budget counts fetch ATTEMPTS (every URL dequeued), not just
   // pages that yielded text. Budgeting on `pages.length` would let a site of
@@ -1055,6 +1077,8 @@ export async function ingestWebsite(
         lookup
       );
       bytesDownloaded += bytes;
+      fetchedCount += 1;
+      onProgress?.({ type: "page_fetched", url: next, bytes, index: fetchedCount });
       const text = extractReadableText(body);
       // Extract links even when `text` is empty — JS-heavy pages often
       // render their copy through linked subpages, and keying off text
@@ -1075,6 +1099,7 @@ export async function ingestWebsite(
       /* v8 ignore next */
       const errorMessage = err instanceof Error ? err.message : String(err);
       logger.warn("website-ingest: fetch failed", { url: next, error: errorMessage });
+      onProgress?.({ type: "page_failed", url: next });
       // Only capture the homepage failure as the user-visible `detail`. A
       // failed sub-page is uninteresting noise — the homepage outcome is
       // what determines whether the crawl as a whole had any chance of
@@ -1086,9 +1111,7 @@ export async function ingestWebsite(
   };
 
   // The homepage is fetched alone (not in a wave): its result decides the
-  // user-visible failure detail, and its links seed the queue before any
-  // sitemap URLs so shallow crawls keep their original "homepage + linked
-  // pages" semantics.
+  // user-visible failure detail.
   visited.add(normalized);
   attempted += 1;
   const homepage = await crawlPage(normalized);
@@ -1105,6 +1128,7 @@ export async function ingestWebsite(
         url: normalized,
         discovered: sitemapUrls.length
       });
+      onProgress?.({ type: "sitemap_found", count: sitemapUrls.length });
     }
     for (const url of sitemapUrls) enqueue(url);
   }
@@ -1171,6 +1195,8 @@ export async function ingestWebsite(
         });
       } else if (cleaned.length > 0) {
         bytesDownloaded += bytes;
+        fetchedCount += 1;
+        onProgress?.({ type: "page_fetched", url: normalized, bytes, index: fetchedCount });
         // Jina already returns extracted markdown — do NOT re-run
         // extractReadableText (it's an HTML stripper and would mangle
         // markdown links / headings). Feed it straight to the summarizer.
@@ -1227,6 +1253,7 @@ export async function ingestWebsite(
     .join("\n\n")
     .slice(0, WEBSITE_INGEST_MAX_COMBINED_CHARS);
 
+  onProgress?.({ type: "summarizing", pages: pages.length });
   const summarized = await summarizeCorpusToWebsiteMd({
     url: normalized,
     corpus: combined,
@@ -1242,7 +1269,8 @@ export async function ingestWebsite(
     websiteMd: summarized.websiteMd,
     pagesCrawled: pages.length,
     bytesDownloaded,
-    finalUrl: pages[0].url
+    finalUrl: pages[0].url,
+    pages: pages.map((p) => ({ url: p.url, chars: p.text.length }))
   };
 }
 
@@ -1352,6 +1380,7 @@ export async function ingestWebsiteFromHtml(
     websiteMd: summarized.websiteMd,
     pagesCrawled: 1,
     bytesDownloaded: Buffer.byteLength(clipped, "utf8"),
-    finalUrl: normalized
+    finalUrl: normalized,
+    pages: [{ url: normalized, chars: text.length }]
   };
 }

@@ -2,6 +2,17 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+/**
+ * Snapshot of the most recent website crawl, persisted so the dashboard can
+ * show "Crawled N pages on <date>" (with the page list) after a reload —
+ * not just in the live re-crawl stream.
+ */
+export type WebsiteCrawlReport = {
+  crawledAt: string;
+  source: "crawl" | "pasted_html";
+  pages: Array<{ url: string; chars: number }>;
+};
+
 export type ConfigRow = {
   business_id: string;
   soul_md: string;
@@ -15,6 +26,12 @@ export type ConfigRow = {
    * 20260822000000_business_profile migration ran won't have it.
    */
   profile_md?: string;
+  /**
+   * Last-crawl snapshot (jsonb). Optional on the type: rows read before the
+   * website_crawl_report migration ran won't have it; NULL until the first
+   * successful ingest after this shipped.
+   */
+  website_crawl_report?: WebsiteCrawlReport | null;
   rowboat_project_id?: string | null;
   updated_at: string;
 };
@@ -56,6 +73,7 @@ export async function patchBusinessConfig(
     memory_md?: string;
     website_md?: string;
     profile_md?: string;
+    website_crawl_report?: WebsiteCrawlReport;
   },
   client?: SupabaseClient
 ): Promise<void> {
@@ -76,12 +94,17 @@ export async function patchBusinessConfig(
     );
   if (insertError) throw new Error(`patchBusinessConfig(ensure): ${insertError.message}`);
 
-  const updatePayload: Record<string, string> = { updated_at: new Date().toISOString() };
+  const updatePayload: Record<string, string | WebsiteCrawlReport> = {
+    updated_at: new Date().toISOString()
+  };
   if (patch.soul_md !== undefined) updatePayload.soul_md = patch.soul_md;
   if (patch.identity_md !== undefined) updatePayload.identity_md = patch.identity_md;
   if (patch.memory_md !== undefined) updatePayload.memory_md = patch.memory_md;
   if (patch.website_md !== undefined) updatePayload.website_md = patch.website_md;
   if (patch.profile_md !== undefined) updatePayload.profile_md = patch.profile_md;
+  if (patch.website_crawl_report !== undefined) {
+    updatePayload.website_crawl_report = patch.website_crawl_report;
+  }
 
   const { error: updateError } = await db
     .from("business_configs")
@@ -103,6 +126,19 @@ export async function setBusinessWebsiteMd(
   client?: SupabaseClient
 ): Promise<void> {
   await patchBusinessConfig(businessId, { website_md: websiteMd }, client);
+}
+
+/**
+ * Persist the last-crawl snapshot alongside `website_md`. Same race-safe
+ * patch pattern; a distinct verb so the ingest route can tolerate a report
+ * write failure independently of the (load-bearing) summary write.
+ */
+export async function setBusinessWebsiteCrawlReport(
+  businessId: string,
+  report: WebsiteCrawlReport,
+  client?: SupabaseClient
+): Promise<void> {
+  await patchBusinessConfig(businessId, { website_crawl_report: report }, client);
 }
 
 export async function getBusinessConfig(
