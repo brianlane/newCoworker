@@ -61,6 +61,7 @@ import {
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import {
+  CALL_NOT_PLACED_SENTINEL,
   MAX_WAIT_MINUTES,
   SHARE_URL_TOKEN,
   planStep,
@@ -325,6 +326,9 @@ serve(async (req: Request): Promise<Response> => {
   // Re-queue wait_for_reply runs whose timeout lapsed with the no-reply
   // sentinel ("" in the step's saveAs var) so the flow's no-reply branch runs.
   await supabase.rpc("resume_overdue_reply_waits");
+  // Re-queue place_ai_call runs whose call-end webhook never arrived before
+  // the wait ceiling, with the no_answer sentinel (lost-webhook backstop).
+  await supabase.rpc("resume_overdue_call_waits");
 
   // Non-SMS trigger sources, all failure-isolated so a bad schedule or a
   // mailbox/calendar outage never stalls run processing below. The email and
@@ -838,6 +842,67 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       return;
     }
+    if (outcome.kind === "pause_call") {
+      const respondByIso = new Date(Date.now() + outcome.respondByMs).toISOString();
+      await recordStep(supabase, run, index, step, "pending", {
+        calling: outcome.e164,
+        call_control_id: outcome.callControlId || null,
+        save_as: outcome.saveAs,
+        respond_by: respondByIso
+      });
+      // Persist the parked state; the voice path (bridge transfer tool /
+      // telnyx-voice-call-end hangup handler) resumes the run with the call
+      // outcome in context.vars[saveAs] via the session's flow_run link. The
+      // timeout sweep (resume_overdue_call_waits) re-queues with the
+      // no_answer sentinel at respond_by_at. Attempt giveback like defer —
+      // waiting on a live call is not a failure.
+      const parked = await updateRun(supabase, run.id, {
+        status: "awaiting_call",
+        current_step: index,
+        context: {
+          ...buildContext(scope, approval, routing),
+          waiting_call: {
+            to: outcome.e164,
+            call_control_id: outcome.callControlId || null,
+            save_as: outcome.saveAs,
+            marker: outcome.marker,
+            step_index: index
+          }
+        },
+        respond_by_at: respondByIso,
+        claimed_at: null,
+        attempt_count: Math.max(0, run.attempt_count - 1)
+      });
+      if (!parked) {
+        // Owner stopped the run while the call was being placed; the call
+        // itself proceeds (hanging up a live callee mid-greeting would be
+        // worse), but nothing resumes — the outcome write no-ops on a
+        // canceled run.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
+      await telemetryRecord(supabase, "ai_flow_run_awaiting_call", {
+        run_id: run.id,
+        business_id: run.business_id,
+        step_index: index
+      });
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "info",
+        event: "ai_flow_run_awaiting_call",
+        message: `Run parked: AI call to ${outcome.e164} in progress (outcome by ${respondByIso})`,
+        payload: {
+          run_id: run.id,
+          flow_id: run.flow_id,
+          step_index: index,
+          to: outcome.e164,
+          call_control_id: outcome.callControlId || null,
+          respond_by: respondByIso
+        }
+      });
+      return;
+    }
     if (outcome.kind === "defer") {
       const resumeIso = new Date(outcome.resumeAtMs).toISOString();
       await recordStep(supabase, run, index, step, "pending", {
@@ -963,7 +1028,10 @@ const COMM_STEP_TYPES = new Set<string>([
   "send_email",
   "notify_owner",
   "route_to_team",
-  "share_document"
+  "share_document",
+  // An outbound AI phone call is the most intrusive contact of all — it must
+  // never place outside the flow's business-hours window.
+  "place_ai_call"
 ]);
 
 type StepOutcome =
@@ -999,7 +1067,20 @@ type StepOutcome =
   // (resume_overdue_reply_waits writes the no_reply sentinel and re-queues).
   // Both paths also stamp vars[marker] so the step completes on re-entry —
   // per step, so a later wait sharing the same saveAs still parks.
-  | { kind: "pause_reply"; e164: string; respondByMs: number; saveAs: string; marker: string };
+  | { kind: "pause_reply"; e164: string; respondByMs: number; saveAs: string; marker: string }
+  // place_ai_call: the call was dialed — park until the voice path resumes the
+  // run with the outcome (bridge transfer tool / call-end hangup handler) or
+  // respond_by_at lapses (resume_overdue_call_waits writes the no_answer
+  // sentinel). Same marker semantics as pause_reply.
+  | {
+      kind: "pause_call";
+      e164: string;
+      respondByMs: number;
+      saveAs: string;
+      marker: string;
+      /** The dialed leg, when known ("" when re-parking after a crash). */
+      callControlId: string;
+    };
 
 /** Execute one step's side effect. Throws on transient IO errors (→ retry). */
 async function runStep(
@@ -1161,6 +1242,8 @@ async function runStep(
         saveAs: action.saveAs,
         marker: action.marker
       };
+    case "place_ai_call":
+      return placeAiCallStep(supabase, run, index, scope, action);
   }
 }
 
@@ -4558,6 +4641,205 @@ async function httpCallStep(
   return { kind: "ok", result: { status: res.status } };
 }
 
+/**
+ * Wait ceiling for a parked place_ai_call run: long enough for the longest
+ * non-transferred AI call (session caps end those in minutes), short enough
+ * that a lost hangup webhook only stalls the run briefly. A TRANSFERRED call
+ * can outlive this (a human conversation has no cap) — that's fine, because
+ * the bridge resumes the run with "transferred" the moment the transfer
+ * starts, long before the ceiling.
+ */
+const PLACE_CALL_WAIT_CEILING_MINUTES = 45;
+/** How long a budget-blocked place_ai_call defers before re-probing. */
+const PLACE_CALL_BUDGET_RETRY_MINUTES = 240;
+
+/**
+ * Place an outbound AI call for a batch flow (the `place_ai_call` step) and
+ * park the run until the call's outcome lands.
+ *
+ * Exactly-once dialing: the run state machine alone can't prevent a re-dial
+ * when the worker crashes between the dial and the park write, so the same
+ * voice_outbound_dial_log ledger the schedule sweep uses locks the (run,
+ * step) occurrence FIRST — a 23505 means an earlier attempt already dialed,
+ * so we re-park and let the webhook/timeout resolve the outcome instead of
+ * ringing the callee again.
+ *
+ * Refusal semantics:
+ *   - pre-dial budget block → release the ledger lock and DEFER the run
+ *     (re-probe later; a temporary budget block must not burn the attempt);
+ *   - other pre-dial refusals (config/validation) → not_placed outcome,
+ *     continue (the flow's outcome gating decides what happens next);
+ *   - post-dial failures → "failed" outcome, continue (the leg was hung up
+ *     before the AI attached; no resume will arrive, and the callee was
+ *     already rung so this occurrence never re-dials);
+ *   - ambiguous no-response from originate → park (a dial and the session
+ *     write may have landed; the webhook resumes, the sweep backstops).
+ */
+async function placeAiCallStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "place_ai_call" }>
+): Promise<StepOutcome> {
+  // Lead-data gap (no usable callee phone): resolve to the not_placed
+  // sentinel and continue — mirrors send_sms's skip semantics.
+  if (action.skipReason) {
+    scope.vars[action.saveAs] = CALL_NOT_PLACED_SENTINEL;
+    scope.vars[action.marker] = "1";
+    appendActionTaken(scope, `AI call skipped (${action.skipReason})`);
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const bearer = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!supabaseUrl || !bearer) {
+    return { kind: "fail", error: "place_ai_call: voice origination is not configured" };
+  }
+
+  // Resolve dynamic refs to live numbers (resolve-before-dial). Failures are
+  // config errors — fail loudly rather than calling with a wrong target.
+  let notifyE164 = action.notifyE164 ?? "";
+  if (action.notifyRef) {
+    const resolved = await resolveContactRef(supabase, run.business_id, action.notifyRef);
+    if (!resolved) {
+      return {
+        kind: "fail",
+        error: `place_ai_call: notify ${action.notifyRef.source} reference could not be resolved (removed or no phone)`
+      };
+    }
+    notifyE164 = resolved.phone;
+  }
+  if (!notifyE164) {
+    return { kind: "fail", error: "place_ai_call: no notify number configured" };
+  }
+  let transfer: { toE164: string; preSmsBody?: string; agentName?: string } | undefined;
+  if (action.transferToE164 || action.transferToRef) {
+    let transferTo = action.transferToE164 ?? "";
+    let agentName = action.transferToRef?.label ?? "";
+    if (action.transferToRef) {
+      const resolved = await resolveContactRef(supabase, run.business_id, action.transferToRef);
+      if (!resolved) {
+        return {
+          kind: "fail",
+          error: `place_ai_call: transfer ${action.transferToRef.source} reference could not be resolved (removed or no phone)`
+        };
+      }
+      transferTo = resolved.phone;
+      agentName = resolved.name || agentName;
+    }
+    transfer = {
+      toE164: transferTo,
+      ...(action.preSmsBody ? { preSmsBody: action.preSmsBody } : {}),
+      ...(agentName ? { agentName } : {})
+    };
+  }
+
+  const pause = (callControlId: string): StepOutcome => ({
+    kind: "pause_call",
+    e164: action.to,
+    respondByMs: PLACE_CALL_WAIT_CEILING_MINUTES * 60_000,
+    saveAs: action.saveAs,
+    marker: action.marker,
+    callControlId
+  });
+
+  const dedupeKey = `pac:${run.id}:${index}`;
+  const { error: insErr } = await supabase.from("voice_outbound_dial_log").insert({
+    flow_id: run.flow_id,
+    business_id: run.business_id,
+    dedupe_key: dedupeKey,
+    status: "placed"
+  });
+  if (insErr) {
+    if ((insErr as { code?: string }).code === "23505") {
+      // A previous attempt already dialed this step (crash between dial and
+      // park). Never ring the callee again — park and let the webhook (or
+      // the timeout sweep's no_answer sentinel) resolve it.
+      return pause("");
+    }
+    throw new Error(`place_ai_call dial ledger insert: ${insErr.message}`);
+  }
+
+  const result = await placeOutboundCall(supabaseUrl, bearer, {
+    businessId: run.business_id,
+    flowId: run.flow_id,
+    call: {
+      toE164: action.to,
+      ...(action.persona ? { persona: action.persona } : {}),
+      ...(action.captureFields ? { captureFields: action.captureFields } : {}),
+      notifyE164,
+      ...(transfer ? { transfer } : {}),
+      flowRun: { runId: run.id, saveAs: action.saveAs, marker: action.marker, stepIndex: index }
+    }
+  });
+
+  if (result.ok) {
+    // Stamp the placed leg on the ledger row (audit trail), then park.
+    const { error: updErr } = await supabase
+      .from("voice_outbound_dial_log")
+      .update({ call_control_id: result.callControlId ?? null })
+      .eq("flow_id", run.flow_id)
+      .eq("dedupe_key", dedupeKey);
+    if (updErr) console.error("place_ai_call ledger update", updErr);
+    appendActionTaken(scope, `placed an AI call to ${action.to}`);
+    return pause(result.callControlId ?? "");
+  }
+
+  // Ambiguous no-response: the dial (and even the session write) may have
+  // landed. Keep the ledger lock and park — the webhook resumes a placed
+  // call, and the timeout sweep backstops a phantom one with no_answer.
+  if (result.errorCode === "originate_unreachable") {
+    return pause("");
+  }
+
+  if (result.retryable) {
+    // Refused BEFORE any dial — release the ledger lock so a later attempt
+    // (deferral retry, or a future flow occurrence) may dial.
+    const { error: delErr } = await supabase
+      .from("voice_outbound_dial_log")
+      .delete()
+      .eq("flow_id", run.flow_id)
+      .eq("dedupe_key", dedupeKey);
+    if (delErr) console.error("place_ai_call ledger release", delErr);
+    if (result.errorCode === "budget") {
+      // Over the voice budget: defer the whole run and re-probe later — a
+      // temporary budget block must not burn this follow-up attempt.
+      return {
+        kind: "defer",
+        resumeAtMs: Date.now() + PLACE_CALL_BUDGET_RETRY_MINUTES * 60_000,
+        reason: `voice budget (${result.reason ?? "blocked"})`
+      };
+    }
+    // Config/validation refusal (no Telnyx connection, invalid callee, ...):
+    // record the not_placed outcome and continue so notify/branch steps
+    // still run and the owner can see why in the run history.
+    scope.vars[action.saveAs] = CALL_NOT_PLACED_SENTINEL;
+    scope.vars[action.marker] = "1";
+    appendActionTaken(scope, `AI call not placed (${result.reason ?? "refused"})`);
+    return {
+      kind: "ok",
+      result: { outcome: CALL_NOT_PLACED_SENTINEL, reason: result.reason ?? null }
+    };
+  }
+
+  // Failed AFTER the dial (post-dial budget refusal, session persist failure,
+  // lost call id): originate hung the leg up before the AI attached and no
+  // session run-link was written, so no resume will ever arrive. Record the
+  // failed outcome and continue; the ledger row stays terminal (the callee
+  // was rung — this occurrence never re-dials).
+  const { error: failUpdErr } = await supabase
+    .from("voice_outbound_dial_log")
+    .update({ status: "failed", reason: result.reason ?? null })
+    .eq("flow_id", run.flow_id)
+    .eq("dedupe_key", dedupeKey);
+  if (failUpdErr) console.error("place_ai_call ledger fail-update", failUpdErr);
+  scope.vars[action.saveAs] = "failed";
+  scope.vars[action.marker] = "1";
+  appendActionTaken(scope, `AI call failed (${result.reason ?? "error"})`);
+  return { kind: "ok", result: { outcome: "failed", reason: result.reason ?? null } };
+}
+
 function approvalStep(
   approval: Record<string, unknown>,
   scope: Scope,
@@ -6113,7 +6395,19 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
 async function placeOutboundCall(
   supabaseUrl: string,
   bearer: string,
-  body: { businessId: string; flowId: string }
+  body: {
+    businessId: string;
+    flowId: string;
+    /** place_ai_call: fully-resolved per-call payload (see parsePlaceCallPayload). */
+    call?: {
+      toE164: string;
+      persona?: string;
+      captureFields?: string[];
+      notifyE164: string;
+      transfer?: { toE164: string; preSmsBody?: string; agentName?: string };
+      flowRun?: { runId: string; saveAs: string; marker: string; stepIndex: number };
+    };
+  }
 ): Promise<{
   ok: boolean;
   callControlId?: string;
@@ -6126,6 +6420,8 @@ async function placeOutboundCall(
   // or a no-response timeout is NOT retryable, or the same occurrence would
   // dial the callee again.
   retryable: boolean;
+  /** originate's machine error code (e.g. "budget"), for caller branching. */
+  errorCode?: string;
 }> {
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), OUTBOUND_ORIGINATE_TIMEOUT_MS);
@@ -6147,12 +6443,13 @@ async function placeOutboundCall(
     return {
       ok: false,
       reason: out?.reason ?? out?.error ?? `http_${res.status}`,
+      errorCode: out?.error,
       retryable: out?.dialed === false
     };
   } catch (e) {
     // No response: a dial MAY have gone through — never retry (could double-dial).
     console.error("placeOutboundCall", e);
-    return { ok: false, reason: "originate_unreachable", retryable: false };
+    return { ok: false, reason: "originate_unreachable", errorCode: "originate_unreachable", retryable: false };
   } finally {
     clearTimeout(timer);
   }

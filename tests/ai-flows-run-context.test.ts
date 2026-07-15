@@ -79,6 +79,7 @@ describe("formatFlowRunContext", () => {
       ["queued", "in progress"],
       ["running", "in progress"],
       ["awaiting_reply", "waiting for this contact's reply"],
+      ["awaiting_call", "on an AI phone call with this contact"],
       ["awaiting_approval", "waiting on an owner approval"],
       ["awaiting_agent", "waiting on a teammate to claim"],
       ["done", "finished"],

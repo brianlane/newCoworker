@@ -24,6 +24,35 @@ describe("intakeSystemInstruction", () => {
     expect(instr).toContain("Acme's office");
     expect(instr).toContain(DEFAULT_INTAKE_CAPTURE_FIELDS.join(", "));
   });
+
+  it("transfer mode pivots to the good-time script and names the agent", () => {
+    const persona = "Hi, I'm calling with Amy Laidlaw's office. How are you?";
+    const instr = intakeSystemInstruction(
+      "Amy Laidlaw",
+      persona,
+      "America/Phoenix",
+      [],
+      true,
+      { agentName: "Dave" }
+    );
+    expect(instr).toContain(persona);
+    expect(instr).toContain("follow-up call");
+    expect(instr).toContain("whether now is a good time to talk");
+    expect(instr).toContain("one moment while I get Dave on the line");
+    expect(instr).toContain("`transfer_to_owner`");
+    // The capture checklist must not fight the call script...
+    expect(instr).not.toContain("Collect these details");
+    // ...but capture_lead stays available for notes / a better time.
+    expect(instr).toContain("capture_lead");
+    // Never hang up on a successfully transferred call.
+    expect(instr).toContain("never after a successful transfer");
+  });
+
+  it("transfer mode without an agent name uses a generic handle", () => {
+    const instr = intakeSystemInstruction("Acme", undefined, null, [], false, {});
+    expect(instr).toContain("the team member handling this");
+    expect(instr).not.toContain("end_call");
+  });
 });
 
 describe("composeIntakeLeadSms", () => {

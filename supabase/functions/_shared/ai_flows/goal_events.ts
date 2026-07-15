@@ -4,7 +4,9 @@
  * A `goal` step is a trunk-only checkpoint. When a watched milestone lands
  * for a lead — they text back, an appointment is booked, a tag is added, a
  * teammate claims them — every one of that lead's runs that is queued
- * (including sleep/quiet-hour deferrals) or parked awaiting their reply
+ * (including sleep/quiet-hour deferrals), parked awaiting their reply, or
+ * parked on an in-progress AI call (awaiting_call — the physical call is
+ * unaffected; its outcome resume no-ops on the moved-on run)
  * fast-forwards to its first matching goal step AHEAD of the current step:
  *
  *   1. the run's `current_step` jumps to the goal's flattened index (forward
@@ -33,8 +35,14 @@ import type { FlowStep, GoalEvent, GoalEventKind } from "./types.ts";
 /** Skip reason recorded on steps a goal jump short-circuited. */
 export const GOAL_JUMP_SKIP = "goal_jump";
 
-/** Run statuses a goal jump may touch (never the human-parked ones). */
-const JUMPABLE_STATUSES = ["queued", "awaiting_reply"] as const;
+/**
+ * Run statuses a goal jump may touch (never the human-parked ones).
+ * awaiting_call is jumpable: the physical AI call proceeds unaffected (its
+ * outcome resume is status-guarded and simply no-ops), while the run stops
+ * nurturing a lead who just converted — e.g. an appointment booked DURING
+ * the call window must not be lost to a one-shot event.
+ */
+const JUMPABLE_STATUSES = ["queued", "awaiting_reply", "awaiting_call"] as const;
 
 /** Most runs one event will jump per lead (same bound as the wait resumes). */
 const MAX_RUNS_PER_EVENT = 25;
@@ -123,7 +131,7 @@ export async function applyGoalEvent(
       .eq("business_id", businessId)
       .in("status", [...JUMPABLE_STATUSES])
       .or(
-        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
+        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164},context->waiting_call->>to.eq.${leadE164}`
       )
       .limit(MAX_RUNS_PER_EVENT);
     if (error) {
@@ -203,15 +211,24 @@ async function jumpRunToGoal(
     run.context?.vars && typeof run.context.vars === "object"
       ? (run.context.vars as Record<string, unknown>)
       : {};
-  // A run parked on a wait_for_reply carries the wait's resolution marker;
-  // stamp it (like the reply/timeout/customer-called resumes do) so the wait
-  // step can never re-park if anything ever re-enters it.
+  // A run parked on a wait_for_reply / place_ai_call carries the wait's
+  // resolution marker; stamp it (like the reply/timeout/outcome resumes do)
+  // so the parked step can never re-park — or re-DIAL — if anything ever
+  // re-enters it.
   const waiting =
     (run.context?.waiting_reply as { marker?: unknown } | undefined) ?? {};
-  const markerVars =
-    typeof waiting.marker === "string" && waiting.marker.trim()
+  const waitingCall =
+    (run.context?.waiting_call as { marker?: unknown } | undefined) ?? {};
+  const markerVars = {
+    ...(typeof waiting.marker === "string" && waiting.marker.trim()
       ? { [waiting.marker]: "1" }
-      : {};
+      : {}),
+    ...(run.status === "awaiting_call" &&
+    typeof waitingCall.marker === "string" &&
+    waitingCall.marker.trim()
+      ? { [waitingCall.marker]: "1" }
+      : {})
+  };
   const nextContext = {
     ...(run.context ?? {}),
     vars: { ...prevVars, [goalReachedVar(goalStep.id)]: event.kind, ...markerVars },
@@ -219,6 +236,14 @@ async function jumpRunToGoal(
       ? {
           waiting_reply: {
             ...(run.context?.waiting_reply as Record<string, unknown>),
+            result: GOAL_JUMP_SKIP
+          }
+        }
+      : {}),
+    ...(run.status === "awaiting_call"
+      ? {
+          waiting_call: {
+            ...(run.context?.waiting_call as Record<string, unknown>),
             result: GOAL_JUMP_SKIP
           }
         }

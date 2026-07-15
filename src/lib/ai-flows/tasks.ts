@@ -20,7 +20,8 @@ export const ACTIVE_RUN_STATUSES = [
   "running",
   "awaiting_approval",
   "awaiting_agent",
-  "awaiting_reply"
+  "awaiting_reply",
+  "awaiting_call"
 ] as const;
 
 const E164_RE = /^\+[1-9]\d{6,15}$/;

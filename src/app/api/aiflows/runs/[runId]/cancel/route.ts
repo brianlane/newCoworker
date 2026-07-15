@@ -1,8 +1,9 @@
 /**
  * Stop a non-terminal AiFlow run. Owner-only.
  * Cancelable states: queued / running / awaiting_approval / awaiting_agent /
- * awaiting_reply → `canceled` (nothing further sends; no resume path picks a
- * canceled run back up). A `running` run cancels cooperatively — the worker
+ * awaiting_reply / awaiting_call → `canceled` (nothing further sends; no
+ * resume path picks a canceled run back up). A `running` run cancels
+ * cooperatively — the worker
  * quits at the next step boundary, so the step in flight completes. Terminal
  * runs return CONFLICT.
  */

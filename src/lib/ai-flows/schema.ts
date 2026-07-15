@@ -36,6 +36,12 @@ export const FLOW_STEP_TYPES = [
   "http_call",
   "sleep",
   "wait_for_reply",
+  // Batch-flow outbound AI call: dial a var-held number, run a scripted AI
+  // persona, optionally live-transfer, and park until the call's outcome
+  // lands. Runs on the async worker (NOT a voice-channel step) — the call
+  // itself is placed through the same origination edge function as
+  // outbound_call, with identical budget metering.
+  "place_ai_call",
   "branch",
   "goal",
   "math",
@@ -812,6 +818,43 @@ const nonBranchStepMembers = [
     timeoutMinutes: z.number().int().min(1).max(43200).optional(),
     when: whenSchema.optional()
   }),
+  // Batch-flow outbound AI call: dial the phone in `toVar`, run the rendered
+  // `personaTemplate` script on answer, then PARK the run (status
+  // awaiting_call, same machinery as wait_for_reply) until the call ends. The
+  // outcome lands in {{vars.<saveAs>}} (default "call_outcome"): transferred /
+  // answered / no_answer / not_placed / failed — so later steps gate the next
+  // follow-up attempt on it. With `transfer` configured, the AI texts the
+  // transfer target the rendered preSmsTemplate pre-alert and warm-transfers
+  // the live call to them once the callee confirms it's a good time. Budget is
+  // enforced exactly like every outbound AI call (pre-dial probe +
+  // authoritative post-dial reserve); a budget refusal defers and retries.
+  // Cross-field rules (exactly one notify source; transfer needs exactly one
+  // target) live in validateDefinitionSemantics.
+  z.object({
+    id: stepId,
+    type: z.literal("place_ai_call"),
+    /** Var holding the callee's phone (same scope rule as wait_for_reply.phoneVar). */
+    toVar: varName,
+    /** Greeting/script template the AI opens the call with. */
+    personaTemplate: z.string().min(1).max(2000),
+    // Post-call summary recipient: exactly one of notifyE164 / notifyRef.
+    notifyE164: e164.optional(),
+    notifyRef: contactRefSchema.optional(),
+    transfer: z
+      .object({
+        // Exactly one of toE164 / toRef (validateDefinitionSemantics).
+        toE164: e164.optional(),
+        toRef: contactRefSchema.optional(),
+        /** Pre-alert SMS texted to the transfer target as the transfer starts. */
+        preSmsTemplate: z.string().min(1).max(1600).optional()
+      })
+      .optional(),
+    /** Optional lead fields the AI captures during the call. */
+    captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
+    /** Outcome var name. Default "call_outcome". */
+    saveAs: varName.optional(),
+    when: whenSchema.optional()
+  }),
   // GHL-style Goal Event checkpoint: when a watched external milestone lands
   // for the run's lead (replied / appointment booked / tag added / claimed),
   // the run fast-forwards to this step and everything in between is skipped
@@ -1254,6 +1297,9 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "run_agent":
       return [step.input];
+    // The call script and the transfer pre-alert both render against run vars.
+    case "place_ai_call":
+      return [step.personaTemplate, step.transfer?.preSmsTemplate ?? ""];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1714,6 +1760,39 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       );
     }
 
+    // place_ai_call: the callee var must exist (same scope rule as
+    // wait_for_reply.phoneVar); the post-call summary needs exactly one
+    // recipient source; a transfer needs exactly one target source.
+    if (step.type === "place_ai_call") {
+      if (!vars.has(step.toVar) && !ENGINE_VARS.has(step.toVar)) {
+        issues.push(
+          `Step "${step.id}" calls {{vars.${step.toVar}}} which no earlier step produces.`
+        );
+      }
+      const notifySources = [Boolean(step.notifyE164), Boolean(step.notifyRef)].filter(
+        Boolean
+      ).length;
+      if (notifySources !== 1) {
+        issues.push(
+          notifySources === 0
+            ? `Step "${step.id}" has nowhere to send the call summary; set notifyE164 or pick a saved contact (notifyRef).`
+            : `Step "${step.id}" sets both notifyE164 and notifyRef; use only one.`
+        );
+      }
+      if (step.transfer) {
+        const targets = [Boolean(step.transfer.toE164), Boolean(step.transfer.toRef)].filter(
+          Boolean
+        ).length;
+        if (targets !== 1) {
+          issues.push(
+            targets === 0
+              ? `Step "${step.id}" configures a live transfer with no target; set transfer.toE164 or pick a saved contact (transfer.toRef).`
+              : `Step "${step.id}" sets both transfer.toE164 and transfer.toRef; use only one.`
+          );
+        }
+      }
+    }
+
     // classify: the text var (when set) must exist, category values must be
     // unique, and "unclear" is reserved for the nothing-fits fallback.
     if (step.type === "classify") {
@@ -1936,6 +2015,10 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "wait_for_reply") {
       // The reply text ("" on timeout) becomes a var for later `when` branches.
       vars.add(step.saveAs ?? "reply_text");
+    } else if (step.type === "place_ai_call") {
+      // The call outcome (transferred/answered/no_answer/not_placed/failed)
+      // becomes a var for later `when` branches.
+      vars.add(step.saveAs ?? "call_outcome");
     } else if (step.type === "classify") {
       vars.add(step.saveAs);
     } else if (step.type === "generate_image") {

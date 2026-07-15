@@ -694,6 +694,167 @@ async function sendIntakeLeadSms(params: {
   }
 }
 
+/**
+ * Text the flow-configured transfer target the pre-alert ("LIVE TRANSFER
+ * incoming — pick up!") right before the warm transfer rings them. Same
+ * bridge-side send path as the intake summary SMS (teammate alert; quota
+ * tracking lives on the Edge/web side). Best-effort — an SMS hiccup must
+ * never block the actual transfer.
+ */
+async function sendTransferPreAlertSms(params: {
+  settings: TenantTelnyxSettings;
+  toE164: string;
+  body: string;
+  callControlId: string;
+}): Promise<void> {
+  const { settings, toE164, body, callControlId } = params;
+  const apiKey = process.env.TELNYX_API_KEY ?? "";
+  if (!apiKey || !settings.smsFromE164) {
+    console.warn("voice-bridge: transfer pre-alert skipped (missing api key / from number)");
+    return;
+  }
+  try {
+    const res = await telnyxSendPlainSms(apiKey, {
+      toE164,
+      fromE164: settings.smsFromE164,
+      messagingProfileId: settings.messagingProfileId ?? undefined,
+      text: body
+    });
+    if (!res.ok) {
+      console.error("voice-bridge: transfer pre-alert SMS failed", res.status, res.body);
+    } else {
+      console.log("voice-bridge: transfer pre-alert SMS sent", { callControlId, to: toE164 });
+    }
+  } catch (err) {
+    console.error("voice-bridge: transfer pre-alert SMS threw", err);
+  }
+}
+
+/**
+ * The outbound session context's parked-run link (see
+ * supabase/functions/_shared/voice_outbound.ts OutboundSessionContext.flow_run).
+ */
+type FlowRunLink = {
+  run_id?: unknown;
+  save_as?: unknown;
+  marker?: unknown;
+  step_index?: unknown;
+};
+
+/**
+ * Stamp `transfer_initiated: true` on the handoff session context so
+ * telnyx-voice-call-end derives the "transferred" outcome at hangup even if
+ * the direct run resume below never landed. Read-modify-write is fine here:
+ * the bridge is the only writer of this flag, once, on its own session.
+ */
+async function stampTransferInitiated(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<void> {
+  try {
+    const { data } = await supabase
+      .from("voice_handoff_sessions")
+      .select("context")
+      .eq("call_control_id", callControlId)
+      .maybeSingle();
+    const ctx =
+      (data as { context?: Record<string, unknown> } | null)?.context &&
+      typeof (data as { context?: unknown }).context === "object"
+        ? ((data as { context: Record<string, unknown> }).context)
+        : {};
+    await supabase
+      .from("voice_handoff_sessions")
+      .update({ context: { ...ctx, transfer_initiated: true } })
+      .eq("call_control_id", callControlId);
+  } catch (err) {
+    console.error("voice-bridge: transfer_initiated stamp failed", err);
+  }
+}
+
+/**
+ * Resume the batch-flow run a place_ai_call step parked (status
+ * `awaiting_call`) with the call outcome. Node mirror of
+ * supabase/functions/_shared/ai_flows/call_outcome.ts (the bridge is a
+ * separate runtime) — keep the two in lockstep. Status/revision-guarded so
+ * only the first writer lands; a miss is backstopped by call-end and the
+ * timeout sweep. Never throws.
+ */
+async function resumeFlowRunWithCallOutcome(
+  supabase: SupabaseClient,
+  link: FlowRunLink,
+  outcome: "transferred" | "answered" | "no_answer"
+): Promise<boolean> {
+  const runId = typeof link.run_id === "string" ? link.run_id : "";
+  if (!runId) return false;
+  const saveAs =
+    typeof link.save_as === "string" && link.save_as.trim() ? link.save_as : "call_outcome";
+  const marker =
+    typeof link.marker === "string" && link.marker.trim() ? link.marker : "__called_unknown";
+  try {
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("id, status, context, revision")
+      .eq("id", runId)
+      .maybeSingle();
+    if (error || !data) {
+      if (error) console.error("voice-bridge: call-outcome run lookup", error);
+      return false;
+    }
+    const run = data as {
+      id: string;
+      status: string;
+      context: Record<string, unknown> | null;
+      revision: number;
+    };
+    if (run.status !== "awaiting_call") return false;
+    const waiting = (run.context?.waiting_call ?? {}) as { step_index?: unknown };
+    if (
+      typeof link.step_index === "number" &&
+      typeof waiting.step_index === "number" &&
+      waiting.step_index !== link.step_index
+    ) {
+      return false;
+    }
+    const prevVars =
+      run.context?.vars && typeof run.context.vars === "object"
+        ? (run.context.vars as Record<string, unknown>)
+        : {};
+    const nextContext = {
+      ...(run.context ?? {}),
+      vars: { ...prevVars, [saveAs]: outcome, [marker]: "1" },
+      waiting_call: {
+        ...(run.context?.waiting_call as Record<string, unknown>),
+        result: outcome
+      }
+    };
+    const { data: updated, error: updErr } = await supabase
+      .from("ai_flow_runs")
+      .update({
+        status: "queued",
+        respond_by_at: null,
+        claimed_at: null,
+        context: nextContext,
+        updated_at: new Date().toISOString()
+      })
+      .eq("id", run.id)
+      .eq("revision", run.revision)
+      .eq("status", "awaiting_call")
+      .select("id");
+    if (updErr) {
+      console.error("voice-bridge: call-outcome run resume", updErr);
+      return false;
+    }
+    const resumed = ((updated ?? []) as unknown[]).length > 0;
+    if (resumed) {
+      console.log("voice-bridge: flow run resumed with call outcome", { runId, outcome });
+    }
+    return resumed;
+  } catch (err) {
+    console.error("voice-bridge: call-outcome resume threw", err);
+    return false;
+  }
+}
+
 function main(): void {
   if (!STREAM_SECRET || !SUPABASE_URL || !SUPABASE_SERVICE_KEY) {
     console.error("voice-bridge: set STREAM_URL_SIGNING_SECRET, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY");
@@ -942,6 +1103,12 @@ function main(): void {
       // number so we can text the owner a summary + transcript at call end.
       let intake: IntakeCapability | undefined;
       let intakeNotifyE164 = "";
+      // place_ai_call live-transfer config + parked-run link, read off the
+      // outbound session context written by telnyx-voice-originate.
+      let intakeTransferConfig:
+        | { toE164: string; preSmsBody: string; agentName: string }
+        | undefined;
+      let intakeFlowRun: FlowRunLink | undefined;
       // Outbound AiFlow legs are placed by telnyx-voice-originate, which writes
       // the handoff session context with `outbound: true`. Everything else is a
       // customer dialing the DID (inbound). Recorded on the transcript so the
@@ -986,6 +1153,12 @@ function main(): void {
               persona?: string;
               capture_fields?: unknown;
             } | null;
+            transfer?: {
+              to_e164?: string;
+              pre_sms_body?: string;
+              agent_name?: string;
+            } | null;
+            flow_run?: FlowRunLink | null;
           };
           if (ctx.outbound === true) callDirection = "outbound";
           const ai = ctx.ai_takeover ?? undefined;
@@ -996,9 +1169,29 @@ function main(): void {
               ? (ai!.capture_fields as unknown[]).filter((x): x is string => typeof x === "string")
               : undefined
           };
+          // place_ai_call live-transfer config: the flow explicitly authorized
+          // a mid-call warm transfer (pre-alert SMS + wt: transfer) — carried
+          // per session, never inferred from tenant settings.
+          if (typeof ctx.transfer?.to_e164 === "string" && ctx.transfer.to_e164.trim()) {
+            intakeTransferConfig = {
+              toE164: ctx.transfer.to_e164.trim(),
+              preSmsBody:
+                typeof ctx.transfer.pre_sms_body === "string"
+                  ? ctx.transfer.pre_sms_body.trim()
+                  : "",
+              agentName:
+                typeof ctx.transfer.agent_name === "string" ? ctx.transfer.agent_name.trim() : ""
+            };
+            intake.allowTransfer = true;
+            intake.transferAgentName = intakeTransferConfig.agentName || undefined;
+          }
+          if (ctx.flow_run && typeof ctx.flow_run.run_id === "string") {
+            intakeFlowRun = ctx.flow_run;
+          }
           console.log("voice-bridge: HomeLight intake mode", {
             callControlId,
-            notify: intakeNotifyE164 || null
+            notify: intakeNotifyE164 || null,
+            transfer: intakeTransferConfig?.toE164 ?? null
           });
         }
       }
@@ -1070,6 +1263,83 @@ function main(): void {
               return { ok: false, detail: `telnyx ${result.status}` };
             }
             console.log("voice-bridge: transfer detach (streaming_stop)", { callControlId });
+            return { ok: true, detail: "streaming stopped" };
+          }
+        };
+      }
+
+      // place_ai_call live transfer: the flow's per-session transfer config
+      // SUPERSEDES the tenant-settings forward target — the flow author picked
+      // exactly who this call may be transferred to. Sequence on invoke:
+      //   1. pre-alert SMS to the transfer target (Amy's "LIVE TRANSFER is
+      //      coming — pick up!"), best-effort so an SMS hiccup never blocks
+      //      the actual transfer;
+      //   2. Telnyx warm transfer with the same wt: client_state as the
+      //      receptionist transfer (so forwarded-human-leg metering and the
+      //      warm-transfer outcome notifications work unchanged);
+      //   3. stamp `transfer_initiated` on the session (call-end reads it for
+      //      the outcome) and resume the parked flow run with "transferred"
+      //      immediately — a transferred human conversation can outlive the
+      //      run's wait ceiling, so the outcome must not wait for hangup.
+      if (intake && intakeTransferConfig) {
+        const telnyxApiKey = process.env.TELNYX_API_KEY ?? "";
+        const flowTransfer = intakeTransferConfig;
+        const fromDid = toE164;
+        transfer = {
+          toE164: flowTransfer.toE164,
+          execute: async ({ reason }) => {
+            if (!telnyxApiKey) {
+              console.warn("voice-bridge: flow transfer requested but TELNYX_API_KEY missing");
+              return { ok: false, detail: "transfer not configured" };
+            }
+            if (flowTransfer.preSmsBody) {
+              await sendTransferPreAlertSms({
+                settings: tenantSettings,
+                toE164: flowTransfer.toE164,
+                body: flowTransfer.preSmsBody,
+                callControlId
+              });
+            }
+            const notifyCaller = trustedFromE164 || fromE164Info || "";
+            const result = await telnyxTransferCall(telnyxApiKey, callControlId, {
+              toE164: flowTransfer.toE164,
+              fromE164: fromDid,
+              clientState: `wt:${businessId}:${notifyCaller}:${flowTransfer.toE164}`
+            });
+            if (!result.ok) {
+              console.error(
+                "voice-bridge: flow transfer failed",
+                result.status,
+                result.body
+              );
+              return { ok: false, detail: `telnyx ${result.status}` };
+            }
+            console.log("voice-bridge: flow live transfer initiated", {
+              callControlId,
+              to: flowTransfer.toE164,
+              reason: reason ?? ""
+            });
+            // Outcome bookkeeping AFTER the transfer succeeded. Best-effort:
+            // call-end's hangup handler re-derives "transferred" from the
+            // session stamp, and the timeout sweep backstops both.
+            await stampTransferInitiated(supabase, callControlId);
+            if (intakeFlowRun) {
+              await resumeFlowRunWithCallOutcome(supabase, intakeFlowRun, "transferred");
+            }
+            return { ok: true, detail: "transfer initiated" };
+          },
+          detach: async () => {
+            if (!telnyxApiKey) return { ok: false, detail: "transfer not configured" };
+            const result = await telnyxStreamingStop(telnyxApiKey, callControlId);
+            if (!result.ok) {
+              console.error(
+                "voice-bridge: telnyx streaming_stop failed",
+                result.status,
+                result.body
+              );
+              return { ok: false, detail: `telnyx ${result.status}` };
+            }
+            console.log("voice-bridge: flow transfer detach (streaming_stop)", { callControlId });
             return { ok: true, detail: "streaming stopped" };
           }
         };

@@ -52,6 +52,7 @@ export type AiFlowRunStatus =
   | "awaiting_approval"
   | "awaiting_agent"
   | "awaiting_reply"
+  | "awaiting_call"
   | "done"
   | "failed"
   | "canceled";
@@ -538,7 +539,8 @@ export const CANCELABLE_RUN_STATUSES = [
   "running",
   "awaiting_approval",
   "awaiting_agent",
-  "awaiting_reply"
+  "awaiting_reply",
+  "awaiting_call"
 ] as const;
 
 /**

@@ -14,30 +14,52 @@ export type CapturedLead = Record<string, string>;
  * was just connected (we pressed 1) after both Dave and Amy missed the warm
  * transfer, so the assistant's whole job is a short, warm intake: confirm who
  * they are, what they're selling, and when — then promise a fast call back.
+ *
+ * With `transfer` set (a place_ai_call follow-up call that may live-transfer),
+ * the instruction pivots: the persona IS the call script, the goal is asking
+ * whether now is a good time, and a yes leads to the `transfer_to_owner` tool
+ * instead of the capture checklist (capture_lead stays available for notes).
  */
 export function intakeSystemInstruction(
   businessName: string,
   persona: string | undefined,
   businessTimezone: string | null | undefined,
   captureFields: string[],
-  hasEndCall = false
+  hasEndCall = false,
+  transfer?: { agentName?: string }
 ): string {
   const opener =
     (persona && persona.trim()) ||
     `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
   const fields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
-  const lines = [
-    `You are the phone assistant for ${businessName}, taking a live seller lead that was just connected to you.`,
-    `Open with this, warmly and naturally: "${opener}"`,
-    "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient — this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
-    `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
-    "As soon as you have any of these details, call the `capture_lead` tool with what you have (you can call it again as you learn more). Always call it before you say goodbye.",
-    "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud.",
-    `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
-  ];
+  const lines: string[] = [];
+  if (transfer) {
+    const agent = transfer.agentName?.trim() || "the team member handling this";
+    lines.push(
+      `You are the phone assistant for ${businessName}, making a follow-up call the office asked you to place. The person has just answered.`,
+      `Open with this, warmly and naturally: "${opener}"`,
+      "Keep replies concise, natural, and spoken (not bulleted). Be friendly and low-pressure — this is a real person who didn't expect a call, so let them respond before moving on.",
+      `Your goal: after your opening and their response, explain what you're following up about (as your opening line describes) and ask whether now is a good time to talk. If they say YES, tell them "one moment while I get ${agent} on the line", then call the \`transfer_to_owner\` tool to connect them.`,
+      `If it's NOT a good time, ask when would work better, note it via the \`capture_lead\` tool (fields: ${fields.join(", ")} — record whatever you learn), thank them, and wrap up politely. Never pressure them.`,
+      "If they ask to stop being contacted, apologize briefly, promise to pass that on, capture it in `capture_lead` notes, and end the call.",
+      "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud."
+    );
+  } else {
+    lines.push(
+      `You are the phone assistant for ${businessName}, taking a live seller lead that was just connected to you.`,
+      `Open with this, warmly and naturally: "${opener}"`,
+      "Keep replies concise, natural, and spoken (not bulleted). Be friendly and efficient — this is a real seller who expected a person, so reassure them they're in the right place and someone will follow up quickly.",
+      `Collect these details, one or two at a time, confirming as you go: ${fields.join(", ")}. Get their best callback number, the property address, and roughly when they're looking to sell.`,
+      "As soon as you have any of these details, call the `capture_lead` tool with what you have (you can call it again as you learn more). Always call it before you say goodbye.",
+      "Do NOT claim to be a person if asked directly, and do not say you're an AI unless asked — keep it light and steer back to helping. Never read a tool's raw response aloud.",
+      `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
+    );
+  }
   if (hasEndCall) {
     lines.push(
-      "After you've captured the lead and said your goodbye, call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over."
+      transfer
+        ? "After you've said your goodbye (when no transfer happened), call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over, and never after a successful transfer — the human conversation continues without you."
+        : "After you've captured the lead and said your goodbye, call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over."
     );
   }
   lines.push(currentDateTimeLine(new Date(), businessTimezone));

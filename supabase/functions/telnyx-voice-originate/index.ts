@@ -1,9 +1,13 @@
 /**
- * Telnyx Programmable Voice: OUTBOUND origination for an `outbound_call` AiFlow.
+ * Telnyx Programmable Voice: OUTBOUND origination for an `outbound_call` AiFlow
+ * (and, via a per-call payload, a batch flow's `place_ai_call` step).
  *
  * Invoked server-to-server (NOT by Telnyx) from the app's "Place call" action
- * (src/app/api/aiflows/[id]/place-call) AND from the ai-flow-worker schedule
- * sweep for scheduled outbound flows. It validates the outbound voice flow,
+ * (src/app/api/aiflows/[id]/place-call), from the ai-flow-worker schedule
+ * sweep for scheduled outbound flows, AND from the ai-flow-worker's
+ * place_ai_call step executor (which sends a fully-resolved `call` payload —
+ * callee, persona, notify, transfer config, parked-run link — instead of
+ * reading an outbound_call step). It validates the outbound voice flow,
  * runs a READ-ONLY pre-dial budget probe (so an over-budget tenant's callee is
  * never even rung), dials the callee, then RESERVES voice budget under the real
  * call_control_id BEFORE any media. If the reservation is refused (over budget /
@@ -47,6 +51,7 @@ import { systemLog } from "../_shared/system_log.ts";
 import {
   encodeOutboundClientState,
   outboundSessionContext,
+  parsePlaceCallPayload,
   resolveOutboundCallPlan
 } from "../_shared/voice_outbound.ts";
 import type { AiFlowDefinition } from "../_shared/ai_flows/types.ts";
@@ -99,7 +104,7 @@ serve(async (req: Request) => {
     return new Response("Body too large", { status: 413 });
   }
 
-  let body: { businessId?: unknown; flowId?: unknown; toE164?: unknown };
+  let body: { businessId?: unknown; flowId?: unknown; toE164?: unknown; call?: unknown };
   try {
     body = JSON.parse(rawBody);
   } catch {
@@ -117,8 +122,13 @@ serve(async (req: Request) => {
 
   const supabase = createClient(supabaseUrl, serviceKey);
 
-  // Load the flow and confirm it is an enabled OUTBOUND voice flow with a usable
-  // outbound_call step.
+  // Load the flow. Two caller shapes:
+  //   - outbound VOICE flow ("Place call" / schedule sweep): the plan is read
+  //     from the flow's single outbound_call step;
+  //   - batch flow place_ai_call step (ai-flow-worker): the plan arrives fully
+  //     resolved in `body.call` (callee, persona, notify, transfer, run link)
+  //     — the flow row is still checked (exists, this business, enabled) so a
+  //     disabled/deleted flow can never keep placing calls.
   const { data: flowRow, error: flowErr } = await supabase
     .from("ai_flows")
     .select("id, definition, enabled")
@@ -134,6 +144,11 @@ serve(async (req: Request) => {
   if (flow.enabled !== true) return json(409, { ok: false, error: "flow_disabled", dialed: false });
 
   const plan = await (async () => {
+    if (body.call !== undefined) {
+      // Per-call payload (place_ai_call). A malformed payload is a caller
+      // bug — refuse (dialed:false) rather than dialing a half-read config.
+      return parsePlaceCallPayload(body.call);
+    }
     try {
       // Resolve dynamic contact refs (toRef/notifyRef → live numbers) BEFORE
       // the pure plan reader runs (resolve-before-compile).
@@ -148,7 +163,13 @@ serve(async (req: Request) => {
       return null;
     }
   })();
-  if (!plan) return json(422, { ok: false, error: "not_an_outbound_flow", dialed: false });
+  if (!plan) {
+    return json(422, {
+      ok: false,
+      error: body.call !== undefined ? "bad_call_payload" : "not_an_outbound_flow",
+      dialed: false
+    });
+  }
 
   // Callee: per-call override wins, else the step default.
   const overrideTo = typeof body.toE164 === "string" ? body.toE164 : "";

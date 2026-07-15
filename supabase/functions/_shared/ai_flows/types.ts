@@ -430,6 +430,24 @@ export type GoalEvent = {
   tag?: string;
 };
 
+/**
+ * Live-transfer config on a `place_ai_call` step: when the callee confirms
+ * it's a good time to talk, the AI texts the transfer target the pre-alert
+ * (rendered `preSmsTemplate`) and warm-transfers the live call to them.
+ * Exactly one of toE164 / toRef (validated at author time).
+ */
+export type PlaceCallTransfer = {
+  toE164?: string;
+  /** Dynamic transfer target (usually an employee) resolved at run time. */
+  toRef?: ContactRef;
+  /**
+   * Pre-alert SMS template texted to the transfer target the moment the AI
+   * initiates the transfer ("LIVE TRANSFER incoming — pick up!"). Rendered
+   * against run vars when the call is placed.
+   */
+  preSmsTemplate?: string;
+};
+
 export type FlowStep =
   | { id: string; type: "extract_url"; saveAs: string; when?: StepCondition }
   | {
@@ -973,6 +991,43 @@ export type FlowStep =
       saveAs?: string;
       /** How long to wait before the no-reply branch. Default 1440 (24h), max 43200 (30 days). */
       timeoutMinutes?: number;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
+       * BATCH-flow outbound AI call (the bridge between the run engine and the
+       * real-time voice path): place a call to the phone number held in
+       * `toVar`, let the AI bridge run the rendered `personaTemplate` script
+       * on answer, then PARK the run (status `awaiting_call`, same machinery
+       * as wait_for_reply) until the call ends. The call outcome lands in
+       * {{vars.<saveAs>}} for later when/branch gating:
+       *   - "transferred": the AI live-transferred the callee (see `transfer`);
+       *   - "answered":    the callee answered and the AI ran, no transfer;
+       *   - "no_answer":   the call rang out / was never answered (also the
+       *                    timeout-sweep sentinel for a lost webhook);
+       *   - "not_placed":  the callee phone was missing/unusable (lead-data
+       *                    gap — skip, not a failure) or origination refused
+       *                    before dialing;
+       *   - "failed":      origination failed after validation.
+       * Budget is enforced exactly like every outbound AI call (pre-dial probe
+       * + authoritative post-dial reserve in telnyx-voice-originate); a budget
+       * refusal defers the run and retries later instead of burning the step.
+       */
+      type: "place_ai_call";
+      /** Var holding the callee's phone (same scope rule as wait_for_reply.phoneVar). */
+      toVar: string;
+      /** Greeting/script template the AI opens the call with (var-templated). */
+      personaTemplate: string;
+      /** Post-call summary recipient: exactly one of notifyE164 / notifyRef. */
+      notifyE164?: string;
+      notifyRef?: ContactRef;
+      /** Optional live-transfer config (pre-alert SMS + warm transfer). */
+      transfer?: PlaceCallTransfer;
+      /** Optional lead fields the AI captures during the call. */
+      captureFields?: string[];
+      /** Outcome var name. Default "call_outcome". */
+      saveAs?: string;
       when?: StepCondition;
     }
   // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook

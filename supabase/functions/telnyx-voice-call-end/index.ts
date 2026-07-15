@@ -26,6 +26,10 @@ import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
+  resumeFlowRunWithCallOutcome,
+  type FlowRunLink
+} from "../_shared/ai_flows/call_outcome.ts";
+import {
   buildOwnerMessage,
   buildRecipientMessage,
   labelFor,
@@ -705,6 +709,16 @@ async function handleHandoffLifecycle(
   // settlement so the media minutes are billed.
   const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
   if (outbound && callControlId) {
+    // Read the session BEFORE flipping it terminal: the context carries the
+    // place_ai_call run link (flow_run) plus the bridge's transfer_initiated
+    // stamp, which together decide the outcome the parked run resumes with.
+    const { data: obSessRow } = await supabase
+      .from("voice_handoff_sessions")
+      .select("context")
+      .eq("call_control_id", callControlId)
+      .maybeSingle();
+    const obCtx = ((obSessRow as { context?: Record<string, unknown> } | null)?.context ??
+      {}) as { transfer_initiated?: unknown; flow_run?: FlowRunLink };
     await supabase
       .from("voice_handoff_sessions")
       .update({ status: "done" })
@@ -714,7 +728,19 @@ async function handleHandoffLifecycle(
       .select("answer_issued_at")
       .eq("call_control_id", callControlId)
       .maybeSingle();
-    if (!(resvRow as { answer_issued_at?: string | null } | null)?.answer_issued_at) {
+    const answered = Boolean(
+      (resvRow as { answer_issued_at?: string | null } | null)?.answer_issued_at
+    );
+    // Resume the parked batch run (place_ai_call) with the call's outcome.
+    // Status-guarded: if the bridge already resumed it with "transferred" at
+    // transfer time, this write is a no-op. Best-effort — a miss is
+    // backstopped by the resume_overdue_call_waits sweep.
+    if (obCtx.flow_run) {
+      const outcome =
+        obCtx.transfer_initiated === true ? "transferred" : answered ? "answered" : "no_answer";
+      await resumeFlowRunWithCallOutcome(supabase, obCtx.flow_run, outcome);
+    }
+    if (!answered) {
       const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
         p_call_control_id: callControlId
       });
