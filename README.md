@@ -524,6 +524,25 @@ Review required. The canonical, owner-facing setup doc is the in-app guide at
 `/dashboard/aiflows/guides/meta-leads` (installs the starter flow, mints the
 key, walks the bridge setup, and shows deliveries live).
 
+### Direct Meta Lead Ads connection (no bridge)
+
+Alongside the bridges, tenants can connect Facebook **directly** from
+`/dashboard/integrations` (Lead sources → "Meta Lead Ads"): our platform Meta
+app (`META_APP_ID` / `META_APP_SECRET`) runs Facebook Login
+(`/api/integrations/meta/connect` → `/callback`, HMAC-signed state), the owner
+picks a Page, and we subscribe it to `leadgen` webhooks
+(`meta_connections` — RLS-on/no-policies, tokens AES-256-GCM encrypted via
+`INTEGRATIONS_ENCRYPTION_KEY`; the page token is permanent so there is no
+refresh flow). Deliveries land on `/api/webhooks/meta` (GET = Meta's
+`hub.challenge` handshake gated by `META_WEBHOOK_VERIFY_TOKEN`; POST =
+`X-Hub-Signature-256`-verified), which fetches each lead's answers via the
+Graph API and enqueues the same webhook flow event the bridges send —
+`source: "facebook_lead_ads"`, leadgen id as the idempotency key — so
+existing flows work unchanged (`src/lib/meta/*`). Until the Meta app clears
+App Review (Advanced Access for `leads_retrieval` + page permissions), only
+Facebook accounts holding a role on the app can connect; the bridges remain
+the everyone-works-today path.
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”

@@ -239,12 +239,37 @@ export function MetaLeadsGuide({
         </div>
       </Card>
 
-      {/* ── Step 3: API key ──────────────────────────────────────────── */}
+      {/* ── Option A: direct Facebook connection ─────────────────────── */}
       <Card>
-        <StepHeading n={3} title="Create your connection key" />
+        <div className="rounded-md border border-signal-teal/40 bg-signal-teal/5 p-3">
+          <StepHeading n={3} title="Fastest path: connect Facebook directly (no bridge)" />
+          <p className="mt-2 text-sm text-parchment/70">
+            On the{" "}
+            <Link href="/dashboard/integrations" className="text-signal-teal hover:underline">
+              Integrations page
+            </Link>
+            , the <strong>Meta Lead Ads</strong> card connects your Facebook Page to your
+            coworker in two clicks — log into Facebook, pick your Page, done. Leads arrive
+            the moment they&apos;re submitted, with no Make.com or Zapier account and no
+            field mapping. Your flow from step 1 works unchanged.
+          </p>
+          <p className="mt-2 text-xs text-parchment/55">
+            While our Meta app finishes Meta&apos;s review process, the direct connection
+            requires your Facebook account to be added as a tester on our app — contact us
+            and we&apos;ll set it up same-day. If you&apos;d rather not wait, the bridge
+            path below works for everyone right now; you can switch to the direct
+            connection later without touching your flows.
+          </p>
+        </div>
+      </Card>
+
+      {/* ── Steps 4-6: the bridge path (Option B) ────────────────────── */}
+      <Card>
+        <StepHeading n={4} title="Bridge path: create your connection key" />
         <p className="mt-2 text-sm text-parchment/60">
-          The bridge tool (next step) proves it&apos;s yours with an API key. Create one here —
-          it&apos;s shown once, so copy it somewhere safe before you leave this page.
+          Using the bridge path instead? The bridge tool (next step) proves it&apos;s yours
+          with an API key. Create one here — it&apos;s shown once, so copy it somewhere safe
+          before you leave this page.
         </p>
         {freshKey ? (
           <div className="mt-3 rounded-md border border-signal-teal/40 bg-signal-teal/5 p-3 space-y-2">
@@ -278,7 +303,7 @@ export function MetaLeadsGuide({
 
       {/* ── Step 4: the bridge ───────────────────────────────────────── */}
       <Card>
-        <StepHeading n={4} title="Connect Facebook to your coworker (via Make.com — free)" />
+        <StepHeading n={5} title="Bridge path: connect Facebook via Make.com (free)" />
         <p className="mt-2 text-sm text-parchment/60">
           Meta only hands leads to approved partners, so a small bridge forwards each new lead
           to your coworker the moment it&apos;s submitted. Make.com&apos;s free plan covers this
@@ -319,7 +344,7 @@ export function MetaLeadsGuide({
               <li>
                 <strong>Headers:</strong> add one named <code className="font-mono text-xs">Authorization</code>{" "}
                 with the value <code className="font-mono text-xs">Bearer YOUR-API-KEY</code> (the key
-                from step 3, after the word “Bearer” and a space)
+                from step 4, after the word “Bearer” and a space)
               </li>
               <li>
                 <strong>Body type:</strong> Raw, <strong>Content type:</strong> JSON. In the request
@@ -360,7 +385,7 @@ export function MetaLeadsGuide({
       {/* ── Step 5: the CRM-access gotcha ────────────────────────────── */}
       <Card>
         <div className="rounded-md border border-spark-orange/40 bg-spark-orange/5 p-3">
-          <StepHeading n={5} title="Don't skip: grant the bridge Lead Access in Facebook" />
+          <StepHeading n={6} title="Bridge path — don't skip: grant the bridge Lead Access in Facebook" />
           <p className="mt-2 text-sm text-parchment/70">
             This is the #1 reason lead capture <em>silently</em> fails: test leads work, then real
             ad leads never arrive. In{" "}
@@ -375,7 +400,7 @@ export function MetaLeadsGuide({
 
       {/* ── Step 6: test it ──────────────────────────────────────────── */}
       <Card>
-        <StepHeading n={6} title="Send a test lead and watch it arrive" />
+        <StepHeading n={7} title="Send a test lead and watch it arrive" />
         <p className="mt-2 text-sm text-parchment/60">
           Use Meta&apos;s{" "}
           <a

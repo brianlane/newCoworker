@@ -9,6 +9,7 @@ import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
+import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
@@ -19,13 +20,14 @@ import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegration
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
 import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
 import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
+import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { Inbox } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
-type SearchParams = Promise<{ error?: string; workspace?: string }>;
+type SearchParams = Promise<{ error?: string; workspace?: string; meta?: string }>;
 
 export default async function IntegrationsPage({ searchParams }: { searchParams: SearchParams }) {
   const user = await getAuthUser();
@@ -60,6 +62,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const vagaroConnection = businessId ? await getPublicVagaroConnection(businessId) : null;
   const calendlyConnection = businessId ? await getPublicCalendlyConnection(businessId) : null;
   const caldavConnection = businessId ? await getPublicCaldavConnection(businessId) : null;
+  const metaConnection = businessId ? await getPublicMetaConnection(businessId) : null;
   const zoomConnection = businessId ? await getPublicZoomConnection(businessId) : null;
   const apiKeys = businessId && canManageApiKeys ? await listApiKeys(businessId) : [];
   const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
@@ -85,6 +88,15 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
       {q.workspace === "connected" && (
         <Card className="border-claw-green/40 bg-claw-green/5">
           <p className="text-sm text-claw-green">Connected successfully.</p>
+        </Card>
+      )}
+
+      {q.meta === "connected" && (
+        <Card className="border-claw-green/40 bg-claw-green/5">
+          <p className="text-sm text-claw-green">
+            Facebook connected — pick the Page to watch for leads on the Meta Lead Ads
+            card below.
+          </p>
         </Card>
       )}
 
@@ -143,6 +155,18 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               <CaldavIntegrationCard
                 businessId={businessId}
                 initialConnection={caldavConnection}
+              />
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              Lead sources
+            </h2>
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
+              <MetaIntegrationCard
+                businessId={businessId}
+                initialConnection={metaConnection}
               />
             </div>
           </section>
