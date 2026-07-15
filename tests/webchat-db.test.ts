@@ -48,7 +48,6 @@ import {
   getWidgetSettingsForBusiness,
   insertWebchatJob,
   isWebchatUniqueViolation,
-  listRecentWebchatSessions,
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
@@ -281,31 +280,6 @@ describe("webchat_sessions accessors", () => {
     );
   });
 
-  it("listRecentWebchatSessions attaches counts + business names defensively", async () => {
-    const rows = [
-      { id: "s1", webchat_messages: [{ count: 4 }], businesses: { name: "Acme" } },
-      { id: "s2", webchat_messages: null, businesses: null },
-      { id: "s3", webchat_messages: [{ count: "garbage" }], businesses: { name: 7 } },
-      { id: "s4", webchat_messages: [], businesses: {} }
-    ];
-    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: rows, error: null }));
-    const out = await listRecentWebchatSessions();
-    expect(out.map((s) => s.message_count)).toEqual([4, 0, 0, 0]);
-    expect(out.map((s) => s.business_name)).toEqual(["Acme", "", "", ""]);
-    expect(out[0]).not.toHaveProperty("webchat_messages");
-    expect(out[0]).not.toHaveProperty("businesses");
-
-    // Custom limit + null data + error paths.
-    const limited = makeBuilder({ data: null, error: null });
-    supabaseStub.from.mockReturnValueOnce(limited);
-    expect(await listRecentWebchatSessions({ limit: 5 }, injected)).toEqual([]);
-    expect(limited.limit).toHaveBeenCalledWith(5);
-
-    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
-    await expect(listRecentWebchatSessions()).rejects.toThrow(
-      "listRecentWebchatSessions: x"
-    );
-  });
 });
 
 describe("webchat_messages accessors", () => {
