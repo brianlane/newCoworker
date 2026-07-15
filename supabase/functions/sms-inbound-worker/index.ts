@@ -56,7 +56,6 @@ import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.
 // against the tenant pool like all traffic but never refused (Jul 14 2026).
 import {
   meterOperationalSms,
-  releaseOperationalSms,
   sendOperationalSms
 } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
@@ -482,17 +481,6 @@ serve(async (req: Request) => {
           };
           if (idem) fwdHeaders["Idempotency-Key"] = idem;
 
-          // Safe-Mode forwards are METERED against the tenant's monthly
-          // pool like all traffic (Jul 14 2026 policy: nothing is exempt)
-          // but never refused — Safe Mode exists so a paused AI never
-          // silently eats customer texts. Count-then-send; a failed send
-          // releases the counted slot inside the catch below.
-          const fwdMeter = await meterOperationalSms(supabase, job.business_id);
-          // Flipped the moment Telnyx ACCEPTS the message: post-send
-          // bookkeeping failures (job completion, prompt insert) re-enter
-          // the catch, and releasing then would refund quota for an SMS
-          // that was actually delivered.
-          let fwdDelivered = false;
           try {
             const fwdRes = await fetch("https://api.telnyx.com/v2/messages", {
               method: "POST",
@@ -502,7 +490,6 @@ serve(async (req: Request) => {
             if (!fwdRes.ok) {
               throw new Error(`telnyx_forward_${fwdRes.status}`);
             }
-            fwdDelivered = true;
             const fwdJson = (await fwdRes.json()) as { data?: { id?: string } };
             const mid = fwdJson.data?.id ?? null;
             await supabase.rpc("complete_sms_inbound_job", {
@@ -512,6 +499,16 @@ serve(async (req: Request) => {
               p_rowboat_conversation_id: null,
               p_last_error: "safe_mode_forwarded"
             });
+            // Safe-Mode forwards are METERED against the tenant's monthly
+            // pool like all traffic (Jul 14 2026 policy: nothing is exempt)
+            // but never refused. Metered AFTER the job completes — not
+            // before the send — so the count lands exactly once: a
+            // pre-completion failure retries the whole job, and the retry's
+            // replayed send is deduped by the Telnyx Idempotency-Key
+            // (metering up front would count every retry for one delivered
+            // forward). A meter failure here under-counts one message
+            // (logged inside the helper) rather than risking double-charge.
+            await meterOperationalSms(supabase, job.business_id);
             await clearJobReplyCache(supabase, job.id);
             // A forward_owner contact keeps their reply relay in Safe Mode:
             // the Safe-Mode forward above already put the text on the owner's
@@ -547,12 +544,9 @@ serve(async (req: Request) => {
               business_id: job.business_id
             });
           } catch (e) {
-            // Release ONLY when the forward never reached Telnyx — a
-            // post-send bookkeeping failure must keep the delivered SMS
-            // counted (retries re-meter on the next attempt).
-            if (!fwdDelivered) {
-              await releaseOperationalSms(supabase, job.business_id, fwdMeter);
-            }
+            // Nothing to release: the meter only runs after the job
+            // completed, and completion is the last throw-capable step
+            // before it — a failure here means nothing was counted.
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
             // Bound the retry budget just like the Rowboat error path below —
