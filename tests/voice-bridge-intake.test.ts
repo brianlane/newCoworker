@@ -88,10 +88,35 @@ describe("intakeSystemInstruction", () => {
     expect(instr).toContain("capture_lead");
   });
 
-  it("the inbound live-transfer intake keeps the callback-number ask", () => {
+  it("outbound collect lists drop 'phone' (defaults and explicit), degrading to notes", () => {
+    // Default field set includes phone — outbound must not list it (Bugbot:
+    // listing it contradicts the never-ask rule in the same paragraph).
+    const defaults = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
+    expect(defaults).toContain("name, address, timeframe, notes");
+    expect(defaults).not.toContain("name, phone,");
+    // Same for the transfer script's capture-fields mention.
+    const transfer = intakeSystemInstruction("Acme", undefined, null, ["phone", "best time"], false, {});
+    expect(transfer).toContain("fields: best time —");
+    // A list that is ONLY phone degrades to notes, never an empty list.
+    const onlyPhone = intakeSystemInstruction("Acme", undefined, null, ["phone"], false, undefined, true);
+    expect(onlyPhone).toContain("confirming as you go: notes.");
+  });
+
+  it("outbound default opener drops the call-you-right-back promise", () => {
+    const outbound = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
+    expect(outbound).toContain("reaching out with a quick follow-up");
+    expect(outbound).not.toContain("call you right back");
+    const withTransfer = intakeSystemInstruction("Acme", undefined, null, [], false, {});
+    expect(withTransfer).toContain("reaching out with a quick follow-up");
+    expect(withTransfer).not.toContain("call you right back");
+  });
+
+  it("the inbound live-transfer intake keeps the callback-number ask and opener", () => {
     const instr = intakeSystemInstruction("Acme", undefined, null, []);
     expect(instr).toContain("taking a live seller lead");
     expect(instr).toContain("best callback number");
+    expect(instr).toContain("call you right back");
+    expect(instr).toContain("name, phone, address, timeframe, notes");
   });
 });
 

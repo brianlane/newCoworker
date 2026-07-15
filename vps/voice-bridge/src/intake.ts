@@ -35,10 +35,27 @@ export function intakeSystemInstruction(
   transfer?: { agentName?: string },
   outboundCall = false
 ): string {
+  // Default opener: the inbound one promises a call-back (the seller phoned
+  // in and expects one); on a call WE placed that promise is mixed messaging,
+  // so the outbound default just states the follow-up.
   const opener =
     (persona && persona.trim()) ||
-    `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
-  const fields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
+    (outboundCall || transfer
+      ? `Hi, this is ${businessName}'s office, reaching out with a quick follow-up — do you have a moment?`
+      : `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`);
+  const allFields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
+  // On a call WE placed, "phone" must not be in the collect list either —
+  // listing it would contradict the never-ask-for-their-number rule below
+  // (the default field set includes it for the inbound live-transfer case).
+  // A list that filters to empty (capture_fields: ["phone"]) degrades to
+  // free-form notes so the collect sentence never renders an empty list.
+  const outboundFields = allFields.filter((f) => f.trim().toLowerCase() !== "phone");
+  const fields =
+    outboundCall || transfer
+      ? outboundFields.length > 0
+        ? outboundFields
+        : ["notes"]
+      : allFields;
   // Barge-in/echo guard: Gemini Live restarts its scripted opener when the
   // callee's "Hello?" lands mid-greeting (or right after), which callers hear
   // as being greeted twice (first live test, Jul 15 2026).
