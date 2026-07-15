@@ -74,7 +74,7 @@
     "eslint-config-next": "^16.2.10",
     "pg": "^8.22.0",
     "tsx": "^4.23.0",
-    "typescript": "^6.0.3",
+    "typescript": "^7.0.2",
     "undici": "^8.7.0",
     "vitest": "^4.1.1"
   },
