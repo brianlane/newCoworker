@@ -554,6 +554,25 @@ The `telnyx-voice-inbound` function may return **HTTP 200** with a Telnyx `hangu
 System-level, per-business budget gates apply to ALL relevant traffic regardless of whether an AiFlow is involved:
 
 - **Voice (hard refuse):** every inbound/outbound call that uses Google/Gemini voice must pass `voice_reserve_for_call` / `reserveVoiceBudget` ([supabase/functions/_shared/voice_reserve.ts](supabase/functions/_shared/voice_reserve.ts)) BEFORE the leg is established. No budget → the call/leg is not established (see the Telnyx voice inbound ops note above). Outbound AiFlow calls (`outbound_call` voice step) originate via [telnyx-voice-originate](supabase/functions/telnyx-voice-originate/index.ts): it first runs a READ-ONLY pre-dial probe (`checkVoiceBudgetAvailable` → the `voice_check_availability` RPC) so an over-budget tenant's callee is never even rung, then dials, captures the `call_control_id`, then `reserveVoiceBudget` BEFORE answer/media — the post-dial reserve is the AUTHORITATIVE gate (the probe is best-effort: an `indeterminate` result falls through to dial because the reserve hangs the leg up before answer if refused, so no minutes are billed). Outbound flows can be placed manually ("Place call") or auto-dialed on a schedule: the `ai-flow-worker` `enqueueDueOutboundCalls` sweep places the call on each due occurrence with exactly-once via the `voice_outbound_dial_log` ledger (unique `flow_id, dedupe_key`), then calls the same origination function.
+- **Voice, forwarded/transferred human time (post-hoc meter, never refuses):**
+  the platform's Telnyx account pays carrier time for the FULL duration of a
+  tenant's call even after the AI hands it to a human, so that time is metered
+  too (policy set Jul 14 2026 — before this, a 9m30s call the AI transferred
+  after 13s debited exactly 60s). AI settlement still bills only the AI
+  portion (`voice_try_finalize_settlement` stops at bridge media end); the
+  HUMAN leg is metered at its hangup by `voice_meter_forwarded_call`
+  ([`_shared/forwarded_call_meter.ts`](supabase/functions/_shared/forwarded_call_meter.ts),
+  called from [telnyx-voice-call-end](supabase/functions/telnyx-voice-call-end/index.ts)):
+  per-minute rounded like settlement, idempotent per leg
+  (`voice_forwarded_call_meter` ledger), committed to the SAME
+  `voice_billing_period_usage.committed_included_seconds` pool the reserve
+  gate and the usage card read. One hook covers every forward path — the
+  `wt:` transfer leg (AI `transfer_to_owner`, per-caller transfer rules,
+  safe-mode forwards) and the handoff-chain A-leg when a human answered.
+  Missed (unanswered) forwards bill nothing — the carrier doesn't charge
+  unanswered legs. Like operational SMS, this meter counts but NEVER refuses:
+  the call already happened; once the pool is spent the reserve gate and the
+  safe-mode pre-check refuse the NEXT call.
 - **SMS (hard stop at the monthly cap):** every customer-facing outbound SMS atomically reserves a slot via `try_reserve_sms_outbound_slot` (row-locked monthly cap + pre-increment) before hitting Telnyx; on `monthly_sms_limit` the send is refused (the reply is suppressed and the owner gets a one-time cap alert). This is parity with voice — a hard stop on the actual SMS limit, independent of how the reply text was generated. Enforced at every customer-facing send site:
   - Node: `sendTelnyxSms(..., { meterBusinessId })` — `app/api/dashboard/messages/send`, `app/api/voice/tools/sms`, `app/api/rowboat/tool-call`.
   - Edge: `sms-inbound-worker` (AI reply) and `ai-flow-worker` (`send_sms` / group SMS to the lead, and team-offer SMS) reserve via the `try_reserve_sms_outbound_slot` RPC.

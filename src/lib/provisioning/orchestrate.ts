@@ -42,6 +42,7 @@ import {
   getTelnyxVoiceRouteForBusiness
 } from "@/lib/db/telnyx-routes";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
@@ -1762,14 +1763,37 @@ async function runOrchestrator(
         );
       } else {
         const cfg = await getTelnyxMessagingForBusiness(businessId);
+        const liveSmsBody = `Your New Coworker is live! Dashboard: ${dashboardUrl}`;
         // Metered like every send (nothing is exempt), in operational mode:
         // counted against the pool but never refused at the cap.
-        await sendTelnyxSms(
+        const sent = await sendTelnyxSms(
           { ...cfg, fromE164: tenantFrom },
           notifyPhone,
-          `Your New Coworker is live! Dashboard: ${dashboardUrl}`,
+          liveSmsBody,
           { meterBusinessId: businessId, meterMode: "operational" }
         );
+        // Durable log so the owner's first text shows in the dashboard Texts
+        // thread like every other owner notice (AiFlow owner_notify does the
+        // same). Best-effort: the SMS already went out, a failed insert must
+        // not fail provisioning.
+        try {
+          const db = await createSupabaseServiceClient();
+          const { error: logErr } = await db.from("sms_outbound_log").insert({
+            business_id: businessId,
+            to_e164: notifyPhone,
+            from_e164: tenantFrom,
+            body: liveSmsBody,
+            source: "owner_notify",
+            telnyx_message_id: sent.id,
+            channel: sent.channel
+          });
+          if (logErr) throw new Error(logErr.message);
+        } catch (logErr) {
+          logger.warn("Provisioning SMS sent but outbound log insert failed", {
+            businessId,
+            error: logErr instanceof Error ? logErr.message : String(logErr)
+          });
+        }
       }
     } catch (err) {
       logger.warn("Failed to send provisioning SMS", {

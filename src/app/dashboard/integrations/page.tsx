@@ -10,6 +10,7 @@ import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
+import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
 import { Card } from "@/components/ui/Card";
@@ -20,6 +21,7 @@ import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationC
 import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
 import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
+import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { Inbox } from "lucide-react";
 
@@ -61,6 +63,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   const calendlyConnection = businessId ? await getPublicCalendlyConnection(businessId) : null;
   const caldavConnection = businessId ? await getPublicCaldavConnection(businessId) : null;
   const metaConnection = businessId ? await getPublicMetaConnection(businessId) : null;
+  const zoomConnection = businessId ? await getPublicZoomConnection(businessId) : null;
   const apiKeys = businessId && canManageApiKeys ? await listApiKeys(businessId) : [];
   const activeHooks = businessId ? await listWebhookSubscriptions(businessId) : [];
 
@@ -118,7 +121,7 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             <div className="grid grid-cols-1 gap-4 max-w-xl">
               <IntegrationCard
                 title="Workspace"
-                description="Gmail, Google Calendar, Drive, Microsoft 365, Slack, Zoom, and more; add each integration simply with Nango."
+                description="Gmail, Google Calendar, Drive, Microsoft 365, Slack, and more; add each integration simply with Nango. Zoom now connects from the Meetings card below."
                 icon={Inbox}
                 status={workspaceConnected ? "connected" : "disconnected"}
               >
@@ -164,6 +167,18 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
               <MetaIntegrationCard
                 businessId={businessId}
                 initialConnection={metaConnection}
+              />
+            </div>
+          </section>
+
+          <section className="space-y-4">
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              Meetings
+            </h2>
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
+              <ZoomIntegrationCard
+                businessId={businessId}
+                initialConnection={zoomConnection}
               />
             </div>
           </section>

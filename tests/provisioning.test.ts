@@ -61,7 +61,16 @@ vi.mock("@/lib/telnyx/messaging", () => ({
     apiKey: "mock_telnyx_key",
     messagingProfileId: "mock_prof"
   }),
-  sendTelnyxSms: vi.fn().mockResolvedValue("telnyx-msg-mock")
+  sendTelnyxSms: vi.fn().mockResolvedValue({ id: "telnyx-msg-mock", channel: "sms" })
+}));
+
+// The live-SMS durable log (sms_outbound_log) writes through the service
+// client; capture inserts so tests can assert the owner notice is logged.
+const outboundLogInsert = vi.fn().mockResolvedValue({ error: null });
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn().mockResolvedValue({
+    from: vi.fn(() => ({ insert: outboundLogInsert }))
+  })
 }));
 
 vi.mock("@/lib/email/client", () => ({
@@ -651,6 +660,49 @@ describe("provisioning/orchestrate", () => {
       // against the pool but never refused at the cap.
       { meterBusinessId: "biz-own-did", meterMode: "operational" }
     );
+    // The owner notice must land in sms_outbound_log (source owner_notify) so
+    // it renders in the dashboard Texts owner thread like AiFlow notices do
+    // (KYP Ads, Jul 14 2026: delivered but invisible in the dashboard).
+    expect(outboundLogInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: "biz-own-did",
+        to_e164: "+15145188192",
+        from_e164: "+15559990000",
+        source: "owner_notify",
+        telnyx_message_id: "telnyx-msg-mock",
+        channel: "sms"
+      })
+    );
+  });
+
+  it("a failed outbound-log insert never fails provisioning (SMS already went out)", async () => {
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    outboundLogInsert.mockResolvedValueOnce({ error: { message: "insert down" } });
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-log-fail", tier: "starter", ownerPhone: "+15145188192" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates a non-Error throw from the outbound-log write", async () => {
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    vi.mocked(sendTelnyxSms).mockClear();
+    outboundLogInsert.mockRejectedValueOnce("string boom");
+    const result = await orchestrateProvisioning(
+      { businessId: "biz-log-throw", tier: "starter", ownerPhone: "+15145188192" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(result.vpsId).toBe("42");
+    expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
   });
 
   it("skips the live SMS when the tenant has no DID to send from (no env fallback by design)", async () => {
