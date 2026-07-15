@@ -1000,6 +1000,8 @@ export function AiFlowsManager({
               const email =
                 (typeof m.provider_account_email === "string" && m.provider_account_email) ||
                 (typeof m.email === "string" && m.email) ||
+                (typeof m.provider_account_display_name === "string" &&
+                  m.provider_account_display_name) ||
                 (typeof m.end_user_email === "string" && m.end_user_email) ||
                 (typeof m.end_user_display_name === "string" && m.end_user_display_name) ||
                 "";

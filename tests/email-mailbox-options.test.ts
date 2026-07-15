@@ -54,6 +54,14 @@ describe("connectionEmail", () => {
     expect(connectionEmail({ end_user_email: "b@x.com" })).toBe("b@x.com");
     expect(connectionEmail({ end_user_display_name: "c@x.com" })).toBe("c@x.com");
   });
+  it("prefers a probed display name over the end_user (login) keys", () => {
+    expect(
+      connectionEmail({
+        provider_account_display_name: "Real Owner",
+        end_user_email: "login@dashboard.com"
+      })
+    ).toBe("Real Owner");
+  });
   it("returns null when nothing usable is present", () => {
     expect(connectionEmail({})).toBeNull();
     expect(connectionEmail(undefined as unknown as Record<string, unknown>)).toBeNull();

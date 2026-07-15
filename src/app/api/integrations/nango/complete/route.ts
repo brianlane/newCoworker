@@ -80,11 +80,25 @@ export async function POST(request: Request) {
     });
     const identityMetadata = providerAccountMetadata(identity);
     if (Object.keys(identityMetadata).length > 0) {
+      // Re-read the row: the probe was a network round-trip, and app-owned
+      // keys (e.g. the shared-calendar id) may have been written concurrently
+      // — merge onto the FRESH metadata, not the pre-probe snapshot.
+      const current = await getWorkspaceOAuthConnectionByNangoIds(
+        parsed.businessId,
+        parsed.providerConfigKey,
+        parsed.connectionId
+      );
+      const base = { ...(current?.metadata ?? mergedMetadata) };
+      // A reconnect can be a DIFFERENT account: a resolved identity replaces
+      // the provider_account_* pair wholesale, so a partial probe (e.g. Graph
+      // display name without mail) can't leave the previous grant's email.
+      delete base.provider_account_email;
+      delete base.provider_account_display_name;
       await upsertWorkspaceOAuthConnection({
         businessId: parsed.businessId,
         providerConfigKey: parsed.providerConfigKey,
         connectionId: parsed.connectionId,
-        metadata: { ...mergedMetadata, ...identityMetadata }
+        metadata: { ...base, ...identityMetadata }
       });
     }
 
