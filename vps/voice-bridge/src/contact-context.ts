@@ -180,6 +180,9 @@ export async function loadVoiceContactTimeline(
       .select("created_at, payload")
       .eq("business_id", businessId)
       .in("customer_e164", numbers)
+      // Owner-soft-deleted messages must not feed AI context (parity with
+      // supabase/functions/_shared/contact_context.ts).
+      .is("deleted_at", null)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(TIMELINE_MAX_EVENTS);
@@ -200,6 +203,7 @@ export async function loadVoiceContactTimeline(
       .select("created_at, body")
       .eq("business_id", businessId)
       .in("to_e164", numbers)
+      .is("deleted_at", null)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(TIMELINE_MAX_EVENTS);
@@ -220,6 +224,7 @@ export async function loadVoiceContactTimeline(
       .select("started_at, created_at, direction, summary, status")
       .eq("business_id", businessId)
       .in("caller_e164", numbers)
+      .is("deleted_at", null)
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: false })
       .limit(3);
