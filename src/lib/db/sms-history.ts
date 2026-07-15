@@ -506,7 +506,21 @@ export async function softDeleteSmsConversation(
   const db = client ?? (await createSupabaseServiceClient());
   const stamp = { deleted_at: new Date().toISOString(), deleted_by: deletedBy };
 
-  // 1) Inbound jobs with the denormalized customer column.
+  // 1) Worker-initiated sends FIRST (residency-aware: box + central). The
+  // box tunnel round-trip is the step most likely to fail; running it
+  // before any central stamps means a failure aborts with NOTHING hidden —
+  // never a half-deleted conversation whose visibility depends on the read
+  // path. The central-only steps below can still fail individually, but a
+  // retry of the (idempotent) delete converges.
+  const outbound = await softDeleteContentRows(
+    businessId,
+    "sms_outbound_log",
+    [{ column: "to_e164", op: "eq", value: customerE164 }],
+    deletedBy,
+    { client: db }
+  );
+
+  // 2) Inbound jobs with the denormalized customer column.
   const { data: stamped, error } = await db
     .from("sms_inbound_jobs")
     .update(stamp)
@@ -517,7 +531,7 @@ export async function softDeleteSmsConversation(
   if (error) throw new Error(`softDeleteSmsConversation: ${error.message}`);
   let inboundJobs = Array.isArray(stamped) ? stamped.length : 0;
 
-  // 2) Legacy rows (customer_e164 NULL, pre-Phase-2) still render in the
+  // 3) Legacy rows (customer_e164 NULL, pre-Phase-2) still render in the
   // thread through payload parsing — page them and match the same way the
   // reader does. Ids are collected first, stamped after, so stamping never
   // disturbs the pagination.
@@ -549,15 +563,6 @@ export async function softDeleteSmsConversation(
     if (legacyError) throw new Error(`softDeleteSmsConversation: ${legacyError.message}`);
     inboundJobs += Array.isArray(legacyStamped) ? legacyStamped.length : 0;
   }
-
-  // 3) Worker-initiated sends (residency-aware: central + box).
-  const outbound = await softDeleteContentRows(
-    businessId,
-    "sms_outbound_log",
-    [{ column: "to_e164", op: "eq", value: customerE164 }],
-    deletedBy,
-    { client: db }
-  );
 
   return {
     inboundJobs,

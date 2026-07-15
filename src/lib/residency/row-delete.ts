@@ -78,10 +78,32 @@ async function stampContentRows(
   }
   const db = deps.client ?? (await createSupabaseServiceClient());
   const dataApiFor = deps.dataApiFor ?? defaultDataApiFor;
+  const mode = await residencyModeFor(businessId, db);
 
-  // Central first: the journal replicates this stamp to a dual/vps box in
-  // order, so even if the direct box call below fails, replay convergence
-  // still delivers the stamp for rows central knows about.
+  // BOX FIRST for dual/vps tenants. The box call is the step most likely to
+  // fail (tunnel round-trip); doing it before the central UPDATE means a
+  // failure leaves the owner-visible state consistent in every mode:
+  //   * box fails → nothing is stamped anywhere; the request errors cleanly
+  //     and a retry redoes the whole thing.
+  //   * box succeeds, central fails → vps-mode reads (the box) already hide
+  //     the row, and the retry's central UPDATE + journaled replication
+  //     converge the central copy (the overlap is idempotent — same stamp).
+  // Central-first would invert that: a box failure would leave central
+  // stamped while vps-mode reads keep serving the "deleted" row.
+  let box: number | null = null;
+  if (mode === "dual" || mode === "vps") {
+    const api = dataApiFor(businessId);
+    const boxFilters: DataApiFilter[] = [
+      { column: "business_id", op: "eq", value: businessId },
+      ...filters.map((f) => ({ column: f.column, op: f.op, value: f.value }))
+    ];
+    const res = await api.update({ table, set, filters: boxFilters, returning: true });
+    if (!res.ok) {
+      throw new ContentRowMutationError(`box update on ${table} failed: ${res.message}`);
+    }
+    box = res.rows.length;
+  }
+
   let q = db.from(table).update(set).eq("business_id", businessId);
   for (const f of filters) {
     q = f.op === "in" ? q.in(f.column, f.value as string[]) : q.eq(f.column, f.value as string);
@@ -91,21 +113,7 @@ async function stampContentRows(
   if (error) {
     throw new ContentRowMutationError(`central update on ${table} failed: ${error.message}`);
   }
-  const central = Array.isArray(data) ? data.length : 0;
-
-  const mode = await residencyModeFor(businessId, db);
-  if (mode !== "dual" && mode !== "vps") return { central, box: null };
-
-  const api = dataApiFor(businessId);
-  const boxFilters: DataApiFilter[] = [
-    { column: "business_id", op: "eq", value: businessId },
-    ...filters.map((f) => ({ column: f.column, op: f.op, value: f.value }))
-  ];
-  const res = await api.update({ table, set, filters: boxFilters, returning: true });
-  if (!res.ok) {
-    throw new ContentRowMutationError(`box update on ${table} failed: ${res.message}`);
-  }
-  return { central, box: res.rows.length };
+  return { central: Array.isArray(data) ? data.length : 0, box };
 }
 
 /**

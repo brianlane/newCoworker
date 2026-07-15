@@ -144,6 +144,8 @@ export async function markNotificationRead(
     .eq("id", notificationId)
     .eq("business_id", businessId)
     .is("read_at", null)
+    // Never mutate a row the owner already deleted (e.g. from another tab).
+    .is("deleted_at", null)
     .select()
     .maybeSingle();
 
@@ -161,6 +163,10 @@ export async function markAllNotificationsRead(
     .update({ read_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .is("read_at", null)
+    // Soft-deleted rows are out of the owner's view — "mark all read" must
+    // not silently mutate them (they'd come back to an admin restore with a
+    // read stamp the owner never made).
+    .is("deleted_at", null)
     .select("id");
 
   if (error) throw new Error(`markAllNotificationsRead: ${error.message}`);

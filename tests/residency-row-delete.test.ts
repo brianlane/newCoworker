@@ -141,8 +141,8 @@ describe("residency/row-delete", () => {
     });
   });
 
-  it("vps mode: box update failure fails LOUDLY (no silent partial delete)", async () => {
-    const { db } = makeDb("vps", { data: [{ id: "n1" }], error: null });
+  it("vps mode: box update failure fails LOUDLY before anything is stamped", async () => {
+    const { db, contentChain } = makeDb("vps", { data: [{ id: "n1" }], error: null });
     const update = vi.fn().mockResolvedValue({ ok: false, error: "internal", message: "down" });
     await expect(
       softDeleteContentRows(
@@ -153,6 +153,9 @@ describe("residency/row-delete", () => {
         { client: db as never, dataApiFor: () => ({ update }) }
       )
     ).rejects.toThrow("box update on notifications failed: down");
+    // Box-first ordering: the failed box call must abort BEFORE the central
+    // stamp, so no read path (central or box) hides a half-deleted item.
+    expect(contentChain.update).not.toHaveBeenCalled();
   });
 
   it("restoreContentRows clears the stamp centrally and on the box", async () => {

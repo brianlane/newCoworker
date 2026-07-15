@@ -245,6 +245,22 @@ describe("db/notifications", () => {
     const db = { from: vi.fn().mockReturnValue(chain) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await markAllNotificationsRead("biz")).toBe(2);
+    // Soft-deleted rows must never be mutated by mark-all.
+    expect(chain.is).toHaveBeenCalledWith("deleted_at", null);
+  });
+
+  it("markNotificationRead never touches soft-deleted rows", async () => {
+    const chain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    const db = { from: vi.fn().mockReturnValue(chain) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await markNotificationRead("n1", "biz");
+    expect(chain.is).toHaveBeenCalledWith("deleted_at", null);
   });
 
   it("markAllNotificationsRead returns 0 when supabase returns null with no error", async () => {
