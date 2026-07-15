@@ -615,9 +615,20 @@ export default async function BusinessDetailPage({
 
       {/* Web chat widget: status + reply engine (VPS worker vs platform Gemini) */}
       <Card>
-        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
-          Web chat
-        </h2>
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+            Web chat
+          </h2>
+          {/* Admin transcript review — the only review surface for widgets
+              with no tenant dashboard behind them (e.g. the direct-Gemini
+              tenant serving newcoworker.com's own chat). */}
+          <Link
+            href={`/admin/${businessId}/webchat`}
+            className="text-sm text-claw-green hover:underline"
+          >
+            View conversations →
+          </Link>
+        </div>
         <WebchatEnginePanel
           key={`${businessId}:${widgetSettings ? webchatReplyEngine(widgetSettings) : "vps"}`}
           businessId={businessId}
