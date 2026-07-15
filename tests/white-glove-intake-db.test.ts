@@ -222,17 +222,24 @@ describe("white-glove/intake DB layer", () => {
     );
   });
 
-  it("claimWhiteGloveIntakeForBusiness claims unlinked-or-same-business rows atomically", async () => {
+  it("claimWhiteGloveIntakeForBusiness claims atomically with an apply lease", async () => {
     const db = mockDb({
       select: vi.fn().mockResolvedValue({ data: [{ id: INTAKE.id }], error: null })
     });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     expect(await claimWhiteGloveIntakeForBusiness(INTAKE.id, "biz-1")).toBe(true);
-    expect(db.update).toHaveBeenCalledWith({ business_id: "biz-1" });
+    expect(db.update).toHaveBeenCalledWith({
+      business_id: "biz-1",
+      apply_started_at: expect.any(String)
+    });
     expect(db.eq).toHaveBeenCalledWith("status", "completed");
     expect(db.or).toHaveBeenCalledWith("business_id.is.null,business_id.eq.biz-1");
+    // The lease guard: refuse while another apply's fresh stamp exists.
+    expect(db.or).toHaveBeenCalledWith(
+      expect.stringMatching(/^apply_started_at\.is\.null,apply_started_at\.lt\./)
+    );
 
-    // Another apply already linked a different tenant → the claim loses.
+    // Linked to a different tenant, or a fresh lease → the claim loses.
     for (const data of [[], null]) {
       const none = mockDb({ select: vi.fn().mockResolvedValue({ data, error: null }) });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(none as never);
@@ -263,7 +270,9 @@ describe("white-glove/intake DB layer", () => {
       expect.objectContaining({
         business_id: "biz-1",
         applied_flow_id: "flow-1",
-        applied_at: expect.any(String)
+        applied_at: expect.any(String),
+        // Success releases the apply lease.
+        apply_started_at: null
       })
     );
     expect(db.eq).toHaveBeenCalledWith("id", INTAKE.id);

@@ -135,7 +135,7 @@ export async function applyWhiteGloveIntake(
   if (!claimed) {
     throw new WhiteGloveApplyError(
       "intake_business_mismatch",
-      "This intake was just applied to a different business."
+      "Another apply for this intake is already running (or it was just applied to a different business). Try again in a couple of minutes."
     );
   }
 

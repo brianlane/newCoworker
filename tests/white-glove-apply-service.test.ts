@@ -99,6 +99,7 @@ function intakeRow(overrides: Partial<WhiteGloveIntakeRow> = {}): WhiteGloveInta
     completed_at: "2026-07-14T01:00:00Z",
     applied_at: null,
     applied_flow_id: null,
+    apply_started_at: null,
     ...overrides
   };
 }
