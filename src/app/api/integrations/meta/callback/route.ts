@@ -17,9 +17,13 @@ import {
   exchangeForLongLivedToken,
   getUserName,
   metaCallbackUrl,
+  unsubscribePage,
   verifyMetaOAuthState
 } from "@/lib/meta/client";
-import { savePendingMetaConnection } from "@/lib/db/meta-connections";
+import {
+  getMetaConnection,
+  savePendingMetaConnection
+} from "@/lib/db/meta-connections";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -71,6 +75,15 @@ export async function GET(request: NextRequest) {
     );
     const longLived = await exchangeForLongLivedToken(shortLived);
     const accountName = await getUserName(longLived).catch(() => null);
+
+    // A reconnect resets an ACTIVE connection back to pending, which clears
+    // its Page — unsubscribe that Page first (best-effort, like DELETE) so
+    // Meta stops delivering leadgen events nobody will route, and the Page
+    // is genuinely released before another pick.
+    const existing = await getMetaConnection(businessId);
+    if (existing?.page_id && existing.pageToken) {
+      await unsubscribePage(existing.page_id, existing.pageToken);
+    }
 
     await savePendingMetaConnection({ businessId, userToken: longLived, accountName });
 
