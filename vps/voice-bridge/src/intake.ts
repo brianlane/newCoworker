@@ -10,6 +10,27 @@ export const DEFAULT_INTAKE_CAPTURE_FIELDS = ["name", "phone", "address", "timef
 export type CapturedLead = Record<string, string>;
 
 /**
+ * The opening line an intake session leads with: the configured persona, or
+ * a mode-appropriate default. SHARED by the system instruction and the
+ * bridge's coordinator greeting cue so the two can never quote different
+ * openers (the cue literally reads the line aloud). The inbound default
+ * promises a call-back (the seller phoned in and expects one); on a call WE
+ * placed (outbound / transfer) that promise is mixed messaging, so the
+ * outbound default just states the follow-up.
+ */
+export function intakeOpener(
+  businessName: string,
+  persona: string | undefined,
+  mode: "inbound" | "outbound"
+): string {
+  const configured = persona && persona.trim();
+  if (configured) return configured;
+  return mode === "outbound"
+    ? `Hi, this is ${businessName}'s office, reaching out with a quick follow-up — do you have a moment?`
+    : `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`;
+}
+
+/**
  * System instruction for the HomeLight AI-takeover intake call. The live seller
  * was just connected (we pressed 1) after both Dave and Amy missed the warm
  * transfer, so the assistant's whole job is a short, warm intake: confirm who
@@ -35,14 +56,11 @@ export function intakeSystemInstruction(
   transfer?: { agentName?: string },
   outboundCall = false
 ): string {
-  // Default opener: the inbound one promises a call-back (the seller phoned
-  // in and expects one); on a call WE placed that promise is mixed messaging,
-  // so the outbound default just states the follow-up.
-  const opener =
-    (persona && persona.trim()) ||
-    (outboundCall || transfer
-      ? `Hi, this is ${businessName}'s office, reaching out with a quick follow-up — do you have a moment?`
-      : `Hi, this is ${businessName}'s office. I'd love to grab a few details so we can call you right back about selling your home.`);
+  const opener = intakeOpener(
+    businessName,
+    persona,
+    outboundCall || transfer ? "outbound" : "inbound"
+  );
   const allFields = captureFields.length > 0 ? captureFields : DEFAULT_INTAKE_CAPTURE_FIELDS;
   // On a call WE placed, "phone" must not be in the collect list either —
   // listing it would contradict the never-ask-for-their-number rule below

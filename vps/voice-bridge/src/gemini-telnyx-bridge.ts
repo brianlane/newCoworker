@@ -9,6 +9,7 @@ import { decodeTelnyxMediaPayload } from "./rtp-frame.js";
 import { type VaultSnapshot } from "./vault-loader.js";
 import {
   DEFAULT_INTAKE_CAPTURE_FIELDS,
+  intakeOpener,
   intakeSystemInstruction,
   type CapturedLead
 } from "./intake.js";
@@ -892,18 +893,23 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       const greetIsStaff = greetIdentity != null && greetIdentity.kind !== "customer";
       let greetingText: string;
       if (intake) {
-        const opener =
-          (intake.persona && intake.persona.trim()) ||
-          `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
-        // A transfer-enabled (place_ai_call) session follows its own
-        // call script instead of the capture checklist — pushing the
-        // intake questionnaire here would fight the flow's script. On a
-        // call WE placed, the cue must not push the callback-number
-        // checklist either (we just dialed their number). "Only once /
-        // never restart" mirrors the system instruction's barge-in guard.
-        greetingText =
-          intake.allowTransfer || opts.direction === "outbound"
-            ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and follow your call script.`
+        const outboundIntake = intake.allowTransfer || opts.direction === "outbound";
+        // Shared with intakeSystemInstruction so the cue can never quote a
+        // different opening line than the system prompt scripted.
+        const opener = intakeOpener(
+          opts.businessName,
+          intake.persona,
+          outboundIntake ? "outbound" : "inbound"
+        );
+        // "Only once / never restart" mirrors the system instruction's
+        // barge-in guard on every variant. A transfer-enabled session
+        // follows its call script; a plain outbound call runs its capture
+        // checklist WITHOUT the callback-number ask (we just dialed their
+        // number); the inbound seller intake keeps the full checklist.
+        greetingText = intake.allowTransfer
+          ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and follow your call script.`
+          : opts.direction === "outbound"
+            ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and continue per your instructions, calling capture_lead as you learn details. Never ask for their phone number.`
             : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") — say it only once, never restart it — and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
       } else if (greetIsStaff) {
         // Owner vs team wording, and handle staff WITHOUT a stored name
