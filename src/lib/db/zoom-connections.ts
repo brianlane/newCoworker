@@ -205,14 +205,21 @@ export async function upsertZoomConnection(
  * refresh, so both tokens must land atomically in one UPDATE — a crash
  * between "used old refresh token" and "stored new one" would strand the
  * connection (the old token is single-use).
+ *
+ * `expectedUpdatedAt` is an optimistic-concurrency fence for cross-instance
+ * races: the update only applies while the row still carries the timestamp
+ * the caller read the (now consumed) refresh token from. Returns whether the
+ * pair was stored — `false` means another writer got there first and the
+ * caller should re-read instead of clobbering the newer rotation.
  */
 export async function updateZoomTokens(
   businessId: string,
   tokens: { accessToken: string; refreshToken: string; expiresAt: Date },
+  expectedUpdatedAt?: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("zoom_connections")
     .update({
       access_token_encrypted: encryptIntegrationSecret(tokens.accessToken),
@@ -220,8 +227,13 @@ export async function updateZoomTokens(
       token_expires_at: tokens.expiresAt.toISOString(),
       updated_at: new Date().toISOString()
     })
-    .eq("business_id", businessId);
+    .match({
+      business_id: businessId,
+      ...(expectedUpdatedAt === undefined ? {} : { updated_at: expectedUpdatedAt })
+    })
+    .select("id");
   if (error) throw new Error(`updateZoomTokens: ${error.message}`);
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
 /** Soft-disable / re-enable (also used when a refresh returns invalid_grant). */

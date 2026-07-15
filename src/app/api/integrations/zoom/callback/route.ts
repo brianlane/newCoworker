@@ -46,8 +46,12 @@ export async function GET(request: Request) {
 
   const user = await getAuthUser();
   if (!user?.email) {
+    // Preserve the one-time code + state through sign-in: login pushes the
+    // browser back to this exact callback URL, so the exchange still happens
+    // (the state carries its own 10-minute expiry).
+    const resume = `/api/integrations/zoom/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`;
     return NextResponse.redirect(
-      new URL("/login?redirectTo=/dashboard/integrations", request.url)
+      new URL(`/login?redirectTo=${encodeURIComponent(resume)}`, request.url)
     );
   }
 

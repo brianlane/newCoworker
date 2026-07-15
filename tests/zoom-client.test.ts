@@ -104,7 +104,7 @@ describe("getZoomAccessToken", () => {
     expect(refreshZoomTokens).not.toHaveBeenCalled();
   });
 
-  it("refreshes when expiring, persisting the ROTATED pair before returning", async () => {
+  it("refreshes when expiring, persisting the ROTATED pair (fenced) before returning", async () => {
     const order: string[] = [];
     getZoomConnection.mockResolvedValueOnce(
       row({ token_expires_at: new Date(NOW + 1000).toISOString() })
@@ -119,15 +119,20 @@ describe("getZoomAccessToken", () => {
     });
     updateZoomTokens.mockImplementationOnce(async () => {
       order.push("persist");
+      return true;
     });
 
     expect(await getZoomAccessToken(BIZ, NOW)).toBe("new-access");
     expect(refreshZoomTokens).toHaveBeenCalledWith("live-refresh");
-    expect(updateZoomTokens).toHaveBeenCalledWith(BIZ, {
-      accessToken: "new-access",
-      refreshToken: "new-refresh",
-      expiresAt: new Date(NOW + 3_600_000)
-    });
+    expect(updateZoomTokens).toHaveBeenCalledWith(
+      BIZ,
+      {
+        accessToken: "new-access",
+        refreshToken: "new-refresh",
+        expiresAt: new Date(NOW + 3_600_000)
+      },
+      "2026-07-01T00:00:00Z"
+    );
     expect(order).toEqual(["refresh", "persist"]);
   });
 
@@ -138,8 +143,40 @@ describe("getZoomAccessToken", () => {
       refreshToken: "new-refresh",
       expiresAt: new Date(NOW + 3_600_000)
     });
-    updateZoomTokens.mockResolvedValueOnce(undefined);
+    updateZoomTokens.mockResolvedValueOnce(true);
     expect(await getZoomAccessToken(BIZ, NOW)).toBe("new-access");
+  });
+
+  it("adopts the newer rotation when the persist fence is lost to another instance", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({ token_expires_at: new Date(NOW + 1000).toISOString() })
+    );
+    refreshZoomTokens.mockResolvedValueOnce({
+      accessToken: "loser-access",
+      refreshToken: "loser-refresh",
+      expiresAt: new Date(NOW + 3_600_000)
+    });
+    updateZoomTokens.mockResolvedValueOnce(false);
+    getZoomConnection.mockResolvedValueOnce(
+      row({ accessToken: "winner-access", updated_at: "2026-07-01T00:00:05Z" })
+    );
+
+    expect(await getZoomAccessToken(BIZ, NOW)).toBe("winner-access");
+  });
+
+  it("falls back to its own fresh pair when the fence is lost and the re-read is unusable", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({ token_expires_at: new Date(NOW + 1000).toISOString() })
+    );
+    refreshZoomTokens.mockResolvedValueOnce({
+      accessToken: "fresh-access",
+      refreshToken: "fresh-refresh",
+      expiresAt: new Date(NOW + 3_600_000)
+    });
+    updateZoomTokens.mockResolvedValueOnce(false);
+    getZoomConnection.mockResolvedValueOnce(null);
+
+    expect(await getZoomAccessToken(BIZ, NOW)).toBe("fresh-access");
   });
 
   it("single-flights concurrent refreshes for the same business", async () => {
@@ -158,7 +195,7 @@ describe("getZoomAccessToken", () => {
             });
         })
     );
-    updateZoomTokens.mockResolvedValue(undefined);
+    updateZoomTokens.mockResolvedValue(true);
 
     const first = getZoomAccessToken(BIZ, NOW);
     // Give the first caller a tick to register the in-flight refresh.
@@ -171,18 +208,37 @@ describe("getZoomAccessToken", () => {
     expect(refreshZoomTokens).toHaveBeenCalledTimes(1);
   });
 
-  it("deactivates the connection and returns null on invalid_grant", async () => {
-    getZoomConnection.mockResolvedValueOnce(
-      row({ token_expires_at: new Date(NOW - 1000).toISOString() })
-    );
+  it("deactivates the connection and returns null on a genuine invalid_grant", async () => {
+    const stale = row({ token_expires_at: new Date(NOW - 1000).toISOString() });
+    getZoomConnection.mockResolvedValueOnce(stale);
     refreshZoomTokens.mockRejectedValueOnce(
       new ZoomOAuthError("invalid_grant", "Zoom token endpoint failed (401)")
     );
+    // Re-read shows the SAME row (no concurrent rotation happened) — the
+    // grant really is dead.
+    getZoomConnection.mockResolvedValueOnce(stale);
     setZoomConnectionActive.mockResolvedValueOnce(undefined);
 
     expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
     expect(setZoomConnectionActive).toHaveBeenCalledWith(BIZ, false);
     expect(updateZoomTokens).not.toHaveBeenCalled();
+  });
+
+  it("adopts a concurrent instance's rotation instead of deactivating on invalid_grant", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({ token_expires_at: new Date(NOW - 1000).toISOString() })
+    );
+    // Another server consumed the single-use refresh token first…
+    refreshZoomTokens.mockRejectedValueOnce(
+      new ZoomOAuthError("invalid_grant", "Zoom token endpoint failed (401)")
+    );
+    // …and its rotation is already on the row.
+    getZoomConnection.mockResolvedValueOnce(
+      row({ accessToken: "winner-access", updated_at: "2026-07-01T00:00:05Z" })
+    );
+
+    expect(await getZoomAccessToken(BIZ, NOW)).toBe("winner-access");
+    expect(setZoomConnectionActive).not.toHaveBeenCalled();
   });
 
   it("rethrows transient refresh failures and clears the in-flight slot", async () => {
@@ -202,7 +258,7 @@ describe("getZoomAccessToken", () => {
       refreshToken: "recovered-refresh",
       expiresAt: new Date(NOW + 3_600_000)
     });
-    updateZoomTokens.mockResolvedValueOnce(undefined);
+    updateZoomTokens.mockResolvedValueOnce(true);
     expect(await getZoomAccessToken(BIZ, NOW)).toBe("recovered");
   });
 });

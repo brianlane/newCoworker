@@ -190,16 +190,28 @@ describe("exchangeZoomAuthCode", () => {
     expect(tokens.expiresAt).toEqual(new Date(now + 3600 * 1000));
   });
 
-  it("maps 400/401 to invalid_grant (with Zoom's reason when present)", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(400, { reason: "Invalid authorization code" }));
+  it("maps Zoom's error=invalid_grant to invalid_grant (with the reason)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(400, { error: "invalid_grant", reason: "Invalid authorization code" })
+    );
     await expect(exchangeZoomAuthCode("bad")).rejects.toMatchObject({
       code: "invalid_grant",
       message: expect.stringContaining("Invalid authorization code")
     });
+  });
 
-    fetchMock.mockResolvedValueOnce(jsonResponse(401, {}));
-    await expect(exchangeZoomAuthCode("bad")).rejects.toMatchObject({
-      code: "invalid_grant"
+  it("keeps app-level auth failures as request_failed (never deactivates grants)", async () => {
+    // invalid_client (bad OUR credentials) must not read as a dead user grant.
+    fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_client" }));
+    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+      code: "request_failed",
+      status: 401
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(400, {}));
+    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+      code: "request_failed",
+      status: 400
     });
   });
 
@@ -297,7 +309,9 @@ describe("refreshZoomTokens", () => {
   });
 
   it("surfaces invalid_grant for a consumed/revoked refresh token", async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse(401, { reason: "Invalid Token!" }));
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(401, { error: "invalid_grant", reason: "Invalid Token!" })
+    );
     await expect(refreshZoomTokens("dead")).rejects.toMatchObject({
       code: "invalid_grant"
     });

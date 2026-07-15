@@ -8,6 +8,11 @@
  * persisted BEFORE the access token is handed out — two concurrent callers
  * racing a rotation would otherwise strand the connection.
  *
+ * Cross-instance races (the in-process single-flight can't see other
+ * servers) are handled with an optimistic-concurrency fence on updated_at:
+ * a losing refresher re-reads the row and adopts the winner's rotation
+ * instead of deactivating the connection or clobbering the newer pair.
+ *
  * `zoomApiRequest` mirrors the calendly-direct contract so a future
  * dual-transport resolver can treat Nango-proxied and direct responses
  * interchangeably:
@@ -19,7 +24,8 @@ import { logger } from "@/lib/logger";
 import {
   getZoomConnection,
   setZoomConnectionActive,
-  updateZoomTokens
+  updateZoomTokens,
+  type ZoomConnectionRow
 } from "@/lib/db/zoom-connections";
 import { refreshZoomTokens, ZOOM_API_BASE_URL, ZoomOAuthError } from "@/lib/zoom/oauth";
 
@@ -52,16 +58,22 @@ export function resetZoomRefreshStateForTests(): void {
 
 async function refreshAndPersist(
   businessId: string,
-  refreshToken: string
+  row: ZoomConnectionRow
 ): Promise<string | null> {
   let tokens;
   try {
-    tokens = await refreshZoomTokens(refreshToken);
+    tokens = await refreshZoomTokens(row.refreshToken);
   } catch (err) {
     if (err instanceof ZoomOAuthError && err.code === "invalid_grant") {
-      // Revoked / already-consumed refresh token: the connection is dead
-      // until the owner reconnects. Deactivate so the dashboard says so and
-      // callers stop retrying a grant Zoom will never honor again.
+      // Zoom rejected the grant itself. Either the owner revoked access, or
+      // ANOTHER INSTANCE already consumed this single-use refresh token
+      // (the in-process single-flight can't see other servers). Re-read
+      // before concluding: if the row rotated since we read it, use the
+      // newer pair instead of deactivating a healthy connection.
+      const latest = await getZoomConnection(businessId);
+      if (latest && latest.is_active && latest.updated_at !== row.updated_at) {
+        return latest.accessToken;
+      }
       logger.warn("zoom refresh token rejected; deactivating connection", {
         businessId
       });
@@ -71,8 +83,13 @@ async function refreshAndPersist(
     throw err;
   }
   // Persist the rotated pair BEFORE handing the access token out — the old
-  // refresh token is already dead on Zoom's side.
-  await updateZoomTokens(businessId, tokens);
+  // refresh token is already dead on Zoom's side. The updated_at fence keeps
+  // a slower concurrent refresher from clobbering a newer rotation.
+  const stored = await updateZoomTokens(businessId, tokens, row.updated_at);
+  if (!stored) {
+    const latest = await getZoomConnection(businessId);
+    if (latest && latest.is_active) return latest.accessToken;
+  }
   return tokens.accessToken;
 }
 
@@ -96,7 +113,7 @@ export async function getZoomAccessToken(
   const existing = inflightRefreshes.get(businessId);
   if (existing) return existing;
 
-  const refresh = refreshAndPersist(businessId, row.refreshToken).finally(() => {
+  const refresh = refreshAndPersist(businessId, row).finally(() => {
     inflightRefreshes.delete(businessId);
   });
   inflightRefreshes.set(businessId, refresh);

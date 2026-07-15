@@ -176,9 +176,12 @@ async function tokenEndpointRequest(
   } | null;
 
   if (!res.ok || !body?.access_token || !body.refresh_token) {
-    // Zoom reports a consumed/revoked grant as HTTP 400 with error/reason —
-    // callers deactivate the connection on this instead of retry-looping.
-    const invalidGrant = res.status === 400 || res.status === 401;
+    // Only a genuine dead grant (consumed/revoked code or refresh token —
+    // Zoom sets `error: "invalid_grant"`) may deactivate a connection.
+    // App-level 401s like invalid_client (bad OUR credentials) and unrelated
+    // 400s stay `request_failed` so a config mistake on our side never
+    // soft-disables tenants whose user grants are still valid.
+    const invalidGrant = body?.error === "invalid_grant";
     throw new ZoomOAuthError(
       invalidGrant ? "invalid_grant" : "request_failed",
       `Zoom token endpoint failed (${res.status}${body?.reason ? `: ${body.reason}` : ""})`,

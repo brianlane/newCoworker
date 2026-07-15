@@ -39,6 +39,7 @@ type Chain = {
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  match: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -50,6 +51,7 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     update: vi.fn(() => c),
     delete: vi.fn(() => c),
     eq: vi.fn(() => c),
+    match: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
@@ -315,25 +317,43 @@ describe("updateZoomTokens", () => {
     expiresAt: new Date("2026-07-15T02:00:00Z")
   };
 
-  it("persists the rotated pair in one update", async () => {
-    const c = chain({ error: null });
-    await updateZoomTokens(BIZ, TOKENS, makeDb(c));
+  it("persists the rotated pair in one update and reports success", async () => {
+    const c = chain({ data: [{ id: "zc-1" }], error: null });
+    expect(await updateZoomTokens(BIZ, TOKENS, undefined, makeDb(c))).toBe(true);
     const updated = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(updated.access_token_encrypted).toBe("enc(rotated-access)");
     expect(updated.refresh_token_encrypted).toBe("enc(rotated-refresh)");
     expect(updated.token_expires_at).toBe("2026-07-15T02:00:00.000Z");
-    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ });
+  });
+
+  it("applies the optimistic-concurrency fence and reports a lost race", async () => {
+    const c = chain({ data: [], error: null });
+    expect(
+      await updateZoomTokens(BIZ, TOKENS, "2026-07-01T00:00:00Z", makeDb(c))
+    ).toBe(false);
+    expect(c.match).toHaveBeenCalledWith({
+      business_id: BIZ,
+      updated_at: "2026-07-01T00:00:00Z"
+    });
+  });
+
+  it("treats a null data payload as no rows updated", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await updateZoomTokens(BIZ, TOKENS, undefined, makeDb(c))).toBe(false);
   });
 
   it("throws on an update error", async () => {
-    const c = chain({ error: { message: "rotate fail" } });
-    await expect(updateZoomTokens(BIZ, TOKENS, makeDb(c))).rejects.toThrow(/rotate fail/);
+    const c = chain({ data: null, error: { message: "rotate fail" } });
+    await expect(updateZoomTokens(BIZ, TOKENS, undefined, makeDb(c))).rejects.toThrow(
+      /rotate fail/
+    );
   });
 
   it("uses the default service client when none is provided", async () => {
-    const c = chain({ error: null });
+    const c = chain({ data: [{ id: "zc-1" }], error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
-    await updateZoomTokens(BIZ, TOKENS);
+    expect(await updateZoomTokens(BIZ, TOKENS)).toBe(true);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
