@@ -41,12 +41,37 @@ type ChatGetResponse = {
   pendingJob?: { id: string; threadId: string } | null;
 };
 
+// A creation draft returned by an inline turn: the owner reviews it in the
+// matching editor (nothing is auto-saved).
+type ChatDraft =
+  | { kind: "aiflow"; definition: unknown; warnings: string[] }
+  | {
+      kind: "agent";
+      name: string;
+      instructions: string;
+      outputFormat: "markdown" | "same_as_input";
+    };
+
 type ChatPostResponse = {
   threadId: string;
   activeThreadId: string;
-  jobId: string;
   userMessageId: number;
   messages: ChatMessage[];
+  /**
+   * "inline": the reply was generated on the platform and is already in
+   * `messages` (plus any creation drafts). "worker"/absent: a job was
+   * enqueued to the VPS worker — watch `jobId` for the reply.
+   */
+  mode?: "inline" | "worker";
+  jobId?: string;
+  assistantMessageId?: number;
+  drafts?: ChatDraft[];
+};
+
+type DocumentOption = {
+  id: string;
+  title: string;
+  status: string;
 };
 
 type ChatJobStatusResponse = {
@@ -174,6 +199,16 @@ export function DashboardChat({ businessId, businessName }: Props) {
   const [loadingThread, setLoadingThread] = useState(false);
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  // File/document attachment for the next turn (PDF / text / markdown / CSV
+  // — read by the platform Gemini path; distinct from the image attach).
+  const attachmentInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachedFileName, setAttachedFileName] = useState<string | null>(null);
+  const [attachedDocumentId, setAttachedDocumentId] = useState("");
+  const [documents, setDocuments] = useState<DocumentOption[]>([]);
+  // Creation drafts from the latest inline turn. Ephemeral by design (same
+  // transience as the library's adapt hand-off): the card stashes the draft
+  // into sessionStorage and opens the matching editor for review.
+  const [drafts, setDrafts] = useState<ChatDraft[]>([]);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   // Outstanding fetch / poll lifecycle. AbortController fires on unmount,
   // "New conversation", switching threads mid-send, or a fresh send. The
@@ -215,6 +250,64 @@ export function DashboardChat({ businessId, businessName }: Props) {
     },
     [businessId]
   );
+
+  // Ready business documents for the attachment picker. Best-effort: on
+  // failure the picker just stays empty (fresh uploads still work).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/dashboard/documents?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const env = await parseEnvelope<{ documents?: DocumentOption[] }>(res);
+        if (!cancelled && env.ok && env.data.documents) {
+          setDocuments(env.data.documents.filter((d) => d.status === "ready"));
+        }
+      } catch {
+        /* picker stays empty */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  function clearAttachment() {
+    if (attachmentInputRef.current) attachmentInputRef.current.value = "";
+    setAttachedFileName(null);
+    setAttachedDocumentId("");
+  }
+
+  // Open a creation draft in its editor: stash it in sessionStorage (the
+  // same hand-off contract the AiFlows library "Adapt with AI" flow uses)
+  // and navigate. Nothing is saved until the owner saves it there.
+  function openDraft(draft: ChatDraft) {
+    try {
+      if (draft.kind === "aiflow") {
+        sessionStorage.setItem("aiflow_adapt_draft", JSON.stringify(draft.definition));
+        if (draft.warnings.length > 0) {
+          sessionStorage.setItem("aiflow_adapt_warnings", JSON.stringify(draft.warnings));
+        } else {
+          sessionStorage.removeItem("aiflow_adapt_warnings");
+        }
+        window.location.href = "/dashboard/aiflows?adapt=1";
+      } else {
+        sessionStorage.setItem(
+          "agent_create_draft",
+          JSON.stringify({
+            name: draft.name,
+            instructions: draft.instructions,
+            outputFormat: draft.outputFormat
+          })
+        );
+        window.location.href = "/dashboard/agents?draft=1";
+      }
+    } catch {
+      setError("Could not open the draft — your browser blocked session storage.");
+    }
+  }
 
   const fetchThreads = useCallback(async () => {
     try {
@@ -327,6 +420,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
       // and the server reactivates if needed.
       setLoadingThread(true);
       setError(null);
+      setDrafts([]);
       try {
         if (threadId === activeThreadId) {
           const res = await fetch(
@@ -659,6 +753,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
     setInput("");
     setSending(true);
     setError(null);
+    setDrafts([]);
 
     // Cancel any prior in-flight poll. The Send button is disabled
     // while sending=true, but defensive cleanup means a fast double-
@@ -670,18 +765,38 @@ export function DashboardChat({ businessId, businessName }: Props) {
     // ChatGPT/Claude/Gemini-style: every thread is continuable.
     const targetThreadId = viewingThreadId ?? activeThreadId;
 
+    // Attachment turns: a fresh file goes as multipart; a picked document
+    // goes as documentId in the JSON body.
+    const attachedFile = attachmentInputRef.current?.files?.[0] ?? null;
+    const attachedDoc = attachedDocumentId;
+
     let post: ChatPostResponse;
     try {
-      const res = await fetch("/api/dashboard/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          message: trimmed,
-          ...(targetThreadId ? { threadId: targetThreadId } : {})
-        }),
-        signal: controller.signal
-      });
+      let res: Response;
+      if (attachedFile) {
+        const form = new FormData();
+        form.set("businessId", businessId);
+        form.set("message", trimmed);
+        if (targetThreadId) form.set("threadId", targetThreadId);
+        form.set("file", attachedFile);
+        res = await fetch("/api/dashboard/chat", {
+          method: "POST",
+          body: form,
+          signal: controller.signal
+        });
+      } else {
+        res = await fetch("/api/dashboard/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            businessId,
+            message: trimmed,
+            ...(targetThreadId ? { threadId: targetThreadId } : {}),
+            ...(attachedDoc ? { documentId: attachedDoc } : {})
+          }),
+          signal: controller.signal
+        });
+      }
       const env = await parseEnvelope<ChatPostResponse>(res);
       if (!env.ok) {
         // Rate limit / paused / not found — surface the server's
@@ -719,14 +834,24 @@ export function DashboardChat({ businessId, businessName }: Props) {
     setMessages(post.messages);
     setActiveThreadId(post.activeThreadId);
     setViewingThreadId(post.threadId);
+    clearAttachment();
     // Refresh sidebar so the (newly) active thread's bumped updatedAt +
     // new message_count + flipped isActive flag show up without a
     // hard reload. Fire-and-forget; sidebar is best-effort.
     void fetchThreads();
 
-    // Wait for the worker and render the reply. Extracted into
-    // watchJobUntilSettled so the same Realtime+poll race can be
-    // re-attached after a refresh / navigation (see the hydrate and
+    // Inline turns already carry the assistant reply (and any creation
+    // drafts) in the response — nothing to watch.
+    if (post.mode === "inline" || !post.jobId) {
+      setDrafts(post.drafts ?? []);
+      setSending(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      return;
+    }
+
+    // Worker-fallback turns: wait for the worker and render the reply.
+    // Extracted into watchJobUntilSettled so the same Realtime+poll race
+    // can be re-attached after a refresh / navigation (see the hydrate and
     // selectThread paths), not just on the original send.
     await watchJobUntilSettled(post.jobId, post.threadId, controller);
   }
@@ -870,6 +995,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
       const env = await parseEnvelope<{ ok: boolean }>(res);
       if (env.ok) {
         setMessages([]);
+        setDrafts([]);
         // The previous active thread is now archived; the next POST will
         // mint a fresh active thread (its id is unknown until that POST
         // resolves). Clearing the active id locally puts the input in
@@ -894,7 +1020,8 @@ export function DashboardChat({ businessId, businessName }: Props) {
         <div>
           <h1 className="text-2xl font-bold text-parchment">Chat with your coworker</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Private chat with {businessName}&rsquo;s AI
+            Private chat with {businessName}&rsquo;s AI — attach a file to work on it, or ask it
+            to draft an automation or agent
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1045,6 +1172,38 @@ export function DashboardChat({ businessId, businessName }: Props) {
                 Your coworker is thinking…
               </div>
             )}
+            {drafts.length > 0 && (
+              <div className="self-start flex flex-col gap-2 max-w-[88%]">
+                {drafts.map((draft, i) => (
+                  <div
+                    key={i}
+                    className="rounded-xl border border-claw-green/40 bg-claw-green/5 px-3 py-2"
+                  >
+                    <p className="text-xs font-semibold text-claw-green">
+                      {draft.kind === "aiflow" ? "AiFlow draft ready" : "Agent draft ready"}
+                    </p>
+                    <p className="text-xs text-parchment/60 mt-0.5">
+                      {draft.kind === "aiflow"
+                        ? "Review the drafted automation in the builder, then save it there. Nothing runs until you save."
+                        : `"${draft.name}" — review and save it on the Agents page. Nothing is saved yet.`}
+                    </p>
+                    {draft.kind === "aiflow" && draft.warnings.length > 0 && (
+                      <p className="text-[11px] text-spark-orange mt-1">
+                        {draft.warnings.length} thing{draft.warnings.length === 1 ? "" : "s"} to
+                        review — shown in the builder.
+                      </p>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => openDraft(draft)}
+                      className="mt-2 inline-flex items-center rounded-md bg-claw-green px-3 py-1.5 text-xs font-semibold text-deep-ink hover:bg-opacity-90 transition-colors"
+                    >
+                      {draft.kind === "aiflow" ? "Open in AiFlows builder" : "Open in Agents"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <form
@@ -1064,11 +1223,28 @@ export function DashboardChat({ businessId, businessName }: Props) {
               maxLength={4000}
               rows={3}
             />
-            <div className="mt-2 flex items-center justify-between">
+            {(attachedFileName || attachedDocumentId) && (
+              <div className="mt-2 flex items-center gap-2 text-xs text-parchment/60">
+                <span className="rounded border border-signal-teal/40 bg-signal-teal/10 px-2 py-0.5">
+                  {attachedFileName ??
+                    `Document: ${
+                      documents.find((d) => d.id === attachedDocumentId)?.title ?? "selected"
+                    }`}
+                </span>
+                <button
+                  type="button"
+                  className="text-parchment/40 hover:text-parchment"
+                  onClick={clearAttachment}
+                >
+                  Remove
+                </button>
+              </div>
+            )}
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
               <span className="text-xs text-parchment/40">
                 {input.length}/4000
               </span>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -1080,6 +1256,44 @@ export function DashboardChat({ businessId, businessName }: Props) {
                     if (file) void attachImage(file);
                   }}
                 />
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  accept=".pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv"
+                  className="hidden"
+                  data-testid="chat-file-input"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      setAttachedFileName(file.name);
+                      setAttachedDocumentId("");
+                    }
+                  }}
+                />
+                {documents.length > 0 && !attachedFileName && (
+                  <select
+                    className="rounded-md border border-parchment/15 bg-deep-ink/40 px-2 py-1.5 text-xs text-parchment/70 focus:border-signal-teal focus:outline-none max-w-44"
+                    value={attachedDocumentId}
+                    disabled={sending || isPaused}
+                    onChange={(e) => setAttachedDocumentId(e.target.value)}
+                  >
+                    <option value="">Attach a document…</option>
+                    {documents.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.title}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={sending || isPaused}
+                  onClick={() => attachmentInputRef.current?.click()}
+                >
+                  Attach file
+                </Button>
                 <Button
                   type="button"
                   variant="ghost"

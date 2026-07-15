@@ -1,13 +1,20 @@
 /**
- * Owner ↔ local-model chat endpoint for /dashboard/chat.
+ * Owner chat endpoint for /dashboard/chat — central-Gemini PRIMARY, VPS
+ * chat-worker FALLBACK.
  *
- * POST   ENQUEUE a job and return immediately. The actual model call runs
- *        on the per-tenant VPS chat-worker (vps/chat-worker/) which writes
- *        the assistant message back to dashboard_chat_messages. The browser
- *        subscribes to that table via Supabase Realtime and renders the
- *        reply when it lands. (Replaces the in-Vercel streaming path that
- *        was capped by Vercel's `maxDuration` and dropped messages on any
- *        disconnect inside that window — see PR #79.)
+ * POST   Resolve the turn's route (src/lib/dashboard-chat/routing.ts):
+ *          - INLINE (primary): call central Gemini directly (function
+ *            calling: create_aiflow / create_agent draft tools; native PDF
+ *            attachment understanding), persist BOTH turns, and return the
+ *            assistant reply in the response body. No VPS dependency.
+ *          - WORKER (fallback): budget-exhausted turns (the worker owns the
+ *            local-model degrade), a missing platform API key, or an inline
+ *            failure — ENQUEUE a job exactly as before (PR #79 pipeline):
+ *            the per-tenant VPS chat-worker (vps/chat-worker/) writes the
+ *            assistant message back to dashboard_chat_messages and the
+ *            browser sees it via Supabase Realtime / job polling.
+ *          - REFUSE: attachment turns that can't run inline (attachments
+ *            need the cloud model) get an honest stored reply.
  * GET    Hydrate the active thread + flag state for the client.
  * DELETE End the active thread so the next POST starts fresh.
  *
@@ -95,16 +102,37 @@ import {
   DASHBOARD_PREAMBLE_MAX_CUSTOMERS
 } from "@/lib/customer-memory/dashboard-preamble";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
+import type { PlanTier } from "@/lib/plans/tier";
+import { resolveChatTurnRoute } from "@/lib/dashboard-chat/routing";
+import {
+  runInlineChatTurn,
+  type InlineChatDraft,
+  type InlineTurnAttachment
+} from "@/lib/dashboard-chat/inline-turn";
+import {
+  EMAIL_SEND_OPEN as EMAIL_BLOCK_OPEN,
+  EMAIL_SEND_CLOSE as EMAIL_BLOCK_CLOSE,
+  fulfillEmailBlocks
+} from "@/lib/dashboard-chat/email-blocks";
+import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
+import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { getBusinessDocument } from "@/lib/documents/db";
+import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
+import { isSupportedDocumentMime } from "@/lib/documents/ingest";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 import { loadBusinessFlowActivity } from "../../../../../supabase/functions/_shared/ai_flows/run_context";
 
 export const dynamic = "force-dynamic";
 
-// POST runs in <2s now (write-and-queue, no Rowboat call). Keep
-// maxDuration small so a misbehaving deploy can't burn function-time
-// budget — anything taking >10s on this path is a bug, not a slow model.
-export const maxDuration = 30;
+// The worker-fallback enqueue still returns in <2s, but the PRIMARY path
+// now answers inline on central Gemini — and its create_aiflow tool can
+// legitimately spend 1-2 minutes compiling + self-repairing a large
+// automation. Budget the worst tool-loop case, not the enqueue case.
+export const maxDuration = 300;
 
 const MAX_MESSAGE_CHARS = 4000;
 const HISTORY_TURNS = 20;
@@ -176,8 +204,15 @@ const postBodySchema = z.object({
     .string()
     .trim()
     .min(1, "Message is empty")
-    .max(MAX_MESSAGE_CHARS, `Message is too long (max ${MAX_MESSAGE_CHARS} chars)`)
+    .max(MAX_MESSAGE_CHARS, `Message is too long (max ${MAX_MESSAGE_CHARS} chars)`),
+  // Optional: run this turn against an existing business document (the
+  // stored original is attached to the inline Gemini call). Fresh uploads
+  // arrive as multipart form data instead — see POST.
+  documentId: z.string().uuid().optional()
 });
+
+/** Fresh chat attachments share the documents pipeline's 10 MB budget. */
+const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 const businessIdSchema = z.string().uuid();
 
@@ -193,13 +228,15 @@ type BusinessFlags = {
   customer_channels_enabled: boolean;
   /** IANA timezone for the date/time preamble; null = UTC fallback. */
   timezone: string | null;
+  /** Plan tier — drives the shared AI-budget cap the routing check reads. */
+  tier: PlanTier | null;
 };
 
 async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | null> {
   const db = await createSupabaseServiceClient();
   const { data } = await db
     .from("businesses")
-    .select("id, is_paused, customer_channels_enabled, timezone")
+    .select("id, is_paused, customer_channels_enabled, timezone, tier")
     .eq("id", businessId)
     .maybeSingle();
   if (!data) return null;
@@ -207,7 +244,8 @@ async function loadBusinessFlags(businessId: string): Promise<BusinessFlags | nu
     id: data.id as string,
     is_paused: Boolean(data.is_paused),
     customer_channels_enabled: data.customer_channels_enabled !== false,
-    timezone: typeof data.timezone === "string" ? data.timezone : null
+    timezone: typeof data.timezone === "string" ? data.timezone : null,
+    tier: typeof data.tier === "string" ? (data.tier as PlanTier) : null
   };
 }
 
@@ -284,11 +322,12 @@ export { OWNER_PREAMBLE };
  * workflow re-seed.
  *
  * MUST stay in lockstep with the parser in vps/chat-worker/email-tool.mjs
- * (EMAIL_SEND_OPEN / EMAIL_SEND_CLOSE + field caps, which themselves match
- * the zod schema in /api/voice/tools/dashboard-email).
+ * (worker path) and src/lib/dashboard-chat/email-blocks.ts (inline path) —
+ * EMAIL_SEND_OPEN / EMAIL_SEND_CLOSE + field caps, which themselves match
+ * the zod schema in /api/voice/tools/dashboard-email.
  */
-export const EMAIL_SEND_OPEN = "<<EMAIL_SEND>>";
-export const EMAIL_SEND_CLOSE = "<<END_EMAIL_SEND>>";
+export const EMAIL_SEND_OPEN = EMAIL_BLOCK_OPEN;
+export const EMAIL_SEND_CLOSE = EMAIL_BLOCK_CLOSE;
 
 export const EMAIL_TOOL_ENABLED_PREAMBLE = `EMAIL TOOL — ENABLED.
 
@@ -421,7 +460,42 @@ export async function POST(request: Request) {
       return errorResponse("UNAUTHORIZED", "Authentication required");
     }
 
-    const body = postBodySchema.parse(await request.json());
+    // Two wire shapes: JSON (plain turns + existing-document attachments)
+    // and multipart form data (fresh file uploads). Both normalize into the
+    // same body + optional upload.
+    let body: z.infer<typeof postBodySchema>;
+    let upload: { filename: string; mimeType: string; data: Buffer } | null = null;
+    const contentType = request.headers.get("content-type") ?? "";
+    if (contentType.includes("multipart/form-data")) {
+      const form = await request.formData().catch(() => null);
+      if (!form) return errorResponse("VALIDATION_ERROR", "Expected multipart form data");
+      body = postBodySchema.parse({
+        businessId: form.get("businessId"),
+        message: form.get("message"),
+        ...(form.get("threadId") ? { threadId: form.get("threadId") } : {}),
+        ...(form.get("documentId") ? { documentId: form.get("documentId") } : {})
+      });
+      const file = form.get("file");
+      if (file instanceof File) {
+        const mimeType = file.type.trim().toLowerCase();
+        if (!isSupportedDocumentMime(mimeType)) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            "Only PDF, plain text, markdown, or CSV attachments are supported"
+          );
+        }
+        if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
+          return errorResponse("VALIDATION_ERROR", "Attachments must be between 1 byte and 10 MB");
+        }
+        upload = {
+          filename: file.name.slice(0, 200) || "attachment",
+          mimeType,
+          data: Buffer.from(await file.arrayBuffer())
+        };
+      }
+    } else {
+      body = postBodySchema.parse(await request.json());
+    }
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "operate_messages");
 
     const limiter = rateLimit(`dashboard-chat:${body.businessId}`, DASHBOARD_CHAT_RATE);
@@ -449,10 +523,44 @@ export async function POST(request: Request) {
       );
     }
 
-    // Activity update fires BEFORE we enqueue so the VPS keep-warm timer
-    // stands down for this turn. The worker is the one that touches
-    // activity again on success (post-Rowboat-reply) — not us, since
-    // we're done after the enqueue.
+    // Resolve the turn's attachment: a fresh upload wins; otherwise an
+    // existing business document's stored ORIGINAL (full fidelity — not the
+    // condensed content_md). Reads happen after the role gate above.
+    let attachment: InlineTurnAttachment | null = upload;
+    if (!attachment && body.documentId) {
+      const document = await getBusinessDocument(body.businessId, body.documentId);
+      if (!document) return errorResponse("NOT_FOUND", "Document not found");
+      if (document.status !== "ready") {
+        return errorResponse("VALIDATION_ERROR", "That document isn't ready to use yet");
+      }
+      if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Only PDF, plain text, markdown, or CSV documents are supported"
+        );
+      }
+      const db = await createSupabaseServiceClient();
+      const { data: blob, error: downloadError } = await db.storage
+        .from(BUSINESS_DOCS_BUCKET)
+        .download(document.storage_path);
+      if (downloadError || !blob) {
+        logger.warn("dashboard chat: document attachment download failed", {
+          businessId: body.businessId,
+          documentId: document.id,
+          error: downloadError?.message ?? "no data"
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Could not read the document file");
+      }
+      attachment = {
+        filename: document.storage_path.split("/").pop() ?? document.title,
+        mimeType: document.mime_type,
+        data: Buffer.from(await blob.arrayBuffer())
+      };
+    }
+
+    // Activity update fires BEFORE the turn runs so the VPS keep-warm timer
+    // stands down. On the worker path the worker touches activity again on
+    // success; the inline path re-touches after persisting the reply.
     await touchChatActivity(body.businessId);
 
     // Thread resolution. Two paths:
@@ -561,10 +669,17 @@ export async function POST(request: Request) {
     //     back FROM; on a fresh thread the first attempt is already
     //     stateless, so a second stateless call wouldn't help — we
     //     pass null so the worker's "no fallback" path kicks in.
+    // The stored user message carries a visible attachment marker so the
+    // history tail / summaries reflect what the turn was about (the actual
+    // file content only ever feeds the inline Gemini call).
+    const storedUserMessage = attachment
+      ? `[Attached: ${attachment.filename}] ${body.message}`
+      : body.message;
+
     const inputMessages = buildRowboatChatMessages({
       summaryMd: thread.summary_md,
       tail: tail.slice(-RESEND_TAIL_MESSAGES),
-      newUserMessage: body.message,
+      newUserMessage: storedUserMessage,
       includeTailContext: true,
       customerPreamble,
       emailToolEnabled,
@@ -574,7 +689,7 @@ export async function POST(request: Request) {
       ? buildRowboatChatMessages({
           summaryMd: thread.summary_md,
           tail,
-          newUserMessage: body.message,
+          newUserMessage: storedUserMessage,
           includeTailContext: true,
           customerPreamble,
           emailToolEnabled,
@@ -582,26 +697,129 @@ export async function POST(request: Request) {
         })
       : null;
 
-    // Persist the user message BEFORE enqueueing. If the enqueue fails
-    // for any reason the user's typed message is still saved — they
-    // can retry without losing what they typed. Cheap insurance.
-    const userMsg = await appendMessage(thread.id, "user", body.message);
+    // === Turn routing: inline (central Gemini) primary, worker fallback ===
+    // The spend read fails OPEN to inline (quality over fuse on a transient
+    // DB blip — same posture as the worker's own cap read).
+    const spend = await getChatSpendSnapshotForBusiness(
+      body.businessId,
+      undefined,
+      flags.tier
+    ).catch((spendErr) => {
+      logger.warn("dashboard chat: spend snapshot read failed; routing inline", {
+        businessId: body.businessId,
+        error: spendErr instanceof Error ? spendErr.message : String(spendErr)
+      });
+      return null;
+    });
+    const route = resolveChatTurnRoute({
+      hasAttachment: attachment !== null,
+      apiKeyPresent: Boolean(process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY),
+      spend
+    });
 
-    // Hand the work off to the VPS chat-worker. Both convId and
-    // state are gated on hasContinuation rather than blanket
-    // forwarded: if the stored convId is "" or whitespace,
-    // hasContinuation is already false and statelessInputMessages
-    // is null (no fallback). Forwarding "" anyway would have the
-    // worker call Rowboat with an invalid empty conversationId,
-    // Rowboat would reject it, and the job would fail permanently
-    // because there's no fallback to escalate to. Mirrors the
-    // pre-Option-B `useContinuation ? ... : null` gate. Bugbot
-    // Medium-severity finding on PR #79 round-9.
-    // NOTE: owner-chat spend-cap routing (Gemini vs local Qwen) is decided
-    // authoritatively by the VPS chat-worker at claim time from live period
-    // spend — NOT here. Deciding at enqueue would let a burst of quick POSTs
-    // queue Gemini jobs before the fuse trips, and would split the cap across
-    // two runtimes. See vps/chat-worker/worker.mjs (resolveOwnerChatCap).
+    // Persist the user message BEFORE running/enqueueing the turn. If the
+    // turn fails for any reason the user's typed message is still saved —
+    // they can retry without losing what they typed. Cheap insurance.
+    const userMsg = await appendMessage(thread.id, "user", storedUserMessage);
+
+    // Refusals (attachment turns that can't run inline) are stored like any
+    // assistant reply so the thread stays coherent across devices.
+    if (route.kind === "refuse") {
+      return await finishInlineTurn({
+        businessId: body.businessId,
+        thread,
+        userMsg,
+        content: route.message,
+        drafts: []
+      });
+    }
+
+    if (route.kind === "inline") {
+      // Prompt parity with the worker path: the same system blocks, joined
+      // into Gemini's systemInstruction; the user turn is the marked message.
+      const systemInstruction = inputMessages
+        .filter((m) => m.role === "system")
+        .map((m) => m.content)
+        .join("\n\n");
+      const inline = await runInlineChatTurn({
+        businessId: body.businessId,
+        systemInstruction,
+        userMessage: `[Dashboard] ${storedUserMessage}`,
+        attachment
+      });
+
+      if (inline.ok) {
+        // Fulfil any EMAIL_SEND blocks platform-side (same protocol the
+        // worker fulfils via the gateway adapter): the send re-checks the
+        // Settings toggle authoritatively, and the stored reply is the
+        // cleaned text + honest per-email outcomes.
+        const emailOutcome = await fulfillEmailBlocks({
+          content: inline.content,
+          send: async (req) => {
+            const enabled = await isAgentToolEnabled(body.businessId, "dashboard", "send_email");
+            if (!enabled) return { ok: false, detail: "tool_disabled" };
+            const sent = await sendFromOwnerMailbox(body.businessId, {
+              toEmail: req.to,
+              subject: req.subject,
+              bodyText: req.body,
+              ccEmails: req.cc,
+              bccEmails: req.bcc
+            });
+            if (!sent.ok) return { ok: false, detail: sent.detail };
+            await recordOutboundAssistantEmail({
+              businessId: body.businessId,
+              toEmail: req.to,
+              subject: req.subject,
+              bodyText: req.body,
+              source: "dashboard_chat",
+              providerMessageId: sent.messageId,
+              ccEmails: req.cc,
+              bccEmails: req.bcc
+            });
+            return { ok: true };
+          }
+        });
+        return await finishInlineTurn({
+          businessId: body.businessId,
+          thread,
+          userMsg,
+          content: emailOutcome.content,
+          drafts: inline.drafts,
+          ownerMessageForCapture: body.message
+        });
+      }
+
+      // Inline failed. Attachment turns have no fallback (the worker path
+      // is text-only) — store an honest failure reply. Text turns fall
+      // through to the worker enqueue below.
+      logger.warn("dashboard chat: inline turn failed", {
+        businessId: body.businessId,
+        threadId: thread.id,
+        error: inline.error,
+        detail: inline.detail
+      });
+      if (attachment) {
+        return await finishInlineTurn({
+          businessId: body.businessId,
+          thread,
+          userMsg,
+          content:
+            "I couldn't read that attachment right now — please try again in a moment.",
+          drafts: []
+        });
+      }
+    }
+
+    // === Worker fallback: enqueue exactly as the pre-inline pipeline ===
+    // Both convId and state are gated on hasContinuation rather than
+    // blanket forwarded: if the stored convId is "" or whitespace,
+    // hasContinuation is already false and statelessInputMessages is null
+    // (no fallback). Forwarding "" anyway would have the worker call
+    // Rowboat with an invalid empty conversationId and fail permanently.
+    // NOTE: the worker still decides its own Gemini-vs-local routing at
+    // claim time from live period spend (vps/chat-worker/worker.mjs) — the
+    // route check above only decides inline vs worker, and over-cap turns
+    // always land here so the cap lives in exactly one enforcement point.
     const job = await insertChatJob({
       businessId: body.businessId,
       threadId: thread.id,
@@ -615,15 +833,15 @@ export async function POST(request: Request) {
     });
 
     // The summarizer runs on the worker side (after the assistant
-    // message is persisted) — see comment above the import block. We
-    // still need the post-user-message thread state for the response
-    // body so the client can render the user's echo + the existing
-    // history without an extra GET.
+    // message is persisted). We still need the post-user-message thread
+    // state for the response body so the client can render the user's
+    // echo + the existing history without an extra GET.
     const updated = await listMessages(thread.id);
 
     return successResponse({
       threadId: thread.id,
       activeThreadId: thread.id,
+      mode: "worker",
       jobId: job.id,
       userMessageId: userMsg.id,
       messages: serializeChatMessages(updated)
@@ -631,6 +849,82 @@ export async function POST(request: Request) {
   } catch (err) {
     return handleRouteError(err);
   }
+}
+
+/**
+ * Persist an inline turn's assistant reply and run the post-turn tasks the
+ * worker path performs after its own insert: thread bump, keep-warm touch,
+ * fire-and-forget rolling-summary check, and (for real model replies)
+ * fire-and-forget owner-rule memory capture. Returns the POST response.
+ */
+async function finishInlineTurn(args: {
+  businessId: string;
+  thread: DashboardChatThreadRow;
+  userMsg: { id: number };
+  content: string;
+  drafts: InlineChatDraft[];
+  /** The owner's raw message — presence enables memory capture. */
+  ownerMessageForCapture?: string;
+}): Promise<Response> {
+  const assistantMsg = await appendMessage(args.thread.id, "assistant", args.content);
+
+  const db = await createSupabaseServiceClient();
+  const { error: threadErr } = await db
+    .from("dashboard_chat_threads")
+    .update({ updated_at: new Date().toISOString() })
+    .eq("id", args.thread.id);
+  if (threadErr) {
+    logger.warn("dashboard chat: thread bump failed", {
+      threadId: args.thread.id,
+      error: threadErr.message
+    });
+  }
+  // Keep-warm touch at the END of the turn too (worker parity — the enqueue
+  // path touches at claim AND completion).
+  await touchChatActivity(args.businessId).catch(() => undefined);
+
+  // Fire-and-forget rolling-summary check: both turns are persisted, so
+  // this sees the complete exchange (the exact ordering the PR #79 worker
+  // handoff was built to preserve). Self-healing — a dropped check just
+  // runs on the next turn.
+  void (async () => {
+    try {
+      const freshThread = await getThreadById(args.thread.id);
+      if (!freshThread) return;
+      const msgs = await listMessages(args.thread.id);
+      if (!shouldSummarize(freshThread, msgs.length)) return;
+      await summarizeThread(args.businessId, args.thread.id, {
+        getThreadById: async () => freshThread,
+        listMessages: async () => msgs
+      });
+    } catch (sumErr) {
+      logger.warn("dashboard chat: inline summary check failed", {
+        threadId: args.thread.id,
+        error: sumErr instanceof Error ? sumErr.message : String(sumErr)
+      });
+    }
+  })();
+
+  // Fire-and-forget owner-rule capture (silent, best-effort — worker
+  // parity; see src/lib/dashboard-chat/memory-capture.ts).
+  if (args.ownerMessageForCapture) {
+    void captureOwnerRuleInline({
+      businessId: args.businessId,
+      ownerMessage: args.ownerMessageForCapture,
+      assistantReply: args.content
+    });
+  }
+
+  const updated = await listMessages(args.thread.id);
+  return successResponse({
+    threadId: args.thread.id,
+    activeThreadId: args.thread.id,
+    mode: "inline",
+    userMessageId: args.userMsg.id,
+    assistantMessageId: assistantMsg.id,
+    drafts: args.drafts,
+    messages: serializeChatMessages(updated)
+  });
 }
 
 // =====================================================================

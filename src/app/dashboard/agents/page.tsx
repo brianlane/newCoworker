@@ -7,7 +7,10 @@ import { AgentsManager } from "@/components/dashboard/AgentsManager";
 
 export const dynamic = "force-dynamic";
 
-export default async function AgentsPage() {
+type Props = { searchParams: Promise<{ draft?: string }> };
+
+export default async function AgentsPage({ searchParams }: Props) {
+  const { draft } = await searchParams;
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/agents");
   if (!user.email) redirect("/login?redirectTo=/dashboard/agents");
@@ -45,7 +48,7 @@ export default async function AgentsPage() {
           </div>
         </Card>
       ) : (
-        <AgentsManager businessId={business.id} />
+        <AgentsManager businessId={business.id} initialDraft={draft === "1"} />
       )}
     </div>
   );
