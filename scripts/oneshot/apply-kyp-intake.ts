@@ -74,9 +74,13 @@ if (!APPLY) {
 }
 
 // 1. Owner phone fix (truncated at signup; owner alerts + notify_owner SMS
-//    depend on it being a real E.164).
+//    depend on it being a real E.164), then an explicit profile_md refresh
+//    so the phone lands in the rendered profile block regardless of whether
+//    the apply below gets to its own hours-conditional refresh.
 await updateBusinessPhone(BUSINESS_ID, OWNER_PHONE_E164);
-console.log("[oneshot] owner phone updated");
+const { refreshBusinessProfileMd } = await import("../../src/lib/business-profile/refresh.ts");
+await refreshBusinessProfileMd(BUSINESS_ID);
+console.log("[oneshot] owner phone updated + profile_md refreshed");
 
 // 2. The apply itself (same service the admin route calls). Mirror the
 //    route's failure contract: a mid-apply failure may have committed the
