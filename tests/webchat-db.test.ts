@@ -48,6 +48,7 @@ import {
   getWidgetSettingsForBusiness,
   insertWebchatJob,
   isWebchatUniqueViolation,
+  listWebchatJobStatsForBusiness,
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
@@ -280,6 +281,22 @@ describe("webchat_sessions accessors", () => {
     );
   });
 
+  it("listWebchatJobStatsForBusiness returns stat rows / [] / throws on error", async () => {
+    const rows = [{ session_id: SESSION, status: "done", cost_micros: 18 }];
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: rows, error: null }));
+    expect(await listWebchatJobStatsForBusiness(BIZ)).toEqual(rows);
+
+    // Custom limit + null data.
+    const limited = makeBuilder({ data: null, error: null });
+    supabaseStub.from.mockReturnValueOnce(limited);
+    expect(await listWebchatJobStatsForBusiness(BIZ, { limit: 9 }, injected)).toEqual([]);
+    expect(limited.limit).toHaveBeenCalledWith(9);
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(listWebchatJobStatsForBusiness(BIZ)).rejects.toThrow(
+      "listWebchatJobStatsForBusiness: x"
+    );
+  });
 });
 
 describe("webchat_messages accessors", () => {
@@ -481,12 +498,59 @@ describe("platform-engine job lifecycle", () => {
     expect(supabaseStub.rpc).toHaveBeenCalledWith("webchat_job_complete_platform", {
       p_job_id: JOB,
       p_content: "Reply text",
-      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER,
+      p_cost_micros: null,
+      p_model: null,
+      p_prompt_tokens: null,
+      p_output_tokens: null,
+      p_tool_rounds: null,
+      p_refused_over_cap: null
     });
 
     // bigint may arrive as a string through PostgREST.
     supabaseStub.rpc.mockResolvedValueOnce({ data: "43", error: null });
-    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", injected)).toBe(43);
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", null, injected)).toBe(43);
+  });
+
+  it("completeWebchatJobFromPlatform persists the turn stats (cost clamped to a non-negative integer)", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: 44, error: null });
+    expect(
+      await completeWebchatJobFromPlatform(jobRow, "Reply", {
+        costMicros: 17.4,
+        model: "gemini-2.5-flash-lite",
+        promptTokens: 100,
+        outputTokens: 20,
+        toolRounds: 1,
+        refusedOverCap: false
+      })
+    ).toBe(44);
+    expect(supabaseStub.rpc).toHaveBeenCalledWith("webchat_job_complete_platform", {
+      p_job_id: JOB,
+      p_content: "Reply",
+      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER,
+      p_cost_micros: 17,
+      p_model: "gemini-2.5-flash-lite",
+      p_prompt_tokens: 100,
+      p_output_tokens: 20,
+      p_tool_rounds: 1,
+      p_refused_over_cap: false
+    });
+
+    // A negative estimate can never write a negative ledger row.
+    supabaseStub.rpc.mockResolvedValueOnce({ data: 45, error: null });
+    await completeWebchatJobFromPlatform(jobRow, "Reply", {
+      costMicros: -3,
+      model: "m",
+      promptTokens: null,
+      outputTokens: null,
+      toolRounds: 0,
+      refusedOverCap: true
+    });
+    expect(vi.mocked(supabaseStub.rpc).mock.calls.at(-1)?.[1]).toMatchObject({
+      p_cost_micros: 0,
+      p_prompt_tokens: null,
+      p_refused_over_cap: true
+    });
   });
 
   it("reclaimStaleWebchatJobForPlatform steals only a stale PLATFORM claim", async () => {

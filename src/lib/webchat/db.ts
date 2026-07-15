@@ -648,16 +648,33 @@ export async function reclaimStaleWebchatJobForPlatform(
  * replay against an already-done job idempotently returns the original
  * message id.
  */
+export type WebchatTurnStats = {
+  /** Micro-USD the turn cost (the meter's own math). 0 for a refusal. */
+  costMicros: number;
+  model: string;
+  promptTokens: number | null;
+  outputTokens: number | null;
+  toolRounds: number;
+  refusedOverCap: boolean;
+};
+
 export async function completeWebchatJobFromPlatform(
   job: Pick<WebchatJobRow, "id">,
   content: string,
+  stats?: WebchatTurnStats | null,
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db.rpc("webchat_job_complete_platform", {
     p_job_id: job.id,
     p_content: content,
-    p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+    p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER,
+    p_cost_micros: stats ? Math.max(0, Math.round(stats.costMicros)) : null,
+    p_model: stats?.model ?? null,
+    p_prompt_tokens: stats?.promptTokens ?? null,
+    p_output_tokens: stats?.outputTokens ?? null,
+    p_tool_rounds: stats?.toolRounds ?? null,
+    p_refused_over_cap: stats?.refusedOverCap ?? null
   });
   if (error) throw new Error(`completeWebchatJobFromPlatform: ${error.message}`);
   const msgId = Number(data);
@@ -665,6 +682,44 @@ export async function completeWebchatJobFromPlatform(
     throw new Error(`completeWebchatJobFromPlatform: non-numeric message id ${String(data)}`);
   }
   return msgId;
+}
+
+/**
+ * Per-turn stat projection of a business's webchat jobs, for the admin
+ * Web chat view's spend/usage aggregates. Cost columns are populated only
+ * by the platform (Gemini) engine — box-worker turns read as nulls, so
+ * aggregating over them stays honest (their spend is metered into the
+ * shared pool but is not attributable per turn).
+ */
+export type WebchatJobStatRow = {
+  session_id: string;
+  status: WebchatJobRow["status"];
+  cost_micros: number | null;
+  model: string | null;
+  prompt_tokens: number | null;
+  output_tokens: number | null;
+  tool_rounds: number | null;
+  refused_over_cap: boolean | null;
+  created_at: string;
+};
+
+export async function listWebchatJobStatsForBusiness(
+  businessId: string,
+  opts: { limit?: number } = {},
+  client?: SupabaseClient
+): Promise<WebchatJobStatRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const limit = opts.limit ?? 2000;
+  const { data, error } = await db
+    .from("webchat_jobs")
+    .select(
+      "session_id, status, cost_micros, model, prompt_tokens, output_tokens, tool_rounds, refused_over_cap, created_at"
+    )
+    .eq("business_id", businessId)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listWebchatJobStatsForBusiness: ${error.message}`);
+  return (data as WebchatJobStatRow[] | null) ?? [];
 }
 
 /**

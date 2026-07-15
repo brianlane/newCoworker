@@ -1,6 +1,6 @@
 /**
- * Admin sidebar Web chat view: visitor transcripts from the PLATFORM'S OWN
- * newcoworker.com chat widget.
+ * Admin sidebar Web chat view: visitor transcripts + spend/usage stats for
+ * the PLATFORM'S OWN newcoworker.com chat widget.
  *
  * That widget runs on the direct-Gemini reply engine with no tenant
  * dashboard behind it, so this page is the only place its conversations
@@ -8,8 +8,14 @@
  * marketing page embeds the widget — NEXT_PUBLIC_WEBCHAT_SITE_KEY →
  * chat_widget_settings by key hash — so rotating the key or re-pointing
  * it at another business keeps this view honest with zero config drift.
- * Rows link into the per-business transcript pages that ship with the
- * admin Web chat card.
+ *
+ * Spend numbers come from two places, shown side by side:
+ *   * per-turn stats persisted on webchat_jobs by the Gemini engine
+ *     (cost_micros — the meter's own math), aggregated per session and in
+ *     total here;
+ *   * the business's shared AI-budget pool for the current period
+ *     (owner_chat_model_spend), which also absorbs error-path turns the
+ *     job table can't attribute.
  */
 
 import Link from "next/link";
@@ -18,10 +24,80 @@ import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { hashWebchatToken, parseWidgetKey } from "@/lib/webchat/keys";
 import {
   getWidgetSettingsByKeyHash,
-  listWebchatSessionsForBusiness
+  listWebchatJobStatsForBusiness,
+  listWebchatSessionsForBusiness,
+  type WebchatJobStatRow
 } from "@/lib/webchat/db";
+import { getBusiness } from "@/lib/db/businesses";
+import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
+import type { PlanTier } from "@/lib/plans/tier";
 
 export const dynamic = "force-dynamic";
+
+/** Micro-USD → dollars, with enough precision for sub-cent turns. */
+function usd(micros: number): string {
+  const dollars = micros / 1_000_000;
+  if (dollars === 0) return "$0";
+  if (dollars < 0.01) return `$${dollars.toFixed(4)}`;
+  return `$${dollars.toFixed(2)}`;
+}
+
+type SessionSpend = {
+  costMicros: number;
+  turns: number;
+  errors: number;
+  refused: number;
+};
+
+function aggregateJobStats(jobs: WebchatJobStatRow[]) {
+  const bySession = new Map<string, SessionSpend>();
+  let totalCostMicros = 0;
+  let promptTokens = 0;
+  let outputTokens = 0;
+  let toolRounds = 0;
+  let doneTurns = 0;
+  let errorTurns = 0;
+  let refusedTurns = 0;
+
+  for (const j of jobs) {
+    const s = bySession.get(j.session_id) ?? {
+      costMicros: 0,
+      turns: 0,
+      errors: 0,
+      refused: 0
+    };
+    s.turns += 1;
+    if (j.status === "error") {
+      s.errors += 1;
+      errorTurns += 1;
+    }
+    if (j.status === "done") doneTurns += 1;
+    if (j.refused_over_cap) {
+      s.refused += 1;
+      refusedTurns += 1;
+    }
+    const cost = Number(j.cost_micros ?? 0);
+    if (Number.isFinite(cost) && cost > 0) {
+      s.costMicros += cost;
+      totalCostMicros += cost;
+    }
+    promptTokens += Number(j.prompt_tokens ?? 0) || 0;
+    outputTokens += Number(j.output_tokens ?? 0) || 0;
+    toolRounds += Number(j.tool_rounds ?? 0) || 0;
+    bySession.set(j.session_id, s);
+  }
+
+  return {
+    bySession,
+    totalCostMicros,
+    promptTokens,
+    outputTokens,
+    toolRounds,
+    doneTurns,
+    errorTurns,
+    refusedTurns
+  };
+}
 
 export default async function AdminSiteWebchatPage() {
   const header = (
@@ -40,7 +116,7 @@ export default async function AdminSiteWebchatPage() {
 
   if (!settings) {
     return (
-      <div className="space-y-6 max-w-4xl">
+      <div className="space-y-6 max-w-5xl">
         {header}
         <Card>
           <p className="text-parchment/60 text-center py-8">
@@ -53,12 +129,28 @@ export default async function AdminSiteWebchatPage() {
     );
   }
 
-  const sessions = await listWebchatSessionsForBusiness(settings.business_id, {
-    limit: 100
-  });
+  const [sessions, jobs, business] = await Promise.all([
+    listWebchatSessionsForBusiness(settings.business_id, { limit: 100 }),
+    listWebchatJobStatsForBusiness(settings.business_id),
+    getBusiness(settings.business_id)
+  ]);
+  // Pool snapshot is display-only; a read failure must not blank the page.
+  const spendSnapshot = await getChatSpendSnapshotForBusiness(
+    settings.business_id,
+    undefined,
+    (business?.tier as PlanTier | null) ?? null
+  ).catch(() => null);
+
+  const agg = aggregateJobStats(jobs);
+  const totalMessages = sessions.reduce((n, s) => n + s.message_count, 0);
+  const leadsCaptured = sessions.filter(
+    (s) => s.visitor_name || s.visitor_email || s.visitor_phone
+  ).length;
+  const avgPerConversation =
+    agg.bySession.size > 0 ? agg.totalCostMicros / agg.bySession.size : 0;
 
   return (
-    <div className="space-y-6 max-w-4xl">
+    <div className="space-y-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         {header}
         <Link
@@ -67,6 +159,60 @@ export default async function AdminSiteWebchatPage() {
         >
           Backing business →
         </Link>
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        <Card>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+            Conversations
+          </p>
+          <p className="text-2xl font-bold text-parchment">{sessions.length}</p>
+          <p className="text-xs text-parchment/40 mt-1">
+            {leadsCaptured} with contact details captured
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Messages</p>
+          <p className="text-2xl font-bold text-parchment">{totalMessages}</p>
+          <p className="text-xs text-parchment/40 mt-1">
+            {agg.doneTurns} AI replies · {agg.errorTurns} errored turn
+            {agg.errorTurns === 1 ? "" : "s"}
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+            Total spent
+          </p>
+          <p className="text-2xl font-bold text-claw-green">{usd(agg.totalCostMicros)}</p>
+          <p className="text-xs text-parchment/40 mt-1">
+            {usd(Math.round(avgPerConversation))} avg per conversation
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Tokens</p>
+          <p className="text-2xl font-bold text-parchment">
+            {(agg.promptTokens + agg.outputTokens).toLocaleString()}
+          </p>
+          <p className="text-xs text-parchment/40 mt-1">
+            {agg.promptTokens.toLocaleString()} in · {agg.outputTokens.toLocaleString()} out ·{" "}
+            {agg.toolRounds} tool round{agg.toolRounds === 1 ? "" : "s"}
+          </p>
+        </Card>
+        <Card>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+            AI budget (period)
+          </p>
+          <p className="text-2xl font-bold text-parchment">
+            {spendSnapshot ? usd(spendSnapshot.spendMicros) : "—"}
+          </p>
+          <p className="text-xs text-parchment/40 mt-1">
+            {spendSnapshot
+              ? `of ${usd(spendSnapshot.effectiveCapMicros)} cap${
+                  agg.refusedTurns > 0 ? ` · ${agg.refusedTurns} refused over cap` : ""
+                }`
+              : "pool snapshot unavailable"}
+          </p>
+        </Card>
       </div>
 
       {sessions.length === 0 ? (
@@ -82,6 +228,13 @@ export default async function AdminSiteWebchatPage() {
               const contactBits = [s.visitor_email, s.visitor_phone]
                 .filter((v) => v && v !== who)
                 .join(" · ");
+              const spend = agg.bySession.get(s.id);
+              const spendBits = [
+                spend ? usd(spend.costMicros) : "$0",
+                `${s.message_count} message${s.message_count === 1 ? "" : "s"}`
+              ];
+              if (spend && spend.errors > 0) spendBits.push(`${spend.errors} errored`);
+              if (spend && spend.refused > 0) spendBits.push(`${spend.refused} refused`);
               return (
                 <li key={s.id}>
                   <Link
@@ -95,9 +248,7 @@ export default async function AdminSiteWebchatPage() {
                       </p>
                     </div>
                     <div className="text-right shrink-0">
-                      <p className="text-xs text-parchment/60">
-                        {s.message_count} message{s.message_count === 1 ? "" : "s"}
-                      </p>
+                      <p className="text-xs text-parchment/60">{spendBits.join(" · ")}</p>
                       <p className="text-xs text-parchment/40">
                         <LocalDateTime iso={s.last_seen_at} style="list" />
                       </p>
