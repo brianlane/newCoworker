@@ -28,6 +28,10 @@ vi.mock("@/lib/calendar-tools/caldav", () => ({
   cancelCaldavAppointment: vi.fn(),
   rescheduleCaldavAppointment: vi.fn()
 }));
+vi.mock("@/lib/zoom/meetings", () => ({
+  updateZoomMeetingForBooking: vi.fn(),
+  deleteZoomMeetingForBooking: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn() } }));
 
 import {
@@ -57,6 +61,10 @@ import {
   cancelCaldavAppointment,
   rescheduleCaldavAppointment
 } from "@/lib/calendar-tools/caldav";
+import {
+  deleteZoomMeetingForBooking,
+  updateZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
 
 /**
  * Appointment lifecycle cores (Truly Issue 4): a reschedule PATCHes the
@@ -88,7 +96,13 @@ const RESCHEDULE_ARGS = {
   attendeePhone: PHONE
 };
 
-const CLAIM = { id: "claim-1", eventId: "evt-1", startAt: "2026-07-13T20:00:00Z" };
+const CLAIM = {
+  id: "claim-1",
+  eventId: "evt-1",
+  startAt: "2026-07-13T20:00:00Z",
+  zoomMeetingId: null
+};
+const ZOOM_CLAIM = { ...CLAIM, zoomMeetingId: "zm-1" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -843,5 +857,78 @@ describe("cancelCalendarAppointment", () => {
     expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).detail).toBe(
       "calendar_cancel_failed"
     );
+  });
+});
+
+describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
+  const CANCEL_ARGS = { attendeePhone: PHONE };
+
+  it("Google reschedule moves the Zoom meeting with the event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+
+    expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
+    expect(vi.mocked(updateZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1", {
+      startIso: RESCHEDULE_ARGS.newStartIso,
+      endIso: RESCHEDULE_ARGS.newEndIso
+    });
+  });
+
+  it("a Zoom-free claim reschedules without touching Zoom", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+
+    expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
+    expect(vi.mocked(updateZoomMeetingForBooking)).not.toHaveBeenCalled();
+  });
+
+  it("CalDAV reschedule moves the Zoom meeting after a successful provider move", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
+    vi.mocked(rescheduleCaldavAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "evt-1" }
+    } as never);
+
+    expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
+    expect(vi.mocked(updateZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1", {
+      startIso: RESCHEDULE_ARGS.newStartIso,
+      endIso: RESCHEDULE_ARGS.newEndIso
+    });
+  });
+
+  it("Microsoft cancel deletes the Zoom meeting with the event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+
+    expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(true);
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("CalDAV cancel deletes the Zoom meeting after the provider delete succeeds", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
+    vi.mocked(cancelCaldavAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "evt-1", canceled: true }
+    } as never);
+
+    expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(true);
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("a failed provider cancel leaves the Zoom meeting alone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(ZOOM_CLAIM);
+    vi.mocked(cancelCaldavAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_cancel_failed"
+    } as never);
+
+    expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(false);
+    expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
   });
 });

@@ -32,6 +32,10 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
 }));
 vi.mock("@/lib/customer-memory/db", () => ({ getCustomerMemory: vi.fn() }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
+vi.mock("@/lib/zoom/meetings", () => ({
+  createZoomMeetingForBooking: vi.fn(),
+  deleteZoomMeetingForBooking: vi.fn()
+}));
 
 import {
   bookCalendarAppointment,
@@ -57,6 +61,10 @@ import {
 } from "@/lib/calendar-tools/booking-dedupe";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import {
+  createZoomMeetingForBooking,
+  deleteZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -99,6 +107,8 @@ beforeEach(() => {
   // Default: no stored contact — the model-supplied attendeeName is used, as
   // pre-preferred-name tests pin.
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
+  // Default: no Zoom connection — bookings behave exactly as pre-Zoom tests pin.
+  vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
 });
 
 describe("computeFreeSlots", () => {
@@ -650,7 +660,9 @@ describe("bookCalendarAppointment", () => {
       { ...ARGS, attendeeEmail: "joe@acme.com", notes: "gate code 1234" },
       "+15551230000"
     );
-    expect(result).toBe(delegated);
+    // Deep equality, not identity: the success path re-wraps the result so a
+    // Zoom join link can be merged into the data when one exists.
+    expect(result).toStrictEqual(delegated);
     expect(vi.mocked(bookCaldavAppointment)).toHaveBeenCalledWith(BIZ, {
       startIso: ARGS.startIso,
       endIso: ARGS.endIso,
@@ -1029,7 +1041,7 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
     const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
     expect(result.ok).toBe(true);
-    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1");
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", null);
     expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
   });
 
@@ -1065,6 +1077,134 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     expect(result.ok).toBe(true);
     expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
     expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
+  });
+});
+
+describe("bookCalendarAppointment — Zoom decorator", () => {
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate call",
+    attendeeName: "Joe Plumber",
+    notes: "Kitchen sink"
+  };
+  const ZOOM = { meetingId: "zm-1", joinUrl: "https://zoom.us/j/123" };
+
+  it("threads the join link into the event body, result data, and ledger confirm", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-1" });
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    expect(vi.mocked(createZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, {
+      topic: "Estimate call",
+      startIso: ARGS.startIso,
+      endIso: ARGS.endIso,
+      agenda: "Kitchen sink"
+    });
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { description: string };
+    };
+    expect(call.data.description).toContain("Video call (Zoom): https://zoom.us/j/123");
+    expect(result.data).toMatchObject({
+      eventId: "ev-1",
+      zoomMeetingId: "zm-1",
+      zoomJoinUrl: "https://zoom.us/j/123"
+    });
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", "zm-1");
+    expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
+  });
+
+  it("omits the agenda when the booking has no notes", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(null);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    const { notes: _unused, ...noNotes } = ARGS;
+    await bookCalendarAppointment(BIZ, noNotes, "+15551230000");
+    expect(vi.mocked(createZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, {
+      topic: "Estimate call",
+      startIso: ARGS.startIso,
+      endIso: ARGS.endIso
+    });
+  });
+
+  it("cleans up the meeting when the Google create returns no connection", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("cleans up the meeting when the Microsoft create returns no connection", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("cleans up the meeting when the provider create throws", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("graph 500"));
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("CalDAV: merges the join link into the body and result; keeps the meeting on success", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    vi.mocked(bookCaldavAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "ics-1", provider: "caldav" }
+    } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+
+    const caldavCall = vi.mocked(bookCaldavAppointment).mock.calls[0][1] as {
+      description: string;
+    };
+    expect(caldavCall.description).toContain("Video call (Zoom): https://zoom.us/j/123");
+    expect(result.data).toMatchObject({
+      eventId: "ics-1",
+      zoomMeetingId: "zm-1",
+      zoomJoinUrl: "https://zoom.us/j/123"
+    });
+    expect(vi.mocked(fireGoalEvent)).toHaveBeenCalled();
+    expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
+  });
+
+  it("CalDAV: cleans up the meeting when the booking fails", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(createZoomMeetingForBooking).mockResolvedValue(ZOOM);
+    vi.mocked(bookCaldavAppointment).mockResolvedValue({
+      ok: false,
+      detail: "calendar_book_failed"
+    } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toEqual({ ok: false, detail: "calendar_book_failed" });
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("Vagaro and Calendly stay Zoom-free", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(createZoomMeetingForBooking)).not.toHaveBeenCalled();
+
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(createCalendlyBookingLink).mockResolvedValue({
+      ok: true,
+      detail: "booking_link_created"
+    } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(createZoomMeetingForBooking)).not.toHaveBeenCalled();
   });
 });
 

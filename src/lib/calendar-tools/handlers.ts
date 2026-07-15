@@ -13,6 +13,10 @@ import {
 } from "@/lib/calendar-tools/booking-dedupe";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import {
+  createZoomMeetingForBooking,
+  deleteZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
 import { logger } from "@/lib/logger";
 
 /**
@@ -468,9 +472,18 @@ export async function bookCalendarAppointment(
   const result = await bookOnProvider(businessId, args, fallbackPhone);
 
   if (claim?.kind === "claimed") {
-    const bookedEventId = (result.data as { eventId?: unknown } | undefined)?.eventId;
+    const booked = result.data as
+      | { eventId?: unknown; zoomMeetingId?: unknown }
+      | undefined;
+    const bookedEventId = booked?.eventId;
     if (result.ok && typeof bookedEventId === "string" && bookedEventId.length > 0) {
-      await confirmBookingDedupe(claim.id, bookedEventId);
+      // The Zoom meeting id (when the booking got one) rides on the ledger
+      // row so reschedule/cancel can move/delete the meeting with the event.
+      await confirmBookingDedupe(
+        claim.id,
+        bookedEventId,
+        typeof booked?.zoomMeetingId === "string" ? booked.zoomMeetingId : null
+      );
     } else {
       await releaseBookingDedupe(claim.id);
     }
@@ -483,6 +496,10 @@ async function bookOnProvider(
   args: BookAppointmentArgs,
   fallbackPhone?: string | null
 ): Promise<CalendarToolResult> {
+  // Hoisted for the catch block: a Zoom meeting created before a provider
+  // failure must be cleaned up, or it lingers on the owner's account with
+  // no calendar event referencing it.
+  let orphanZoomMeetingId: string | null = null;
   try {
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) {
@@ -511,11 +528,32 @@ async function bookOnProvider(
       });
     }
 
+    // Zoom decorator for the REAL-booking calendar providers below (CalDAV,
+    // Google, Microsoft): with a connected Zoom account — first-party
+    // zoom_connections, or a legacy Nango link — the appointment gets a
+    // scheduled Zoom meeting whose join link rides the event body and the
+    // tool result (so the agent texts/emails it in the confirmation).
+    // Best-effort by contract: null means "no video link", never a failed
+    // booking. Vagaro (in-person services) and Calendly (link-mode, no
+    // confirmed event) stay Zoom-free.
+    const zoomMeeting = await createZoomMeetingForBooking(businessId, {
+      topic: args.summary,
+      startIso: args.startIso,
+      endIso: args.endIso,
+      ...(args.notes ? { agenda: args.notes } : {})
+    });
+    orphanZoomMeetingId = zoomMeeting?.meetingId ?? null;
+    const zoomLine = zoomMeeting ? `Video call (Zoom): ${zoomMeeting.joinUrl}` : "";
+    const zoomData = zoomMeeting
+      ? { zoomMeetingId: zoomMeeting.meetingId, zoomJoinUrl: zoomMeeting.joinUrl }
+      : {};
+
     if (conn.provider === "caldav") {
       // Real booking on the owner's CalDAV calendar (direct, no Nango).
       const caldavPhone = args.attendeePhone ?? fallbackPhone ?? "";
       const caldavDescription = [
         args.notes ?? "",
+        zoomLine,
         `Attendee: ${args.attendeeName}`,
         caldavPhone ? `Phone: ${caldavPhone}` : "",
         args.attendeeEmail ? `Email: ${args.attendeeEmail}` : ""
@@ -532,9 +570,18 @@ async function bookOnProvider(
       // a response carrying an event id counts as booked for goals.
       const caldavEventId = (caldavResult.data as { eventId?: unknown } | undefined)?.eventId;
       if (caldavResult.ok && caldavEventId) {
+        orphanZoomMeetingId = null;
         await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
           kind: "appointment_booked"
         });
+        return {
+          ...caldavResult,
+          data: { ...(caldavResult.data as Record<string, unknown>), ...zoomData }
+        };
+      }
+      if (zoomMeeting) {
+        await deleteZoomMeetingForBooking(businessId, zoomMeeting.meetingId);
+        orphanZoomMeetingId = null;
       }
       return caldavResult;
     }
@@ -542,6 +589,7 @@ async function bookOnProvider(
     const phoneFallback = args.attendeePhone ?? fallbackPhone ?? "";
     const descriptionLines = [
       args.notes ?? "",
+      zoomLine,
       `Attendee: ${args.attendeeName}`,
       phoneFallback ? `Phone: ${phoneFallback}` : "",
       args.attendeeEmail ? `Email: ${args.attendeeEmail}` : ""
@@ -596,7 +644,13 @@ async function bookOnProvider(
           }
         }
       );
-      if (!res) return { ok: false, detail: "calendar_not_connected" };
+      if (!res) {
+        if (zoomMeeting) {
+          await deleteZoomMeetingForBooking(businessId, zoomMeeting.meetingId);
+          orphanZoomMeetingId = null;
+        }
+        return { ok: false, detail: "calendar_not_connected" };
+      }
       const data = res.data as { id?: string; htmlLink?: string };
       eventId = data?.id ?? null;
       htmlLink = data?.htmlLink ?? null;
@@ -623,7 +677,13 @@ async function bookOnProvider(
           }
         }
       );
-      if (!res) return { ok: false, detail: "calendar_not_connected" };
+      if (!res) {
+        if (zoomMeeting) {
+          await deleteZoomMeetingForBooking(businessId, zoomMeeting.meetingId);
+          orphanZoomMeetingId = null;
+        }
+        return { ok: false, detail: "calendar_not_connected" };
+      }
       const data = res.data as { id?: string; webLink?: string };
       eventId = data?.id ?? null;
       htmlLink = data?.webLink ?? null;
@@ -641,13 +701,16 @@ async function bookOnProvider(
       });
     }
 
+    // The event now exists and references the meeting — no longer an orphan.
+    orphanZoomMeetingId = null;
     return {
       ok: true,
       data: {
         eventId,
         htmlLink,
         provider: conn.provider,
-        calendar: shared ? "shared" : "primary"
+        calendar: shared ? "shared" : "primary",
+        ...zoomData
       }
     };
   } catch (err) {
@@ -655,6 +718,9 @@ async function bookOnProvider(
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });
+    if (orphanZoomMeetingId) {
+      await deleteZoomMeetingForBooking(businessId, orphanZoomMeetingId);
+    }
     return { ok: false, detail: "calendar_book_failed" };
   }
 }

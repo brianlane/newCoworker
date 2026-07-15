@@ -205,6 +205,13 @@ describe("confirmBookingDedupe", () => {
     expect(logger.error).not.toHaveBeenCalled();
   });
 
+  it("stamps the booking's Zoom meeting id alongside the event id when present", async () => {
+    const calls = scriptClient([{ data: null, error: null }]);
+    await confirmBookingDedupe("row-1", "evt-9", "zm-1");
+    const update = calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toEqual({ event_id: "evt-9", zoom_meeting_id: "zm-1" });
+  });
+
   it("retries a failed confirm and succeeds without escalating", async () => {
     // A lost confirm re-opens the duplicate window after the in-flight TTL
     // (Bugbot High on PR #566) — one transient DB error must not be enough
@@ -269,19 +276,35 @@ describe("releaseBookingDedupe", () => {
 });
 
 describe("findUpcomingBookingClaim (reschedule/cancel event resolution)", () => {
-  it("returns the attendee's next confirmed upcoming booking", async () => {
+  it("returns the attendee's next confirmed upcoming booking (with its Zoom meeting)", async () => {
     const calls = scriptClient([
-      { data: { id: "row-1", event_id: "evt-1", start_at: "2026-07-14T20:00:00Z" }, error: null }
+      {
+        data: {
+          id: "row-1",
+          event_id: "evt-1",
+          start_at: "2026-07-14T20:00:00Z",
+          zoom_meeting_id: "zm-1"
+        },
+        error: null
+      }
     ]);
     expect(await findUpcomingBookingClaim(BIZ, KEY)).toEqual({
       id: "row-1",
       eventId: "evt-1",
-      startAt: "2026-07-14T20:00:00Z"
+      startAt: "2026-07-14T20:00:00Z",
+      zoomMeetingId: "zm-1"
     });
     // Confirmed rows only (event_id set), upcoming only, soonest first.
     expect(calls.find((c) => c.name === "not")?.args).toEqual(["event_id", "is", null]);
     expect(calls.find((c) => c.name === "gte")?.args[0]).toBe("start_at");
     expect(calls.find((c) => c.name === "order")?.args[0]).toBe("start_at");
+  });
+
+  it("normalizes a missing zoom_meeting_id to null (pre-Zoom rows)", async () => {
+    scriptClient([
+      { data: { id: "row-1", event_id: "evt-1", start_at: "2026-07-14T20:00:00Z" }, error: null }
+    ]);
+    expect((await findUpcomingBookingClaim(BIZ, KEY))?.zoomMeetingId).toBeNull();
   });
 
   it("null on no row, read error, or client blow-up", async () => {
@@ -327,10 +350,20 @@ describe("findUpcomingBookingClaimByPhone (format-tolerant fallback)", () => {
       id: "row-mine",
       eventId: "evt-mine",
       startAt: "2026-07-14T20:00:00Z",
+      zoomMeetingId: null,
       attendeeKey: "phone:+15485773546"
     });
     const like = calls.find((c) => c.name === "like");
     expect(like?.args).toEqual(["attendee_key", "phone:%"]);
+  });
+
+  it("carries the row's Zoom meeting id when present", async () => {
+    scriptClient([
+      { data: [{ ...ROWS[2], zoom_meeting_id: "zm-9" }], error: null }
+    ]);
+    expect(
+      (await findUpcomingBookingClaimByPhone(BIZ, "+15485773546"))?.zoomMeetingId
+    ).toBe("zm-9");
   });
 
   it("null when no digits, no rows match, or the read fails", async () => {
