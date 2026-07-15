@@ -30,14 +30,19 @@ export type SendFromOption = {
 };
 
 /**
- * Pull the connected mailbox's address from Nango metadata. Connect-UI
- * connections store it under `end_user_email` / `end_user_display_name` rather
- * than `email`, so fall back through those before giving up.
+ * Pull the connected mailbox's address from Nango metadata.
+ * `provider_account_email` is the REAL account behind the OAuth grant (probed
+ * from the provider after connect — see lib/nango/account-identity). The
+ * `end_user_*` keys are only who was logged into OUR dashboard when the
+ * session started (identical across every account the owner connects), so
+ * they are last-resort fallbacks for legacy rows.
  */
 export function connectionEmail(metadata: Record<string, unknown>): string | null {
   const m = metadata ?? {};
   const candidate =
+    (typeof m.provider_account_email === "string" && m.provider_account_email) ||
     (typeof m.email === "string" && m.email) ||
+    (typeof m.provider_account_display_name === "string" && m.provider_account_display_name) ||
     (typeof m.end_user_email === "string" && m.end_user_email) ||
     (typeof m.end_user_display_name === "string" && m.end_user_display_name) ||
     "";
