@@ -170,6 +170,7 @@ export function simulateTestAction(
         simulated: "place_ai_call",
         to: action.to,
         persona: action.persona,
+        ...(action.contextNote ? { known_details: action.contextNote } : {}),
         ...(action.preSmsBody ? { pre_alert: action.preSmsBody } : {}),
         saved: { [action.saveAs]: outcome }
       };

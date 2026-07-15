@@ -478,6 +478,8 @@ export type StepAction =
       kind: "place_ai_call";
       to: string;
       persona: string;
+      /** Rendered known-details note ("" = none configured). */
+      contextNote: string;
       notifyE164?: string;
       notifyRef?: ContactRef;
       transferToE164?: string;
@@ -1066,12 +1068,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!persona) {
         return { ok: false, error: "place_ai_call: call script is empty after templating" };
       }
+      const contextNote = step.contextTemplate
+        ? renderTemplate(step.contextTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
       const preSmsBody = step.transfer?.preSmsTemplate
         ? renderTemplate(step.transfer.preSmsTemplate, scope, { collapseEmpty: true }).trim()
         : "";
       const base = {
         kind: "place_ai_call" as const,
         persona,
+        contextNote,
         ...(step.notifyE164 ? { notifyE164: step.notifyE164 } : {}),
         ...(step.notifyRef ? { notifyRef: step.notifyRef } : {}),
         ...(step.transfer?.toE164 ? { transferToE164: step.transfer.toE164 } : {}),

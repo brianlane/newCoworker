@@ -1152,6 +1152,7 @@ function main(): void {
               notify_e164?: string;
               persona?: string;
               capture_fields?: unknown;
+              context_note?: string;
             } | null;
             transfer?: {
               to_e164?: string;
@@ -1167,7 +1168,11 @@ function main(): void {
             persona: typeof ai?.persona === "string" ? ai.persona : undefined,
             captureFields: Array.isArray(ai?.capture_fields)
               ? (ai!.capture_fields as unknown[]).filter((x): x is string => typeof x === "string")
-              : undefined
+              : undefined,
+            contextNote:
+              typeof ai?.context_note === "string" && ai.context_note.trim()
+                ? ai.context_note.trim()
+                : undefined
           };
           // place_ai_call live-transfer config: the flow explicitly authorized
           // a mid-call warm transfer (pre-alert SMS + wt: transfer) — carried

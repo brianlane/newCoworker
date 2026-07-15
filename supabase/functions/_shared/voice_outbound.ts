@@ -55,6 +55,8 @@ export type OutboundCallPlan = {
   /** Where the post-call summary + transcript text is sent. */
   notifyE164: string;
   persona: string | null;
+  /** place_ai_call only: rendered known-details note for the call prompt. */
+  contextNote?: string;
   captureFields: string[] | null;
   /** place_ai_call only: live-transfer config. */
   transfer?: OutboundCallTransfer;
@@ -132,6 +134,8 @@ export type OutboundSessionContext = {
     notify_e164: string;
     persona?: string;
     capture_fields?: string[];
+    /** Known details about the callee, injected with a never-re-ask rule. */
+    context_note?: string;
   };
   /** place_ai_call only: the bridge registers a live-transfer tool from this. */
   transfer?: {
@@ -164,6 +168,7 @@ export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionC
   if (plan.captureFields && plan.captureFields.length > 0) {
     ai_takeover.capture_fields = plan.captureFields;
   }
+  if (plan.contextNote) ai_takeover.context_note = plan.contextNote;
   const ctx: OutboundSessionContext = { outbound: true, ai_takeover };
   if (plan.transfer) {
     ctx.transfer = {
@@ -206,6 +211,9 @@ export function parsePlaceCallPayload(raw: unknown): OutboundCallPlan | null {
     persona,
     captureFields: captureFields && captureFields.length > 0 ? captureFields : null
   };
+  if (typeof c.contextNote === "string" && c.contextNote.trim()) {
+    plan.contextNote = c.contextNote.trim();
+  }
   if (c.transfer !== undefined) {
     const t = c.transfer as Record<string, unknown> | null;
     const transferTo = t && typeof t.toE164 === "string" ? t.toE164.trim() : "";

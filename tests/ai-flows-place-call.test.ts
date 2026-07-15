@@ -136,16 +136,18 @@ describe("schema: place_ai_call", () => {
     ).toContain("both transfer.toE164 and transfer.toRef");
   });
 
-  it("scope-checks the persona and pre-alert templates", () => {
+  it("scope-checks the persona, known-details, and pre-alert templates", () => {
     const issues = issuesOf(
       defWith({
         toVar: "lead_phone",
         personaTemplate: "Hi {{vars.never_extracted}}",
+        contextTemplate: "Name: {{vars.ctx_missing}}",
         notifyE164: "+16025245719",
         transfer: { toE164: "+16025245719", preSmsTemplate: "Alert {{vars.also_missing}}" }
       })
     );
     expect(issues.join("\n")).toContain("{{vars.never_extracted}}");
+    expect(issues.join("\n")).toContain("{{vars.ctx_missing}}");
     expect(issues.join("\n")).toContain("{{vars.also_missing}}");
   });
 
@@ -196,9 +198,10 @@ describe("planStep: place_ai_call", () => {
       ...extra
     }) as FlowStep;
 
-  it("resolves the callee (NANP normalized), renders persona + pre-alert, and passes refs through", () => {
+  it("resolves the callee (NANP normalized), renders persona + context + pre-alert, and passes refs through", () => {
     const plan = planStep(
       step({
+        contextTemplate: "Their name: {{vars.lead_name}}.",
         transfer: {
           toRef: EMP_REF,
           preSmsTemplate: "LIVE TRANSFER — {{vars.lead_name}} ({{vars.lead_phone}})"
@@ -214,6 +217,7 @@ describe("planStep: place_ai_call", () => {
         kind: "place_ai_call",
         to: "+17572390150",
         persona: "Hi Bryan, is now a good time?",
+        contextNote: "Their name: Bryan.",
         notifyE164: "+16025245719",
         transferToRef: EMP_REF,
         preSmsBody: "LIVE TRANSFER — Bryan ((757) 239-0150)",
@@ -233,6 +237,7 @@ describe("planStep: place_ai_call", () => {
       to: "+17572390150",
       notifyRef: EMP_REF,
       transferToE164: "+16025245719",
+      contextNote: "",
       preSmsBody: "",
       saveAs: "call_outcome"
     });
@@ -271,6 +276,7 @@ describe("test mode: place_ai_call is simulated", () => {
     kind: "place_ai_call" as const,
     to: "+17572390150",
     persona: "Hi!",
+    contextNote: "",
     notifyE164: "+16025245719",
     preSmsBody: "",
     saveAs: "call_outcome",
@@ -305,7 +311,17 @@ describe("test mode: place_ai_call is simulated", () => {
     const result = simulateTestAction(baseAction, scope);
     expect(result).toMatchObject({ saved: { call_outcome: "answered" } });
     expect(result).not.toHaveProperty("pre_alert");
+    expect(result).not.toHaveProperty("known_details");
     expect(scope.vars.call_outcome).toBe("answered");
+  });
+
+  it("the simulated result surfaces the rendered known-details note", () => {
+    const scope = { vars: {} as Record<string, unknown> };
+    const result = simulateTestAction(
+      { ...baseAction, contextNote: "Their name: Bryan." },
+      scope
+    );
+    expect(result).toMatchObject({ known_details: "Their name: Bryan." });
   });
 
   it("a planner skip mirrors the live not_placed sentinel", () => {

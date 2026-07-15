@@ -1019,6 +1019,14 @@ export type FlowStep =
       toVar: string;
       /** Greeting/script template the AI opens the call with (var-templated). */
       personaTemplate: string;
+      /**
+       * What the AI already KNOWS about the person (var-templated, e.g.
+       * "Name: {{vars.lead_name}}. Property: {{vars.lead_address}}."). Injected
+       * into the call's system prompt with a never-re-ask rule — without it
+       * the AI asks for details the flow already extracted ("why are you
+       * asking my name if you already have it?", live test Jul 15 2026).
+       */
+      contextTemplate?: string;
       /** Post-call summary recipient: exactly one of notifyE164 / notifyRef. */
       notifyE164?: string;
       notifyRef?: ContactRef;

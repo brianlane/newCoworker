@@ -770,6 +770,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
         : undefined;
     return {
       ...step,
+      contextTemplate: step.contextTemplate?.trim() || undefined,
       notifyE164: step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
       transfer,
       captureFields: captureFields.length > 0 ? captureFields : undefined
@@ -4302,6 +4303,13 @@ function StepFields({
           onChange={(v) => patchStep(index, { personaTemplate: v })}
           textarea
           help="How the AI opens and what the call is about. You can reuse details earlier steps found, e.g. {{vars.lead_name}}."
+        />
+        <Field
+          label="What the AI already knows about them (optional)"
+          value={step.contextTemplate ?? ""}
+          onChange={(v) => patchStep(index, { contextTemplate: v.trim() ? v : undefined })}
+          textarea
+          help='Details the AI must never re-ask for, e.g. "Their name: {{vars.lead_name}}. Address: {{vars.lead_address}}."'
         />
         <ContactRefPicker
           label="Text the summary to (E.164, e.g. +16025551234)"

@@ -560,6 +560,9 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
         <>
           <Row label="Calls" value={`{{vars.${step.toVar}}}`} mono />
           <Row label="AI opens with" value={step.personaTemplate} />
+          {step.contextTemplate && (
+            <Row label="Already knows (never re-asks)" value={step.contextTemplate} />
+          )}
           <Row
             label="Texts summary to"
             value={voiceTarget(step.notifyE164, step.notifyRef)}
