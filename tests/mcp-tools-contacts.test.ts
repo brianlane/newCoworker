@@ -185,6 +185,24 @@ describe("update_contact", () => {
     });
   });
 
+  it("fans goal events out to merged alias numbers", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      ...ROW,
+      alias_e164s: ["+15550009999"]
+    } as never);
+    await updateContactTool.handler({ phone: "+15550001111", tags: ["Won"] }, AUTH);
+    // A parked run may be keyed on the merged-away number — both must jump.
+    expect(fireGoalEvent).toHaveBeenCalledTimes(2);
+    expect(fireGoalEvent).toHaveBeenCalledWith("biz-1", "+15550001111", {
+      kind: "tag_added",
+      tag: "Won"
+    });
+    expect(fireGoalEvent).toHaveBeenCalledWith("biz-1", "+15550009999", {
+      kind: "tag_added",
+      tag: "Won"
+    });
+  });
+
   it("fires owner_assigned with the member's name on a real owner change", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
     vi.mocked(getTeamMember).mockResolvedValue({ name: "Sam" } as never);
@@ -201,9 +219,22 @@ describe("update_contact", () => {
     );
   });
 
-  it("omits ownerName when the roster lookup fails", async () => {
+  it("refuses an owner who is not on this business's roster", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
-    vi.mocked(getTeamMember).mockRejectedValue(new Error("gone"));
+    vi.mocked(getTeamMember).mockResolvedValue(null);
+    await expect(
+      updateContactTool.handler(
+        { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
+        AUTH
+      )
+    ).rejects.toThrow(/not on this business's roster/);
+    expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
+    expect(fireContactEvent).not.toHaveBeenCalled();
+  });
+
+  it("omits ownerName when the roster row has an empty name", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValue(ROW as never);
+    vi.mocked(getTeamMember).mockResolvedValue({ name: "" } as never);
     await updateContactTool.handler(
       { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
       AUTH
@@ -218,10 +249,13 @@ describe("update_contact", () => {
       ...ROW,
       owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962"
     } as never);
+    vi.mocked(getTeamMember).mockResolvedValue({ name: "Sam" } as never);
     await updateContactTool.handler(
       { phone: "+15550001111", owner_employee_id: null },
       AUTH
     );
+    // Clearing skips the roster check entirely (null is not an assignment).
+    expect(getTeamMember).not.toHaveBeenCalled();
     await updateContactTool.handler(
       { phone: "+15550001111", owner_employee_id: "3b241101-e2bb-4255-8caf-4136c566a962" },
       AUTH

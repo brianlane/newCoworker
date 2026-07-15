@@ -127,6 +127,19 @@ export const updateContactTool = defineMcpTool({
       throw new McpToolError(`No contact found for ${phone} — use create_contact.`);
     }
 
+    // An assigned owner must be one of THIS business's roster members —
+    // the FK alone is cross-tenant, so without this check a member id from
+    // another business could be attached (same guard as the dashboard PATCH).
+    let assignedOwnerName = "";
+    if (args.owner_employee_id) {
+      const { getTeamMember } = await import("@/lib/db/employees");
+      const member = await getTeamMember(businessId, args.owner_employee_id);
+      if (!member) {
+        throw new McpToolError("That employee is not on this business's roster.");
+      }
+      assignedOwnerName = member.name;
+    }
+
     await updateCustomerOwnerFields(businessId, existing.customer_e164, {
       ...(args.name !== undefined ? { displayName: args.name, nameSource: "manual" } : {}),
       ...(args.email !== undefined ? { email: args.email } : {}),
@@ -149,9 +162,15 @@ export const updateContactTool = defineMcpTool({
       const before = new Set(previousTags.map((t) => t.toLowerCase()));
       const after = new Set(nextTags.map((t) => t.toLowerCase()));
       const eventStamp = Date.now();
+      // Runs match goal events by the exact number they were triggered
+      // with, which after a profile merge may be an ALIAS — fire for every
+      // linked number so a parked run keyed on the old number still jumps.
+      const goalNumbers = [existing.customer_e164, ...(existing.alias_e164s ?? [])];
       for (const tag of nextTags) {
         if (before.has(tag.toLowerCase())) continue;
-        await fireGoalEvent(businessId, existing.customer_e164, { kind: "tag_added", tag });
+        for (const number of goalNumbers) {
+          await fireGoalEvent(businessId, number, { kind: "tag_added", tag });
+        }
         await fireContactEvent(businessId, {
           kind: "tag_changed",
           contact: { e164: existing.customer_e164, tags: nextTags },
@@ -173,18 +192,17 @@ export const updateContactTool = defineMcpTool({
     }
 
     // owner_assigned triggers on a real change to a new (non-null) owner.
+    // `assignedOwnerName` comes from the roster row validated before the write.
     if (
       args.owner_employee_id !== undefined &&
       args.owner_employee_id !== null &&
       args.owner_employee_id !== existing.owner_employee_id
     ) {
-      const { getTeamMember } = await import("@/lib/db/employees");
       const { fireContactEvent } = await import("@/lib/ai-flows/contact-event-hooks");
-      const member = await getTeamMember(businessId, args.owner_employee_id).catch(() => null);
       await fireContactEvent(businessId, {
         kind: "owner_assigned",
         contact: { e164: existing.customer_e164 },
-        ...(member?.name ? { ownerName: member.name } : {}),
+        ...(assignedOwnerName ? { ownerName: assignedOwnerName } : {}),
         dedupeKey: `ce:owner:${existing.customer_e164}:${args.owner_employee_id}:${Date.now()}`
       });
     }

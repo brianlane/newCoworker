@@ -164,7 +164,9 @@ export const createFlowTool = defineMcpTool({
     const row = await createAiFlow({
       businessId,
       name: args.name,
-      enabled: args.enabled,
+      // Default OFF (createAiFlow's own default is on): a model-authored
+      // flow must not go live without an explicit enabled:true opt-in.
+      enabled: args.enabled ?? false,
       definition: args.definition,
       createdBy: auth.userId
     });

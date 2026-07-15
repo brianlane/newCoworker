@@ -181,16 +181,18 @@ describe("get_flow_schema", () => {
 });
 
 describe("create_flow / update_flow / set_flow_enabled", () => {
-  it("creates a validated flow attributed to the caller", async () => {
+  it("creates a validated flow attributed to the caller, DISABLED by default", async () => {
     vi.mocked(createAiFlow).mockResolvedValue({ ...FLOW_ROW, enabled: false } as never);
     const result = await createFlowTool.handler(
       { name: "Lead intake", definition: DEFINITION },
       AUTH
     );
+    // createAiFlow's own default is enabled:true — the connector must opt
+    // model-authored flows OUT unless the caller explicitly enables them.
     expect(createAiFlow).toHaveBeenCalledWith({
       businessId: "biz-1",
       name: "Lead intake",
-      enabled: undefined,
+      enabled: false,
       definition: DEFINITION,
       createdBy: "user-1"
     });
@@ -200,6 +202,17 @@ describe("create_flow / update_flow / set_flow_enabled", () => {
       name: "Lead intake",
       enabled: false
     });
+  });
+
+  it("honors an explicit enabled:true on create", async () => {
+    vi.mocked(createAiFlow).mockResolvedValue(FLOW_ROW as never);
+    await createFlowTool.handler(
+      { name: "Lead intake", enabled: true, definition: DEFINITION },
+      AUTH
+    );
+    expect(createAiFlow).toHaveBeenCalledWith(
+      expect.objectContaining({ enabled: true })
+    );
   });
 
   it("refuses an update with nothing to change", async () => {
