@@ -106,6 +106,10 @@ async function runIngestAndPersist(
 ): Promise<IngestPayload> {
   const usePastedHtml = Boolean(body.pastedHtml && body.pastedHtml.trim().length > 0);
   const source = usePastedHtml ? ("pasted_html" as const) : ("crawl" as const);
+  // The pasted path never fetches, so it emits no crawl events of its own —
+  // signal the summarize phase up front or a streaming client sits on
+  // "Contacting your site…" for the whole Gemini call.
+  if (usePastedHtml) onProgress?.({ type: "summarizing", pages: 1 });
   const result = usePastedHtml
     ? // WAF escape hatch: the owner pasted their homepage's page source
       // because every server-side fetch path is challenge-blocked. No

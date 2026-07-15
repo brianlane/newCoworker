@@ -44,7 +44,13 @@ interface CrawlProgress {
   failed: number;
   lastUrl: string | null;
   sitemapCount: number | null;
-  summarizing: boolean;
+  /**
+   * Page count from the server's `summarizing` event — the number of pages
+   * actually feeding the summary, which can differ from `fetched` (textless
+   * fetches don't summarize; the pasted-source path summarizes without
+   * fetching). Null until the summarize phase starts.
+   */
+  summarizingPages: number | null;
 }
 
 type RecrawlState =
@@ -58,7 +64,7 @@ const EMPTY_PROGRESS: CrawlProgress = {
   failed: 0,
   lastUrl: null,
   sitemapCount: null,
-  summarizing: false
+  summarizingPages: null
 };
 
 /** Show just the path of a crawled URL — the origin is the owner's own site. */
@@ -269,7 +275,13 @@ export function MemoryEditor({
                 };
               }
               if (parsed.type === "summarizing") {
-                return { status: "running", progress: { ...progress, summarizing: true } };
+                return {
+                  status: "running",
+                  progress: {
+                    ...progress,
+                    summarizingPages: typeof parsed.pages === "number" ? parsed.pages : progress.fetched
+                  }
+                };
               }
               return prev;
             });
@@ -458,10 +470,10 @@ export function MemoryEditor({
         )}
         {recrawl.status === "running" && (
           <div className="mt-2 text-xs text-parchment/60 space-y-0.5">
-            {recrawl.progress.summarizing ? (
+            {recrawl.progress.summarizingPages !== null ? (
               <p>
-                Summarizing {recrawl.progress.fetched} page
-                {recrawl.progress.fetched === 1 ? "" : "s"}…
+                Summarizing {recrawl.progress.summarizingPages} page
+                {recrawl.progress.summarizingPages === 1 ? "" : "s"}…
               </p>
             ) : recrawl.progress.fetched > 0 ? (
               <p>
@@ -474,7 +486,7 @@ export function MemoryEditor({
             ) : (
               <p>Contacting your site…</p>
             )}
-            {!recrawl.progress.summarizing && recrawl.progress.lastUrl && (
+            {recrawl.progress.summarizingPages === null && recrawl.progress.lastUrl && (
               <p className="truncate text-parchment/40 font-mono">
                 {crawlPathLabel(recrawl.progress.lastUrl)}
               </p>

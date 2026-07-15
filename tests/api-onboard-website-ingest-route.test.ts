@@ -443,6 +443,28 @@ describe("api/onboard/website-ingest route", () => {
     expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
   });
 
+  it("streams a summarizing progress line for the pasted-source path (no crawl events exist)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({ email: "owner@example.com", isAdmin: false } as never);
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@example.com" } as never);
+    vi.mocked(ingestWebsiteFromHtml).mockResolvedValue({ ...INGEST_OK, pagesCrawled: 1 });
+
+    const res = await POST(
+      jsonRequest({
+        businessId: BIZ,
+        websiteUrl: "https://example.com/",
+        pastedHtml: "<html><body>Acme sells anvils</body></html>",
+        stream: true
+      })
+    );
+    expect(res.status).toBe(200);
+    const lines = await readNdjsonLines(res);
+    // Without this line a streaming client sits on "Contacting your site…"
+    // for the entire Gemini call.
+    expect(lines[0]).toMatchObject({ kind: "progress", type: "summarizing", pages: 1 });
+    expect(lines[lines.length - 1]).toMatchObject({ kind: "result", ok: true });
+    expect(ingestWebsite).not.toHaveBeenCalled();
+  });
+
   it("streams an ok:false result line when the ingest fails (no persistence)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue({ email: "admin@nc", isAdmin: true } as never);
     vi.mocked(ingestWebsite).mockResolvedValue({ ok: false, error: "fetch_failed", detail: "HTTP 403" });
