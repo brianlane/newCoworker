@@ -670,6 +670,14 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.saveAs && <Row label="Saves the link as" value={step.saveAs} mono />}
         </>
       );
+    case "run_agent":
+      return (
+        <>
+          <Row label="Agent" value={step.agentName ?? step.agentId} />
+          <Row label="Runs on" value={step.input} mono />
+          <Row label="Saves the result as" value={step.saveAs} mono />
+        </>
+      );
     case "ring_handoff":
       return (
         <>

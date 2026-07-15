@@ -85,6 +85,9 @@ export type EmployeeEmailOption = { name: string; email: string };
 /** A shareable business document, offered in the share_document step picker. */
 export type DocumentOption = { id: string; title: string; expired: boolean };
 
+/** A saved agent, offered in the run_agent step picker. */
+export type AgentOption = { id: string; name: string; enabled: boolean };
+
 const inputClass =
   "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
 const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
@@ -495,6 +498,16 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         via: "sms",
         messageTemplate: "Here it is: {{share_url}}"
       };
+    case "run_agent":
+      // agentId is filled from the picker; the empty id never saves (the API
+      // validates the agent exists + is enabled for this business).
+      return {
+        id,
+        type,
+        agentId: "",
+        input: "{{trigger.windowText}}",
+        saveAs: "agent_output"
+      };
     case "sleep":
       return { id, type, minutes: 300 };
     case "wait_for_reply":
@@ -844,6 +857,8 @@ export function AiFlowsManager({
   const pickerPeople = [...rosterPeople, ...contactPeople];
   // Client-shareable business documents for the share_document step picker.
   const [documents, setDocuments] = useState<DocumentOption[]>([]);
+  // Saved agents for the run_agent step picker.
+  const [agents, setAgents] = useState<AgentOption[]>([]);
   // Run-now panel: which flow's panel is open, its input, and the last outcome.
   const [runFor, setRunFor] = useState<string | null>(null);
   const [runInput, setRunInput] = useState("");
@@ -1055,6 +1070,38 @@ export function AiFlowsManager({
               title: d.title,
               expired: Boolean(d.expires_at && Date.parse(d.expires_at) <= Date.now())
             }))
+        );
+      } catch {
+        /* picker stays empty */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  // Saved agents for the run_agent step picker. Best-effort: on failure the
+  // picker hides and the step shows a hint.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/dashboard/agents?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { agents?: Array<{ id?: string; name?: string; enabled?: boolean }> };
+        };
+        if (cancelled || !json.ok || !json.data?.agents) return;
+        setAgents(
+          json.data.agents
+            .filter(
+              (a): a is { id: string; name: string; enabled?: boolean } =>
+                typeof a.id === "string" && typeof a.name === "string"
+            )
+            .map((a) => ({ id: a.id, name: a.name, enabled: a.enabled !== false }))
         );
       } catch {
         /* picker stays empty */
@@ -1581,6 +1628,7 @@ export function AiFlowsManager({
                     employees={employees}
                     people={pickerPeople}
                     documents={documents}
+                    agents={agents}
                     examples={examples}
                   />
                 )}
@@ -2310,6 +2358,7 @@ export function AiFlowsManager({
                 employees={employees}
                 people={pickerPeople}
                 documents={documents}
+                agents={agents}
                 examples={examples}
               />
               {/* Voice steps have no `when` guard (they run on the real-time call
@@ -2787,6 +2836,7 @@ function StepFields({
   employees,
   people,
   documents,
+  agents,
   examples
 }: {
   step: FlowStep;
@@ -2798,6 +2848,8 @@ function StepFields({
   people: PickerPerson[];
   /** Client-shareable business documents for the share_document picker. */
   documents: DocumentOption[];
+  /** Saved agents for the run_agent picker. */
+  agents: AgentOption[];
   examples: AiFlowExampleCopy;
 }) {
   if (step.type === "extract_url") {
@@ -3883,6 +3935,57 @@ function StepFields({
         <p className="text-[11px] text-parchment/40">
           Only client-facing, unexpired documents can be shared. If the document expires later,
           this step stops sending it and notifies you instead.
+        </p>
+      </div>
+    );
+  }
+  if (step.type === "run_agent") {
+    return (
+      <div className="space-y-2">
+        <div>
+          <label className={labelClass}>Agent to run</label>
+          <select
+            className={inputClass}
+            value={step.agentId}
+            onChange={(e) => {
+              const agent = agents.find((a) => a.id === e.target.value);
+              patchStep(index, {
+                agentId: e.target.value,
+                agentName: agent?.name
+              });
+            }}
+          >
+            <option value="">Pick an agent…</option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+                {a.enabled ? "" : " (disabled — enable it first)"}
+              </option>
+            ))}
+          </select>
+          {agents.length === 0 && (
+            <p className="mt-1 text-[11px] text-parchment/40">
+              No agents saved yet — create one on the Agents page first.
+            </p>
+          )}
+        </div>
+        <Field
+          label="What to run it on"
+          value={step.input}
+          onChange={(v) => patchStep(index, { input: v })}
+          textarea
+          help="The text handed to the agent — e.g. {{trigger.windowText}} (the triggering message/email) or a variable an earlier step extracted."
+        />
+        <Field
+          label="Save the result as"
+          value={step.saveAs}
+          onChange={(v) => patchStep(index, { saveAs: v })}
+          help="A short name so later steps can use the agent's output (e.g. agent_output)."
+        />
+        <p className="text-[11px] text-parchment/40">
+          The agent&apos;s saved instructions transform the input text; the result lands in{" "}
+          {`{{vars.${step.saveAs || "agent_output"}}}`} for a later email, text, or notification.
+          Each run draws from your monthly AI budget.
         </p>
       </div>
     );

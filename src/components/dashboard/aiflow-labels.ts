@@ -44,6 +44,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   classify: "Decide what the message means",
   generate_image: "Create an AI-generated image",
   share_document: "Share a business document (expiring link)",
+  run_agent: "Run one of your Agents",
   ring_handoff: "Ring a person (warm transfer)",
   voice_ai_intake: "AI takes the call (capture the lead)",
   voice_transfer: "Connect the caller to a number",
@@ -87,6 +88,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Creates an image from your description and saves a link to it. Attach it to a later \"Send a text\" step (goes out as a picture message) or include the link in an email. Uses your monthly AI budget.",
   share_document:
     "Texts or emails the person an expiring link to one of your uploaded documents (price sheet, policy, contract). Only client-facing, unexpired documents can be shared - an expired document fails the step and notifies you instead of sending a stale copy.",
+  run_agent:
+    "Runs one of your saved Agents (from the Agents page) on text from this workflow - e.g. turn an inbound email into a clean summary - and saves the result for later steps to send or reference. Uses your monthly AI budget.",
   ring_handoff:
     "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
   voice_ai_intake:

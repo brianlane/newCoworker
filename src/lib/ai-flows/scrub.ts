@@ -197,6 +197,14 @@ export function scrubDefinition(
           // an unknown document, so the nil can never silently share).
           step.documentId = NIL_UUID;
           break;
+        case "run_agent":
+          // The agent id is tenant-specific; blank to the schema-valid nil so
+          // a duplicating owner re-picks one of THEIR agents in the editor
+          // (write-time validation + the runtime both refuse an unknown
+          // agent, so the nil can never silently run).
+          step.agentId = NIL_UUID;
+          delete step.agentName;
+          break;
         case "branch": {
           // `def` is a parsed AiFlowDefinition, so arms/else are always arrays.
           for (const arm of step.branches as Array<{ steps: Record<string, unknown>[] }>) {

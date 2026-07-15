@@ -196,6 +196,7 @@ export function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "classify") return [step.saveAs];
   if (step.type === "generate_image") return [step.saveAs];
   if (step.type === "share_document" && step.saveAs) return [step.saveAs];
+  if (step.type === "run_agent") return [step.saveAs];
   return [];
 }
 

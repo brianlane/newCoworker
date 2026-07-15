@@ -601,6 +601,27 @@ export type FlowStep =
       saveAs?: string;
       when?: StepCondition;
     }
+  | {
+      id: string;
+      /**
+       * Run a saved Agent (business_agents — a reusable AI instruction set
+       * the owner authored on /dashboard/agents) against flow content: the
+       * rendered `input` template is transformed per the agent's
+       * instructions on central Gemini (via the platform's gateway-guarded
+       * run-agent endpoint) and the artifact lands in {{vars.<saveAs>}}.
+       * The endpoint re-checks the agent exists + is enabled at execution.
+       */
+      type: "run_agent";
+      /** business_agents row id. */
+      agentId: string;
+      /** Editor display hint captured when the agent was picked. */
+      agentName?: string;
+      /** Template rendered into the agent's input. */
+      input: string;
+      /** The artifact lands in {{vars.<saveAs>}}. */
+      saveAs: string;
+      when?: StepCondition;
+    }
   | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
   | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
   | {

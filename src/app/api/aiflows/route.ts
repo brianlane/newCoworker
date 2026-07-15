@@ -11,6 +11,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { createAiFlow, listAiFlows } from "@/lib/ai-flows/db";
 import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
+import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
 
 const businessIdSchema = z.string().uuid();
 
@@ -44,11 +45,14 @@ export async function POST(request: Request) {
     const body = createSchema.parse(await request.json());
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
     // share_document steps must reference a real, ready, client-audience,
-    // non-expired document (shape validation alone can't know that).
+    // non-expired document, and run_agent steps a real, enabled agent
+    // (shape validation alone can't know either).
     const parsedDefinition = parseAiFlowDefinition(body.definition);
     const documentIssues = await validateShareDocumentSteps(body.businessId, parsedDefinition);
-    if (documentIssues.length > 0) {
-      return errorResponse("VALIDATION_ERROR", documentIssues.join("; "));
+    const agentIssues = await validateRunAgentSteps(body.businessId, parsedDefinition);
+    const bindingIssues = [...documentIssues, ...agentIssues];
+    if (bindingIssues.length > 0) {
+      return errorResponse("VALIDATION_ERROR", bindingIssues.join("; "));
     }
     const row = await createAiFlow({
       businessId: body.businessId,

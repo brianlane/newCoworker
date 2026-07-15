@@ -47,6 +47,7 @@ export const FLOW_STEP_TYPES = [
   "classify",
   "generate_image",
   "share_document",
+  "run_agent",
   // Voice-channel steps (real-time call routing, executed by the Telnyx voice
   // webhook state machine; NOT the async ai-flow-worker). Only valid under a
   // `voice` trigger; see VOICE_STEP_TYPES and validateVoiceFlow.
@@ -943,6 +944,26 @@ const nonBranchStepMembers = [
     saveAs: varName,
     when: whenSchema.optional()
   }),
+  // Run a saved Agent (a reusable instruction set from /dashboard/agents)
+  // against flow content: the rendered `input` template is handed to the
+  // agent's instructions on central Gemini and the produced artifact lands
+  // in {{vars.<saveAs>}} for later steps (send_email body, notify_owner,
+  // extract_text, ...). Metered into the shared AI budget. The write-time
+  // validator (validateRunAgentSteps) checks the agent exists and is
+  // enabled; the runtime re-checks at execution.
+  z.object({
+    id: stepId,
+    type: z.literal("run_agent"),
+    /** business_agents row id (picked in the builder / bound by AI-assist). */
+    agentId: z.string().uuid(),
+    /** Editor display hint captured when the agent was picked. */
+    agentName: z.string().min(1).max(120).optional(),
+    /** Template rendered into the agent's input (e.g. "{{trigger.windowText}}"). */
+    input: z.string().min(1).max(8000),
+    /** The artifact lands in {{vars.<saveAs>}}. */
+    saveAs: varName,
+    when: whenSchema.optional()
+  }),
   // Classify a message into exactly one author-defined category (or the
   // reserved "unclear" fallback) so branches fork on MEANING. Values are
   // var-name-shaped tokens so when/branch conditions match them exactly;
@@ -1231,6 +1252,8 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.untilDateTemplate ?? "", step.relativeToTemplate ?? ""];
     case "generate_image":
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
+    case "run_agent":
+      return [step.input];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1920,6 +1943,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "math") {
       vars.add(step.saveAs);
     } else if (step.type === "share_document" && step.saveAs) {
+      vars.add(step.saveAs);
+    } else if (step.type === "run_agent") {
       vars.add(step.saveAs);
     }
   };

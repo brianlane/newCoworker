@@ -31,6 +31,7 @@ import {
   ArrowDown,
   ArrowUp,
   Bell,
+  Bot,
   Calculator,
   Copy,
   FileText,
@@ -99,6 +100,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   classify: "branch",
   generate_image: "read",
   share_document: "comm",
+  run_agent: "read",
   ring_handoff: "voice",
   voice_ai_intake: "voice",
   voice_transfer: "voice",
@@ -137,6 +139,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   classify: <HelpCircle className="h-4 w-4" />,
   generate_image: <ImageIcon className="h-4 w-4" />,
   share_document: <FileText className="h-4 w-4" />,
+  run_agent: <Bot className="h-4 w-4" />,
   ring_handoff: <Phone className="h-4 w-4" />,
   voice_ai_intake: <Phone className="h-4 w-4" />,
   voice_transfer: <Phone className="h-4 w-4" />,
@@ -226,6 +229,8 @@ function stepSubtitle(step: FlowStep): string {
       return `saves {{vars.${step.saveAs}}}`;
     case "share_document":
       return `${step.documentTitle ?? "document"} → ${step.to}`;
+    case "run_agent":
+      return `${step.agentName ?? "agent"} → {{vars.${step.saveAs}}}`;
     case "ring_handoff":
     case "voice_transfer":
       return step.toRef?.label ?? step.toE164 ?? "";
