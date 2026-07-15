@@ -52,6 +52,21 @@ const nextConfig: NextConfig = {
   // stay as a runtime `require()` on the server — it is only reached from
   // server-only routes (orchestrator / provisioning), never from the browser.
   serverExternalPackages: ["ssh2"],
+  async redirects() {
+    return [
+      // OAuth callback forwarder for LEGACY Nango-brokered connections
+      // (Google/Microsoft/Calendly, plus any Zoom link made before the
+      // first-party Zoom OAuth shipped). Providers redirect to our domain so
+      // only newcoworker.com ever appears in their consoles/verification
+      // flows; Nango completes the token exchange. 308 preserves the method
+      // and Next forwards the query string (code, state) automatically.
+      {
+        source: "/oauth-callback",
+        destination: "https://api.nango.dev/oauth/callback",
+        permanent: true
+      }
+    ];
+  },
   async headers() {
     return [
       // Negative lookahead: every path EXCEPT /widget/frame gets the
