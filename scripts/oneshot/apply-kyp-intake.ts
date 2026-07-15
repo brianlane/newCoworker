@@ -78,10 +78,24 @@ if (!APPLY) {
 await updateBusinessPhone(BUSINESS_ID, OWNER_PHONE_E164);
 console.log("[oneshot] owner phone updated");
 
-// 2. The apply itself (same service the admin route calls).
+// 2. The apply itself (same service the admin route calls). Mirror the
+//    route's failure contract: a mid-apply failure may have committed the
+//    vault write centrally, so the box re-seed below runs EVEN when the
+//    apply throws — the live agent must never keep pre-apply grounding
+//    behind an error.
 const { applyWhiteGloveIntake } = await import("../../src/lib/white-glove/apply-service.ts");
-const result = await applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BUSINESS_ID });
-console.log("[oneshot] applied:", result);
+let result: Awaited<ReturnType<typeof applyWhiteGloveIntake>> | null = null;
+let applyError: unknown = null;
+try {
+  result = await applyWhiteGloveIntake({ intakeId: INTAKE_ID, businessId: BUSINESS_ID });
+  console.log("[oneshot] applied:", result);
+} catch (err) {
+  applyError = err;
+  console.error(
+    "[oneshot] apply FAILED (re-seeding the box anyway; central writes may have landed):",
+    err instanceof Error ? err.message : err
+  );
+}
 
 // 3. Vault → VPS re-seed (inline; no request scope for after()).
 const { syncVaultToVps } = await import("../../src/lib/vps/sync-vault.ts");
@@ -93,23 +107,37 @@ console.log(
     : { ok: false, reason: sync.reason, detail: sync.detail }
 );
 
-// 4. Ledger.
-const db = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
-  { auth: { persistSession: false } }
-);
-await recordOneshotApplied(db, {
-  scriptPath: process.argv[1],
-  businessId: BUSINESS_ID,
-  details: {
-    intake_id: INTAKE_ID,
-    flow_id: result.flowId,
-    flow_created: result.flowCreated,
-    business_hours_applied: result.businessHoursApplied,
-    vault_synced: sync?.ok ?? false
-  }
-});
+// 4. Ledger — recorded only for a successful apply (the ledger marks work
+//    as done; a failed run must not look applied).
+if (result) {
+  const db = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? "",
+    { auth: { persistSession: false } }
+  );
+  await recordOneshotApplied(db, {
+    scriptPath: process.argv[1],
+    businessId: BUSINESS_ID,
+    details: {
+      intake_id: INTAKE_ID,
+      flow_id: result.flowId,
+      flow_created: result.flowCreated,
+      business_hours_applied: result.businessHoursApplied,
+      vault_synced: sync.ok
+    }
+  });
+}
+
+if (applyError || !sync.ok) {
+  console.error(
+    applyError
+      ? "[oneshot] FAILED: the apply threw — fix the cause and re-run (idempotent)."
+      : "[oneshot] INCOMPLETE: central config is written but the box re-seed failed — " +
+          "re-run this script (or any vault-touching save) once the box is reachable."
+  );
+  process.exit(1);
+}
+
 console.log(
   "[oneshot] done. Flow is installed DISABLED — enable it from /dashboard/aiflows " +
     "after James approves the wording (go-live checklist)."
