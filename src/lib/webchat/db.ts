@@ -685,11 +685,11 @@ export async function completeWebchatJobFromPlatform(
 }
 
 /**
- * Per-turn stat projection of a business's webchat jobs, for the admin
- * Web chat view's spend/usage aggregates. Cost columns are populated only
- * by the platform (Gemini) engine — box-worker turns read as nulls, so
- * aggregating over them stays honest (their spend is metered into the
- * shared pool but is not attributable per turn).
+ * Per-turn stat projection of webchat jobs, for the admin Web chat view's
+ * spend/usage aggregates. Cost columns are populated only by the platform
+ * (Gemini) engine — box-worker turns read as nulls, so aggregating over
+ * them stays honest (their spend is metered into the shared pool but is
+ * not attributable per turn).
  */
 export type WebchatJobStatRow = {
   session_id: string;
@@ -703,22 +703,28 @@ export type WebchatJobStatRow = {
   created_at: string;
 };
 
-export async function listWebchatJobStatsForBusiness(
-  businessId: string,
-  opts: { limit?: number } = {},
+/**
+ * Stats for EXACTLY the given sessions — the caller passes the session
+ * ids it is displaying, so per-row spend and the page totals share one
+ * scope. (A business-wide "recent N jobs" window could silently exclude a
+ * listed conversation's turns on a busy tenant — Bugbot Medium on PR
+ * #648.)
+ */
+export async function listWebchatJobStatsForSessions(
+  sessionIds: string[],
   client?: SupabaseClient
 ): Promise<WebchatJobStatRow[]> {
+  if (sessionIds.length === 0) return [];
   const db = client ?? (await createSupabaseServiceClient());
-  const limit = opts.limit ?? 2000;
   const { data, error } = await db
     .from("webchat_jobs")
     .select(
       "session_id, status, cost_micros, model, prompt_tokens, output_tokens, tool_rounds, refused_over_cap, created_at"
     )
-    .eq("business_id", businessId)
+    .in("session_id", sessionIds)
     .order("created_at", { ascending: false })
-    .limit(limit);
-  if (error) throw new Error(`listWebchatJobStatsForBusiness: ${error.message}`);
+    .limit(10_000);
+  if (error) throw new Error(`listWebchatJobStatsForSessions: ${error.message}`);
   return (data as WebchatJobStatRow[] | null) ?? [];
 }
 

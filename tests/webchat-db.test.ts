@@ -14,7 +14,7 @@ type StubResult = {
  */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gt", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
+  for (const m of ["select", "eq", "in", "gt", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);
@@ -48,7 +48,7 @@ import {
   getWidgetSettingsForBusiness,
   insertWebchatJob,
   isWebchatUniqueViolation,
-  listWebchatJobStatsForBusiness,
+  listWebchatJobStatsForSessions,
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
@@ -281,20 +281,25 @@ describe("webchat_sessions accessors", () => {
     );
   });
 
-  it("listWebchatJobStatsForBusiness returns stat rows / [] / throws on error", async () => {
+  it("listWebchatJobStatsForSessions returns stat rows / [] / throws on error", async () => {
     const rows = [{ session_id: SESSION, status: "done", cost_micros: 18 }];
-    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: rows, error: null }));
-    expect(await listWebchatJobStatsForBusiness(BIZ)).toEqual(rows);
+    const builder = makeBuilder({ data: rows, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    expect(await listWebchatJobStatsForSessions([SESSION])).toEqual(rows);
+    expect(builder.in).toHaveBeenCalledWith("session_id", [SESSION]);
 
-    // Custom limit + null data.
-    const limited = makeBuilder({ data: null, error: null });
-    supabaseStub.from.mockReturnValueOnce(limited);
-    expect(await listWebchatJobStatsForBusiness(BIZ, { limit: 9 }, injected)).toEqual([]);
-    expect(limited.limit).toHaveBeenCalledWith(9);
+    // Empty input short-circuits with no query at all.
+    vi.mocked(supabaseStub.from).mockClear();
+    expect(await listWebchatJobStatsForSessions([], injected)).toEqual([]);
+    expect(supabaseStub.from).not.toHaveBeenCalled();
+
+    // Null data + error paths.
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await listWebchatJobStatsForSessions([SESSION], injected)).toEqual([]);
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
-    await expect(listWebchatJobStatsForBusiness(BIZ)).rejects.toThrow(
-      "listWebchatJobStatsForBusiness: x"
+    await expect(listWebchatJobStatsForSessions([SESSION])).rejects.toThrow(
+      "listWebchatJobStatsForSessions: x"
     );
   });
 });

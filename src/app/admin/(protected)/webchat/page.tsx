@@ -24,7 +24,7 @@ import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { hashWebchatToken, parseWidgetKey } from "@/lib/webchat/keys";
 import {
   getWidgetSettingsByKeyHash,
-  listWebchatJobStatsForBusiness,
+  listWebchatJobStatsForSessions,
   listWebchatSessionsForBusiness,
   type WebchatJobStatRow
 } from "@/lib/webchat/db";
@@ -129,11 +129,13 @@ export default async function AdminSiteWebchatPage() {
     );
   }
 
-  const [sessions, jobs, business] = await Promise.all([
+  const [sessions, business] = await Promise.all([
     listWebchatSessionsForBusiness(settings.business_id, { limit: 100 }),
-    listWebchatJobStatsForBusiness(settings.business_id),
     getBusiness(settings.business_id)
   ]);
+  // Job stats scoped to EXACTLY the sessions shown, so per-row spend and
+  // the cards above always describe the same conversations.
+  const jobs = await listWebchatJobStatsForSessions(sessions.map((s) => s.id));
   // Pool snapshot is display-only; a read failure must not blank the page.
   const spendSnapshot = await getChatSpendSnapshotForBusiness(
     settings.business_id,
@@ -185,7 +187,7 @@ export default async function AdminSiteWebchatPage() {
           </p>
           <p className="text-2xl font-bold text-claw-green">{usd(agg.totalCostMicros)}</p>
           <p className="text-xs text-parchment/40 mt-1">
-            {usd(Math.round(avgPerConversation))} avg per conversation
+            {usd(Math.round(avgPerConversation))} avg · listed conversations
           </p>
         </Card>
         <Card>
