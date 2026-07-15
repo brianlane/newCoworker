@@ -7,6 +7,7 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   bookingAttendeeKey: vi.fn(() => "phone:+15485773546"),
   findUpcomingBookingClaim: vi.fn(),
   findUpcomingBookingClaimByPhone: vi.fn(),
+  findZoomMeetingIdByEvent: vi.fn(),
   rescheduleBookingClaim: vi.fn(),
   deleteBookingClaim: vi.fn(),
   deleteBookingClaimsByEvent: vi.fn(),
@@ -46,6 +47,7 @@ import {
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
+  findZoomMeetingIdByEvent,
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -113,6 +115,7 @@ beforeEach(() => {
   vi.mocked(getSharedCalendar).mockResolvedValue(null);
   vi.mocked(findUpcomingBookingClaim).mockResolvedValue(null);
   vi.mocked(findUpcomingBookingClaimByPhone).mockResolvedValue(null);
+  vi.mocked(findZoomMeetingIdByEvent).mockResolvedValue(null);
 });
 
 describe("rescheduleCalendarAppointment", () => {
@@ -918,6 +921,39 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
 
     expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(true);
     expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-1");
+  });
+
+  it("a provider-search hit recovers the meeting id from the event's row before ledger cleanup (reschedule)", async () => {
+    // No ledger row under the caller's key — the event resolves via Google
+    // search, but its row under a DIFFERENT key still holds the meeting id.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(findZoomMeetingIdByEvent).mockResolvedValue("zm-7");
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { items: [{ id: "evt-search", description: `Phone: ${PHONE}` }] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    expect((await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).ok).toBe(true);
+    expect(vi.mocked(findZoomMeetingIdByEvent)).toHaveBeenCalledWith(BIZ, "evt-search");
+    expect(vi.mocked(updateZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-7", {
+      startIso: RESCHEDULE_ARGS.newStartIso,
+      endIso: RESCHEDULE_ARGS.newEndIso
+    });
+    expect(vi.mocked(deleteBookingClaimsByEvent)).toHaveBeenCalledWith(BIZ, "evt-search");
+  });
+
+  it("a provider-search hit deletes the recovered meeting on cancel", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(findZoomMeetingIdByEvent).mockResolvedValue("zm-7");
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { value: [{ id: "evt-search", bodyPreview: `Phone: ${PHONE}` }] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(true);
+    expect(vi.mocked(deleteZoomMeetingForBooking)).toHaveBeenCalledWith(BIZ, "zm-7");
   });
 
   it("a failed provider cancel leaves the Zoom meeting alone", async () => {

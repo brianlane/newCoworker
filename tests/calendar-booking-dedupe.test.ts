@@ -14,6 +14,7 @@ import {
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
+  findZoomMeetingIdByEvent,
   recordExternalBookingClaim,
   releaseBookingDedupe,
   rescheduleBookingClaim
@@ -384,6 +385,36 @@ describe("findUpcomingBookingClaimByPhone (format-tolerant fallback)", () => {
 
     vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
     expect(await findUpcomingBookingClaimByPhone(BIZ, "+15485773546")).toBeNull();
+  });
+});
+
+describe("findZoomMeetingIdByEvent (provider-search Zoom recovery)", () => {
+  it("returns the meeting id recorded for the event under ANY attendee key", async () => {
+    const calls = scriptClient([{ data: { zoom_meeting_id: "zm-1" }, error: null }]);
+    expect(await findZoomMeetingIdByEvent(BIZ, "evt-1")).toBe("zm-1");
+    // Only rows that actually carry a meeting id qualify.
+    expect(calls.find((c) => c.name === "not")?.args).toEqual(["zoom_meeting_id", "is", null]);
+    const eqs = calls.filter((c) => c.name === "eq").map((c) => c.args);
+    expect(eqs).toContainEqual(["business_id", BIZ]);
+    expect(eqs).toContainEqual(["event_id", "evt-1"]);
+  });
+
+  it("null on no row, a null id, a read error, or a client blow-up", async () => {
+    scriptClient([{ data: null, error: null }]);
+    expect(await findZoomMeetingIdByEvent(BIZ, "evt-1")).toBeNull();
+
+    scriptClient([{ data: { zoom_meeting_id: null }, error: null }]);
+    expect(await findZoomMeetingIdByEvent(BIZ, "evt-1")).toBeNull();
+
+    scriptClient([{ data: null, error: { message: "boom" } }]);
+    expect(await findZoomMeetingIdByEvent(BIZ, "evt-1")).toBeNull();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no env"));
+    expect(await findZoomMeetingIdByEvent(BIZ, "evt-1")).toBeNull();
+    expect(logger.warn).toHaveBeenCalled();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
+    expect(await findZoomMeetingIdByEvent(BIZ, "evt-1")).toBeNull();
   });
 });
 

@@ -8,6 +8,7 @@ import {
   deleteBookingClaimsByEvent,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
+  findZoomMeetingIdByEvent,
   recordExternalBookingClaim,
   rescheduleBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
@@ -83,9 +84,10 @@ type LocatedEvent = {
   /** Ledger row backing the event; null when found via provider search. */
   claimId: string | null;
   /**
-   * Zoom meeting created with the booking (ledger hits only — the id lives
-   * on the ledger row). Reschedule/cancel move/delete it with the event,
-   * best-effort.
+   * Zoom meeting created with the booking. Ledger hits read it off the
+   * claim row; provider-search hits recover it from the event's row under
+   * a different attendee key (findZoomMeetingIdByEvent). Reschedule/cancel
+   * move/delete it with the event, best-effort.
    */
   zoomMeetingId: string | null;
 };
@@ -238,7 +240,13 @@ async function locateUpcomingAppointment(
     return { eventId: claim.eventId, claimId: claim.id, zoomMeetingId: claim.zoomMeetingId };
   }
   const eventId = await searchProviderEvent(businessId, conn, marker);
-  return eventId ? { eventId, claimId: null, zoomMeetingId: null } : null;
+  if (!eventId) return null;
+  // The event may still hold a ledger row under a DIFFERENT attendee key
+  // (booked by phone, rescheduled by email) carrying the booking's Zoom
+  // meeting — capture it NOW, before the callers' by-event ledger cleanup
+  // deletes that row, so the meeting still moves/dies with the event.
+  const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, eventId);
+  return { eventId, claimId: null, zoomMeetingId };
 }
 
 /**
@@ -412,8 +420,10 @@ export async function rescheduleCalendarAppointment(
       );
     }
 
-    // Move the booking's Zoom meeting with the event (best-effort; the id
-    // rides the ledger row, so provider-search hits have none to move).
+    // Move the booking's Zoom meeting with the event (best-effort). Both
+    // resolution paths can carry one: a ledger hit reads it off the claim
+    // row; a provider-search hit captured it from the event's row under a
+    // different key before the cleanup above deleted that row.
     if (located.zoomMeetingId) {
       await updateZoomMeetingForBooking(businessId, located.zoomMeetingId, {
         startIso: args.newStartIso,

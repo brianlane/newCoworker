@@ -406,6 +406,39 @@ export async function deleteBookingClaim(claimId: string): Promise<void> {
 }
 
 /**
+ * The Zoom meeting recorded for a provider event under ANY attendee key.
+ * Used by the provider-search resolution path in reschedule/cancel: the
+ * caller's own key missed (booked by phone, canceled by email), but the
+ * event's ledger row — about to be dropped by deleteBookingClaimsByEvent —
+ * may still carry the booking's Zoom meeting id, and the meeting must move
+ * or die with the event. Best-effort: null means "no meeting to touch".
+ */
+export async function findZoomMeetingIdByEvent(
+  businessId: string,
+  eventId: string
+): Promise<string | null> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("zoom_meeting_id")
+      .eq("business_id", businessId)
+      .eq("event_id", eventId)
+      .not("zoom_meeting_id", "is", null)
+      .limit(1)
+      .maybeSingle();
+    if (error || !data) return null;
+    return (data as { zoom_meeting_id: string | null }).zoom_meeting_id ?? null;
+  } catch (err) {
+    logger.warn("booking-dedupe: zoom-by-event lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
  * Drop EVERY claim recorded for a provider event, regardless of attendee
  * key. Used when an event was located via provider search (no ledger hit
  * for the caller's key): the booking may still have a ledger row under a
