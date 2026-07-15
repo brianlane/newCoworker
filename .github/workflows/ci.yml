@@ -294,6 +294,16 @@ jobs:
   # same-workflow job covered by `needs`, the gate poll only ever covers
   # cross-workflow checks (CodeQL, audit) and apps (Bugbot, GitGuardian).
   # The 30m budget = gate poll (≤20m) + the deploy itself.
+  #
+  # On Dependabot PRs every step no-ops and the job reports success — the
+  # same pattern as supabase-drift above, for the same two reasons: (1)
+  # dependabot-triggered runs get Dependabot secrets, not repo secrets, so
+  # VERCEL_TOKEN is empty and the deploy step can only fail; (2) a job-level
+  # skip would leave a "skipped" check run, which both the e2e gate and the
+  # dependabot auto-merge's strict all-success evaluation treat as NOT
+  # passing — so no Dependabot PR could ever auto-merge. Deploy coverage is
+  # not lost: dependency bumps get their real deploy from the push-to-main
+  # run right after the auto-merge.
   vercel-deploy:
     name: Vercel Deploy
     runs-on: ubuntu-latest
@@ -309,12 +319,15 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
     steps:
       - name: Checkout
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v7
 
       # Push events (post-merge main) skip the PR-shaped gate: Bugbot and
       # review threads exist on the PR, which already enforced this pre-merge.
       - name: Wait for every other check to pass and all threads to resolve
-        if: github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -339,6 +352,7 @@ jobs:
 
       - name: Deploy to Vercel
         id: deploy
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
         run: |
@@ -362,7 +376,9 @@ jobs:
       # The git integration's bot comment is gone with auto-deploys; keep the
       # preview URL discoverable with one sticky (edited-in-place) PR comment.
       - name: Comment preview URL on the PR
-        if: github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -396,6 +412,13 @@ jobs:
   #      (they can't self-resolve; re-run the job after resolving them).
   #      See .github/scripts/e2e-gate.sh.
   # Superseded pushes are cancelled by the workflow-level concurrency group.
+  #
+  # On Dependabot PRs every step no-ops and the job reports success (same
+  # pattern and rationale as vercel-deploy above): dependabot-triggered runs
+  # get Dependabot secrets — not repo secrets — so GOOGLE_API_KEY is empty
+  # and the suite could never run, and a job-level skip would leave a
+  # "skipped" check that blocks the strict auto-merge evaluation. The live
+  # suite still covers dependency bumps on the push-to-main run post-merge.
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest
@@ -412,12 +435,15 @@ jobs:
       pull-requests: read
     steps:
       - name: Checkout
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v7
 
       # Push events (post-merge main) skip the PR-shaped gate: Bugbot/Vercel/
       # threads exist on the PR, which already enforced all of this pre-merge.
       - name: Wait for every other check to pass and all threads to resolve
-        if: github.event_name == 'pull_request'
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -426,15 +452,18 @@ jobs:
         run: bash .github/scripts/e2e-gate.sh
 
       - name: Setup Node.js
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         run: npm ci
 
       - name: Run live e2e suite
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
