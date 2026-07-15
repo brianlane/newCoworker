@@ -21,6 +21,7 @@ import {
   verifyMetaOAuthState
 } from "@/lib/meta/client";
 import {
+  getActiveMetaConnectionByPageId,
   getMetaConnection,
   savePendingMetaConnection
 } from "@/lib/db/meta-connections";
@@ -87,7 +88,16 @@ export async function GET(request: NextRequest) {
     await savePendingMetaConnection({ businessId, userToken: longLived, accountName });
 
     if (existing?.page_id && existing.pageToken) {
-      await unsubscribePage(existing.page_id, existing.pageToken);
+      // The leadgen subscription is an app<->page edge shared by whoever
+      // holds the Page. If another business claimed it between the reset
+      // and here, unsubscribing would sever THEIR delivery — so only
+      // unsubscribe while the Page is unclaimed.
+      const claimedElsewhere = await getActiveMetaConnectionByPageId(
+        existing.page_id
+      ).catch(() => null);
+      if (!claimedElsewhere) {
+        await unsubscribePage(existing.page_id, existing.pageToken);
+      }
     }
 
     return dashboardRedirect(request, { meta: "connected" });

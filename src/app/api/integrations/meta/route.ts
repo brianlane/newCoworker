@@ -115,12 +115,20 @@ export async function POST(request: Request) {
     // the owner can retry — we never store an unsubscribed "active" row.
     await subscribePageToLeadgen(page.id, page.accessToken);
 
-    const row = await activateMetaConnection({
-      businessId: body.businessId,
-      pageId: page.id,
-      pageName: page.name,
-      pageToken: page.accessToken
-    });
+    let row;
+    try {
+      row = await activateMetaConnection({
+        businessId: body.businessId,
+        pageId: page.id,
+        pageName: page.name,
+        pageToken: page.accessToken
+      });
+    } catch (err) {
+      // Roll the Meta side back (best-effort) so a failed activation never
+      // leaves a dangling subscription delivering events no row routes.
+      await unsubscribePage(page.id, page.accessToken);
+      throw err;
+    }
     return successResponse(row);
   } catch (err) {
     return handleRouteError(err);
