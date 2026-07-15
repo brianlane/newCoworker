@@ -897,10 +897,14 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           `Hi, this is ${opts.businessName}'s office — I'd love to grab a few details about your home.`;
         // A transfer-enabled (place_ai_call) session follows its own
         // call script instead of the capture checklist — pushing the
-        // intake questionnaire here would fight the flow's script.
-        greetingText = intake.allowTransfer
-          ? `[Coordinator — speak aloud now] The person has just answered the phone. Greet them warmly with your opening line ("${opener}") and follow your call script.`
-          : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
+        // intake questionnaire here would fight the flow's script. On a
+        // call WE placed, the cue must not push the callback-number
+        // checklist either (we just dialed their number). "Only once /
+        // never restart" mirrors the system instruction's barge-in guard.
+        greetingText =
+          intake.allowTransfer || opts.direction === "outbound"
+            ? `[Coordinator — speak aloud now] The person has just answered the phone. Say your opening line ONCE ("${opener}"), then stop and listen — never repeat the opener, even if they talk over it — and follow your call script.`
+            : `[Coordinator — speak aloud now] A seller lead has just been connected. Greet them warmly with your opening line ("${opener}") — say it only once, never restart it — and begin the short intake — get their name, callback number, property address, and timeframe, calling capture_lead as you go.`;
       } else if (greetIsStaff) {
         // Owner vs team wording, and handle staff WITHOUT a stored name
         // (otherwise they'd get the customer receptionist greeting that
@@ -1125,7 +1129,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.businessTimezone,
             intakeCaptureFields,
             hasEndCall,
-            intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined
+            intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
+            opts.direction === "outbound"
           )
         : systemInstructionForBusiness(
             opts.businessName,

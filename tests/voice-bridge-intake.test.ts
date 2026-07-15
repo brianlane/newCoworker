@@ -46,12 +46,52 @@ describe("intakeSystemInstruction", () => {
     expect(instr).toContain("capture_lead");
     // Never hang up on a successfully transferred call.
     expect(instr).toContain("never after a successful transfer");
+    // Barge-in guard + no callback-number non-sequitur (first live test).
+    expect(instr).toContain("only ONCE");
+    expect(instr).toContain("NEVER ask for their phone number");
   });
 
   it("transfer mode without an agent name uses a generic handle", () => {
     const instr = intakeSystemInstruction("Acme", undefined, null, [], false, {});
     expect(instr).toContain("the team member handling this");
     expect(instr).not.toContain("end_call");
+  });
+
+  it("every variant carries the greet-once barge-in guard", () => {
+    for (const instr of [
+      intakeSystemInstruction("Acme", undefined, null, []),
+      intakeSystemInstruction("Acme", undefined, null, [], false, {}),
+      intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true)
+    ]) {
+      expect(instr).toContain("only ONCE");
+      expect(instr).toContain("never restart it");
+    }
+  });
+
+  it("an outbound call (we dialed) reframes the intake and never asks for their number", () => {
+    const instr = intakeSystemInstruction(
+      "Amy Laidlaw",
+      "Hi, quick call from Amy's office!",
+      null,
+      ["name", "timeframe"],
+      false,
+      undefined,
+      true
+    );
+    expect(instr).toContain("making a call the office asked you to place");
+    expect(instr).toContain("The person has just answered");
+    expect(instr).toContain("NEVER ask for their phone number");
+    expect(instr).not.toContain("best callback number");
+    expect(instr).not.toContain("call them back shortly");
+    // Capture still works for the fields the flow configured.
+    expect(instr).toContain("name, timeframe");
+    expect(instr).toContain("capture_lead");
+  });
+
+  it("the inbound live-transfer intake keeps the callback-number ask", () => {
+    const instr = intakeSystemInstruction("Acme", undefined, null, []);
+    expect(instr).toContain("taking a live seller lead");
+    expect(instr).toContain("best callback number");
   });
 });
 
