@@ -23,6 +23,7 @@ import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationC
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
+import { ClaudeConnectorCard } from "@/components/dashboard/ClaudeConnectorCard";
 import { Inbox } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -220,6 +221,17 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
             </div>
           </section>
           )}
+
+          <section className="space-y-4">
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              AI assistants
+            </h2>
+            <div className="grid grid-cols-1 gap-4 max-w-xl">
+              <ClaudeConnectorCard
+                mcpUrl={`${(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/mcp`}
+              />
+            </div>
+          </section>
         </>
       )}
     </div>

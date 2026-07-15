@@ -104,7 +104,8 @@ export type OutboundLogSource =
   | "owner_manual"
   | "owner_scheduled"
   | "api"
-  | "voice_follow_up";
+  | "voice_follow_up"
+  | "mcp";
 
 export type OutboundLogRow = {
   id: string;

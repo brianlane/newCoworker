@@ -139,6 +139,12 @@ export async function proxy(request: NextRequest) {
     // External clients send no Origin header, so CSRF would 403 every call.
     // Same rationale as the exemptions above.
     !pathname.startsWith("/api/public/") &&
+    // /api/mcp is the Claude connector's MCP server, authenticated solely by
+    // a Supabase OAuth access-token bearer (verifySupabaseAccessToken) —
+    // never by a session cookie. Anthropic's servers POST JSON-RPC with no
+    // Origin header, so CSRF would 403 every tool call. Same rationale as
+    // the /api/public exemption above.
+    pathname !== "/api/mcp" &&
     // /api/widget/* is the website chat widget API, authenticated solely by
     // the tenant's public site key (ncw_pub_…) + a per-session bearer
     // (ncws_…) — never by a session cookie, so CSRF adds no protection.

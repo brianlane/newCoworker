@@ -520,6 +520,39 @@ callable surfaces go through service-role clients, never `anon`/`authenticated` 
 - SMS keyword auto-replies (**STOP** / **HELP** / **START**) need **`TELNYX_API_KEY`**, **`TELNYX_MESSAGING_PROFILE_ID`**, and **`TELNYX_SMS_FROM_E164`** on the `telnyx-sms-inbound` function; without them the handler still returns **200** but logs a warning.
 - After first-time deploy (or any time you reset the cache columns), backfill `subscriptions.stripe_current_period_{start,end}` from Stripe so voice quota gating works before the next subscription lifecycle webhook runs: `npx tsx scripts/backfill-stripe-subscription-periods.ts` (dry-run), then re-run with `--apply`. Requires `STRIPE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`.
 
+## Claude connector (remote MCP)
+
+Owners can add New Coworker to Claude (claude.ai / Claude Desktop) as a
+**custom connector**: a remote MCP server at **`/api/mcp`**
+([src/app/api/mcp/route.ts](src/app/api/mcp/route.ts), Streamable HTTP only,
+stateless — tool logic lives in `src/lib/mcp/**` under the coverage gate).
+Authentication is **OAuth 2.1 via Supabase Auth's OAuth server**: Claude
+discovers the issuer through the RFC 9728 metadata at
+`/.well-known/oauth-protected-resource`, self-registers (dynamic client
+registration), and sends the owner through login + consent at
+**`/oauth/consent`** ([src/app/oauth/consent](src/app/oauth/consent/page.tsx);
+decision handler `POST /api/oauth/decision`). Every tool call then presents a
+Supabase access token, verified via `auth.getClaims`
+([src/lib/mcp/auth.ts](src/lib/mcp/auth.ts)) and **role-checked per business
+through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`)
+— no admin bypass, no separate credential to mint.
+
+- Tool set (`src/lib/mcp/tools/*`): reads (businesses, contacts, SMS threads,
+  recent events, call transcripts, Task Center), `send_sms` (same metered
+  Telnyx path as the dashboard/Zapier — logged to `sms_outbound_log` with
+  `source: 'mcp'`), calendar find-slots/book (shared calendar core: Vagaro /
+  Nango / Calendly / CalDAV), contact create/update (fires the same
+  `contact_created` / `tag_changed` / `owner_assigned` automation hooks as
+  dashboard edits), AiFlow CRUD + `trigger_flow` (definitions validated by
+  `parseAiFlowDefinition` + binding checks; `get_flow_schema` returns the
+  authoring vocabulary), and agent CRUD (tier-capped).
+- Ops prerequisites (one-time, production Supabase dashboard): enable
+  **Authentication → OAuth Server** with dynamic client registration, and set
+  the authorization path to `/oauth/consent` (local config in
+  `supabase/config.toml` `[auth.oauth_server]`).
+- Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
+  (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
+
 ## AiFlow webhook trigger (Meta Lead Ads etc.)
 
 AiFlows can start from an inbound webhook: `POST /api/public/v1/flow-events`
