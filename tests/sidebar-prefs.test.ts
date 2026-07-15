@@ -7,7 +7,10 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
-import { SIDEBAR_ITEMS } from "@/lib/dashboard/sidebar-items";
+import {
+  filterSidebarItemsForBusiness,
+  SIDEBAR_ITEMS
+} from "@/lib/dashboard/sidebar-items";
 import {
   getSidebarLayout,
   mergeSidebarLayout,
@@ -28,6 +31,36 @@ describe("SIDEBAR_ITEMS catalog", () => {
     expect(new Set(keys).size).toBe(keys.length);
     expect(SIDEBAR_ITEMS.find((i) => i.key === "settings")?.locked).toBe(true);
     expect(SIDEBAR_ITEMS.find((i) => i.key === "notifications")?.locked).toBe(true);
+  });
+
+  it("marks the Messenger inbox as Meta-connection-conditional", () => {
+    expect(
+      SIDEBAR_ITEMS.find((i) => i.key === "messenger")?.requiresMetaConnection
+    ).toBe(true);
+  });
+});
+
+describe("filterSidebarItemsForBusiness", () => {
+  it("drops conditional items without a Meta connection and keeps them with one", () => {
+    const without = filterSidebarItemsForBusiness(SIDEBAR_ITEMS, {
+      metaConnected: false
+    });
+    expect(without.some((i) => i.key === "messenger")).toBe(false);
+    // Nothing else is affected.
+    expect(without).toHaveLength(SIDEBAR_ITEMS.length - 1);
+
+    const withMeta = filterSidebarItemsForBusiness(SIDEBAR_ITEMS, {
+      metaConnected: true
+    });
+    expect(withMeta.some((i) => i.key === "messenger")).toBe(true);
+    expect(withMeta).toHaveLength(SIDEBAR_ITEMS.length);
+  });
+
+  it("passes merged layouts through, preserving extra fields", () => {
+    const layout = mergeSidebarLayout([]);
+    const filtered = filterSidebarItemsForBusiness(layout, { metaConnected: false });
+    expect(filtered.every((i) => "visible" in i)).toBe(true);
+    expect(filtered.some((i) => i.key === "messenger")).toBe(false);
   });
 });
 

@@ -20,6 +20,7 @@ import {
   MetaConnectionValidationError,
   activateMetaConnection,
   deleteMetaConnection,
+  getActiveMetaConnectionByInstagramId,
   getActiveMetaConnectionByPageId,
   getMetaConnection,
   getMetaPageClaim,
@@ -68,6 +69,8 @@ const PENDING = {
   page_name: null,
   page_token_encrypted: null,
   account_name: "Brian Lane",
+  instagram_account_id: null,
+  instagram_username: null,
   is_active: true,
   created_at: "2026-07-14T00:00:00Z",
   updated_at: "2026-07-14T00:00:00Z"
@@ -79,7 +82,9 @@ const ACTIVE = {
   user_token_encrypted: null,
   page_id: "page-9",
   page_name: "Truly Insurance",
-  page_token_encrypted: "enc(page-token)"
+  page_token_encrypted: "enc(page-token)",
+  instagram_account_id: "ig-9",
+  instagram_username: "trulyinsurance"
 };
 
 describe("toPublicMetaConnection", () => {
@@ -160,6 +165,31 @@ describe("getActiveMetaConnectionByPageId", () => {
     await expect(getActiveMetaConnectionByPageId("page-9", makeDb(c2))).rejects.toThrow(
       /down/
     );
+  });
+});
+
+describe("getActiveMetaConnectionByInstagramId", () => {
+  it("filters to the active connection holding the IG account and decrypts", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: ACTIVE, error: null });
+    const row = await getActiveMetaConnectionByInstagramId("ig-9", makeDb(c));
+    expect(row?.pageToken).toBe("page-token");
+    expect(row?.instagram_account_id).toBe("ig-9");
+    expect(c.eq).toHaveBeenCalledWith("instagram_account_id", "ig-9");
+    expect(c.eq).toHaveBeenCalledWith("status", "active");
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+  });
+
+  it("returns null when absent and throws on error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getActiveMetaConnectionByInstagramId("ig-9", makeDb(c))).toBeNull();
+
+    const c2 = chain();
+    c2.maybeSingle.mockResolvedValue({ data: null, error: { message: "ig down" } });
+    await expect(
+      getActiveMetaConnectionByInstagramId("ig-9", makeDb(c2))
+    ).rejects.toThrow(/ig down/);
   });
 });
 
@@ -296,7 +326,9 @@ describe("activateMetaConnection", () => {
         businessId: BIZ,
         pageId: "page-9",
         pageName: "Truly Insurance",
-        pageToken: " page-token "
+        pageToken: " page-token ",
+        instagramAccountId: "ig-9",
+        instagramUsername: "trulyinsurance"
       },
       makeDb(c)
     );
@@ -307,9 +339,23 @@ describe("activateMetaConnection", () => {
     expect(patch.page_id).toBe("page-9");
     expect(patch.page_name).toBe("Truly Insurance");
     expect(patch.page_token_encrypted).toBe("enc(page-token)");
+    expect(patch.instagram_account_id).toBe("ig-9");
+    expect(patch.instagram_username).toBe("trulyinsurance");
     expect(patch.is_active).toBe(true);
     // Concurrency guard: only a still-pending row can be activated.
     expect(c.eq).toHaveBeenCalledWith("status", "pending");
+  });
+
+  it("defaults the IG columns to null when the Page has no linked account", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: { ...ACTIVE, instagram_account_id: null }, error: null });
+    await activateMetaConnection(
+      { businessId: BIZ, pageId: "page-9", pageName: null, pageToken: "t" },
+      makeDb(c)
+    );
+    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.instagram_account_id).toBeNull();
+    expect(patch.instagram_username).toBeNull();
   });
 
   it("surfaces an update error", async () => {
@@ -363,6 +409,7 @@ describe("default service client", () => {
     expect(await getMetaConnection(BIZ)).toBeNull();
     expect(await getPublicMetaConnection(BIZ)).toBeNull();
     expect(await getActiveMetaConnectionByPageId("page-9")).toBeNull();
+    expect(await getActiveMetaConnectionByInstagramId("ig-9")).toBeNull();
     expect(await getMetaPageClaim("page-9")).toBeNull();
     await savePendingMetaConnection({ businessId: BIZ, userToken: "t", accountName: null });
     await activateMetaConnection({
@@ -373,6 +420,6 @@ describe("default service client", () => {
     });
     await setMetaConnectionActive(BIZ, true);
     await deleteMetaConnection(BIZ);
-    expect(defaultClientSpy).toHaveBeenCalledTimes(8);
+    expect(defaultClientSpy).toHaveBeenCalledTimes(9);
   });
 });

@@ -15,21 +15,27 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { logger } from "@/lib/logger";
 
-export const META_GRAPH_VERSION = "v24.0";
+// v25.0 matches the app dashboard's webhook field subscription version.
+export const META_GRAPH_VERSION = "v25.0";
 export const META_GRAPH_BASE_URL = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
 export const META_OAUTH_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`;
 
 /**
  * Permissions for the Lead Ads use case ("Capture & manage ad leads with
- * Marketing API"): read leads, list/choose the Page, manage its webhook
- * subscription.
+ * Marketing API") plus the Messenger/Instagram DM conversation channel:
+ * read leads, list/choose the Page, manage its webhook subscription, and
+ * read/send messages on the Page and its linked IG professional account.
+ * Existing connections must reconnect once to grant the newer scopes.
  */
 export const META_LOGIN_SCOPES = [
   "leads_retrieval",
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_metadata",
-  "pages_manage_ads"
+  "pages_manage_ads",
+  "pages_messaging",
+  "instagram_basic",
+  "instagram_manage_messages"
 ] as const;
 
 /** Outbound budget per Graph call — fail fast on a stuck upstream. */
@@ -258,14 +264,26 @@ export async function listManagedPages(userToken: string): Promise<MetaManagedPa
   return pages;
 }
 
-/** Subscribe our app to the Page's `leadgen` webhook field. */
+/**
+ * Webhook fields subscribed on the app<->page edge: lead ads plus the
+ * Messenger conversation events (message text + button postbacks). The
+ * POST replaces the edge's field set, so every field must be listed on
+ * every (re)subscribe.
+ */
+export const META_PAGE_SUBSCRIBED_FIELDS = [
+  "leadgen",
+  "messages",
+  "messaging_postbacks"
+] as const;
+
+/** Subscribe our app to the Page's webhook fields (leadgen + messaging). */
 export async function subscribePageToLeadgen(
   pageId: string,
   pageToken: string
 ): Promise<void> {
   const payload = await graphRequest(
     `/${pageId}/subscribed_apps`,
-    { subscribed_fields: "leadgen", access_token: pageToken },
+    { subscribed_fields: META_PAGE_SUBSCRIBED_FIELDS.join(","), access_token: pageToken },
     { method: "POST" }
   );
   const success = (payload as { success?: unknown } | null)?.success;
@@ -288,6 +306,114 @@ export async function unsubscribePage(pageId: string, pageToken: string): Promis
       pageId,
       error: (err as Error).message
     });
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Messenger / Instagram DM messaging                                  */
+/* ------------------------------------------------------------------ */
+
+/** Messenger Send API hard limit per text message. */
+export const MESSENGER_MAX_TEXT_LENGTH = 2000;
+
+/**
+ * Send a text reply to a Messenger PSID or Instagram-scoped user id —
+ * the same `/{page_id}/messages` edge serves both platforms with the
+ * page token. `messaging_type: "RESPONSE"` declares this a reply inside
+ * Meta's 24h standard messaging window (the caller gates on the window
+ * BEFORE calling). Returns Meta's message id when provided.
+ */
+export async function sendMessengerMessage(
+  pageId: string,
+  pageToken: string,
+  recipientId: string,
+  text: string
+): Promise<{ messageId: string | null }> {
+  const trimmed = text.length > MESSENGER_MAX_TEXT_LENGTH
+    ? `${text.slice(0, MESSENGER_MAX_TEXT_LENGTH - 1)}…`
+    : text;
+  const payload = await graphRequest(
+    `/${pageId}/messages`,
+    {
+      recipient: JSON.stringify({ id: recipientId }),
+      messaging_type: "RESPONSE",
+      message: JSON.stringify({ text: trimmed }),
+      access_token: pageToken
+    },
+    { method: "POST" }
+  );
+  const messageId = (payload as { message_id?: unknown } | null)?.message_id;
+  return { messageId: typeof messageId === "string" ? messageId : null };
+}
+
+/**
+ * Best-effort display name for a Messenger PSID / IG-scoped id — profile
+ * access is permission- and window-limited, so failures return null and
+ * the conversation just shows the raw id.
+ */
+export async function getMessengerProfile(
+  pageToken: string,
+  userId: string,
+  platform: "messenger" | "instagram"
+): Promise<{ name: string | null }> {
+  try {
+    const fields = platform === "instagram" ? "name,username" : "first_name,last_name";
+    const payload = (await graphRequest(`/${userId}`, {
+      fields,
+      access_token: pageToken
+    })) as {
+      name?: unknown;
+      username?: unknown;
+      first_name?: unknown;
+      last_name?: unknown;
+    } | null;
+    const joined = [payload?.first_name, payload?.last_name]
+      .filter((v): v is string => typeof v === "string" && v.length > 0)
+      .join(" ");
+    const name =
+      (typeof payload?.name === "string" && payload.name) ||
+      joined ||
+      (typeof payload?.username === "string" && payload.username) ||
+      null;
+    return { name: name || null };
+  } catch (err) {
+    // graphRequest only ever throws MetaApiError.
+    logger.warn("meta messenger profile lookup failed (ignored)", {
+      userId,
+      error: (err as Error).message
+    });
+    return { name: null };
+  }
+}
+
+/**
+ * The IG professional account linked to a Page (null when none) —
+ * captured at page-pick time so instagram-object webhook entries can be
+ * resolved to the owning tenant.
+ */
+export async function getLinkedInstagramAccount(
+  pageToken: string,
+  pageId: string
+): Promise<{ id: string; username: string | null } | null> {
+  try {
+    const payload = (await graphRequest(`/${pageId}`, {
+      fields: "instagram_business_account{id,username}",
+      access_token: pageToken
+    })) as { instagram_business_account?: { id?: unknown; username?: unknown } } | null;
+    const account = payload?.instagram_business_account;
+    if (!account || typeof account.id !== "string" || account.id.length === 0) {
+      return null;
+    }
+    return {
+      id: account.id,
+      username: typeof account.username === "string" ? account.username : null
+    };
+  } catch (err) {
+    logger.warn("meta linked instagram lookup failed (ignored)", {
+      pageId,
+      error: (err as Error).message
+    });
+    return null;
   }
 }
 

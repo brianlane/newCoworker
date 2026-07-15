@@ -13,6 +13,9 @@ import {
   type AccessibleBusiness
 } from "@/lib/dashboard/active-business";
 import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
+import { filterSidebarItemsForBusiness } from "@/lib/dashboard/sidebar-items";
+import { getPublicMetaConnection } from "@/lib/db/meta-connections";
+import { logger } from "@/lib/logger";
 import { can } from "@/lib/authz/policy";
 import { effectiveBranding, type Branding } from "@/lib/plans/branding";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
@@ -126,7 +129,26 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Per-user nav customization (order + visibility). Keyed to the SIGNED-IN
   // user (not the tenant), so an admin in view-as sees their own layout.
   // Degrades to the default catalog on any read hiccup inside the helper.
-  const sidebarLayout = await getSidebarLayout(user.userId);
+  // Conditional items (Messenger inbox) only render for businesses with an
+  // ACTIVE Meta connection — a read hiccup hides rather than breaks nav.
+  let metaConnected = false;
+  if (businessId) {
+    try {
+      const metaConnection = await getPublicMetaConnection(businessId);
+      // is_active matters too: a soft-paused integration stops webhook
+      // routing and sends, so the inbox must disappear with it.
+      metaConnected = metaConnection?.status === "active" && metaConnection.is_active;
+    } catch (err) {
+      logger.warn("dashboard layout: meta connection read failed; hiding Messenger nav", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  const sidebarLayout = filterSidebarItemsForBusiness(
+    await getSidebarLayout(user.userId),
+    { metaConnected }
+  );
 
   return (
     <div className="flex h-dvh bg-deep-ink">

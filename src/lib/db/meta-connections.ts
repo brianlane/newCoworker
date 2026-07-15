@@ -32,6 +32,9 @@ type StoredMetaConnectionRow = {
   page_name: string | null;
   page_token_encrypted: string | null;
   account_name: string | null;
+  /** IG professional account linked to the Page (null when none). */
+  instagram_account_id: string | null;
+  instagram_username: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -56,7 +59,8 @@ export type PublicMetaConnectionRow = Omit<
 
 const ALL_COLUMNS =
   "id,business_id,status,user_token_encrypted,page_id,page_name," +
-  "page_token_encrypted,account_name,is_active,created_at,updated_at";
+  "page_token_encrypted,account_name,instagram_account_id,instagram_username," +
+  "is_active,created_at,updated_at";
 
 function toDecryptedRow(row: StoredMetaConnectionRow): MetaConnectionRow {
   const {
@@ -133,6 +137,29 @@ export async function getActiveMetaConnectionByPageId(
 }
 
 /**
+ * Webhook routing for `object: "instagram"` entries: the ACTIVE connection
+ * whose linked IG professional account matches, with the page token
+ * decrypted (IG DMs send through the same page-token edge). Enforced
+ * unique by `uq_meta_connections_instagram`.
+ */
+export async function getActiveMetaConnectionByInstagramId(
+  instagramAccountId: string,
+  client?: SupabaseClient
+): Promise<MetaConnectionRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("meta_connections")
+    .select(ALL_COLUMNS)
+    .eq("instagram_account_id", instagramAccountId)
+    .eq("status", "active")
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw new Error(`getActiveMetaConnectionByInstagramId: ${error.message}`);
+  if (!data) return null;
+  return toDecryptedRow(data as unknown as StoredMetaConnectionRow);
+}
+
+/**
  * Whoever holds this Page's unique claim (`uq_meta_connections_page`) —
  * ACTIVE or PAUSED. Distinct from getActiveMetaConnectionByPageId: paused
  * rows keep both the claim and the Meta subscription, so unsubscribe
@@ -188,6 +215,8 @@ export async function savePendingMetaConnection(
     page_name: null,
     page_token_encrypted: null,
     account_name: input.accountName,
+    instagram_account_id: null,
+    instagram_username: null,
     is_active: true
   };
 
@@ -225,6 +254,9 @@ export async function activateMetaConnection(
     pageId: string;
     pageName: string | null;
     pageToken: string;
+    /** Linked IG professional account, when the Page has one. */
+    instagramAccountId?: string | null;
+    instagramUsername?: string | null;
   },
   client?: SupabaseClient
 ): Promise<PublicMetaConnectionRow> {
@@ -242,6 +274,8 @@ export async function activateMetaConnection(
       page_id: input.pageId,
       page_name: input.pageName,
       page_token_encrypted: encryptIntegrationSecret(token),
+      instagram_account_id: input.instagramAccountId ?? null,
+      instagram_username: input.instagramUsername ?? null,
       is_active: true,
       updated_at: new Date().toISOString()
     })

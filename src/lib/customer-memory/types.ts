@@ -10,7 +10,7 @@
  * Supabase client and our server-only modules.
  */
 
-export type CustomerMemoryChannel = "sms" | "voice" | "dashboard" | "email" | "webchat";
+export type CustomerMemoryChannel = "sms" | "voice" | "dashboard" | "email" | "webchat" | "messenger";
 
 /**
  * Contact classification (the `contacts.type` column). `customer` is the default

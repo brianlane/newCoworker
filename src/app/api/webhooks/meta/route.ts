@@ -1,19 +1,23 @@
 /**
- * Meta (Facebook) leadgen webhook receiver.
+ * Meta (Facebook) webhook receiver — lead ads + Messenger/Instagram DMs.
  *
  *   GET  — Meta's one-time verification handshake: echo `hub.challenge`
  *          when `hub.verify_token` matches META_WEBHOOK_VERIFY_TOKEN.
- *   POST — real-time lead deliveries. The raw body is verified against
+ *   POST — real-time deliveries. The raw body is verified against
  *          `X-Hub-Signature-256` (HMAC-SHA256, app secret) BEFORE parsing;
- *          everything after that lives in src/lib/meta/webhook.ts (page →
- *          tenant resolution, Graph lead fetch, webhook-flow enqueue with
- *          source "facebook_lead_ads" and the leadgen id as the
- *          idempotency key).
+ *          everything after that lives in src/lib/meta/webhook.ts:
+ *          leadgen changes become webhook flow events, conversation
+ *          messages land in messenger_conversations/messages and enqueue
+ *          messenger_jobs reply jobs. When a reply job was enqueued, the
+ *          internal worker is kicked fire-and-forget (via `after()`) so
+ *          replies land in seconds — the per-minute cron sweep is only
+ *          the retry net.
  *
  * POST always answers 200 for verified deliveries — an unknown page or a
  * failed lead fetch is logged, not 4xx/5xxed, so Meta doesn't back off or
  * disable the subscription over one tenant's bad row.
  */
+import { after, NextResponse } from "next/server";
 import { errorResponse, successResponse } from "@/lib/api-response";
 import { verifyMetaWebhookSignature } from "@/lib/meta/client";
 import {
@@ -21,8 +25,34 @@ import {
   parseMetaWebhookBody,
   processMetaWebhookEvents
 } from "@/lib/meta/webhook";
+import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Fire-and-forget kick of the reply worker (same bearer the cron bridge
+ * uses). Missing secret/base URL just defers to the sweep.
+ */
+async function kickMessengerWorker(): Promise<void> {
+  const secret = process.env.INTERNAL_CRON_SECRET?.trim();
+  const base = process.env.NEXT_PUBLIC_APP_URL?.trim();
+  if (!secret || !base) return;
+  try {
+    await fetch(new URL("/api/internal/messenger-worker", base).toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`,
+        Origin: base
+      },
+      body: "{}"
+    });
+  } catch (err) {
+    logger.warn("messenger worker kick failed; sweep will retry", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
@@ -63,5 +93,17 @@ export async function POST(request: Request) {
   }
 
   const result = await processMetaWebhookEvents(events);
+  if (result.messagesEnqueued > 0) {
+    after(() => kickMessengerWorker());
+  }
+  if (result.messagesRateLimited > 0) {
+    // Non-200 makes Meta REDELIVER the shed messages once the window
+    // clears; the mid dedupe makes the already-ingested part of the batch
+    // idempotent on replay.
+    return NextResponse.json(
+      { ok: false, error: { code: "RATE_LIMITED", message: "message events shed; redeliver" } },
+      { status: 429 }
+    );
+  }
   return successResponse(result);
 }
