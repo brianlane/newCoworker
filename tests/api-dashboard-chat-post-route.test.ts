@@ -43,6 +43,7 @@ const supabaseFlagsStub = {
   from: vi.fn(),
   select: vi.fn(),
   eq: vi.fn(),
+  update: vi.fn(),
   maybeSingle: vi.fn()
 };
 vi.mock("@/lib/supabase/server", () => ({
@@ -59,6 +60,33 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
   isAgentToolEnabled: vi.fn(async () => false)
 }));
 
+vi.mock("@/lib/db/chat-usage", () => ({
+  // Under-cap by default; the over-cap/fallback tests override per-call.
+  getChatSpendSnapshotForBusiness: vi.fn(async () => ({
+    periodStart: "2026-07-01T00:00:00.000Z",
+    spendMicros: 0,
+    baseCapMicros: 10_000_000,
+    creditMicros: 0,
+    effectiveCapMicros: 10_000_000
+  }))
+}));
+
+vi.mock("@/lib/dashboard-chat/inline-turn", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/dashboard-chat/inline-turn")>(
+    "@/lib/dashboard-chat/inline-turn"
+  );
+  return { ...actual, runInlineChatTurn: vi.fn() };
+});
+
+vi.mock("@/lib/dashboard-chat/memory-capture", () => ({
+  captureOwnerRuleInline: vi.fn(async () => ({ saved: [] }))
+}));
+
+vi.mock("@/lib/dashboard-chat/summarizer", () => ({
+  shouldSummarize: vi.fn(() => false),
+  summarizeThread: vi.fn(async () => ({ ok: true, summary: "" }))
+}));
+
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -73,6 +101,9 @@ import {
 } from "@/lib/db/dashboard-chat";
 import { insertChatJob } from "@/lib/db/dashboard-chat-jobs";
 import { listCustomerMemories } from "@/lib/customer-memory/db";
+import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
+import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
+import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
@@ -137,7 +168,12 @@ beforeEach(() => {
   // Business flags: not paused, customer channels enabled.
   supabaseFlagsStub.from.mockReturnValue(supabaseFlagsStub);
   supabaseFlagsStub.select.mockReturnValue(supabaseFlagsStub);
+  // `.eq()` terminates BOTH the flags read chain (before .maybeSingle) and
+  // the inline path's thread-bump update chain (awaited directly) — a
+  // non-thenable return works for the latter (await passes it through and
+  // `error` destructures to undefined).
   supabaseFlagsStub.eq.mockReturnValue(supabaseFlagsStub);
+  supabaseFlagsStub.update.mockReturnValue(supabaseFlagsStub);
   supabaseFlagsStub.maybeSingle.mockResolvedValue({
     data: {
       id: BIZ,
@@ -593,24 +629,206 @@ describe("POST /api/dashboard/chat — pre-flight errors (no enqueue)", () => {
   });
 });
 
-describe("POST /api/dashboard/chat — summarizer trigger has moved", () => {
-  // Bugbot Medium-severity finding on PR #79: firing the summarizer
-  // from this route in the Option B pipeline would build a summary
-  // missing the latest assistant turn (the worker hasn't written it
-  // yet). The trigger now lives on the worker side, which calls
-  // POST /api/internal/dashboard-chat-summarize after persisting
-  // the assistant message. These tests pin the contract: the route
-  // does NOT import or invoke the summarizer.
-  it("does not import the dashboard-chat summarizer module", async () => {
+describe("POST /api/dashboard/chat — summarizer fires only after the assistant turn is persisted", () => {
+  // Bugbot Medium-severity finding on PR #79: firing the summarizer from
+  // the ENQUEUE path would build a summary missing the latest assistant
+  // turn (the worker hasn't written it yet) — so the worker path's trigger
+  // lives on the worker side (POST /api/internal/dashboard-chat-summarize
+  // after the assistant insert). The INLINE path persists BOTH turns
+  // in-route before its summary check, which preserves the same invariant.
+  // This test pins that structure: shouldSummarize is only ever invoked
+  // inside finishInlineTurn (after appendMessage(..., "assistant", ...)),
+  // never on the enqueue path.
+  it("keeps the summary check inside finishInlineTurn, after the assistant insert", async () => {
     const routeSrc = await (
       await import("node:fs/promises")
     ).readFile(
       new URL("../src/app/api/dashboard/chat/route.ts", import.meta.url),
       "utf8"
     );
-    expect(routeSrc).not.toMatch(/from\s+["']@\/lib\/dashboard-chat\/summarizer["']/);
-    expect(routeSrc).not.toMatch(/summarizeThreadAndLog\s*\(/);
-    expect(routeSrc).not.toMatch(/shouldSummarize\s*\(/);
+    const postSection = routeSrc.slice(
+      routeSrc.indexOf("export async function POST"),
+      routeSrc.indexOf("async function finishInlineTurn")
+    );
+    expect(postSection).not.toMatch(/shouldSummarize\s*\(/);
+    const finishSection = routeSrc.slice(routeSrc.indexOf("async function finishInlineTurn"));
+    const assistantInsertAt = finishSection.indexOf('appendMessage(args.thread.id, "assistant"');
+    const summaryCheckAt = finishSection.indexOf("shouldSummarize(");
+    expect(assistantInsertAt).toBeGreaterThanOrEqual(0);
+    expect(summaryCheckAt).toBeGreaterThan(assistantInsertAt);
+  });
+});
+
+describe("POST /api/dashboard/chat — inline (central Gemini) primary path", () => {
+  beforeEach(() => {
+    process.env.GOOGLE_API_KEY = "test-key";
+    vi.mocked(runInlineChatTurn).mockResolvedValue({
+      ok: true,
+      content: "Inline reply",
+      drafts: []
+    });
+    vi.mocked(appendMessage).mockImplementation(
+      async (_threadId: string, role: string, content: string) =>
+        ({ id: role === "user" ? 99 : 100, role, content, created_at: "now" }) as never
+    );
+  });
+
+  afterEach(() => {
+    delete process.env.GOOGLE_API_KEY;
+  });
+
+  it("answers inline (mode=inline, assistant persisted, NO job enqueued) when the key is present and spend is under cap", async () => {
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    const env = await readEnvelope(res);
+    expect(env.data).toMatchObject({
+      mode: "inline",
+      assistantMessageId: 100,
+      drafts: []
+    });
+    expect(env.data?.jobId).toBeUndefined();
+    expect(insertChatJob).not.toHaveBeenCalled();
+    const assistantAppend = vi.mocked(appendMessage).mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend?.[2]).toBe("Inline reply");
+    // Prompt parity: the inline call received the same system blocks and
+    // the [Dashboard]-marked user turn.
+    const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(inlineArgs.systemInstruction).toContain("OWNER MODE");
+    expect(inlineArgs.userMessage).toBe("[Dashboard] hi");
+  });
+
+  it("returns creation drafts from the inline turn to the client", async () => {
+    vi.mocked(runInlineChatTurn).mockResolvedValueOnce({
+      ok: true,
+      content: "Drafted!",
+      drafts: [
+        { kind: "agent", name: "Summarizer", instructions: "Summarize.", outputFormat: "markdown" }
+      ]
+    });
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "make an agent" }));
+    const env = await readEnvelope(res);
+    expect(env.data?.drafts).toEqual([
+      { kind: "agent", name: "Summarizer", instructions: "Summarize.", outputFormat: "markdown" }
+    ]);
+  });
+
+  it("falls back to the worker enqueue when the inline turn fails on a TEXT turn", async () => {
+    vi.mocked(runInlineChatTurn).mockResolvedValueOnce({ ok: false, error: "model_failed" });
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const env = await readEnvelope(res);
+    expect(env.data).toMatchObject({ mode: "worker", jobId: FAKE_JOB_ID });
+    expect(insertChatJob).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes to the worker WITHOUT an inline attempt when spend is over the cap", async () => {
+    vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValueOnce({
+      periodStart: "2026-07-01T00:00:00.000Z",
+      spendMicros: 10_000_000,
+      baseCapMicros: 10_000_000,
+      creditMicros: 0,
+      effectiveCapMicros: 10_000_000
+    });
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const env = await readEnvelope(res);
+    expect(env.data).toMatchObject({ mode: "worker" });
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
+  });
+
+  it("multipart attachment turn: runs inline with the file and marks the stored user message", async () => {
+    const form = new FormData();
+    form.set("businessId", BIZ);
+    form.set("message", "summarize this");
+    form.set("file", new File(["a,b\n1,2"], "leads.csv", { type: "text/csv" }));
+    const res = await POST(
+      new Request("http://localhost/api/dashboard/chat", { method: "POST", body: form })
+    );
+    expect(res.status).toBe(200);
+    const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(inlineArgs.attachment).toMatchObject({ filename: "leads.csv", mimeType: "text/csv" });
+    const userAppend = vi.mocked(appendMessage).mock.calls.find((c) => c[1] === "user");
+    expect(userAppend?.[2]).toBe("[Attached: leads.csv] summarize this");
+  });
+
+  it("rejects unsupported attachment types before any model work", async () => {
+    const form = new FormData();
+    form.set("businessId", BIZ);
+    form.set("message", "read this");
+    form.set("file", new File(["x"], "virus.exe", { type: "application/x-msdownload" }));
+    const res = await POST(
+      new Request("http://localhost/api/dashboard/chat", { method: "POST", body: form })
+    );
+    expect(res.status).toBe(400);
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
+    expect(appendMessage).not.toHaveBeenCalled();
+  });
+
+  it("attachment turn over cap: stores an honest refusal reply (mode=inline, no model call, no job)", async () => {
+    vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValueOnce({
+      periodStart: "2026-07-01T00:00:00.000Z",
+      spendMicros: 20_000_000,
+      baseCapMicros: 10_000_000,
+      creditMicros: 0,
+      effectiveCapMicros: 10_000_000
+    });
+    const form = new FormData();
+    form.set("businessId", BIZ);
+    form.set("message", "summarize this");
+    form.set("file", new File(["text"], "notes.txt", { type: "text/plain" }));
+    const res = await POST(
+      new Request("http://localhost/api/dashboard/chat", { method: "POST", body: form })
+    );
+    const env = await readEnvelope(res);
+    expect(env.data).toMatchObject({ mode: "inline" });
+    expect(runInlineChatTurn).not.toHaveBeenCalled();
+    expect(insertChatJob).not.toHaveBeenCalled();
+    const assistantAppend = vi.mocked(appendMessage).mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend?.[2]).toContain("monthly AI budget is used up");
+  });
+
+  it("attachment turn whose inline call fails: stores an honest failure reply instead of enqueueing", async () => {
+    vi.mocked(runInlineChatTurn).mockResolvedValueOnce({ ok: false, error: "model_failed" });
+    const form = new FormData();
+    form.set("businessId", BIZ);
+    form.set("message", "summarize this");
+    form.set("file", new File(["text"], "notes.txt", { type: "text/plain" }));
+    const res = await POST(
+      new Request("http://localhost/api/dashboard/chat", { method: "POST", body: form })
+    );
+    const env = await readEnvelope(res);
+    expect(env.data).toMatchObject({ mode: "inline" });
+    expect(insertChatJob).not.toHaveBeenCalled();
+    const assistantAppend = vi.mocked(appendMessage).mock.calls.find((c) => c[1] === "assistant");
+    expect(assistantAppend?.[2]).toContain("couldn't read that attachment");
+  });
+
+  it("fires memory capture (fire-and-forget) after a real inline reply", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "we are closed Sundays" }));
+    // Give the void promise a tick to start.
+    await new Promise((r) => setTimeout(r, 0));
+    expect(captureOwnerRuleInline).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        ownerMessage: "we are closed Sundays",
+        assistantReply: "Inline reply"
+      })
+    );
+  });
+
+  it("does NOT fire memory capture for a refusal reply", async () => {
+    vi.mocked(getChatSpendSnapshotForBusiness).mockResolvedValueOnce({
+      periodStart: "2026-07-01T00:00:00.000Z",
+      spendMicros: 20_000_000,
+      baseCapMicros: 10_000_000,
+      creditMicros: 0,
+      effectiveCapMicros: 10_000_000
+    });
+    const form = new FormData();
+    form.set("businessId", BIZ);
+    form.set("message", "read this");
+    form.set("file", new File(["text"], "notes.txt", { type: "text/plain" }));
+    await POST(new Request("http://localhost/api/dashboard/chat", { method: "POST", body: form }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(captureOwnerRuleInline).not.toHaveBeenCalled();
   });
 });
 

@@ -26,6 +26,7 @@ import {
 } from "./telnyx-call-actions.js";
 import { composeIntakeLeadSms } from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
+import { loadVoiceContactTimeline } from "./contact-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
 
@@ -1211,6 +1212,20 @@ function main(): void {
               (await loadVoiceFlowContext(supabase, businessId, trustedFromE164)) ?? undefined;
           }
 
+          // Cross-channel recent-interactions timeline (contact-context.ts):
+          // the caller's raw SMS thread + recent call summaries from the last
+          // hours. Mid-first-conversation the rolling summary above is still
+          // EMPTY (the summarize sweep runs later) — a lead who was texting
+          // minutes ago and now calls would otherwise reach a receptionist
+          // with no idea the exchange happened (the voice twin of the
+          // 2026-07-14 Truly SMS incident). Same best-effort/staff gates.
+          let recentInteractionsNote: string | undefined;
+          if (trustedFromE164 && !callerIsStaff) {
+            recentInteractionsNote =
+              (await loadVoiceContactTimeline(supabase, businessId, trustedFromE164)) ??
+              undefined;
+          }
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -1235,6 +1250,7 @@ function main(): void {
             transcriptAdapter,
             customerMemorySummary,
             flowContextNote,
+            recentInteractionsNote,
             callerIdentity,
             intake,
             recordDiag

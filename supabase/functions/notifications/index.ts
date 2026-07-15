@@ -30,6 +30,10 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import {
+  meterOperationalSms,
+  releaseOperationalSms
+} from "../_shared/sms_operational_meter.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -332,9 +336,19 @@ serve(async (req: Request) => {
       targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
     );
   } else if (telnyxKey && telnyxProfile) {
+    // Owner alerts are METERED against the tenant's monthly pool like all
+    // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
+    // the "you hit your SMS cap" alert must outrun the cap it reports.
+    // Declared OUTSIDE the try so the catch can release the counted slot
+    // when the fetch itself throws (network error — nothing left Telnyx).
+    const smsMeter = await meterOperationalSms(supa, record.business_id);
+    // Slot lifecycle guard: set once the counted slot is SETTLED — either
+    // kept (Telnyx accepted the alert) or already released (Telnyx
+    // rejected it). A later throw in the same try (recordRow, error-body
+    // read) re-enters the catch, which must neither refund a delivered
+    // alert nor release the same slot twice.
+    let smsMeterSettled = false;
     try {
-      // Platform-initiated owner alert (same class as /api/rowboat urgent SMS): not metered against
-      // the business monthly pool.
       const body: Record<string, string> = {
         to: targets.phone,
         text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
@@ -349,6 +363,11 @@ serve(async (req: Request) => {
         },
         body: JSON.stringify(body)
       });
+      if (!smsRes.ok) {
+        // The alert never left Telnyx — give the counted slot back.
+        await releaseOperationalSms(supa, record.business_id, smsMeter);
+      }
+      smsMeterSettled = true;
       if (smsRes.ok) {
         await recordRow(
           supa,
@@ -374,6 +393,12 @@ serve(async (req: Request) => {
         );
       }
     } catch (e) {
+      // Release ONLY when the slot is still unsettled (the fetch itself
+      // threw — nothing left Telnyx). A delivered alert stays counted, and
+      // an already-released slot is never released twice.
+      if (!smsMeterSettled) {
+        await releaseOperationalSms(supa, record.business_id, smsMeter);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       errors.push(`SMS error: ${msg}`);
       await recordRow(

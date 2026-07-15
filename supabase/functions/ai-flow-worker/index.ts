@@ -28,6 +28,7 @@ import { telemetryRecord } from "../_shared/telemetry.ts";
 import { isSelfPhone, scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
+import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildClassifyPrompt,
@@ -4437,7 +4438,8 @@ async function notifyOwnerStep(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (forward && cfg) {
     const text = prepareSmsBody(`[AiFlow] ${action.message}`);
-    const send = await telnyxSendSms({
+    // Metered (never refused) owner traffic — Jul 14 2026 policy.
+    const send = await sendOperationalSms(supabase, run.business_id, {
       apiKey: cfg.apiKey,
       messagingProfileId: cfg.profile,
       fromE164: cfg.from,
@@ -5505,7 +5507,8 @@ async function sendOwnerSms(
     return;
   }
   const body = prepareSmsBody(`[AiFlow] ${text}`);
-  const send = await telnyxSendSms({
+  // Metered (never refused) owner traffic — Jul 14 2026 policy.
+  const send = await sendOperationalSms(supabase, run.business_id, {
     apiKey: cfg.apiKey,
     messagingProfileId: cfg.profile,
     fromE164: cfg.from,

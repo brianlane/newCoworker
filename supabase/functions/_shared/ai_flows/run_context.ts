@@ -162,6 +162,14 @@ export function formatFlowRunContext(
  * the question sitting in its system prompt. The same model reads the note
  * reliably when it is adjacent to the user message, so the worker anchors
  * the LAST automated message right next to the turn it likely answers.
+ *
+ * The ACT-on-it clause exists because acknowledging an answer is not
+ * enough: Amy's lead Bryan answered "Now is a good time" to "when is a good
+ * time to discuss…?" and the reply re-opened scheduling ("What time works
+ * best for you?" / "I can check for some available times") — the answer
+ * was understood but deferred. An "I'm available now" answer must be acted
+ * on in the same reply (continue the conversation immediately or arrange a
+ * prompt human follow-up), never bounced back into a calendar negotiation.
  */
 export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
   const trimmed = lastFlowMessage.trim();
@@ -169,7 +177,11 @@ export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
   return (
     `(Note: the last automated message to this texter was: ` +
     `"${truncate(trimmed, MAX_LAST_MESSAGE_CHARS)}" — read their message below ` +
-    `as a likely answer to it.)`
+    `as a likely answer to it, and ACT on that answer in this reply. If they ` +
+    `are agreeing or saying they are available now, help them right now — ` +
+    `continue the conversation immediately or arrange a prompt human ` +
+    `follow-up; do NOT ask them to schedule for later, offer to find times, ` +
+    `or re-ask the question they just answered.)`
   );
 }
 

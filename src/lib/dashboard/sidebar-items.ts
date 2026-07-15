@@ -35,6 +35,7 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "import-export", label: "Import / Export", href: "/dashboard/import-export" },
   { key: "integrations", label: "Integrations", href: "/dashboard/integrations" },
   { key: "aiflows", label: "AiFlows", href: "/dashboard/aiflows" },
+  { key: "agents", label: "Agents", href: "/dashboard/agents" },
   { key: "billing", label: "Billing", href: "/dashboard/billing" },
   { key: "settings", label: "Settings", href: "/dashboard/settings", locked: true },
   { key: "notifications", label: "Notifications", href: "/dashboard/notifications", locked: true }

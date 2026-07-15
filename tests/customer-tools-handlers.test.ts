@@ -19,6 +19,14 @@ vi.mock("@/lib/customer-memory/summarizer", () => ({
   summarizeCustomerMemoryAndLog: vi.fn().mockResolvedValue(undefined)
 }));
 
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn().mockResolvedValue({ mocked: "client" })
+}));
+
+vi.mock("../supabase/functions/_shared/contact_context", () => ({
+  loadContactTimeline: vi.fn()
+}));
+
 import {
   appendCustomerPinnedNote,
   lookupCustomerByPhone,
@@ -27,6 +35,8 @@ import {
 } from "@/lib/customer-tools/handlers";
 import { getCustomerMemory, updateCustomerOwnerFields } from "@/lib/customer-memory/db";
 import { summarizeCustomerMemoryAndLog } from "@/lib/customer-memory/summarizer";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { loadContactTimeline } from "../supabase/functions/_shared/contact_context";
 import type { CustomerMemoryRow } from "@/lib/customer-memory/types";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -68,6 +78,47 @@ describe("lookupCustomerByPhone", () => {
     const result = await lookupCustomerByPhone(BIZ, "anonymous");
     expect(result).toEqual({ ok: true, data: { found: false } });
     expect(vi.mocked(getCustomerMemory)).not.toHaveBeenCalled();
+  });
+
+  it("attaches the cross-channel recentInteractions timeline when one exists", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(memory({ display_name: "Alex" }));
+    vi.mocked(loadContactTimeline).mockResolvedValueOnce(
+      "Recent interactions…\n- [Contact (SMS)] July 23, 2026"
+    );
+    const result = await lookupCustomerByPhone(BIZ, PHONE);
+    const customer = (result.data as { customer: Record<string, unknown> }).customer;
+    expect(customer.recentInteractions).toContain("July 23, 2026");
+    // One call with the queried number — the loader itself is alias-aware
+    // (it resolves the profile's primary + merged numbers).
+    expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledWith(
+      { mocked: "client" },
+      BIZ,
+      PHONE
+    );
+  });
+
+  it("omits recentInteractions when there is no timeline (nothing recent)", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(memory());
+    vi.mocked(loadContactTimeline).mockResolvedValueOnce(null);
+    const result = await lookupCustomerByPhone(BIZ, PHONE);
+    const customer = (result.data as { customer: Record<string, unknown> }).customer;
+    expect("recentInteractions" in customer).toBe(false);
+    expect(vi.mocked(loadContactTimeline)).toHaveBeenCalledTimes(1);
+  });
+
+  it("degrades to the summary-only shape when the timeline load blows up", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(getCustomerMemory).mockResolvedValueOnce(
+      memory({ summary_md: "rolling summary" })
+    );
+    vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce(new Error("no client"));
+    const result = await lookupCustomerByPhone(BIZ, PHONE);
+    const customer = (result.data as { customer: Record<string, unknown> }).customer;
+    expect(customer.summary).toBe("rolling summary");
+    expect("recentInteractions" in customer).toBe(false);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
 });
 

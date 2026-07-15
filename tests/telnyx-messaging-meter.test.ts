@@ -26,6 +26,110 @@ describe("reserveSlotFailureMessage", () => {
   });
 });
 
+describe("sendTelnyxSms meterMode: operational (count always, never refuse)", () => {
+  const rpc = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rpc.mockImplementation((name: string) => {
+      if (name === "meter_sms_operational_send") {
+        return Promise.resolve({ data: { counted: true, source: "plan" }, error: null });
+      }
+      if (name === "release_sms_outbound_slot") {
+        return Promise.resolve({ error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    createSupabaseServiceClient.mockResolvedValue({ rpc } as never);
+  });
+
+  const okFetch = () =>
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "m1" } })
+    });
+
+  it("counts via the operational RPC and sends — no reserve, no throttle", async () => {
+    const fetchMock = okFetch();
+    const { id } = await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "p" },
+      "+15145188192",
+      "Your New Coworker is live!",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1", meterMode: "operational" }
+    );
+    expect(id).toBe("m1");
+    expect(rpc).toHaveBeenCalledWith("meter_sms_operational_send", { p_business_id: "biz-1" });
+    expect(rpc).not.toHaveBeenCalledWith("try_reserve_sms_outbound_slot", expect.anything());
+    expect(rpc).not.toHaveBeenCalledWith("sms_outbound_rate_check", expect.anything());
+    expect(rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
+  });
+
+  it("still sends when the operational meter RPC errors (log-and-continue)", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "meter_sms_operational_send") {
+        return Promise.resolve({ data: null, error: { message: "ledger down" } });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = okFetch();
+    const { id } = await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "p" },
+      "+15145188192",
+      "Alert",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1", meterMode: "operational" }
+    );
+    expect(id).toBe("m1");
+    // Nothing counted → nothing released even if later steps failed.
+  });
+
+  it("releases (with bonus refund) when a bonus-counted send fails at Telnyx", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "meter_sms_operational_send") {
+        return Promise.resolve({ data: { counted: true, source: "bonus" }, error: null });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve("err")
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15145188192",
+        "Alert",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1", meterMode: "operational" }
+      )
+    ).rejects.toThrow("Telnyx SMS error");
+    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_refund_bonus: true
+    });
+  });
+
+  it("does not release after a failed send when the meter never counted", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "meter_sms_operational_send") {
+        return Promise.resolve({ data: { counted: false, reason: "no_business" }, error: null });
+      }
+      return Promise.resolve({ error: null });
+    });
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      text: () => Promise.resolve("err")
+    });
+    await expect(
+      sendTelnyxSms(
+        { apiKey: "k", messagingProfileId: "p" },
+        "+15145188192",
+        "Alert",
+        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1", meterMode: "operational" }
+      )
+    ).rejects.toThrow("Telnyx SMS error");
+    expect(rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
+  });
+});
+
 describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
   const rpc = vi.fn();
 

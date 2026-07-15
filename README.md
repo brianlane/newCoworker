@@ -540,12 +540,27 @@ System-level, per-business budget gates apply to ALL relevant traffic regardless
   - Edge: `sms-inbound-worker` (AI reply) and `ai-flow-worker` (`send_sms` / group SMS to the lead, and team-offer SMS) reserve via the `try_reserve_sms_outbound_slot` RPC.
 - **AI chat spend (graceful degrade, NOT a hard stop):** when a business is over its AI token budget, the SMS/chat reply degrades to the local model ([supabase/functions/_shared/chat_spend_cap.ts](supabase/functions/_shared/chat_spend_cap.ts)) rather than refusing. The SMS SEND that carries that reply is still hard-gated by the SMS cap above.
 
-Intentional operational exemptions (NOT metered against the customer's monthly SMS pool, because they are platform/owner/compliance traffic, never customer-facing):
+**NOTHING is exempt from metering** (policy set Jul 14 2026 — the previous
+"operational exemptions" list is gone). Every outbound SMS counts against the
+tenant's monthly pool via the same `daily_usage.sms_sent` ledger the quota UI
+reads. Traffic classes differ only in what happens AT the cap:
 
-- Owner alerts ([src/lib/notifications/dispatch.ts](src/lib/notifications/dispatch.ts)) and AiFlow owner notices (`sendOwnerSms` / `notify_owner` forward in [ai-flow-worker](supabase/functions/ai-flow-worker/index.ts)).
-- The one-time provisioning "your Coworker is live" SMS to the owner ([src/lib/provisioning/orchestrate.ts](src/lib/provisioning/orchestrate.ts)).
-- Teammate offer-reply acks and the Safe-Mode inbound forward to the owner ([telnyx-sms-inbound](supabase/functions/telnyx-sms-inbound/index.ts) / [sms-inbound-worker](supabase/functions/sms-inbound-worker/index.ts)).
-- STOP / HELP / START compliance auto-replies (legally required; must never be capped).
+- **Customer-facing sends** (AI replies, composer, tools, AiFlow customer
+  texts, missed-call auto-texts, scheduled texts): `try_reserve_sms_outbound_slot`
+  — hard stop at the cap after the purchased-bonus spill, exactly as before.
+- **Operational sends** — owner alerts ([src/lib/notifications/dispatch.ts](src/lib/notifications/dispatch.ts),
+  Edge `notifications`), AiFlow owner notices (`sendOwnerSms` / `notify_owner`),
+  the provisioning "your Coworker is live" SMS ([src/lib/provisioning/orchestrate.ts](src/lib/provisioning/orchestrate.ts)),
+  teammate offer-reply acks, the Safe-Mode inbound forward + owner reply
+  prompts ([telnyx-sms-inbound](supabase/functions/telnyx-sms-inbound/index.ts) /
+  [sms-inbound-worker](supabase/functions/sms-inbound-worker/index.ts)), and
+  STOP / HELP / START compliance auto-replies: `meter_sms_operational_send`
+  (Node: `sendTelnyxSms(..., { meterMode: "operational" })`, Edge:
+  `_shared/sms_operational_meter.ts`) — counted as plan usage, bonus spill,
+  or explicit **overage**, but never REFUSED and never throttled. Rationale:
+  STOP/HELP/START replies are legally required; the "you hit your SMS cap"
+  alert must outrun the cap it reports; Safe Mode exists so a paused AI never
+  silently eats customer texts. Failed sends release the counted slot.
 
 ## All work and code modifications must follow this flow
 

@@ -377,19 +377,27 @@ describe("loadFlowRunContextDetailed", () => {
 });
 
 describe("formatFlowAnswerNote", () => {
-  it("anchors the last automated message next to the user turn", () => {
+  it("anchors the last automated message next to the user turn with the act-on-it clause", () => {
     const note = formatFlowAnswerNote("Approximately when does your current policy renew?");
-    expect(note).toBe(
+    expect(note).toContain(
       '(Note: the last automated message to this texter was: ' +
         '"Approximately when does your current policy renew?" — read their ' +
-        "message below as a likely answer to it.)"
+        "message below as a likely answer to it, and ACT on that answer in this reply."
     );
+    // The Bryan clause (Amy 2026-07-14): an "available now" answer must be
+    // acted on, never bounced into a schedule-for-later negotiation.
+    expect(note).toContain("saying they are available now, help them right now");
+    expect(note).toContain("do NOT ask them to schedule for later");
+    expect(note!.endsWith(")")).toBe(true);
   });
 
   it("clips a runaway message and returns null for blank input", () => {
     const note = formatFlowAnswerNote(`${"x".repeat(400)}`);
     expect(note).toContain("…");
-    expect(note!.length).toBeLessThan(420);
+    // The quoted flow message itself stays capped at MAX_LAST_MESSAGE_CHARS
+    // regardless of the surrounding instruction text.
+    const quoted = note!.slice(note!.indexOf('"') + 1, note!.lastIndexOf('"'));
+    expect(quoted.length).toBeLessThanOrEqual(300);
     expect(formatFlowAnswerNote("   ")).toBeNull();
     expect(formatFlowAnswerNote("")).toBeNull();
   });

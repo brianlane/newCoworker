@@ -43,6 +43,7 @@ import {
   formatFlowAnswerNote,
   loadFlowRunContextDetailed
 } from "../_shared/ai_flows/run_context.ts";
+import { loadContactTimeline } from "../_shared/contact_context.ts";
 import { loadRecentSmsTranscript } from "../_shared/sms_transcript.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
 import {
@@ -51,6 +52,12 @@ import {
   SMS_IDENTITY_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+// Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
+// against the tenant pool like all traffic but never refused (Jul 14 2026).
+import {
+  meterOperationalSms,
+  sendOperationalSms
+} from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
@@ -492,6 +499,16 @@ serve(async (req: Request) => {
               p_rowboat_conversation_id: null,
               p_last_error: "safe_mode_forwarded"
             });
+            // Safe-Mode forwards are METERED against the tenant's monthly
+            // pool like all traffic (Jul 14 2026 policy: nothing is exempt)
+            // but never refused. Metered AFTER the job completes — not
+            // before the send — so the count lands exactly once: a
+            // pre-completion failure retries the whole job, and the retry's
+            // replayed send is deduped by the Telnyx Idempotency-Key
+            // (metering up front would count every retry for one delivered
+            // forward). A meter failure here under-counts one message
+            // (logged inside the helper) rather than risking double-charge.
+            await meterOperationalSms(supabase, job.business_id);
             await clearJobReplyCache(supabase, job.id);
             // A forward_owner contact keeps their reply relay in Safe Mode:
             // the Safe-Mode forward above already put the text on the owner's
@@ -527,6 +544,9 @@ serve(async (req: Request) => {
               business_id: job.business_id
             });
           } catch (e) {
+            // Nothing to release: the meter only runs after the job
+            // completed, and completion is the last throw-capable step
+            // before it — a failure here means nothing was counted.
             const msg = e instanceof Error ? e.message : String(e);
             console.error("sms_worker safe mode forward", msg);
             // Bound the retry budget just like the Rowboat error path below —
@@ -708,7 +728,7 @@ serve(async (req: Request) => {
               const customerLabel =
                 (contactRow as { display_name?: string | null } | null)?.display_name?.trim() ||
                 fromE164;
-              const send = await telnyxSendSms({
+              const send = await sendOperationalSms(supabase, job.business_id, {
                 apiKey,
                 messagingProfileId: fwdProfile,
                 fromE164: fwdFrom,
@@ -932,10 +952,25 @@ serve(async (req: Request) => {
       // replays the real history there.
       const lastFlowMessage =
         flowDetail.recentMessages[flowDetail.recentMessages.length - 1] ?? "";
-      flowAnswerNote =
-        !thread?.rowboat_conversation_id?.trim() && lastFlowMessage
-          ? formatFlowAnswerNote(lastFlowMessage)
-          : null;
+      const freshThread = !thread?.rowboat_conversation_id?.trim();
+      flowAnswerNote = freshThread && lastFlowMessage
+        ? formatFlowAnswerNote(lastFlowMessage)
+        : null;
+      // Cross-channel timeline, FRESH THREADS ONLY: a conversation Rowboat
+      // hasn't rooted yet starts with zero history — and mid-conversation
+      // the rolling summary (contacts.summary_md) is typically still empty
+      // (the summarize sweep runs later), which is exactly the window the
+      // 2026-07-14 Truly turn fell into. The merged timeline (SMS both
+      // directions INCLUDING flow-suppressed inbounds + recent call
+      // summaries) covers it raw. Continued threads skip it: Rowboat holds
+      // its own SMS history there, and re-sending it every turn would bloat
+      // the prompt and contradict the server-side thread; cross-channel
+      // recency stays reachable there through customer_lookup_by_phone.
+      const contactTimeline = freshThread
+        ? await loadContactTimeline(supabase, job.business_id, fromE164, {
+            excludeInboundJobId: job.id
+          })
+        : null;
       // The texter's E.164 is ALWAYS stated, even on first contact with no
       // memory row: the Rowboat tool webhook (/api/rowboat/tool-call) has no
       // caller context, so the customer tools require an explicit `phone`
@@ -947,7 +982,7 @@ serve(async (req: Request) => {
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
       const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${conversationQualityLine}\n\n${dateLine}\n\n${phoneLine}`;
-      customerPreamble = [dateAndPhoneLines, memoryPreamble, flowContext]
+      customerPreamble = [dateAndPhoneLines, memoryPreamble, contactTimeline, flowContext]
         .filter((part): part is string => Boolean(part))
         .join("\n\n");
       // Decision-engine capture (PRD Ch. 6): ask the model to end its reply

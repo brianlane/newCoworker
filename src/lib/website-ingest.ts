@@ -1,13 +1,23 @@
 /**
- * One-shot shallow website ingestion for onboarding.
+ * Website ingestion for onboarding and dashboard re-crawls.
  *
- * Fetches a small sample of pages under a single origin, extracts readable
- * text, then asks Gemini to summarize it into a compact `website.md` block
- * that gets shipped to `/opt/rowboat/vault/website.md` on the VPS alongside
- * `soul.md`, `identity.md`, and `memory.md`.
+ * Fetches pages under a single origin, extracts readable text, then asks
+ * Gemini to summarize it into a compact `website.md` block that gets shipped
+ * to `/opt/rowboat/vault/website.md` on the VPS alongside `soul.md`,
+ * `identity.md`, and `memory.md`.
+ *
+ * Two crawl profiles share this module:
+ * - Shallow (default, `WEBSITE_INGEST_MAX_PAGES`): homepage + a handful of
+ *   linked pages. Used by the unauthenticated onboarding preview where cost
+ *   per request matters.
+ * - Deep (`WEBSITE_INGEST_DEEP_MAX_PAGES` + `sitemapDiscovery`): seeds the
+ *   queue from `/sitemap.xml` (following one level of sitemap-index nesting)
+ *   and BFS-expands links from every crawled page, fetching small batches
+ *   concurrently under an overall deadline. Used by the authenticated
+ *   `/api/onboard/website-ingest` route so the vault summary reflects the
+ *   whole site (parity with GHL-style "N pages crawled" crawlers).
  *
  * Design goals:
- * - Cheap: one request up front, at most ~6 follow-up pages.
  * - Safe-ish: DNS allowlist + per-hop hostname re-check for redirects, robots
  *   respect, hard timeouts, streamed byte cap. See `fetchWithLimit` for the
  *   residual DNS-rebinding TOCTOU risk that sits above the fetch layer.
@@ -23,9 +33,58 @@ import { isPrivateIpv4, isPrivateIpv6 } from "@/lib/net/ip-classification";
 import { BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS } from "@/lib/vault/business-config-markdown-limits";
 
 export const WEBSITE_INGEST_MAX_PAGES = 6;
+/**
+ * Hard ceiling for `options.maxPages`, and the value the authenticated ingest
+ * route requests for its deep crawl. Sized so a sitemap-rich small-business
+ * site (e.g. a Wix blog with ~67 pages) fits inside one crawl.
+ */
+export const WEBSITE_INGEST_DEEP_MAX_PAGES = 80;
 export const WEBSITE_INGEST_PAGE_TIMEOUT_MS = 5000;
-export const WEBSITE_INGEST_MAX_BYTES_PER_PAGE = 1_000_000;
-export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 40_000;
+/**
+ * Per-page streamed byte cap. Raised from 1 MB after a production Wix
+ * homepage (trulyinsurance.ca) grew past 4 MB of served HTML — builder
+ * platforms routinely inline several MB of CSS/JSON into the document, and
+ * tripping `payload_too_large` on the homepage kills the whole crawl.
+ */
+export const WEBSITE_INGEST_MAX_BYTES_PER_PAGE = 8_000_000;
+/**
+ * Cumulative download budget across the whole crawl. A deep crawl of 80
+ * pathological pages at the per-page cap would otherwise pull ~640 MB
+ * through the route; the crawl stops (keeping what it has) once crossed.
+ * Sized for real builder platforms: Wix serves ~4 MB of HTML per page, so
+ * an 80-page Wix site needs ~320 MB of headroom. Only the extracted text is
+ * retained — page bodies are transient (at most 4 in flight).
+ */
+export const WEBSITE_INGEST_MAX_TOTAL_BYTES = 400_000_000;
+export const WEBSITE_INGEST_MAX_COMBINED_CHARS = 150_000;
+/**
+ * Per-page floor for the corpus slice. The actual per-page budget is
+ * `max(this, MAX_COMBINED / pageCount)` so a single-page crawl can still use
+ * the whole combined budget while an 80-page crawl gives every page a fair
+ * share instead of letting one bloated page crowd out the rest.
+ */
+export const WEBSITE_INGEST_MAX_CHARS_PER_PAGE = 8_000;
+/**
+ * Low-signal floor: unless at least ONE crawled page carries this many
+ * extracted chars, the crawl found nothing usable. Judged per-page (not on
+ * the summed corpus) because a deep crawl of a JS-rendered SPA can stack
+ * many shell pages whose only text is each page's <title> — the sum would
+ * sneak past a corpus-wide floor and produce a titles-only garbage summary.
+ */
+export const WEBSITE_INGEST_MIN_CORPUS_CHARS = 200;
+/** Parallel page fetches per crawl wave. */
+export const WEBSITE_INGEST_CRAWL_CONCURRENCY = 4;
+/**
+ * Overall crawl deadline (fetch phase only — the summarizer has its own 20s
+ * budget). 4-way concurrency over 80 pages at the 5s per-page timeout worst-
+ * cases to ~100s, so 120s leaves the route's 300s `maxDuration` plenty of
+ * room for the summary + post-response vault re-seed.
+ */
+export const WEBSITE_INGEST_CRAWL_DEADLINE_MS = 120_000;
+/** Byte cap for a single sitemap XML document (same as robots.txt). */
+export const WEBSITE_INGEST_SITEMAP_MAX_BYTES = 500_000;
+/** How many child sitemaps of a sitemap index we follow (one nesting level). */
+export const WEBSITE_INGEST_SITEMAP_MAX_CHILDREN = 5;
 export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS;
 
 /** Used when env omits `GEMINI_SUMMARY_MODEL`, or carries a Gemini id unsupported on `:generateContent`. */
@@ -115,6 +174,19 @@ export interface WebsiteIngestOptions {
   businessName?: string;
   businessType?: string;
   maxPages?: number;
+  /**
+   * When true, seed the crawl queue from the site's `/sitemap.xml` (following
+   * one level of sitemap-index nesting) before BFS link expansion. This is
+   * how full-site crawlers (GHL etc.) reach blog posts and deep pages the
+   * homepage never links to. Sitemap fetches run through the same
+   * SSRF-guarded `fetchWithLimit` and same-origin filter as page fetches;
+   * a missing/broken sitemap degrades silently to link-only discovery.
+   */
+  sitemapDiscovery?: boolean;
+  /** Overall crawl-phase deadline. Defaults to {@link WEBSITE_INGEST_CRAWL_DEADLINE_MS}. */
+  crawlDeadlineMs?: number;
+  /** Cumulative download budget. Defaults to {@link WEBSITE_INGEST_MAX_TOTAL_BYTES}. */
+  maxTotalBytes?: number;
   /**
    * When true, skip the robots.txt fetch and the per-page
    * `isPathAllowed` check. Intended ONLY for owner-consented contexts
@@ -335,6 +407,25 @@ export function extractReadableText(html: string): string {
     .join("\n");
 }
 
+/**
+ * Same-origin + "looks like an HTML page" filter shared by link extraction
+ * and sitemap discovery. Returns the normalized URL string (hash stripped)
+ * or null when the candidate should be skipped.
+ */
+function normalizeCrawlableUrl(href: string, baseUrl: URL): string | null {
+  try {
+    const resolved = new URL(href, baseUrl);
+    if (resolved.origin !== baseUrl.origin) return null;
+    if (!/\.(html?|aspx?|php)$/i.test(resolved.pathname) && /\.[a-z0-9]{2,4}$/i.test(resolved.pathname)) {
+      return null; // skip images, pdfs, etc.
+    }
+    resolved.hash = "";
+    return resolved.toString();
+  } catch {
+    return null;
+  }
+}
+
 export function extractSameOriginLinks(html: string, baseUrl: URL): string[] {
   const urls = new Set<string>();
   const regex = /<a\s+[^>]*href\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gi;
@@ -363,19 +454,110 @@ export function extractSameOriginLinks(html: string, baseUrl: URL): string[] {
     ) {
       continue;
     }
-    try {
-      const resolved = new URL(href, baseUrl);
-      if (resolved.origin !== baseUrl.origin) continue;
-      if (!/\.(html?|aspx?|php)$/i.test(resolved.pathname) && /\.[a-z0-9]{2,4}$/i.test(resolved.pathname)) {
-        continue; // skip images, pdfs, etc.
-      }
-      resolved.hash = "";
-      urls.add(resolved.toString());
-    } catch {
-      continue;
-    }
+    const normalized = normalizeCrawlableUrl(href, baseUrl);
+    if (normalized) urls.add(normalized);
   }
   return Array.from(urls);
+}
+
+/**
+ * Extract `<loc>` entries from a sitemap document. A `urlset` yields page
+ * URLs; a `sitemapindex` yields child-sitemap URLs. Both kinds can appear in
+ * the wild with junk whitespace/CDATA around the loc text, so the parser is a
+ * tolerant regex pass rather than a full XML parse — sitemaps are flat enough
+ * that this is robust in practice (and this module already parses HTML the
+ * same way).
+ */
+export function parseSitemapLocs(xml: string): { pageUrls: string[]; childSitemaps: string[] } {
+  const pageUrls: string[] = [];
+  const childSitemaps: string[] = [];
+  const blockRegex = /<(sitemap|url)\b[^>]*>([\s\S]*?)<\/\1>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = blockRegex.exec(xml))) {
+    const kind = match[1].toLowerCase();
+    const locMatch = /<loc\b[^>]*>\s*(?:<!\[CDATA\[)?([\s\S]*?)(?:\]\]>)?\s*<\/loc>/i.exec(match[2]);
+    const loc = locMatch?.[1]?.trim();
+    if (!loc) continue;
+    if (kind === "sitemap") childSitemaps.push(loc);
+    else pageUrls.push(loc);
+  }
+  return { pageUrls, childSitemaps };
+}
+
+/**
+ * Discover same-origin page URLs from `/sitemap.xml`, following one level of
+ * sitemap-index nesting (Wix/Squarespace publish an index pointing at
+ * pages/blog child sitemaps). Best-effort: any fetch or parse failure returns
+ * what was collected so far — the crawl then proceeds on link discovery alone.
+ */
+async function discoverSitemapUrls(
+  baseUrl: URL,
+  fetchImpl: FetchImpl,
+  lookup: DnsLookup,
+  maxUrls: number
+): Promise<string[]> {
+  const collected: string[] = [];
+  const seen = new Set<string>();
+
+  const fetchSitemap = async (url: string): Promise<{ pageUrls: string[]; childSitemaps: string[] } | null> => {
+    try {
+      const { body } = await fetchWithLimit(
+        url,
+        fetchImpl,
+        WEBSITE_INGEST_PAGE_TIMEOUT_MS,
+        WEBSITE_INGEST_SITEMAP_MAX_BYTES,
+        lookup,
+        // Sitemaps ship as application/xml or text/xml; some hosts mislabel
+        // them text/plain. HTML is excluded so a soft-404 page doesn't get
+        // parsed as a sitemap.
+        /application\/xml|text\/xml|text\/plain/i
+      );
+      return parseSitemapLocs(body);
+    } catch (err) {
+      logger.info("website-ingest: sitemap fetch failed (continuing without it)", {
+        url,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    }
+  };
+
+  const addPages = (pageUrls: string[]) => {
+    for (const loc of pageUrls) {
+      if (collected.length >= maxUrls) return;
+      const normalized = normalizeCrawlableUrl(loc, baseUrl);
+      if (!normalized || seen.has(normalized)) continue;
+      seen.add(normalized);
+      collected.push(normalized);
+    }
+  };
+
+  const root = await fetchSitemap(new URL("/sitemap.xml", baseUrl.origin).toString());
+  if (!root) return collected;
+  addPages(root.pageUrls);
+
+  // One nesting level: fetch child sitemaps listed by a sitemap index. Child
+  // URLs are same-origin-filtered so an index can't point the crawler at a
+  // third-party host.
+  const children = root.childSitemaps
+    .map((loc) => {
+      try {
+        const resolved = new URL(loc, baseUrl);
+        return resolved.origin === baseUrl.origin ? resolved.toString() : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((u): u is string => Boolean(u))
+    .slice(0, WEBSITE_INGEST_SITEMAP_MAX_CHILDREN);
+
+  for (const child of children) {
+    if (collected.length >= maxUrls) break;
+    const parsed = await fetchSitemap(child);
+    if (parsed) addPages(parsed.pageUrls);
+  }
+
+  return collected;
 }
 
 const MAX_REDIRECTS = 5;
@@ -405,7 +587,8 @@ async function fetchWithLimit(
   fetchImpl: FetchImpl,
   timeoutMs: number,
   maxBytes: number,
-  lookup: DnsLookup
+  lookup: DnsLookup,
+  contentTypePattern: RegExp = /text\/html|application\/xhtml\+xml|text\/plain/i
 ): Promise<{ body: string; contentType: string; finalUrl: string; bytes: number }> {
   const controller = new AbortController();
   /* c8 ignore next -- timer callback fires only on real-world timeouts; the
@@ -467,7 +650,7 @@ async function fetchWithLimit(
       throw new Error(`status_${response.status}`);
     }
     const contentType = response.headers.get("content-type") ?? "";
-    if (!/text\/html|application\/xhtml\+xml|text\/plain/i.test(contentType)) {
+    if (!contentTypePattern.test(contentType)) {
       throw new Error("non_html_content_type");
     }
 
@@ -780,7 +963,10 @@ export async function ingestWebsite(
   const fetchImpl = options.fetchImpl ?? fetch;
   const lookup = options.lookup ?? (dns.lookup as unknown as DnsLookup);
   const summarize = options.summarize ?? defaultGeminiSummarize;
-  const maxPages = Math.max(1, Math.min(options.maxPages ?? WEBSITE_INGEST_MAX_PAGES, 10));
+  const maxPages = Math.max(
+    1,
+    Math.min(options.maxPages ?? WEBSITE_INGEST_MAX_PAGES, WEBSITE_INGEST_DEEP_MAX_PAGES)
+  );
 
   try {
     await assertSafeHostname(parsed.hostname, lookup);
@@ -829,20 +1015,38 @@ export async function ingestWebsite(
   // a config tweak.
   let homepageErrorDetail: string | null = null;
 
-  const queue: string[] = [normalized];
+  const crawlDeadlineAt = Date.now() + (options.crawlDeadlineMs ?? WEBSITE_INGEST_CRAWL_DEADLINE_MS);
+  const maxTotalBytes = options.maxTotalBytes ?? WEBSITE_INGEST_MAX_TOTAL_BYTES;
+  const queue: string[] = [];
+  // The crawl budget counts fetch ATTEMPTS (every URL dequeued), not just
+  // pages that yielded text. Budgeting on `pages.length` would let a site of
+  // textless pages (or one that link-expands faster than it produces text)
+  // keep fetching far past maxPages until the deadline/byte budget tripped.
+  let attempted = 0;
 
-  while (queue.length > 0 && pages.length < maxPages) {
-    const next = queue.shift();
-    /* c8 ignore next -- `queue.length > 0` in the while guards against `!next`,
-       and `visited.has` is defensive because we always check before queueing. */
-    if (!next || visited.has(next)) continue;
-    visited.add(next);
+  /** Queue a candidate URL unless it's already seen or the fetch budget is spoken for. */
+  const enqueue = (url: string) => {
+    if (queue.length + attempted >= maxPages) return;
+    if (visited.has(url) || queue.includes(url)) return;
+    queue.push(url);
+  };
+
+  /**
+   * Fetch + extract one page. Returns null when the page yielded nothing
+   * (failed fetch, robots-disallowed path, or no readable text); link
+   * expansion into `queue` happens back on the caller so wave ordering
+   * stays deterministic.
+   */
+  const crawlPage = async (
+    next: string
+  ): Promise<{ url: string; text: string; links: string[] } | null> => {
     const isHomepage = next === normalized;
     try {
       const nextUrl = new URL(next);
-      // Same defensive `|| "/"` as above — unreachable on our supported runtimes.
+      // WHATWG URL always exposes `pathname` as non-empty; `|| "/"` is
+      // defensive against hypothetical polyfills.
       /* c8 ignore next */
-      if (!isPathAllowed(nextUrl.pathname || "/", disallows)) continue;
+      if (!isPathAllowed(nextUrl.pathname || "/", disallows)) return null;
       const { body, finalUrl, bytes } = await fetchWithLimit(
         next,
         fetchImpl,
@@ -852,20 +1056,18 @@ export async function ingestWebsite(
       );
       bytesDownloaded += bytes;
       const text = extractReadableText(body);
-      if (text.trim()) {
-        pages.push({ url: finalUrl, text });
+      // Extract links even when `text` is empty — JS-heavy pages often
+      // render their copy through linked subpages, and keying off text
+      // presence would silently drop those sites with `fetch_failed`.
+      // Best-effort: a malformed `response.url` (finalUrl) must not throw
+      // away a page whose content was already fetched successfully.
+      let links: string[] = [];
+      try {
+        links = extractSameOriginLinks(body, new URL(finalUrl));
+      } catch {
+        links = [];
       }
-      if (isHomepage) {
-        // Expand the queue from the homepage to keep "shallow" semantics. We
-        // do this even when `text` is empty — JS-heavy homepages often render
-        // their copy through linked subpages, and keying off `pages.length`
-        // would silently drop those sites with `fetch_failed`.
-        const links = extractSameOriginLinks(body, new URL(finalUrl));
-        for (const link of links) {
-          if (queue.length + pages.length >= maxPages) break;
-          if (!visited.has(link)) queue.push(link);
-        }
-      }
+      return { url: finalUrl, text, links };
     } catch (err) {
       // `fetchWithLimit` / assertSafeHostname always reject with `Error`
       // instances; the `String(err)` branch is a safety net for a hypothetical
@@ -877,19 +1079,80 @@ export async function ingestWebsite(
       // failed sub-page is uninteresting noise — the homepage outcome is
       // what determines whether the crawl as a whole had any chance of
       // success, and surfacing a sub-page error would be actively
-      // misleading (we don't even tell the user we tried sub-pages).
-      /* c8 ignore next -- non-homepage branch fires only on partial-success crawls (homepage OK + N sub-pages 5xx); covered by integration tests, not unit tests */
+      // misleading.
       if (isHomepage) homepageErrorDetail = humanizeFetchError(errorMessage);
-      continue;
+      return null;
+    }
+  };
+
+  // The homepage is fetched alone (not in a wave): its result decides the
+  // user-visible failure detail, and its links seed the queue before any
+  // sitemap URLs so shallow crawls keep their original "homepage + linked
+  // pages" semantics.
+  visited.add(normalized);
+  attempted += 1;
+  const homepage = await crawlPage(normalized);
+
+  // Sitemap URLs are seeded BEFORE homepage links: the sitemap is the
+  // authoritative full-site map (blog posts, deep pages the nav never
+  // links), while a nav-heavy homepage can carry enough links to fill the
+  // whole fetch budget by itself and starve sitemap-only pages out of the
+  // queue. Homepage links backfill whatever budget the sitemap left.
+  if (options.sitemapDiscovery) {
+    const sitemapUrls = await discoverSitemapUrls(parsed, fetchImpl, lookup, maxPages);
+    if (sitemapUrls.length > 0) {
+      logger.info("website-ingest: sitemap discovery", {
+        url: normalized,
+        discovered: sitemapUrls.length
+      });
+    }
+    for (const url of sitemapUrls) enqueue(url);
+  }
+
+  if (homepage) {
+    if (homepage.text.trim()) pages.push({ url: homepage.url, text: homepage.text });
+    for (const link of homepage.links) enqueue(link);
+  }
+
+  while (
+    queue.length > 0 &&
+    attempted < maxPages &&
+    Date.now() < crawlDeadlineAt &&
+    bytesDownloaded < maxTotalBytes
+  ) {
+    // Batch size is capped at the remaining fetch budget, so a wave can never
+    // push total attempts past maxPages even when every fetch in it succeeds.
+    const batch = queue.splice(0, Math.min(WEBSITE_INGEST_CRAWL_CONCURRENCY, maxPages - attempted));
+    attempted += batch.length;
+    for (const url of batch) visited.add(url);
+    const results = await Promise.all(batch.map((url) => crawlPage(url)));
+    for (const result of results) {
+      if (!result) continue;
+      if (result.text.trim()) {
+        pages.push({ url: result.url, text: result.text });
+      }
+      // BFS: expand links from every crawled page (not just the homepage) so
+      // deep crawls can walk blog indexes and nav trees the homepage never
+      // links to directly.
+      for (const link of result.links) enqueue(link);
     }
   }
 
-  if (pages.length === 0 && options.readerFallback) {
-    // The direct crawl recovered nothing — almost always Cloudflare (or a
-    // similar WAF) returning a 403 JS-challenge to our non-browser fetch.
-    // Header/UA/TLS spoofing can't clear an active challenge, but the Jina
-    // Reader proxy runs a real browser server-side and returns clean
-    // markdown. This is the light alternative to a per-VPS headless browser.
+  // Judge signal on the RICHEST single page, not the summed corpus: a deep
+  // crawl of a JS-rendered SPA yields many shell pages whose only text is
+  // each page's <title>; enough of them sum past any corpus-wide floor while
+  // still carrying zero real content.
+  const richestPageChars = pages.reduce((max, page) => Math.max(max, page.text.length), 0);
+  if (richestPageChars < WEBSITE_INGEST_MIN_CORPUS_CHARS && options.readerFallback) {
+    // The direct crawl recovered nothing usable. Either every fetch failed
+    // (almost always Cloudflare or a similar WAF returning a 403
+    // JS-challenge to our non-browser fetch), or the pages "succeeded" but
+    // carried no readable text — the JS-rendered-SPA case, where the server
+    // returns an HTML shell (<div id="root">) whose only text is the
+    // <title>. Header/UA/TLS spoofing can't clear a challenge and a raw
+    // fetch can't run React, but the Jina Reader proxy runs a real browser
+    // server-side and returns clean markdown. This is the light alternative
+    // to a per-VPS headless browser.
     try {
       const { text, bytes } = await fetchViaJinaReader(
         normalized,
@@ -911,6 +1174,10 @@ export async function ingestWebsite(
         // Jina already returns extracted markdown — do NOT re-run
         // extractReadableText (it's an HTML stripper and would mangle
         // markdown links / headings). Feed it straight to the summarizer.
+        // Any low-signal shell pages the direct crawl produced (e.g. a
+        // 41-char SPA <title>) are dropped — the rendered markdown
+        // supersedes them.
+        pages.length = 0;
         pages.push({ url: normalized, text: cleaned });
         logger.info("website-ingest: recovered via Jina reader fallback", {
           url: normalized,
@@ -935,8 +1202,28 @@ export async function ingestWebsite(
       : { ok: false, error: "fetch_failed" };
   }
 
+  // Same per-page gate on the final result: without it, a titles-only crawl
+  // would "succeed" with a garbage summary whenever the reader fallback is
+  // unavailable (disabled, down, or itself blocked). When the homepage
+  // itself failed with an actionable error (CDN/WAF 403 etc.), that detail
+  // is the real story — a few low-signal shells recovered from sitemap
+  // subpages must not mask it behind a generic empty_content.
+  const finalRichestPageChars = pages.reduce((max, page) => Math.max(max, page.text.length), 0);
+  if (finalRichestPageChars < WEBSITE_INGEST_MIN_CORPUS_CHARS) {
+    return homepageErrorDetail
+      ? { ok: false, error: "fetch_failed", detail: homepageErrorDetail }
+      : { ok: false, error: "empty_content" };
+  }
+
+  // Per-page budget: a lone page (or Jina fallback) can use the whole
+  // combined window, while a deep crawl gives every page a fair floor so a
+  // single bloated page can't crowd the rest out of the summarizer prompt.
+  const perPageChars = Math.max(
+    WEBSITE_INGEST_MAX_CHARS_PER_PAGE,
+    Math.floor(WEBSITE_INGEST_MAX_COMBINED_CHARS / pages.length)
+  );
   const combined = pages
-    .map((p) => `### ${p.url}\n${p.text}`)
+    .map((p) => `### ${p.url}\n${p.text.slice(0, perPageChars)}`)
     .join("\n\n")
     .slice(0, WEBSITE_INGEST_MAX_COMBINED_CHARS);
 
@@ -973,7 +1260,7 @@ async function summarizeCorpusToWebsiteMd(args: {
   summarize: GeminiSummarizer;
   meterBusinessId?: string;
 }): Promise<{ ok: true; websiteMd: string } | WebsiteIngestFailure> {
-  if (args.corpus.trim().length < 200) {
+  if (args.corpus.trim().length < WEBSITE_INGEST_MIN_CORPUS_CHARS) {
     return { ok: false, error: "empty_content" };
   }
 

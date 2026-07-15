@@ -12,6 +12,7 @@ vi.mock("@/lib/website-ingest", () => ({
   ingestWebsite: vi.fn(),
   ingestWebsiteFromHtml: vi.fn(),
   WEBSITE_INGEST_MAX_PASTED_HTML_CHARS: 2_000_000,
+  WEBSITE_INGEST_DEEP_MAX_PAGES: 80,
   normalizeWebsiteUrl: (raw: string) => {
     try {
       return new URL(raw).toString();
@@ -114,9 +115,12 @@ describe("api/onboard/website-ingest route", () => {
     // wildcards. Bypass is forwarded so onboarding doesn't break on
     // sites like phoenixareasbestrealtor.com whose robots blocks every
     // unknown UA. SSRF/private-IP defenses remain in place.
+    // This authenticated path also requests the DEEP crawl profile:
+    // sitemap-seeded discovery up to the deep page ceiling, so the vault
+    // summary covers the whole site instead of homepage-linked pages only.
     expect(ingestWebsite).toHaveBeenCalledWith(
       "https://example.com/",
-      expect.objectContaining({ ignoreRobots: true })
+      expect.objectContaining({ ignoreRobots: true, sitemapDiscovery: true, maxPages: 80 })
     );
   });
 

@@ -20,7 +20,11 @@ import {
   looksLikeWafChallenge,
   normalizeWebsiteUrl,
   parseRobotsDisallows,
-  WEBSITE_INGEST_MAX_PASTED_HTML_CHARS
+  parseSitemapLocs,
+  WEBSITE_INGEST_DEEP_MAX_PAGES,
+  WEBSITE_INGEST_MAX_BYTES_PER_PAGE,
+  WEBSITE_INGEST_MAX_PASTED_HTML_CHARS,
+  WEBSITE_INGEST_SITEMAP_MAX_CHILDREN
 } from "@/lib/website-ingest";
 import * as geminiGc from "@/lib/gemini-generate-content";
 import * as aiSpendMeter from "@/lib/billing/ai-spend-meter";
@@ -1050,7 +1054,7 @@ describe("ingestWebsite", () => {
   it("aborts reads once chunks cross WEBSITE_INGEST_MAX_BYTES_PER_PAGE", async () => {
     // Build a stream that yields one chunk larger than the per-page cap. The
     // implementation must throw before buffering the whole payload.
-    const oversize = new Uint8Array(2_000_000); // 2 MB > 1 MB cap
+    const oversize = new Uint8Array(WEBSITE_INGEST_MAX_BYTES_PER_PAGE + 1);
     const stream = new ReadableStream({
       start(controller) {
         controller.enqueue(oversize);
@@ -1100,7 +1104,7 @@ describe("ingestWebsite", () => {
 
   it("trips payload_too_large on the arrayBuffer fallback too", async () => {
     const buildResponse = () => {
-      const huge = new Uint8Array(2_000_000); // > 1 MB cap
+      const huge = new Uint8Array(WEBSITE_INGEST_MAX_BYTES_PER_PAGE + 1);
       const r = new Response(huge, {
         status: 200,
         headers: { "content-type": "text/html" }
@@ -1414,7 +1418,7 @@ describe("ingestWebsite", () => {
     expect(summarize.mock.calls[0][0]).toMatch(/a small business/);
   });
 
-  it("clamps options.maxPages into the [1, 10] window", async () => {
+  it(`clamps options.maxPages into the [1, ${WEBSITE_INGEST_DEEP_MAX_PAGES}] window`, async () => {
     const fetchImpl = vi.fn(async (url: string) => {
       if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
       return new Response(`<html><body><h1>Hi</h1><p>${"We help. ".repeat(40)}</p></body></html>`, {
@@ -1425,11 +1429,654 @@ describe("ingestWebsite", () => {
     const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
     const summarize = vi.fn().mockResolvedValue("## Summary\nok");
 
-    // maxPages: 50 should clamp down to 10; maxPages: 0 should clamp up to 1.
-    const high = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize, maxPages: 50 });
+    // Above the deep ceiling clamps down; 0 clamps up to 1.
+    const high = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: WEBSITE_INGEST_DEEP_MAX_PAGES + 100
+    });
     const low = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize, maxPages: 0 });
     expect(high.ok).toBe(true);
     expect(low.ok).toBe(true);
+  });
+
+  // --- Deep crawl: BFS from subpages, concurrency, deadline, byte budget ---
+
+  const richBody = (label: string, links: string[] = []) =>
+    `<html><body>${links.map((l) => `<a href="${l}">x</a>`).join("")}<h1>${label}</h1><p>${`${label} detail. `.repeat(
+      40
+    )}</p></body></html>`;
+
+  it("BFS-expands links from subpages, not just the homepage", async () => {
+    // /b is only discoverable through /a — and /a itself is a textless nav
+    // page (link hub). The old homepage-only expansion could never reach /b;
+    // deep BFS must, and the textless hub must not count as a crawled page.
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/") {
+        return new Response(richBody("home", ["/a"]), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      if (url === "https://example.com/a") {
+        return new Response('<html><body><nav><a href="/b"></a></nav></body></html>', {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(richBody("b"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize, maxPages: 3 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(2); // home + /b; /a is a textless hub
+    expect(requested).toContain("https://example.com/b");
+  });
+
+  it("keeps the crawl alive when a subpage fails (homepage detail stays clean)", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/") {
+        return new Response(richBody("home", ["/broken", "/ok"]), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      if (url === "https://example.com/broken") {
+        return new Response("boom", { status: 500 });
+      }
+      return new Response(richBody("ok"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize, maxPages: 4 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(2); // home + /ok, /broken skipped
+  });
+
+  it("fetches subpages in bounded concurrent waves (never more than 4 in flight)", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const nav = Array.from({ length: 12 }, (_, i) => `/p${i}`);
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/") {
+        return new Response(richBody("home", nav), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setImmediate(resolve));
+      inFlight -= 1;
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize, maxPages: 13 });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(13);
+    expect(peak).toBeGreaterThan(1); // waves actually run in parallel
+    expect(peak).toBeLessThanOrEqual(4);
+  });
+
+  it("stops crawling subpages once the crawl deadline has elapsed", async () => {
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(richBody("home", ["/a", "/b"]), {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    // Deadline of 0 ms: the homepage (fetched before the wave loop) is kept,
+    // but no subpage wave ever starts.
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 5,
+      crawlDeadlineMs: 0
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(1);
+    expect(requested.filter((u) => !u.endsWith("robots.txt"))).toEqual(["https://example.com/"]);
+  });
+
+  it("stops crawling subpages once the cumulative byte budget is exhausted", async () => {
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(richBody("home", ["/a", "/b"]), {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    // The homepage download alone (> 1 byte) exhausts the budget.
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 5,
+      maxTotalBytes: 1
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(1);
+    expect(requested.filter((u) => !u.endsWith("robots.txt"))).toEqual(["https://example.com/"]);
+  });
+
+  // --- Sitemap discovery ---
+
+  const urlset = (locs: string[]) =>
+    `<?xml version="1.0"?><urlset>${locs.map((l) => `<url><loc>${l}</loc></url>`).join("")}</urlset>`;
+  const sitemapIndex = (locs: string[]) =>
+    `<?xml version="1.0"?><sitemapindex>${locs.map((l) => `<sitemap><loc>${l}</loc></sitemap>`).join("")}</sitemapindex>`;
+  const xmlResponse = (body: string) =>
+    new Response(body, { status: 200, headers: { "content-type": "application/xml" } });
+
+  it("seeds the crawl queue from sitemap.xml when sitemapDiscovery is on (deduping homepage links)", async () => {
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        // /a is ALSO linked from the homepage — the queue must dedupe it.
+        return xmlResponse(urlset(["https://example.com/a", "https://example.com/deep-page"]));
+      }
+      if (url === "https://example.com/") {
+        return new Response(richBody("home", ["/a"]), { status: 200, headers: { "content-type": "text/html" } });
+      }
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 10,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(3); // home + /a + /deep-page
+    // /deep-page is not linked anywhere — only the sitemap could surface it.
+    expect(requested).toContain("https://example.com/deep-page");
+    // Deduped: /a fetched exactly once despite appearing in links AND sitemap.
+    expect(requested.filter((u) => u === "https://example.com/a")).toHaveLength(1);
+  });
+
+  it("follows one level of sitemap-index nesting, skipping off-origin/malformed children and stopping at the child cap", async () => {
+    const requested: string[] = [];
+    const children = [
+      "https://example.com/pages-sitemap.xml",
+      "https://evil.example/off-origin-sitemap.xml", // off-origin: skipped
+      "http://%", // malformed: skipped
+      "https://example.com/blog-sitemap.xml",
+      "https://example.com/c3.xml",
+      "https://example.com/c4.xml",
+      "https://example.com/c5.xml",
+      // Beyond WEBSITE_INGEST_SITEMAP_MAX_CHILDREN valid children: never fetched.
+      "https://example.com/never-fetched-sitemap.xml"
+    ];
+    expect(children.filter((c) => c.startsWith("https://example.com/")).length).toBeGreaterThan(
+      WEBSITE_INGEST_SITEMAP_MAX_CHILDREN
+    );
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") return xmlResponse(sitemapIndex(children));
+      if (url === "https://example.com/pages-sitemap.xml") {
+        return xmlResponse(urlset(["https://example.com/about"]));
+      }
+      if (url === "https://example.com/blog-sitemap.xml") {
+        return xmlResponse(urlset(["https://example.com/blog/post-1"]));
+      }
+      if (url.endsWith("-sitemap.xml") || /c\d\.xml$/.test(url)) {
+        return xmlResponse(urlset([]));
+      }
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 10,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+    expect(requested).toContain("https://example.com/about");
+    expect(requested).toContain("https://example.com/blog/post-1");
+    expect(requested).not.toContain("https://evil.example/off-origin-sitemap.xml");
+    expect(requested).not.toContain("https://example.com/never-fetched-sitemap.xml");
+  });
+
+  it("seeds sitemap URLs before homepage links so a nav-heavy homepage can't starve sitemap-only pages", async () => {
+    // Bugbot finding: with homepage links seeded first, a homepage carrying
+    // maxPages worth of nav links filled the whole fetch budget and
+    // sitemap-only pages (blog posts etc.) never got queued.
+    const requested: string[] = [];
+    const navLinks = Array.from({ length: 10 }, (_, i) => `/nav-${i}`);
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(
+          urlset([
+            "https://example.com/blog/deep-1",
+            "https://example.com/blog/deep-2",
+            "https://example.com/blog/deep-3"
+          ])
+        );
+      }
+      if (url === "https://example.com/") {
+        return new Response(richBody("home", navLinks), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 4,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+    // All three sitemap-only pages made it into the 4-fetch budget…
+    expect(requested).toContain("https://example.com/blog/deep-1");
+    expect(requested).toContain("https://example.com/blog/deep-2");
+    expect(requested).toContain("https://example.com/blog/deep-3");
+    // …which means no nav link could be fetched (budget = home + 3).
+    expect(requested.some((u) => u.includes("/nav-"))).toBe(false);
+  });
+
+  it("stops collecting sitemap URLs at the page cap without fetching further child sitemaps", async () => {
+    const requested: string[] = [];
+    const many = Array.from({ length: 10 }, (_, i) => `https://example.com/page-${i}`);
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(
+          sitemapIndex(["https://example.com/big-sitemap.xml", "https://example.com/extra-sitemap.xml"])
+        );
+      }
+      if (url === "https://example.com/big-sitemap.xml") return xmlResponse(urlset(many));
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 3,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBeLessThanOrEqual(3);
+    // The cap was hit inside big-sitemap; the second child must not be fetched.
+    expect(requested).not.toContain("https://example.com/extra-sitemap.xml");
+  });
+
+  it("skips off-origin, asset, and duplicate URLs listed in a sitemap", async () => {
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(
+          urlset([
+            "https://evil.example/elsewhere",
+            "https://example.com/logo.png",
+            "https://example.com/real-page",
+            "https://example.com/real-page", // duplicate
+            "http://%" // unparseable
+          ])
+        );
+      }
+      return new Response(richBody(url), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 10,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.pagesCrawled).toBe(2); // home + /real-page
+    expect(requested).not.toContain("https://evil.example/elsewhere");
+    expect(requested).not.toContain("https://example.com/logo.png");
+    expect(requested.filter((u) => u === "https://example.com/real-page")).toHaveLength(1);
+  });
+
+  it("degrades silently when sitemap.xml is missing, HTML (soft-404), or a child errors", async () => {
+    // Missing sitemap.
+    const missing = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url.endsWith("/sitemap.xml")) return new Response("nope", { status: 404 });
+      return new Response(richBody("home"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+    const resMissing = await ingestWebsite("https://example.com/", {
+      fetchImpl: missing,
+      lookup,
+      summarize,
+      sitemapDiscovery: true
+    });
+    expect(resMissing.ok).toBe(true);
+
+    // Soft-404: sitemap URL answers with an HTML page — must not be parsed
+    // as a sitemap (content-type gate rejects it).
+    const soft404 = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url.endsWith("/sitemap.xml")) {
+        return new Response("<html><body>not found</body></html>", {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(richBody("home"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const resSoft = await ingestWebsite("https://example.com/", {
+      fetchImpl: soft404,
+      lookup,
+      summarize,
+      sitemapDiscovery: true
+    });
+    expect(resSoft.ok).toBe(true);
+
+    // Child sitemap errors: the index parses but its child 500s.
+    const childError = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(sitemapIndex(["https://example.com/broken-sitemap.xml"]));
+      }
+      if (url === "https://example.com/broken-sitemap.xml") return new Response("boom", { status: 500 });
+      return new Response(richBody("home"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const resChild = await ingestWebsite("https://example.com/", {
+      fetchImpl: childError,
+      lookup,
+      summarize,
+      sitemapDiscovery: true
+    });
+    expect(resChild.ok).toBe(true);
+  });
+
+  it("tolerates a non-Error rejection from the sitemap fetch", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url.endsWith("/sitemap.xml")) return Promise.reject("sitemap network blip");
+      return new Response(richBody("home"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(true);
+  });
+
+  it("does not fetch sitemap.xml when sitemapDiscovery is off (default)", async () => {
+    const requested: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      requested.push(url);
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(richBody("home"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", { fetchImpl, lookup, summarize });
+    expect(res.ok).toBe(true);
+    expect(requested.some((u) => u.endsWith("/sitemap.xml"))).toBe(false);
+  });
+
+  // --- Low-signal reader fallback (JS-rendered SPA shells) ---
+
+  it("falls back to Jina when the crawl 'succeeds' but yields near-zero text (JS-rendered SPA shell)", async () => {
+    // The production KYP Ads case: a Vite/React site serves an HTML shell
+    // whose only readable text is the <title> (41 chars) and zero <a> links.
+    // The crawl 'succeeds' with one near-empty page, so the old
+    // pages.length === 0 gate never fired and the ingest died with
+    // empty_content. The low-signal gate must route this through Jina.
+    const shell =
+      '<html><head><title>KYP Ads | Paid Ads That Drive Real Growth</title></head><body><div id="root"></div></body></html>';
+    const markdown = `# KYP Ads\n\n${"We manage Meta, Google, and TikTok ads. ".repeat(20)}`;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) {
+        return new Response(markdown, { status: 200, headers: { "content-type": "text/plain; charset=utf-8" } });
+      }
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(shell, { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nKYP Ads manages paid ads.");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      readerFallback: true
+    });
+
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.websiteMd).toMatch(/KYP Ads manages paid ads/);
+      // The shell page was REPLACED by the rendered markdown, not appended.
+      expect(res.pagesCrawled).toBe(1);
+    }
+    // The summarizer saw the rendered content, not just the shell title.
+    const prompt = summarize.mock.calls[0][0] as string;
+    expect(prompt).toContain("We manage Meta, Google, and TikTok ads.");
+  });
+
+  it("keeps empty_content when the SPA-shell fallback also fails", async () => {
+    const shell = "<html><head><title>Shell Title</title></head><body><div id=\"root\"></div></body></html>";
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith("https://r.jina.ai/")) return new Response("nope", { status: 502 });
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(shell, { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      readerFallback: true
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("empty_content");
+  });
+
+  it("treats a multi-page titles-only crawl as low-signal even when the titles sum past the floor", async () => {
+    // Bugbot finding: with a corpus-wide sum, a deep crawl over N SPA shell
+    // pages (each contributing only its ~50-char <title>) can add up past
+    // the 200-char floor and produce a titles-only garbage summary. Signal
+    // must be judged on the richest single page.
+    const shellFor = (label: string, links: string[] = []) =>
+      `<html><head><title>${label} | Long Marketing Title Words Here</title></head><body>${links
+        .map((l) => `<a href="${l}"></a>`)
+        .join("")}<div id="root"></div></body></html>`;
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/") {
+        return new Response(shellFor("Home", ["/p1", "/p2", "/p3", "/p4", "/p5"]), {
+          status: 200,
+          headers: { "content-type": "text/html" }
+        });
+      }
+      return new Response(shellFor(url.slice(-2)), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn();
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      maxPages: 10
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toBe("empty_content");
+    expect(summarize).not.toHaveBeenCalled();
+  });
+
+  it("surfaces the homepage CDN error detail even when low-signal sitemap subpages were fetched", async () => {
+    // Bugbot finding: homepage 403 (actionable CDN/WAF story) + sitemap
+    // subpages returning SPA shells made `pages` non-empty, so the ingest
+    // reported a generic empty_content and hid the 403 detail the owner
+    // needs to act on.
+    const shell = "<html><head><title>Shell Title</title></head><body><div id=\"root\"></div></body></html>";
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      if (url === "https://example.com/sitemap.xml") {
+        return xmlResponse(urlset(["https://example.com/app-page"]));
+      }
+      if (url === "https://example.com/") {
+        return new Response("blocked", { status: 403, headers: { "content-type": "text/html" } });
+      }
+      return new Response(shell, { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      maxPages: 5,
+      sitemapDiscovery: true
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error).toBe("fetch_failed");
+      expect(res.detail).toMatch(/HTTP 403/);
+    }
+  });
+
+  it("caps total fetch attempts at maxPages even when every page is textless (BFS can't run away)", async () => {
+    // Bugbot finding: budgeting on pages-with-text let a site of textless,
+    // link-rich pages keep fetching until the deadline/byte budget. Every
+    // dequeued URL must count against the maxPages budget.
+    let serial = 0;
+    const fetched: string[] = [];
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      fetched.push(url);
+      // Each textless page links to two brand-new URLs — an infinite frontier.
+      const a = `/n${(serial += 1)}`;
+      const b = `/n${(serial += 1)}`;
+      return new Response(`<html><body><a href="${a}"></a><a href="${b}"></a></body></html>`, {
+        status: 200,
+        headers: { "content-type": "text/html" }
+      });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize: async () => "unused",
+      maxPages: 5
+    });
+    // Nothing readable anywhere → fetch_failed, and crucially only 5 fetches.
+    expect(res.ok).toBe(false);
+    expect(fetched).toHaveLength(5);
+  });
+
+  it("does not call Jina when the crawl already produced a rich corpus", async () => {
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith("/robots.txt")) return new Response("", { status: 404 });
+      return new Response(richBody("home"), { status: 200, headers: { "content-type": "text/html" } });
+    }) as unknown as typeof fetch;
+    const lookup = vi.fn().mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
+    const summarize = vi.fn().mockResolvedValue("## Summary\nok");
+
+    const res = await ingestWebsite("https://example.com/", {
+      fetchImpl,
+      lookup,
+      summarize,
+      readerFallback: true
+    });
+    expect(res.ok).toBe(true);
+    expect(
+      (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls.some(([u]) =>
+        String(u).startsWith("https://r.jina.ai/")
+      )
+    ).toBe(false);
+  });
+});
+
+describe("parseSitemapLocs", () => {
+  it("extracts page URLs from a urlset", () => {
+    const xml = `<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://example.com/</loc><priority>1.0</priority></url>
+      <url><loc> https://example.com/about </loc></url>
+    </urlset>`;
+    const { pageUrls, childSitemaps } = parseSitemapLocs(xml);
+    expect(pageUrls).toEqual(["https://example.com/", "https://example.com/about"]);
+    expect(childSitemaps).toEqual([]);
+  });
+
+  it("extracts child sitemaps from a sitemapindex (Wix-style)", () => {
+    const xml = `<?xml version="1.0" encoding="UTF-8"?>
+    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" generatedBy="WIX">
+      <sitemap><loc>https://example.com/blog-posts-sitemap.xml</loc><lastmod>2026-07-10</lastmod></sitemap>
+      <sitemap><loc>https://example.com/pages-sitemap.xml</loc></sitemap>
+    </sitemapindex>`;
+    const { pageUrls, childSitemaps } = parseSitemapLocs(xml);
+    expect(pageUrls).toEqual([]);
+    expect(childSitemaps).toEqual([
+      "https://example.com/blog-posts-sitemap.xml",
+      "https://example.com/pages-sitemap.xml"
+    ]);
+  });
+
+  it("handles CDATA-wrapped locs and skips blocks without a loc", () => {
+    const xml = `<urlset>
+      <url><loc><![CDATA[https://example.com/cdata-page]]></loc></url>
+      <url><changefreq>weekly</changefreq></url>
+      <url><loc></loc></url>
+    </urlset>`;
+    const { pageUrls } = parseSitemapLocs(xml);
+    expect(pageUrls).toEqual(["https://example.com/cdata-page"]);
+  });
+
+  it("returns nothing for non-sitemap XML", () => {
+    const { pageUrls, childSitemaps } = parseSitemapLocs("<rss><channel><title>feed</title></channel></rss>");
+    expect(pageUrls).toEqual([]);
+    expect(childSitemaps).toEqual([]);
   });
 });
 
