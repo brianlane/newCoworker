@@ -581,7 +581,7 @@ export const MAX_BRANCH_ARMS = 4;
 /** Max branch nesting depth (a branch at depth 3 may not contain another). */
 export const MAX_BRANCH_DEPTH = 3;
 /** Max steps a definition may hold in total (trunk + every arm + every else). */
-export const MAX_TOTAL_STEPS = 50;
+export const MAX_TOTAL_STEPS = 150;
 
 /**
  * Flow-level time window: communication steps (send_sms / send_email /
