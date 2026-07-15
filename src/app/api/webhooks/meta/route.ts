@@ -17,7 +17,7 @@
  * failed lead fetch is logged, not 4xx/5xxed, so Meta doesn't back off or
  * disable the subscription over one tenant's bad row.
  */
-import { after } from "next/server";
+import { after, NextResponse } from "next/server";
 import { errorResponse, successResponse } from "@/lib/api-response";
 import { verifyMetaWebhookSignature } from "@/lib/meta/client";
 import {
@@ -95,6 +95,15 @@ export async function POST(request: Request) {
   const result = await processMetaWebhookEvents(events);
   if (result.messagesEnqueued > 0) {
     after(() => kickMessengerWorker());
+  }
+  if (result.messagesRateLimited > 0) {
+    // Non-200 makes Meta REDELIVER the shed messages once the window
+    // clears; the mid dedupe makes the already-ingested part of the batch
+    // idempotent on replay.
+    return NextResponse.json(
+      { ok: false, error: { code: "RATE_LIMITED", message: "message events shed; redeliver" } },
+      { status: 429 }
+    );
   }
   return successResponse(result);
 }

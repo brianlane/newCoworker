@@ -248,13 +248,22 @@ export const MESSENGER_FLOW_SOURCES: Record<MessengerPlatform, string> = {
  * must not fail the delivery batch. Returns true when a reply job was
  * enqueued.
  */
-export async function processMetaMessageEvent(event: MetaMessageEvent): Promise<boolean> {
+export async function processMetaMessageEvent(
+  event: MetaMessageEvent
+): Promise<boolean | "rate_limited"> {
   const { platform, accountId, senderId, mid, text } = event;
 
+  // "rate_limited" (unlike a plain skip) makes the route answer non-200
+  // so Meta REDELIVERS the batch once the window clears — the mid dedupe
+  // makes reprocessing the already-ingested events a no-op, so nothing is
+  // silently dropped and nothing double-enqueues.
   const limiter = rateLimit(`meta-webhook-msg:${accountId}`, META_WEBHOOK_RATE);
   if (!limiter.success) {
-    logger.warn("meta message webhook rate limited", { accountId, platform });
-    return false;
+    logger.warn("meta message webhook rate limited; requesting redelivery", {
+      accountId,
+      platform
+    });
+    return "rate_limited";
   }
 
   let connection: MetaConnectionRow | null = null;
@@ -358,17 +367,24 @@ export async function processMetaMessageEvent(event: MetaMessageEvent): Promise<
   }
 }
 
-/** Process every event in a delivery; returns the handled counts. */
+/**
+ * Process every event in a delivery; returns the handled counts plus how
+ * many message events were shed by the rate limiter (the route answers
+ * non-200 when any were, so Meta redelivers them).
+ */
 export async function processMetaWebhookEvents(
   events: MetaWebhookEvents
-): Promise<{ handled: number; messagesEnqueued: number }> {
+): Promise<{ handled: number; messagesEnqueued: number; messagesRateLimited: number }> {
   let handled = 0;
   for (const event of events.leadgen) {
     if (await processMetaLeadgenEvent(event)) handled += 1;
   }
   let messagesEnqueued = 0;
+  let messagesRateLimited = 0;
   for (const event of events.messages) {
-    if (await processMetaMessageEvent(event)) messagesEnqueued += 1;
+    const result = await processMetaMessageEvent(event);
+    if (result === "rate_limited") messagesRateLimited += 1;
+    else if (result) messagesEnqueued += 1;
   }
-  return { handled, messagesEnqueued };
+  return { handled, messagesEnqueued, messagesRateLimited };
 }

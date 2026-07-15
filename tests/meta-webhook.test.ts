@@ -406,9 +406,9 @@ describe("processMetaMessageEvent", () => {
     expect(insertMessengerJobMock).not.toHaveBeenCalled();
   });
 
-  it("refuses when rate limited", async () => {
+  it("returns rate_limited (so the route asks Meta to redeliver) when shed", async () => {
     rateLimitMock.mockReturnValue({ success: false });
-    expect(await processMetaMessageEvent(EVENT)).toBe(false);
+    expect(await processMetaMessageEvent(EVENT)).toBe("rate_limited");
     expect(getActiveMetaConnectionByPageIdMock).not.toHaveBeenCalled();
   });
 
@@ -507,6 +507,17 @@ describe("processMetaWebhookEvents", () => {
         { platform: "messenger", accountId: "p3", senderId: "psid-2", mid: "m2", text: "yo" }
       ]
     });
-    expect(result).toEqual({ handled: 1, messagesEnqueued: 1 });
+    expect(result).toEqual({ handled: 1, messagesEnqueued: 1, messagesRateLimited: 0 });
+  });
+
+  it("counts rate-limited message events separately (route flips to 429)", async () => {
+    rateLimitMock.mockReturnValue({ success: false });
+    const result = await processMetaWebhookEvents({
+      leadgen: [],
+      messages: [
+        { platform: "messenger", accountId: "p1", senderId: "psid-1", mid: "m1", text: "hi" }
+      ]
+    });
+    expect(result).toEqual({ handled: 0, messagesEnqueued: 0, messagesRateLimited: 1 });
   });
 });
