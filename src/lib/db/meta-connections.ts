@@ -132,6 +132,26 @@ export async function getActiveMetaConnectionByPageId(
   return toDecryptedRow(data as unknown as StoredMetaConnectionRow);
 }
 
+/**
+ * Whoever holds this Page's unique claim (`uq_meta_connections_page`) —
+ * ACTIVE or PAUSED. Distinct from getActiveMetaConnectionByPageId: paused
+ * rows keep both the claim and the Meta subscription, so unsubscribe
+ * decisions must consult THIS, never the active-only lookup.
+ */
+export async function getMetaPageClaim(
+  pageId: string,
+  client?: SupabaseClient
+): Promise<{ business_id: string } | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("meta_connections")
+    .select("business_id")
+    .eq("page_id", pageId)
+    .maybeSingle();
+  if (error) throw new Error(`getMetaPageClaim: ${error.message}`);
+  return (data as { business_id: string } | null) ?? null;
+}
+
 export class MetaConnectionValidationError extends Error {
   constructor(message: string) {
     super(message);
@@ -194,6 +214,10 @@ export async function savePendingMetaConnection(
 /**
  * Page picked + leadgen subscribed: store the permanent page token, flip to
  * `active`, and drop the user token (no longer needed; least privilege).
+ *
+ * Guarded on `status = 'pending'` so concurrent picks can't both win: the
+ * second update matches zero rows and fails, and its caller rolls back its
+ * own Meta subscription — no orphaned subscription without a routing row.
  */
 export async function activateMetaConnection(
   input: {
@@ -222,6 +246,7 @@ export async function activateMetaConnection(
       updated_at: new Date().toISOString()
     })
     .eq("business_id", input.businessId)
+    .eq("status", "pending")
     .select(ALL_COLUMNS)
     .single();
   if (error) throw new Error(`activateMetaConnection: ${error.message}`);

@@ -22,6 +22,7 @@ import {
   deleteMetaConnection,
   getActiveMetaConnectionByPageId,
   getMetaConnection,
+  getMetaPageClaim,
   getPublicMetaConnection,
   savePendingMetaConnection,
   setMetaConnectionActive,
@@ -162,6 +163,27 @@ describe("getActiveMetaConnectionByPageId", () => {
   });
 });
 
+describe("getMetaPageClaim", () => {
+  it("returns whoever holds the page (active or paused), null when unclaimed", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { business_id: BIZ }, error: null });
+    expect(await getMetaPageClaim("page-9", makeDb(c))).toEqual({ business_id: BIZ });
+    // No status/is_active filters: paused rows keep their claim.
+    expect(c.eq).toHaveBeenCalledTimes(1);
+    expect(c.eq).toHaveBeenCalledWith("page_id", "page-9");
+
+    const c2 = chain();
+    c2.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getMetaPageClaim("page-9", makeDb(c2))).toBeNull();
+  });
+
+  it("throws on a query error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "claim fail" } });
+    await expect(getMetaPageClaim("page-9", makeDb(c))).rejects.toThrow(/claim fail/);
+  });
+});
+
 describe("savePendingMetaConnection", () => {
   it("rejects an empty or oversized token", async () => {
     await expect(
@@ -266,7 +288,7 @@ describe("activateMetaConnection", () => {
     ).rejects.toThrow(/1-4096/);
   });
 
-  it("activates: page fields set, user token cleared", async () => {
+  it("activates: page fields set, user token cleared, guarded on pending", async () => {
     const c = chain();
     c.single.mockResolvedValue({ data: ACTIVE, error: null });
     const pub = await activateMetaConnection(
@@ -286,6 +308,8 @@ describe("activateMetaConnection", () => {
     expect(patch.page_name).toBe("Truly Insurance");
     expect(patch.page_token_encrypted).toBe("enc(page-token)");
     expect(patch.is_active).toBe(true);
+    // Concurrency guard: only a still-pending row can be activated.
+    expect(c.eq).toHaveBeenCalledWith("status", "pending");
   });
 
   it("surfaces an update error", async () => {
@@ -339,6 +363,7 @@ describe("default service client", () => {
     expect(await getMetaConnection(BIZ)).toBeNull();
     expect(await getPublicMetaConnection(BIZ)).toBeNull();
     expect(await getActiveMetaConnectionByPageId("page-9")).toBeNull();
+    expect(await getMetaPageClaim("page-9")).toBeNull();
     await savePendingMetaConnection({ businessId: BIZ, userToken: "t", accountName: null });
     await activateMetaConnection({
       businessId: BIZ,
@@ -348,6 +373,6 @@ describe("default service client", () => {
     });
     await setMetaConnectionActive(BIZ, true);
     await deleteMetaConnection(BIZ);
-    expect(defaultClientSpy).toHaveBeenCalledTimes(7);
+    expect(defaultClientSpy).toHaveBeenCalledTimes(8);
   });
 });

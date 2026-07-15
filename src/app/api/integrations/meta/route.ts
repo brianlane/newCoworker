@@ -19,6 +19,7 @@ import {
   activateMetaConnection,
   deleteMetaConnection,
   getMetaConnection,
+  getMetaPageClaim,
   getPublicMetaConnection,
   setMetaConnectionActive
 } from "@/lib/db/meta-connections";
@@ -126,7 +127,14 @@ export async function POST(request: Request) {
     } catch (err) {
       // Roll the Meta side back (best-effort) so a failed activation never
       // leaves a dangling subscription delivering events no row routes.
-      await unsubscribePage(page.id, page.accessToken);
+      // The subscription is a single platform-app<->page edge shared by
+      // whoever holds the Page, so only unsubscribe if no OTHER tenant
+      // (active or paused) claims it — otherwise the rollback would sever
+      // that tenant's delivery.
+      const claim = await getMetaPageClaim(page.id).catch(() => null);
+      if (!claim || claim.business_id === body.businessId) {
+        await unsubscribePage(page.id, page.accessToken);
+      }
       throw err;
     }
     return successResponse(row);
