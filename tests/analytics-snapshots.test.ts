@@ -33,7 +33,7 @@ type QueryResult = { data?: unknown; count?: number | null; error: { message: st
 
 function makeChain(result: QueryResult) {
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "upsert", "eq", "neq", "gte", "lt", "lte", "order", "limit", "maybeSingle"]) {
+  for (const m of ["select", "upsert", "eq", "neq", "is", "gte", "lt", "lte", "order", "limit", "maybeSingle"]) {
     chain[m] = vi.fn(() => chain);
   }
   (chain as { then: unknown }).then = (
@@ -270,7 +270,7 @@ describe("runSnapshotSweep", () => {
     // `from()`): a sync throw during Promise.all argument construction would
     // strand the already-started sibling reads as unhandled rejections.
     const rejectingChain: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "neq", "gte", "lt", "order", "limit", "maybeSingle"]) {
+    for (const m of ["select", "eq", "neq", "is", "gte", "lt", "order", "limit", "maybeSingle"]) {
       rejectingChain[m] = vi.fn(() => rejectingChain);
     }
     (rejectingChain as { then: unknown }).then = (

@@ -13,6 +13,10 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: (...a: unknown[]) => defaultClientSpy(...a)
 }));
 
+vi.mock("@/lib/residency/row-delete", () => ({
+  softDeleteContentRows: vi.fn()
+}));
+
 import {
   EMAIL_LOG_DEFAULT_LIMIT,
   EMAIL_LOG_MAX_LIMIT,
@@ -21,25 +25,30 @@ import {
   listEmailLogForAddress,
   recordInboundTriggerEmail,
   recordOutboundAssistantEmail,
-  recordTenantMailboxInbound
+  recordTenantMailboxInbound,
+  softDeleteEmailLogEntry
 } from "@/lib/db/email-log";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
+/** listEmailLog chains select → eq → is(deleted_at) → order → limit. */
 function listChain(result: { data: unknown; error: { message: string } | null }) {
   const limit = vi.fn().mockResolvedValue(result);
   const order = vi.fn(() => ({ limit }));
-  const eq = vi.fn(() => ({ order }));
+  const is = vi.fn(() => ({ order }));
+  const eq = vi.fn(() => ({ is }));
   const select = vi.fn(() => ({ eq }));
-  return { select, eq, order, limit };
+  return { select, eq, is, order, limit };
 }
 
-/** listEmailLogForAddress chains select → eq → or → order → limit. */
+/** listEmailLogForAddress chains select → eq → is(deleted_at) → or → order → limit. */
 function addressChain(result: { data: unknown; error: { message: string } | null }) {
   const limit = vi.fn().mockResolvedValue(result);
   const order = vi.fn(() => ({ limit }));
   const or = vi.fn(() => ({ order }));
-  const eq = vi.fn(() => ({ or }));
+  const is = vi.fn(() => ({ or }));
+  const eq = vi.fn(() => ({ is }));
   const select = vi.fn(() => ({ eq }));
-  return { select, eq, or, order, limit };
+  return { select, eq, is, or, order, limit };
 }
 
 function makeDb<T>(c: T) {
@@ -61,12 +70,14 @@ const ROW = {
   created_at: "2026-06-12T10:00:00Z"
 };
 
+/** getEmailBody chains select → eq(biz) → eq(id) → is(deleted_at) → maybeSingle. */
 function singleChain(result: { data: unknown; error: { message: string } | null }) {
   const maybeSingle = vi.fn().mockResolvedValue(result);
-  const eqId = vi.fn(() => ({ maybeSingle }));
+  const is = vi.fn(() => ({ maybeSingle }));
+  const eqId = vi.fn(() => ({ is }));
   const eqBiz = vi.fn(() => ({ eq: eqId }));
   const select = vi.fn(() => ({ eq: eqBiz }));
-  return { select, eqBiz, eqId, maybeSingle };
+  return { select, eqBiz, eqId, is, maybeSingle };
 }
 
 beforeEach(() => {
@@ -79,6 +90,8 @@ describe("listEmailLog", () => {
     const rows = await listEmailLog("biz", {}, makeDb(c) as never);
     expect(rows).toEqual([ROW]);
     expect(c.eq).toHaveBeenCalledWith("business_id", "biz");
+    // Soft-deleted mail must never show in the inbox.
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
     expect(c.order).toHaveBeenCalledWith("created_at", { ascending: false });
     expect(c.limit).toHaveBeenCalledWith(EMAIL_LOG_DEFAULT_LIMIT);
   });
@@ -188,6 +201,7 @@ describe("getEmailBody", () => {
     expect(c.select).toHaveBeenCalledWith("body_preview, body_full, body_html, attachments");
     expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
     expect(c.eqId).toHaveBeenCalledWith("id", "e1");
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
   });
 
   it("returns null when the id is not found for the business", async () => {
@@ -431,6 +445,33 @@ describe("recordOutboundAssistantEmail", () => {
     await expect(recordOutboundAssistantEmail(input)).resolves.toBeUndefined();
     expect(errSpy).toHaveBeenCalledWith("recordOutboundAssistantEmail", "weird");
     errSpy.mockRestore();
+  });
+});
+
+describe("softDeleteEmailLogEntry", () => {
+  it("delegates to the residency-aware soft delete with an id filter", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 1, box: null });
+    const db = { from: vi.fn() };
+    expect(await softDeleteEmailLogEntry("biz", "e1", "user-1", db as never)).toBe(1);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      "biz",
+      "email_log",
+      [{ column: "id", op: "eq", value: "e1" }],
+      "user-1",
+      { client: db }
+    );
+  });
+
+  it("counts box-only stamps (vps-mode purged central) and defaults deps", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 0, box: 2 });
+    expect(await softDeleteEmailLogEntry("biz", "e1", null)).toBe(2);
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      "biz",
+      "email_log",
+      [{ column: "id", op: "eq", value: "e1" }],
+      null,
+      {}
+    );
   });
 });
 

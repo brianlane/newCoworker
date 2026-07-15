@@ -52,7 +52,46 @@ const STATUS_TONE: Record<string, string> = {
   awaiting_reply: "bg-spark-orange/15 text-spark-orange"
 };
 
-function RunLine({ run }: { run: TaskRunView }) {
+function RunLine({
+  run,
+  businessId,
+  canDismiss,
+  onDismissed
+}: {
+  run: TaskRunView;
+  businessId: string;
+  /** Manager+ only — the cancel endpoint requires manage_aiflows. */
+  canDismiss: boolean;
+  onDismissed: () => void;
+}) {
+  const [state, setState] = useState<"idle" | "dismissing" | "error">("idle");
+
+  async function dismiss() {
+    if (
+      !window.confirm(
+        `Dismiss this task? "${run.flowName}" stops for this lead and nothing further sends.`
+      )
+    ) {
+      return;
+    }
+    setState("dismissing");
+    try {
+      const res = await fetch(`/api/aiflows/runs/${encodeURIComponent(run.id)}/cancel`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId })
+      });
+      const json = (await res.json().catch(() => null)) as { ok?: boolean } | null;
+      if (!res.ok || !json?.ok) {
+        setState("error");
+        return;
+      }
+      onDismissed();
+    } catch {
+      setState("error");
+    }
+  }
+
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <Workflow className="h-3.5 w-3.5 text-parchment/40" />
@@ -79,6 +118,20 @@ function RunLine({ run }: { run: TaskRunView }) {
           <Hourglass className="h-3 w-3" />
           until <LocalDateTime iso={run.waitingUntil} />
         </span>
+      )}
+      {canDismiss && (
+        <button
+          type="button"
+          data-testid="task-dismiss"
+          onClick={() => void dismiss()}
+          disabled={state === "dismissing"}
+          className="ml-auto text-[11px] font-medium text-parchment/40 hover:text-spark-orange disabled:opacity-50 cursor-pointer"
+        >
+          {state === "dismissing" ? "Dismissing…" : "Dismiss"}
+        </button>
+      )}
+      {state === "error" && (
+        <span className="text-[11px] text-spark-orange">Couldn&apos;t dismiss — try again.</span>
       )}
     </div>
   );
@@ -110,7 +163,17 @@ function ReasoningLine({ r }: { r: TaskReasoningView }) {
   );
 }
 
-function TaskCard({ task }: { task: TaskCardData }) {
+function TaskCard({
+  task,
+  businessId,
+  canDismissRuns,
+  onChanged
+}: {
+  task: TaskCardData;
+  businessId: string;
+  canDismissRuns: boolean;
+  onChanged: () => void;
+}) {
   const [showVars, setShowVars] = useState(false);
   return (
     <Card className="space-y-3">
@@ -142,7 +205,13 @@ function TaskCard({ task }: { task: TaskCardData }) {
       {task.runs.length > 0 ? (
         <div className="space-y-1.5">
           {task.runs.map((run) => (
-            <RunLine key={run.id} run={run} />
+            <RunLine
+              key={run.id}
+              run={run}
+              businessId={businessId}
+              canDismiss={canDismissRuns}
+              onDismissed={onChanged}
+            />
           ))}
         </div>
       ) : (
@@ -246,12 +315,15 @@ function TaskCard({ task }: { task: TaskCardData }) {
 export function TaskCenter({
   businessId,
   defaultScope,
-  hasLinkedEmployee
+  hasLinkedEmployee,
+  canDismissRuns
 }: {
   businessId: string;
   /** Staff with a linked roster member start on "mine"; everyone else "all". */
   defaultScope: Scope;
   hasLinkedEmployee: boolean;
+  /** Manager+ (manage_aiflows) — gates the Dismiss-task action. */
+  canDismissRuns: boolean;
 }) {
   const [scope, setScope] = useState<Scope>(defaultScope);
   const [tasks, setTasks] = useState<TaskCardData[] | null>(null);
@@ -347,7 +419,13 @@ export function TaskCenter({
       )}
 
       {tasks?.map((task) => (
-        <TaskCard key={task.e164} task={task} />
+        <TaskCard
+          key={task.e164}
+          task={task}
+          businessId={businessId}
+          canDismissRuns={canDismissRuns}
+          onChanged={() => void load(scope)}
+        />
       ))}
     </div>
   );

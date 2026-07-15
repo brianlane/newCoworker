@@ -100,7 +100,7 @@ describe("loader parity (same wire shape against the same fake client)", () => {
     const next = () => results[idx++] ?? { data: null, error: null };
     const from = (table: string) => {
       const builder: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "neq", "in", "or", "gte", "order", "limit"]) {
+      for (const m of ["select", "eq", "neq", "is", "in", "or", "gte", "order", "limit"]) {
         builder[m] = (...args: unknown[]) => {
           calls.push({ table, name: m, args });
           return builder;
@@ -187,7 +187,7 @@ describe("loader parity (same wire shape against the same fake client)", () => {
             throw new Error("resolve boom");
           }
           const builder: Record<string, unknown> = {};
-          for (const m of ["select", "eq", "neq", "in", "or", "gte", "order", "limit"]) {
+          for (const m of ["select", "eq", "neq", "is", "in", "or", "gte", "order", "limit"]) {
             builder[m] = () => builder;
           }
           builder["then"] = (resolve: (v: unknown) => unknown) =>

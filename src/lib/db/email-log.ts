@@ -18,6 +18,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { escapeLikeLiteral, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -126,7 +127,10 @@ export async function listEmailLog(
     return await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
       columns: EMAIL_LOG_COLUMNS,
-      filters: [{ column: "business_id", op: "eq", value: businessId }],
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "deleted_at", op: "is", value: null }
+      ],
       order: [{ column: "created_at", ascending: false }],
       limit
     });
@@ -135,6 +139,7 @@ export async function listEmailLog(
     .from("email_log")
     .select(EMAIL_LOG_SELECT)
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listEmailLog: ${error.message}`);
@@ -189,6 +194,7 @@ export async function listEmailLogForAddress(
         ...base,
         filters: [
           { column: "business_id", op: "eq", value: businessId },
+          { column: "deleted_at", op: "is", value: null },
           { column: "from_email", op: "ilike", value: likeValue }
         ]
       }),
@@ -196,6 +202,7 @@ export async function listEmailLogForAddress(
         ...base,
         filters: [
           { column: "business_id", op: "eq", value: businessId },
+          { column: "deleted_at", op: "is", value: null },
           { column: "to_email", op: "ilike", value: likeValue }
         ]
       })
@@ -224,6 +231,7 @@ export async function listEmailLogForAddress(
     .from("email_log")
     .select(EMAIL_LOG_SELECT)
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .or(`from_email.ilike.${pattern},to_email.ilike.${pattern}`)
     .order("created_at", { ascending: false })
     .limit(limit);
@@ -266,7 +274,8 @@ export async function getEmailBody(
       columns: ["body_preview", "body_full", "body_html", "attachments"],
       filters: [
         { column: "business_id", op: "eq", value: businessId },
-        { column: "id", op: "eq", value: id }
+        { column: "id", op: "eq", value: id },
+        { column: "deleted_at", op: "is", value: null }
       ],
       limit: 1
     });
@@ -284,6 +293,7 @@ export async function getEmailBody(
     .select("body_preview, body_full, body_html, attachments")
     .eq("business_id", businessId)
     .eq("id", id)
+    .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new Error(`getEmailBody: ${error.message}`);
   if (!data) return null;
@@ -294,6 +304,28 @@ export async function getEmailBody(
     body_html: row.body_html ?? null,
     attachments: row.attachments ?? []
   };
+}
+
+/**
+ * Owner-facing delete of one logged email: SOFT (deleted_at stamp,
+ * residency-aware, admin-restorable) but indistinguishable from a hard
+ * delete in the dashboard — every reader above filters the stamp. Returns
+ * the stamped-row count (0 when unknown/already deleted; idempotent).
+ */
+export async function softDeleteEmailLogEntry(
+  businessId: string,
+  id: string,
+  deletedBy: string | null,
+  client?: SupabaseClient
+): Promise<number> {
+  const result = await softDeleteContentRows(
+    businessId,
+    "email_log",
+    [{ column: "id", op: "eq", value: id }],
+    deletedBy,
+    client ? { client } : {}
+  );
+  return Math.max(result.central, result.box ?? 0);
 }
 
 export type RecordInboundTriggerEmailInput = {

@@ -70,6 +70,9 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   // Pipeline administration (create boards, edit stages) is manager+, same
   // bar as the manage_settings routes it calls.
   const canManagePipelines = ctx.role === "owner" || ctx.role === "manager";
+  // Dismissing a task cancels its AiFlow run — manage_aiflows is manager+,
+  // so staff don't get a Dismiss button that can only 403.
+  const canDismissRuns = ctx.role === "owner" || ctx.role === "manager";
   const rawLead = (await searchParams).lead ?? null;
   // Same shape the contact routes accept; anything else is ignored.
   let highlightLead =
@@ -99,6 +102,7 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
         defaultScope={defaultScope}
         hasLinkedEmployee={linkedEmployeeId !== null}
         canManagePipelines={canManagePipelines}
+        canDismissRuns={canDismissRuns}
         highlightLead={highlightLead}
       />
     </div>

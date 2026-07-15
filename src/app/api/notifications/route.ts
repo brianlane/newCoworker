@@ -3,9 +3,11 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import {
   getNotifications,
   markAllNotificationsRead,
-  markNotificationRead
+  markNotificationRead,
+  softDeleteNotification
 } from "@/lib/db/notifications";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { rateLimit } from "@/lib/rate-limit";
 
 /**
  * GET /api/notifications?businessId=...&limit=25&unreadOnly=1
@@ -14,6 +16,11 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
  * POST /api/notifications
  *   Body shape A: { businessId, action: "mark_read", id }
  *   Body shape B: { businessId, action: "mark_all_read" }
+ *
+ * DELETE /api/notifications?businessId=...&id=...
+ *   Removes one notification from the owner's view. Soft delete under the
+ *   hood (admin-restorable via /api/admin/deleted-items) but behaves like a
+ *   hard delete here: idempotent, and the row never surfaces again.
  */
 
 const listQuerySchema = z.object({
@@ -23,6 +30,13 @@ const listQuerySchema = z.object({
     .union([z.literal("1"), z.literal("true"), z.literal("0"), z.literal("false")])
     .optional()
 });
+
+const deleteQuerySchema = z.object({
+  businessId: z.string().uuid(),
+  id: z.string().uuid()
+});
+
+const DELETE_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
 const markReadSchema = z.discriminatedUnion("action", [
   z.object({
@@ -82,6 +96,42 @@ export async function POST(request: Request) {
     }
     const count = await markAllNotificationsRead(body.businessId);
     return successResponse({ marked: count });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const user = await getAuthUser();
+    if (!user?.email) {
+      return errorResponse("UNAUTHORIZED", "Authentication required");
+    }
+
+    const url = new URL(request.url);
+    const parsed = deleteQuerySchema.safeParse({
+      businessId: url.searchParams.get("businessId") ?? "",
+      id: url.searchParams.get("id") ?? ""
+    });
+    if (!parsed.success) {
+      return errorResponse("VALIDATION_ERROR", parsed.error.issues[0]?.message ?? "Invalid query");
+    }
+
+    await requireBusinessRole(parsed.data.businessId, "view_dashboard");
+
+    const limiter = rateLimit(`notification-delete:${parsed.data.businessId}`, DELETE_RATE);
+    if (!limiter.success) {
+      return errorResponse("CONFLICT", "Too many deletes, slow down.", 429);
+    }
+
+    // Delete-if-exists semantics: ok even when the row is already gone so
+    // flaky-network retries never surface an error for a completed delete.
+    const deleted = await softDeleteNotification(
+      parsed.data.businessId,
+      parsed.data.id,
+      user.userId
+    );
+    return successResponse({ deleted });
   } catch (err) {
     return handleRouteError(err);
   }

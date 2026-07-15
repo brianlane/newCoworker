@@ -2,6 +2,11 @@
 -- Source: central Supabase live schema, 2026-07-07T09:18:50.784Z
 -- Tables: 15 (RESIDENCY_MOVED_TABLES)
 --
+-- Hand-patched ahead of the next regeneration (mirrors central migration
+-- 20260806000000_soft_delete_user_items): deleted_at/deleted_by soft-delete
+-- columns on dashboard_chat_threads, email_log, voice_call_transcripts,
+-- sms_outbound_log, notifications.
+--
 -- Single-tenant datastore for the per-VPS data API. RLS is intentionally
 -- absent (one tenant per box; the data-api bearer token is the boundary).
 -- FKs to central control-plane tables (businesses, …) are dropped.
@@ -90,6 +95,8 @@ alter table dashboard_chat_threads add column if not exists created_at timestamp
 alter table dashboard_chat_threads add column if not exists updated_at timestamp with time zone not null default now();
 alter table dashboard_chat_threads add column if not exists summary_md text;
 alter table dashboard_chat_threads add column if not exists summary_message_count integer not null default 0;
+alter table dashboard_chat_threads add column if not exists deleted_at timestamp with time zone;
+alter table dashboard_chat_threads add column if not exists deleted_by uuid;
 
 create index if not exists dashboard_chat_threads_business_idx ON public.dashboard_chat_threads USING btree (business_id, created_at DESC);
 create unique index if not exists dashboard_chat_threads_one_active ON public.dashboard_chat_threads USING btree (business_id) WHERE is_active;
@@ -167,6 +174,8 @@ alter table email_log add column if not exists bcc_email text;
 alter table email_log add column if not exists body_full text;
 alter table email_log add column if not exists body_html text;
 alter table email_log add column if not exists attachments jsonb not null default '[]'::jsonb;
+alter table email_log add column if not exists deleted_at timestamp with time zone;
+alter table email_log add column if not exists deleted_by uuid;
 
 create index if not exists email_log_business_created_idx ON public.email_log USING btree (business_id, created_at DESC);
 
@@ -218,6 +227,8 @@ alter table voice_call_transcripts add column if not exists summary_error text;
 alter table voice_call_transcripts add column if not exists summary_attempts integer not null default 0;
 alter table voice_call_transcripts add column if not exists call_kind text not null default 'ai'::text;
 alter table voice_call_transcripts add column if not exists forwarded_to_e164 text;
+alter table voice_call_transcripts add column if not exists deleted_at timestamp with time zone;
+alter table voice_call_transcripts add column if not exists deleted_by uuid;
 
 create index if not exists voice_call_transcripts_business_idx ON public.voice_call_transcripts USING btree (business_id, created_at DESC);
 create index if not exists voice_call_transcripts_summary_pending_idx ON public.voice_call_transcripts USING btree (ended_at DESC) WHERE ((status = 'completed'::text) AND (summarized_at IS NULL));
@@ -314,6 +325,8 @@ alter table sms_outbound_log add column if not exists telnyx_message_id text;
 alter table sms_outbound_log add column if not exists created_at timestamp with time zone not null default now();
 alter table sms_outbound_log add column if not exists channel text not null default 'sms'::text;
 alter table sms_outbound_log add column if not exists scheduled_sms_id uuid;
+alter table sms_outbound_log add column if not exists deleted_at timestamp with time zone;
+alter table sms_outbound_log add column if not exists deleted_by uuid;
 
 create index if not exists sms_outbound_log_business_created_idx ON public.sms_outbound_log USING btree (business_id, created_at DESC);
 create index if not exists sms_outbound_log_business_to_idx ON public.sms_outbound_log USING btree (business_id, to_e164, created_at DESC);
@@ -423,6 +436,8 @@ alter table notifications add column if not exists created_at timestamp with tim
 alter table notifications add column if not exists read_at timestamp with time zone;
 alter table notifications add column if not exists kind text;
 alter table notifications add column if not exists summary text;
+alter table notifications add column if not exists deleted_at timestamp with time zone;
+alter table notifications add column if not exists deleted_by uuid;
 
 create index if not exists notifications_business_unread_idx ON public.notifications USING btree (business_id, created_at DESC) WHERE ((status = 'sent'::text) AND (read_at IS NULL));
 

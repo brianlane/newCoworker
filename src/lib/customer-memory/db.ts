@@ -537,6 +537,7 @@ export async function listSmsHistoryForCustomer(
     .select("id, payload, assistant_reply_text, rowboat_reply_cached, created_at")
     .eq("business_id", businessId)
     .in("customer_e164", numbers)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listSmsHistoryForCustomer: ${error.message}`);
@@ -549,6 +550,7 @@ export async function listSmsHistoryForCustomer(
     .select("id, body, source, created_at")
     .eq("business_id", businessId)
     .in("to_e164", numbers)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (outboundError) {

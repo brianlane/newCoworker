@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { countMovedRows, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -65,6 +66,7 @@ export async function getNotifications(
       table: "notifications",
       filters: [
         { column: "business_id", op: "eq", value: businessId },
+        { column: "deleted_at", op: "is", value: null },
         ...(opts.unreadOnly ? [{ column: "read_at", op: "is" as const, value: null }] : [])
       ],
       order: [{ column: "created_at", ascending: false }],
@@ -75,6 +77,7 @@ export async function getNotifications(
     .from("notifications")
     .select()
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false });
   if (opts.unreadOnly) {
     q = q.is("read_at", null);
@@ -112,7 +115,8 @@ export async function getUnreadNotificationCount(
       filters: [
         { column: "business_id", op: "eq", value: businessId },
         { column: "status", op: "eq", value: "sent" },
-        { column: "read_at", op: "is", value: null }
+        { column: "read_at", op: "is", value: null },
+        { column: "deleted_at", op: "is", value: null }
       ]
     });
   }
@@ -121,7 +125,8 @@ export async function getUnreadNotificationCount(
     .select("id", { count: "exact", head: true })
     .eq("business_id", businessId)
     .eq("status", "sent")
-    .is("read_at", null);
+    .is("read_at", null)
+    .is("deleted_at", null);
 
   if (error) throw new Error(`getUnreadNotificationCount: ${error.message}`);
   return count ?? 0;
@@ -139,6 +144,8 @@ export async function markNotificationRead(
     .eq("id", notificationId)
     .eq("business_id", businessId)
     .is("read_at", null)
+    // Never mutate a row the owner already deleted (e.g. from another tab).
+    .is("deleted_at", null)
     .select()
     .maybeSingle();
 
@@ -156,8 +163,34 @@ export async function markAllNotificationsRead(
     .update({ read_at: new Date().toISOString() })
     .eq("business_id", businessId)
     .is("read_at", null)
+    // Soft-deleted rows are out of the owner's view — "mark all read" must
+    // not silently mutate them (they'd come back to an admin restore with a
+    // read stamp the owner never made).
+    .is("deleted_at", null)
     .select("id");
 
   if (error) throw new Error(`markAllNotificationsRead: ${error.message}`);
   return (data ?? []).length;
+}
+
+/**
+ * Owner-facing delete: SOFT (deleted_at stamp, residency-aware, admin-
+ * restorable) but indistinguishable from a hard delete in the dashboard —
+ * every read above filters the stamp. Returns the stamped-row count
+ * (0 when the id is unknown/already deleted — idempotent retries are fine).
+ */
+export async function softDeleteNotification(
+  businessId: string,
+  notificationId: string,
+  deletedBy: string | null,
+  client?: SupabaseClient
+): Promise<number> {
+  const result = await softDeleteContentRows(
+    businessId,
+    "notifications",
+    [{ column: "id", op: "eq", value: notificationId }],
+    deletedBy,
+    client ? { client } : {}
+  );
+  return Math.max(result.central, result.box ?? 0);
 }

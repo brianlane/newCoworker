@@ -119,6 +119,26 @@ export function NotificationList({ businessId, initial }: Props) {
     }
   }
 
+  async function deleteOne(id: string) {
+    if (!window.confirm("Delete this notification?")) return;
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/notifications?businessId=${encodeURIComponent(businessId)}&id=${encodeURIComponent(id)}`,
+        { method: "DELETE" }
+      );
+      const json = await res.json();
+      if (!res.ok || !json.ok) {
+        setError(json.error?.message ?? "Failed to delete");
+        return;
+      }
+      setExpandedId((prev) => (prev === id ? null : prev));
+      setItems((prev) => prev.filter((it) => it.id !== id));
+    } catch {
+      setError("Network error");
+    }
+  }
+
   if (items.length === 0) {
     return <p className="text-sm text-parchment/40">No notifications yet.</p>;
   }
@@ -231,6 +251,16 @@ export function NotificationList({ businessId, initial }: Props) {
                       {link.label} →
                     </Link>
                   )}
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      data-testid="notification-delete"
+                      onClick={() => void deleteOne(n.id)}
+                      className="text-xs font-medium text-spark-orange/80 hover:text-spark-orange cursor-pointer"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               )}
             </li>

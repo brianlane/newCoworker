@@ -21,12 +21,15 @@ export function TasksWorkspace({
   defaultScope,
   hasLinkedEmployee,
   canManagePipelines,
+  canDismissRuns,
   highlightLead
 }: {
   businessId: string;
   defaultScope: "mine" | "all";
   hasLinkedEmployee: boolean;
   canManagePipelines: boolean;
+  /** Manager+ (manage_aiflows) — gates the list view's Dismiss-task action. */
+  canDismissRuns: boolean;
   /** E.164 from ?lead= — the board scrolls to + highlights this lead's card. */
   highlightLead: string | null;
 }) {
@@ -94,6 +97,7 @@ export function TasksWorkspace({
           businessId={businessId}
           defaultScope={defaultScope}
           hasLinkedEmployee={hasLinkedEmployee}
+          canDismissRuns={canDismissRuns}
         />
       )}
     </div>

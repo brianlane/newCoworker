@@ -128,6 +128,7 @@ export async function fetchTranscriptRows<T>(
     const filters: DataApiFilter[] = [
       { column: "business_id", op: "eq", value: businessId },
       { column: "status", op: "neq", value: "missed" },
+      { column: "deleted_at", op: "is", value: null },
       { column: "started_at", op: "gte", value: filter.startIso }
     ];
     if (filter.endIso) filters.push({ column: "started_at", op: "lt", value: filter.endIso });
@@ -146,6 +147,7 @@ export async function fetchTranscriptRows<T>(
     .select(columns.join(", "))
     .eq("business_id", businessId)
     .neq("status", "missed")
+    .is("deleted_at", null)
     .gte("started_at", filter.startIso);
   if (filter.endIso) q = q.lt("started_at", filter.endIso);
   if (filter.direction) q = q.eq("direction", filter.direction);
@@ -388,6 +390,7 @@ export async function getAnalyticsDayDetail(
         columns: ["id", "to_e164", "body", "source", "channel", "created_at"],
         filters: [
           { column: "business_id", op: "eq", value: businessId },
+          { column: "deleted_at", op: "is", value: null },
           { column: "created_at", op: "gte", value: startIso },
           { column: "created_at", op: "lt", value: endIso }
         ],
@@ -399,6 +402,7 @@ export async function getAnalyticsDayDetail(
       .from("sms_outbound_log")
       .select("id, to_e164, body, source, channel, created_at")
       .eq("business_id", businessId)
+      .is("deleted_at", null)
       .gte("created_at", startIso)
       .lt("created_at", endIso)
       .order("created_at", { ascending: false })
@@ -439,6 +443,7 @@ export async function getAnalyticsDayDetail(
         "id, payload, status, assistant_reply_text, rowboat_reply_cached, channel, reply_channel, created_at, updated_at"
       )
       .eq("business_id", businessId)
+      .is("deleted_at", null)
       .gte("created_at", new Date(dayStart.getTime() - 86_400_000).toISOString())
       .lt("created_at", endIso)
       .order("created_at", { ascending: false })
@@ -940,6 +945,7 @@ export async function getAnswerRateStats(
           { column: "business_id", op: "eq", value: businessId },
           { column: "direction", op: "eq", value: "inbound" },
           { column: "status", op: "neq", value: "missed" },
+          { column: "deleted_at", op: "is", value: null },
           { column: "started_at", op: "gte", value: cutoffIso }
         ]
       });
@@ -950,6 +956,7 @@ export async function getAnswerRateStats(
       .eq("business_id", businessId)
       .eq("direction", "inbound")
       .neq("status", "missed")
+      .is("deleted_at", null)
       .gte("started_at", cutoffIso);
     if (error) throw new Error(`getAnswerRateStats answered: ${error.message}`);
     return count ?? 0;

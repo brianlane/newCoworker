@@ -20,6 +20,7 @@ import type {
 import { SortControl, type SortOption } from "@/components/dashboard/SortControl";
 import { SearchControl } from "@/components/dashboard/SearchControl";
 import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
+import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
 import { sortRows } from "@/lib/dashboard/sort";
 import { usePersistentSort } from "@/components/dashboard/usePersistentSort";
 import { matchesQuery } from "@/lib/dashboard/search";
@@ -62,7 +63,7 @@ function sortValue(row: CallListRow, field: string): string | number | null | un
   return row.startedAt;
 }
 
-export function CallsList({ rows }: { rows: CallListRow[] }) {
+export function CallsList({ rows, businessId }: { rows: CallListRow[]; businessId: string }) {
   const [sort, setSort] = usePersistentSort(
     "dashboard.calls.sort",
     { field: "startedAt", dir: "desc" },
@@ -155,6 +156,13 @@ export function CallsList({ rows }: { rows: CallListRow[] }) {
                   </div>
                   <span className="text-parchment/40 text-sm shrink-0">View →</span>
                 </Link>
+                <div className="px-3 pb-2 -mt-1 text-right">
+                  <DeleteItemButton
+                    url={`/api/dashboard/calls/${row.id}?businessId=${encodeURIComponent(businessId)}`}
+                    confirmMessage="Delete this call and its transcript from your history?"
+                    compact
+                  />
+                </div>
               </li>
             ))}
           </ul>

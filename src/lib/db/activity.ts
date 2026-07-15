@@ -553,6 +553,7 @@ async function fetchActivityFeedInput(
               .from("voice_call_transcripts")
               .select("caller_e164, status, started_at")
               .eq("business_id", businessId)
+              .is("deleted_at", null)
               .gte("started_at", since),
             "started_at"
           )
@@ -565,6 +566,7 @@ async function fetchActivityFeedInput(
               .from("sms_inbound_jobs")
               .select("payload, created_at")
               .eq("business_id", businessId)
+              .is("deleted_at", null)
               .gte("created_at", since),
             "created_at"
           )
@@ -579,6 +581,7 @@ async function fetchActivityFeedInput(
               .from("sms_inbound_jobs")
               .select("payload, updated_at")
               .eq("business_id", businessId)
+              .is("deleted_at", null)
               .not("assistant_reply_text", "is", null)
               .gte("updated_at", since),
             "updated_at"
@@ -592,6 +595,7 @@ async function fetchActivityFeedInput(
               .from("sms_outbound_log")
               .select("to_e164, created_at")
               .eq("business_id", businessId)
+              .is("deleted_at", null)
               .gte("created_at", since),
             "created_at"
           )
@@ -608,11 +612,13 @@ async function fetchActivityFeedInput(
                   .select("direction, to_email, from_email, subject, created_at")
                   .eq("business_id", businessId)
                   .eq("direction", emailDirection)
+                  .is("deleted_at", null)
                   .gte("created_at", since)
               : db
                   .from("email_log")
                   .select("direction, to_email, from_email, subject, created_at")
                   .eq("business_id", businessId)
+                  .is("deleted_at", null)
                   .gte("created_at", since),
             "created_at"
           )
@@ -832,6 +838,7 @@ export async function getContactActivity(
           .select("caller_e164, status, started_at")
           .eq("business_id", businessId)
           .in("caller_e164", numbers)
+          .is("deleted_at", null)
           .gte("started_at", since)
           .order("started_at", { ascending: false })
           .limit(limit),
@@ -842,6 +849,7 @@ export async function getContactActivity(
           .select("payload, created_at")
           .eq("business_id", businessId)
           .in("customer_e164", numbers)
+          .is("deleted_at", null)
           .gte("created_at", since)
           .order("created_at", { ascending: false })
           .limit(limit),
@@ -852,6 +860,7 @@ export async function getContactActivity(
           .select("payload, updated_at")
           .eq("business_id", businessId)
           .in("customer_e164", numbers)
+          .is("deleted_at", null)
           .not("assistant_reply_text", "is", null)
           .gte("updated_at", since)
           .order("updated_at", { ascending: false })
@@ -863,6 +872,7 @@ export async function getContactActivity(
           .select("to_e164, created_at")
           .eq("business_id", businessId)
           .in("to_e164", numbers)
+          .is("deleted_at", null)
           .gte("created_at", since)
           .order("created_at", { ascending: false })
           .limit(limit),
@@ -874,6 +884,7 @@ export async function getContactActivity(
           .from("email_log")
           .select("direction, to_email, from_email, subject, created_at")
           .eq("business_id", businessId)
+          .is("deleted_at", null)
           .or(`to_email.eq.${email},from_email.eq.${email}`)
           .gte("created_at", since)
           .order("created_at", { ascending: false })
@@ -955,6 +966,7 @@ export async function getActivityForContacts(
       .select("caller_e164, status, started_at")
       .eq("business_id", businessId)
       .in("caller_e164", numbers)
+      .is("deleted_at", null)
       .gte("started_at", since)
       .order("started_at", { ascending: false })
       .limit(scanLimit),
@@ -963,6 +975,7 @@ export async function getActivityForContacts(
       .select("payload, created_at")
       .eq("business_id", businessId)
       .in("customer_e164", numbers)
+      .is("deleted_at", null)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .limit(scanLimit),
@@ -971,6 +984,7 @@ export async function getActivityForContacts(
       .select("payload, updated_at")
       .eq("business_id", businessId)
       .in("customer_e164", numbers)
+      .is("deleted_at", null)
       .not("assistant_reply_text", "is", null)
       .gte("updated_at", since)
       .order("updated_at", { ascending: false })
@@ -980,6 +994,7 @@ export async function getActivityForContacts(
       .select("to_e164, created_at")
       .eq("business_id", businessId)
       .in("to_e164", numbers)
+      .is("deleted_at", null)
       .gte("created_at", since)
       .order("created_at", { ascending: false })
       .limit(scanLimit)
