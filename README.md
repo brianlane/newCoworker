@@ -140,6 +140,14 @@ One-shot ledger — a new `applied_oneshots` table (service-role only) plus
 every `--apply` with the business and the patched flow IDs. "Has this run
 everywhere?" is a one-line query going forward.
 
+Incident reviews live in `docs/` — see
+[docs/INCIDENT-2026-07-KYP-ONBOARDING.md](docs/INCIDENT-2026-07-KYP-ONBOARDING.md)
+for the KYP Ads signup (seven defects: webhook-teardown provisioning, DID
+search abort, CA messaging profile, dead SMS sender + wrong recipient,
+un-normalized owner phone, invisible owner SMS, adopted-box tunnel token),
+each with its hot fix and permanent fix, plus the **adoption-pool checklist**
+every new per-tenant box resource must be added to.
+
 ```bash
 # Roll the latest main's chat-worker out to EVERY active VPS
 tsx debug/update-all-vps.ts --dry-run   # preview targets
