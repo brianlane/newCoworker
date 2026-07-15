@@ -222,3 +222,51 @@ describe("voice settlement: per-minute carrier rounding", () => {
     );
   });
 });
+
+const forwardedMeterMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260806000100_meter_forwarded_call_minutes.sql"
+  ),
+  "utf8"
+);
+
+describe("voice_meter_forwarded_call migration (contract)", () => {
+  it("is idempotent per call_control_id via insert-as-claim", () => {
+    // One meter per leg no matter how many webhook deliveries land: the
+    // insert into the meter ledger is the atomic claim, and a conflict
+    // short-circuits with duplicate=true before touching period usage.
+    expect(forwardedMeterMigration).toMatch(
+      /insert into voice_forwarded_call_meter[\s\S]*?on conflict \(call_control_id\) do nothing;/s
+    );
+    expect(forwardedMeterMigration).toMatch(
+      /if not v_inserted then\s+return jsonb_build_object\('ok', true, 'duplicate', true/s
+    );
+  });
+
+  it("per-minute rounds like voice_try_finalize_settlement", () => {
+    expect(forwardedMeterMigration).toMatch(
+      /v_billable := \(ceil\(p_reported_seconds \/ 60\.0\)\)::int \* 60;/
+    );
+    // Zero / missing duration bills nothing (carrier doesn't charge
+    // unanswered legs).
+    expect(forwardedMeterMigration).toMatch(
+      /if p_reported_seconds is null or p_reported_seconds <= 0 then\s+v_billable := 0;/s
+    );
+  });
+
+  it("commits to the same pool the reserve gate reads, unconditionally (never refuses)", () => {
+    // Same usage-row bootstrap as voice_reserve_for_call, then an
+    // unconditional commit — a call that already happened is never refused;
+    // over the cap it lands as visible overage and the NEXT call is refused
+    // by the reserve gate / safe-mode pre-check instead.
+    expect(forwardedMeterMigration).toMatch(
+      /insert into voice_billing_period_usage[\s\S]*?on conflict \(business_id, stripe_period_start\) do nothing;/s
+    );
+    expect(forwardedMeterMigration).toMatch(
+      /committed_included_seconds = committed_included_seconds \+ v_billable/
+    );
+    // No refusal branch: the only non-ok return is a missing call id.
+    expect(forwardedMeterMigration).not.toMatch(/quota_exhausted|refused/);
+  });
+});
