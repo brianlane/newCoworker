@@ -347,6 +347,47 @@ export async function listWebchatSessionsForBusiness(
   });
 }
 
+/**
+ * A session row plus its message count and owning business name, for the
+ * fleet-wide admin Web chat index (/admin/webchat) — the review surface
+ * for widgets with no tenant dashboard behind them (e.g. the platform's
+ * own direct-Gemini marketing-site tenant).
+ */
+export type WebchatSessionAdminSummary = WebchatSessionSummary & {
+  business_name: string;
+};
+
+export async function listRecentWebchatSessions(
+  opts: { limit?: number } = {},
+  client?: SupabaseClient
+): Promise<WebchatSessionAdminSummary[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const limit = opts.limit ?? 100;
+  const { data, error } = await db
+    .from("webchat_sessions")
+    .select(
+      "id, business_id, session_token_sha256, visitor_name, visitor_email, visitor_phone, rowboat_conversation_id, rowboat_state, last_seen_at, created_at, webchat_messages(count), businesses(name)"
+    )
+    .order("last_seen_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listRecentWebchatSessions: ${error.message}`);
+  type EmbeddedRow = WebchatSessionRow & {
+    webchat_messages?: Array<{ count?: number }> | null;
+    businesses?: { name?: unknown } | null;
+  };
+  return ((data as EmbeddedRow[] | null) ?? []).map((row) => {
+    const { webchat_messages, businesses, ...rest } = row;
+    const count = Array.isArray(webchat_messages)
+      ? Number(webchat_messages[0]?.count ?? 0)
+      : 0;
+    return {
+      ...rest,
+      message_count: Number.isFinite(count) ? count : 0,
+      business_name: typeof businesses?.name === "string" ? businesses.name : ""
+    };
+  });
+}
+
 // ---------------------------------------------------------------------
 // webchat_messages
 // ---------------------------------------------------------------------
