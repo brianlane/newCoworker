@@ -176,7 +176,7 @@ jobs:
       # businesses" on the first CI run). 2.78.1 is the version the suite was
       # validated against locally; bump deliberately, not implicitly.
       - name: Setup Supabase CLI
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: 2.78.1
 
@@ -257,7 +257,7 @@ jobs:
       # Same pin as worker-integration: bump deliberately, not implicitly.
       - name: Setup Supabase CLI
         if: github.event.pull_request.user.login != 'dependabot[bot]'
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: 2.78.1
 
@@ -337,7 +337,7 @@ jobs:
 
       - name: Setup Supabase CLI
         if: github.event_name == 'push'
-        uses: supabase/setup-cli@v1
+        uses: supabase/setup-cli@v3
         with:
           version: 2.78.1
 
