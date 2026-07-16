@@ -33,6 +33,14 @@ export type BusinessDocumentRow = {
   expires_at: string | null;
   expiring_soon_notified_at: string | null;
   expired_notified_at: string | null;
+  /** Contact this document belongs to (policy holder / tenant / member). Null = plain library doc. */
+  contact_id: string | null;
+  /** Renewal due date — keeps the doc active, unlike expires_at which retires it. */
+  renewal_date: string | null;
+  /** Roster member (ai_flow_team_members) who handles the renewal. */
+  assigned_employee_id: string | null;
+  /** One-reminder-per-state stamp for the renewal sweep; reset when renewal_date changes. */
+  renewal_due_notified_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -81,17 +89,44 @@ export async function getBusinessDocument(
   return (data as BusinessDocumentRow | null) ?? null;
 }
 
+/**
+ * Count documents for cap enforcement. `scope` separates the two caps:
+ * "library" counts unlinked knowledge-library docs (the per-tier cap),
+ * "contact_records" counts contact-linked records (the flat generous cap) —
+ * see CONTACT_DOCUMENT_RECORDS_LIMIT in core.ts.
+ */
 export async function countBusinessDocuments(
   businessId: string,
+  scope: "library" | "contact_records" = "library",
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { count, error } = await db
+  const base = db
     .from("business_documents")
     .select("id", { count: "exact", head: true })
     .eq("business_id", businessId);
+  const query =
+    scope === "contact_records" ? base.not("contact_id", "is", null) : base.is("contact_id", null);
+  const { count, error } = await query;
   if (error) throw new Error(`countBusinessDocuments: ${error.message}`);
   return count ?? 0;
+}
+
+/** Documents linked to one contact (their policies / contracts / records). */
+export async function listBusinessDocumentsForContact(
+  businessId: string,
+  contactId: string,
+  client?: SupabaseClient
+): Promise<BusinessDocumentRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("business_documents")
+    .select()
+    .eq("business_id", businessId)
+    .eq("contact_id", contactId)
+    .order("created_at", { ascending: false });
+  if (error) throw new Error(`listBusinessDocumentsForContact: ${error.message}`);
+  return (data ?? []) as BusinessDocumentRow[];
 }
 
 export async function insertBusinessDocument(
@@ -99,7 +134,18 @@ export async function insertBusinessDocument(
     BusinessDocumentRow,
     "id" | "business_id" | "title" | "category" | "audience" | "storage_path" | "mime_type" | "byte_size"
   > &
-    Partial<Pick<BusinessDocumentRow, "content_md" | "summary" | "status" | "expires_at">>,
+    Partial<
+      Pick<
+        BusinessDocumentRow,
+        | "content_md"
+        | "summary"
+        | "status"
+        | "expires_at"
+        | "contact_id"
+        | "renewal_date"
+        | "assigned_employee_id"
+      >
+    >,
   client?: SupabaseClient
 ): Promise<BusinessDocumentRow> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -125,6 +171,10 @@ export type BusinessDocumentPatch = Partial<
     | "expires_at"
     | "expiring_soon_notified_at"
     | "expired_notified_at"
+    | "contact_id"
+    | "renewal_date"
+    | "assigned_employee_id"
+    | "renewal_due_notified_at"
   >
 >;
 

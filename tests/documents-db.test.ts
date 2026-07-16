@@ -22,6 +22,7 @@ import {
   insertDocumentShare,
   insertDocumentSignatureRequest,
   listBusinessDocuments,
+  listBusinessDocumentsForContact,
   listDocumentShares,
   listDocumentSignatureRequests,
   markSignatureRequestViewed,
@@ -38,7 +39,7 @@ type Chain = Record<string, ReturnType<typeof vi.fn>> & PromiseLike<unknown>;
 
 function chain(terminal?: unknown): Chain {
   const c: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "delete", "eq", "in", "not", "order"]) {
+  for (const m of ["select", "insert", "update", "delete", "eq", "in", "not", "is", "order"]) {
     c[m] = vi.fn(() => c);
   }
   c.single = vi.fn();
@@ -96,9 +97,16 @@ describe("getBusinessDocument", () => {
 });
 
 describe("countBusinessDocuments", () => {
-  it("returns the exact count (explicit client)", async () => {
+  it("counts unlinked library docs by default (explicit client)", async () => {
     const c = chain({ count: 4, error: null });
-    expect(await countBusinessDocuments(BIZ, makeDb(c))).toBe(4);
+    expect(await countBusinessDocuments(BIZ, "library", makeDb(c))).toBe(4);
+    expect(c.is).toHaveBeenCalledWith("contact_id", null);
+  });
+
+  it("counts contact-linked records under the contact_records scope", async () => {
+    const c = chain({ count: 7, error: null });
+    expect(await countBusinessDocuments(BIZ, "contact_records", makeDb(c))).toBe(7);
+    expect(c.not).toHaveBeenCalledWith("contact_id", "is", null);
   });
 
   it("returns 0 for a null count (default client)", async () => {
@@ -109,7 +117,29 @@ describe("countBusinessDocuments", () => {
 
   it("throws on error", async () => {
     const c = chain({ count: null, error: { message: "cnt" } });
-    await expect(countBusinessDocuments(BIZ, makeDb(c))).rejects.toThrow(/cnt/);
+    await expect(countBusinessDocuments(BIZ, "library", makeDb(c))).rejects.toThrow(/cnt/);
+  });
+});
+
+describe("listBusinessDocumentsForContact", () => {
+  const CONTACT = "33333333-3333-4333-8333-333333333333";
+
+  it("returns the contact's documents (explicit client)", async () => {
+    const c = chain({ data: [{ id: DOC }], error: null });
+    expect(await listBusinessDocumentsForContact(BIZ, CONTACT, makeDb(c))).toEqual([{ id: DOC }]);
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    expect(c.eq).toHaveBeenCalledWith("contact_id", CONTACT);
+  });
+
+  it("returns [] for a null data payload (default client)", async () => {
+    const c = chain({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await listBusinessDocumentsForContact(BIZ, CONTACT)).toEqual([]);
+  });
+
+  it("throws on error", async () => {
+    const c = chain({ data: null, error: { message: "lc" } });
+    await expect(listBusinessDocumentsForContact(BIZ, CONTACT, makeDb(c))).rejects.toThrow(/lc/);
   });
 });
 

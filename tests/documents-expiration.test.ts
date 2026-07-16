@@ -42,20 +42,52 @@ function doc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumentRow 
     expires_at: "2026-07-14T00:00:00Z",
     expiring_soon_notified_at: null,
     expired_notified_at: null,
+    contact_id: null,
+    renewal_date: null,
+    assigned_employee_id: null,
+    renewal_due_notified_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
   };
 }
 
+type TableResult = { data: unknown; error: { message: string } | null };
+
+/**
+ * Table-aware chainable mock: the docs scan resolves from `documents`;
+ * the renewal name lookups resolve (in call order) from `contacts` /
+ * `members`. Every chain method is recorded per table for assertions.
+ */
+function makeTableDb(results: {
+  documents: TableResult;
+  contacts?: TableResult;
+  members?: TableResult;
+}) {
+  const calls: Record<string, Array<{ name: string; args: unknown[] }>> = {};
+  const from = vi.fn((table: string) => {
+    const log = (calls[table] ??= []);
+    const result: TableResult =
+      table === "business_documents"
+        ? results.documents
+        : table === "contacts"
+          ? results.contacts ?? { data: [], error: null }
+          : results.members ?? { data: [], error: null };
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "not", "or", "eq", "in"]) {
+      chain[m] = vi.fn((...args: unknown[]) => {
+        log.push({ name: m, args });
+        return chain;
+      });
+    }
+    chain.then = (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve);
+    return chain;
+  });
+  return { db: { from } as never, calls };
+}
+
 function makeDb(rows: BusinessDocumentRow[] | null, error: { message: string } | null = null) {
-  const chain = {
-    select: vi.fn(() => chain),
-    not: vi.fn(() => chain),
-    eq: vi.fn(() => chain),
-    then: (resolve: (v: unknown) => unknown) => Promise.resolve({ data: rows, error }).then(resolve)
-  };
-  return { from: vi.fn(() => chain) } as never;
+  return makeTableDb({ documents: { data: rows, error } }).db;
 }
 
 const dispatch = vi.mocked(dispatchUrgentNotification);
@@ -182,5 +214,105 @@ describe("sweepDocumentExpirations", () => {
   it("handles a null data payload and defaults the clock", async () => {
     const result = await sweepDocumentExpirations({ client: makeDb(null) });
     expect(result).toMatchObject({ scanned: 0 });
+  });
+
+  it("reminds once about an upcoming renewal, naming the contact and assignee", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      contact_id: "c-1",
+      assigned_employee_id: "m-1"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      contacts: { data: [{ id: "c-1", display_name: "Jane Doe", customer_e164: "+16025551234" }], error: null },
+      members: { data: [{ id: "m-1", name: "Dania" }], error: null }
+    });
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(result).toMatchObject({ scanned: 1, renewalDueNotified: 1, expiredNotified: 0 });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "document_renewal_due",
+        summary: expect.stringContaining("for Jane Doe renews 2026-08-01"),
+        emailBody: expect.stringContaining("Assigned to Dania.")
+      })
+    );
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      policy.id,
+      { renewal_due_notified_at: NOW.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("falls back to the contact's number when it has no display name", async () => {
+    const policy = doc({ expires_at: null, renewal_date: "2026-08-01T00:00:00Z", contact_id: "c-1" });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      contacts: { data: [{ id: "c-1", display_name: "  ", customer_e164: "+16025551234" }], error: null }
+    });
+    await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: expect.stringContaining("for +16025551234") })
+    );
+  });
+
+  it("marks an overdue renewal as overdue and still reminds once", async () => {
+    const policy = doc({ expires_at: null, renewal_date: "2026-07-01T00:00:00Z" });
+    const result = await sweepDocumentExpirations({ client: makeDb([policy]), now: () => NOW });
+    expect(result.renewalDueNotified).toBe(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "document_renewal_due",
+        summary: expect.stringContaining("was due for renewal 2026-07-01"),
+        emailSubject: expect.stringContaining("Renewal overdue")
+      })
+    );
+  });
+
+  it("skips a renewal that was already reminded and leaves far-future renewals alone", async () => {
+    const reminded = doc({
+      id: "doc-reminded",
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      renewal_due_notified_at: "2026-07-10T00:00:00Z"
+    });
+    const far = doc({ id: "doc-far", expires_at: null, renewal_date: "2026-12-01T00:00:00Z" });
+    const result = await sweepDocumentExpirations({
+      client: makeDb([reminded, far]),
+      now: () => NOW
+    });
+    expect(result.renewalDueNotified).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("handles a doc that is both expired and renewal-due — both notices fire", async () => {
+    const both = doc({
+      expires_at: "2026-07-10T00:00:00Z",
+      renewal_date: "2026-07-20T00:00:00Z"
+    });
+    const result = await sweepDocumentExpirations({ client: makeDb([both]), now: () => NOW });
+    expect(result.expiredNotified).toBe(1);
+    expect(result.renewalDueNotified).toBe(1);
+    expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("degrades to nameless reminders when the directory lookups fail", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      contact_id: "c-1",
+      assigned_employee_id: "m-1"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      contacts: { data: null, error: { message: "contacts down" } },
+      members: { data: null, error: { message: "roster down" } }
+    });
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(result.renewalDueNotified).toBe(1);
+    const call = dispatch.mock.calls[0][0];
+    expect(call.summary).not.toContain(" for ");
+    expect(call.emailBody).not.toContain("Assigned to");
   });
 });

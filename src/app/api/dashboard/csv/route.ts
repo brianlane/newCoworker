@@ -30,8 +30,15 @@ import {
   exportEmployeesCsv,
   importEmployeesCsv
 } from "@/lib/csv/employees";
+import {
+  documentsCsvTemplate,
+  exportDocumentsCsv,
+  importDocumentsCsv
+} from "@/lib/csv/documents";
 
 export const dynamic = "force-dynamic";
+// Record imports write one storage object per created row (up to 500).
+export const maxDuration = 300;
 
 const READ_RATE = { interval: 60 * 1000, maxRequests: 30 };
 const IMPORT_RATE = { interval: 60 * 1000, maxRequests: 10 };
@@ -41,7 +48,7 @@ const MAX_IMPORT_BYTES = 1024 * 1024;
 
 const querySchema = z.object({
   businessId: z.string().uuid(),
-  type: z.enum(["contacts", "employees"]),
+  type: z.enum(["contacts", "employees", "documents"]),
   mode: z.enum(["export", "template"]).optional()
 });
 
@@ -76,13 +83,20 @@ export async function GET(request: Request) {
 
     const date = new Date().toISOString().slice(0, 10);
     if (parsed.mode === "template") {
-      const csv = parsed.type === "contacts" ? contactsCsvTemplate() : employeesCsvTemplate();
+      const csv =
+        parsed.type === "contacts"
+          ? contactsCsvTemplate()
+          : parsed.type === "employees"
+            ? employeesCsvTemplate()
+            : documentsCsvTemplate();
       return csvDownload(csv, `${parsed.type}-template.csv`);
     }
     const csv =
       parsed.type === "contacts"
         ? await exportContactsCsv(parsed.businessId)
-        : await exportEmployeesCsv(parsed.businessId);
+        : parsed.type === "employees"
+          ? await exportEmployeesCsv(parsed.businessId)
+          : await exportDocumentsCsv(parsed.businessId);
     return csvDownload(csv, `${parsed.type}-${date}.csv`);
   } catch (err) {
     return handleRouteError(err);
@@ -118,7 +132,9 @@ export async function POST(request: Request) {
     const summary =
       parsed.type === "contacts"
         ? await importContactsCsv(parsed.businessId, body)
-        : await importEmployeesCsv(parsed.businessId, body);
+        : parsed.type === "employees"
+          ? await importEmployeesCsv(parsed.businessId, body)
+          : await importDocumentsCsv(parsed.businessId, body);
 
     return successResponse({ summary });
   } catch (err) {

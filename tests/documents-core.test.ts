@@ -13,6 +13,7 @@ import {
   documentEligibleFor,
   documentLimitForTier,
   isDocumentExpired,
+  isRenewalDueWithin,
   parseExpirationInput,
   renderDocumentsContext,
   resolveDocumentReference,
@@ -40,6 +41,10 @@ function doc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumentRow 
     expires_at: null,
     expiring_soon_notified_at: null,
     expired_notified_at: null,
+    contact_id: null,
+    renewal_date: null,
+    assigned_employee_id: null,
+    renewal_due_notified_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -74,6 +79,30 @@ describe("isDocumentExpired", () => {
 
   it("defaults the clock to now", () => {
     expect(isDocumentExpired(doc({ expires_at: "1999-01-01T00:00:00Z" }))).toBe(true);
+  });
+});
+
+describe("isRenewalDueWithin", () => {
+  it("is never due without a renewal date", () => {
+    expect(isRenewalDueWithin(doc({ renewal_date: null }), NOW)).toBe(false);
+  });
+
+  it("treats an unparseable date as not due (fail open, sweep-visible)", () => {
+    expect(isRenewalDueWithin(doc({ renewal_date: "not-a-date" }), NOW)).toBe(false);
+  });
+
+  it("is due inside the window — including already-past dates", () => {
+    expect(isRenewalDueWithin(doc({ renewal_date: "2026-08-01T00:00:00Z" }), NOW)).toBe(true);
+    expect(isRenewalDueWithin(doc({ renewal_date: "2026-07-01T00:00:00Z" }), NOW)).toBe(true);
+  });
+
+  it("is not due beyond the window, and honors a custom window", () => {
+    expect(isRenewalDueWithin(doc({ renewal_date: "2026-12-01T00:00:00Z" }), NOW)).toBe(false);
+    expect(isRenewalDueWithin(doc({ renewal_date: "2026-12-01T00:00:00Z" }), NOW, 365)).toBe(true);
+  });
+
+  it("defaults the clock to now", () => {
+    expect(isRenewalDueWithin(doc({ renewal_date: "1999-01-01T00:00:00Z" }))).toBe(true);
   });
 });
 

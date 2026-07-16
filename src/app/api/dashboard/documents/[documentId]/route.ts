@@ -27,6 +27,7 @@ import {
   DOCUMENT_SUMMARY_MAX_CHARS,
   parseExpirationInput
 } from "@/lib/documents/core";
+import { getTeamMember } from "@/lib/db/employees";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 
@@ -39,6 +40,12 @@ const patchSchema = z.object({
   audience: z.enum(["clients", "staff", "both"]).optional(),
   /** ISO date/datetime; null clears (never expires). */
   expiresAt: z.string().max(64).nullable().optional(),
+  /** ISO date/datetime; null clears (no renewal tracking). */
+  renewalDate: z.string().max(64).nullable().optional(),
+  /** Contact the document belongs to; null unlinks. */
+  contactId: z.string().uuid().nullable().optional(),
+  /** Roster member handling the renewal; null unassigns. */
+  assignedEmployeeId: z.string().uuid().nullable().optional(),
   contentMd: z.string().max(DOCUMENT_CONTENT_MD_MAX_CHARS).optional(),
   summary: z.string().max(DOCUMENT_SUMMARY_MAX_CHARS).optional()
 });
@@ -93,6 +100,51 @@ export async function PATCH(request: Request, context: RouteContext) {
       // Changing the date re-arms the sweep's reminders.
       patch.expiring_soon_notified_at = null;
       patch.expired_notified_at = null;
+    }
+    if (body.data.renewalDate !== undefined) {
+      if (body.data.renewalDate === null || body.data.renewalDate.trim() === "") {
+        patch.renewal_date = null;
+      } else {
+        // Same end-of-day semantics as expiresAt.
+        const parsed = parseExpirationInput(body.data.renewalDate);
+        if (!parsed) {
+          return errorResponse("VALIDATION_ERROR", "renewalDate is not a date");
+        }
+        patch.renewal_date = parsed;
+      }
+      // A new renewal date re-arms the sweep's reminder.
+      patch.renewal_due_notified_at = null;
+    }
+    if (body.data.contactId !== undefined) {
+      if (body.data.contactId === null) {
+        patch.contact_id = null;
+      } else {
+        const db = await createSupabaseServiceClient();
+        const { data: contactRow, error: contactErr } = await db
+          .from("contacts")
+          .select("id")
+          .eq("business_id", body.data.businessId)
+          .eq("id", body.data.contactId)
+          .maybeSingle();
+        if (contactErr) {
+          logger.warn("documents/patch: contact lookup failed", {
+            businessId: body.data.businessId,
+            error: contactErr.message
+          });
+          return errorResponse("INTERNAL_SERVER_ERROR", "Contact lookup failed");
+        }
+        if (!contactRow) return errorResponse("VALIDATION_ERROR", "Contact not found");
+        patch.contact_id = body.data.contactId;
+      }
+    }
+    if (body.data.assignedEmployeeId !== undefined) {
+      if (body.data.assignedEmployeeId === null) {
+        patch.assigned_employee_id = null;
+      } else {
+        const member = await getTeamMember(body.data.businessId, body.data.assignedEmployeeId);
+        if (!member) return errorResponse("VALIDATION_ERROR", "Assigned employee not found");
+        patch.assigned_employee_id = body.data.assignedEmployeeId;
+      }
     }
     if (Object.keys(patch).length === 0) {
       return errorResponse("VALIDATION_ERROR", "Nothing to update");
