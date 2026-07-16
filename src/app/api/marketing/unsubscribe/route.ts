@@ -46,13 +46,17 @@ async function handle(request: Request): Promise<Response> {
   }
   const { bid, c, t } = parsed.data;
 
+  // Token first, rate limit second: the HMAC check is cheap and an invalid
+  // request never touches the limiter — otherwise anyone knowing a business
+  // id could exhaust the quota with garbage tokens and block real
+  // customers from opting out.
+  if (!verifyMarketingUnsubscribeToken(bid, c, t)) {
+    return page("That unsubscribe link is invalid or expired.", 400);
+  }
+
   const limiter = rateLimit(`marketing-unsub:${bid}`, RATE);
   if (!limiter.success) {
     return page("Too many requests — try again in a minute.", 429);
-  }
-
-  if (!verifyMarketingUnsubscribeToken(bid, c, t)) {
-    return page("That unsubscribe link is invalid or expired.", 400);
   }
 
   try {
