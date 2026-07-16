@@ -2408,6 +2408,52 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     }
   });
 
+  it("pins thinkingLevel=minimal for Gemini 3 summarizers and omits it for 2.5 overrides", async () => {
+    // Regression pin (2026-07-16 probe): Gemini 3.x default thinking counts
+    // against the 1500-token cap — gemini-3.5-flash spent 1126 tokens on
+    // hidden reasoning and truncated the website summary at MAX_TOKENS.
+    process.env.GOOGLE_API_KEY = "test-key";
+    delete process.env.GEMINI_SUMMARY_MODEL;
+    delete process.env.GEMINI_ROWBOAT_MODEL;
+    const bodies: Array<Record<string, unknown>> = [];
+    const geminiFetch = vi.fn(async (input: Request | string | URL, init?: RequestInit) => {
+      const urlStr = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      if (new URL(urlStr).hostname !== "generativelanguage.googleapis.com") {
+        throw new Error(`unexpected fetch: ${urlStr}`);
+      }
+      bodies.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+      return new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "## Summary\nok" }] } }],
+          usageMetadata: { promptTokenCount: 10, candidatesTokenCount: 5 }
+        }),
+        { status: 200, headers: { "content-type": "application/json" } }
+      );
+    });
+    vi.stubGlobal("fetch", geminiFetch);
+
+    // Default model is gemini-3-flash-preview → thinking pinned to minimal.
+    const res1 = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+    expect(res1.ok).toBe(true);
+    expect((bodies[0].generationConfig as Record<string, unknown>).thinkingConfig).toEqual({
+      thinkingLevel: "minimal"
+    });
+
+    // A 2.5-era override must NOT carry the field (2.5 rejects it).
+    process.env.GEMINI_SUMMARY_MODEL = "gemini-2.5-flash";
+    bodies.length = 0;
+    const res2 = await ingestWebsite("https://example.com/", {
+      fetchImpl: pageFetchImpl(),
+      lookup: publicLookup as never
+    });
+    expect(res2.ok).toBe(true);
+    expect((bodies[0].generationConfig as Record<string, unknown>).thinkingConfig).toBeUndefined();
+    delete process.env.GEMINI_SUMMARY_MODEL;
+  });
+
   it("meters a billed-but-empty summarizer reply when meterBusinessId is set", async () => {
     process.env.GOOGLE_API_KEY = "test-key";
     delete process.env.GEMINI_SUMMARY_MODEL;
