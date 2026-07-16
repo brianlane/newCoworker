@@ -78,8 +78,10 @@ import { getRenewalPipeline } from "@/lib/analytics/renewal-pipeline";
 import { getResponseTimeStats } from "@/lib/analytics/response-times";
 import { getRetentionOverview } from "@/lib/analytics/retention";
 import { getMonthlySummary } from "@/lib/analytics/monthly-summary";
+import { getQuoteFunnel } from "@/lib/analytics/quote-funnel";
 import {
   MonthlySummaryCard,
+  QuoteFunnelCard,
   RenewalPipelineCard,
   ResponseTimeCard,
   RetentionCard
@@ -229,6 +231,7 @@ export default async function DashboardAnalyticsPage(props: {
     responseTimes,
     retention,
     monthlySummary,
+    quoteFunnel,
     dayDetail,
     sentimentDetail,
     hourDetail
@@ -259,6 +262,8 @@ export default async function DashboardAnalyticsPage(props: {
       getResponseTimeStats(business.id, { client: db, now }).catch(() => null),
       getRetentionOverview(business.id, { client: db, now }).catch(() => null),
       getMonthlySummary(business.id, { client: db, now }).catch(() => null),
+      // Quote-stage tag funnel; a blip hides the card.
+      getQuoteFunnel(business.id, { client: db }).catch(() => null),
       selectedDay
         ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
         : Promise.resolve(null),
@@ -512,6 +517,8 @@ export default async function DashboardAnalyticsPage(props: {
         )}
         {retention && retention.engagedEver > 0 && <RetentionCard retention={retention} />}
       </div>
+
+      {quoteFunnel && quoteFunnel.totalTracked > 0 && <QuoteFunnelCard funnel={quoteFunnel} />}
 
       {monthlySummary &&
         (monthlySummary.current.coveredDays > 0 || monthlySummary.previous.coveredDays > 0) && (
