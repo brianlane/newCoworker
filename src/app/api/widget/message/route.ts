@@ -45,7 +45,27 @@ import {
   WEBCHAT_RESEND_TAIL_MESSAGES
 } from "@/lib/webchat/prompt";
 import { appendVisitorPage, parseVisitorMeta } from "@/lib/webchat/visitor-meta";
-import { updateWebchatSessionMeta } from "@/lib/webchat/db";
+import { updateWebchatSessionMeta, type WebchatSessionRow } from "@/lib/webchat/db";
+
+/**
+ * Best-effort page-trail append — runs on normal sends AND idempotent
+ * replays (a retry whose original POST died before the trail write must
+ * still record the page). Never throws: the turn is already safe.
+ */
+async function recordVisitorPage(
+  session: Pick<WebchatSessionRow, "id" | "visitor_meta">,
+  page: string | undefined
+): Promise<void> {
+  if (!page) return;
+  const next = appendVisitorPage(parseVisitorMeta(session.visitor_meta ?? null), page);
+  if (!next) return;
+  await updateWebchatSessionMeta(session.id, next).catch((err) => {
+    logger.warn("widget/message: visitor page-trail update failed", {
+      sessionId: session.id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+}
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -120,6 +140,7 @@ export async function POST(request: Request) {
       if (existing) {
         const existingJob = await getWebchatJobForUserMessage(existing.id);
         const history = await listWebchatMessages(session.id);
+        await recordVisitorPage(session, body.page);
         return successResponse({
           jobId: existingJob?.id ?? null,
           userMessageId: existing.id,
@@ -195,6 +216,7 @@ export async function POST(request: Request) {
         if (winner) {
           const winnerJob = await getWebchatJobForUserMessage(winner.id);
           const history = await listWebchatMessages(session.id);
+          await recordVisitorPage(session, body.page);
           return successResponse({
             jobId: winnerJob?.id ?? null,
             userMessageId: winner.id,
@@ -233,17 +255,7 @@ export async function POST(request: Request) {
     await touchWebchatSession(session.id);
 
     // Page-trail append — best-effort, after the turn is safely enqueued.
-    if (body.page) {
-      const next = appendVisitorPage(parseVisitorMeta(session.visitor_meta ?? null), body.page);
-      if (next) {
-        await updateWebchatSessionMeta(session.id, next).catch((err) => {
-          logger.warn("widget/message: visitor page-trail update failed", {
-            sessionId: session.id,
-            error: err instanceof Error ? err.message : String(err)
-          });
-        });
-      }
-    }
+    await recordVisitorPage(session, body.page);
 
     return successResponse({
       jobId: job.id,
