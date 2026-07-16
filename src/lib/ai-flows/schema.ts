@@ -1037,12 +1037,18 @@ const nonBranchStepMembers = [
     when: whenSchema.optional()
   }),
   // Run a saved Agent (a reusable instruction set from /dashboard/agents)
-  // against flow content: the rendered `input` template is handed to the
+  // against flow content: either the rendered `input` template (text) or a
+  // DOCUMENT (`documentTemplate`, an email-attachments:<path> /
+  // business-docs:<id> ref — default {{trigger.document}}) is handed to the
   // agent's instructions on central Gemini and the produced artifact lands
   // in {{vars.<saveAs>}} for later steps (send_email body, notify_owner,
-  // extract_text, ...). Metered into the shared AI budget. The write-time
-  // validator (validateRunAgentSteps) checks the agent exists and is
-  // enabled; the runtime re-checks at execution.
+  // extract_text, ...). Exactly one of input/documentTemplate (enforced in
+  // validateDefinitionSemantics). `saveDocument` additionally files the
+  // artifact into Business Documents (staff-only audience — an automated
+  // run must never widen output to customer channels). Metered into the
+  // shared AI budget. The write-time validator (validateRunAgentSteps)
+  // checks the agent exists and is enabled; the runtime re-checks at
+  // execution.
   z.object({
     id: stepId,
     type: z.literal("run_agent"),
@@ -1051,7 +1057,19 @@ const nonBranchStepMembers = [
     /** Editor display hint captured when the agent was picked. */
     agentName: z.string().min(1).max(120).optional(),
     /** Template rendered into the agent's input (e.g. "{{trigger.windowText}}"). */
-    input: z.string().min(1).max(8000),
+    input: z.string().min(1).max(8000).optional(),
+    /**
+     * Template resolving to a document ref the agent runs on instead of
+     * text — usually {{trigger.document}} (the triggering email's PDF/text
+     * attachment); a trigger with no document SKIPS the step gracefully.
+     */
+    documentTemplate: z.string().min(1).max(300).optional(),
+    /** File the artifact into Business Documents (title template). */
+    saveDocument: z
+      .object({
+        titleTemplate: z.string().min(1).max(200)
+      })
+      .optional(),
     /** The artifact lands in {{vars.<saveAs>}}. */
     saveAs: varName,
     when: whenSchema.optional()
@@ -1356,7 +1374,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "generate_image":
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "run_agent":
-      return [step.input];
+      return [step.input ?? "", step.documentTemplate ?? "", step.saveDocument?.titleTemplate ?? ""];
     // The call script, known-details note, and transfer pre-alert all render
     // against run vars.
     case "place_ai_call":
@@ -1981,6 +1999,21 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
+    // A run_agent needs EXACTLY ONE input source: rendered text (`input`)
+    // or a document ref (`documentTemplate`). Enforced here because a
+    // discriminatedUnion member can't hold a refine.
+    if (step.type === "run_agent") {
+      if (!step.input && !step.documentTemplate) {
+        issues.push(
+          `Step "${step.id}" runs an agent but has nothing to run it on; set "input" (text) or "documentTemplate" (a document).`
+        );
+      } else if (step.input && step.documentTemplate) {
+        issues.push(
+          `Step "${step.id}" sets both "input" and "documentTemplate"; use only one.`
+        );
+      }
+    }
+
     // The MMS attachment reads the image URL from a var an EARLIER
     // generate_image step must have produced (same scope rule as urlVar).
     if (
@@ -2101,6 +2134,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs);
     } else if (step.type === "run_agent") {
       vars.add(step.saveAs);
+      // Filing exposes the filed document's id/title to later templates.
+      if (step.saveDocument) {
+        vars.add(`${step.saveAs}_document_id`);
+        vars.add(`${step.saveAs}_document_title`);
+      }
     }
   };
 

@@ -321,17 +321,22 @@ export type StepAction =
   | {
       /**
        * Run a saved Agent on flow content: the worker POSTs the rendered
-       * input to the platform's gateway-guarded run-agent endpoint (which
-       * re-checks the agent exists + is enabled, executes on central
-       * Gemini, meters the spend, and records the agent_runs row) and
-       * stamps the returned artifact into {{vars.<saveAs>}}.
+       * input (text or a document ref) to the platform's gateway-guarded
+       * run-agent endpoint (which re-checks the agent exists + is enabled,
+       * executes on central Gemini, meters the spend, and records the
+       * agent_runs row) and stamps the returned artifact into
+       * {{vars.<saveAs>}}.
        */
       kind: "run_agent";
       agentId: string;
       /** Editor display hint — used in failure notes when the agent row is gone. */
       agentName?: string;
-      /** Rendered input text. */
+      /** Rendered input text ("" in document mode). */
       input: string;
+      /** Rendered document ref (email-attachments:<path> / business-docs:<id>). */
+      documentRef?: string;
+      /** Rendered filing title; absent = don't file the artifact. */
+      saveTitle?: string;
       saveAs: string;
       /** Templated input resolved to nothing usable → skip, not fail. */
       skipReason?: string;
@@ -861,13 +866,37 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       return { ok: true, action: { ...base, to: toRaw } };
     }
     case "run_agent": {
-      const input = renderTemplate(step.input, scope, { collapseEmpty: true }).trim();
       const base = {
         kind: "run_agent" as const,
         agentId: step.agentId,
         ...(step.agentName ? { agentName: step.agentName } : {}),
         saveAs: step.saveAs
       };
+      const saveTitle = step.saveDocument
+        ? renderTemplate(step.saveDocument.titleTemplate, scope).trim()
+        : "";
+      // A filing title that rendered blank keeps the filing intent; the
+      // platform falls back to the agent's artifact filename.
+      const save = step.saveDocument ? { saveTitle: saveTitle || "Agent output" } : {};
+      // Document mode: the ref template (default {{trigger.document}})
+      // resolves to an email-attachments:/business-docs: ref. A blank ref
+      // (no attachment on this trigger, or an upstream var that never
+      // filled) plans a SKIP, not a failure — an all-text email arriving on
+      // a document flow is normal traffic.
+      if (step.documentTemplate !== undefined || step.input === undefined) {
+        const documentRef = renderTemplate(
+          step.documentTemplate ?? "{{trigger.document}}",
+          scope
+        ).trim();
+        if (!documentRef) {
+          return {
+            ok: true,
+            action: { ...base, input: "", skipReason: "no document on this trigger to run on" }
+          };
+        }
+        return { ok: true, action: { ...base, input: "", documentRef, ...save } };
+      }
+      const input = renderTemplate(step.input, scope, { collapseEmpty: true }).trim();
       // Same lead-data-gap semantics as send_sms recipients: a TEMPLATED
       // input that rendered to nothing plans a SKIP (the var lands ""); a
       // literal empty input can't pass the schema's min(1), so this only
@@ -878,7 +907,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         }
         return { ok: false, error: "run_agent: input is empty after templating" };
       }
-      return { ok: true, action: { ...base, input } };
+      return { ok: true, action: { ...base, input, ...save } };
     }
     case "send_email": {
       const to = renderTemplate(step.to, scope).trim();

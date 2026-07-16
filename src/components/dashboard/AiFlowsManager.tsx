@@ -4198,13 +4198,63 @@ function StepFields({
             </p>
           )}
         </div>
-        <Field
-          label="What to run it on"
-          value={step.input}
-          onChange={(v) => patchStep(index, { input: v })}
-          textarea
-          help="The text handed to the agent — e.g. {{trigger.windowText}} (the triggering message/email) or a variable an earlier step extracted."
-        />
+        <div>
+          <label className={labelClass}>Run it on</label>
+          <select
+            className={inputClass}
+            value={step.documentTemplate !== undefined || step.input === undefined ? "document" : "text"}
+            onChange={(e) =>
+              e.target.value === "document"
+                ? patchStep(index, { input: undefined, documentTemplate: "{{trigger.document}}" })
+                : patchStep(index, { input: "{{trigger.windowText}}", documentTemplate: undefined })
+            }
+          >
+            <option value="text">Text from this workflow</option>
+            <option value="document">The document attached to the triggering email</option>
+          </select>
+        </div>
+        {step.documentTemplate !== undefined || step.input === undefined ? (
+          <Field
+            label="Document to run on (template)"
+            value={step.documentTemplate ?? ""}
+            onChange={(v) =>
+              patchStep(index, { documentTemplate: v.trim() ? v : "{{trigger.document}}" })
+            }
+            help="Usually {{trigger.document}} (the triggering email's PDF/text attachment). If the email carries no document, the step is skipped."
+          />
+        ) : (
+          <Field
+            label="What to run it on"
+            value={step.input ?? ""}
+            onChange={(v) => patchStep(index, { input: v })}
+            textarea
+            help="The text handed to the agent — e.g. {{trigger.windowText}} (the triggering message/email) or a variable an earlier step extracted."
+          />
+        )}
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.saveDocument !== undefined}
+            onChange={(ev) =>
+              patchStep(index, {
+                saveDocument: ev.target.checked
+                  ? { titleTemplate: "Agent output — {{trigger.document_name}}" }
+                  : undefined
+              })
+            }
+          />
+          Also save the result into your Documents (staff-only)
+        </label>
+        {step.saveDocument !== undefined && (
+          <div className="pl-6">
+            <Field
+              label="Document title"
+              value={step.saveDocument.titleTemplate}
+              onChange={(v) => patchStep(index, { saveDocument: { titleTemplate: v } })}
+              help="Templates work, e.g. Quote comparison — {{trigger.document_name}}."
+            />
+          </div>
+        )}
         <Field
           label="Save the result as"
           value={step.saveAs}
@@ -4212,7 +4262,7 @@ function StepFields({
           help="A short name so later steps can use the agent's output (e.g. agent_output)."
         />
         <p className="text-[11px] text-parchment/40">
-          The agent&apos;s saved instructions transform the input text; the result lands in{" "}
+          The agent&apos;s saved instructions transform the input; the result lands in{" "}
           {`{{vars.${step.saveAs || "agent_output"}}}`} for a later email, text, or notification.
           Each run draws from your monthly AI budget.
         </p>

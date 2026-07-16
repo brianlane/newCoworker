@@ -86,17 +86,25 @@ export function simulateTestAction(
       // No model call is made (budget-metered); the saveAs var gets a visible
       // placeholder so later templates render distinguishably.
       if (action.skipReason) {
-        // Live skips stamp the var "" — mirror that so later when-guards and
+        // Live skips stamp the vars "" — mirror that so later when-guards and
         // templates behave identically in test and production.
         scope.vars[action.saveAs] = "";
+        scope.vars[`${action.saveAs}_document_id`] = "";
+        scope.vars[`${action.saveAs}_document_title`] = "";
         return { simulated: "run_agent", skipped: action.skipReason };
       }
       scope.vars[action.saveAs] = "(test run: agent output placeholder)";
+      // No document is filed in test mode; the linkage vars get live-run
+      // parity values ("" when the step wouldn't file).
+      scope.vars[`${action.saveAs}_document_id`] = "";
+      scope.vars[`${action.saveAs}_document_title`] = action.saveTitle ?? "";
       return {
         simulated: "run_agent",
         agentId: action.agentId,
         ...(action.agentName ? { agentName: action.agentName } : {}),
-        input: action.input
+        // Document mode reports the ref it would read; text mode the input.
+        ...(action.documentRef ? { document: action.documentRef } : { input: action.input }),
+        ...(action.saveTitle ? { would_file_as: action.saveTitle } : {})
       };
     }
     case "doc_extract": {
