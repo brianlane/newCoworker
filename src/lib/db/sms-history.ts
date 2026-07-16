@@ -105,7 +105,8 @@ export type OutboundLogSource =
   | "owner_scheduled"
   | "api"
   | "voice_follow_up"
-  | "mcp";
+  | "mcp"
+  | "dashboard_chat";
 
 export type OutboundLogRow = {
   id: string;

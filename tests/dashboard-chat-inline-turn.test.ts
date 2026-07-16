@@ -502,3 +502,270 @@ describe("runInlineChatTurn — business_knowledge_lookup", () => {
     expect(knowledgeResponseOf(chatStep)).toEqual({ ok: false, message: "question is required" });
   });
 });
+
+describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
+  const ALL_ON = {
+    send_sms: true,
+    calendar_find_slots: true,
+    calendar_book_appointment: true,
+    calendar_reschedule_appointment: true,
+    calendar_cancel_appointment: true
+  };
+
+  it("declares gated action tools alongside the creation tools", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), { chatStep });
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).toEqual([
+      "create_aiflow",
+      "create_agent",
+      "business_knowledge_lookup",
+      "send_sms",
+      "calendar_find_slots",
+      "calendar_book_appointment",
+      "calendar_reschedule_appointment",
+      "calendar_cancel_appointment"
+    ]);
+  });
+
+  it("omits Settings-disabled action tools and declares none without gates", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(
+      baseArgs({ actionToolGates: { ...ALL_ON, send_sms: false } }),
+      { chatStep }
+    );
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).not.toContain("send_sms");
+    expect(declared).toContain("calendar_find_slots");
+
+    const chatStep2 = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs(), { chatStep: chatStep2 });
+    const declared2 = chatStep2.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared2).toEqual(["create_aiflow", "create_agent", "business_knowledge_lookup"]);
+  });
+
+  it("dispatches a declared action tool call to the executor and feeds the result back", async () => {
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      messageId: "msg-9",
+      sentBody: "This is a test message."
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("send_sms", { toE164: "+15145188192", body: "This is a test message." })
+      )
+      .mockResolvedValueOnce(textStep("Sent: \"This is a test message.\""));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res).toMatchObject({ ok: true, content: 'Sent: "This is a test message."' });
+    expect(runActionTool).toHaveBeenCalledWith(BIZ, {
+      name: "send_sms",
+      args: { toE164: "+15145188192", body: "This is a test message." }
+    });
+    const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
+      functionResponse: { name: string; response: { result: { messageId: string } } };
+    };
+    expect(fr.functionResponse.name).toBe("send_sms");
+    expect(fr.functionResponse.response.result.messageId).toBe("msg-9");
+  });
+
+  it("never bounces to the worker after a side-effecting tool ran — wrap-up FAILURE degrades to an honest line", async () => {
+    // Bugbot High (PR #668): an inline failure after send_sms already ran
+    // would re-enqueue the turn on the worker, which re-answers the same
+    // owner message and could text/book AGAIN.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      messageId: "msg-1",
+      toE164: "+15145188192",
+      sentBody: "This is a test message."
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      // The degraded line carries the FACTS the lost wrap-up would have
+      // relayed — recipient and exact body.
+      expect(res.content).toContain("hit a hiccup writing my summary");
+      expect(res.content).toContain('Text sent to +15145188192 — "This is a test message."');
+    }
+  });
+
+  it("never bounces to the worker after a side-effecting tool ran — an EMPTY wrap-up degrades too", async () => {
+    const runActionTool = vi.fn(async () => ({ ok: true }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("calendar_cancel_appointment", { attendeePhone: "+15145188192" })
+      )
+      .mockResolvedValueOnce({ text: null, functionCalls: [], modelContent: null, usage: null });
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("requested action went through");
+      expect(res.content).toContain("The appointment was canceled.");
+    }
+  });
+
+  it("preserves a Calendly reschedule/booking LINK in the degraded wrap-up", async () => {
+    // Bugbot Medium (3rd round): reschedule_link_created succeeded but the
+    // wrap-up died — the stored reply must still hand the owner the link.
+    for (const [tool, resultData, needle] of [
+      [
+        "calendar_reschedule_appointment",
+        { rescheduleLink: "https://calendly.com/r/abc" },
+        "NOT moved until the attendee picks the new time): https://calendly.com/r/abc"
+      ],
+      [
+        "calendar_book_appointment",
+        { bookingLink: "https://calendly.com/b/xyz" },
+        "NOT booked until the attendee completes it): https://calendly.com/b/xyz"
+      ]
+    ] as const) {
+      const runActionTool = vi.fn(async () => ({ ok: true, data: resultData }));
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(
+          toolStep(tool, {
+            newStartIso: "2026-07-21T15:00:00-04:00",
+            newEndIso: "2026-07-21T15:30:00-04:00",
+            startIso: "2026-07-21T15:00:00-04:00",
+            endIso: "2026-07-21T15:30:00-04:00",
+            summary: "Call",
+            attendeeName: "Uday"
+          })
+        )
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+        chatStep,
+        runActionTool
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.content).toContain(needle);
+    }
+  });
+
+  it("reports BOTH the draft hand-off and the side-effect notes when the wrap-up dies after both", async () => {
+    // Bugbot Medium (4th round): draft-only fallback copy hid that a text
+    // had also been sent in the same turn.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      toE164: "+15145188192",
+      sentBody: "hi"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce({
+        text: null,
+        functionCalls: [
+          { name: "create_agent", args: { name: "A", instructions: "B" } },
+          { name: "send_sms", args: { toE164: "+15145188192", body: "hi" } }
+        ],
+        modelContent: { role: "model", parts: [{ text: "" }] },
+        usage: null
+      })
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.drafts).toHaveLength(1);
+      expect(res.content).toContain("prepared a draft");
+      expect(res.content).toContain("Also completed");
+      expect(res.content).toContain('Text sent to +15145188192 — "hi"');
+    }
+  });
+
+  it("uses the linkless note arms when book/reschedule succeed without links, and tolerates a linkless send result", async () => {
+    for (const [tool, needle] of [
+      ["calendar_book_appointment", "The appointment was booked."],
+      ["calendar_reschedule_appointment", "The appointment was rescheduled."],
+      ["send_sms", "Text sent to the recipient."]
+    ] as const) {
+      const runActionTool = vi.fn(async () => ({ ok: true }));
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep(tool, {}))
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+        chatStep,
+        runActionTool
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.content).toContain(needle);
+    }
+  });
+
+  it("a pure READ tool (calendar_find_slots) does NOT suppress the worker fallback", async () => {
+    const runActionTool = vi.fn(async () => ({ ok: true, data: { slots: [] } }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("calendar_find_slots", {}))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    // Nothing irreversible happened — the worker fallback stays available.
+    expect(res).toEqual({
+      ok: false,
+      error: "model_failed",
+      detail: "gemini_http_500:wrap-up died"
+    });
+  });
+
+  it("a FAILED side-effect tool (ok:false) does NOT suppress the worker fallback either", async () => {
+    // Bugbot Medium (2nd round): a cleanly-refused send (opt-out, quota,
+    // validation) committed nothing — pinning the turn would suppress a
+    // legitimate fallback AND let the degraded copy imply a send happened.
+    const runActionTool = vi.fn(async () => ({ ok: false, message: "recipient_opted_out" }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: "model_failed",
+      detail: "gemini_http_500:wrap-up died"
+    });
+  });
+
+  it("fails CLOSED on an action tool the model calls but that was not declared", async () => {
+    const runActionTool = vi.fn();
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
+      .mockResolvedValueOnce(textStep("I can't send texts right now."));
+    // Gates present but send_sms OFF — a hallucinated call must not execute.
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: { ...ALL_ON, send_sms: false } }),
+      { chatStep, runActionTool }
+    );
+    expect(res.ok).toBe(true);
+    expect(runActionTool).not.toHaveBeenCalled();
+    const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
+      functionResponse: { response: { result: { ok: boolean; message: string } } };
+    };
+    expect(fr.functionResponse.response.result).toEqual({
+      ok: false,
+      message: "unknown tool: send_sms"
+    });
+  });
+});
