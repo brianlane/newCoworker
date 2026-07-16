@@ -70,6 +70,9 @@ describe("hasPriorRunForLead", () => {
     const or = calls.find((c) => c.name === "or")!.args[0] as string;
     expect(or).toContain(`context->trigger->>from.eq.${LEAD}`);
     expect(or).toContain(`context->vars->>lead_phone.eq.${LEAD}`);
+    // Full identity parity with goal_events/response_stop: waits and calls too.
+    expect(or).toContain(`context->waiting_reply->>from.eq.${LEAD}`);
+    expect(or).toContain(`context->waiting_call->>to.eq.${LEAD}`);
   });
 
   it("test runs never count as an enrollment", async () => {

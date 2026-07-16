@@ -127,6 +127,46 @@ describe("stopRunsOnResponse", () => {
     expect(calls.filter((c) => c.table === "ai_flows")).toHaveLength(0);
   });
 
+  it("a run awaiting THIS sender's reply is exempt even when its resume lost the race", async () => {
+    // Not in excludeRunIds (its resume lost the revision race and it is
+    // still parked) — the guard must still keep the reply out of a cancel.
+    const { db, calls } = makeDb([
+      {
+        data: [
+          runRow({
+            id: "r-waiting",
+            status: "awaiting_reply",
+            context: { vars: {}, trigger: { from: LEAD }, waiting_reply: { from: LEAD } }
+          })
+        ],
+        error: null
+      }
+    ]);
+    expect(await stopRunsOnResponse(db, BIZ, LEAD)).toEqual({ stoppedRuns: 0 });
+    expect(calls.filter((c) => c.table === "ai_flows")).toHaveLength(0);
+  });
+
+  it("a wait parked on a DIFFERENT number stays cancelable", async () => {
+    const { db } = makeDb([
+      {
+        data: [
+          runRow({
+            status: "awaiting_reply",
+            context: {
+              vars: { lead_phone: LEAD },
+              trigger: { from: LEAD },
+              waiting_reply: { from: "+16025559999" }
+            }
+          })
+        ],
+        error: null
+      },
+      { data: [flowRow("f1", { stopOnResponse: true })], error: null },
+      { data: [{ id: "r1" }], error: null }
+    ]);
+    expect(await stopRunsOnResponse(db, BIZ, LEAD)).toEqual({ stoppedRuns: 1 });
+  });
+
   it("a flow without stopOnResponse is left alone", async () => {
     const { db, calls } = makeDb([
       { data: [runRow()], error: null },

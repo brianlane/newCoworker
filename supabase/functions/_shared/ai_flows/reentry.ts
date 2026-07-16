@@ -49,7 +49,7 @@ export async function hasPriorRunForLead(
       .select("id, context")
       .eq("flow_id", flowId)
       .or(
-        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164}`
+        `context->trigger->>from.eq.${leadE164},context->vars->>lead_phone.eq.${leadE164},context->waiting_reply->>from.eq.${leadE164},context->waiting_call->>to.eq.${leadE164}`
       )
       .limit(PRIOR_RUN_SCAN);
     if (error) {

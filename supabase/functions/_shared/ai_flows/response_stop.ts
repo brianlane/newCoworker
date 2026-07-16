@@ -9,9 +9,13 @@
  *   - only the machine-parked states are touched (queued — including
  *     sleep/quiet-hour deferrals — awaiting_reply, awaiting_call); runs
  *     parked on a HUMAN (awaiting_approval / awaiting_agent) are left alone;
- *   - the run whose wait_for_reply just CONSUMED this reply is exempt
- *     (`excludeRunIds`): the flow authored that wait, so the reply must flow
- *     through its branch logic, not cancel it;
+ *   - a run waiting for THIS sender's reply is never canceled: the flow
+ *     authored that wait, so the reply must flow through its branch logic.
+ *     Two layers cover the two timings — `excludeRunIds` exempts runs whose
+ *     resume already CONSUMED the reply (they are `queued` again by now),
+ *     and the awaiting_reply-on-this-sender guard exempts runs whose resume
+ *     lost its revision race (still parked), so a race can never turn the
+ *     reply into a cancel that eats it;
  *   - test runs are never touched (a real reply must not eat a dry run);
  *   - revision-gated writes: losing a race to a claim/resume means the run
  *     moved on and this stop no longer applies;
@@ -55,6 +59,13 @@ type CandidateRun = {
   revision: number;
 };
 
+/** Is this run parked on a wait_for_reply watching exactly this sender? */
+function isAwaitingThisSendersReply(run: CandidateRun, leadE164: string): boolean {
+  if (run.status !== "awaiting_reply") return false;
+  const waiting = run.context?.waiting_reply as { from?: unknown } | undefined;
+  return typeof waiting?.from === "string" && waiting.from === leadE164;
+}
+
 /**
  * Cancel every pending stop-on-response run for this lead. Never throws; a
  * failure on one run never blocks the others.
@@ -86,7 +97,15 @@ export async function stopRunsOnResponse(
     const runs = ((data ?? []) as CandidateRun[]).filter(
       (r) =>
         !excludeRunIds.includes(r.id) &&
-        !isTestModeTrigger(r.context?.trigger as Record<string, unknown> | undefined)
+        !isTestModeTrigger(r.context?.trigger as Record<string, unknown> | undefined) &&
+        // A run parked awaiting THIS sender's reply owns that reply by
+        // definition — the resume path feeds it through the authored wait
+        // logic. excludeRunIds covers resumes that WON their revision race;
+        // this guard covers the ones that LOST it (the run is still
+        // awaiting_reply here) so a race can never turn the reply into a
+        // cancel that eats it. Waits parked on a DIFFERENT number remain
+        // cancelable like any other pending follow-up.
+        !isAwaitingThisSendersReply(r, leadE164)
     );
     if (runs.length === 0) return NOOP;
 
