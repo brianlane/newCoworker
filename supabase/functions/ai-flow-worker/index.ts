@@ -97,6 +97,7 @@ import {
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
 import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_mode.ts";
+import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
 import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import {
@@ -2963,8 +2964,15 @@ function readPageSourceBefore(body: unknown): string | null {
  * ride along as MMS media. Returns null (and logs) when there is no stored
  * screenshot or signing fails — an offer without the image still routes the lead.
  */
-async function screenshotMmsUrl(supabase: Supabase, scope: Scope): Promise<string | null> {
-  const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
+async function screenshotMmsUrl(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope
+): Promise<string | null> {
+  // Tenant guard: only a path under THIS run's business prefix is signable —
+  // the var shares the scope.vars namespace with extraction outputs, whose
+  // values inbound text controls (see screenshot_guard.ts).
+  const path = tenantScreenshotPath(run.business_id, scope.vars.screenshot_path);
   if (!path) return null;
   const { data: signed, error } = await supabase.storage
     .from(SCREENSHOT_BUCKET)
@@ -4443,7 +4451,10 @@ async function deliverFlowEmail(
     | { filename: string; mime_type: string; size_bytes: number; storage_path: string; bucket: string }
     | null = null;
   if (action.attachScreenshot) {
-    const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
+    // Tenant guard: only a path under THIS run's business prefix is
+    // downloadable (see screenshot_guard.ts) — the var shares scope.vars
+    // with extraction outputs, whose values inbound text controls.
+    const path = tenantScreenshotPath(run.business_id, scope.vars.screenshot_path);
     if (path) {
       const { data, error } = await supabase.storage.from(SCREENSHOT_BUCKET).download(path);
       if (error || !data) {
@@ -5271,7 +5282,7 @@ async function routeToTeamStep(
       // auto-assigned lead could never be handed back (Bugbot on PR #580).
       routing.route_step_index = stepIndex;
       scope.vars.claimed_agent = agent.name || agent.phone;
-      const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
+      const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
       const fyiBody =
         "New lead assigned to you (auto-assign is on — it's yours, no reply " +
         'needed; reply "86" to hand it back):\n' +
@@ -5351,7 +5362,7 @@ async function routeToTeamStep(
     // is persisted (state before side effect); we only carry the rendered body
     // and a per-agent idempotency key here. The MMS URL is signed fresh per
     // offer so an escalation hours later never carries an expired link.
-    const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
+    const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
     let offerText = renderTemplate(
       action.offerTemplate,
       agentScope(scope, agent, formatInTimeZone(deadlineMs, action.offerWindow?.timezone ?? "UTC"))
