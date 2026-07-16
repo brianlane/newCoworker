@@ -197,7 +197,44 @@ describe("processInboundTenantEmail", () => {
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: expect.objectContaining({
-          image: "email-attachments:inbound/_msg-1_example.com_/1-face.jpg"
+          image: "email-attachments:inbound/_msg-1_example.com_/1-face.jpg",
+          // The pdf (first) is the document — image and document coexist.
+          document: "email-attachments:inbound/_msg-1_example.com_/0-quote.pdf",
+          document_name: "quote.pdf"
+        })
+      }),
+      db
+    );
+  });
+
+  it("matches a document by filename extension when the sender ships it as octet-stream", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-doc" });
+
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "renewal.PDF",
+            mimeType: "application/octet-stream",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal.PDF"
+          }
+        ]
+      },
+      db as never
+    );
+
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          document: "email-attachments:inbound/_msg-1_example.com_/0-renewal.PDF",
+          document_name: "renewal.PDF"
         })
       }),
       db

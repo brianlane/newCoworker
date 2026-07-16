@@ -511,7 +511,34 @@ describe("replayInboundEmails", () => {
     await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
-        trigger: expect.objectContaining({ image: "email-attachments:inbound/m/2-pic.jpg" })
+        trigger: expect.objectContaining({
+          image: "email-attachments:inbound/m/2-pic.jpg",
+          // The pdf is the document — mirrors the live inbound path.
+          document: "email-attachments:inbound/m/0-notes.pdf",
+          document_name: "notes.pdf"
+        })
+      }),
+      db
+    );
+  });
+
+  it("matches a replayed document by filename extension (octet-stream PDFs)", async () => {
+    const attachments = [
+      {
+        filename: "renewal.pdf",
+        mime_type: "application/octet-stream",
+        size_bytes: 9,
+        storage_path: "inbound/m/0-renewal.pdf"
+      }
+    ];
+    const { db } = replayDb({ emailLog: { data: [{ ...ROW, attachments }], error: null } });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-4" });
+    await replayInboundEmails("biz-1", FLOW, { emailLogIds: ["mail-1"] }, db);
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          document: "email-attachments:inbound/m/0-renewal.pdf"
+        })
       }),
       db
     );

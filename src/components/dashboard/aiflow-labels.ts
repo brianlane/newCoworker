@@ -26,6 +26,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   browse_extract: "Read details from a web page",
   extract_text: "Read details from the message text",
   email_extract: "Read details from an email",
+  doc_extract: "Read details from a document (PDF)",
   send_sms: "Send a text",
   send_email: "Send an email",
   approval_gate: "Ask me to approve first",
@@ -60,6 +61,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Reads the details you ask for (like a name or phone number) straight from the incoming message - no link needed.",
   email_extract:
     "Reads details from a recent email in a connected mailbox - used to backfill lead info (like a phone or address) from an alert email when a web page was slow or empty.",
+  doc_extract:
+    "Reads the details you ask for (like a premium, a renewal date, or a policy number) out of the document attached to the triggering email - PDFs included. Optionally files the document into your Documents so your coworker can answer from it and share it later. If the email has no document, the step is skipped. Uses your monthly AI budget.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",

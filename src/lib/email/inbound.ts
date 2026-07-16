@@ -143,13 +143,31 @@ export async function processInboundTenantEmail(
   const firstImage = ownAttachments.find((a) =>
     ["image/jpeg", "image/png", "image/webp"].includes(a.mimeType.trim().toLowerCase())
   );
+  // First DOCUMENT attachment (pdf/text) → {{trigger.document}} — the
+  // doc_extract step's default source. Matched on MIME with a filename-
+  // extension fallback (some senders ship PDFs as application/octet-stream).
+  const firstDocument = ownAttachments.find((a) => {
+    const mime = a.mimeType.trim().toLowerCase();
+    if (
+      ["application/pdf", "text/plain", "text/markdown", "text/csv"].includes(mime)
+    ) {
+      return true;
+    }
+    return /\.(pdf|txt|md|csv)$/i.test(a.filename);
+  });
   const scope = tenantEmailTriggerScope({
     id: payload.messageId,
     fromEmail,
     subject: payload.subject,
     bodyText: payload.text,
     toEmail: payload.to,
-    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {})
+    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {}),
+    ...(firstDocument
+      ? {
+          documentRef: `email-attachments:${firstDocument.path}`,
+          documentName: firstDocument.filename
+        }
+      : {})
   });
 
   const flows = await loadTenantEmailFlows(db, businessId);

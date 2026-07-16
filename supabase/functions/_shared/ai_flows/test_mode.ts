@@ -99,6 +99,27 @@ export function simulateTestAction(
         input: action.input
       };
     }
+    case "doc_extract": {
+      // No document is downloaded and no model call is made (budget-metered,
+      // and the optional filing writes a Business Document). Field vars get
+      // visible placeholders so later templates render distinguishably; a
+      // planner skip (no document on the trigger) mirrors the live skip.
+      if (action.skipReason) {
+        for (const f of action.fields) scope.vars[f.name] = "";
+        return { simulated: "doc_extract", skipped: action.skipReason };
+      }
+      const saved: Record<string, string> = {};
+      for (const f of action.fields) {
+        saved[f.name] = `(test run: ${f.name} from document)`;
+        scope.vars[f.name] = saved[f.name];
+      }
+      return {
+        simulated: "doc_extract",
+        source: action.sourceRef,
+        saved,
+        ...(action.fileTitle ? { would_file_as: action.fileTitle } : {})
+      };
+    }
     case "notify_owner":
       return { simulated: "notify_owner", message: action.message };
     case "http_call":

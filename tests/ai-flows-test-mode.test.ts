@@ -25,6 +25,53 @@ describe("isTestModeTrigger", () => {
 describe("simulateTestAction", () => {
   const scope = () => ({ vars: {} as Record<string, unknown> });
 
+  it("simulates doc_extract with placeholder vars (skip mirrors the live empty stamp)", () => {
+    const s = scope();
+    expect(
+      simulateTestAction(
+        {
+          kind: "doc_extract",
+          sourceRef: "email-attachments:inbound/m/0-renewal.pdf",
+          fields: [{ name: "renewal_date" }],
+          fileTitle: "Renewal"
+        } as StepAction,
+        s
+      )
+    ).toEqual({
+      simulated: "doc_extract",
+      source: "email-attachments:inbound/m/0-renewal.pdf",
+      saved: { renewal_date: "(test run: renewal_date from document)" },
+      would_file_as: "Renewal"
+    });
+    expect(s.vars.renewal_date).toBe("(test run: renewal_date from document)");
+
+    // Without a filing title, no would_file_as key appears.
+    expect(
+      simulateTestAction(
+        {
+          kind: "doc_extract",
+          sourceRef: "email-attachments:inbound/m/0-a.pdf",
+          fields: [{ name: "x" }]
+        } as StepAction,
+        scope()
+      )
+    ).not.toHaveProperty("would_file_as");
+
+    const skipped = scope();
+    expect(
+      simulateTestAction(
+        {
+          kind: "doc_extract",
+          sourceRef: "",
+          fields: [{ name: "renewal_date" }],
+          skipReason: "no document on this trigger to read"
+        } as StepAction,
+        skipped
+      )
+    ).toEqual({ simulated: "doc_extract", skipped: "no document on this trigger to read" });
+    expect(skipped.vars.renewal_date).toBe("");
+  });
+
   it("simulates every send with its fully-rendered content", () => {
     expect(
       simulateTestAction(

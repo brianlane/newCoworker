@@ -8,6 +8,70 @@ import {
 } from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
+describe("planStep: doc_extract", () => {
+  const FIELDS = [{ name: "renewal_date", description: "the renewal date" }];
+  const base = { id: "d1", type: "doc_extract" as const, fields: FIELDS };
+  const scopeWithDoc: StepScope = {
+    vars: {},
+    trigger: {
+      document: "email-attachments:inbound/msg1/0-renewal.pdf",
+      document_name: "renewal.pdf"
+    }
+  };
+
+  it("defaults the source to {{trigger.document}}", () => {
+    const plan = planStep(base as FlowStep, scopeWithDoc);
+    expect(plan).toEqual({
+      ok: true,
+      action: {
+        kind: "doc_extract",
+        sourceRef: "email-attachments:inbound/msg1/0-renewal.pdf",
+        fields: FIELDS
+      }
+    });
+  });
+
+  it("renders a custom sourceTemplate", () => {
+    const plan = planStep(
+      { ...base, sourceTemplate: "{{vars.doc_ref}}" } as FlowStep,
+      { vars: { doc_ref: "email-attachments:inbound/msg2/1-policy.pdf" }, trigger: {} }
+    );
+    expect(plan.ok && plan.action.kind === "doc_extract" && plan.action.sourceRef).toBe(
+      "email-attachments:inbound/msg2/1-policy.pdf"
+    );
+  });
+
+  it("plans a SKIP when the trigger carries no document", () => {
+    const plan = planStep(base as FlowStep, { vars: {}, trigger: {} });
+    expect(plan.ok && plan.action.kind === "doc_extract" && plan.action.skipReason).toBe(
+      "no document on this trigger to read"
+    );
+  });
+
+  it("renders the filing title (audience defaults to staff; blank title falls back)", () => {
+    const plan = planStep(
+      { ...base, fileAs: { titleTemplate: "Renewal — {{trigger.document_name}}" } } as FlowStep,
+      scopeWithDoc
+    );
+    expect(plan.ok && plan.action.kind === "doc_extract" ? plan.action : null).toMatchObject({
+      fileTitle: "Renewal — renewal.pdf",
+      fileAudience: "staff"
+    });
+
+    const blank = planStep(
+      {
+        ...base,
+        fileAs: { titleTemplate: "{{vars.missing_title}}", audience: "both" as const }
+      } as FlowStep,
+      scopeWithDoc
+    );
+    expect(blank.ok && blank.action.kind === "doc_extract" ? blank.action : null).toMatchObject({
+      fileTitle: "Filed document",
+      fileAudience: "both"
+    });
+  });
+});
+
 describe("planStep: share_document", () => {
   const DOC_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const base = { id: "sd1", type: "share_document" as const, documentId: DOC_ID };

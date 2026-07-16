@@ -526,6 +526,24 @@ export type FlowStep =
       when?: StepCondition;
     }
   | {
+      /**
+       * Read typed fields out of a DOCUMENT — the triggering email's PDF/text
+       * attachment ({{trigger.document}}, the plan-time default) — via the
+       * platform's Gemini document pipeline (the worker proxies to
+       * /api/internal/aiflow-doc-extract). Produces {{vars.<field>}}; a
+       * trigger carrying no document SKIPS the step. `fileAs` additionally
+       * files the source into Business Documents (knowledge + share_document
+       * ready).
+       */
+      id: string;
+      type: "doc_extract";
+      /** Template resolving to a document ref. Omitted = {{trigger.document}}. */
+      sourceTemplate?: string;
+      fields: ExtractField[];
+      fileAs?: { titleTemplate: string; audience?: "clients" | "staff" | "both" };
+      when?: StepCondition;
+    }
+  | {
       id: string;
       type: "send_sms";
       /** Recipient (templatable). Optional when `replyToGroup`/`toAgentName` supplies recipients. */

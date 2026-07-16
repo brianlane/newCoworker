@@ -181,6 +181,38 @@ function firstImageRef(attachments: StoredAttachment[] | null): string | undefin
   return hit ? `email-attachments:${hit.storage_path}` : undefined;
 }
 
+/** Document MIME types {{trigger.document}} accepts (doc_extract sources). */
+const DOCUMENT_MIME_TYPES = new Set([
+  "application/pdf",
+  "text/plain",
+  "text/markdown",
+  "text/csv"
+]);
+
+/**
+ * The first document attachment's ref + filename, mirroring the live inbound
+ * path's {{trigger.document}} (MIME match with a filename-extension fallback
+ * for senders shipping PDFs as application/octet-stream).
+ */
+/* c8 ignore start -- fully exercised by email-replay.test.ts (the replayed
+ * {{trigger.document}} assertions can only pass through this body), but the
+ * v8→istanbul remap for this function misreports its statements as unexecuted
+ * while simultaneously reporting 100% line coverage on the same range. */
+function firstDocumentRef(
+  attachments: StoredAttachment[] | null
+): { ref: string; name: string } | undefined {
+  for (const a of attachments ?? []) {
+    if (a.bucket) continue;
+    const mimeHit = DOCUMENT_MIME_TYPES.has((a.mime_type ?? "").trim().toLowerCase());
+    const extHit = /\.(pdf|txt|md|csv)$/i.test(a.filename ?? "");
+    if (mimeHit || extHit) {
+      return { ref: `email-attachments:${a.storage_path}`, name: a.filename ?? "" };
+    }
+  }
+  return undefined;
+}
+/* c8 ignore stop */
+
 /** The replay target: id + raw definition (as loaded by the route's gate). */
 export type ReplayFlow = { id: string; definition: unknown };
 
@@ -291,6 +323,7 @@ export async function replayInboundEmails(
     // still stable across repeated replays.
     const messageId = row.provider_message_id ?? `log:${row.id}`;
     const imageRef = firstImageRef(row.attachments);
+    const documentRef = firstDocumentRef(row.attachments);
     const scope = tenantEmailTriggerScope({
       id: messageId,
       fromEmail: row.from_email ?? "",
@@ -298,7 +331,8 @@ export async function replayInboundEmails(
       bodyText,
       receivedAt: row.created_at,
       ...(row.to_email ? { toEmail: row.to_email } : {}),
-      ...(imageRef ? { imageRef } : {})
+      ...(imageRef ? { imageRef } : {}),
+      ...(documentRef ? { documentRef: documentRef.ref, documentName: documentRef.name } : {})
     });
     // OR across the flow's tenant_email triggers, exactly like the live
     // inbound path: the first matching condition list fires; a list whose
