@@ -414,6 +414,19 @@ export async function runInlineChatTurn(
      * pass false so compile work can't succeed into a void.
      */
     includeCreationTools?: boolean;
+    /**
+     * Whole-turn wall-clock budget (ms). Callers whose OWN caller enforces a
+     * hard timeout (the SMS worker aborts owner turns at 75s) MUST pass a
+     * smaller budget so this engine stops starting/continuing work before
+     * that abort — otherwise a slow turn can commit tools AFTER the caller
+     * already fell back to another path, leaving the owner a reply that
+     * contradicts actions that really happened. When the budget runs out:
+     * committed side effects / drafts degrade to the honest ok:true line;
+     * a turn that committed nothing fails fast so the fallback stays safe.
+     * Omitted = per-step timeouts only (dashboard chat's own 300s function
+     * budget applies there).
+     */
+    budgetMs?: number;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -455,11 +468,28 @@ export async function runInlineChatTurn(
   // the facts a degraded wrap-up must not lose (links, sent bodies).
   const sideEffects: SideEffectLog = { happened: false, notes: [] };
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
+  const deadlineMs =
+    typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    // Budget check BEFORE starting another model step: once the caller's
+    // own timeout is near, committing more work (tool calls!) risks acting
+    // after the caller already fell back to another reply path.
+    const remainingMs = deadlineMs === null ? null : deadlineMs - Date.now();
+    if (remainingMs !== null && remainingMs <= 0) {
+      logger.warn("dashboard-chat inline turn: budget exhausted", {
+        businessId: args.businessId,
+        step
+      });
+      if (drafts.length > 0 || sideEffects.happened) break;
+      return { ok: false, error: "model_failed", detail: "budget_exhausted" };
+    }
     const controller = new AbortController();
+    // The per-step timeout never exceeds what's left of the whole-turn budget.
+    const stepTimeoutMs =
+      remainingMs === null ? 90_000 : Math.min(90_000, Math.max(1, remainingMs));
     /* c8 ignore next -- timer fires only on a real Gemini hang */
-    const timer = setTimeout(() => controller.abort(), 90_000);
+    const timer = setTimeout(() => controller.abort(), stepTimeoutMs);
     let result: GeminiChatStepResult;
     try {
       const stepParams = {

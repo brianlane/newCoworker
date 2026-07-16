@@ -169,6 +169,12 @@ export async function POST(request: Request) {
       // so compile work can't succeed into a void (the model points the
       // owner to dashboard chat / /dashboard/aiflows for authoring instead).
       includeCreationTools: false,
+      // MUST stay below the SMS worker's OWNER_SMS_TURN_TIMEOUT_MS (75s)
+      // abort: the engine stops starting new steps (and thus committing new
+      // tool calls) before the worker gives up and falls back to the Rowboat
+      // staff reply — otherwise a slow turn could keep acting after the
+      // owner already received a contradictory fallback answer.
+      budgetMs: 70_000,
       actionToolGates: {
         send_sms: smsToolEnabled,
         calendar_find_slots: calFindEnabled,

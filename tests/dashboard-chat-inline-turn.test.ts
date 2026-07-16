@@ -766,6 +766,38 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     if (res2.ok) expect(res2.content).toContain("Automation run started — it can be watched");
   });
 
+  it("stops starting new steps once budgetMs is exhausted — fails fast when nothing committed", async () => {
+    // Bugbot High (PR #687): a slow turn must not keep committing tools
+    // after the SMS worker's own timeout already fell back to Rowboat.
+    const runActionTool = vi.fn(async () => ({ ok: true, data: { slots: [] } }));
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => {
+      await new Promise((r) => setTimeout(r, 10));
+      return toolStep("calendar_find_slots", {});
+    });
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: ALL_ON, budgetMs: 5 }),
+      { chatStep, runActionTool }
+    );
+    expect(res).toEqual({ ok: false, error: "model_failed", detail: "budget_exhausted" });
+    // Only the first step ran; the second was refused by the budget check.
+    expect(chatStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("budget exhaustion AFTER a committed side effect degrades to the honest ok:true line", async () => {
+    const runActionTool = vi.fn(async () => ({ ok: true, messageId: "m1", toE164: "+15145188192" }));
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => {
+      await new Promise((r) => setTimeout(r, 10));
+      return toolStep("send_sms", { toE164: "+15145188192", body: "hi" });
+    });
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: ALL_ON, budgetMs: 5 }),
+      { chatStep, runActionTool }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.content).toContain("Text sent to +15145188192");
+    expect(chatStep).toHaveBeenCalledTimes(1);
+  });
+
   it("omits the creation tools when includeCreationTools is false (no builder UI on the surface)", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
     await runInlineChatTurn(
