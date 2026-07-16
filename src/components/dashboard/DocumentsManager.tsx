@@ -689,13 +689,25 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                         >
                           Save content
                         </Button>
-                        <a
-                          href={`/api/dashboard/documents/${doc.id}/pptx?businessId=${encodeURIComponent(businessId)}`}
-                          className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
-                          title="Headings become slides, bullets become bullets"
-                        >
-                          Download as PowerPoint
-                        </a>
+                        {/* The export builds from SAVED content — with unsaved
+                            edits in the textarea the link would silently ship an
+                            older deck, so it gates on a save first. */}
+                        {draftContent === (doc.content_md ?? "") ? (
+                          <a
+                            href={`/api/dashboard/documents/${doc.id}/pptx?businessId=${encodeURIComponent(businessId)}`}
+                            className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
+                            title="Headings become slides, bullets become bullets"
+                          >
+                            Download as PowerPoint
+                          </a>
+                        ) : (
+                          <span
+                            className="inline-flex items-center rounded-md border border-parchment/10 px-3 py-1.5 text-xs text-parchment/40 cursor-not-allowed"
+                            title="Save your content edits first — the export uses saved content"
+                          >
+                            Download as PowerPoint (save first)
+                          </span>
+                        )}
                       </div>
                     </div>
                     <div>
