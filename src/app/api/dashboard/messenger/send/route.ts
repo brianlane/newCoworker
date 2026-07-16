@@ -23,14 +23,17 @@ import { getActiveWhatsAppConnectionByPhoneNumberId } from "@/lib/db/whatsapp-co
 import {
   sendMessengerMessage,
   sendWhatsAppMessage,
-  MESSENGER_MAX_TEXT_LENGTH
+  MESSENGER_MAX_TEXT_LENGTH,
+  WHATSAPP_MAX_TEXT_LENGTH
 } from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
 
+// Validated at WhatsApp's higher ceiling (4096); the Messenger/IG limit
+// (2000) is enforced per-platform once the conversation is loaded.
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   conversationId: z.string().uuid(),
-  text: z.string().min(1).max(MESSENGER_MAX_TEXT_LENGTH)
+  text: z.string().min(1).max(WHATSAPP_MAX_TEXT_LENGTH)
 });
 
 export async function POST(request: Request) {
@@ -45,6 +48,14 @@ export async function POST(request: Request) {
     const conversation = await getMessengerConversationById(body.conversationId);
     if (!conversation || conversation.business_id !== body.businessId) {
       return errorResponse("NOT_FOUND", "Conversation not found");
+    }
+
+    // Per-platform length ceiling: WhatsApp allows 4096, Messenger/IG 2000.
+    if (conversation.platform !== "whatsapp" && body.text.length > MESSENGER_MAX_TEXT_LENGTH) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `Messenger replies are limited to ${MESSENGER_MAX_TEXT_LENGTH} characters`
+      );
     }
 
     if (!messengerWindowOpen(conversation)) {

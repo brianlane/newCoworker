@@ -142,6 +142,20 @@ export async function POST(request: Request) {
     for (const t of templateStatuses) {
       templates[t.name] = { status: t.status, language: t.language };
     }
+    // Reconnects: registration answers "already exists" (recorded as
+    // PENDING above), but the live review status may long since be
+    // APPROVED — fetch it now so out-of-window sends aren't blocked until
+    // someone happens to open the integration card. Best-effort.
+    try {
+      for (const s of await fetchWhatsAppTemplateStatuses(body.wabaId, accessToken)) {
+        templates[s.name] = { status: s.status, language: s.language };
+      }
+    } catch (err) {
+      logger.warn("whatsapp connect: template status fetch failed; card refresh will reconcile", {
+        businessId: body.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
 
     const connection = await saveWhatsAppConnection({
       businessId: body.businessId,

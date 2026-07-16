@@ -116,6 +116,7 @@ export default async function MessengerConversationPage({
         <MessengerReplyForm
           businessId={conversation.business_id}
           conversationId={conversation.id}
+          maxLength={conversation.platform === "whatsapp" ? 4096 : 2000}
         />
       ) : (
         <Card>

@@ -15,9 +15,11 @@ import { Card } from "@/components/ui/Card";
 type Props = {
   businessId: string;
   conversationId: string;
+  /** Platform send ceiling: 2000 for Messenger/IG, 4096 for WhatsApp. */
+  maxLength?: number;
 };
 
-export function MessengerReplyForm({ businessId, conversationId }: Props) {
+export function MessengerReplyForm({ businessId, conversationId, maxLength = 2000 }: Props) {
   const router = useRouter();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -61,7 +63,7 @@ export function MessengerReplyForm({ businessId, conversationId }: Props) {
         <textarea
           className="w-full rounded-md bg-ink-black/40 border border-parchment/15 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-signal-teal/60"
           rows={3}
-          maxLength={2000}
+          maxLength={maxLength}
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Type a reply…"
