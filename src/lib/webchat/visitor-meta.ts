@@ -318,9 +318,12 @@ export function visitorMetaDisplayRows(meta: WebchatVisitorMeta | null): Visitor
     rows.push({ label: "Time on page before chat", value: formatDuration(c.timeOnPageMs) });
   }
   const trail = (meta.pages ?? []).filter((p) => typeof p === "string" && p.length > 0);
-  // The first trail entry is the session-start page, already shown above.
-  if (trail.length > 1) {
-    rows.push({ label: "Pages visited", value: trail.slice(1).join(" → ") });
+  // Skip the first entry only when it duplicates the "Opened on" row —
+  // a trail built purely from message-time appends (session started
+  // without client meta) must still show its first page.
+  const shownTrail = trail[0] === c?.page ? trail.slice(1) : trail;
+  if (shownTrail.length > 0) {
+    rows.push({ label: "Pages visited", value: shownTrail.join(" → ") });
   }
   return rows;
 }

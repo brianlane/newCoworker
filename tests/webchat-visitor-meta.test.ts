@@ -282,7 +282,7 @@ describe("display formatting", () => {
     ]);
   });
 
-  it("handles sparse metas: geo timezone fallback, sub-minute durations, no trail row for one page", () => {
+  it("handles sparse metas: geo timezone fallback, sub-minute durations", () => {
     expect(visitorMetaDisplayRows(null)).toEqual([]);
     const sparse = visitorMetaDisplayRows({
       geo: { timezone: "America/Toronto" },
@@ -292,11 +292,32 @@ describe("display formatting", () => {
     expect(sparse).toEqual([
       { label: "Local timezone", value: "America/Toronto" },
       { label: "Returning visitor", value: "no" },
-      { label: "Time on page before chat", value: "12s" }
+      { label: "Time on page before chat", value: "12s" },
+      // No client.page to duplicate, so the lone trail entry still shows.
+      { label: "Pages visited", value: "https://a.com/only" }
     ]);
     // Client meta without the optional flags/trail emits only what exists.
     expect(visitorMetaDisplayRows({ client: { language: "en" } })).toEqual([
       { label: "Language", value: "en" }
     ]);
+  });
+
+  it("dedupes the trail against 'Opened on' but keeps message-time-only trails whole", () => {
+    // Trail seeded from client.page: first entry is the "Opened on" page.
+    const seeded = visitorMetaDisplayRows({
+      client: { page: "https://a.com/start" },
+      pages: ["https://a.com/start", "https://a.com/next"]
+    });
+    expect(seeded).toEqual([
+      { label: "Opened on", value: "https://a.com/start" },
+      { label: "Pages visited", value: "https://a.com/next" }
+    ]);
+    // One page, and it IS the opened-on page: no redundant trail row.
+    expect(
+      visitorMetaDisplayRows({
+        client: { page: "https://a.com/start" },
+        pages: ["https://a.com/start"]
+      })
+    ).toEqual([{ label: "Opened on", value: "https://a.com/start" }]);
   });
 });
