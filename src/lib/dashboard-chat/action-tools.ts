@@ -34,6 +34,8 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
+import { listAiFlows, enqueueAiFlowRun } from "@/lib/ai-flows/db";
+import { manualTriggerScope } from "@/lib/ai-flows/trigger-eval";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { logger } from "@/lib/logger";
 
@@ -43,7 +45,9 @@ export const ACTION_TOOL_NAMES = [
   "calendar_find_slots",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
-  "calendar_cancel_appointment"
+  "calendar_cancel_appointment",
+  "list_aiflows",
+  "run_aiflow"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -56,7 +60,8 @@ export function isActionToolName(name: string): name is ActionToolName {
  * Settings → Coworker tools gate state for the action tools (dashboard
  * agent). The chat route reads the toggles once per turn — same pattern as
  * `emailToolEnabled` / `knowledgeToolEnabled` — and tools that are OFF are
- * never even declared to the model.
+ * never even declared to the model. `list_aiflows` and `run_aiflow` share
+ * the single `run_aiflow` Settings toggle (listing exists to serve running).
  */
 export type ActionToolGates = {
   send_sms: boolean;
@@ -64,6 +69,8 @@ export type ActionToolGates = {
   calendar_book_appointment: boolean;
   calendar_reschedule_appointment: boolean;
   calendar_cancel_appointment: boolean;
+  list_aiflows: boolean;
+  run_aiflow: boolean;
 };
 
 const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
@@ -159,12 +166,38 @@ const CANCEL_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const LIST_AIFLOWS_DECLARATION: GeminiFunctionDeclaration = {
+  name: "list_aiflows",
+  description:
+    "List this business's AiFlow automations (id, name, enabled, what starts them). Use it to check whether an automation already exists for what the owner is asking — when one matches, OFFER it as an option alongside doing the action directly, and let the owner choose.",
+  parameters: { type: "object", properties: {}, required: [] }
+};
+
+const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
+  name: "run_aiflow",
+  description:
+    "Run one of the business's ENABLED AiFlow automations now (a manual run). Use ONLY after the owner explicitly chooses to run it in this conversation. `flow` is the flow's id or its exact-enough name; `input` is the context text handed to the flow (contact details, notes — whatever the owner supplied). Disabled flows cannot be run — tell the owner to review and enable them at /dashboard/aiflows first.",
+  parameters: {
+    type: "object",
+    properties: {
+      flow: { type: "string", description: "Flow id (uuid) or name (case-insensitive match)." },
+      input: {
+        type: "string",
+        description: "Context text passed to the flow as its manual-run input (optional)."
+      }
+    },
+    required: ["flow"]
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   calendar_find_slots: FIND_SLOTS_DECLARATION,
   calendar_book_appointment: BOOK_DECLARATION,
   calendar_reschedule_appointment: RESCHEDULE_DECLARATION,
-  calendar_cancel_appointment: CANCEL_DECLARATION
+  calendar_cancel_appointment: CANCEL_DECLARATION,
+  list_aiflows: LIST_AIFLOWS_DECLARATION,
+  run_aiflow: RUN_AIFLOW_DECLARATION
 };
 
 /** The declarations for every gate that is ON, in stable order. */
@@ -216,6 +249,12 @@ const cancelAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional()
+});
+
+const runAiflowArgsSchema = z.object({
+  flow: z.string().min(1).max(200),
+  // Same bound as the dashboard "Run now" endpoint.
+  input: z.string().max(4000).optional()
 });
 
 // ---------------------------------------------------------------------
@@ -280,7 +319,21 @@ export type ActionToolDeps = {
   reschedule?: typeof rescheduleCalendarAppointment;
   cancel?: typeof cancelCalendarAppointment;
   createDb?: typeof createSupabaseServiceClient;
+  listFlows?: typeof listAiFlows;
+  enqueueFlowRun?: typeof enqueueAiFlowRun;
 };
+
+/** Cap on flows returned to the model (a business rarely has more). */
+const LIST_AIFLOWS_MAX = 50;
+
+/** One-line human summary of what starts a flow, for the model's listing. */
+function flowTriggerSummary(definition: { trigger?: { channel?: string; on?: string } }): string {
+  const trigger = definition?.trigger;
+  if (!trigger?.channel) return "unknown trigger";
+  if (trigger.channel === "manual") return "manual (run on demand)";
+  if (trigger.channel === "calendar") return `calendar (${trigger.on ?? "event"})`;
+  return trigger.channel;
+}
 
 /**
  * Execute one inline action tool call; the returned payload becomes the
@@ -300,6 +353,8 @@ export async function executeActionTool(
   const reschedule = deps.reschedule ?? rescheduleCalendarAppointment;
   const cancel = deps.cancel ?? cancelCalendarAppointment;
   const createDb = deps.createDb ?? createSupabaseServiceClient;
+  const listFlows = deps.listFlows ?? listAiFlows;
+  const enqueueFlowRun = deps.enqueueFlowRun ?? enqueueAiFlowRun;
   /* c8 ignore stop */
 
   try {
@@ -433,6 +488,84 @@ export async function executeActionTool(
           if (message) return { ...canceled, message };
         }
         return canceled;
+      }
+      case "list_aiflows": {
+        const flows = await listFlows(businessId);
+        return {
+          ok: true,
+          flows: flows.slice(0, LIST_AIFLOWS_MAX).map((f) => ({
+            id: f.id,
+            name: f.name,
+            enabled: f.enabled,
+            trigger: flowTriggerSummary(f.definition)
+          })),
+          note:
+            "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run — the owner reviews/enables them at /dashboard/aiflows."
+        };
+      }
+      case "run_aiflow": {
+        const parsed = runAiflowArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        const flows = await listFlows(businessId);
+        const ref = parsed.data.flow.trim();
+        const refLc = ref.toLowerCase();
+        // Resolve: exact id → exact name → unique substring. An ambiguous
+        // or missing ref fails honestly with the candidates.
+        let matches = flows.filter((f) => f.id === ref);
+        if (matches.length === 0) matches = flows.filter((f) => f.name.toLowerCase() === refLc);
+        if (matches.length === 0) {
+          matches = flows.filter((f) => f.name.toLowerCase().includes(refLc));
+        }
+        if (matches.length === 0) {
+          return {
+            ok: false,
+            message: `No AiFlow matches "${ref}". Call list_aiflows and use one of the real names or ids.`
+          };
+        }
+        if (matches.length > 1) {
+          return {
+            ok: false,
+            message: `"${ref}" matches ${matches.length} flows (${matches
+              .slice(0, 5)
+              .map((f) => f.name)
+              .join("; ")}). Ask the owner which one and use its exact name or id.`
+          };
+        }
+        const flow = matches[0];
+        if (!flow.enabled) {
+          return {
+            ok: false,
+            message: `"${flow.name}" is DISABLED, so it cannot be run. Tell the owner it's awaiting their review — they can enable it at /dashboard/aiflows, then ask again.`
+          };
+        }
+        // Voice flows run on the real-time call path, not the async worker —
+        // same refusal as the dashboard "Run now" endpoint (an enqueued run
+        // would only fail while the model tells the owner it started).
+        if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {
+          return {
+            ok: false,
+            message: `"${flow.name}" is a voice flow — it runs when a call comes in and cannot be started manually. Tell the owner to place a call from the trigger number to test it.`
+          };
+        }
+        const run = await enqueueFlowRun({
+          businessId,
+          flowId: flow.id,
+          trigger: manualTriggerScope(parsed.data.input ?? "", "assistant"),
+          // Every model-initiated run is its own run; dedupe only guards
+          // automatic enqueues (mirror of the dashboard "Run now" endpoint).
+          dedupeKey: `manual:${crypto.randomUUID()}`
+        });
+        if (!run) {
+          return { ok: false, message: "The run could not be enqueued — tell the owner to try again." };
+        }
+        return {
+          ok: true,
+          runId: run.id,
+          flowName: flow.name,
+          note: `Run enqueued — it starts within about a minute. Tell the owner "${flow.name}" is running and they can watch it at /dashboard/aiflows.`
+        };
       }
     }
   } catch (err) {

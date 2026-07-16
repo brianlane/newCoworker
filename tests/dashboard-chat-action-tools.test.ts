@@ -27,7 +27,9 @@ const ALL_ON: ActionToolGates = {
   calendar_find_slots: true,
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,
-  calendar_cancel_appointment: true
+  calendar_cancel_appointment: true,
+  list_aiflows: true,
+  run_aiflow: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -63,7 +65,9 @@ describe("declarations & naming", () => {
     const some = actionToolDeclarations({
       ...ALL_ON,
       send_sms: false,
-      calendar_cancel_appointment: false
+      calendar_cancel_appointment: false,
+      list_aiflows: false,
+      run_aiflow: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -415,6 +419,157 @@ describe("calendar_cancel_appointment", () => {
       happyDeps()
     );
     expect(res2).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
+  });
+});
+
+describe("list_aiflows / run_aiflow", () => {
+  const FLOWS = [
+    {
+      id: "11111111-aaaa-4aaa-8aaa-111111111111",
+      name: "Booking confirmation text (Calendly)",
+      enabled: true,
+      definition: { trigger: { channel: "calendar", on: "event_start" } }
+    },
+    {
+      id: "22222222-bbbb-4bbb-8bbb-222222222222",
+      name: "Proposal send + follow-up",
+      enabled: true,
+      definition: { trigger: { channel: "manual" } }
+    },
+    {
+      id: "33333333-cccc-4ccc-8ccc-333333333333",
+      name: "Wrong-link booking flag",
+      enabled: false,
+      definition: { trigger: { channel: "calendar", on: "event_created" } }
+    },
+    {
+      id: "44444444-dddd-4ddd-8ddd-444444444444",
+      name: "Lead follow-up",
+      enabled: true,
+      definition: {}
+    },
+    {
+      id: "55555555-eeee-4eee-8eee-555555555555",
+      name: "Privyr intake",
+      enabled: true,
+      definition: { trigger: { channel: "sms" } }
+    },
+    {
+      id: "66666666-ffff-4fff-8fff-666666666666",
+      name: "Calendar misc",
+      enabled: true,
+      definition: { trigger: { channel: "calendar" } }
+    }
+  ] as never[];
+
+  it("lists flows with human trigger summaries and the offer-options note", async () => {
+    const deps = happyDeps({ listFlows: vi.fn(async () => FLOWS) as never });
+    const res = (await executeActionTool(BIZ, { name: "list_aiflows", args: {} }, deps)) as {
+      ok: boolean;
+      flows: Array<{ name: string; enabled: boolean; trigger: string }>;
+      note: string;
+    };
+    expect(res.ok).toBe(true);
+    expect(res.flows).toHaveLength(6);
+    expect(res.flows[0].trigger).toBe("calendar (event_start)");
+    expect(res.flows[1].trigger).toBe("manual (run on demand)");
+    expect(res.flows[3].trigger).toBe("unknown trigger");
+    expect(res.flows[4].trigger).toBe("sms"); // any other channel passes through
+    expect(res.flows[5].trigger).toBe("calendar (event)"); // missing `on` falls back
+    expect(res.note).toContain("offer it as an option");
+  });
+
+  it("runs an enabled flow resolved by id, exact name, or unique substring", async () => {
+    for (const ref of [
+      "22222222-bbbb-4bbb-8bbb-222222222222",
+      "proposal send + follow-up",
+      "Proposal"
+    ]) {
+      const enqueueFlowRun = vi.fn(async (_args: unknown) => ({ id: "run-1" }));
+      const deps = happyDeps({
+        listFlows: vi.fn(async () => FLOWS) as never,
+        enqueueFlowRun: enqueueFlowRun as never
+      });
+      const res = await executeActionTool(
+        BIZ,
+        { name: "run_aiflow", args: { flow: ref, input: "Uday +17326190286" } },
+        deps
+      );
+      expect(res).toMatchObject({ ok: true, runId: "run-1", flowName: "Proposal send + follow-up" });
+      const call = enqueueFlowRun.mock.calls[0][0] as unknown as {
+        flowId: string;
+        trigger: { channel: string; windowText: string; from: string };
+        dedupeKey: string;
+      };
+      expect(call.flowId).toBe("22222222-bbbb-4bbb-8bbb-222222222222");
+      expect(call.trigger).toMatchObject({
+        channel: "manual",
+        windowText: "Uday +17326190286",
+        from: "assistant"
+      });
+      expect(call.dedupeKey).toMatch(/^manual:/);
+    }
+  });
+
+  it("refuses to run a VOICE flow (real-time call path; the async worker can't execute it)", async () => {
+    const voiceFlows = [
+      {
+        id: "77777777-aaaa-4aaa-8aaa-777777777777",
+        name: "Inbound call qualifier",
+        enabled: true,
+        definition: { trigger: { channel: "voice" } }
+      }
+    ] as never[];
+    const enqueueFlowRun = vi.fn();
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => voiceFlows) as never,
+      enqueueFlowRun: enqueueFlowRun as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "run_aiflow", args: { flow: "Inbound call qualifier" } },
+      deps
+    );
+    expect(res).toMatchObject({ ok: false, message: expect.stringContaining("voice flow") });
+    expect(enqueueFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("refuses to run a DISABLED flow, with the review pointer", async () => {
+    const enqueueFlowRun = vi.fn();
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => FLOWS) as never,
+      enqueueFlowRun: enqueueFlowRun as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "run_aiflow", args: { flow: "Wrong-link booking flag" } },
+      deps
+    );
+    expect(res).toMatchObject({ ok: false, message: expect.stringContaining("DISABLED") });
+    expect(res).toMatchObject({ message: expect.stringContaining("/dashboard/aiflows") });
+    expect(enqueueFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("fails honestly on no match, ambiguous match, invalid args, and a dedupe-null enqueue", async () => {
+    const deps = happyDeps({ listFlows: vi.fn(async () => FLOWS) as never });
+    expect(
+      await executeActionTool(BIZ, { name: "run_aiflow", args: { flow: "nonexistent flow" } }, deps)
+    ).toMatchObject({ ok: false, message: expect.stringContaining("No AiFlow matches") });
+    // "booking" hits both the confirmation flow and the wrong-link flag.
+    expect(
+      await executeActionTool(BIZ, { name: "run_aiflow", args: { flow: "booking" } }, deps)
+    ).toMatchObject({ ok: false, message: expect.stringContaining("matches 2 flows") });
+    expect(
+      await executeActionTool(BIZ, { name: "run_aiflow", args: {} }, deps)
+    ).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
+
+    const nullEnqueue = happyDeps({
+      listFlows: vi.fn(async () => FLOWS) as never,
+      enqueueFlowRun: vi.fn(async () => null) as never
+    });
+    expect(
+      await executeActionTool(BIZ, { name: "run_aiflow", args: { flow: "Proposal" } }, nullEnqueue)
+    ).toMatchObject({ ok: false, message: expect.stringContaining("could not be enqueued") });
   });
 });
 
