@@ -152,20 +152,6 @@ export async function processInboundTenantEmail(
   // an extensionless attachment simply leaves the trigger document-less and
   // the step skips gracefully.
   const firstDocument = ownAttachments.find((a) => /\.(pdf|txt|md|csv)$/i.test(a.path));
-  const scope = tenantEmailTriggerScope({
-    id: payload.messageId,
-    fromEmail,
-    subject: payload.subject,
-    bodyText: payload.text,
-    toEmail: payload.to,
-    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {}),
-    ...(firstDocument
-      ? {
-          documentRef: `email-attachments:${firstDocument.path}`,
-          documentName: firstDocument.filename
-        }
-      : {})
-  });
 
   // Record the inbound mail on the Emails page BEFORE enqueueing any run:
   // doc_extract's tenant-ownership gate reads this row's attachment paths,
@@ -195,6 +181,26 @@ export async function processInboundTenantEmail(
     },
     db
   );
+
+  const scope = tenantEmailTriggerScope({
+    id: payload.messageId,
+    fromEmail,
+    subject: payload.subject,
+    bodyText: payload.text,
+    toEmail: payload.to,
+    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {}),
+    // {{trigger.document}} is only exposed when the log row LANDED — the
+    // ownership gate trusts email_log.attachments alone, so a ref without
+    // its row could only fail permanently. A (rare, best-effort) log
+    // failure degrades to a document-less trigger and a graceful step skip;
+    // the owner can re-run via the email replay once the row exists.
+    ...(firstDocument && emailLogId
+      ? {
+          documentRef: `email-attachments:${firstDocument.path}`,
+          documentName: firstDocument.filename
+        }
+      : {})
+  });
 
   const flows = await loadTenantEmailFlows(db, businessId);
 

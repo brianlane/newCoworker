@@ -333,34 +333,45 @@ export async function docExtract(
     }
 
     // Same condense pipeline as dashboard uploads, so the filed copy answers
-    // knowledge lookups. An ingest failure leaves the row visible as failed
-    // (the owner can re-ingest from the dashboard) — the filing still stands.
-    const ingested = await ingestDocument(
-      {
+    // knowledge lookups. From here on the document EXISTS (row + bytes), so
+    // any condense/patch failure still reports `filed` — downstream steps
+    // can reference the copy while the owner re-ingests from the dashboard.
+    try {
+      const ingested = await ingestDocument(
+        {
+          businessId: input.businessId,
+          title,
+          mimeType,
+          data: bytes,
+          businessName: (bizRow as { name?: string | null } | null)?.name ?? undefined
+        },
+        { generate }
+      );
+      if (ingested.ok) {
+        await patchBusinessDocument(
+          input.businessId,
+          documentId,
+          { content_md: ingested.contentMd, summary: ingested.summary, status: "ready", error_detail: null },
+          db
+        );
+      } else {
+        await patchBusinessDocument(
+          input.businessId,
+          documentId,
+          { status: "failed", error_detail: ingested.detail ?? ingested.error },
+          db
+        );
+      }
+      return { ok: true, vars, filed: { documentId, title } };
+    } catch (postInsertErr) {
+      const detail = postInsertErr instanceof Error ? postInsertErr.message : String(postInsertErr);
+      logger.warn("aiflows/doc-extract: post-filing condense failed", {
         businessId: input.businessId,
-        title,
-        mimeType,
-        data: bytes,
-        businessName: (bizRow as { name?: string | null } | null)?.name ?? undefined
-      },
-      { generate }
-    );
-    if (ingested.ok) {
-      await patchBusinessDocument(
-        input.businessId,
         documentId,
-        { content_md: ingested.contentMd, summary: ingested.summary, status: "ready", error_detail: null },
-        db
-      );
-    } else {
-      await patchBusinessDocument(
-        input.businessId,
-        documentId,
-        { status: "failed", error_detail: ingested.detail ?? ingested.error },
-        db
-      );
+        error: detail
+      });
+      return { ok: true, vars, filed: { documentId, title }, fileError: detail };
     }
-    return { ok: true, vars, filed: { documentId, title } };
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     logger.warn("aiflows/doc-extract: filing failed", { businessId: input.businessId, error: detail });

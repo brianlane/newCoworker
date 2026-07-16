@@ -196,6 +196,36 @@ describe("processInboundTenantEmail", () => {
     expect(linkTenantMailboxInboundRun).not.toHaveBeenCalled();
   });
 
+  it("a failed log write leaves the trigger document-less (the ownership gate would refuse it)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    recordTenantMailboxInbound.mockResolvedValueOnce(null);
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-1" });
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "renewal.pdf",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal.pdf"
+          }
+        ]
+      },
+      db as never
+    );
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({ document: "", document_name: "" })
+      }),
+      db
+    );
+  });
+
   it("exposes the first image attachment as trigger.image (email-attachments ref)", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({

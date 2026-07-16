@@ -334,6 +334,29 @@ describe("docExtract", () => {
     );
   });
 
+  it("a post-insert condense/patch THROW still reports the filed document", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = makeDb({});
+    vi.mocked(ingestDocument).mockRejectedValueOnce(new Error("condense transport down"));
+    const result = await docExtract(
+      { ...input, fileAs: { title: "T", audience: "staff" } },
+      { client: db as never, generate: okGenerate as never }
+    );
+    // The row + bytes exist, so downstream steps can still reference it.
+    expect(result.ok && result.filed?.title).toBe("T");
+    expect(result.ok && result.fileError).toBe("condense transport down");
+
+    // Non-Error throws stringify.
+    vi.mocked(ingestDocument).mockRejectedValueOnce("weird condense failure");
+    const stringy = await docExtract(
+      { ...input, fileAs: { title: "T", audience: "staff" } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(stringy.ok && stringy.filed?.title).toBe("T");
+    expect(stringy.ok && stringy.fileError).toBe("weird condense failure");
+    err.mockRestore();
+  });
+
   it("a failed condense files the row as failed (the filing still stands)", async () => {
     const { db } = makeDb({});
     vi.mocked(ingestDocument).mockResolvedValueOnce({
