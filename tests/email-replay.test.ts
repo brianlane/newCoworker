@@ -522,8 +522,16 @@ describe("replayInboundEmails", () => {
     );
   });
 
-  it("matches a replayed document by filename extension (octet-stream PDFs)", async () => {
+  it("matches a replayed document by PATH extension (octet-stream PDFs; extensionless skipped)", async () => {
     const attachments = [
+      // Declared PDF but stored without an extension — docExtract can't
+      // classify it, so it must not become {{trigger.document}}.
+      {
+        filename: "renewal-noext",
+        mime_type: "application/pdf",
+        size_bytes: 9,
+        storage_path: "inbound/m/0-renewal-noext"
+      },
       {
         filename: "renewal.pdf",
         mime_type: "application/octet-stream",

@@ -241,6 +241,40 @@ describe("processInboundTenantEmail", () => {
     );
   });
 
+  it("leaves the trigger document-less for an extensionless attachment (even with a document MIME)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-noext" });
+
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          // Declared as PDF but stored without an extension: doc_extract
+          // classifies by path suffix, so exposing this ref could only fail —
+          // the trigger stays document-less and the step skips gracefully.
+          {
+            filename: "renewal",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal"
+          }
+        ]
+      },
+      db as never
+    );
+
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({ document: "", document_name: "" })
+      }),
+      db
+    );
+  });
+
   it("fires flows whose tenant_email trigger lives in the EXTRA triggers array (multi-trigger OR)", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({

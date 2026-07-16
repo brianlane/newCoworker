@@ -181,18 +181,12 @@ function firstImageRef(attachments: StoredAttachment[] | null): string | undefin
   return hit ? `email-attachments:${hit.storage_path}` : undefined;
 }
 
-/** Document MIME types {{trigger.document}} accepts (doc_extract sources). */
-const DOCUMENT_MIME_TYPES = new Set([
-  "application/pdf",
-  "text/plain",
-  "text/markdown",
-  "text/csv"
-]);
-
 /**
  * The first document attachment's ref + filename, mirroring the live inbound
- * path's {{trigger.document}} (MIME match with a filename-extension fallback
- * for senders shipping PDFs as application/octet-stream).
+ * path's {{trigger.document}}: gated on the STORED PATH's extension, because
+ * that suffix is exactly what docExtract classifies the type from — a
+ * MIME-only match with an extensionless path would hand the step a ref it
+ * can only fail on.
  */
 /* c8 ignore start -- fully exercised by email-replay.test.ts (the replayed
  * {{trigger.document}} assertions can only pass through this body), but the
@@ -203,9 +197,7 @@ function firstDocumentRef(
 ): { ref: string; name: string } | undefined {
   for (const a of attachments ?? []) {
     if (a.bucket) continue;
-    const mimeHit = DOCUMENT_MIME_TYPES.has((a.mime_type ?? "").trim().toLowerCase());
-    const extHit = /\.(pdf|txt|md|csv)$/i.test(a.filename ?? "");
-    if (mimeHit || extHit) {
+    if (/\.(pdf|txt|md|csv)$/i.test(a.storage_path)) {
       return { ref: `email-attachments:${a.storage_path}`, name: a.filename ?? "" };
     }
   }
