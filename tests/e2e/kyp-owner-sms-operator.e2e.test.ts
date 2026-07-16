@@ -62,6 +62,7 @@ const JAMES_REQUEST =
 
 const ALL_GATES: ActionToolGates = {
   send_sms: true,
+  send_whatsapp: false,
   calendar_find_slots: true,
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,

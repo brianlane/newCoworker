@@ -221,9 +221,18 @@ export async function DELETE(request: Request) {
 
     const existing = await getWhatsAppConnection(parsed.data);
     if (existing?.accessToken) {
-      // Best-effort: a failed unsubscribe must not strand the owner with
-      // an undeletable connection (unsubscribeWabaFromApp never throws).
-      await unsubscribeWabaFromApp(existing.waba_id, existing.accessToken);
+      // One WABA can back multiple tenants (different phone numbers), and
+      // the app subscription is WABA-level — tearing it down while another
+      // tenant still routes through it would silence THEIR inbound too.
+      const sharedElsewhere = await isWabaClaimedByOtherBusiness(
+        existing.waba_id,
+        parsed.data
+      ).catch(() => true); // fail toward NOT unsubscribing
+      if (!sharedElsewhere) {
+        // Best-effort: a failed unsubscribe must not strand the owner with
+        // an undeletable connection (unsubscribeWabaFromApp never throws).
+        await unsubscribeWabaFromApp(existing.waba_id, existing.accessToken);
+      }
     }
     await deleteWhatsAppConnection(parsed.data);
     return successResponse({ deleted: true });
