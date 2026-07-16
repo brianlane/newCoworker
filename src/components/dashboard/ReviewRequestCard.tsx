@@ -5,12 +5,16 @@
  * flow (the review-requests answer to GHL's Reviews AI). The owner pastes
  * their Google/Yelp/Facebook review link; the install POSTs /api/aiflows
  * with the code-defined template (created DISABLED so the wording is
- * reviewed before anything fires). Once the starter exists the card
- * collapses to an installed state with an edit link.
+ * reviewed before anything fires).
+ *
+ * Rendered INSIDE AiFlowsManager's list view and driven entirely by its
+ * `flows` state: `installedFlow` derives from the live list and
+ * `onInstalled` is the manager's reload — so installing here immediately
+ * shows the flow in the list below, and deleting the flow in the list
+ * immediately re-offers the installer (no page reload either way).
  */
 
 import { useState } from "react";
-import Link from "next/link";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import {
@@ -21,14 +25,17 @@ import {
 
 type Props = {
   businessId: string;
-  /** The already-installed starter flow, if any (matched by name). */
+  /** The already-installed starter flow, derived live from the flow list. */
   installedFlow: { id: string; enabled: boolean } | null;
+  /** Refresh the owning list after a successful install. */
+  onInstalled: () => Promise<void>;
+  /** Open the installed flow in the editor (wording review). */
+  onEdit: (flowId: string) => void;
 };
 
-export function ReviewRequestCard({ businessId, installedFlow }: Props) {
+export function ReviewRequestCard({ businessId, installedFlow, onInstalled, onEdit }: Props) {
   const [link, setLink] = useState("");
   const [installing, setInstalling] = useState(false);
-  const [installedId, setInstalledId] = useState<string | null>(installedFlow?.id ?? null);
   const [error, setError] = useState<string | null>(null);
 
   const install = async () => {
@@ -58,7 +65,8 @@ export function ReviewRequestCard({ businessId, installedFlow }: Props) {
         setError(json.error.message);
         return;
       }
-      setInstalledId(json.data.id);
+      // Refresh the manager's list — installedFlow flips via props.
+      await onInstalled();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Request failed");
     } finally {
@@ -72,16 +80,16 @@ export function ReviewRequestCard({ businessId, installedFlow }: Props) {
         <h2 className="text-sm font-semibold text-parchment">
           Ask happy customers for reviews — automatically
         </h2>
-        {installedId ? (
+        {installedFlow ? (
           <p className="text-sm text-parchment/60">
             The “Ask for a review after appointments” flow is installed
-            {installedFlow?.enabled ? " and running" : " (disabled until you review it)"}.{" "}
-            <Link
-              href={`/dashboard/aiflows?edit=${installedId}`}
+            {installedFlow.enabled ? " and running" : " (disabled until you review it)"}.{" "}
+            <button
+              onClick={() => onEdit(installedFlow.id)}
               className="text-signal-teal hover:underline"
             >
-              Review &amp; {installedFlow?.enabled ? "edit" : "enable"} it →
-            </Link>
+              Review &amp; {installedFlow.enabled ? "edit" : "enable"} it →
+            </button>
           </p>
         ) : (
           <>
