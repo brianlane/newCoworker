@@ -13,7 +13,7 @@
  */
 
 import { redirect } from "next/navigation";
-import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
+import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -22,6 +22,7 @@ import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/
 import { findDuplicateContactPairs } from "@/lib/customer-memory/dedup";
 import { listTeamMembers } from "@/lib/db/employees";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { listContactSegments } from "@/lib/segments/db";
 import { AddCustomerForm } from "@/components/dashboard/AddCustomerForm";
 import { DuplicateContactsCard } from "@/components/dashboard/DuplicateContactsCard";
 import {
@@ -40,7 +41,8 @@ export default async function DashboardCustomersPage() {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const activeBusinessId = await resolveActiveBusinessId(user);
+  const ctx = await resolveActiveBusinessContext(user, db);
+  const activeBusinessId = ctx.businessId;
   const { data: businesses } = await db
     .from("businesses")
     .select("id, name")
@@ -80,6 +82,11 @@ export default async function DashboardCustomersPage() {
   // Same-email duplicate suggestions (owner-confirmed merges). Best-effort:
   // a detection failure must never take down the directory page.
   const duplicatePairs = await findDuplicateContactPairs(business.id).catch(() => []);
+  // Saved Smart Lists (one-click segments). Best-effort: the directory page
+  // must render even if the segments read fails.
+  const segments = await listContactSegments(business.id, db).catch(() => []);
+  // Smart List administration is manager+, same bar as the pipeline boards.
+  const canManageSegments = ctx.role === "owner" || ctx.role === "manager";
   // Owner badges + the "owned by" filter show the roster member's NAME; one
   // roster read covers every row (id → name).
   const teamMembers = await listTeamMembers(business.id, db).catch(() => []);
@@ -110,6 +117,7 @@ export default async function DashboardCustomersPage() {
       totalInteractions: c.total_interaction_count,
       lastInteractionAt: c.last_interaction_at,
       tags: c.tags ?? [],
+      ownerEmployeeId: c.owner_employee_id ?? null,
       ownerName: (c.owner_employee_id && memberNameById.get(c.owner_employee_id)) || null,
       createdAt: c.created_at,
       updatedAt: c.updated_at
@@ -132,7 +140,13 @@ export default async function DashboardCustomersPage() {
         <DuplicateContactsCard businessId={business.id} pairs={duplicatePairs} />
       ) : null}
 
-      <CustomersList rows={customerRows} />
+      <CustomersList
+        rows={customerRows}
+        businessId={business.id}
+        segments={segments}
+        owners={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
+        canManageSegments={canManageSegments}
+      />
     </div>
   );
 }
