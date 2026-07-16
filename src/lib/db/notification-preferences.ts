@@ -9,7 +9,7 @@ export type NotificationPreferencesRow = {
   /**
    * Deliver urgent alerts over WhatsApp too (requires a connected WhatsApp
    * integration; out-of-window sends use the owner_alert template).
-   * Optional on the type for rows read before 20260716171917.
+   * Optional on the type for rows read before 20260811170000.
    */
   whatsapp_urgent?: boolean;
   email_digest: boolean;
