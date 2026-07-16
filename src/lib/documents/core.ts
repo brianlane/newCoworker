@@ -25,8 +25,10 @@ export const DOCUMENT_SUMMARY_MAX_CHARS = 300;
 export const DOCUMENT_SHARE_DEFAULT_TTL_DAYS = 30;
 /** Documents expiring within this window trigger the owner reminder. */
 export const DOCUMENT_EXPIRING_SOON_DAYS = 7;
-/** Documents with a renewal date within this window trigger the renewal reminder. */
+/** Documents with a renewal date within this window trigger the renewal heads-up. */
 export const DOCUMENT_RENEWAL_SOON_DAYS = 30;
+/** Final-reminder tier: renewal within this window escalates the reminder. */
+export const DOCUMENT_RENEWAL_FINAL_DAYS = 7;
 /**
  * Flat cap on contact-linked record documents (policies, contracts,
  * memberships). Separate from the per-tier knowledge-library cap because a

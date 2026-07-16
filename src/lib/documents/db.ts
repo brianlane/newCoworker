@@ -39,8 +39,14 @@ export type BusinessDocumentRow = {
   renewal_date: string | null;
   /** Roster member (ai_flow_team_members) who handles the renewal. */
   assigned_employee_id: string | null;
-  /** One-reminder-per-state stamp for the renewal sweep; reset when renewal_date changes. */
+  /** One-reminder-per-state stamp for the ~30-day heads-up; reset when renewal_date changes. */
   renewal_due_notified_at: string | null;
+  /** One-reminder-per-state stamp for the ~7-day final reminder; reset when renewal_date changes. */
+  renewal_final_notified_at: string | null;
+  /** One-reminder-per-state stamp for the past-due notice; reset when renewal_date changes. */
+  renewal_overdue_notified_at: string | null;
+  /** When this renewal fired its document_renewal outreach flow event; reset when renewal_date changes. */
+  renewal_outreach_enqueued_at: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -175,6 +181,9 @@ export type BusinessDocumentPatch = Partial<
     | "renewal_date"
     | "assigned_employee_id"
     | "renewal_due_notified_at"
+    | "renewal_final_notified_at"
+    | "renewal_overdue_notified_at"
+    | "renewal_outreach_enqueued_at"
   >
 >;
 

@@ -1,6 +1,7 @@
 /**
- * Daily expiration sweep (src/lib/documents/expiration.ts): one reminder
- * per state (expiring-soon / expired), armed/cleared stamps, per-document
+ * Daily expiration + renewal sweep (src/lib/documents/expiration.ts): one
+ * reminder per state (expiring-soon / expired / the three renewal tiers),
+ * armed/cleared stamps, assignee SMS, outreach flow events, per-document
  * error isolation.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,11 +17,20 @@ vi.mock("@/lib/documents/db", async (importOriginal) => ({
 }));
 vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.fn() }));
 vi.mock("@/lib/vps/sync-vault", () => ({ syncVaultToVpsAndLog: vi.fn(async () => {}) }));
+vi.mock("@/lib/telnyx/messaging", () => ({
+  getTelnyxMessagingForBusiness: vi.fn(async () => ({ apiKey: "k" })),
+  sendTelnyxSms: vi.fn(async () => ({}))
+}));
+vi.mock("@/lib/ai-flows/webhook-events", () => ({
+  processWebhookFlowEvent: vi.fn(async () => ({ enqueued: 0, flowsEvaluated: 0, flowsMatched: 0 }))
+}));
 
 import { sweepDocumentExpirations } from "@/lib/documents/expiration";
 import { patchBusinessDocument, type BusinessDocumentRow } from "@/lib/documents/db";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
+import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-07-11T12:00:00Z");
@@ -46,6 +56,9 @@ function doc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumentRow 
     renewal_date: null,
     assigned_employee_id: null,
     renewal_due_notified_at: null,
+    renewal_final_notified_at: null,
+    renewal_overdue_notified_at: null,
+    renewal_outreach_enqueued_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -92,11 +105,17 @@ function makeDb(rows: BusinessDocumentRow[] | null, error: { message: string } |
 
 const dispatch = vi.mocked(dispatchUrgentNotification);
 const patch = vi.mocked(patchBusinessDocument);
+const sendSms = vi.mocked(sendTelnyxSms);
+const getMessaging = vi.mocked(getTelnyxMessagingForBusiness);
+const processFlowEvent = vi.mocked(processWebhookFlowEvent);
 
 beforeEach(() => {
   vi.clearAllMocks();
   dispatch.mockResolvedValue({ results: [] });
   patch.mockResolvedValue(undefined);
+  sendSms.mockResolvedValue({} as never);
+  getMessaging.mockResolvedValue({ apiKey: "k" } as never);
+  processFlowEvent.mockResolvedValue({ enqueued: 0, flowsEvaluated: 0, flowsMatched: 0 });
 });
 
 describe("sweepDocumentExpirations", () => {
@@ -216,7 +235,7 @@ describe("sweepDocumentExpirations", () => {
     expect(result).toMatchObject({ scanned: 0 });
   });
 
-  it("reminds once about an upcoming renewal, naming the contact and assignee", async () => {
+  it("sends the 30-day heads-up, texts the assignee, and enqueues outreach", async () => {
     const policy = doc({
       expires_at: null,
       renewal_date: "2026-08-01T00:00:00Z",
@@ -225,11 +244,23 @@ describe("sweepDocumentExpirations", () => {
     });
     const { db } = makeTableDb({
       documents: { data: [policy], error: null },
-      contacts: { data: [{ id: "c-1", display_name: "Jane Doe", customer_e164: "+16025551234" }], error: null },
-      members: { data: [{ id: "m-1", name: "Dania" }], error: null }
+      contacts: {
+        data: [
+          { id: "c-1", display_name: "Jane Doe", customer_e164: "+16025551234", email: "jane@x.com" }
+        ],
+        error: null
+      },
+      members: { data: [{ id: "m-1", name: "Dania", phone_e164: "+16025559876" }], error: null }
     });
     const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
-    expect(result).toMatchObject({ scanned: 1, renewalDueNotified: 1, expiredNotified: 0 });
+    expect(result).toMatchObject({
+      scanned: 1,
+      renewalDueNotified: 1,
+      renewalFinalNotified: 0,
+      renewalOverdueNotified: 0,
+      renewalOutreachEnqueued: 1,
+      expiredNotified: 0
+    });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "document_renewal_due",
@@ -237,10 +268,44 @@ describe("sweepDocumentExpirations", () => {
         emailBody: expect.stringContaining("Assigned to Dania.")
       })
     );
-    expect(patch).toHaveBeenCalledWith(
+    // Assignee gets a direct operational-metered text.
+    expect(sendSms).toHaveBeenCalledWith(
+      { apiKey: "k" },
+      "+16025559876",
+      expect.stringContaining("You're the assigned handler"),
+      { meterBusinessId: BIZ, meterMode: "operational" }
+    );
+    // Tier stamp first, outreach stamp after the event enqueues.
+    expect(patch).toHaveBeenNthCalledWith(
+      1,
       BIZ,
       policy.id,
       { renewal_due_notified_at: NOW.toISOString() },
+      expect.anything()
+    );
+    expect(processFlowEvent).toHaveBeenCalledWith(
+      BIZ,
+      {
+        source: "document_renewal",
+        eventId: `document_renewal:${policy.id}:2026-08-01T00:00:00Z`,
+        data: {
+          document_title: "Summer price list",
+          category: "pricing",
+          renewal_date: "2026-08-01",
+          days_until_renewal: 21,
+          contact_name: "Jane Doe",
+          contact_phone: "+16025551234",
+          contact_email: "jane@x.com",
+          assigned_employee: "Dania"
+        }
+      },
+      expect.anything()
+    );
+    expect(patch).toHaveBeenNthCalledWith(
+      2,
+      BIZ,
+      policy.id,
+      { renewal_outreach_enqueued_at: NOW.toISOString() },
       expect.anything()
     );
   });
@@ -249,41 +314,130 @@ describe("sweepDocumentExpirations", () => {
     const policy = doc({ expires_at: null, renewal_date: "2026-08-01T00:00:00Z", contact_id: "c-1" });
     const { db } = makeTableDb({
       documents: { data: [policy], error: null },
-      contacts: { data: [{ id: "c-1", display_name: "  ", customer_e164: "+16025551234" }], error: null }
+      contacts: {
+        data: [{ id: "c-1", display_name: "  ", customer_e164: "+16025551234", email: null }],
+        error: null
+      }
     });
     await sweepDocumentExpirations({ client: db, now: () => NOW });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ summary: expect.stringContaining("for +16025551234") })
     );
+    // Null contact email rides as "" on the outreach payload.
+    expect(processFlowEvent).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        data: expect.objectContaining({ contact_email: "", contact_phone: "+16025551234" })
+      }),
+      expect.anything()
+    );
   });
 
-  it("marks an overdue renewal as overdue and still reminds once", async () => {
-    const policy = doc({ expires_at: null, renewal_date: "2026-07-01T00:00:00Z" });
+  it("escalates to the final tier at 7 days even after the heads-up fired", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-07-15T00:00:00Z",
+      renewal_due_notified_at: "2026-06-15T00:00:00Z",
+      renewal_outreach_enqueued_at: "2026-06-15T00:00:00Z"
+    });
     const result = await sweepDocumentExpirations({ client: makeDb([policy]), now: () => NOW });
-    expect(result.renewalDueNotified).toBe(1);
+    expect(result).toMatchObject({ renewalFinalNotified: 1, renewalDueNotified: 0 });
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
-        kind: "document_renewal_due",
+        kind: "document_renewal_final",
+        summary: expect.stringContaining("Final reminder:")
+      })
+    );
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      policy.id,
+      { renewal_final_notified_at: NOW.toISOString() },
+      expect.anything()
+    );
+    expect(processFlowEvent).not.toHaveBeenCalled();
+  });
+
+  it("fires only the most urgent tier for a late-entering date and stamps the skipped ones", async () => {
+    const policy = doc({ expires_at: null, renewal_date: "2026-07-01T00:00:00Z" });
+    const result = await sweepDocumentExpirations({ client: makeDb([policy]), now: () => NOW });
+    expect(result).toMatchObject({
+      renewalOverdueNotified: 1,
+      renewalFinalNotified: 0,
+      renewalDueNotified: 0
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "document_renewal_overdue",
         summary: expect.stringContaining("was due for renewal 2026-07-01"),
         emailSubject: expect.stringContaining("Renewal overdue")
       })
     );
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      policy.id,
+      {
+        renewal_due_notified_at: NOW.toISOString(),
+        renewal_final_notified_at: NOW.toISOString(),
+        renewal_overdue_notified_at: NOW.toISOString()
+      },
+      expect.anything()
+    );
+    // No linked contact → no outreach, and no stamp so linking later still fires.
+    expect(processFlowEvent).not.toHaveBeenCalled();
+    expect(result.renewalOutreachEnqueued).toBe(0);
   });
 
-  it("skips a renewal that was already reminded and leaves far-future renewals alone", async () => {
-    const reminded = doc({
-      id: "doc-reminded",
+  it("stays silent once every applicable tier is stamped, and skips far-future renewals", async () => {
+    const fullyStamped = doc({
+      id: "doc-stamped",
       expires_at: null,
-      renewal_date: "2026-08-01T00:00:00Z",
-      renewal_due_notified_at: "2026-07-10T00:00:00Z"
+      renewal_date: "2026-07-01T00:00:00Z",
+      renewal_due_notified_at: "2026-06-01T00:00:00Z",
+      renewal_final_notified_at: "2026-07-04T00:00:00Z",
+      renewal_overdue_notified_at: "2026-07-02T00:00:00Z"
     });
     const far = doc({ id: "doc-far", expires_at: null, renewal_date: "2026-12-01T00:00:00Z" });
     const result = await sweepDocumentExpirations({
-      client: makeDb([reminded, far]),
+      client: makeDb([fullyStamped, far]),
       now: () => NOW
     });
     expect(result.renewalDueNotified).toBe(0);
+    expect(result.renewalFinalNotified).toBe(0);
+    expect(result.renewalOverdueNotified).toBe(0);
     expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("stays silent inside the final window once the final reminder is stamped", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-07-15T00:00:00Z",
+      renewal_due_notified_at: "2026-06-15T00:00:00Z",
+      renewal_final_notified_at: "2026-07-08T00:00:00Z"
+    });
+    const result = await sweepDocumentExpirations({ client: makeDb([policy]), now: () => NOW });
+    expect(result.renewalFinalNotified).toBe(0);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("back-fills outreach for a contact-linked doc whose reminders already fired", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      contact_id: "c-1",
+      renewal_due_notified_at: "2026-07-10T00:00:00Z"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      contacts: {
+        data: [{ id: "c-1", display_name: "Jane", customer_e164: "+16025551234", email: null }],
+        error: null
+      }
+    });
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(result.renewalOutreachEnqueued).toBe(1);
+    expect(processFlowEvent).toHaveBeenCalledTimes(1);
   });
 
   it("handles a doc that is both expired and renewal-due — both notices fire", async () => {
@@ -295,6 +449,72 @@ describe("sweepDocumentExpirations", () => {
     expect(result.expiredNotified).toBe(1);
     expect(result.renewalDueNotified).toBe(1);
     expect(dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  it("tolerates an assignee-SMS failure without re-firing the tier", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      assigned_employee_id: "m-1"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      members: { data: [{ id: "m-1", name: "Dania", phone_e164: "+16025559876" }], error: null }
+    });
+    sendSms.mockRejectedValueOnce(new Error("carrier down"));
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(result.renewalDueNotified).toBe(1);
+    expect(result.errors).toEqual([]);
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      policy.id,
+      { renewal_due_notified_at: NOW.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("tolerates a messaging-config failure the same way", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      assigned_employee_id: "m-1"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      members: { data: [{ id: "m-1", name: "Dania", phone_e164: "+16025559876" }], error: null }
+    });
+    getMessaging.mockRejectedValueOnce("config gone");
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    expect(result.renewalDueNotified).toBe(1);
+    expect(result.errors).toEqual([]);
+    expect(sendSms).not.toHaveBeenCalled();
+  });
+
+  it("leaves the outreach stamp unset when the flow-event enqueue fails (retries tomorrow)", async () => {
+    const policy = doc({
+      expires_at: null,
+      renewal_date: "2026-08-01T00:00:00Z",
+      contact_id: "c-1"
+    });
+    const { db } = makeTableDb({
+      documents: { data: [policy], error: null },
+      contacts: {
+        data: [{ id: "c-1", display_name: "Jane", customer_e164: "+16025551234", email: null }],
+        error: null
+      }
+    });
+    processFlowEvent.mockRejectedValueOnce(new Error("enqueue down"));
+    const result = await sweepDocumentExpirations({ client: db, now: () => NOW });
+    // The tier reminder landed and stamped before the outreach failure.
+    expect(result.renewalDueNotified).toBe(1);
+    expect(result.renewalOutreachEnqueued).toBe(0);
+    expect(result.errors).toEqual([{ documentId: policy.id, message: "enqueue down" }]);
+    expect(patch).not.toHaveBeenCalledWith(
+      BIZ,
+      policy.id,
+      { renewal_outreach_enqueued_at: NOW.toISOString() },
+      expect.anything()
+    );
   });
 
   it("degrades to nameless reminders when the directory lookups fail", async () => {
@@ -314,5 +534,7 @@ describe("sweepDocumentExpirations", () => {
     const call = dispatch.mock.calls[0][0];
     expect(call.summary).not.toContain(" for ");
     expect(call.emailBody).not.toContain("Assigned to");
+    // Unresolvable contact → no outreach event (nobody to reach), no stamp.
+    expect(processFlowEvent).not.toHaveBeenCalled();
   });
 });

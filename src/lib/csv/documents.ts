@@ -362,7 +362,13 @@ export async function importDocumentsCsv(
           ...(assignedEmployeeId ? { assigned_employee_id: assignedEmployeeId } : {}),
           ...(notes ? { content_md: notes.slice(0, DOCUMENT_CONTENT_MD_MAX_CHARS) } : {}),
           ...(renewalDate && renewalDate !== existing.renewal_date
-            ? { renewal_date: renewalDate, renewal_due_notified_at: null }
+            ? {
+                renewal_date: renewalDate,
+                renewal_due_notified_at: null,
+                renewal_final_notified_at: null,
+                renewal_overdue_notified_at: null,
+                renewal_outreach_enqueued_at: null
+              }
             : {}),
           ...(expiresAt && expiresAt !== existing.expires_at
             ? {

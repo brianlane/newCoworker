@@ -121,10 +121,15 @@ export async function PATCH(request: Request, context: RouteContext) {
           return errorResponse("VALIDATION_ERROR", "renewalDate is not a date");
         }
       }
-      // Same changed-only rule: an unchanged renewal date keeps its stamp.
+      // Changed-only rule: a CHANGED renewal date re-arms the whole
+      // reminder ladder + outreach; re-submitting the same date keeps
+      // every stamp.
       if (nextRenewal !== existing.renewal_date) {
         patch.renewal_date = nextRenewal;
         patch.renewal_due_notified_at = null;
+        patch.renewal_final_notified_at = null;
+        patch.renewal_overdue_notified_at = null;
+        patch.renewal_outreach_enqueued_at = null;
       }
     }
     if (body.data.contactId !== undefined) {
