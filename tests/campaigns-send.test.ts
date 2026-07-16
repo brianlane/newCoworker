@@ -342,6 +342,24 @@ describe("processCampaignSweep — sending", () => {
     expect(result.errors).toEqual([
       { campaignId: "c-1", message: expect.stringContaining("failed to send AND to downgrade") }
     ]);
+
+    // Non-Error downgrade failures stringify too.
+    vi.clearAllMocks();
+    const sendEmail2 = vi.fn().mockRejectedValueOnce(new Error("bounce"));
+    mark.mockRejectedValueOnce("string down");
+    listDue.mockResolvedValue([]);
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([recipient("r1", "bad@x.test")]);
+    claim.mockResolvedValue(true);
+    countByStatus.mockResolvedValue(0);
+    const second = await processCampaignSweep({
+      client: makeDb([]).db,
+      now: () => NOW,
+      sendEmail: sendEmail2
+    });
+    expect(second.errors).toEqual([
+      { campaignId: "c-1", message: expect.stringContaining("string down") }
+    ]);
   });
 
   it("re-snapshots a sending campaign whose snapshot never landed before draining", async () => {
