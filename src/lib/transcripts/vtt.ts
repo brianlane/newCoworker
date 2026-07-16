@@ -64,12 +64,20 @@ export function vttToPlainText(raw: string): string {
     if (/^\d+$/.test(trimmed)) continue;
 
     // Inline tags: `<v Jane Doe>text</v>` carries the speaker; other tags
-    // (<c>, <i>, timestamps like <00:01:02.000>) are decoration.
+    // (<c>, <i>, timestamps like <00:01:02.000>) are decoration. Stripped
+    // to a fixpoint so overlapping sequences ("<scr<i>ipt>") can't re-form
+    // a tag after one pass — the output feeds model prompts as plain text,
+    // but stable stripping costs nothing and satisfies static analysis.
     let text = trimmed;
     let speaker: string | null = null;
     const voice = /^<v(?:\.[^ >]*)?\s+([^>]+)>/.exec(text);
     if (voice) speaker = voice[1].trim();
-    text = text.replace(/<[^>]*>/g, "").trim();
+    let previous: string;
+    do {
+      previous = text;
+      text = text.replace(/<[^>]*>/g, "");
+    } while (text !== previous);
+    text = text.trim();
     if (text.length === 0) continue;
 
     // Zoom's cue payload is usually "Name: words" already.
