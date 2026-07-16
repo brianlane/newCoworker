@@ -76,8 +76,8 @@ export default function AboutPage() {
           </p>
           <p>
             And because a coworker knows things a vendor never should, we made privacy the
-            foundation: your business runs on its own dedicated server, your data stays yours, and
-            your coworker&apos;s memory works for you alone.
+            foundation: your business is strictly isolated from every other, business stays your
+            business, and your coworker&apos;s memory works for you alone.
           </p>
         </div>
       </section>

@@ -214,7 +214,7 @@ export default function HomePage() {
             label: "Handled at once, so there are no busy signals during your rush"
           },
           { value: "8,000+", label: "Everyday apps connected through Zapier, no code required" },
-          { value: "1 server", label: "Dedicated to your business, so your data stays yours" }
+          { value: "1 server", label: "Dedicated to your business, so business stays your business" }
         ]}
       />
 
