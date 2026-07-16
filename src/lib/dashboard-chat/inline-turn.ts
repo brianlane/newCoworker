@@ -538,17 +538,25 @@ export async function runInlineChatTurn(
   if (!content && drafts.length === 0 && !sideEffects.happened) {
     return { ok: false, error: "empty" };
   }
-  return {
-    ok: true,
-    // A tool-created draft (or committed side effect) with a silent final
-    // step still deserves an honest line — and must not fail the turn,
-    // which would re-run it on the worker. The side-effect notes carry the
-    // facts the lost wrap-up would have relayed (links, sent bodies).
-    content:
-      content ||
-      (drafts.length > 0
-        ? "Done — I've prepared a draft for you. Open it from the card below to review and save."
-        : `Done — the requested action went through, but I hit a hiccup writing my summary. What happened:\n${sideEffects.notes.map((n) => `- ${n}`).join("\n")}`),
-    drafts
-  };
+  // A tool-created draft (or committed side effect) with a silent final
+  // step still deserves an honest line — and must not fail the turn, which
+  // would re-run it on the worker. BOTH facts are reported when both
+  // happened: the draft hand-off AND the side-effect notes (links, sent
+  // bodies) the lost wrap-up would have relayed.
+  let fallback = content;
+  if (!fallback) {
+    const parts: string[] = [];
+    if (drafts.length > 0) {
+      parts.push(
+        "Done — I've prepared a draft for you. Open it from the card below to review and save."
+      );
+    }
+    if (sideEffects.happened) {
+      parts.push(
+        `${parts.length > 0 ? "Also completed" : "Done — the requested action went through"}, though I hit a hiccup writing my summary. What happened:\n${sideEffects.notes.map((n) => `- ${n}`).join("\n")}`
+      );
+    }
+    fallback = parts.join("\n\n");
+  }
+  return { ok: true, content: fallback, drafts };
 }

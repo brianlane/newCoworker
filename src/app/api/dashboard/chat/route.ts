@@ -915,10 +915,6 @@ export async function POST(request: Request) {
         error: inline.error,
         detail: inline.detail
       });
-      // A dying primary path must be LOUD: the July 2026 dead-model id
-      // (gemini-3.1-flash) demoted every text turn to the worker for weeks
-      // with zero signal. Best-effort — never fails the turn.
-      void emitInlineFallbackTelemetry(body.businessId, "inline_failed", inline.detail ?? inline.error);
       if (attachment) {
         return await finishInlineTurn({
           businessId: body.businessId,
@@ -929,6 +925,12 @@ export async function POST(request: Request) {
           drafts: []
         });
       }
+      // A dying primary path must be LOUD: the July 2026 dead-model id
+      // (gemini-3.1-flash) demoted every text turn to the worker for weeks
+      // with zero signal. Emitted only for turns that actually fall through
+      // to the worker enqueue below (attachment turns store an inline
+      // failure reply instead — they never demote). Best-effort.
+      void emitInlineFallbackTelemetry(body.businessId, "inline_failed", inline.detail ?? inline.error);
     }
 
     // === Worker fallback: enqueue exactly as the pre-inline pipeline ===

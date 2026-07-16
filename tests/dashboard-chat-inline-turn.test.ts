@@ -656,6 +656,39 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     }
   });
 
+  it("reports BOTH the draft hand-off and the side-effect notes when the wrap-up dies after both", async () => {
+    // Bugbot Medium (4th round): draft-only fallback copy hid that a text
+    // had also been sent in the same turn.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      toE164: "+15145188192",
+      sentBody: "hi"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce({
+        text: null,
+        functionCalls: [
+          { name: "create_agent", args: { name: "A", instructions: "B" } },
+          { name: "send_sms", args: { toE164: "+15145188192", body: "hi" } }
+        ],
+        modelContent: { role: "model", parts: [{ text: "" }] },
+        usage: null
+      })
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.drafts).toHaveLength(1);
+      expect(res.content).toContain("prepared a draft");
+      expect(res.content).toContain("Also completed");
+      expect(res.content).toContain('Text sent to +15145188192 — "hi"');
+    }
+  });
+
   it("uses the linkless note arms when book/reschedule succeed without links, and tolerates a linkless send result", async () => {
     for (const [tool, needle] of [
       ["calendar_book_appointment", "The appointment was booked."],
