@@ -1025,6 +1025,7 @@ async function stoppedMidExecutionLog(
  */
 const COMM_STEP_TYPES = new Set<string>([
   "send_sms",
+  "send_whatsapp",
   "send_email",
   "notify_owner",
   "route_to_team",
@@ -1190,6 +1191,8 @@ async function runStep(
       return emailExtractStep(supabase, run, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, scope, action);
+    case "send_whatsapp":
+      return sendWhatsAppStep(supabase, run, scope, action);
     case "send_email":
       return sendEmailStep(supabase, run, index, scope, action);
     case "share_document":
@@ -3784,6 +3787,159 @@ async function shareDocumentStep(
       ...(delivered.result ?? {})
     }
   };
+}
+
+/**
+ * send_whatsapp: resolve the recipient (same roster/contact-ref semantics
+ * as send_sms), then delegate delivery to the platform's internal
+ * whatsapp-send endpoint — the Cloud API client, tenant token decryption,
+ * 24h-window check, and template fallback all live in the Next app.
+ * Policy skips (no WhatsApp connected, template still in Meta review)
+ * come back as structured ok:false results and are recorded as honest
+ * step skips with an owner-facing note, never run failures.
+ */
+async function sendWhatsAppStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "send_whatsapp" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    appendActionTaken(
+      scope,
+      "skipped the WhatsApp message — no valid phone number was extracted"
+    );
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+
+  // Named-agent / contact-ref recipients: resolve the live number and render
+  // the raw body, exactly like sendSmsStep.
+  let toE164 = action.to;
+  let bodyText = action.body;
+  if (action.toAgentName) {
+    const agent = await resolveAgentByName(supabase, run.business_id, action.toAgentName);
+    if (!agent) {
+      return {
+        kind: "fail",
+        error: `send_whatsapp: agent "${action.toAgentName}" is not on the active roster`
+      };
+    }
+    toE164 = agent.phone;
+    bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
+    if (!bodyText) {
+      return { kind: "fail", error: "send_whatsapp: body is empty after templating" };
+    }
+  } else if (action.toRef) {
+    const resolved = await resolveContactRef(supabase, run.business_id, action.toRef);
+    if (!resolved) {
+      return {
+        kind: "fail",
+        error: `send_whatsapp: ${action.toRef.source} reference could not be resolved (removed or no phone)`
+      };
+    }
+    toE164 = resolved.phone;
+    bodyText = renderTemplate(
+      action.body,
+      action.toRef.source === "employee" ? agentScope(scope, resolved) : scope
+    ).trim();
+    if (!bodyText) {
+      return { kind: "fail", error: "send_whatsapp: body is empty after templating" };
+    }
+  }
+
+  // Never message ourselves (same extraction-grabbed-our-own-number guard
+  // as send_sms).
+  if (isSelfPhone(toE164, await businessSelfNumbers(supabase, run.business_id))) {
+    return {
+      kind: "fail",
+      error:
+        "send_whatsapp: the recipient is the business's own number — an earlier step " +
+        "extracted the business's contact info instead of the lead's"
+    };
+  }
+
+  const appUrl = (Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "").trim().replace(/\/$/, "");
+  const bearer = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!appUrl || !bearer) {
+    return { kind: "fail", error: "send_whatsapp: platform delivery is not configured" };
+  }
+
+  const isTeammate = Boolean(action.toAgentName) || action.toRef?.source === "employee";
+  let res: Response;
+  try {
+    res = await fetch(`${appUrl}/api/internal/whatsapp-send`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${bearer}`,
+        // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs only
+        // when Origin matches NEXT_PUBLIC_APP_URL.
+        Origin: appUrl
+      },
+      body: JSON.stringify({
+        businessId: run.business_id,
+        to: toE164,
+        text: bodyText,
+        // Teammate sends use the owner-alert template out of window; lead
+        // sends use the follow-up template.
+        audience: isTeammate ? "owner" : "contact"
+      })
+    });
+  } catch (err) {
+    // Transport blip: retryable.
+    return {
+      kind: "fail",
+      error: `send_whatsapp: delivery endpoint unreachable (${(err as Error).message})`
+    };
+  }
+  const payload = (await res.json().catch(() => null)) as {
+    data?: {
+      ok?: boolean;
+      via?: string;
+      reason?: string;
+      detail?: string;
+    };
+  } | null;
+  if (!res.ok) {
+    return { kind: "fail", error: `send_whatsapp: delivery endpoint answered ${res.status}` };
+  }
+  const result = payload?.data;
+  if (!result?.ok) {
+    const reason = result?.reason ?? "send_failed";
+    if (reason === "not_connected") {
+      appendActionTaken(
+        scope,
+        "skipped the WhatsApp message — WhatsApp is not connected under Integrations"
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
+    if (reason === "template_not_approved") {
+      appendActionTaken(
+        scope,
+        `skipped the WhatsApp message to ${toE164} — the recipient hasn't messaged recently ` +
+          "and the message template is still in Meta review"
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
+    if (reason === "invalid_recipient") {
+      return {
+        kind: "fail",
+        error: `send_whatsapp: recipient "${toE164}" is not a usable phone number`
+      };
+    }
+    // send_failed: could be transient (Cloud API 5xx) — retryable.
+    return {
+      kind: "fail",
+      error: `send_whatsapp: delivery failed (${result?.detail ?? "unknown"})`
+    };
+  }
+
+  appendActionTaken(
+    scope,
+    `sent a WhatsApp message to ${action.toAgentName || action.toRef?.label || toE164}` +
+      (result.via === "template" ? " (via approved template — outside the 24h window)" : "")
+  );
+  return { kind: "ok", result: { to: toE164, via: result.via ?? "text" } };
 }
 
 async function sendSmsStep(

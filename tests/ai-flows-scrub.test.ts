@@ -70,6 +70,18 @@ const piiDefinition = {
       body: "Lead for {{agent.name}}"
     },
     {
+      id: "s2c",
+      type: "send_whatsapp" as const,
+      toAgentName: "Amy",
+      body: "WhatsApp lead for {{agent.name}}"
+    },
+    {
+      id: "s2d",
+      type: "send_whatsapp" as const,
+      to: "{{vars.lead_phone}}",
+      body: "WhatsApp for the lead"
+    },
+    {
       id: "s3",
       type: "send_email" as const,
       to: "amy@emylaidlaw.com",
@@ -115,10 +127,12 @@ describe("scrubDefinition", () => {
     // send_sms bodies, send_email subject + body, route_to_team templates.
     expect(steps[1].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
     expect(steps[2].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
-    expect(steps[3].subject).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
     expect(steps[3].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
-    expect(steps[4].offerTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
-    expect(steps[4].ownerFallbackTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[4].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[5].subject).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[5].body).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[6].offerTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[6].ownerFallbackTemplate).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
     // No body prose survives anywhere.
     expect(json).not.toContain("this is");
     expect(json).not.toContain("Lead for");
@@ -137,17 +151,22 @@ describe("scrubDefinition", () => {
     const trigger = scrubbed.trigger as Record<string, unknown>;
     expect(trigger.connectionId).toBe(NIL_UUID);
     expect(steps[2].toAgentName).toBe(EMPLOYEE_NAME_PLACEHOLDER);
-    expect(steps[3].fromConnectionId).toBeUndefined();
-    expect(steps[4].agentName).toBeUndefined();
+    // send_whatsapp pins are scrubbed the same way as send_sms; a
+    // templated recipient (no pin) passes through untouched.
+    expect(steps[3].toAgentName).toBe(EMPLOYEE_NAME_PLACEHOLDER);
+    expect(steps[4].toAgentName).toBeUndefined();
+    expect(steps[4].to).toBe("{{vars.lead_phone}}");
+    expect(steps[5].fromConnectionId).toBeUndefined();
+    expect(steps[6].agentName).toBeUndefined();
   });
 
   it("drops http_call endpoint path and bodyTemplate (tenant secrets) and blanks the label", () => {
     expect(json).not.toContain("SECRET123");
     expect(json).not.toContain("sk_live_DEADBEEF");
     const steps = scrubbed.steps as Record<string, unknown>[];
-    expect(steps[5].path).toBeUndefined();
-    expect(steps[5].bodyTemplate).toBeUndefined();
-    expect(steps[5].label).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
+    expect(steps[7].path).toBeUndefined();
+    expect(steps[7].bodyTemplate).toBeUndefined();
+    expect(steps[7].label).toBe(LIBRARY_STRIPPED_PLACEHOLDER);
   });
 
   it("does not mutate the input definition", () => {

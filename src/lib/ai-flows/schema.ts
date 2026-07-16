@@ -30,6 +30,7 @@ export const FLOW_STEP_TYPES = [
   "extract_text",
   "email_extract",
   "send_sms",
+  "send_whatsapp",
   "send_email",
   "approval_gate",
   "notify_owner",
@@ -712,6 +713,22 @@ const nonBranchStepMembers = [
   }),
   z.object({
     id: stepId,
+    // WhatsApp outbound to a contact or teammate. Delivery routes through
+    // the central helper: free-form text when the recipient's 24h service
+    // window is open, the approved utility template otherwise (Meta bills
+    // the tenant per template message; not-yet-approved templates skip
+    // with an honest note). Requires a connected WhatsApp integration.
+    type: z.literal("send_whatsapp"),
+    // Exactly one of to / toAgentName / toRef (same rule as send_sms,
+    // enforced in validateDefinitionSemantics).
+    to: z.string().min(1).max(200).optional(),
+    body: z.string().min(1).max(1600),
+    toAgentName: z.string().min(1).max(120).optional(),
+    toRef: contactRefSchema.optional(),
+    when: whenSchema.optional()
+  }),
+  z.object({
+    id: stepId,
     type: z.literal("send_email"),
     to: z.string().min(3).max(320),
     // cc/bcc are optional extra recipients. Bounded like `to` (not strict
@@ -1276,6 +1293,8 @@ function templateStringsForStep(step: FlowStep): string[] {
   switch (step.type) {
     case "send_sms":
       return [step.to ?? "", step.body, step.quietHours?.emailSubject ?? ""];
+    case "send_whatsapp":
+      return [step.to ?? "", step.body];
     case "send_email":
       return [step.to, ...(step.cc ?? []), ...(step.bcc ?? []), step.subject, step.body];
     // The {{share_url}} placement token is substituted by the worker after
@@ -1611,7 +1630,7 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           // send_sms { toAgentName } step (the named recipient).
           const hasAgent =
             step.type === "route_to_team" ||
-            (step.type === "send_sms" &&
+            ((step.type === "send_sms" || step.type === "send_whatsapp") &&
               (Boolean(step.toAgentName) || step.toRef?.source === "employee"));
           if (!hasAgent) {
             issues.push(
@@ -1930,6 +1949,22 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (step.replyToGroup && def.trigger.channel !== "sms") {
         issues.push(
           `Step "${step.id}" replies to a group thread, which only works on an SMS-triggered flow.`
+        );
+      }
+    }
+
+    // A send_whatsapp needs EXACTLY ONE recipient source (same rule as
+    // send_sms, minus replyToGroup — WhatsApp has no group-MMS reply path).
+    if (step.type === "send_whatsapp") {
+      const waSources = [Boolean(step.to), Boolean(step.toAgentName), Boolean(step.toRef)];
+      const waCount = waSources.filter(Boolean).length;
+      if (waCount === 0) {
+        issues.push(
+          `Step "${step.id}" sends a WhatsApp message but has no recipient; set "to", "toAgentName", or "toRef".`
+        );
+      } else if (waCount > 1) {
+        issues.push(
+          `Step "${step.id}" sets more than one recipient; use only one of "to", "toAgentName", or "toRef".`
         );
       }
     }

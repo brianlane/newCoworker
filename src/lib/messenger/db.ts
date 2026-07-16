@@ -14,7 +14,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type MessengerPlatform = "messenger" | "instagram";
+export type MessengerPlatform = "messenger" | "instagram" | "whatsapp";
 
 /** Meta's standard messaging window: replies allowed for 24h after the
  * lead's last message. */
@@ -149,6 +149,56 @@ async function getMessengerConversationByIdentity(
   return (data as MessengerConversationRow | null) ?? null;
 }
 
+/**
+ * Side-effect-free identity lookup for OUTBOUND paths (the WhatsApp
+ * deliver helper's 24h-window read) — unlike upsertMessengerConversation
+ * it never bumps the window clock.
+ */
+export async function getMessengerConversationByIdentityPublic(
+  businessId: string,
+  pageId: string,
+  platform: MessengerPlatform,
+  psid: string,
+  client?: SupabaseClient
+): Promise<MessengerConversationRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  return getMessengerConversationByIdentity({ businessId, pageId, platform, psid }, db);
+}
+
+/**
+ * Conversation row for a BUSINESS-INITIATED thread (outbound WhatsApp to
+ * a contact who never messaged first). last_user_message_at is backdated
+ * to epoch so the fresh row reads as a CLOSED 24h window — only a real
+ * inbound message (upsertMessengerConversation) opens it. Races re-read
+ * the winner.
+ */
+export async function insertOutboundMessengerConversation(
+  input: {
+    businessId: string;
+    pageId: string;
+    platform: MessengerPlatform;
+    psid: string;
+  },
+  client?: SupabaseClient
+): Promise<MessengerConversationRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("messenger_conversations")
+    .insert({
+      business_id: input.businessId,
+      page_id: input.pageId,
+      platform: input.platform,
+      psid: input.psid,
+      last_user_message_at: new Date(0).toISOString()
+    })
+    .select()
+    .single();
+  if (!error) return data as MessengerConversationRow;
+  const winner = await getMessengerConversationByIdentity(input, db);
+  if (winner) return winner;
+  throw new Error(`insertOutboundMessengerConversation: ${error.message}`);
+}
+
 export async function getMessengerConversationById(
   conversationId: string,
   client?: SupabaseClient
@@ -195,15 +245,17 @@ export type MessengerConversationSummary = MessengerConversationRow & {
 
 export async function listMessengerConversationsForBusiness(
   businessId: string,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; platform?: MessengerPlatform } = {},
   client?: SupabaseClient
 ): Promise<MessengerConversationSummary[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const limit = opts.limit ?? 50;
-  const { data, error } = await db
+  let query = db
     .from("messenger_conversations")
     .select("*, messenger_messages(count)")
-    .eq("business_id", businessId)
+    .eq("business_id", businessId);
+  if (opts.platform) query = query.eq("platform", opts.platform);
+  const { data, error } = await query
     .order("last_user_message_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listMessengerConversationsForBusiness: ${error.message}`);

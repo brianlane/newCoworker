@@ -4,7 +4,7 @@ import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-export type NotificationDeliveryChannel = "sms" | "email" | "dashboard";
+export type NotificationDeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp";
 export type NotificationStatus = "queued" | "sent" | "failed" | "skipped";
 
 export type NotificationRow = {

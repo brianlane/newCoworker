@@ -44,6 +44,7 @@ import {
   Link2,
   Mail,
   Maximize,
+  MessageCircle,
   MessageSquare,
   Minus,
   Phone,
@@ -83,6 +84,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   extract_text: "read",
   email_extract: "read",
   send_sms: "comm",
+  send_whatsapp: "comm",
   send_email: "comm",
   approval_gate: "wait",
   notify_owner: "comm",
@@ -123,6 +125,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   extract_text: <Search className="h-4 w-4" />,
   email_extract: <Mail className="h-4 w-4" />,
   send_sms: <MessageSquare className="h-4 w-4" />,
+  send_whatsapp: <MessageCircle className="h-4 w-4" />,
   send_email: <Send className="h-4 w-4" />,
   approval_gate: <ShieldCheck className="h-4 w-4" />,
   notify_owner: <Bell className="h-4 w-4" />,
@@ -169,6 +172,14 @@ function stepSubtitle(step: FlowStep): string {
             : step.to
               ? `to ${step.to}`
               : "";
+    case "send_whatsapp":
+      return step.toRef?.label
+        ? `to ${step.toRef.label}`
+        : step.toAgentName
+          ? `to ${step.toAgentName}`
+          : step.to
+            ? `to ${step.to}`
+            : "";
     case "send_email":
       return `to ${step.to}`;
     case "notify_owner":

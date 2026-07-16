@@ -506,6 +506,7 @@ describe("runInlineChatTurn — business_knowledge_lookup", () => {
 describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
   const ALL_ON = {
     send_sms: true,
+    send_whatsapp: false,
     calendar_find_slots: true,
     calendar_book_appointment: true,
     calendar_reschedule_appointment: true,
@@ -693,19 +694,43 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     for (const [tool, needle] of [
       ["calendar_book_appointment", "The appointment was booked."],
       ["calendar_reschedule_appointment", "The appointment was rescheduled."],
-      ["send_sms", "Text sent to the recipient."]
+      ["send_sms", "Text sent to the recipient."],
+      ["send_whatsapp", "WhatsApp message sent to the recipient."]
     ] as const) {
       const runActionTool = vi.fn(async () => ({ ok: true }));
       const chatStep = vi
         .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
         .mockResolvedValueOnce(toolStep(tool, {}))
         .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
-      const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
-        chatStep,
-        runActionTool
-      });
+      const res = await runInlineChatTurn(
+        baseArgs({ actionToolGates: { ...ALL_ON, send_whatsapp: true } }),
+        {
+          chatStep,
+          runActionTool
+        }
+      );
       expect(res.ok).toBe(true);
       if (res.ok) expect(res.content).toContain(needle);
+    }
+  });
+
+  it("carries the WhatsApp side-effect note (recipient + body) through a degraded wrap-up", async () => {
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      toE164: "+15145188192",
+      sentBody: "hola"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_whatsapp", { toE164: "+15145188192", body: "hola" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: { ...ALL_ON, send_whatsapp: true } }),
+      { chatStep, runActionTool }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain('WhatsApp message sent to +15145188192 — "hola"');
     }
   });
 

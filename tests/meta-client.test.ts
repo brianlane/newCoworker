@@ -15,6 +15,14 @@ import {
   META_GRAPH_BASE_URL,
   META_STATE_TTL_MS,
   MESSENGER_MAX_TEXT_LENGTH,
+  WHATSAPP_MAX_TEXT_LENGTH,
+  exchangeEmbeddedSignupCode,
+  fetchWhatsAppTemplateStatuses,
+  registerWhatsAppTemplates,
+  sendWhatsAppMessage,
+  sendWhatsAppTemplate,
+  subscribeWabaToApp,
+  unsubscribeWabaFromApp,
   buildMetaLoginUrl,
   createMetaOAuthState,
   exchangeCodeForToken,
@@ -412,6 +420,159 @@ describe("getLinkedInstagramAccount", () => {
 
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
     expect(await getLinkedInstagramAccount("tok", "p1")).toBeNull();
+  });
+});
+
+describe("sendWhatsAppMessage", () => {
+  it("POSTs the Cloud API JSON body with a bearer token and returns the wamid", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { messages: [{ id: "wamid-1" }] }));
+    const result = await sendWhatsAppMessage("pn-9", "biz-tok", "15551234567", "Hello!");
+    expect(result).toEqual({ messageId: "wamid-1" });
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new URL(url).pathname).toBe("/v25.0/pn-9/messages");
+    expect(init.method).toBe("POST");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer biz-tok");
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: "whatsapp",
+      recipient_type: "individual",
+      to: "15551234567",
+      type: "text",
+      text: { body: "Hello!" }
+    });
+  });
+
+  it("truncates over-limit text and tolerates a missing message id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    const long = "x".repeat(WHATSAPP_MAX_TEXT_LENGTH + 50);
+    const result = await sendWhatsAppMessage("pn-9", "biz-tok", "15551234567", long);
+    expect(result).toEqual({ messageId: null });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { text: { body: string } };
+    expect(body.text.body.length).toBe(WHATSAPP_MAX_TEXT_LENGTH);
+    expect(body.text.body.endsWith("…")).toBe(true);
+  });
+});
+
+describe("sendWhatsAppTemplate", () => {
+  it("POSTs the template payload with sanitized positional params", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { messages: [{ id: "wamid-t" }] }));
+    const result = await sendWhatsAppTemplate("pn-9", "biz-tok", "15551234567", {
+      name: "nc_owner_alert",
+      language: "en_US",
+      bodyParams: ["Acme", "line one\nline two  spaced"]
+    });
+    expect(result).toEqual({ messageId: "wamid-t" });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as {
+      type: string;
+      template: {
+        name: string;
+        language: { code: string };
+        components: Array<{ parameters: Array<{ text: string }> }>;
+      };
+    };
+    expect(body.type).toBe("template");
+    expect(body.template.name).toBe("nc_owner_alert");
+    expect(body.template.language.code).toBe("en_US");
+    // Newlines/tabs collapse to spaces (Cloud API rejects them in params).
+    expect(body.template.components[0].parameters.map((p) => p.text)).toEqual([
+      "Acme",
+      "line one line two spaced"
+    ]);
+
+    // Missing message id tolerated.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { messages: [] }));
+    expect(
+      await sendWhatsAppTemplate("pn-9", "biz-tok", "1", {
+        name: "n",
+        language: "en_US",
+        bodyParams: []
+      })
+    ).toEqual({ messageId: null });
+  });
+});
+
+describe("exchangeEmbeddedSignupCode", () => {
+  it("exchanges the code for a business token and rejects empty responses", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { access_token: "biz-tok" }));
+    expect(await exchangeEmbeddedSignupCode("code-1")).toBe("biz-tok");
+    const [url] = fetchMock.mock.calls[0] as [string];
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/v25.0/oauth/access_token");
+    expect(parsed.searchParams.get("code")).toBe("code-1");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    await expect(exchangeEmbeddedSignupCode("code-2")).rejects.toThrow(/no token/);
+  });
+});
+
+describe("WABA subscription", () => {
+  it("subscribeWabaToApp requires success:true", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true }));
+    await subscribeWabaToApp("waba-9", "biz-tok");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(new URL(url).pathname).toBe("/v25.0/waba-9/subscribed_apps");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer biz-tok");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: false }));
+    await expect(subscribeWabaToApp("waba-9", "biz-tok")).rejects.toThrow(/not confirmed/);
+  });
+
+  it("unsubscribeWabaFromApp swallows failures", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true }));
+    await unsubscribeWabaFromApp("waba-9", "biz-tok");
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("DELETE");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
+    await expect(unsubscribeWabaFromApp("waba-9", "biz-tok")).resolves.toBeUndefined();
+  });
+});
+
+describe("registerWhatsAppTemplates", () => {
+  it("registers every stock template and reports statuses", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(jsonResponse(200, {}));
+    const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
+    expect(results).toEqual([
+      { name: "nc_owner_alert", language: "en_US", status: "PENDING" },
+      { name: "nc_contact_followup", language: "en_US", status: "PENDING" }
+    ]);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string) as { name: string; category: string };
+    expect(body.name).toBe("nc_owner_alert");
+    expect(body.category).toBe("UTILITY");
+  });
+
+  it("maps 400 (already exists) to PENDING and other failures to FAILED", async () => {
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(400, { error: "name already exists" }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
+    const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
+    expect(results.map((r) => r.status)).toEqual(["PENDING", "FAILED"]);
+  });
+});
+
+describe("fetchWhatsAppTemplateStatuses", () => {
+  it("returns only the stock templates with defensive field handling", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: [
+          { name: "nc_owner_alert", language: "en_US", status: "APPROVED" },
+          { name: "someone_elses_template", language: "en_US", status: "APPROVED" },
+          { name: "nc_contact_followup", language: 7, status: 9 },
+          { name: 42 }
+        ]
+      })
+    );
+    expect(await fetchWhatsAppTemplateStatuses("waba-9", "biz-tok")).toEqual([
+      { name: "nc_owner_alert", language: "en_US", status: "APPROVED" },
+      { name: "nc_contact_followup", language: "en_US", status: "PENDING" }
+    ]);
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await fetchWhatsAppTemplateStatuses("waba-9", "biz-tok")).toEqual([]);
   });
 });
 

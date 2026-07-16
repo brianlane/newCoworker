@@ -22,6 +22,7 @@ vi.mock("@/lib/db/vagaro-connections", () => ({ getPublicVagaroConnection: vi.fn
 vi.mock("@/lib/db/calendly-connections", () => ({ getPublicCalendlyConnection: vi.fn() }));
 vi.mock("@/lib/db/caldav-connections", () => ({ getPublicCaldavConnection: vi.fn() }));
 vi.mock("@/lib/db/meta-connections", () => ({ getPublicMetaConnection: vi.fn() }));
+vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: vi.fn() }));
 vi.mock("@/lib/db/zoom-connections", () => ({ getPublicZoomConnection: vi.fn() }));
 vi.mock("@/lib/db/api-keys", () => ({ listApiKeys: vi.fn() }));
 vi.mock("@/lib/db/webhook-subscriptions", () => ({ listWebhookSubscriptions: vi.fn() }));
@@ -41,6 +42,7 @@ import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
@@ -143,6 +145,7 @@ describe("loadIntegrationsContext", () => {
     expect(ctx.calendlyConnection).toBeNull();
     expect(ctx.caldavConnection).toBeNull();
     expect(ctx.metaConnection).toBeNull();
+    expect(ctx.whatsappConnection).toBeNull();
     expect(ctx.zoomConnection).toBeNull();
     expect(ctx.apiKeys).toEqual([]);
     expect(ctx.activeHooks).toEqual([]);
@@ -173,6 +176,7 @@ describe("computeIntegrationStatuses", () => {
       calendlyConnection: null,
       caldavConnection: null,
       metaConnection: null,
+      whatsappConnection: null,
       zoomConnection: null,
       apiKeys: [],
       activeHooks: [],
@@ -187,6 +191,7 @@ describe("computeIntegrationStatuses", () => {
     expect(s.calendly.state).toBe("disconnected");
     expect(s.caldav.state).toBe("disconnected");
     expect(s.meta.state).toBe("disconnected");
+    expect(s.whatsapp.state).toBe("disconnected");
     expect(s.zoom.state).toBe("disconnected");
     expect(s.custom).toEqual({ state: "disconnected", label: "None yet" });
     expect(s["zapier-api"]).toEqual({ state: "disconnected", label: "No keys" });
@@ -228,6 +233,18 @@ describe("computeIntegrationStatuses", () => {
       baseCtx({ metaConnection: { status: "pending" } as never })
     );
     expect(pending.meta).toEqual({ state: "attention", label: "Almost there" });
+  });
+
+  it("distinguishes active vs paused WhatsApp connections", () => {
+    const active = computeIntegrationStatuses(
+      baseCtx({ whatsappConnection: { is_active: true } as never })
+    );
+    expect(active.whatsapp).toEqual({ state: "connected", label: "Connected" });
+
+    const paused = computeIntegrationStatuses(
+      baseCtx({ whatsappConnection: { is_active: false } as never })
+    );
+    expect(paused.whatsapp).toEqual({ state: "attention", label: "Paused" });
   });
 
   it("flags a revoked Zoom grant as needing reconnect", () => {

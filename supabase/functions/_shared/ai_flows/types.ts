@@ -563,6 +563,21 @@ export type FlowStep =
     }
   | {
       id: string;
+      /**
+       * WhatsApp outbound to a contact or teammate — recipient semantics
+       * mirror send_sms (minus replyToGroup/MMS). Delivery is delegated to
+       * the platform's internal whatsapp-send endpoint (24h-window aware:
+       * free-form text inside, approved utility template outside).
+       */
+      type: "send_whatsapp";
+      to?: string;
+      body: string;
+      toAgentName?: string;
+      toRef?: ContactRef;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
       type: "send_email";
       /** Recipient address (templatable, e.g. a fixed owner address). */
       to: string;

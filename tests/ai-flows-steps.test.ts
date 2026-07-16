@@ -8,6 +8,103 @@ import {
 } from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
+describe("planStep: send_whatsapp", () => {
+  const base = { id: "w", type: "send_whatsapp", body: "Hi {{vars.name}}" };
+
+  it("passes named-agent and contact-ref recipients through unrendered", () => {
+    const agent = planStep(
+      { ...base, toAgentName: " Dave " } as FlowStep,
+      { vars: { name: "Joe" } }
+    );
+    expect(agent).toEqual({
+      ok: true,
+      action: { kind: "send_whatsapp", to: "", body: "Hi {{vars.name}}", toAgentName: "Dave" }
+    });
+
+    const ref = { source: "contact", id: "33333333-3333-4333-8333-333333333333", label: "Joe" };
+    const contact = planStep({ ...base, toRef: ref } as FlowStep, { vars: {} });
+    expect(contact).toEqual({
+      ok: true,
+      action: { kind: "send_whatsapp", to: "", body: "Hi {{vars.name}}", toRef: ref }
+    });
+  });
+
+  it("renders templated recipients/bodies with lead-data-gap skip semantics", () => {
+    const rendered = planStep(
+      { ...base, to: "{{vars.lead_phone}}" } as FlowStep,
+      { vars: { lead_phone: "(840) 275-3158", name: "Joe" } }
+    );
+    expect(rendered).toEqual({
+      ok: true,
+      action: { kind: "send_whatsapp", to: "+18402753158", body: "Hi Joe" }
+    });
+
+    // Templated recipient resolved empty → planned SKIP.
+    const emptyVar = planStep(
+      { ...base, to: "{{vars.lead_phone}}" } as FlowStep,
+      { vars: { lead_phone: "none", name: "Joe" } }
+    );
+    expect(emptyVar).toEqual({
+      ok: true,
+      action: {
+        kind: "send_whatsapp",
+        to: "",
+        body: "Hi Joe",
+        skipReason: "no_recipient_phone"
+      }
+    });
+
+    // Templated recipient unparseable → planned SKIP.
+    const unparseable = planStep(
+      { ...base, to: "{{vars.lead_phone}}" } as FlowStep,
+      { vars: { lead_phone: "call the office", name: "Joe" } }
+    );
+    expect(unparseable).toEqual({
+      ok: true,
+      action: {
+        kind: "send_whatsapp",
+        to: "",
+        body: "Hi Joe",
+        skipReason: "unparseable_recipient_phone"
+      }
+    });
+
+    // LITERAL bad recipients stay hard failures.
+    expect(planStep({ ...base, to: "" } as FlowStep, { vars: { name: "Joe" } })).toEqual({
+      ok: false,
+      error: "send_whatsapp: recipient is empty after templating"
+    });
+    expect(
+      planStep({ ...base, to: "not a phone" } as FlowStep, { vars: { name: "Joe" } })
+    ).toEqual({
+      ok: false,
+      error: 'send_whatsapp: recipient "not a phone" is not a valid phone number'
+    });
+  });
+
+  it("keeps an already-E.164 recipient as-is", () => {
+    expect(
+      planStep({ ...base, to: "+15551234567" } as FlowStep, { vars: { name: "Joe" } })
+    ).toEqual({ ok: true, action: { kind: "send_whatsapp", to: "+15551234567", body: "Hi Joe" } });
+  });
+
+  it("treats a wholly absent `to` as a literal empty recipient (hard failure)", () => {
+    expect(planStep({ ...base } as FlowStep, { vars: { name: "Joe" } })).toEqual({
+      ok: false,
+      error: "send_whatsapp: recipient is empty after templating"
+    });
+  });
+
+  it("fails when the body renders empty", () => {
+    expect(
+      planStep(
+        { id: "w", type: "send_whatsapp", to: "+15551234567", body: "{{vars.gone}}" } as FlowStep,
+        { vars: {} }
+      )
+    ).toEqual({ ok: false, error: "send_whatsapp: body is empty after templating" });
+  });
+});
+
 describe("planStep: share_document", () => {
   const DOC_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
   const base = { id: "sd1", type: "share_document" as const, documentId: DOC_ID };

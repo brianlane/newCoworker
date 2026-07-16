@@ -27,6 +27,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   extract_text: "Read details from the message text",
   email_extract: "Read details from an email",
   send_sms: "Send a text",
+  send_whatsapp: "Send a WhatsApp message",
   send_email: "Send an email",
   approval_gate: "Ask me to approve first",
   notify_owner: "Notify me",
@@ -61,6 +62,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   email_extract:
     "Reads details from a recent email in a connected mailbox - used to backfill lead info (like a phone or address) from an alert email when a web page was slow or empty.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
+  send_whatsapp:
+    "Sends a WhatsApp message from your connected WhatsApp Business number. If the person hasn't messaged you in the last 24 hours, an approved template carries the message (Meta bills per template message).",
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",
   notify_owner: "Sends you a quick update without pausing the workflow.",

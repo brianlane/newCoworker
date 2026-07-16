@@ -17,7 +17,9 @@ import {
   deleteMessengerMessage,
   failMessengerJob,
   getMessengerConversationById,
+  getMessengerConversationByIdentityPublic,
   insertMessengerJob,
+  insertOutboundMessengerConversation,
   listMessengerConversationsForBusiness,
   listMessengerMessages,
   MESSENGER_WINDOW_MS,
@@ -194,6 +196,71 @@ describe("upsertMessengerConversation", () => {
   });
 });
 
+describe("getMessengerConversationByIdentityPublic", () => {
+  it("looks up by identity without side effects; null when absent; throws on error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: CONVERSATION, error: null });
+    const row = await getMessengerConversationByIdentityPublic(
+      BIZ,
+      "p1",
+      "messenger",
+      "psid-1",
+      makeDb(c)
+    );
+    expect(row?.id).toBe(CONV_ID);
+    expect(c.update).not.toHaveBeenCalled();
+    expect(c.insert).not.toHaveBeenCalled();
+
+    const c2 = chain();
+    c2.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(
+      await getMessengerConversationByIdentityPublic(BIZ, "p1", "messenger", "x", makeDb(c2))
+    ).toBeNull();
+
+    const c3 = chain();
+    c3.maybeSingle.mockResolvedValue({ data: null, error: { message: "identity fail" } });
+    await expect(
+      getMessengerConversationByIdentityPublic(BIZ, "p1", "messenger", "x", makeDb(c3))
+    ).rejects.toThrow(/identity fail/);
+  });
+});
+
+describe("insertOutboundMessengerConversation", () => {
+  const INPUT = {
+    businessId: BIZ,
+    pageId: "pn-9",
+    platform: "whatsapp" as const,
+    psid: "15551234567"
+  };
+
+  it("inserts with a backdated window clock (outbound rows read closed)", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: CONVERSATION, error: null });
+    const row = await insertOutboundMessengerConversation(INPUT, makeDb(c));
+    expect(row?.id).toBe(CONV_ID);
+    const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
+    expect(inserted.last_user_message_at).toBe(new Date(0).toISOString());
+    expect(
+      messengerWindowOpen({ last_user_message_at: inserted.last_user_message_at as string })
+    ).toBe(false);
+  });
+
+  it("re-reads the winner on an identity race; throws when both fail", async () => {
+    const c = chain();
+    c.single.mockResolvedValue({ data: null, error: { message: "duplicate key 23505" } });
+    c.maybeSingle.mockResolvedValue({ data: CONVERSATION, error: null });
+    const row = await insertOutboundMessengerConversation(INPUT, makeDb(c));
+    expect(row?.id).toBe(CONV_ID);
+
+    const c2 = chain();
+    c2.single.mockResolvedValue({ data: null, error: { message: "insert fail" } });
+    c2.maybeSingle.mockResolvedValue({ data: null, error: null });
+    await expect(insertOutboundMessengerConversation(INPUT, makeDb(c2))).rejects.toThrow(
+      /insert fail/
+    );
+  });
+});
+
 describe("getMessengerConversationById", () => {
   it("returns the row / null / throws on error", async () => {
     const c = chain();
@@ -258,6 +325,16 @@ describe("listMessengerConversationsForBusiness", () => {
   it("returns [] when the read produces no data at all", async () => {
     const c = chain({ data: null, error: null });
     expect(await listMessengerConversationsForBusiness(BIZ, {}, makeDb(c))).toEqual([]);
+  });
+
+  it("filters by platform when requested", async () => {
+    const c = chain({ data: [], error: null });
+    await listMessengerConversationsForBusiness(BIZ, { platform: "whatsapp" }, makeDb(c));
+    expect(c.eq).toHaveBeenCalledWith("platform", "whatsapp");
+
+    const c2 = chain({ data: [], error: null });
+    await listMessengerConversationsForBusiness(BIZ, {}, makeDb(c2));
+    expect(c2.eq).not.toHaveBeenCalledWith("platform", expect.anything());
   });
 
   it("honors the limit and throws on error", async () => {
@@ -472,6 +549,15 @@ describe("default service client", () => {
     defaultClientSpy.mockReturnValue(makeDb(c, rpc));
 
     expect(await getMessengerConversationById(CONV_ID)).toBeNull();
+    expect(
+      await getMessengerConversationByIdentityPublic(BIZ, "p1", "messenger", "psid-1")
+    ).toBeNull();
+    await insertOutboundMessengerConversation({
+      businessId: BIZ,
+      pageId: "p1",
+      platform: "messenger",
+      psid: "psid-1"
+    });
     await upsertMessengerConversation(IDENTITY);
     await updateMessengerConversationContact(CONV_ID, {});
     await listMessengerConversationsForBusiness(BIZ);

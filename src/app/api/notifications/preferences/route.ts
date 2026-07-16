@@ -13,6 +13,7 @@ import { z } from "zod";
 const patchSchema = z.object({
   businessId: z.string().uuid(),
   sms_urgent: z.boolean().optional(),
+  whatsapp_urgent: z.boolean().optional(),
   email_digest: z.boolean().optional(),
   email_digest_weekly: z.boolean().optional(),
   email_urgent: z.boolean().optional(),

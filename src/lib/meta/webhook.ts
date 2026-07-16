@@ -9,19 +9,20 @@
  *     Each becomes a webhook flow event with source "facebook_lead_ads"
  *     and the leadgen id as the idempotency key.
  *   * `entry[].messaging[]` (object "page" = Messenger, object
- *     "instagram" = IG DMs) — conversation messages. Each lands in
- *     messenger_conversations/messages (Meta `mid` dedupes redeliveries)
- *     and enqueues a messenger_jobs reply job; a NEW conversation also
- *     fires a first-contact webhook flow event (source
- *     "facebook_messenger" / "instagram_dm", conversation id as the
- *     idempotency key).
+ *     "instagram" = IG DMs) and `entry[].changes[].value.messages[]`
+ *     (object "whatsapp_business_account" = WhatsApp) — conversation
+ *     messages. Each lands in messenger_conversations/messages (Meta
+ *     `mid`/wamid dedupes redeliveries) and enqueues a messenger_jobs
+ *     reply job; a NEW conversation also fires a first-contact webhook
+ *     flow event (source "facebook_messenger" / "instagram_dm" /
+ *     "whatsapp", conversation id as the idempotency key).
  */
 import { z } from "zod";
 import {
   getActiveMetaConnectionByInstagramId,
-  getActiveMetaConnectionByPageId,
-  type MetaConnectionRow
+  getActiveMetaConnectionByPageId
 } from "@/lib/db/meta-connections";
+import { getActiveWhatsAppConnectionByPhoneNumberId } from "@/lib/db/whatsapp-connections";
 import { fetchLead } from "@/lib/meta/client";
 import {
   appendMessengerMessage,
@@ -88,6 +89,44 @@ const webhookBodySchema = z.object({
   )
 });
 
+/**
+ * WhatsApp deliveries carry a different change shape than leadgen:
+ * value.messages[] (inbound texts) + value.statuses[] (receipts, ignored)
+ * + value.contacts[] (sender profile names) under field "messages".
+ */
+const whatsappChangeValueSchema = z
+  .object({
+    metadata: z
+      .object({
+        phone_number_id: z.union([z.string(), z.number()]).optional()
+      })
+      .passthrough()
+      .optional(),
+    contacts: z
+      .array(
+        z.object({
+          wa_id: z.union([z.string(), z.number()]).optional(),
+          profile: z.object({ name: z.string().optional() }).passthrough().optional()
+        })
+      )
+      .optional(),
+    messages: z
+      .array(
+        z.object({
+          id: z.string().optional(),
+          from: z.union([z.string(), z.number()]).optional(),
+          type: z.string().optional(),
+          text: z.object({ body: z.string().optional() }).passthrough().optional(),
+          button: z
+            .object({ text: z.string().optional(), payload: z.string().optional() })
+            .passthrough()
+            .optional()
+        })
+      )
+      .optional()
+  })
+  .passthrough();
+
 export type MetaLeadgenEvent = {
   pageId: string;
   leadgenId: string;
@@ -95,13 +134,18 @@ export type MetaLeadgenEvent = {
 
 export type MetaMessageEvent = {
   platform: MessengerPlatform;
-  /** Page id (Messenger) or IG professional account id (Instagram). */
+  /**
+   * Business-side account key: Page id (messenger), IG professional
+   * account id (instagram), or phone_number_id (whatsapp).
+   */
   accountId: string;
-  /** The lead's page-/IG-scoped user id. */
+  /** The lead's page-/IG-scoped user id, or wa_id for WhatsApp. */
   senderId: string;
-  /** Meta message id — the redelivery dedupe key. */
+  /** Meta message id (wamid for WhatsApp) — the redelivery dedupe key. */
   mid: string;
   text: string;
+  /** Sender profile name when the delivery carried one (WhatsApp does). */
+  displayName?: string | null;
 };
 
 export type MetaWebhookEvents = {
@@ -125,6 +169,52 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
 
   const events: MetaWebhookEvents = { leadgen: [], messages: [] };
   const object = parsed.data.object;
+  if (object === "whatsapp_business_account") {
+    for (const entry of parsed.data.entry) {
+      for (const change of entry.changes ?? []) {
+        if (change.field !== "messages") continue;
+        const value = whatsappChangeValueSchema.safeParse(change.value);
+        if (!value.success) continue;
+        const phoneNumberId = String(value.data.metadata?.phone_number_id ?? "");
+        if (!phoneNumberId) continue;
+        // Sender display names ride along in contacts[], keyed by wa_id.
+        const names = new Map<string, string>();
+        for (const contact of value.data.contacts ?? []) {
+          const waId = String(contact.wa_id ?? "");
+          const name = contact.profile?.name?.trim();
+          if (waId && name) names.set(waId, name);
+        }
+        for (const message of value.data.messages ?? []) {
+          const mid = message.id ?? "";
+          const senderId = String(message.from ?? "");
+          if (!mid || !senderId) continue;
+          const text = message.text?.body?.trim() ?? "";
+          // Quick-reply button taps read as the customer's turn.
+          const buttonLabel =
+            message.button?.text?.trim() || message.button?.payload?.trim() || "";
+          const content =
+            text ||
+            buttonLabel ||
+            // Non-text types (image/audio/document/...) get the placeholder;
+            // `unsupported`/reaction noise is skipped entirely.
+            (message.type && !["unsupported", "reaction"].includes(message.type)
+              ? MESSENGER_ATTACHMENT_PLACEHOLDER
+              : "");
+          if (!content) continue;
+          events.messages.push({
+            platform: "whatsapp",
+            accountId: phoneNumberId,
+            senderId,
+            mid,
+            text: content,
+            displayName: names.get(senderId) ?? null
+          });
+        }
+        // value.statuses[] (sent/delivered/read receipts) intentionally ignored.
+      }
+    }
+    return events;
+  }
   if (object !== "page" && object !== "instagram") return events;
   const platform: MessengerPlatform = object === "instagram" ? "instagram" : "messenger";
 
@@ -237,8 +327,37 @@ export async function processMetaLeadgenEvent(
 /** Flow-trigger source labels for first-contact conversation events. */
 export const MESSENGER_FLOW_SOURCES: Record<MessengerPlatform, string> = {
   messenger: "facebook_messenger",
-  instagram: "instagram_dm"
+  instagram: "instagram_dm",
+  whatsapp: "whatsapp"
 };
+
+/**
+ * The business-side send credentials for one inbound message, platform-
+ * normalized: Page token + page id for Messenger/IG, Cloud API token +
+ * phone_number_id for WhatsApp.
+ */
+type ResolvedMessageAccount = {
+  businessId: string;
+  /** Value stored in messenger_conversations.page_id. */
+  accountKey: string;
+};
+
+async function resolveMessageAccount(
+  platform: MessengerPlatform,
+  accountId: string
+): Promise<ResolvedMessageAccount | null> {
+  if (platform === "whatsapp") {
+    const connection = await getActiveWhatsAppConnectionByPhoneNumberId(accountId);
+    if (!connection?.accessToken) return null;
+    return { businessId: connection.business_id, accountKey: connection.phone_number_id };
+  }
+  const connection =
+    platform === "instagram"
+      ? await getActiveMetaConnectionByInstagramId(accountId)
+      : await getActiveMetaConnectionByPageId(accountId);
+  if (!connection?.pageToken || !connection.page_id) return null;
+  return { businessId: connection.business_id, accountKey: connection.page_id };
+}
 
 /**
  * Ingest one conversation message: resolve the tenant, upsert the
@@ -266,12 +385,9 @@ export async function processMetaMessageEvent(
     return "rate_limited";
   }
 
-  let connection: MetaConnectionRow | null = null;
+  let account: ResolvedMessageAccount | null = null;
   try {
-    connection =
-      platform === "instagram"
-        ? await getActiveMetaConnectionByInstagramId(accountId)
-        : await getActiveMetaConnectionByPageId(accountId);
+    account = await resolveMessageAccount(platform, accountId);
   } catch (err) {
     logger.warn("meta message connection lookup failed", {
       accountId,
@@ -280,7 +396,7 @@ export async function processMetaMessageEvent(
     });
     return false;
   }
-  if (!connection?.pageToken || !connection.page_id) {
+  if (!account) {
     // Unknown/disabled account: acknowledge so Meta doesn't retry forever.
     logger.warn("meta message for unconnected account", { accountId, platform });
     return false;
@@ -288,15 +404,17 @@ export async function processMetaMessageEvent(
 
   try {
     const { conversation, isNew } = await upsertMessengerConversation({
-      businessId: connection.business_id,
-      pageId: connection.page_id,
+      businessId: account.businessId,
+      pageId: account.accountKey,
       platform,
-      psid: senderId
+      psid: senderId,
+      // WhatsApp deliveries carry the sender's profile name inline.
+      displayName: event.displayName ?? null
     });
 
     const message = await appendMessengerMessage({
       conversationId: conversation.id,
-      businessId: connection.business_id,
+      businessId: account.businessId,
       role: "user",
       content: text,
       mid
@@ -311,12 +429,12 @@ export async function processMetaMessageEvent(
       // event (exactly-once via the conversation-id dedupe key). Reply
       // generation is the conversational engine's job, not the flow's.
       try {
-        await processWebhookFlowEvent(connection.business_id, {
+        await processWebhookFlowEvent(account.businessId, {
           source: MESSENGER_FLOW_SOURCES[platform],
           eventId: conversation.id,
           data: {
             platform,
-            page_id: connection.page_id,
+            page_id: account.accountKey,
             psid: senderId,
             ...(conversation.display_name
               ? { display_name: conversation.display_name }
@@ -326,7 +444,7 @@ export async function processMetaMessageEvent(
         });
       } catch (err) {
         logger.warn("messenger first-contact flow trigger failed", {
-          businessId: connection.business_id,
+          businessId: account.businessId,
           conversationId: conversation.id,
           error: err instanceof Error ? err.message : String(err)
         });
@@ -335,7 +453,7 @@ export async function processMetaMessageEvent(
 
     try {
       await insertMessengerJob({
-        businessId: connection.business_id,
+        businessId: account.businessId,
         conversationId: conversation.id,
         userMessageId: message.id
       });
@@ -348,7 +466,7 @@ export async function processMetaMessageEvent(
         await deleteMessengerMessage(message.id);
       } catch (cleanupErr) {
         logger.error("meta message job-insert cleanup failed; orphan transcript row", {
-          businessId: connection.business_id,
+          businessId: account.businessId,
           messageId: message.id,
           error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr)
         });
@@ -358,7 +476,7 @@ export async function processMetaMessageEvent(
     return true;
   } catch (err) {
     logger.warn("meta message processing failed", {
-      businessId: connection.business_id,
+      businessId: account.businessId,
       accountId,
       platform,
       error: err instanceof Error ? err.message : String(err)

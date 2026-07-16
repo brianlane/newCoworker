@@ -19,7 +19,12 @@ import {
   messengerWindowOpen
 } from "@/lib/messenger/db";
 import { getActiveMetaConnectionByPageId } from "@/lib/db/meta-connections";
-import { sendMessengerMessage, MESSENGER_MAX_TEXT_LENGTH } from "@/lib/meta/client";
+import { getActiveWhatsAppConnectionByPhoneNumberId } from "@/lib/db/whatsapp-connections";
+import {
+  sendMessengerMessage,
+  sendWhatsAppMessage,
+  MESSENGER_MAX_TEXT_LENGTH
+} from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
@@ -49,9 +54,24 @@ export async function POST(request: Request) {
       );
     }
 
-    const connection = await getActiveMetaConnectionByPageId(conversation.page_id);
-    if (!connection?.pageToken) {
-      return errorResponse("VALIDATION_ERROR", "Facebook is no longer connected");
+    // Platform-normalized send credentials: page token (messenger/IG) or
+    // the Cloud API business token (whatsapp), both keyed by the
+    // conversation's stored account key.
+    let sendToken: string;
+    if (conversation.platform === "whatsapp") {
+      const connection = await getActiveWhatsAppConnectionByPhoneNumberId(
+        conversation.page_id
+      );
+      if (!connection?.accessToken) {
+        return errorResponse("VALIDATION_ERROR", "WhatsApp is no longer connected");
+      }
+      sendToken = connection.accessToken;
+    } else {
+      const connection = await getActiveMetaConnectionByPageId(conversation.page_id);
+      if (!connection?.pageToken) {
+        return errorResponse("VALIDATION_ERROR", "Facebook is no longer connected");
+      }
+      sendToken = connection.pageToken;
     }
 
     // Transcript row FIRST, then the external send: if the Send API fails,
@@ -67,12 +87,21 @@ export async function POST(request: Request) {
     });
 
     try {
-      await sendMessengerMessage(
-        conversation.page_id,
-        connection.pageToken,
-        conversation.psid,
-        body.text
-      );
+      if (conversation.platform === "whatsapp") {
+        await sendWhatsAppMessage(
+          conversation.page_id,
+          sendToken,
+          conversation.psid,
+          body.text
+        );
+      } else {
+        await sendMessengerMessage(
+          conversation.page_id,
+          sendToken,
+          conversation.psid,
+          body.text
+        );
+      }
     } catch (sendErr) {
       if (message) {
         try {

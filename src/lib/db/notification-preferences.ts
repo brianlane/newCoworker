@@ -6,6 +6,12 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export type NotificationPreferencesRow = {
   business_id: string;
   sms_urgent: boolean;
+  /**
+   * Deliver urgent alerts over WhatsApp too (requires a connected WhatsApp
+   * integration; out-of-window sends use the owner_alert template).
+   * Optional on the type for rows read before 20260716171917.
+   */
+  whatsapp_urgent?: boolean;
   email_digest: boolean;
   email_digest_weekly: boolean;
   email_urgent: boolean;
@@ -112,6 +118,7 @@ export type NotificationPreferencesUpdate = Partial<
   Pick<
     NotificationPreferencesRow,
     | "sms_urgent"
+    | "whatsapp_urgent"
     | "email_digest"
     | "email_digest_weekly"
     | "email_urgent"
@@ -132,6 +139,7 @@ export type NotificationPreferencesUpdate = Partial<
 
 const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> = {
   sms_urgent: true,
+  whatsapp_urgent: true,
   email_digest: true,
   email_digest_weekly: true,
   email_urgent: true,
@@ -233,6 +241,7 @@ export async function updateNotificationPreferences(
 
   const keys: (keyof NotificationPreferencesUpdate)[] = [
     "sms_urgent",
+    "whatsapp_urgent",
     "email_digest",
     "email_digest_weekly",
     "email_urgent",
@@ -264,6 +273,7 @@ export async function updateNotificationPreferences(
   const reSubscribed =
     update.unsubscribed_at === undefined &&
     (patch.sms_urgent === true ||
+      patch.whatsapp_urgent === true ||
       patch.email_digest === true ||
       patch.email_digest_weekly === true ||
       patch.email_urgent === true ||

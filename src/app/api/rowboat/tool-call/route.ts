@@ -14,6 +14,7 @@ import {
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
+import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
@@ -310,6 +311,7 @@ function toolSurface(name: string): DocumentToolSurface {
 
 const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
   send_sms: { agentKey: "dashboard", toolKey: "send_sms" },
+  send_whatsapp: { agentKey: "dashboard", toolKey: "send_whatsapp" },
   // Marketplace parity (all tools on all workers): the texting coworker
   // declares the bare names, the dashboard coworker its `dashboard_` twins —
   // same cores, separate Settings toggles.
@@ -665,6 +667,41 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         ...(parsed.data.caption !== undefined ? { caption: parsed.data.caption } : {}),
         ...(parsed.data.inputImageRef ? { inputImageRef: parsed.data.inputImageRef } : {})
       });
+    }
+    case "send_whatsapp": {
+      const parsed = sendSmsArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const delivered = await deliverWhatsApp({
+        businessId,
+        to: parsed.data.toE164,
+        text: parsed.data.body,
+        audience: "contact"
+      });
+      if (!delivered.ok) {
+        if (delivered.reason === "not_connected") {
+          return {
+            ok: false,
+            detail: "whatsapp_not_connected",
+            message:
+              "WhatsApp is not connected. Point the owner to Integrations to connect WhatsApp Business."
+          };
+        }
+        if (delivered.reason === "template_not_approved") {
+          return {
+            ok: false,
+            detail: "whatsapp_window_closed",
+            message:
+              "The recipient has not messaged on WhatsApp in the last 24 hours and the message template is still in Meta review. Offer to text them with send_sms instead."
+          };
+        }
+        return { ok: false, detail: "whatsapp_send_failed" };
+      }
+      return {
+        ok: true,
+        data: { messageId: delivered.messageId, toE164: parsed.data.toE164, via: delivered.via }
+      };
     }
     case "send_sms": {
       const parsed = sendSmsArgsSchema.safeParse(args);

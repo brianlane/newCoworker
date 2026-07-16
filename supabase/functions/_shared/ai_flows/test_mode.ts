@@ -56,6 +56,16 @@ export function simulateTestAction(
         to: action.toAgentName || action.toRef?.label || action.to || "(group thread)",
         body: action.body
       };
+    case "send_whatsapp":
+      // Same skip semantics as send_sms.
+      if (action.skipReason) {
+        return { simulated: "send_whatsapp", skipped: action.skipReason };
+      }
+      return {
+        simulated: "send_whatsapp",
+        to: action.toAgentName || action.toRef?.label || action.to,
+        body: action.body
+      };
     case "send_email":
       return {
         simulated: "send_email",

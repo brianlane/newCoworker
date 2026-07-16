@@ -145,7 +145,13 @@ export function buildMetaLoginUrl(input: { redirectUri: string; state: string })
 async function graphRequest(
   path: string,
   params: Record<string, string>,
-  options?: { method?: "GET" | "POST" | "DELETE" }
+  options?: {
+    method?: "GET" | "POST" | "DELETE";
+    /** JSON request body (Cloud API style) instead of query params. */
+    jsonBody?: unknown;
+    /** Send the token as an Authorization bearer instead of a query param. */
+    bearerToken?: string;
+  }
 ): Promise<unknown> {
   const method = options?.method ?? "GET";
   const url = new URL(`${META_GRAPH_BASE_URL}${path}`);
@@ -153,11 +159,21 @@ async function graphRequest(
     url.searchParams.set(k, v);
   }
 
+  const headers: Record<string, string> = {};
+  let body: string | undefined;
+  if (options?.jsonBody !== undefined) {
+    headers["Content-Type"] = "application/json";
+    body = JSON.stringify(options.jsonBody);
+  }
+  if (options?.bearerToken) {
+    headers.Authorization = `Bearer ${options.bearerToken}`;
+  }
+
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), META_REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
-    res = await fetch(url.toString(), { method, signal: ac.signal });
+    res = await fetch(url.toString(), { method, headers, body, signal: ac.signal });
   } catch (err) {
     const aborted = (err as Error)?.name === "AbortError";
     throw new MetaApiError(
@@ -415,6 +431,249 @@ export async function getLinkedInstagramAccount(
     });
     return null;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* WhatsApp Business (Cloud API)                                       */
+/* ------------------------------------------------------------------ */
+
+/** Cloud API hard limit for a text message body. */
+export const WHATSAPP_MAX_TEXT_LENGTH = 4096;
+
+/**
+ * The stock utility templates auto-registered on every tenant WABA at
+ * connect time. Bodies carry a fixed frame + variables (Meta rejects
+ * variable-only bodies); category "utility" keeps them out of marketing
+ * review. Sends outside the 24h service window use these; inside it,
+ * free-form text goes out instead.
+ */
+export const WHATSAPP_STOCK_TEMPLATES = [
+  {
+    name: "nc_owner_alert",
+    language: "en_US",
+    category: "UTILITY" as const,
+    bodyText: "Update from your {{1}} assistant: {{2}}"
+  },
+  {
+    name: "nc_contact_followup",
+    language: "en_US",
+    category: "UTILITY" as const,
+    bodyText: "Hello from {{1}}: {{2}} Reply here and we can pick it up on WhatsApp."
+  }
+] as const;
+
+export type WhatsAppStockTemplateName = (typeof WHATSAPP_STOCK_TEMPLATES)[number]["name"];
+
+/**
+ * Send a free-form text to a WhatsApp user (wa_id / E.164 digits) from
+ * the tenant's business number. Only valid inside the 24h customer
+ * service window — the deliver helper gates on that BEFORE calling.
+ */
+export async function sendWhatsAppMessage(
+  phoneNumberId: string,
+  token: string,
+  to: string,
+  text: string
+): Promise<{ messageId: string | null }> {
+  const trimmed =
+    text.length > WHATSAPP_MAX_TEXT_LENGTH
+      ? `${text.slice(0, WHATSAPP_MAX_TEXT_LENGTH - 1)}…`
+      : text;
+  const payload = (await graphRequest(
+    `/${phoneNumberId}/messages`,
+    {},
+    {
+      method: "POST",
+      bearerToken: token,
+      jsonBody: {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "text",
+        text: { body: trimmed }
+      }
+    }
+  )) as { messages?: Array<{ id?: unknown }> } | null;
+  const messageId = payload?.messages?.[0]?.id;
+  return { messageId: typeof messageId === "string" ? messageId : null };
+}
+
+/**
+ * Send an approved template message (the out-of-window path). Variables
+ * map positionally onto the template's {{1}}, {{2}}, ... body slots.
+ */
+export async function sendWhatsAppTemplate(
+  phoneNumberId: string,
+  token: string,
+  to: string,
+  template: { name: string; language: string; bodyParams: string[] }
+): Promise<{ messageId: string | null }> {
+  const payload = (await graphRequest(
+    `/${phoneNumberId}/messages`,
+    {},
+    {
+      method: "POST",
+      bearerToken: token,
+      jsonBody: {
+        messaging_product: "whatsapp",
+        recipient_type: "individual",
+        to,
+        type: "template",
+        template: {
+          name: template.name,
+          language: { code: template.language },
+          components: [
+            {
+              type: "body",
+              parameters: template.bodyParams.map((text) => ({
+                type: "text",
+                // Cloud API rejects params with newlines/tabs or >1024 chars.
+                text: text.replace(/\s+/g, " ").trim().slice(0, 1024)
+              }))
+            }
+          ]
+        }
+      }
+    }
+  )) as { messages?: Array<{ id?: unknown }> } | null;
+  const messageId = payload?.messages?.[0]?.id;
+  return { messageId: typeof messageId === "string" ? messageId : null };
+}
+
+/**
+ * Exchange the Embedded Signup popup's code for a business-integration
+ * system-user token (does not expire; no long-lived exchange needed).
+ */
+export async function exchangeEmbeddedSignupCode(code: string): Promise<string> {
+  const payload = await graphRequest("/oauth/access_token", {
+    client_id: getMetaAppId(),
+    client_secret: getMetaAppSecret(),
+    code
+  });
+  const token = (payload as { access_token?: unknown } | null)?.access_token;
+  if (typeof token !== "string" || token.length === 0) {
+    throw new MetaApiError("request_failed", "Embedded Signup code exchange returned no token");
+  }
+  return token;
+}
+
+/** Subscribe our app to the WABA's webhooks (inbound message delivery). */
+export async function subscribeWabaToApp(wabaId: string, token: string): Promise<void> {
+  const payload = await graphRequest(
+    `/${wabaId}/subscribed_apps`,
+    {},
+    { method: "POST", bearerToken: token }
+  );
+  const success = (payload as { success?: unknown } | null)?.success;
+  if (success !== true) {
+    throw new MetaApiError("request_failed", "WABA webhook subscription was not confirmed");
+  }
+}
+
+/** Best-effort unsubscribe on disconnect — never throws. */
+export async function unsubscribeWabaFromApp(wabaId: string, token: string): Promise<void> {
+  try {
+    await graphRequest(
+      `/${wabaId}/subscribed_apps`,
+      {},
+      { method: "DELETE", bearerToken: token }
+    );
+  } catch (err) {
+    // graphRequest only ever throws MetaApiError.
+    logger.warn("waba unsubscribe failed (ignored)", {
+      wabaId,
+      error: (err as Error).message
+    });
+  }
+}
+
+export type WhatsAppTemplateStatus = {
+  name: string;
+  language: string;
+  status: string;
+};
+
+/**
+ * Register the stock utility templates on a WABA (idempotent: an
+ * already-exists error is treated as registered/PENDING). Returns the
+ * per-template outcome so the connection row can track review status.
+ */
+export async function registerWhatsAppTemplates(
+  wabaId: string,
+  token: string
+): Promise<WhatsAppTemplateStatus[]> {
+  const results: WhatsAppTemplateStatus[] = [];
+  for (const template of WHATSAPP_STOCK_TEMPLATES) {
+    try {
+      const payload = (await graphRequest(
+        `/${wabaId}/message_templates`,
+        {},
+        {
+          method: "POST",
+          bearerToken: token,
+          jsonBody: {
+            name: template.name,
+            language: template.language,
+            category: template.category,
+            components: [
+              {
+                type: "BODY",
+                text: template.bodyText,
+                example: { body_text: [["Acme Plumbing", "You have a new lead waiting."]] }
+              }
+            ]
+          }
+        }
+      )) as { status?: unknown } | null;
+      results.push({
+        name: template.name,
+        language: template.language,
+        status: typeof payload?.status === "string" ? payload.status : "PENDING"
+      });
+    } catch (err) {
+      // Re-connects hit "name already exists" — that means a prior
+      // registration is live; report PENDING and let the status fetch
+      // below reconcile. Anything else is reported as FAILED (the deliver
+      // helper falls back to window-only sends for that template).
+      logger.warn("whatsapp template registration failed", {
+        wabaId,
+        template: template.name,
+        error: (err as Error).message
+      });
+      results.push({
+        name: template.name,
+        language: template.language,
+        status: (err as MetaApiError).status === 400 ? "PENDING" : "FAILED"
+      });
+    }
+  }
+  return results;
+}
+
+/**
+ * Current review status of our stock templates on a WABA (used to flip
+ * PENDING → APPROVED on later reads). Returns only the stock names.
+ */
+export async function fetchWhatsAppTemplateStatuses(
+  wabaId: string,
+  token: string
+): Promise<WhatsAppTemplateStatus[]> {
+  const payload = (await graphRequest(
+    `/${wabaId}/message_templates`,
+    { fields: "name,language,status", limit: "100" },
+    { bearerToken: token }
+  )) as { data?: Array<{ name?: unknown; language?: unknown; status?: unknown }> } | null;
+  const stockNames = new Set<string>(WHATSAPP_STOCK_TEMPLATES.map((t) => t.name));
+  const out: WhatsAppTemplateStatus[] = [];
+  for (const row of payload?.data ?? []) {
+    if (typeof row.name !== "string" || !stockNames.has(row.name)) continue;
+    out.push({
+      name: row.name,
+      language: typeof row.language === "string" ? row.language : "en_US",
+      status: typeof row.status === "string" ? row.status : "PENDING"
+    });
+  }
+  return out;
 }
 
 /* ------------------------------------------------------------------ */

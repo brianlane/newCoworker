@@ -14,6 +14,7 @@ vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn()
 }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/whatsapp/deliver", () => ({ deliverWhatsApp: vi.fn() }));
 
 const insertMock = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
@@ -23,9 +24,10 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { requireMcpBusinessRole } from "@/lib/mcp/auth";
-import { sendSmsTool } from "@/lib/mcp/tools/sms";
+import { sendSmsTool, sendWhatsAppTool } from "@/lib/mcp/tools/sms";
 import { rateLimit } from "@/lib/rate-limit";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { logger } from "@/lib/logger";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
@@ -123,5 +125,80 @@ describe("send_sms", () => {
       "mcp sms: outbound log insert failed",
       expect.objectContaining({ error: "insert down" })
     );
+  });
+});
+
+describe("send_whatsapp", () => {
+  it("delivers through the central helper and reports the delivery path", async () => {
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: true,
+      via: "template",
+      messageId: "wamid-1"
+    } as never);
+    const result = await sendWhatsAppTool.handler(
+      { to: "555-000-1111", text: "hello" },
+      AUTH
+    );
+    expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "operate_messages");
+    expect(deliverWhatsApp).toHaveBeenCalledWith({
+      businessId: "biz-1",
+      to: "+15550001111",
+      text: "hello",
+      audience: "contact"
+    });
+    expect(result).toEqual({
+      sent: true,
+      to: "+15550001111",
+      message_id: "wamid-1",
+      via: "template"
+    });
+  });
+
+  it("refuses when the per-business rate limit is hit", async () => {
+    vi.mocked(rateLimit).mockReturnValue({
+      success: false,
+      limit: 60,
+      remaining: 0,
+      reset: 0
+    });
+    await expect(
+      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+    ).rejects.toThrow(/rate limit/i);
+    expect(deliverWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("maps policy skips and failures to actionable tool errors", async () => {
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: false,
+      reason: "not_connected"
+    } as never);
+    await expect(
+      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+    ).rejects.toThrow(/not connected/i);
+
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: false,
+      reason: "template_not_approved"
+    } as never);
+    await expect(
+      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+    ).rejects.toThrow(/use send_sms instead/i);
+
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: false,
+      reason: "send_failed",
+      detail: "cloud api 500"
+    } as never);
+    await expect(
+      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+    ).rejects.toThrow(/Could not send: send_failed \(cloud api 500\)/);
+
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: false,
+      reason: "invalid_recipient"
+    } as never);
+    await expect(
+      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+    ).rejects.toThrow(/Could not send: invalid_recipient/);
   });
 });

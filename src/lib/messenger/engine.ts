@@ -83,7 +83,8 @@ export const MESSENGER_ENGINE_HISTORY_LIMIT = 20;
 
 const PLATFORM_LABELS: Record<MessengerConversationRow["platform"], string> = {
   messenger: "Facebook Messenger",
-  instagram: "Instagram Direct Messages"
+  instagram: "Instagram Direct Messages",
+  whatsapp: "WhatsApp"
 };
 
 /**

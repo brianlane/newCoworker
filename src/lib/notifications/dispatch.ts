@@ -40,6 +40,7 @@ import {
   resolveNotificationCategory,
   type CategoryPreferenceFlags
 } from "@/lib/notifications/categories";
+import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { logger } from "@/lib/logger";
 
 export type NotificationKind = "urgent_alert" | "voice_capture" | "digest" | string;
@@ -74,6 +75,8 @@ export type ResolvedTargets = {
   email: string | null;
   phone: string | null;
   smsUrgentEnabled: boolean;
+  /** WhatsApp channel toggle (delivery still requires a connected integration). */
+  whatsappUrgentEnabled: boolean;
   emailUrgentEnabled: boolean;
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
@@ -98,6 +101,7 @@ export async function resolveNotificationTargets(
   let prefsEmail: string | null = null;
   let prefsPhone: string | null = null;
   let smsUrgent = true;
+  let whatsappUrgent = true;
   let emailUrgent = true;
   let emailDigest = true;
   let dashboardAlerts = true;
@@ -130,6 +134,9 @@ export async function resolveNotificationTargets(
       });
     }
     smsUrgent = prefs.sms_urgent;
+    // ?? true: rows read before the 20260716171917 migration keep the
+    // channel on (delivery still requires a connected integration).
+    whatsappUrgent = prefs.whatsapp_urgent ?? true;
     emailUrgent = prefs.email_urgent;
     emailDigest = prefs.email_digest;
     dashboardAlerts = prefs.dashboard_alerts;
@@ -162,6 +169,7 @@ export async function resolveNotificationTargets(
     email: prefsEmail ?? ownerEmail ?? fallbackEmail,
     phone: prefsPhone ?? fallbackPhone,
     smsUrgentEnabled: smsUrgent,
+    whatsappUrgentEnabled: whatsappUrgent,
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
@@ -226,7 +234,7 @@ export async function dispatchUrgentNotification(
   const category = resolveNotificationCategory(kind);
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
-    for (const channel of ["dashboard", "email", "sms"] as const) {
+    for (const channel of ["dashboard", "email", "sms", "whatsapp"] as const) {
       results.push(
         await recordRow(input.businessId, channel, "skipped", summary, kind, payload, reason)
       );
@@ -374,6 +382,75 @@ export async function dispatchUrgentNotification(
         await recordRow(
           input.businessId,
           "sms",
+          "failed",
+          summary,
+          kind,
+          { ...payload, recipient: targets.phone },
+          err instanceof Error ? err.message : "send_failed"
+        )
+      );
+    }
+  }
+
+  // 4) WhatsApp channel. Fully additive: no connected WhatsApp integration
+  // just writes an honest skip row (deliverWhatsApp's not_connected). Out-
+  // of-window sends ride the owner-alert utility template; a template still
+  // in Meta review is likewise recorded as skipped, never failed.
+  if (!targets.phone) {
+    results.push(
+      await recordRow(input.businessId, "whatsapp", "skipped", summary, kind, payload, "no_phone")
+    );
+  } else if (!targets.whatsappUrgentEnabled || targets.unsubscribed) {
+    results.push(
+      await recordRow(
+        input.businessId,
+        "whatsapp",
+        "skipped",
+        summary,
+        kind,
+        { ...payload, recipient: targets.phone },
+        targets.unsubscribed ? "unsubscribed" : "whatsapp_urgent_disabled"
+      )
+    );
+  } else {
+    const text = input.smsBody ?? `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
+    try {
+      const delivered = await deliverWhatsApp({
+        businessId: input.businessId,
+        to: targets.phone,
+        text,
+        audience: "owner"
+      });
+      if (delivered.ok) {
+        results.push(
+          await recordRow(input.businessId, "whatsapp", "sent", summary, kind, {
+            ...payload,
+            recipient: targets.phone,
+            via: delivered.via
+          })
+        );
+      } else {
+        results.push(
+          await recordRow(
+            input.businessId,
+            "whatsapp",
+            delivered.reason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            { ...payload, recipient: targets.phone },
+            delivered.reason
+          )
+        );
+      }
+    } catch (err) {
+      logger.warn("notifications.dispatch: whatsapp send failed", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      results.push(
+        await recordRow(
+          input.businessId,
+          "whatsapp",
           "failed",
           summary,
           kind,

@@ -59,6 +59,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s2t","type":"extract_text","fields":[{"name":"lead_name","description":"..."},{"name":"lead_phone","description":"..."}]}   // parse fields straight from the inbound message text',
   '  {"id":"s2e","type":"email_extract","connectionId":"<uuid of a connected mailbox>","fromContains":"referral","matchTemplates":["{{vars.lead_name}}"],"lookbackMinutes":60,"fields":[{"name":"lead_phone"}],"fillOnlyEmpty":true}   // backfill fields from a recent email in the owner\'s CONNECTED mailbox — ONLY when the user supplies a real connection uuid; NEVER invent it',
   '  {"id":"s3","type":"send_sms","to":"{{vars.seller_phone}}","body":"...{{trigger.from}}"}',
+  '  {"id":"s3w","type":"send_whatsapp","to":"{{vars.seller_phone}}","body":"..."}   // WhatsApp message from the business\'s connected WhatsApp number — ONLY include when the user explicitly asks for WhatsApp (texting is the default). Recipient rules match send_sms ("to" OR "toAgentName" OR "toRef", exactly one; no replyToGroup/mediaUrlVar). Outside the recipient\'s 24h WhatsApp window it goes out via an approved template; if WhatsApp isn\'t connected the step skips with a note',
   '  {"id":"s3b","type":"send_email","to":"owner@example.com","cc":["manager@example.com"],"bcc":["archive@example.com"],"subject":"{{vars.lead_name}} lead","body":"...","attachScreenshot":true}',
   '  {"id":"s4","type":"approval_gate","prompt":"..."}',
   '  {"id":"s5","type":"notify_owner","message":"..."}',

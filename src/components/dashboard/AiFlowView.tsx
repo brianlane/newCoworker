@@ -374,6 +374,26 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           )}
         </>
       );
+    case "send_whatsapp":
+      return (
+        <>
+          <Row
+            label="Recipient"
+            value={
+              step.toRef
+                ? `${step.toRef.label ?? "Saved contact"} (saved contact: live number)`
+                : step.toAgentName
+                  ? `${step.toAgentName} (team member)`
+                  : (step.to ?? "")
+            }
+            mono={!step.toAgentName && !step.toRef}
+          />
+          <Row label="Message" value={step.body} />
+          <Chip>
+            Outside a 24-hour conversation window this goes out as an approved template
+          </Chip>
+        </>
+      );
     case "send_email":
       return (
         <>
