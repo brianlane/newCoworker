@@ -51,6 +51,13 @@ const FLOW_TEST_BUSINESS_ID = "f1047e50-0000-4000-8000-000000000001";
 const WEBCHAT_VAULT_SOURCE_BUSINESS_ID = "7e2b9d4a-1f3c-4e5d-9a6b-8c7d0e1f2a3b"; // Residency Pilot
 const BRIDGE_MEDIA_WSS_ORIGIN = `wss://voice-${HQ_BUSINESS_ID}.newcoworker.com`;
 
+// Deploy-env fallback for the bridge origin: the orchestrator forwards
+// BRIDGE_MEDIA_WSS_ORIGIN from process.env unless the Cloudflare tunnel
+// provisioner succeeds (which yields this same deterministic hostname). This
+// keeps the on-box .env consistent with the DB rows written below even if
+// the tunnel phase is skipped/fails on a re-run.
+process.env.BRIDGE_MEDIA_WSS_ORIGIN = BRIDGE_MEDIA_WSS_ORIGIN;
+
 const HQ_IDENTITY_MD = `# identity.md
 
 Business Name: New Coworker
