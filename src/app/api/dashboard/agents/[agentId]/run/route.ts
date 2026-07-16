@@ -303,7 +303,17 @@ export async function POST(request: Request, context: RouteContext) {
         }
       : {
           status: "failed" as const,
-          error_detail: RUN_ERROR_MESSAGES[result.error] ?? result.error,
+          // Attachment-classification failures carry the failing filename
+          // in the detail — essential on multi-file runs, where "an
+          // attachment is empty" alone doesn't say which one. Model
+          // failures keep the generic message (their detail is a raw
+          // transport error, not owner-facing).
+          error_detail: `${RUN_ERROR_MESSAGES[result.error] ?? result.error}${
+            result.detail &&
+            ["unsupported_type", "empty_content", "too_many_files"].includes(result.error)
+              ? ` (${result.detail})`
+              : ""
+          }`,
           completed_at: new Date().toISOString()
         };
     try {
