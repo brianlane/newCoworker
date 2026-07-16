@@ -134,7 +134,13 @@ export const dynamic = "force-dynamic";
 // automation. Budget the worst tool-loop case, not the enqueue case.
 export const maxDuration = 300;
 
-const MAX_MESSAGE_CHARS = 4000;
+// 16k chars (~2-3 pages). The old 4000 cap silently clipped a pasted
+// onboarding brief mid-sentence (KYP Ads, Jul 15) — owners paste long setup
+// documents into chat, and the composer's maxLength truncated them with no
+// signal. Bounded so a pathological paste can't balloon the prompt; the
+// worker path's tail/summary caps are unchanged (the per-message tail clip
+// keeps CPU prefill flat).
+const MAX_MESSAGE_CHARS = 16_000;
 const HISTORY_TURNS = 20;
 // How many recent messages to replay verbatim as the "recent conversation
 // context" system block on EVERY turn (including continuation turns). Kept
