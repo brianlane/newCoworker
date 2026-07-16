@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { AGENT_TEMPLATES } from "@/lib/agents/templates";
+import { AGENT_RUN_MAX_FILES } from "@/lib/agents/core";
 
 type AgentItem = {
   id: string;
@@ -31,6 +32,7 @@ type RunItem = {
   source: "manual" | "flow";
   input_document_id: string | null;
   input_filename: string;
+  input_files: Array<{ filename: string }> | null;
   output_md: string;
   output_filename: string;
   error_detail: string | null;
@@ -81,7 +83,9 @@ export function AgentsManager({
   const [savingAgent, setSavingAgent] = useState(false);
   const [runs, setRuns] = useState<RunItem[]>([]);
   const [documents, setDocuments] = useState<DocumentOption[]>([]);
-  const [runDocumentId, setRunDocumentId] = useState("");
+  // Multi-select: run one agent over several documents ("compare these
+  // quotes") in a single model call. Capped at MAX_RUN_FILES entries.
+  const [runDocumentIds, setRunDocumentIds] = useState<string[]>([]);
   const [running, setRunning] = useState(false);
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const [savingRunDoc, setSavingRunDoc] = useState<string | null>(null);
@@ -157,7 +161,7 @@ export function AgentsManager({
     setDraftInstructions(agent.instructions);
     setDraftFormat(agent.output_format);
     setRuns([]);
-    setRunDocumentId("");
+    setRunDocumentIds([]);
     // Clear any attachment left over from another agent's run panel — the
     // file input is shared across panels and runAgent prefers it over the
     // document picker.
@@ -283,9 +287,13 @@ export function AgentsManager({
   }
 
   async function runAgent(agent: AgentItem) {
-    const file = runFileRef.current?.files?.[0];
-    if (!file && !runDocumentId) {
+    const files = Array.from(runFileRef.current?.files ?? []);
+    if (files.length === 0 && runDocumentIds.length === 0) {
       setError("Attach a file or pick a document to run on.");
+      return;
+    }
+    if (files.length > AGENT_RUN_MAX_FILES || runDocumentIds.length > AGENT_RUN_MAX_FILES) {
+      setError(`Attach at most ${AGENT_RUN_MAX_FILES} files per run.`);
       return;
     }
     setError(null);
@@ -293,10 +301,10 @@ export function AgentsManager({
     setRunning(true);
     try {
       let res: Response;
-      if (file) {
+      if (files.length > 0) {
         const form = new FormData();
         form.set("businessId", businessId);
-        form.set("file", file);
+        for (const file of files) form.append("file", file);
         res = await fetch(`/api/dashboard/agents/${agent.id}/run`, {
           method: "POST",
           body: form
@@ -305,7 +313,10 @@ export function AgentsManager({
         res = await fetch(`/api/dashboard/agents/${agent.id}/run`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ businessId, documentId: runDocumentId })
+          body:
+            runDocumentIds.length === 1
+              ? JSON.stringify({ businessId, documentId: runDocumentIds[0] })
+              : JSON.stringify({ businessId, documentIds: runDocumentIds })
         });
       }
       const json = (await res.json()) as {
@@ -318,7 +329,7 @@ export function AgentsManager({
         return;
       }
       if (runFileRef.current) runFileRef.current.value = "";
-      setRunDocumentId("");
+      setRunDocumentIds([]);
       const run = json.data?.run;
       if (run) setOpenRunId(run.id);
       if (run?.status === "failed") {
@@ -511,32 +522,66 @@ export function AgentsManager({
                     <input
                       ref={runFileRef}
                       type="file"
+                      multiple
                       accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
                       className="text-xs text-parchment/60 file:mr-3 file:rounded-md file:border-0 file:bg-parchment/10 file:px-3 file:py-1.5 file:text-xs file:text-parchment"
-                      onChange={() => setRunDocumentId("")}
+                      onChange={() => setRunDocumentIds([])}
                     />
                     <select
                       className={`${inputClass} sm:max-w-56`}
-                      value={runDocumentId}
+                      value=""
                       onChange={(e) => {
-                        setRunDocumentId(e.target.value);
-                        if (e.target.value && runFileRef.current) runFileRef.current.value = "";
+                        const id = e.target.value;
+                        if (!id) return;
+                        setRunDocumentIds((prev) =>
+                          prev.includes(id) || prev.length >= AGENT_RUN_MAX_FILES
+                            ? prev
+                            : [...prev, id]
+                        );
+                        if (runFileRef.current) runFileRef.current.value = "";
                       }}
                     >
-                      <option value="">…or pick a document</option>
-                      {documents.map((d) => (
-                        <option key={d.id} value={d.id}>
-                          {d.title}
-                        </option>
-                      ))}
+                      <option value="">
+                        {runDocumentIds.length === 0
+                          ? "…or pick documents"
+                          : `…add another document (${runDocumentIds.length} picked)`}
+                      </option>
+                      {documents
+                        .filter((d) => !runDocumentIds.includes(d.id))
+                        .map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.title}
+                          </option>
+                        ))}
                     </select>
                     <Button size="sm" onClick={() => void runAgent(agent)} disabled={running}>
                       {running ? "Running…" : "Run agent"}
                     </Button>
                   </div>
+                  {runDocumentIds.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {runDocumentIds.map((id) => {
+                        const doc = documents.find((d) => d.id === id);
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            title="Remove from this run"
+                            onClick={() =>
+                              setRunDocumentIds((prev) => prev.filter((x) => x !== id))
+                            }
+                            className="rounded border border-signal-teal/40 px-1.5 py-0.5 text-[11px] text-signal-teal hover:bg-signal-teal/10"
+                          >
+                            {doc?.title ?? "document"} ✕
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   <p className="text-[11px] text-parchment/40">
-                    PDF, text, markdown, or CSV up to 10 MB. Runs use your plan&rsquo;s shared AI
-                    budget.
+                    PDF, text, markdown, or CSV — up to {AGENT_RUN_MAX_FILES} files, 10 MB each.
+                    Attach several to work across them in one run (e.g. compare quotes). Runs use
+                    your plan&rsquo;s shared AI budget.
                   </p>
                 </div>
 
@@ -557,6 +602,9 @@ export function AgentsManager({
                         >
                           <span className="text-xs text-parchment/70 truncate">
                             {run.input_filename || "attachment"}
+                            {(run.input_files?.length ?? 0) > 1
+                              ? ` +${(run.input_files?.length ?? 0) - 1} more`
+                              : ""}
                             <span className="text-parchment/40">
                               {" "}
                               · {new Date(run.created_at).toLocaleString()}

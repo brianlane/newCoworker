@@ -2,16 +2,19 @@
  * Agents — run execution.
  *
  *   POST /api/dashboard/agents/:agentId/run
- *     multipart: businessId + file            → run against a fresh upload
- *     JSON:      { businessId, documentId }   → run against an existing document
+ *     multipart: businessId + file (repeatable)      → run against fresh uploads
+ *     JSON:      { businessId, documentId }          → run against one document
+ *     JSON:      { businessId, documentIds: [...] }  → run against several documents
  *
- * One run = one Gemini transformation (executeAgentRun), executed INLINE —
- * a run is an owner-attended action and the model call is bounded at 90s,
- * same posture as document ingestion. Fresh uploads are stored in the
- * private business-docs bucket (`<businessId>/agent-inputs/<runId>/…`) so
- * run history keeps its input; document runs read the stored original for
- * full fidelity (not the condensed content_md). Runs are staff-allowed
- * (`operate_messages`) — using an agent is operating, not authoring.
+ * One run = one Gemini transformation (executeAgentRun) over EVERY attached
+ * file — multi-file runs exist for side-by-side work ("compare these
+ * carrier quotes"). Executed INLINE — a run is an owner-attended action and
+ * the model call is bounded at 90s, same posture as document ingestion.
+ * Fresh uploads are stored in the private business-docs bucket
+ * (`<businessId>/agent-inputs/<runId>/…`) so run history keeps its inputs;
+ * document runs read the stored originals for full fidelity (not the
+ * condensed content_md). Runs are staff-allowed (`operate_messages`) —
+ * using an agent is operating, not authoring.
  */
 
 import { randomUUID } from "node:crypto";
@@ -20,8 +23,14 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { getBusinessAgent, insertAgentRun, patchAgentRun } from "@/lib/agents/db";
+import {
+  getBusinessAgent,
+  insertAgentRun,
+  patchAgentRun,
+  type AgentRunInputFileMeta
+} from "@/lib/agents/db";
 import { executeAgentRun } from "@/lib/agents/run";
+import { AGENT_RUN_MAX_FILES, AGENT_RUN_MAX_TOTAL_BYTES } from "@/lib/agents/core";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
@@ -35,14 +44,15 @@ const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 
 const RUN_ERROR_MESSAGES: Record<string, string> = {
   unsupported_type: "Only PDF, plain text, markdown, or CSV attachments are supported",
-  empty_content: "The attachment has no readable content",
+  empty_content: "An attachment has no readable content",
+  too_many_files: `A run can carry at most ${AGENT_RUN_MAX_FILES} files`,
   model_unavailable: "The AI service is not configured — try again later",
   model_failed: "The AI call failed — try again"
 };
 
 type RouteContext = { params: Promise<{ agentId: string }> };
 
-type RunInputSource = {
+type RunInputFile = {
   filename: string;
   mimeType: string;
   data: Buffer;
@@ -64,8 +74,8 @@ export async function POST(request: Request, context: RouteContext) {
     const db = await createSupabaseServiceClient();
     const contentType = request.headers.get("content-type") ?? "";
     let businessId: string;
-    let upload: { filename: string; mimeType: string; data: Buffer } | null = null;
-    let documentId: string | null = null;
+    const uploads: Array<{ filename: string; mimeType: string; data: Buffer }> = [];
+    let documentIds: string[] = [];
 
     if (contentType.includes("multipart/form-data")) {
       const form = await request.formData().catch(() => null);
@@ -75,75 +85,105 @@ export async function POST(request: Request, context: RouteContext) {
         return errorResponse("VALIDATION_ERROR", "businessId is required");
       }
       businessId = parsedBusiness.data;
-      const file = form.get("file");
-      if (!(file instanceof File)) return errorResponse("VALIDATION_ERROR", "file is required");
-      // normalizeUploadMime maps VTT transcripts (text/vtt, or a .vtt name
-      // under a blank/octet-stream reported type) onto their canonical mime.
-      const mimeType = normalizeUploadMime(file.type, file.name);
-      if (!isSupportedDocumentMime(mimeType)) {
+      const files = form.getAll("file").filter((f): f is File => f instanceof File);
+      if (files.length === 0) return errorResponse("VALIDATION_ERROR", "file is required");
+      if (files.length > AGENT_RUN_MAX_FILES) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
+          `Attach at most ${AGENT_RUN_MAX_FILES} files per run`
         );
       }
-      if (file.size === 0 || file.size > MAX_INPUT_BYTES) {
-        return errorResponse("VALIDATION_ERROR", "Attachments must be between 1 byte and 10 MB");
+      let totalBytes = 0;
+      for (const file of files) {
+        // normalizeUploadMime maps VTT transcripts (text/vtt, or a .vtt name
+        // under a blank/octet-stream reported type) onto their canonical mime.
+        const mimeType = normalizeUploadMime(file.type, file.name);
+        if (!isSupportedDocumentMime(mimeType)) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
+          );
+        }
+        if (file.size === 0 || file.size > MAX_INPUT_BYTES) {
+          return errorResponse("VALIDATION_ERROR", "Attachments must be between 1 byte and 10 MB");
+        }
+        totalBytes += file.size;
+        uploads.push({
+          filename: file.name.slice(0, 200) || "attachment",
+          mimeType,
+          data: Buffer.from(await file.arrayBuffer())
+        });
       }
-      upload = {
-        filename: file.name.slice(0, 200) || "attachment",
-        mimeType,
-        data: Buffer.from(await file.arrayBuffer())
-      };
+      if (totalBytes > AGENT_RUN_MAX_TOTAL_BYTES) {
+        return errorResponse("VALIDATION_ERROR", "Attachments exceed 25 MB combined");
+      }
     } else {
-      const bodySchema = z.object({
-        businessId: z.string().uuid(),
-        documentId: z.string().uuid()
-      });
+      const bodySchema = z
+        .object({
+          businessId: z.string().uuid(),
+          documentId: z.string().uuid().optional(),
+          documentIds: z.array(z.string().uuid()).min(1).max(AGENT_RUN_MAX_FILES).optional()
+        })
+        .refine((b) => Boolean(b.documentId) !== Boolean(b.documentIds), {
+          message: "provide documentId or documentIds"
+        });
       const body = bodySchema.safeParse(await request.json().catch(() => null));
       if (!body.success) {
         return errorResponse("VALIDATION_ERROR", body.error.issues[0]?.message ?? "Invalid body");
       }
       businessId = body.data.businessId;
-      documentId = body.data.documentId;
+      documentIds = body.data.documentIds ?? [body.data.documentId!];
+      if (new Set(documentIds).size !== documentIds.length) {
+        return errorResponse("VALIDATION_ERROR", "Duplicate documents in the selection");
+      }
     }
 
     // Role gate BEFORE any tenant-data read (document lookup/download).
     if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
-    let input: RunInputSource;
-    if (upload) {
-      input = { ...upload, documentId: null };
+    let inputs: RunInputFile[];
+    if (uploads.length > 0) {
+      inputs = uploads.map((u) => ({ ...u, documentId: null }));
     } else {
-      const document = await getBusinessDocument(businessId, documentId!);
-      if (!document) return errorResponse("NOT_FOUND", "Document not found", 404);
-      // Mirror the dashboard picker's constraints server-side: only ingested
-      // (ready) documents with a supported original format are runnable.
-      if (document.status !== "ready") {
-        return errorResponse("VALIDATION_ERROR", "That document isn't ready to use yet");
-      }
-      if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
-        return errorResponse(
-          "VALIDATION_ERROR",
-          "Only PDF, plain text, markdown, or CSV documents are supported"
-        );
-      }
-      const { data: blob, error: downloadError } = await db.storage
-        .from(BUSINESS_DOCS_BUCKET)
-        .download(document.storage_path);
-      if (downloadError || !blob) {
-        logger.warn("agents/run: document download failed", {
-          businessId,
-          documentId: document.id,
-          error: downloadError?.message ?? "no data"
+      inputs = [];
+      let totalBytes = 0;
+      for (const documentId of documentIds) {
+        const document = await getBusinessDocument(businessId, documentId);
+        if (!document) return errorResponse("NOT_FOUND", "Document not found", 404);
+        // Mirror the dashboard picker's constraints server-side: only ingested
+        // (ready) documents with a supported original format are runnable.
+        if (document.status !== "ready") {
+          return errorResponse("VALIDATION_ERROR", "That document isn't ready to use yet");
+        }
+        if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            "Only PDF, plain text, markdown, or CSV documents are supported"
+          );
+        }
+        const { data: blob, error: downloadError } = await db.storage
+          .from(BUSINESS_DOCS_BUCKET)
+          .download(document.storage_path);
+        if (downloadError || !blob) {
+          logger.warn("agents/run: document download failed", {
+            businessId,
+            documentId: document.id,
+            error: downloadError?.message ?? "no data"
+          });
+          return errorResponse("INTERNAL_SERVER_ERROR", "Could not read the document file");
+        }
+        const data = Buffer.from(await blob.arrayBuffer());
+        totalBytes += data.byteLength;
+        if (totalBytes > AGENT_RUN_MAX_TOTAL_BYTES) {
+          return errorResponse("VALIDATION_ERROR", "Documents exceed 25 MB combined");
+        }
+        inputs.push({
+          filename: document.storage_path.split("/").pop() ?? document.title,
+          mimeType: document.mime_type,
+          data,
+          documentId: document.id
         });
-        return errorResponse("INTERNAL_SERVER_ERROR", "Could not read the document file");
       }
-      input = {
-        filename: document.storage_path.split("/").pop() ?? document.title,
-        mimeType: document.mime_type,
-        data: Buffer.from(await blob.arrayBuffer()),
-        documentId: document.id
-      };
     }
 
     const agent = await getBusinessAgent(businessId, agentId);
@@ -153,39 +193,49 @@ export async function POST(request: Request, context: RouteContext) {
     }
 
     const runId = randomUUID();
-    let inputStoragePath: string | null = null;
-    if (!input.documentId) {
-      const safeName = input.filename.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "input";
-      inputStoragePath = `${businessId}/agent-inputs/${runId}/${safeName}`;
-      const { error: uploadError } = await db.storage
-        .from(BUSINESS_DOCS_BUCKET)
-        .upload(inputStoragePath, input.data, { contentType: input.mimeType });
-      if (uploadError) {
-        // Input archival is best-effort — the run itself matters more than
-        // keeping a re-viewable copy of its input.
-        logger.warn("agents/run: input upload failed; running without archive", {
-          businessId,
-          error: uploadError.message
-        });
-        inputStoragePath = null;
+    // Archive fresh uploads so run history keeps its inputs (best-effort —
+    // the run itself matters more than a re-viewable copy). One object per
+    // file, index-prefixed so same-named uploads can't collide.
+    const archivedPaths: (string | null)[] = inputs.map(() => null);
+    if (uploads.length > 0) {
+      for (const [i, input] of inputs.entries()) {
+        const safeName = input.filename.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "input";
+        const path = `${businessId}/agent-inputs/${runId}/${i}-${safeName}`;
+        const { error: uploadError } = await db.storage
+          .from(BUSINESS_DOCS_BUCKET)
+          .upload(path, input.data, { contentType: input.mimeType });
+        if (uploadError) {
+          logger.warn("agents/run: input upload failed; running without archive", {
+            businessId,
+            error: uploadError.message
+          });
+        } else {
+          archivedPaths[i] = path;
+        }
       }
     }
 
-    // Best-effort compensation: an aborted run must not leave an orphaned
-    // archived input (no row pointing at it) in the bucket.
-    const removeArchivedInput = async (): Promise<void> => {
-      if (!inputStoragePath) return;
-      const { error: removeError } = await db.storage
-        .from(BUSINESS_DOCS_BUCKET)
-        .remove([inputStoragePath]);
+    // Best-effort compensation: an aborted run must not leave orphaned
+    // archived inputs (no row pointing at them) in the bucket.
+    const removeArchivedInputs = async (): Promise<void> => {
+      const paths = archivedPaths.filter((p): p is string => p !== null);
+      if (paths.length === 0) return;
+      const { error: removeError } = await db.storage.from(BUSINESS_DOCS_BUCKET).remove(paths);
       if (removeError) {
         logger.warn("agents/run: orphan input cleanup failed", {
           businessId,
-          inputStoragePath,
+          paths,
           error: removeError.message
         });
       }
     };
+
+    const inputFilesMeta: AgentRunInputFileMeta[] = inputs.map((input, i) => ({
+      filename: input.filename,
+      mime_type: input.mimeType,
+      document_id: input.documentId,
+      storage_path: archivedPaths[i]
+    }));
 
     let run;
     try {
@@ -194,13 +244,16 @@ export async function POST(request: Request, context: RouteContext) {
         agent_id: agent.id,
         business_id: businessId,
         source: "manual",
-        input_document_id: input.documentId,
-        input_filename: input.filename,
-        input_mime_type: input.mimeType,
-        input_storage_path: inputStoragePath
+        // Scalar columns mirror the FIRST file (single-file rows read
+        // exactly as before); input_files carries the full ordered list.
+        input_document_id: inputs[0].documentId,
+        input_filename: inputs[0].filename,
+        input_mime_type: inputs[0].mimeType,
+        input_storage_path: archivedPaths[0],
+        input_files: inputFilesMeta
       });
     } catch (err) {
-      await removeArchivedInput();
+      await removeArchivedInputs();
       throw err;
     }
 
@@ -213,9 +266,14 @@ export async function POST(request: Request, context: RouteContext) {
       result = await executeAgentRun({
         businessId,
         agent: { instructions: agent.instructions, output_format: agent.output_format },
-        inputFilename: input.filename,
-        inputMime: input.mimeType,
-        data: input.data
+        inputFilename: inputs[0].filename,
+        inputMime: inputs[0].mimeType,
+        data: inputs[0].data,
+        extraFiles: inputs.slice(1).map((i) => ({
+          filename: i.filename,
+          mime: i.mimeType,
+          data: i.data
+        }))
       });
     } catch (err) {
       await patchAgentRun(businessId, runId, {
