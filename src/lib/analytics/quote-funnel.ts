@@ -67,14 +67,15 @@ export async function getQuoteFunnel(
   opts: { client?: SupabaseClient } = {}
 ): Promise<QuoteFunnel> {
   const db = opts.client ?? (await createSupabaseServiceClient());
-  // Only contacts carrying at least one stage tag — the GIN overlaps filter
-  // keeps this cheap even on a big directory.
-  const allStageTags = [...QUOTE_STAGE_TAGS, QUOTE_LOST_TAG];
+  // Full customer-directory scan (same cap as the engagement segments):
+  // stage matching is case-insensitive and tag normalization preserves the
+  // owner's original casing, so a case-sensitive SQL tag filter would
+  // silently under-count (a contact tagged "Quote-Won" must still count).
   const { data, error } = await db
     .from("contacts")
     .select("tags")
     .eq("business_id", businessId)
-    .overlaps("tags", allStageTags)
+    .eq("type", "customer")
     .limit(ENGAGEMENT_SCAN_LIMIT);
   if (error) throw new Error(`getQuoteFunnel: ${error.message}`);
 
@@ -89,7 +90,6 @@ export async function getQuoteFunnel(
   let totalTracked = 0;
   for (const row of rows) {
     const stage = quoteStageForTags(row.tags ?? []);
-    /* c8 ignore next -- the overlaps filter guarantees a stage tag exists */
     if (!stage) continue;
     counts[stage] += 1;
     totalTracked += 1;

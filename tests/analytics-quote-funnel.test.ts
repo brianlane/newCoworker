@@ -5,12 +5,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
-import {
-  QUOTE_LOST_TAG,
-  QUOTE_STAGE_TAGS,
-  getQuoteFunnel,
-  quoteStageForTags
-} from "@/lib/analytics/quote-funnel";
+import { getQuoteFunnel, quoteStageForTags } from "@/lib/analytics/quote-funnel";
 import { ENGAGEMENT_SCAN_LIMIT } from "@/lib/analytics/engagement";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -53,14 +48,17 @@ describe("quoteStageForTags", () => {
 });
 
 describe("getQuoteFunnel", () => {
-  it("buckets each contact once and computes the win rate", async () => {
+  it("buckets each contact once (case-insensitively) and computes the win rate", async () => {
     const { client, calls } = makeClient({
       data: [
         { tags: ["quote-requested"] },
         { tags: ["quote-requested", "quote-received"] },
         { tags: ["quote-presented"] },
-        { tags: ["quote-won", "quote-requested"] },
-        { tags: ["quote-lost", "quote-presented"] }
+        // Mixed casing still counts — tag normalization preserves the
+        // owner's original spelling.
+        { tags: ["Quote-Won", "quote-requested"] },
+        { tags: ["quote-lost", "quote-presented"] },
+        { tags: ["VIP"] } // no stage tag → not tracked
       ],
       error: null
     });
@@ -75,11 +73,13 @@ describe("getQuoteFunnel", () => {
     expect(funnel.totalTracked).toBe(5);
     expect(funnel.conversionRate).toBe(0.2);
     expect(funnel.clipped).toBe(false);
-    // The scan pre-filters on the stage tags (GIN overlaps).
-    expect(calls.find((c) => c.name === "overlaps")?.args).toEqual([
-      "tags",
-      [...QUOTE_STAGE_TAGS, QUOTE_LOST_TAG]
+    // Full customer scan — a case-sensitive SQL tag filter would drop
+    // "Quote-Won" spellings.
+    expect(calls.find((c) => c.name === "eq" && c.args[0] === "type")?.args).toEqual([
+      "type",
+      "customer"
     ]);
+    expect(calls.find((c) => c.name === "overlaps")).toBeUndefined();
   });
 
   it("returns a null rate for an empty funnel and tolerates null tags/data (default client)", async () => {
