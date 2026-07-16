@@ -19,6 +19,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
@@ -147,17 +148,14 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
             AiFlows within seconds — no Zapier or Make account needed.
           </p>
         </div>
-        <span
-          className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded-full border whitespace-nowrap ${
-            connection?.status === "active"
-              ? "text-claw-green border-claw-green/40 bg-claw-green/5"
-              : connection
-                ? "text-signal-teal border-signal-teal/40 bg-signal-teal/5"
-                : "text-parchment/40 border-parchment/15"
-          }`}
+        <Badge
+          className="whitespace-nowrap"
+          variant={
+            connection?.status === "active" ? "success" : connection ? "pending" : "neutral"
+          }
         >
           {statusLabel}
-        </span>
+        </Badge>
       </div>
 
       {banner ? <p className="text-xs text-spark-orange mt-3">{banner}</p> : null}

@@ -3,7 +3,7 @@
  * here with ?code & ?state after consent; this route verifies the signed
  * state, exchanges the code for the token pair, captures the connected
  * account's identity (users/me), stores everything encrypted, and lands the
- * owner back on /dashboard/integrations.
+ * owner back on /dashboard/integrations/zoom.
  *
  * Auth is TWO-factor by design: the signed state proves the flow started
  * from our connect route for this business, AND the browser session must
@@ -22,7 +22,7 @@ import {
 import { logger } from "@/lib/logger";
 
 function dashboardRedirect(request: Request, params: Record<string, string>) {
-  const url = new URL("/dashboard/integrations", request.url);
+  const url = new URL("/dashboard/integrations/zoom", request.url);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return NextResponse.redirect(url);
 }

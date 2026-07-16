@@ -18,6 +18,7 @@
  */
 
 import { useState } from "react";
+import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 
@@ -117,15 +118,9 @@ export function CalendlyIntegrationCard({ businessId, initialConnection }: Props
             booking link — they confirm the time on your Calendly page.
           </p>
         </div>
-        <span
-          className={`text-[10px] uppercase tracking-wider px-2 py-1 rounded-full border ${
-            connection
-              ? "text-claw-green border-claw-green/40 bg-claw-green/5"
-              : "text-parchment/40 border-parchment/15"
-          }`}
-        >
+        <Badge variant={connection ? "success" : "neutral"}>
           {connection ? "Connected" : "Not connected"}
-        </span>
+        </Badge>
       </div>
 
       {banner ? <p className="text-xs text-spark-orange mt-3">{banner}</p> : null}
