@@ -104,7 +104,19 @@ async function askGemini(
         systemInstruction: sys,
         userText,
         temperature: 0.1,
-        maxOutputTokens: 200,
+        // Gemini 3.x thinking counts against maxOutputTokens: at the old
+        // cap of 200 the model spent ~190 tokens on hidden reasoning and
+        // truncated the visible answer mid-sentence (live repro on Truly's
+        // knowledge base: "What insurance products do we offer?" → "D&O").
+        // `minimal` gives the whole budget to the answer — a lookup over an
+        // already-retrieved 12k-char context needs no chain-of-thought —
+        // and is also the fastest option under the 3s voice deadline
+        // (~1.1-1.4s measured vs MAX_TOKENS truncation before). 300 keeps
+        // the read-aloud backstop with headroom for list-style answers.
+        // Gated on the model family: Gemini 2.5 rejects `thinkingLevel`
+        // (numeric budgets only), and GEMINI_ROWBOAT_MODEL is operator-set.
+        maxOutputTokens: 300,
+        ...(/^gemini-3/i.test(model) ? { thinkingLevel: "minimal" as const } : {}),
         signal: controller.signal
       });
       return { answer: text, model, usage, inputChars };

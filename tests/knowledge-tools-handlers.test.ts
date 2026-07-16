@@ -93,6 +93,12 @@ describe("lookupBusinessKnowledge", () => {
     expect(call.userText).toContain("Business name: Amy Laidlaw Team");
     expect(call.userText).toContain("# website.md");
     expect(call.userText).toContain("Caller question: What are your hours?");
+    // Regression pin (Truly, 2026-07-15): Gemini 3.x hidden thinking counts
+    // against maxOutputTokens — at the old cap of 200 with default (high)
+    // thinking the visible answer truncated mid-sentence ("D&O"). Gemini 3
+    // models must run thinkingLevel=minimal with the 300 answer budget.
+    expect(call.maxOutputTokens).toBe(300);
+    expect(call.thinkingLevel).toBe("minimal");
 
     expect(meter).toHaveBeenCalledOnce();
     expect(meter.mock.calls[0][0]).toMatchObject({
@@ -219,6 +225,16 @@ describe("lookupBusinessKnowledge", () => {
     const result = await lookupBusinessKnowledge(BIZ, "hours?");
     expect(result.ok).toBe(true);
     expect(gemini.mock.calls[0][0].apiKey).toBe("alt-key");
+  });
+
+  it("omits thinkingLevel for non-Gemini-3 model overrides (2.5 rejects the field)", async () => {
+    process.env.GEMINI_ROWBOAT_MODEL = "gemini-2.5-flash";
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    const result = await lookupBusinessKnowledge(BIZ, "hours?");
+    expect(result.ok).toBe(true);
+    expect(gemini.mock.calls[0][0].model).toBe("gemini-2.5-flash");
+    expect(gemini.mock.calls[0][0].thinkingLevel).toBeUndefined();
+    expect(gemini.mock.calls[0][0].maxOutputTokens).toBe(300);
   });
 
   it("retries the default model when a configured override 404s and meters the fallback model", async () => {
