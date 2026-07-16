@@ -15,6 +15,7 @@
  */
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -38,6 +39,7 @@ export function RequestDocumentsAction({
   mailboxAddress,
   currentTags
 }: Props) {
+  const router = useRouter();
   const [open, setOpen] = useState(false);
   const [docs, setDocs] = useState("");
   const [sending, setSending] = useState(false);
@@ -46,10 +48,12 @@ export function RequestDocumentsAction({
   const [sentStatus, setSentStatus] = useState<
     "tagged" | "already_tracked" | "tag_failed" | null
   >(null);
+  // Local tag state so a successful tag write is reflected immediately —
+  // a second request in the same session must read as already-tracked and
+  // must not re-send a stale tag set.
+  const [tags, setTags] = useState<string[]>(currentTags);
 
-  const alreadyAwaiting = currentTags.some(
-    (t) => t.trim().toLowerCase() === AWAITING_DOCUMENTS_TAG
-  );
+  const alreadyAwaiting = tags.some((t) => t.trim().toLowerCase() === AWAITING_DOCUMENTS_TAG);
 
   async function send() {
     const list = docs.trim().replace(/\s+/g, " ");
@@ -80,16 +84,23 @@ export function RequestDocumentsAction({
       if (alreadyAwaiting) {
         setSentStatus("already_tracked");
       } else {
+        const nextTags = [...tags, AWAITING_DOCUMENTS_TAG];
         const tagged = await fetch(
           `/api/dashboard/customers/${encodeURIComponent(customerE164)}?businessId=${encodeURIComponent(businessId)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ tags: [...currentTags, AWAITING_DOCUMENTS_TAG] })
+            body: JSON.stringify({ tags: nextTags })
           }
         )
           .then(async (res) => ((await res.json()) as { ok?: boolean }).ok === true)
           .catch(() => false);
+        if (tagged) {
+          setTags(nextTags);
+          // Re-render the server page so sibling components (profile
+          // editor, tag chips) see the new tag instead of a stale set.
+          router.refresh();
+        }
         setSentStatus(tagged ? "tagged" : "tag_failed");
       }
       setDocs("");
