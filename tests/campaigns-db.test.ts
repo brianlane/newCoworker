@@ -33,7 +33,7 @@ type Chain = Record<string, ReturnType<typeof vi.fn>> & PromiseLike<unknown>;
 
 function chain(terminal?: unknown): Chain {
   const c: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "delete", "upsert", "eq", "lte", "is", "not", "order", "limit", "contains"]) {
+  for (const m of ["select", "insert", "update", "delete", "upsert", "eq", "neq", "lte", "is", "not", "order", "limit", "contains"]) {
     c[m] = vi.fn(() => c);
   }
   c.single = vi.fn();
@@ -100,9 +100,14 @@ describe("insert / patch / delete", () => {
       patchEmailCampaign(BIZ, CAMPAIGN, {}, makeDb(chain({ error: { message: "p" } })))
     ).rejects.toThrow(/p/);
 
-    await deleteEmailCampaign(BIZ, CAMPAIGN, makeDb(chain({ error: null })));
+    const del = chain({ data: [{ id: CAMPAIGN }], error: null });
+    expect(await deleteEmailCampaign(BIZ, CAMPAIGN, makeDb(del))).toBe(true);
+    // The delete is status-guarded: a mid-send campaign survives.
+    expect(del.neq).toHaveBeenCalledWith("status", "sending");
+    const guarded = chain({ data: [], error: null });
+    expect(await deleteEmailCampaign(BIZ, CAMPAIGN, makeDb(guarded))).toBe(false);
     await expect(
-      deleteEmailCampaign(BIZ, CAMPAIGN, makeDb(chain({ error: { message: "d" } })))
+      deleteEmailCampaign(BIZ, CAMPAIGN, makeDb(chain({ data: null, error: { message: "d" } })))
     ).rejects.toThrow(/d/);
   });
 });

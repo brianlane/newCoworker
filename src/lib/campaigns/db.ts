@@ -147,18 +147,26 @@ export async function transitionEmailCampaign(
   return Array.isArray(data) && data.length > 0;
 }
 
+/**
+ * Delete a campaign — guarded so a row the sweep just promoted to
+ * `sending` survives (deleting it would cascade-drop the recipient
+ * snapshot mid-send). Returns whether a row was actually deleted.
+ */
 export async function deleteEmailCampaign(
   businessId: string,
   campaignId: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("email_campaigns")
     .delete()
     .eq("business_id", businessId)
-    .eq("id", campaignId);
+    .eq("id", campaignId)
+    .neq("status", "sending")
+    .select("id");
   if (error) throw new Error(`deleteEmailCampaign: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
 }
 
 /** Campaigns whose send time has passed, oldest first (sweep promotion). */

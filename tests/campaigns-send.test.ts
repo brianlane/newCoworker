@@ -107,7 +107,7 @@ function makeDb(
 ) {
   const calls: Array<{ name: string; args: unknown[] }> = [];
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "not", "is", "limit", "contains"]) {
+  for (const m of ["select", "eq", "not", "is", "order", "limit", "contains"]) {
     chain[m] = vi.fn((...args: unknown[]) => {
       calls.push({ name: m, args });
       return chain;
@@ -189,8 +189,13 @@ describe("processCampaignSweep — promotion", () => {
       { status: "sending", started_at: NOW.toISOString(), recipients_total: 1 },
       db
     );
-    // The scan applied the customer/email/suppression filters.
+    // The scan applied the customer/email/suppression filters, in a
+    // deterministic order (no arbitrary-subset clipping).
     expect(calls.find((c) => c.name === "is")?.args).toEqual(["marketing_unsubscribed_at", null]);
+    expect(calls.find((c) => c.name === "order")?.args).toEqual([
+      "created_at",
+      { ascending: true }
+    ]);
   });
 
   it("matches the audience tag case-insensitively and tolerates a losing cancel race", async () => {

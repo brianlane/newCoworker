@@ -19,7 +19,6 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import {
   deleteEmailCampaign,
   getEmailCampaign,
-  patchEmailCampaign,
   transitionEmailCampaign,
   type EmailCampaignPatch
 } from "@/lib/campaigns/db";
@@ -105,7 +104,23 @@ export async function PATCH(request: Request, context: RouteContext) {
       return errorResponse("VALIDATION_ERROR", "Nothing to update");
     }
 
-    await patchEmailCampaign(body.data.businessId, campaignId, patch);
+    // Guarded on the status we validated against: if the sweep promoted
+    // the campaign to `sending` between our read and this write, the edit
+    // loses cleanly instead of yanking a mid-send campaign back to
+    // draft/scheduled while its recipients keep draining.
+    const applied = await transitionEmailCampaign(
+      body.data.businessId,
+      campaignId,
+      existing.status,
+      patch
+    );
+    if (!applied) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "This campaign just started sending and can't be edited.",
+        409
+      );
+    }
     const updated = await getEmailCampaign(body.data.businessId, campaignId);
     return successResponse({ campaign: updated });
   } catch (err) {
@@ -133,14 +148,17 @@ export async function DELETE(request: Request, context: RouteContext) {
 
     const existing = await getEmailCampaign(businessId.data, campaignId);
     if (!existing) return successResponse({ deleted: true }); // idempotent
-    if (existing.status === "sending") {
+    // The delete itself is status-guarded (`neq sending`), so a sweep
+    // promotion racing this read can never cascade-drop a mid-send
+    // campaign's recipient snapshot.
+    const deleted = await deleteEmailCampaign(businessId.data, campaignId);
+    if (!deleted) {
       return errorResponse(
         "VALIDATION_ERROR",
-        "This campaign is mid-send; cancel isn't possible and history is retained.",
+        "This campaign is mid-send; deleting isn't possible and history is retained.",
         409
       );
     }
-    await deleteEmailCampaign(businessId.data, campaignId);
     return successResponse({ deleted: true });
   } catch (err) {
     return handleRouteError(err);

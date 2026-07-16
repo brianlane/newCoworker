@@ -111,6 +111,9 @@ async function snapshotRecipients(
   db: SupabaseClient,
   campaign: EmailCampaignRow
 ): Promise<number> {
+  // Deterministic oldest-first ordering: without an ORDER BY the limit
+  // returns an arbitrary subset, so a big directory could silently omit a
+  // different set of eligible customers every campaign.
   const { data, error } = await db
     .from("contacts")
     .select("id, email, tags")
@@ -118,6 +121,7 @@ async function snapshotRecipients(
     .eq("type", "customer")
     .not("email", "is", null)
     .is("marketing_unsubscribed_at", null)
+    .order("created_at", { ascending: true })
     .limit(CAMPAIGN_AUDIENCE_SCAN_LIMIT);
   if (error) throw new Error(`snapshotRecipients: ${error.message}`);
   const wantedTag = campaign.audience_tag.trim().toLowerCase();
