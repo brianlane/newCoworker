@@ -547,16 +547,30 @@ export function EmployeePerformanceCard({ rows }: { rows: EmployeePerformanceVie
         Team performance (30 days) — owner view
       </p>
       <div className="mt-3 space-y-2">
-        <div className="grid grid-cols-5 gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
+        {/* Same asymmetric grid as FlowFunnelCard: an equal 5-way split made
+            the multi-word headers physically overlap on phones. */}
+        <div className="grid grid-cols-[minmax(0,1.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
           <span>Teammate</span>
-          <span className="text-right">Leads offered</span>
+          <span className="text-right">
+            <span className="sm:hidden">Leads</span>
+            <span className="hidden sm:inline">Leads offered</span>
+          </span>
           <span className="text-right">Claimed</span>
-          <span className="text-right">Typical turnaround</span>
-          <span className="text-right">Calls forwarded</span>
+          <span className="text-right">
+            <span className="sm:hidden">Median</span>
+            <span className="hidden sm:inline">Typical turnaround</span>
+          </span>
+          <span className="text-right">
+            <span className="sm:hidden">Calls</span>
+            <span className="hidden sm:inline">Calls forwarded</span>
+          </span>
         </div>
         {rows.map((row) => (
-          <div key={row.memberId} className="grid grid-cols-5 gap-2 text-sm items-baseline">
-            <span className="text-parchment/85 truncate">
+          <div
+            key={row.memberId}
+            className="grid grid-cols-[minmax(0,1.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-sm items-baseline"
+          >
+            <span className="text-parchment/85 truncate" title={row.name}>
               {row.name}
               {row.active ? "" : <span className="text-parchment/35"> (inactive)</span>}
             </span>
@@ -704,18 +718,27 @@ export function FlowFunnelCard({ rows, clipped }: { rows: FlowFunnelView[]; clip
         </Link>
       </div>
       <div className="mt-3 space-y-2">
-        <div className="grid grid-cols-5 gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
+        {/* The name column takes ~2.5x a stat column — an equal 5-way split
+            left flow names ~60px wide on phones (3-4 visible characters). */}
+        <div className="grid grid-cols-[minmax(0,2.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-[10px] uppercase tracking-wider text-parchment/35">
           <span>Flow</span>
           <span className="text-right">Runs</span>
           <span className="text-right">Texts</span>
-          <span className="text-right">Link clicks</span>
+          <span className="text-right">
+            <span className="sm:hidden">Clicks</span>
+            <span className="hidden sm:inline">Link clicks</span>
+          </span>
           <span className="text-right">Goals</span>
         </div>
         {rows.map((row) => (
-          <div key={row.flowId} className="grid grid-cols-5 gap-2 text-sm items-baseline">
+          <div
+            key={row.flowId}
+            className="grid grid-cols-[minmax(0,2.5fr)_repeat(4,minmax(0,1fr))] gap-2 text-sm items-baseline"
+          >
             <Link
               href={`/dashboard/aiflows/${row.flowId}`}
-              className="text-parchment/85 hover:text-parchment hover:underline truncate"
+              title={row.flowName}
+              className="min-w-0 break-words line-clamp-2 text-parchment/85 hover:text-parchment hover:underline"
             >
               {row.flowName}
               {row.enabled ? "" : <span className="text-parchment/35"> (off)</span>}

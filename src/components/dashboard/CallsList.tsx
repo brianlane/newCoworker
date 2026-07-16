@@ -112,18 +112,25 @@ export function CallsList({ rows, businessId }: { rows: CallListRow[]; businessI
                   className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
                 >
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
+                    {/* flex-wrap (as in CustomersList): the name is the only
+                        shrinkable item, so without wrapping it absorbed all the
+                        squeeze on phones — "Brian" rendered as "Bri…" while the
+                        E.164 and badges kept full width. */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                       <CallDirectionBadge direction={row.direction} />
-                      <span className="text-sm font-semibold text-parchment truncate">
+                      <span
+                        className="text-sm font-semibold text-parchment truncate"
+                        title={row.label}
+                      >
                         {row.label}
                       </span>
                       {row.badgeKind && (
-                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                        <span className="shrink-0 text-[10px] uppercase tracking-wide text-parchment/40">
                           {row.badgeKind}
                         </span>
                       )}
                       {row.e164 && row.label !== row.e164 && (
-                        <span className="text-[10px] text-parchment/40 font-mono">
+                        <span className="shrink-0 text-[10px] text-parchment/40 font-mono">
                           {row.e164}
                         </span>
                       )}

@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
@@ -63,6 +63,29 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
     setOpen(false);
   }
 
+  // The hamburger is fixed over a scrollable <main>, and the layout's top
+  // padding only clears it at scroll position 0 — once the page scrolls, the
+  // button floats over the page title. Hide it while scrolling down; bring it
+  // back on any scroll up or near the top. The listener attaches to the
+  // layout's scroll container ([data-app-main]); if a layout lacks one the
+  // button just stays visible.
+  const [navHidden, setNavHidden] = useState(false);
+  useEffect(() => {
+    const main = document.querySelector("[data-app-main]");
+    if (!main) return;
+    let lastTop = main.scrollTop;
+    const onScroll = () => {
+      const top = main.scrollTop;
+      // 8px deadband so tiny rubber-band jitters don't toggle the button.
+      if (top <= 8) setNavHidden(false);
+      else if (top > lastTop + 8) setNavHidden(true);
+      else if (top < lastTop - 8) setNavHidden(false);
+      lastTop = top;
+    };
+    main.addEventListener("scroll", onScroll, { passive: true });
+    return () => main.removeEventListener("scroll", onScroll);
+  }, []);
+
   const activeItem = [...items]
     .sort((a, b) => b.href.length - a.href.length)
     .find((item) => pathname === item.href || pathname.startsWith(item.href + "/"));
@@ -76,7 +99,11 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
         aria-expanded={open}
         onClick={() => setOpen(true)}
         data-mobile-nav-trigger
-        className="fixed left-3 top-3 z-50 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-parchment/10 bg-deep-ink/90 text-parchment backdrop-blur-sm lg:hidden"
+        className={[
+          "fixed left-3 top-3 z-50 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-parchment/10 bg-deep-ink/90 text-parchment backdrop-blur-sm transition-all duration-200 lg:hidden",
+          // Keep it reachable while the drawer is open regardless of scroll.
+          navHidden && !open ? "pointer-events-none -translate-y-16 opacity-0" : ""
+        ].join(" ")}
       >
         <Menu size={20} />
       </button>

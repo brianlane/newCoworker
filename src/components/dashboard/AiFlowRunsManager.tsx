@@ -549,26 +549,30 @@ export function AiFlowRunsManager({
             const groupOpen = expandedGroups.has(group.id);
             return (
             <div key={group.id} className="space-y-2">
+              {/* min-w-0 + clamp: long flow names wrap to two lines instead of
+                  squashing the chevron or colliding with "Collapse details". */}
               <h3 className="flex items-center gap-2 pt-1 text-sm font-semibold text-parchment">
                 <button
                   onClick={() => toggleGroup(group.id)}
-                  className="flex items-center gap-2 text-left"
+                  className="flex min-w-0 items-center gap-2 text-left"
                   aria-expanded={groupOpen}
                 >
                   {groupOpen ? (
-                    <ChevronDown className="h-4 w-4 text-parchment/40" />
+                    <ChevronDown className="h-4 w-4 shrink-0 text-parchment/40" />
                   ) : (
-                    <ChevronRight className="h-4 w-4 text-parchment/40" />
+                    <ChevronRight className="h-4 w-4 shrink-0 text-parchment/40" />
                   )}
-                  {group.name}
-                  <span className="text-xs font-normal text-parchment/40">
+                  <span className="min-w-0 break-words line-clamp-2" title={group.name}>
+                    {group.name}
+                  </span>
+                  <span className="shrink-0 text-xs font-normal text-parchment/40">
                     {group.runs.length} run{group.runs.length === 1 ? "" : "s"}
                   </span>
                 </button>
                 {groupOpen && (
                   <button
                     onClick={() => setGroupExpanded(groupRunIds, !allExpanded)}
-                    className="ml-auto text-xs font-normal text-signal-teal hover:underline"
+                    className="ml-auto shrink-0 whitespace-nowrap text-xs font-normal text-signal-teal hover:underline"
                   >
                     {allExpanded ? "Collapse details" : "Expand details"}
                   </button>

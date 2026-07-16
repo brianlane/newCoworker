@@ -487,9 +487,10 @@ function BoardCard({
           : "border-parchment/10 hover:border-parchment/25"
       }`}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <Link
           href={`/dashboard/customers/${encodeURIComponent(card.e164)}`}
+          title={card.name}
           className="truncate text-sm font-semibold text-parchment hover:text-signal-teal hover:underline"
         >
           {card.name}
@@ -497,7 +498,7 @@ function BoardCard({
       </div>
       <p className="mt-0.5 text-[10px] font-mono text-parchment/40">{card.e164}</p>
       {activeRun && (
-        <p className="mt-1 truncate text-[11px] text-parchment/60">
+        <p className="mt-1 truncate text-[11px] text-parchment/60" title={activeRun.flowName}>
           <span className="rounded bg-signal-teal/10 px-1 py-0.5 text-[10px] font-medium text-signal-teal">
             {RUN_STATUS_LABEL[activeRun.status] ?? activeRun.status}
           </span>{" "}
