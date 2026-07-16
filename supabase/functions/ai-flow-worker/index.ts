@@ -97,6 +97,7 @@ import {
 import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
 import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
 import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_mode.ts";
+import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
 import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
 import {
@@ -1189,6 +1190,8 @@ async function runStep(
       return extractTextStep(supabase, run, scope, action);
     case "email_extract":
       return emailExtractStep(supabase, run, scope, action);
+    case "doc_extract":
+      return docExtractStep(supabase, run, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, scope, action);
     case "send_whatsapp":
@@ -2368,6 +2371,84 @@ async function emailExtractStep(
 }
 
 /**
+ * doc_extract: read typed fields out of a document (the triggering email's
+ * PDF/text attachment) and optionally file it into Business Documents. The
+ * worker can't run Gemini's document pipeline or touch the documents store,
+ * so the whole read+extract+file round-trips through the gateway-guarded
+ * platform adapter (/api/internal/aiflow-doc-extract) — same proxy pattern
+ * as email_extract's mailbox read. A planner skip (no document on the
+ * trigger) records a skipped step; ok:false on 2xx is a permanent input
+ * error (unsupported type, oversized, unreadable) → fail without retrying;
+ * 5xx / transport throws so the run retries.
+ */
+async function docExtractStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "doc_extract" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    // Stamp every field empty so later when-guards/templates read cleanly.
+    for (const f of action.fields) scope.vars[f.name] = "";
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!base || !token) {
+    return { kind: "fail", error: "doc_extract: platform proxy not configured" };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/internal/aiflow-doc-extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        businessId: run.business_id,
+        sourceRef: action.sourceRef,
+        fields: action.fields,
+        ...(action.fileTitle
+          ? { fileAs: { title: action.fileTitle, audience: action.fileAudience ?? "staff" } }
+          : {})
+      })
+    });
+  } catch (e) {
+    throw new Error(
+      `doc_extract: platform request failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+  if (res.status >= 500) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`doc_extract: platform ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const payload = (await res.json().catch(() => null)) as
+    | {
+        ok?: boolean;
+        detail?: string;
+        data?: {
+          vars?: Record<string, string>;
+          filed?: { documentId: string; title: string } | null;
+          fileError?: string;
+        };
+      }
+    | null;
+  if (!payload || payload.ok !== true) {
+    return { kind: "fail", error: `doc_extract: ${payload?.detail ?? "document read rejected"}` };
+  }
+  const raw: Record<string, string> = {};
+  for (const f of action.fields) raw[f.name] = payload.data?.vars?.[f.name] ?? "";
+  const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "doc_extract");
+  Object.assign(scope.vars, out);
+  return {
+    kind: "ok",
+    result: {
+      vars: out,
+      ...(payload.data?.filed ? { filed: payload.data.filed } : {}),
+      ...(payload.data?.fileError ? { file_error: payload.data.fileError } : {})
+    }
+  };
+}
+
+/**
  * browse_action: drive an ordered click/fill sequence on a page via the
  * per-tenant render service (e.g. posting a "still trying to contact" update
  * on the ReferralExchange lead timeline). Unlike browse_extract there is no
@@ -2886,8 +2967,15 @@ function readPageSourceBefore(body: unknown): string | null {
  * ride along as MMS media. Returns null (and logs) when there is no stored
  * screenshot or signing fails — an offer without the image still routes the lead.
  */
-async function screenshotMmsUrl(supabase: Supabase, scope: Scope): Promise<string | null> {
-  const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
+async function screenshotMmsUrl(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope
+): Promise<string | null> {
+  // Tenant guard: only a path under THIS run's business prefix is signable —
+  // the var shares the scope.vars namespace with extraction outputs, whose
+  // values inbound text controls (see screenshot_guard.ts).
+  const path = tenantScreenshotPath(run.business_id, scope.vars.screenshot_path);
   if (!path) return null;
   const { data: signed, error } = await supabase.storage
     .from(SCREENSHOT_BUCKET)
@@ -4519,7 +4607,10 @@ async function deliverFlowEmail(
     | { filename: string; mime_type: string; size_bytes: number; storage_path: string; bucket: string }
     | null = null;
   if (action.attachScreenshot) {
-    const path = typeof scope.vars.screenshot_path === "string" ? scope.vars.screenshot_path : "";
+    // Tenant guard: only a path under THIS run's business prefix is
+    // downloadable (see screenshot_guard.ts) — the var shares scope.vars
+    // with extraction outputs, whose values inbound text controls.
+    const path = tenantScreenshotPath(run.business_id, scope.vars.screenshot_path);
     if (path) {
       const { data, error } = await supabase.storage.from(SCREENSHOT_BUCKET).download(path);
       if (error || !data) {
@@ -5347,7 +5438,7 @@ async function routeToTeamStep(
       // auto-assigned lead could never be handed back (Bugbot on PR #580).
       routing.route_step_index = stepIndex;
       scope.vars.claimed_agent = agent.name || agent.phone;
-      const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
+      const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
       const fyiBody =
         "New lead assigned to you (auto-assign is on — it's yours, no reply " +
         'needed; reply "86" to hand it back):\n' +
@@ -5427,7 +5518,7 @@ async function routeToTeamStep(
     // is persisted (state before side effect); we only carry the rendered body
     // and a per-agent idempotency key here. The MMS URL is signed fresh per
     // offer so an escalation hours later never carries an expired link.
-    const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, scope) : null;
+    const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
     let offerText = renderTemplate(
       action.offerTemplate,
       agentScope(scope, agent, formatInTimeZone(deadlineMs, action.offerWindow?.timezone ?? "UTC"))

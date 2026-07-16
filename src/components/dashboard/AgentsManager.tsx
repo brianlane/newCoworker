@@ -511,7 +511,7 @@ export function AgentsManager({
                     <input
                       ref={runFileRef}
                       type="file"
-                      accept=".pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv"
+                      accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
                       className="text-xs text-parchment/60 file:mr-3 file:rounded-md file:border-0 file:bg-parchment/10 file:px-3 file:py-1.5 file:text-xs file:text-parchment"
                       onChange={() => setRunDocumentId("")}
                     />
@@ -596,6 +596,13 @@ export function AgentsManager({
                                     className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
                                   >
                                     Download {run.output_filename || "output"}
+                                  </a>
+                                  <a
+                                    href={`/api/dashboard/agents/runs/${run.id}/pptx?businessId=${encodeURIComponent(businessId)}`}
+                                    className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
+                                    title="Headings become slides, bullets become bullets"
+                                  >
+                                    Download .pptx
                                   </a>
                                   <Button
                                     size="sm"

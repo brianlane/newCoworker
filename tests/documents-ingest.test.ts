@@ -13,6 +13,7 @@ import {
   DOCUMENT_INGEST_MAX_TEXT_CHARS,
   ingestDocument,
   isSupportedDocumentMime,
+  normalizeUploadMime,
   parseCondensedReply,
   rewriteDocumentContent
 } from "@/lib/documents/ingest";
@@ -58,6 +59,62 @@ describe("isSupportedDocumentMime", () => {
     }
     expect(isSupportedDocumentMime("application/msword")).toBe(false);
     expect(isSupportedDocumentMime("image/png")).toBe(false);
+  });
+});
+
+describe("normalizeUploadMime", () => {
+  it("canonicalizes VTT uploads however the browser reported them", () => {
+    expect(normalizeUploadMime("text/vtt", "m.vtt")).toBe("text/vtt");
+    expect(normalizeUploadMime("", "meeting.vtt")).toBe("text/vtt");
+    expect(normalizeUploadMime("application/octet-stream", "Meeting.VTT")).toBe("text/vtt");
+  });
+
+  it("keeps every other reported type verbatim (lowercased)", () => {
+    expect(normalizeUploadMime(" TEXT/PLAIN ", "notes.vtt")).toBe("text/plain");
+    expect(normalizeUploadMime("application/pdf", "doc.pdf")).toBe("application/pdf");
+    expect(normalizeUploadMime("", "doc.pdf")).toBe("");
+  });
+});
+
+describe("ingestDocument (vtt transcript)", () => {
+  it("converts cue soup to speaker lines before condensing", async () => {
+    const generate = generateOk(GOOD_REPLY);
+    const vtt = [
+      "WEBVTT",
+      "",
+      "1",
+      "00:00:01.000 --> 00:00:04.000",
+      "Dania: We agreed the premium is $1,240 per year."
+    ].join("\n");
+    const res = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Renewal call",
+        mimeType: "text/vtt",
+        data: Buffer.from(vtt)
+      },
+      { generate }
+    );
+    expect(res.ok).toBe(true);
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain("Dania: We agreed the premium is $1,240 per year.");
+    expect(call.userText).not.toContain("-->");
+    expect(call.userText).not.toContain("WEBVTT");
+  });
+
+  it("treats a payload-free transcript as empty content", async () => {
+    const generate = generateOk(GOOD_REPLY);
+    const res = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Empty",
+        mimeType: "text/vtt",
+        data: Buffer.from("WEBVTT\n\n00:00:01.000 --> 00:00:02.000\n")
+      },
+      { generate }
+    );
+    expect(res).toEqual({ ok: false, error: "empty_content" });
+    expect(generate).not.toHaveBeenCalled();
   });
 });
 

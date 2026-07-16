@@ -12,10 +12,11 @@ import {
 import { AGENT_TEMPLATES, getAgentTemplate } from "@/lib/agents/templates";
 
 describe("AGENT_TEMPLATES", () => {
-  it("ships the two quote templates with unique ids", () => {
+  it("ships the quote + meeting-minutes templates with unique ids", () => {
     const ids = AGENT_TEMPLATES.map((t) => t.id);
     expect(ids).toContain("quote_comparison");
     expect(ids).toContain("quote_request_package");
+    expect(ids).toContain("meeting_minutes");
     expect(new Set(ids).size).toBe(ids.length);
   });
 
@@ -42,6 +43,15 @@ describe("AGENT_TEMPLATES", () => {
 
   it("the comparison template demands honest gaps instead of guessed values", () => {
     expect(getAgentTemplate("quote_comparison")!.instructions).toMatch(/not stated/);
+  });
+});
+
+describe("meeting_minutes template", () => {
+  it("demands transcript-grounded minutes with owners and no invented facts", () => {
+    const minutes = getAgentTemplate("meeting_minutes")!;
+    expect(minutes.instructions).toMatch(/Action items/);
+    expect(minutes.instructions).toMatch(/never invent facts/i);
+    expect(minutes.instructions).toMatch(/owner not stated/);
   });
 });
 

@@ -25,6 +25,7 @@ import {
   listEmailLogForAddress,
   recordInboundTriggerEmail,
   recordOutboundAssistantEmail,
+  linkTenantMailboxInboundRun,
   recordTenantMailboxInbound,
   softDeleteEmailLogEntry
 } from "@/lib/db/email-log";
@@ -288,10 +289,18 @@ describe("recordTenantMailboxInbound", () => {
     providerMessageId: "<m1@x>"
   };
 
+  /** insert().select("id").maybeSingle() chain returning the given result. */
+  const insertingDb = (result: { data: unknown; error: { message: string } | null }) => {
+    const maybeSingle = vi.fn().mockResolvedValue(result);
+    const select = vi.fn(() => ({ maybeSingle }));
+    const insert = vi.fn(() => ({ select }));
+    return { insert, db: { from: vi.fn(() => ({ insert })) } };
+  };
+
   it("inserts an inbound tenant-mailbox row with a capped preview", async () => {
-    const insert = vi.fn().mockResolvedValue({ error: null });
-    const db = { from: vi.fn(() => ({ insert })) };
-    await recordTenantMailboxInbound({ ...input, bodyHtml: "<p>z</p>" }, db as never);
+    const { insert, db } = insertingDb({ data: { id: "log-1" }, error: null });
+    const id = await recordTenantMailboxInbound({ ...input, bodyHtml: "<p>z</p>" }, db as never);
+    expect(id).toBe("log-1");
     expect(db.from).toHaveBeenCalledWith("email_log");
     expect(insert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -311,13 +320,13 @@ describe("recordTenantMailboxInbound", () => {
     );
   });
 
-  it("defaults optional fields to null", async () => {
-    const insert = vi.fn().mockResolvedValue({ error: null });
-    const db = { from: vi.fn(() => ({ insert })) };
-    await recordTenantMailboxInbound(
+  it("defaults optional fields to null and a missing returned id to null", async () => {
+    const { insert, db } = insertingDb({ data: null, error: null });
+    const id = await recordTenantMailboxInbound(
       { businessId: "biz", toEmail: "a@nc.com", fromEmail: "b@x.com", subject: "s", bodyText: "t" },
       db as never
     );
+    expect(id).toBeNull();
     expect(insert).toHaveBeenCalledWith(
       expect.objectContaining({
         run_id: null,
@@ -328,31 +337,75 @@ describe("recordTenantMailboxInbound", () => {
     );
   });
 
-  it("only logs on insert error (best-effort)", async () => {
+  it("only logs on insert error (best-effort), returning null", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const insert = vi.fn().mockResolvedValue({ error: { message: "down" } });
-    const db = { from: vi.fn(() => ({ insert })) };
-    await expect(recordTenantMailboxInbound(input, db as never)).resolves.toBeUndefined();
+    const { db } = insertingDb({ data: null, error: { message: "down" } });
+    await expect(recordTenantMailboxInbound(input, db as never)).resolves.toBeNull();
     expect(errSpy).toHaveBeenCalledWith("recordTenantMailboxInbound", "down");
     errSpy.mockRestore();
   });
 
   it("uses the default service client when none is injected", async () => {
-    const insert = vi.fn().mockResolvedValue({ error: null });
-    defaultClientSpy.mockResolvedValueOnce({ from: vi.fn(() => ({ insert })) });
-    await recordTenantMailboxInbound(input);
+    const { insert, db } = insertingDb({ data: { id: "log-2" }, error: null });
+    defaultClientSpy.mockResolvedValueOnce(db);
+    expect(await recordTenantMailboxInbound(input)).toBe("log-2");
     expect(insert).toHaveBeenCalled();
   });
 
   it("never throws when the client cannot be created", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     defaultClientSpy.mockRejectedValueOnce(new Error("no env"));
-    await expect(recordTenantMailboxInbound(input)).resolves.toBeUndefined();
+    await expect(recordTenantMailboxInbound(input)).resolves.toBeNull();
     expect(errSpy).toHaveBeenCalledWith("recordTenantMailboxInbound", "no env");
     defaultClientSpy.mockRejectedValueOnce("weird");
-    await expect(recordTenantMailboxInbound(input)).resolves.toBeUndefined();
+    await expect(recordTenantMailboxInbound(input)).resolves.toBeNull();
     expect(errSpy).toHaveBeenCalledWith("recordTenantMailboxInbound", "weird");
     errSpy.mockRestore();
+  });
+});
+
+describe("linkTenantMailboxInboundRun", () => {
+  const linkage = { flowId: "flow-1", runId: "run-1" };
+
+  /** update().eq().eq() chain resolving to the given result. */
+  const updatingDb = (result: { error: { message: string } | null }) => {
+    const eq2 = vi.fn().mockResolvedValue(result);
+    const eq1 = vi.fn(() => ({ eq: eq2 }));
+    const update = vi.fn(() => ({ eq: eq1 }));
+    return { update, eq1, eq2, db: { from: vi.fn(() => ({ update })) } };
+  };
+
+  it("stamps the flow/run linkage scoped to the business + row", async () => {
+    const { update, eq1, eq2, db } = updatingDb({ error: null });
+    await linkTenantMailboxInboundRun("biz", "log-1", linkage, db as never);
+    expect(db.from).toHaveBeenCalledWith("email_log");
+    expect(update).toHaveBeenCalledWith({ flow_id: "flow-1", run_id: "run-1" });
+    expect(eq1).toHaveBeenCalledWith("business_id", "biz");
+    expect(eq2).toHaveBeenCalledWith("id", "log-1");
+  });
+
+  it("only logs on update error and never throws (best-effort)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = updatingDb({ error: { message: "down" } });
+    await expect(
+      linkTenantMailboxInboundRun("biz", "log-1", linkage, db as never)
+    ).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("linkTenantMailboxInboundRun", "down");
+
+    defaultClientSpy.mockRejectedValueOnce(new Error("no env"));
+    await expect(linkTenantMailboxInboundRun("biz", "log-1", linkage)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("linkTenantMailboxInboundRun", "no env");
+    defaultClientSpy.mockRejectedValueOnce("weird");
+    await expect(linkTenantMailboxInboundRun("biz", "log-1", linkage)).resolves.toBeUndefined();
+    expect(errSpy).toHaveBeenCalledWith("linkTenantMailboxInboundRun", "weird");
+    errSpy.mockRestore();
+  });
+
+  it("uses the default service client when none is injected", async () => {
+    const { update, db } = updatingDb({ error: null });
+    defaultClientSpy.mockResolvedValueOnce(db);
+    await linkTenantMailboxInboundRun("biz", "log-1", linkage);
+    expect(update).toHaveBeenCalled();
   });
 });
 

@@ -162,6 +162,20 @@ describe("applyInviteeContext", () => {
     expect(ev.description).not.toContain("starts (invitee local time)");
   });
 
+  it("surfaces a host-marked no-show and omits the line otherwise", () => {
+    // Gate line for no-show recovery flows (condition: contains
+    // "invitee no-show: yes" on an event_end trigger).
+    const marked = baseEvent();
+    applyInviteeContext(marked, [
+      { name: "Ghosty", no_show: { uri: "https://api.calendly.com/invitee_no_shows/N1" } }
+    ]);
+    expect(marked.description).toContain("invitee no-show: yes");
+
+    const unmarked = baseEvent();
+    applyInviteeContext(unmarked, [{ name: "Showed Up", no_show: null }, { name: "Also Fine" }]);
+    expect(unmarked.description).not.toContain("no-show");
+  });
+
   it("skips canceled invitees on active events but keeps them on canceled events", () => {
     const active = baseEvent();
     applyInviteeContext(active, [{ name: "Ghost", email: "g@x.co", status: "canceled" }]);

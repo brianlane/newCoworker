@@ -12,6 +12,12 @@ import type { RenewalBucket, RenewalPipeline } from "@/lib/analytics/renewal-pip
 import type { ResponseTimeStats } from "@/lib/analytics/response-times";
 import type { RetentionOverview } from "@/lib/analytics/retention";
 import type { MonthlySummary } from "@/lib/analytics/monthly-summary";
+import {
+  QUOTE_LOST_TAG,
+  QUOTE_STAGE_LABELS,
+  QUOTE_STAGE_TAGS,
+  type QuoteFunnel
+} from "@/lib/analytics/quote-funnel";
 
 const BUCKET_LABELS: Record<RenewalBucket, string> = {
   overdue: "Overdue",
@@ -229,6 +235,52 @@ function MonthColumn({
         ))}
       </ul>
     </div>
+  );
+}
+
+export function QuoteFunnelCard({ funnel }: { funnel: QuoteFunnel }) {
+  const ladderMax = Math.max(...QUOTE_STAGE_TAGS.map((t) => funnel.counts[t]), 1);
+  return (
+    <Card>
+      <h2 className="text-sm font-semibold text-parchment">Quote funnel</h2>
+      <p className="text-xs text-parchment/50 mt-0.5 mb-3">
+        Contacts by quote stage — each counted at their furthest stage
+        {funnel.clipped ? " (directory capped)" : ""}
+      </p>
+      <div className="space-y-1.5">
+        {QUOTE_STAGE_TAGS.map((tag) => (
+          <div key={tag} className="flex items-center gap-2">
+            <span className="w-20 shrink-0 text-xs text-parchment/60">
+              {QUOTE_STAGE_LABELS[tag]}
+            </span>
+            <div className="flex-1 h-3 rounded bg-parchment/5">
+              <div
+                className={`h-3 rounded ${tag === "quote-won" ? "bg-claw-green/70" : "bg-signal-teal/60"}`}
+                style={{ width: `${Math.max((funnel.counts[tag] / ladderMax) * 100, funnel.counts[tag] > 0 ? 4 : 0)}%` }}
+              />
+            </div>
+            <span className="w-8 shrink-0 text-right text-xs text-parchment/80">
+              {funnel.counts[tag]}
+            </span>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] text-parchment/40 mt-3">
+        {funnel.conversionRate !== null && (
+          <span className="text-claw-green">
+            {Math.round(funnel.conversionRate * 100)}% won
+          </span>
+        )}
+        {funnel.counts[QUOTE_LOST_TAG] > 0 && (
+          <span> · {funnel.counts[QUOTE_LOST_TAG]} lost</span>
+        )}
+        <span>
+          {" "}
+          · Track quotes by tagging contacts {QUOTE_STAGE_TAGS.join(" → ")} (AiFlows can set
+          these automatically).
+        </span>
+      </p>
+    </Card>
   );
 }
 

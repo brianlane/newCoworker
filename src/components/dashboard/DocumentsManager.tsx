@@ -409,11 +409,13 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
       {/* ── Upload ─────────────────────────────────────────────────────── */}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div>
-          <label className={labelClass}>File (PDF, text, markdown, or CSV — max 10 MB)</label>
+          <label className={labelClass}>
+            File (PDF, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
+          </label>
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv"
+            accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
             className="block w-full text-sm text-parchment/70 file:mr-3 file:rounded-md file:border-0 file:bg-signal-teal/20 file:px-3 file:py-1.5 file:text-sm file:text-signal-teal"
           />
         </div>
@@ -679,7 +681,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                         value={draftContent}
                         onChange={(e) => setDraftContent(e.target.value)}
                       />
-                      <div className="mt-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Button
                           type="button"
                           variant="secondary"
@@ -689,6 +691,28 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                         >
                           Save content
                         </Button>
+                        {/* The export builds from SAVED, ready content — the
+                            route rejects processing/failed/empty docs, and with
+                            unsaved edits the link would silently ship an older
+                            deck, so both gate the control. */}
+                        {doc.status === "ready" && (doc.content_md ?? "").trim().length > 0 ? (
+                          draftContent === (doc.content_md ?? "") ? (
+                            <a
+                              href={`/api/dashboard/documents/${doc.id}/pptx?businessId=${encodeURIComponent(businessId)}`}
+                              className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
+                              title="Headings become slides, bullets become bullets"
+                            >
+                              Download as PowerPoint
+                            </a>
+                          ) : (
+                            <span
+                              className="inline-flex items-center rounded-md border border-parchment/10 px-3 py-1.5 text-xs text-parchment/40 cursor-not-allowed"
+                              title="Save your content edits first — the export uses saved content"
+                            >
+                              Download as PowerPoint (save first)
+                            </span>
+                          )
+                        ) : null}
                       </div>
                     </div>
                     <div>

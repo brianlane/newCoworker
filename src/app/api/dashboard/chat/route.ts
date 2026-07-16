@@ -117,14 +117,16 @@ import {
   fulfillEmailBlocks
 } from "@/lib/dashboard-chat/email-blocks";
 import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
-import { getBusinessConfig } from "@/lib/db/configs";
+import {
+  buildBusinessContextBlock,
+  buildIntegrationsStatusLine
+} from "@/lib/dashboard-chat/context-blocks";
 import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
-import { resolveCalendarConnection, resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
-import { isSupportedDocumentMime } from "@/lib/documents/ingest";
+import { isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 import { loadBusinessFlowActivity } from "../../../../../supabase/functions/_shared/ai_flows/run_context";
@@ -316,6 +318,8 @@ YOUR CHANNELS ARE SMS TEXTING, PHONE CALLS, AND EMAIL — NOTHING ELSE. You cann
 
 AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description.
 
+PRESENT YOUR OPTIONS, THEN DO WHAT THE OWNER PICKS. When the owner asks for something you can fulfil MORE THAN ONE WAY with the tools you actually have — doing it directly now, running an existing automation that covers it (check list_aiflows when you have it), scheduling it, or drafting it for their approval — present the viable options in ONE short reply with a word on the tradeoff, then execute exactly the option they choose. Example: "I can text Uday that confirmation right now, or run your 'Booking confirmation' automation which also handles the timing — which do you prefer?" Options must be real: never offer an action you lack a tool for, and if a matching automation is disabled, say it's awaiting their review at /dashboard/aiflows and offer the direct action instead. When only one way exists, just confirm and do it — don't manufacture choices. Never act without the owner's explicit choice in this conversation.
+
 THE OWNER'S DECISIONS ARE THEIRS. When the owner pastes a list of questions, considerations, or options for THEM to decide (setup checklists, advisor notes, "things to think about"), walk through the items and ASK for their choices — never answer the questions on their behalf, never invent policies, contact details, or preferences they haven't stated, and never present your own assumptions as settled decisions.
 
 BE PROACTIVE WITH TOOLS. When the owner asks how to do something you can do yourself with your tools (send a follow-up SMS or email, book/reschedule/cancel an appointment, share a document), don't answer with generic advice — propose the concrete action for the specific customer under discussion and offer a draft they can approve (e.g. "Want me to text Juhu a follow-up? Here's a draft: …"). Never close by offering to "find more general information".
@@ -362,57 +366,6 @@ Rules:
 export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL — DISABLED.
 
 You cannot send emails on this surface. If the owner asks you to send an email, do NOT pretend to send one and do NOT output any tool-call syntax — tell them plainly that email sending is turned off, and that they can enable the "Send email" tool under Settings → Coworker tools on the dashboard.`;
-
-/**
- * Human labels for the calendar providers resolveCalendarConnection can
- * return. Calendly gets its link-mode caveat inline so the model never
- * promises direct booking on a link-only provider.
- */
-const CALENDAR_PROVIDER_LABELS: Record<string, string> = {
-  vagaro: "Vagaro (real availability search + direct booking)",
-  google: "Google Calendar",
-  microsoft: "Outlook Calendar",
-  caldav: "CalDAV (e.g. iCloud)",
-  calendly:
-    "Calendly (slot search + scheduling links — booking hands the person a single-use link, it cannot book on their behalf)"
-};
-
-/**
- * Per-turn "what is actually connected" system line, so the model answers
- * "are you connected to Calendly?" from ground truth instead of guessing —
- * the KYP Ads conversation (Jul 15) had the assistant deny, then claim,
- * Calendly access within four turns while a live Calendly connection
- * existed the whole time. Best-effort: a resolver failure degrades to no
- * line (the model then honestly doesn't know), never a failed turn.
- */
-async function buildIntegrationsStatusLine(businessId: string): Promise<string | null> {
-  try {
-    const [calendar, email] = await Promise.all([
-      resolveCalendarConnection(businessId),
-      resolveEmailConnection(businessId)
-    ]);
-    const calendarLabel = calendar
-      ? CALENDAR_PROVIDER_LABELS[calendar.provider] ?? calendar.provider
-      : "not connected";
-    const emailLabel = email
-      ? email.provider === "google"
-        ? "Google mailbox connected"
-        : "Microsoft mailbox connected"
-      : "not connected";
-    return (
-      "CONNECTED INTEGRATIONS (ground truth for THIS turn — answer connection questions from this line, never guess or ask the owner for API details):\n" +
-      `- Calendar: ${calendarLabel}\n` +
-      `- Email mailbox: ${emailLabel}\n` +
-      "- Texting: the business's own SMS number (always available on this platform)."
-    );
-  } catch (err) {
-    logger.warn("dashboard chat: integrations status line failed", {
-      businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return null;
-  }
-}
 
 /**
  * Build the message array sent to Rowboat for one chat turn. Stored on
@@ -525,48 +478,6 @@ function buildRowboatChatMessages(args: {
 }
 
 /**
- * Per-side cap on the identity/memory blocks injected into the INLINE
- * systemInstruction. Generous (Gemini flash context is huge) but bounded so
- * a pathological memory_md can't dominate the prompt. Memory keeps its TAIL
- * (owner-chat capture sections append newest-last).
- */
-const BUSINESS_CONTEXT_MAX_CHARS = 12_000;
-
-/**
- * Business identity + memory system block for the INLINE path. The worker
- * path gets these via the Rowboat agent's seeded instructions (vault sync);
- * the inline call would otherwise answer configuration questions blind.
- * Best-effort: a read failure degrades to no block, never a failed turn.
- */
-async function buildBusinessContextBlock(businessId: string): Promise<string | null> {
-  try {
-    const config = await getBusinessConfig(businessId);
-    if (!config) return null;
-    const clipHead = (s: string): string =>
-      s.length > BUSINESS_CONTEXT_MAX_CHARS
-        ? `${s.slice(0, BUSINESS_CONTEXT_MAX_CHARS)}\n… (truncated)`
-        : s;
-    const clipTail = (s: string): string =>
-      s.length > BUSINESS_CONTEXT_MAX_CHARS
-        ? `… (older content truncated)\n${s.slice(-BUSINESS_CONTEXT_MAX_CHARS)}`
-        : s;
-    const identity = (config.identity_md ?? "").trim();
-    const memory = (config.memory_md ?? "").trim();
-    if (!identity && !memory) return null;
-    const parts = ["YOUR BUSINESS CONFIGURATION (identity + memory — the owner's own data; quote from it freely):"];
-    if (identity) parts.push(`# identity.md\n${clipHead(identity)}`);
-    if (memory) parts.push(`# memory.md\n${clipTail(memory)}`);
-    return parts.join("\n\n");
-  } catch (err) {
-    logger.warn("dashboard chat: business context block read failed", {
-      businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return null;
-  }
-}
-
-/**
  * Telemetry for a text turn that could NOT run on the inline primary path
  * for a non-cap reason. The July 2026 dead-model incident (default id
  * `gemini-3.1-flash`, which does not exist on the Gemini API) demoted every
@@ -620,11 +531,13 @@ export async function POST(request: Request) {
       });
       const file = form.get("file");
       if (file instanceof File) {
-        const mimeType = file.type.trim().toLowerCase();
+        // normalizeUploadMime maps VTT transcripts (text/vtt, or a .vtt name
+        // under a blank/octet-stream reported type) onto their canonical mime.
+        const mimeType = normalizeUploadMime(file.type, file.name);
         if (!isSupportedDocumentMime(mimeType)) {
           return errorResponse(
             "VALIDATION_ERROR",
-            "Only PDF, plain text, markdown, or CSV attachments are supported"
+            "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
           );
         }
         if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
@@ -815,14 +728,16 @@ export async function POST(request: Request) {
       calFindEnabled,
       calBookEnabled,
       calRescheduleEnabled,
-      calCancelEnabled
+      calCancelEnabled,
+      runAiflowEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment")
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow")
     ]);
     const actionToolGates = {
       send_sms: smsToolEnabled,
@@ -835,7 +750,10 @@ export async function POST(request: Request) {
       calendar_find_slots: calFindEnabled,
       calendar_book_appointment: calBookEnabled,
       calendar_reschedule_appointment: calRescheduleEnabled,
-      calendar_cancel_appointment: calCancelEnabled
+      calendar_cancel_appointment: calCancelEnabled,
+      // One Settings toggle gates the pair: listing exists to serve running.
+      list_aiflows: runAiflowEnabled,
+      run_aiflow: runAiflowEnabled
     };
 
     // Two message arrays:

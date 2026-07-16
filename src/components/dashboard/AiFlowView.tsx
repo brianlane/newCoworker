@@ -330,6 +330,33 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           </div>
         </div>
       );
+    case "doc_extract":
+      return (
+        <div className="space-y-1">
+          <Row
+            label="Document"
+            value={step.sourceTemplate ?? "The triggering email's attachment"}
+            mono={Boolean(step.sourceTemplate)}
+          />
+          {step.fileAs && (
+            <Row
+              label="Files into Documents as"
+              value={`${step.fileAs.titleTemplate} (${step.fileAs.audience ?? "staff"})`}
+            />
+          )}
+          <div className="text-xs font-medium text-parchment/50">
+            Fields read from the document
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {step.fields.map((f, i) => (
+              <Chip key={i}>
+                {f.name}
+                {f.description ? `: ${f.description}` : ""}
+              </Chip>
+            ))}
+          </div>
+        </div>
+      );
     case "send_sms":
       return (
         <>

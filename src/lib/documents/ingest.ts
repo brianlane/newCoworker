@@ -18,11 +18,19 @@ import {
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 import { DOCUMENT_CONTENT_MD_MAX_CHARS, DOCUMENT_SUMMARY_MAX_CHARS } from "./core";
+import { VTT_MIME_TYPE, isVttUpload, vttToPlainText } from "@/lib/transcripts/vtt";
 
 /** Raw text fed to the condenser is clipped to keep the prompt bounded. */
 export const DOCUMENT_INGEST_MAX_TEXT_CHARS = 40_000;
 
-export const DOCUMENT_TEXT_MIME_TYPES = ["text/plain", "text/markdown", "text/csv"] as const;
+export const DOCUMENT_TEXT_MIME_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  // Meeting transcripts (Zoom/Meet/Teams recordings). Converted from cue
+  // soup to "Speaker: sentence" lines before condensing.
+  VTT_MIME_TYPE
+] as const;
 export const DOCUMENT_PDF_MIME_TYPE = "application/pdf";
 export const DOCUMENT_ALLOWED_MIME_TYPES = [
   ...DOCUMENT_TEXT_MIME_TYPES,
@@ -31,6 +39,17 @@ export const DOCUMENT_ALLOWED_MIME_TYPES = [
 
 export function isSupportedDocumentMime(mime: string): boolean {
   return (DOCUMENT_ALLOWED_MIME_TYPES as readonly string[]).includes(mime);
+}
+
+/**
+ * Canonical mime for an upload: maps VTT transcripts (reported as text/vtt,
+ * blank, or octet-stream with a .vtt name — browsers do all three) onto
+ * VTT_MIME_TYPE so the upload routes accept them and ingestion knows to
+ * convert. Every other upload keeps its reported type.
+ */
+export function normalizeUploadMime(mime: string, filename: string): string {
+  const trimmed = mime.trim().toLowerCase();
+  return isVttUpload(trimmed, filename) ? VTT_MIME_TYPE : trimmed;
 }
 
 const DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview";
@@ -178,11 +197,11 @@ export async function ingestDocument(
   const generate = deps.generate ?? geminiGenerateTextDetailed;
 
   if ((DOCUMENT_TEXT_MIME_TYPES as readonly string[]).includes(input.mimeType)) {
-    const rawText = input.data
-      .toString("utf8")
-      .replace(/\u0000/g, "")
-      .trim()
-      .slice(0, DOCUMENT_INGEST_MAX_TEXT_CHARS);
+    const decoded = input.data.toString("utf8").replace(/\u0000/g, "");
+    // VTT transcripts become "Speaker: sentence" lines so the condenser
+    // reads a meeting, not subtitle cue soup.
+    const asText = input.mimeType === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    const rawText = asText.trim().slice(0, DOCUMENT_INGEST_MAX_TEXT_CHARS);
     if (rawText.length < 20) return { ok: false, error: "empty_content" };
     const prompt = buildCondensePrompt({
       title: input.title,

@@ -91,6 +91,20 @@ describe("buildAttachmentParts", () => {
     expect(inlinePart).toBeNull();
   });
 
+  it("converts VTT transcripts to speaker lines inline — NEVER as a PDF part", () => {
+    const att: InlineTurnAttachment = {
+      filename: "meeting.vtt",
+      mimeType: "text/vtt",
+      data: Buffer.from(
+        "WEBVTT\n\n1\n00:00:01.000 --> 00:00:04.000\nDania: The premium is $1,240 per year."
+      )
+    };
+    const { textBlock, inlinePart } = buildAttachmentParts(att);
+    expect(textBlock).toContain("Dania: The premium is $1,240 per year.");
+    expect(textBlock).not.toContain("-->");
+    expect(inlinePart).toBeNull();
+  });
+
   it("rides PDFs along as inlineData", () => {
     const att: InlineTurnAttachment = {
       filename: "menu.pdf",
@@ -510,7 +524,9 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     calendar_find_slots: true,
     calendar_book_appointment: true,
     calendar_reschedule_appointment: true,
-    calendar_cancel_appointment: true
+    calendar_cancel_appointment: true,
+    list_aiflows: true,
+    run_aiflow: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -525,7 +541,9 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       "calendar_find_slots",
       "calendar_book_appointment",
       "calendar_reschedule_appointment",
-      "calendar_cancel_appointment"
+      "calendar_cancel_appointment",
+      "list_aiflows",
+      "run_aiflow"
     ]);
   });
 
@@ -750,6 +768,86 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       error: "model_failed",
       detail: "gemini_http_500:wrap-up died"
     });
+  });
+
+  it("a successful run_aiflow is side-effect pinned — wrap-up failure keeps ok:true with the flow note", async () => {
+    // Bugbot High (PR #687): an enqueued automation run is committed; a
+    // fallback rerun would enqueue the same flow twice.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      runId: "run-9",
+      flowName: "Proposal send + follow-up"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("run_aiflow", { flow: "Proposal" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain('Automation run started ("Proposal send + follow-up")');
+    }
+
+    // Nameless result (defensive arm): the note still lands, without quotes.
+    const namelessTool = vi.fn(async () => ({ ok: true, runId: "run-10" }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("run_aiflow", { flow: "Proposal" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: namelessTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) expect(res2.content).toContain("Automation run started — it can be watched");
+  });
+
+  it("stops starting new steps once budgetMs is exhausted — fails fast when nothing committed", async () => {
+    // Bugbot High (PR #687): a slow turn must not keep committing tools
+    // after the SMS worker's own timeout already fell back to Rowboat.
+    const runActionTool = vi.fn(async () => ({ ok: true, data: { slots: [] } }));
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => {
+      await new Promise((r) => setTimeout(r, 10));
+      return toolStep("calendar_find_slots", {});
+    });
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: ALL_ON, budgetMs: 5 }),
+      { chatStep, runActionTool }
+    );
+    expect(res).toEqual({ ok: false, error: "model_failed", detail: "budget_exhausted" });
+    // Only the first step ran; the second was refused by the budget check.
+    expect(chatStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("budget exhaustion AFTER a committed side effect degrades to the honest ok:true line", async () => {
+    const runActionTool = vi.fn(async () => ({ ok: true, messageId: "m1", toE164: "+15145188192" }));
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => {
+      await new Promise((r) => setTimeout(r, 10));
+      return toolStep("send_sms", { toE164: "+15145188192", body: "hi" });
+    });
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: ALL_ON, budgetMs: 5 }),
+      { chatStep, runActionTool }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.content).toContain("Text sent to +15145188192");
+    expect(chatStep).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the creation tools when includeCreationTools is false (no builder UI on the surface)", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(
+      baseArgs({ actionToolGates: ALL_ON, includeCreationTools: false }),
+      { chatStep }
+    );
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).not.toContain("create_aiflow");
+    expect(declared).not.toContain("create_agent");
+    expect(declared).toContain("business_knowledge_lookup");
+    expect(declared).toContain("send_sms");
   });
 
   it("a FAILED side-effect tool (ok:false) does NOT suppress the worker fallback either", async () => {

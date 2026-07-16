@@ -12,6 +12,7 @@ import {
   manualTriggerScope,
   safeRegexTest,
   tenantEmailTriggerScope,
+  EMAIL_ATTACHMENT_NAMES_MAX,
   webhookTriggerScope
 } from "@/lib/ai-flows/trigger-eval";
 
@@ -247,7 +248,11 @@ describe("tenantEmailTriggerScope", () => {
       message_id: "m1",
       to: "amy@newcoworker.com",
       received_at: "2026-06-09T15:00:00Z",
-      image: ""
+      image: "",
+      document: "",
+      document_name: "",
+      attachments: "",
+      attachment_count: 0
     });
   });
   it("omits to and received_at when unknown", () => {
@@ -269,6 +274,61 @@ describe("tenantEmailTriggerScope", () => {
       imageRef: "email-attachments:inbound/m3/face.jpg"
     });
     expect(scope.image).toBe("email-attachments:inbound/m3/face.jpg");
+  });
+  it("carries the first document attachment as {{trigger.document}} + its filename", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m4",
+      fromEmail: "a@b.c",
+      subject: "renewal",
+      bodyText: "see attached",
+      documentRef: "email-attachments:inbound/m4/0-renewal.pdf",
+      documentName: "renewal.pdf"
+    });
+    expect(scope.document).toBe("email-attachments:inbound/m4/0-renewal.pdf");
+    expect(scope.document_name).toBe("renewal.pdf");
+  });
+
+  it("appends the attachments line AFTER the body slice and exposes {{trigger.attachments}}", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m4",
+      fromEmail: "a@b.c",
+      subject: "docs",
+      // A body at the window cap would truncate an in-body line away — the
+      // attachments line must survive it.
+      bodyText: "x".repeat(EMAIL_WINDOW_TEXT_MAX),
+      attachmentNames: ["license.pdf", "  proof of address.pdf  ", ""]
+    });
+    expect(
+      scope.windowText.endsWith("\n\n[inbound attachments] license.pdf, proof of address.pdf")
+    ).toBe(true);
+    // The starter template's anchored trigger regex matches the appended line.
+    expect(/\n\[inbound attachments\] .+$/.test(scope.windowText)).toBe(true);
+    expect(scope.attachments).toBe("license.pdf, proof of address.pdf");
+    expect(scope.attachment_count).toBe(2);
+  });
+
+  it("adds no attachments line when every name is blank", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m5",
+      fromEmail: "a@b.c",
+      subject: "s",
+      bodyText: "body",
+      attachmentNames: ["  ", ""]
+    });
+    expect(scope.windowText).toBe("s\nbody");
+    expect(scope.attachments).toBe("");
+    expect(scope.attachment_count).toBe(0);
+  });
+
+  it("caps a pathological attachment-names line", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m6",
+      fromEmail: "a@b.c",
+      subject: "s",
+      bodyText: "body",
+      attachmentNames: Array.from({ length: 100 }, (_, i) => `${"long".repeat(10)}-${i}.pdf`)
+    });
+    expect((scope.attachments as string).length).toBe(EMAIL_ATTACHMENT_NAMES_MAX);
   });
 });
 

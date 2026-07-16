@@ -59,9 +59,17 @@ import {
   type ActionToolName
 } from "@/lib/dashboard-chat/action-tools";
 import { logger } from "@/lib/logger";
+import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 
 /** Attachment formats the inline turn understands. */
-export const CHAT_ATTACHMENT_TEXT_MIME_TYPES = ["text/plain", "text/markdown", "text/csv"] as const;
+export const CHAT_ATTACHMENT_TEXT_MIME_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  // Meeting transcripts (Zoom/Meet/Teams) — converted from cue soup to
+  // "Speaker: sentence" lines below, NEVER sent as a PDF inline part.
+  VTT_MIME_TYPE
+] as const;
 export const CHAT_ATTACHMENT_PDF_MIME_TYPE = "application/pdf";
 /** Inline text from an attachment is clipped to keep the prompt bounded. */
 export const CHAT_ATTACHMENT_MAX_TEXT_CHARS = 40_000;
@@ -179,11 +187,9 @@ export function buildAttachmentParts(attachment: InlineTurnAttachment): {
 } {
   const mime = attachment.mimeType.trim().toLowerCase();
   if ((CHAT_ATTACHMENT_TEXT_MIME_TYPES as readonly string[]).includes(mime)) {
-    const text = attachment.data
-      .toString("utf8")
-      .replace(/\u0000/g, "")
-      .trim()
-      .slice(0, CHAT_ATTACHMENT_MAX_TEXT_CHARS);
+    const decoded = attachment.data.toString("utf8").replace(/\u0000/g, "");
+    const asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    const text = asText.trim().slice(0, CHAT_ATTACHMENT_MAX_TEXT_CHARS);
     return {
       textBlock: `Attached file "${attachment.filename}" (may be truncated):\n---\n${text}\n---`,
       inlinePart: null
@@ -225,7 +231,10 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "send_whatsapp",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
-  "calendar_cancel_appointment"
+  "calendar_cancel_appointment",
+  // A run_aiflow enqueue is committed the moment it lands in the queue —
+  // a fallback rerun would enqueue the same automation twice.
+  "run_aiflow"
 ]);
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
@@ -262,6 +271,10 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
     return typeof r.data?.rescheduleLink === "string"
       ? `Reschedule link created (the appointment is NOT moved until the attendee picks the new time): ${r.data.rescheduleLink}`
       : "The appointment was rescheduled.";
+  }
+  if (name === "run_aiflow") {
+    const flowName = (r as { flowName?: unknown }).flowName;
+    return `Automation run started${typeof flowName === "string" ? ` ("${flowName}")` : ""} — it can be watched at /dashboard/aiflows.`;
   }
   return "The appointment was canceled.";
 }
@@ -407,6 +420,25 @@ export async function runInlineChatTurn(
      * (e.g. older callers/tests) ⇒ no action tools declared.
      */
     actionToolGates?: ActionToolGates | null;
+    /**
+     * Declare the create_aiflow / create_agent draft tools (default true).
+     * Surfaces with no builder UI to hand a draft card to — owner-over-SMS —
+     * pass false so compile work can't succeed into a void.
+     */
+    includeCreationTools?: boolean;
+    /**
+     * Whole-turn wall-clock budget (ms). Callers whose OWN caller enforces a
+     * hard timeout (the SMS worker aborts owner turns at 75s) MUST pass a
+     * smaller budget so this engine stops starting/continuing work before
+     * that abort — otherwise a slow turn can commit tools AFTER the caller
+     * already fell back to another path, leaving the owner a reply that
+     * contradicts actions that really happened. When the budget runs out:
+     * committed side effects / drafts degrade to the honest ok:true line;
+     * a turn that committed nothing fails fast so the fallback stays safe.
+     * Omitted = per-step timeouts only (dashboard chat's own 300s function
+     * budget applies there).
+     */
+    budgetMs?: number;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -425,8 +457,10 @@ export async function runInlineChatTurn(
   const declaredActionTools: ReadonlySet<string> = new Set(
     actionDeclarations.map((d) => d.name)
   );
+  const creationTools = args.includeCreationTools === false ? [] : CREATION_TOOLS;
   const tools = [
-    ...(args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL]),
+    ...creationTools,
+    ...(args.knowledgeToolEnabled === false ? [] : [KNOWLEDGE_TOOL]),
     ...actionDeclarations
   ];
 
@@ -446,11 +480,28 @@ export async function runInlineChatTurn(
   // the facts a degraded wrap-up must not lose (links, sent bodies).
   const sideEffects: SideEffectLog = { happened: false, notes: [] };
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
+  const deadlineMs =
+    typeof args.budgetMs === "number" ? Date.now() + Math.max(1, args.budgetMs) : null;
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
+    // Budget check BEFORE starting another model step: once the caller's
+    // own timeout is near, committing more work (tool calls!) risks acting
+    // after the caller already fell back to another reply path.
+    const remainingMs = deadlineMs === null ? null : deadlineMs - Date.now();
+    if (remainingMs !== null && remainingMs <= 0) {
+      logger.warn("dashboard-chat inline turn: budget exhausted", {
+        businessId: args.businessId,
+        step
+      });
+      if (drafts.length > 0 || sideEffects.happened) break;
+      return { ok: false, error: "model_failed", detail: "budget_exhausted" };
+    }
     const controller = new AbortController();
+    // The per-step timeout never exceeds what's left of the whole-turn budget.
+    const stepTimeoutMs =
+      remainingMs === null ? 90_000 : Math.min(90_000, Math.max(1, remainingMs));
     /* c8 ignore next -- timer fires only on a real Gemini hang */
-    const timer = setTimeout(() => controller.abort(), 90_000);
+    const timer = setTimeout(() => controller.abort(), stepTimeoutMs);
     let result: GeminiChatStepResult;
     try {
       const stepParams = {

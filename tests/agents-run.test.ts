@@ -92,6 +92,32 @@ describe("executeAgentRun (text)", () => {
     expect(generate.mock.calls[0][0].userText).toContain("Produce the result as CSV.");
   });
 
+  it("converts a VTT transcript to speaker lines before prompting (markdown out)", async () => {
+    const generate = generateOk("# Minutes");
+    const vtt = [
+      "WEBVTT",
+      "",
+      "1",
+      "00:00:01.000 --> 00:00:04.000",
+      "Dania: The premium is $1,240 per year."
+    ].join("\n");
+    const res = await executeAgentRun(
+      textInput({
+        agent: { instructions: "Write the minutes.", output_format: "same_as_input" },
+        inputFilename: "meeting.vtt",
+        inputMime: "text/vtt",
+        data: Buffer.from(vtt)
+      }),
+      { generate }
+    );
+    // same_as_input still produces markdown for transcripts — echoing VTT
+    // back would be subtitle soup, not minutes.
+    expect(res).toMatchObject({ ok: true, outputFilename: "meeting.md", outputMime: "text/markdown" });
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain("Dania: The premium is $1,240 per year.");
+    expect(call.userText).not.toContain("-->");
+  });
+
   it("strips NUL bytes and clips oversized text", async () => {
     const generate = generateOk("done");
     const res = await executeAgentRun(

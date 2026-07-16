@@ -45,8 +45,9 @@ import {
   friendlyFlowSummary
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
-import { reviewRequestTemplate } from "@/lib/ai-flows/templates";
+import { documentReceiptTemplate, reviewRequestTemplate } from "@/lib/ai-flows/templates";
 import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
+import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard";
 import {
   ContactRefPicker,
   type PickerPerson,
@@ -125,6 +126,8 @@ const VISUAL_BATCH_STEP_TYPES = FLOW_STEP_TYPES.filter((t) => !VOICE_STEP_TYPE_S
 const EDITOR_MODE_STORAGE_KEY = "aiflow-editor-mode";
 /** The review-request starter's flow name (the link arg is irrelevant here). */
 const REVIEW_STARTER_NAME = reviewRequestTemplate("https://example.invalid").name;
+/** The document-receipt starter's flow name. */
+const DOC_RECEIPT_STARTER_NAME = documentReceiptTemplate().name;
 /** Inbound voice flows route a live caller; outbound flows place one call. */
 const INBOUND_VOICE_STEP_TYPES = VOICE_STEP_TYPES.filter((t) => t !== "outbound_call");
 const OUTBOUND_VOICE_STEP_TYPES = ["outbound_call"] as const;
@@ -448,6 +451,12 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         lookbackMinutes: 60,
         fillOnlyEmpty: true,
         fields: [{ name: examples.contactVar, description: "" }]
+      };
+    case "doc_extract":
+      return {
+        id,
+        type,
+        fields: [{ name: "renewal_date", description: "The policy/renewal date, YYYY-MM-DD" }]
       };
     case "send_sms":
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
@@ -2634,6 +2643,23 @@ export function AiFlowsManager({
           setEditorBaseline(JSON.stringify(opened));
         }}
       />
+      {/* Document-receipt starter installer — same live-list wiring. */}
+      <DocumentReceiptCard
+        businessId={businessId}
+        installedFlow={(() => {
+          const row = flows.find((f) => f.name === DOC_RECEIPT_STARTER_NAME);
+          return row ? { id: row.id, enabled: row.enabled } : null;
+        })()}
+        onInstalled={reload}
+        onEdit={(flowId) => {
+          const row = flows.find((f) => f.id === flowId);
+          if (!row) return;
+          setAiWarnings([]);
+          const opened = editorFromRow(row);
+          setEditor(opened);
+          setEditorBaseline(JSON.stringify(opened));
+        }}
+      />
       {flows.length === 0 ? (
         <Card>
           <p className="py-6 text-center text-sm text-parchment/60">
@@ -3138,6 +3164,102 @@ function StepFields({
         >
           + field
         </button>
+      </div>
+    );
+  }
+  if (step.type === "doc_extract") {
+    return (
+      <div className="space-y-2">
+        <p className="text-xs text-parchment/50">
+          Reads these details out of the document attached to the triggering email
+          (PDFs included). If the email carries no document, the step is skipped.
+        </p>
+        <Field
+          label="Document to read (template; empty = the triggering email's attachment)"
+          value={step.sourceTemplate ?? ""}
+          onChange={(v) =>
+            patchStep(index, { sourceTemplate: v.trim() ? v : undefined })
+          }
+          help="Usually left empty ({{trigger.document}})."
+        />
+        <label className={labelClass}>Fields to extract</label>
+        {step.fields.map((f, fi) => (
+          <div key={fi} className="flex gap-2">
+            <input
+              className={inputClass}
+              value={f.name}
+              placeholder="renewal_date"
+              onChange={(ev) =>
+                patchStep(index, {
+                  fields: step.fields.map((x, xi) =>
+                    xi === fi ? { ...x, name: ev.target.value } : x
+                  )
+                })
+              }
+            />
+            <input
+              className={inputClass}
+              value={f.description ?? ""}
+              placeholder="description (optional)"
+              onChange={(ev) =>
+                patchStep(index, {
+                  fields: step.fields.map((x, xi) =>
+                    xi === fi ? { ...x, description: ev.target.value } : x
+                  )
+                })
+              }
+            />
+          </div>
+        ))}
+        <button
+          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
+          className="text-xs text-signal-teal hover:underline"
+        >
+          + field
+        </button>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.fileAs !== undefined}
+            onChange={(ev) =>
+              patchStep(index, {
+                fileAs: ev.target.checked
+                  ? { titleTemplate: "{{trigger.document_name}}", audience: "staff" }
+                  : undefined
+              })
+            }
+          />
+          Also file the document into your Documents (searchable + shareable)
+        </label>
+        {step.fileAs !== undefined && (
+          <div className="pl-6 space-y-2">
+            <Field
+              label="Document title"
+              value={step.fileAs.titleTemplate}
+              onChange={(v) => patchStep(index, { fileAs: { ...step.fileAs, titleTemplate: v } })}
+              help="Templates work, e.g. Renewal — {{vars.customer_name}}."
+            />
+            <div>
+              <label className={labelClass}>Who can it answer for</label>
+              <select
+                className={inputClass}
+                value={step.fileAs.audience ?? "staff"}
+                onChange={(ev) =>
+                  patchStep(index, {
+                    fileAs: {
+                      ...step.fileAs,
+                      audience: ev.target.value as "clients" | "staff" | "both"
+                    }
+                  })
+                }
+              >
+                <option value="staff">Staff only (back-office paperwork)</option>
+                <option value="clients">Clients only</option>
+                <option value="both">Clients and staff</option>
+              </select>
+            </div>
+          </div>
+        )}
       </div>
     );
   }

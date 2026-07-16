@@ -92,6 +92,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "run_aiflow",
+        label: "Run automations",
+        description:
+          "List your AiFlows in chat and run an enabled one when you ask (it will offer the automation when one matches your request).",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "calendar_find_slots",
         label: "Find calendar openings",
         description: "Look up free slots on your connected calendar from chat.",

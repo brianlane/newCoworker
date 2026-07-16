@@ -16,8 +16,10 @@ vi.mock("@/lib/ai-flows/db", () => ({
 }));
 
 const recordTenantMailboxInbound = vi.fn();
+const linkTenantMailboxInboundRun = vi.fn();
 vi.mock("@/lib/db/email-log", () => ({
-  recordTenantMailboxInbound: (...a: unknown[]) => recordTenantMailboxInbound(...a)
+  recordTenantMailboxInbound: (...a: unknown[]) => recordTenantMailboxInbound(...a),
+  linkTenantMailboxInboundRun: (...a: unknown[]) => linkTenantMailboxInboundRun(...a)
 }));
 
 const recordSystemLog = vi.fn();
@@ -58,6 +60,9 @@ beforeEach(() => {
   resolveBusinessByAddress.mockReset();
   enqueueAiFlowRun.mockReset();
   recordTenantMailboxInbound.mockReset();
+  recordTenantMailboxInbound.mockResolvedValue("log-1");
+  linkTenantMailboxInboundRun.mockReset();
+  linkTenantMailboxInboundRun.mockResolvedValue(undefined);
   recordSystemLog.mockReset();
   findCustomerByEmail.mockReset();
   findCustomerByEmail.mockResolvedValue(null);
@@ -151,14 +156,71 @@ describe("processInboundTenantEmail", () => {
       db
     );
     expect(recordSystemLog).toHaveBeenCalledTimes(2);
+    // The log row is written BEFORE any run exists (doc_extract's ownership
+    // gate reads it), so the record call carries no linkage yet…
     expect(recordTenantMailboxInbound).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: "biz-1",
         toEmail: "amy@newcoworker.com",
         fromEmail: "jane@example.com",
-        flowId: "flow-match",
-        runId: "run-1",
+        flowId: null,
+        runId: null,
         providerMessageId: "<msg-1@example.com>"
+      }),
+      db
+    );
+    // …and the first run's linkage is backfilled afterwards.
+    expect(linkTenantMailboxInboundRun).toHaveBeenCalledWith(
+      "biz-1",
+      "log-1",
+      { flowId: "flow-match", runId: "run-1" },
+      db
+    );
+  });
+
+  it("skips the linkage backfill when the log write failed or nothing matched", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    // Log write failed → no id → no backfill even though a run enqueued.
+    recordTenantMailboxInbound.mockResolvedValueOnce(null);
+    const db = flowsDb({
+      data: [{ id: "flow-match", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-1" });
+    await processInboundTenantEmail(PAYLOAD, db as never);
+    expect(linkTenantMailboxInboundRun).not.toHaveBeenCalled();
+
+    // No matching flow → no run → no backfill.
+    const noMatch = flowsDb({ data: [], error: null });
+    await processInboundTenantEmail(PAYLOAD, noMatch as never);
+    expect(linkTenantMailboxInboundRun).not.toHaveBeenCalled();
+  });
+
+  it("a failed log write leaves the trigger document-less (the ownership gate would refuse it)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    recordTenantMailboxInbound.mockResolvedValueOnce(null);
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-1" });
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "renewal.pdf",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal.pdf"
+          }
+        ]
+      },
+      db as never
+    );
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({ document: "", document_name: "" })
       }),
       db
     );
@@ -197,8 +259,79 @@ describe("processInboundTenantEmail", () => {
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
         trigger: expect.objectContaining({
-          image: "email-attachments:inbound/_msg-1_example.com_/1-face.jpg"
+          image: "email-attachments:inbound/_msg-1_example.com_/1-face.jpg",
+          // The pdf (first) is the document — image and document coexist.
+          document: "email-attachments:inbound/_msg-1_example.com_/0-quote.pdf",
+          document_name: "quote.pdf"
         })
+      }),
+      db
+    );
+  });
+
+  it("matches a document by filename extension when the sender ships it as octet-stream", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-doc" });
+
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "renewal.PDF",
+            mimeType: "application/octet-stream",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal.PDF"
+          }
+        ]
+      },
+      db as never
+    );
+
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          document: "email-attachments:inbound/_msg-1_example.com_/0-renewal.PDF",
+          document_name: "renewal.PDF"
+        })
+      }),
+      db
+    );
+  });
+
+  it("leaves the trigger document-less for an extensionless attachment (even with a document MIME)", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-noext" });
+
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          // Declared as PDF but stored without an extension: doc_extract
+          // classifies by path suffix, so exposing this ref could only fail —
+          // the trigger stays document-less and the step skips gracefully.
+          {
+            filename: "renewal",
+            mimeType: "application/pdf",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal"
+          }
+        ]
+      },
+      db as never
+    );
+
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({ document: "", document_name: "" })
       }),
       db
     );
