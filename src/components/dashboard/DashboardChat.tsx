@@ -193,7 +193,10 @@ function friendlyErrorMessage(code: string | null): string {
 export function DashboardChat({ businessId, businessName }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
-  const inputTooLong = input.length > MAX_MESSAGE_CHARS;
+  // Trimmed length — the route validates AFTER trim(), so a paste with
+  // trailing whitespace/newlines must not be blocked when its real body fits.
+  const trimmedInputLength = input.trim().length;
+  const inputTooLong = trimmedInputLength > MAX_MESSAGE_CHARS;
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1291,7 +1294,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                   inputTooLong ? "text-xs font-semibold text-spark-orange" : "text-xs text-parchment/40"
                 }
               >
-                {input.length.toLocaleString()}/{MAX_MESSAGE_CHARS.toLocaleString()}
+                {trimmedInputLength.toLocaleString()}/{MAX_MESSAGE_CHARS.toLocaleString()}
                 {inputTooLong && " — too long to send; trim it or attach it as a file"}
               </span>
               <div className="flex flex-wrap items-center gap-2">
