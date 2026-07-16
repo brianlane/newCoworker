@@ -409,11 +409,13 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
       {/* ── Upload ─────────────────────────────────────────────────────── */}
       <div className="mt-4 grid gap-3 sm:grid-cols-2">
         <div>
-          <label className={labelClass}>File (PDF, text, markdown, or CSV — max 10 MB)</label>
+          <label className={labelClass}>
+            File (PDF, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
+          </label>
           <input
             ref={fileRef}
             type="file"
-            accept=".pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv"
+            accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
             className="block w-full text-sm text-parchment/70 file:mr-3 file:rounded-md file:border-0 file:bg-signal-teal/20 file:px-3 file:py-1.5 file:text-sm file:text-signal-teal"
           />
         </div>

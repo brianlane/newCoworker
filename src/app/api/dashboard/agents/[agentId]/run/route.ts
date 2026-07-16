@@ -24,7 +24,7 @@ import { getBusinessAgent, insertAgentRun, patchAgentRun } from "@/lib/agents/db
 import { executeAgentRun } from "@/lib/agents/run";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
-import { isSupportedDocumentMime } from "@/lib/documents/ingest";
+import { isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -77,11 +77,13 @@ export async function POST(request: Request, context: RouteContext) {
       businessId = parsedBusiness.data;
       const file = form.get("file");
       if (!(file instanceof File)) return errorResponse("VALIDATION_ERROR", "file is required");
-      const mimeType = file.type.trim().toLowerCase();
+      // normalizeUploadMime maps VTT transcripts (text/vtt, or a .vtt name
+      // under a blank/octet-stream reported type) onto their canonical mime.
+      const mimeType = normalizeUploadMime(file.type, file.name);
       if (!isSupportedDocumentMime(mimeType)) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "Only PDF, plain text, markdown, or CSV attachments are supported"
+          "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
         );
       }
       if (file.size === 0 || file.size > MAX_INPUT_BYTES) {
