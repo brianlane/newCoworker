@@ -648,16 +648,33 @@ export async function reclaimStaleWebchatJobForPlatform(
  * replay against an already-done job idempotently returns the original
  * message id.
  */
+export type WebchatTurnStats = {
+  /** Micro-USD the turn cost (the meter's own math). 0 for a refusal. */
+  costMicros: number;
+  model: string;
+  promptTokens: number | null;
+  outputTokens: number | null;
+  toolRounds: number;
+  refusedOverCap: boolean;
+};
+
 export async function completeWebchatJobFromPlatform(
   job: Pick<WebchatJobRow, "id">,
   content: string,
+  stats?: WebchatTurnStats | null,
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db.rpc("webchat_job_complete_platform", {
     p_job_id: job.id,
     p_content: content,
-    p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+    p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER,
+    p_cost_micros: stats ? Math.max(0, Math.round(stats.costMicros)) : null,
+    p_model: stats?.model ?? null,
+    p_prompt_tokens: stats?.promptTokens ?? null,
+    p_output_tokens: stats?.outputTokens ?? null,
+    p_tool_rounds: stats?.toolRounds ?? null,
+    p_refused_over_cap: stats?.refusedOverCap ?? null
   });
   if (error) throw new Error(`completeWebchatJobFromPlatform: ${error.message}`);
   const msgId = Number(data);
@@ -665,6 +682,61 @@ export async function completeWebchatJobFromPlatform(
     throw new Error(`completeWebchatJobFromPlatform: non-numeric message id ${String(data)}`);
   }
   return msgId;
+}
+
+/**
+ * Per-turn stat projection of webchat jobs, for the admin Web chat view's
+ * spend/usage aggregates. Cost columns are populated only by the platform
+ * (Gemini) engine — box-worker turns read as nulls, so aggregating over
+ * them stays honest (their spend is metered into the shared pool but is
+ * not attributable per turn).
+ */
+export type WebchatJobStatRow = {
+  session_id: string;
+  status: WebchatJobRow["status"];
+  cost_micros: number | null;
+  model: string | null;
+  prompt_tokens: number | null;
+  output_tokens: number | null;
+  tool_rounds: number | null;
+  refused_over_cap: boolean | null;
+  created_at: string;
+};
+
+/** Page size for the session-stats read (PostgREST clamps ~1000/query). */
+export const WEBCHAT_JOB_STATS_PAGE_SIZE = 1000;
+
+/**
+ * Stats for EXACTLY the given sessions — the caller passes the session
+ * ids it is displaying, so per-row spend and the page totals share one
+ * scope. (A business-wide "recent N jobs" window could silently exclude a
+ * listed conversation's turns on a busy tenant — Bugbot Medium on PR
+ * #648.) Reads in pages until exhausted, so no fixed row cap can truncate
+ * the aggregation either.
+ */
+export async function listWebchatJobStatsForSessions(
+  sessionIds: string[],
+  client?: SupabaseClient
+): Promise<WebchatJobStatRow[]> {
+  if (sessionIds.length === 0) return [];
+  const db = client ?? (await createSupabaseServiceClient());
+  const rows: WebchatJobStatRow[] = [];
+  for (let offset = 0; ; offset += WEBCHAT_JOB_STATS_PAGE_SIZE) {
+    const { data, error } = await db
+      .from("webchat_jobs")
+      .select(
+        "session_id, status, cost_micros, model, prompt_tokens, output_tokens, tool_rounds, refused_over_cap, created_at"
+      )
+      .in("session_id", sessionIds)
+      // Stable page order: id is unique, so paging can't skip/duplicate
+      // rows when new jobs land mid-read (created_at is not unique).
+      .order("id", { ascending: true })
+      .range(offset, offset + WEBCHAT_JOB_STATS_PAGE_SIZE - 1);
+    if (error) throw new Error(`listWebchatJobStatsForSessions: ${error.message}`);
+    const page = (data as WebchatJobStatRow[] | null) ?? [];
+    rows.push(...page);
+    if (page.length < WEBCHAT_JOB_STATS_PAGE_SIZE) return rows;
+  }
 }
 
 /**

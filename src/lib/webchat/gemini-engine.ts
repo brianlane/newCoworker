@@ -38,7 +38,11 @@ import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getChatSpendSnapshotForBusiness, type ChatSpendSnapshot } from "@/lib/db/chat-usage";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
 import { buildDocumentsDigestMd } from "@/lib/documents/core";
-import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
+import {
+  estimateGeminiCostMicrosFromChars,
+  geminiCostMicrosFromUsage,
+  meterGeminiSpendForBusiness
+} from "@/lib/billing/ai-spend-meter";
 import type { GeminiUsage } from "@/lib/gemini-generate-content";
 import {
   executeWebchatEngineTool,
@@ -137,6 +141,17 @@ export type WebchatGeminiTurnResult = {
   refusedOverCap: boolean;
   /** Tool rounds actually executed (telemetry). */
   toolRounds: number;
+  /** Model that answered (or would have answered) the turn. */
+  model: string;
+  /** Billed tokens summed across every step; null when Google sent none. */
+  usage: GeminiUsage | null;
+  /**
+   * Micro-USD this turn cost — the SAME number the AI-budget meter records
+   * (exact token math when usage exists, chars/4 estimate otherwise), so
+   * per-conversation stats and the shared pool always agree. 0 for an
+   * over-cap refusal (no Gemini call).
+   */
+  costMicros: number;
 };
 
 /**
@@ -178,12 +193,21 @@ export async function runWebchatGeminiTurn(
     throw new Error("webchat_engine_no_input");
   }
 
+  const model = webchatEngineModel(env);
+
   // Shared AI budget fuse FIRST — an over-cap tenant's anonymous traffic
   // must not bill Gemini at all. Central has no local model to degrade to,
   // so refuse with the worker's honest copy (kvm1 parity).
   const snapshot = await getSpendSnapshot(args.businessId, args.tier);
   if (snapshot.spendMicros >= snapshot.effectiveCapMicros) {
-    return { reply: WEBCHAT_ENGINE_OVER_CAP_REFUSAL, refusedOverCap: true, toolRounds: 0 };
+    return {
+      reply: WEBCHAT_ENGINE_OVER_CAP_REFUSAL,
+      refusedOverCap: true,
+      toolRounds: 0,
+      model,
+      usage: null,
+      costMicros: 0
+    };
   }
 
   // Grounding: the agent instructions exactly as the vault sync would seed
@@ -213,7 +237,6 @@ export async function runWebchatGeminiTurn(
   );
   const systemInstruction = [instructions, ...systemBlocks].join("\n\n");
 
-  const model = webchatEngineModel(env);
   const contents: GeminiChatContent[] = [
     { role: "user", parts: [{ text: userTurn }] }
   ];
@@ -227,6 +250,17 @@ export async function runWebchatGeminiTurn(
   let sawUsage = false;
   let outputCharsEstimate = 0;
   let toolRounds = 0;
+
+  // The turn's cost, mirrored from the meter's own math so the number the
+  // caller persists per conversation equals the number the pool records.
+  const currentCostMicros = () =>
+    sawUsage
+      ? geminiCostMicrosFromUsage(model, usageTotal)
+      : estimateGeminiCostMicrosFromChars(
+          model,
+          systemInstruction.length + userTurn.length,
+          outputCharsEstimate
+        );
 
   try {
     for (let round = 0; round <= WEBCHAT_ENGINE_MAX_TOOL_ROUNDS; round++) {
@@ -274,7 +308,14 @@ export async function runWebchatGeminiTurn(
       }
 
       if (step.text && step.text.trim().length > 0) {
-        return { reply: step.text.trim(), refusedOverCap: false, toolRounds };
+        return {
+          reply: step.text.trim(),
+          refusedOverCap: false,
+          toolRounds,
+          model,
+          usage: sawUsage ? { ...usageTotal } : null,
+          costMicros: currentCostMicros()
+        };
       }
       // No text and no executable calls: an empty/thinking-only step.
       // Retrying the same contents would just re-bill the same emptiness.

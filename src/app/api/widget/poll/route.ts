@@ -89,7 +89,14 @@ async function runPlatformEngineTurn(
     });
     toolRounds = result.toolRounds;
     refusedOverCap = result.refusedOverCap;
-    await completeWebchatJobFromPlatform(claimed, result.reply);
+    await completeWebchatJobFromPlatform(claimed, result.reply, {
+      costMicros: result.costMicros,
+      model: result.model,
+      promptTokens: result.usage?.promptTokens ?? null,
+      outputTokens: result.usage?.outputTokens ?? null,
+      toolRounds: result.toolRounds,
+      refusedOverCap: result.refusedOverCap
+    });
     outcome = "done";
   } catch (err) {
     errorMessage = err instanceof Error ? err.message : String(err);

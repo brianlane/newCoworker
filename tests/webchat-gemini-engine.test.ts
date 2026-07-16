@@ -161,7 +161,10 @@ describe("runWebchatGeminiTurn", () => {
     expect(res).toEqual({
       reply: WEBCHAT_ENGINE_OVER_CAP_REFUSAL,
       refusedOverCap: true,
-      toolRounds: 0
+      toolRounds: 0,
+      model: WEBCHAT_ENGINE_DEFAULT_MODEL,
+      usage: null,
+      costMicros: 0
     });
     expect(deps.chatStep).not.toHaveBeenCalled();
     expect(deps.meter).not.toHaveBeenCalled();
@@ -174,7 +177,11 @@ describe("runWebchatGeminiTurn", () => {
     expect(res).toEqual({
       reply: "The Standard plan is $99/mo on a 24-month contract.",
       refusedOverCap: false,
-      toolRounds: 0
+      toolRounds: 0,
+      model: WEBCHAT_ENGINE_DEFAULT_MODEL,
+      usage: { promptTokens: 100, outputTokens: 20 },
+      // Same math the meter records: 100 * $0.1/1M + 20 * $0.4/1M in micros.
+      costMicros: 18
     });
 
     const step = vi.mocked(deps.chatStep).mock.calls[0][0];
@@ -238,7 +245,15 @@ describe("runWebchatGeminiTurn", () => {
         .mockResolvedValueOnce(textStep("It is $99/mo.", { promptTokens: 200, outputTokens: 30 }))
     });
     const res = await runWebchatGeminiTurn(ARGS, deps);
-    expect(res).toEqual({ reply: "It is $99/mo.", refusedOverCap: false, toolRounds: 1 });
+    expect(res).toEqual({
+      reply: "It is $99/mo.",
+      refusedOverCap: false,
+      toolRounds: 1,
+      model: WEBCHAT_ENGINE_DEFAULT_MODEL,
+      usage: { promptTokens: 250, outputTokens: 40 },
+      // 250 * $0.1/1M + 40 * $0.4/1M in micros.
+      costMicros: 41
+    });
 
     expect(deps.executeTool).toHaveBeenCalledWith(BIZ, "webchat_business_knowledge_lookup", {
       question: "price?"
@@ -359,11 +374,15 @@ describe("runWebchatGeminiTurn", () => {
         usage: null
       }))
     });
-    await runWebchatGeminiTurn(ARGS, deps);
+    const res = await runWebchatGeminiTurn(ARGS, deps);
     const call = vi.mocked(deps.meter).mock.calls[0][0];
     expect(call.usage).toBeNull();
     expect(call.outputChars).toBe("Answer.".length);
     expect(call.inputChars).toBeGreaterThan(0);
+    // The returned stats mirror the estimate path too: no usage, but a
+    // positive chars-derived cost for the per-conversation ledger.
+    expect(res.usage).toBeNull();
+    expect(res.costMicros).toBeGreaterThan(0);
   });
 
   it("meters on a tool-round-only failure even with zero output chars", async () => {

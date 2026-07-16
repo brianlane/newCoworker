@@ -14,7 +14,7 @@ type StubResult = {
  */
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gt", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
+  for (const m of ["select", "eq", "in", "gt", "gte", "lt", "order", "limit", "range", "insert", "update", "delete"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);
@@ -48,6 +48,7 @@ import {
   getWidgetSettingsForBusiness,
   insertWebchatJob,
   isWebchatUniqueViolation,
+  listWebchatJobStatsForSessions,
   listWebchatMessages,
   listWebchatMessagesSince,
   listWebchatSessionsForBusiness,
@@ -59,6 +60,7 @@ import {
   updateWidgetSettings,
   webchatReplyEngine,
   WEBCHAT_ENGINE_HISTORY_MARKER,
+  WEBCHAT_JOB_STATS_PAGE_SIZE,
   WEBCHAT_PLATFORM_RECLAIM_AFTER_MS,
   WEBCHAT_PLATFORM_WORKER_ID,
   type WebchatMessageRow
@@ -280,6 +282,49 @@ describe("webchat_sessions accessors", () => {
     );
   });
 
+  it("listWebchatJobStatsForSessions returns stat rows / [] / throws on error", async () => {
+    const rows = [{ session_id: SESSION, status: "done", cost_micros: 18 }];
+    const builder = makeBuilder({ data: rows, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    expect(await listWebchatJobStatsForSessions([SESSION])).toEqual(rows);
+    expect(builder.in).toHaveBeenCalledWith("session_id", [SESSION]);
+    expect(builder.range).toHaveBeenCalledWith(0, WEBCHAT_JOB_STATS_PAGE_SIZE - 1);
+
+    // Empty input short-circuits with no query at all.
+    vi.mocked(supabaseStub.from).mockClear();
+    expect(await listWebchatJobStatsForSessions([], injected)).toEqual([]);
+    expect(supabaseStub.from).not.toHaveBeenCalled();
+
+    // Null data + error paths.
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await listWebchatJobStatsForSessions([SESSION], injected)).toEqual([]);
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(listWebchatJobStatsForSessions([SESSION])).rejects.toThrow(
+      "listWebchatJobStatsForSessions: x"
+    );
+  });
+
+  it("listWebchatJobStatsForSessions pages past the per-query row clamp", async () => {
+    // A full first page signals more rows; the short second page ends it.
+    const fullPage = Array.from({ length: WEBCHAT_JOB_STATS_PAGE_SIZE }, (_, i) => ({
+      session_id: SESSION,
+      cost_micros: i
+    }));
+    const tail = [{ session_id: SESSION, cost_micros: 9999 }];
+    const first = makeBuilder({ data: fullPage, error: null });
+    const second = makeBuilder({ data: tail, error: null });
+    supabaseStub.from.mockReturnValueOnce(first).mockReturnValueOnce(second);
+
+    const out = await listWebchatJobStatsForSessions([SESSION]);
+    expect(out).toHaveLength(WEBCHAT_JOB_STATS_PAGE_SIZE + 1);
+    expect(out.at(-1)).toEqual(tail[0]);
+    expect(first.range).toHaveBeenCalledWith(0, WEBCHAT_JOB_STATS_PAGE_SIZE - 1);
+    expect(second.range).toHaveBeenCalledWith(
+      WEBCHAT_JOB_STATS_PAGE_SIZE,
+      2 * WEBCHAT_JOB_STATS_PAGE_SIZE - 1
+    );
+  });
 });
 
 describe("webchat_messages accessors", () => {
@@ -481,12 +526,59 @@ describe("platform-engine job lifecycle", () => {
     expect(supabaseStub.rpc).toHaveBeenCalledWith("webchat_job_complete_platform", {
       p_job_id: JOB,
       p_content: "Reply text",
-      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER
+      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER,
+      p_cost_micros: null,
+      p_model: null,
+      p_prompt_tokens: null,
+      p_output_tokens: null,
+      p_tool_rounds: null,
+      p_refused_over_cap: null
     });
 
     // bigint may arrive as a string through PostgREST.
     supabaseStub.rpc.mockResolvedValueOnce({ data: "43", error: null });
-    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", injected)).toBe(43);
+    expect(await completeWebchatJobFromPlatform(jobRow, "Reply", null, injected)).toBe(43);
+  });
+
+  it("completeWebchatJobFromPlatform persists the turn stats (cost clamped to a non-negative integer)", async () => {
+    supabaseStub.rpc.mockResolvedValueOnce({ data: 44, error: null });
+    expect(
+      await completeWebchatJobFromPlatform(jobRow, "Reply", {
+        costMicros: 17.4,
+        model: "gemini-2.5-flash-lite",
+        promptTokens: 100,
+        outputTokens: 20,
+        toolRounds: 1,
+        refusedOverCap: false
+      })
+    ).toBe(44);
+    expect(supabaseStub.rpc).toHaveBeenCalledWith("webchat_job_complete_platform", {
+      p_job_id: JOB,
+      p_content: "Reply",
+      p_history_marker: WEBCHAT_ENGINE_HISTORY_MARKER,
+      p_cost_micros: 17,
+      p_model: "gemini-2.5-flash-lite",
+      p_prompt_tokens: 100,
+      p_output_tokens: 20,
+      p_tool_rounds: 1,
+      p_refused_over_cap: false
+    });
+
+    // A negative estimate can never write a negative ledger row.
+    supabaseStub.rpc.mockResolvedValueOnce({ data: 45, error: null });
+    await completeWebchatJobFromPlatform(jobRow, "Reply", {
+      costMicros: -3,
+      model: "m",
+      promptTokens: null,
+      outputTokens: null,
+      toolRounds: 0,
+      refusedOverCap: true
+    });
+    expect(vi.mocked(supabaseStub.rpc).mock.calls.at(-1)?.[1]).toMatchObject({
+      p_cost_micros: 0,
+      p_prompt_tokens: null,
+      p_refused_over_cap: true
+    });
   });
 
   it("reclaimStaleWebchatJobForPlatform steals only a stale PLATFORM claim", async () => {
