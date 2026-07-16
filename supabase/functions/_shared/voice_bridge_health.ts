@@ -59,6 +59,7 @@ export function computeStaleBridges(
     business_id: string;
     bridge_last_heartbeat_at: string | null;
     telnyx_connection_id: string | null;
+    bridge_stale_alert_muted?: boolean | null;
   }>,
   nowMs: number,
   stalenessSeconds: number
@@ -70,6 +71,10 @@ export function computeStaleBridges(
     // `telnyx_connection_id` are shell rows created by onboarding and have
     // never been expected to heartbeat.
     if (!r.telnyx_connection_id) continue;
+
+    // Per-tenant opt-out: internal tenants (e.g. NCW Flow Test) hold a DID
+    // for SMS testing but intentionally run no voice bridge.
+    if (r.bridge_stale_alert_muted) continue;
 
     if (r.bridge_last_heartbeat_at == null) {
       // A tenant with voice connected but NO heartbeat ever = bridge never
