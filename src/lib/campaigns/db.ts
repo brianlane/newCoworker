@@ -222,7 +222,30 @@ export async function listPendingRecipients(
   return (data ?? []) as CampaignRecipientRow[];
 }
 
-/** Outcome stamp for one recipient. */
+/**
+ * Atomically claim a pending recipient by optimistically marking it sent
+ * (conditional on `status = 'pending'`). Returns whether THIS caller won
+ * the claim — overlapping sweeps and post-crash retries lose cleanly, so a
+ * recipient can never receive the campaign twice. The at-most-once bias is
+ * deliberate for marketing mail: a duplicate is a spam complaint, a rare
+ * crash-window loss is harmless.
+ */
+export async function claimRecipient(
+  recipientId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("email_campaign_recipients")
+    .update({ status: "sent", sent_at: new Date().toISOString() })
+    .eq("id", recipientId)
+    .eq("status", "pending")
+    .select("id");
+  if (error) throw new Error(`claimRecipient: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/** Outcome stamp for one recipient (downgrades a claimed row on send failure). */
 export async function markRecipient(
   recipientId: string,
   status: "sent" | "failed",
@@ -239,4 +262,24 @@ export async function markRecipient(
     })
     .eq("id", recipientId);
   if (error) throw new Error(`markRecipient: ${error.message}`);
+}
+
+/**
+ * Convergent counters: derive sent/failed from the recipient rows instead
+ * of read-modify-write increments on the campaign row (which drift under
+ * concurrent sweeps).
+ */
+export async function countRecipientsByStatus(
+  campaignId: string,
+  status: "pending" | "sent" | "failed",
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("email_campaign_recipients")
+    .select("id", { count: "exact", head: true })
+    .eq("campaign_id", campaignId)
+    .eq("status", status);
+  if (error) throw new Error(`countRecipientsByStatus: ${error.message}`);
+  return count ?? 0;
 }

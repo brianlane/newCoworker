@@ -30,6 +30,8 @@ import { getBusiness } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
 import {
   CAMPAIGN_MAX_RECIPIENTS,
+  claimRecipient,
+  countRecipientsByStatus,
   insertCampaignRecipients,
   listDueScheduledCampaigns,
   listPendingRecipients,
@@ -96,27 +98,39 @@ export type CampaignSweepDeps = {
   now?: () => Date;
 };
 
-/** Snapshot the audience for a just-promoted campaign. */
+/** Directory scan bound for the audience snapshot (pre-tag-filter). */
+export const CAMPAIGN_AUDIENCE_SCAN_LIMIT = 5000;
+
+/**
+ * Snapshot the audience for a due campaign. The tag filter runs in JS,
+ * case-insensitively, because contact-tag normalization preserves the
+ * owner's original casing — a campaign targeting "vip" must reach a
+ * contact tagged "VIP".
+ */
 async function snapshotRecipients(
   db: SupabaseClient,
   campaign: EmailCampaignRow
 ): Promise<number> {
-  let query = db
+  const { data, error } = await db
     .from("contacts")
-    .select("id, email")
+    .select("id, email, tags")
     .eq("business_id", campaign.business_id)
     .eq("type", "customer")
     .not("email", "is", null)
     .is("marketing_unsubscribed_at", null)
-    .limit(CAMPAIGN_MAX_RECIPIENTS);
-  if (campaign.audience_tag) {
-    query = query.contains("tags", [campaign.audience_tag]);
-  }
-  const { data, error } = await query;
+    .limit(CAMPAIGN_AUDIENCE_SCAN_LIMIT);
   if (error) throw new Error(`snapshotRecipients: ${error.message}`);
-  const contacts = ((data as Array<{ id: string; email: string | null }> | null) ?? []).filter(
-    (c): c is { id: string; email: string } => !!c.email && c.email.includes("@")
-  );
+  const wantedTag = campaign.audience_tag.trim().toLowerCase();
+  const contacts = (
+    (data as Array<{ id: string; email: string | null; tags: string[] | null }> | null) ?? []
+  )
+    .filter((c): c is { id: string; email: string; tags: string[] | null } =>
+      Boolean(c.email && c.email.includes("@"))
+    )
+    .filter(
+      (c) =>
+        !wantedTag || (c.tags ?? []).some((t) => t.trim().toLowerCase() === wantedTag)
+    );
   // De-dupe by address: two contact rows sharing an email get ONE mail.
   const seen = new Set<string>();
   const rows = contacts
@@ -126,6 +140,7 @@ async function snapshotRecipients(
       seen.add(key);
       return true;
     })
+    .slice(0, CAMPAIGN_MAX_RECIPIENTS)
     .map((c) => ({
       campaign_id: campaign.id,
       business_id: campaign.business_id,
@@ -154,20 +169,24 @@ export async function processCampaignSweep(
 
   const result: CampaignSweepResult = { promoted: 0, sent: 0, failed: 0, completed: 0, errors: [] };
 
-  // 1) Promote due scheduled campaigns and snapshot their audiences.
+  // 1) Snapshot due campaigns' audiences, THEN promote. Snapshot-first
+  //    means a snapshot failure leaves the campaign `scheduled` for the
+  //    next sweep to retry — never a recipient-less `sending` campaign
+  //    that would complete to `sent` without delivering a thing. The
+  //    snapshot is an idempotent upsert, and rows for a campaign that a
+  //    racing cancel wins stay inert (only `sending` campaigns drain).
   const due = await listDueScheduledCampaigns(now.toISOString(), db);
   for (const campaign of due) {
     try {
+      const total = await snapshotRecipients(db, campaign);
       const moved = await transitionEmailCampaign(
         campaign.business_id,
         campaign.id,
         "scheduled",
-        { status: "sending", started_at: now.toISOString() },
+        { status: "sending", started_at: now.toISOString(), recipients_total: total },
         db
       );
       if (!moved) continue; // cancelled (or promoted) under us — their win
-      const total = await snapshotRecipients(db, campaign);
-      await patchEmailCampaign(campaign.business_id, campaign.id, { recipients_total: total }, db);
       result.promoted += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -203,9 +222,12 @@ export async function processCampaignSweep(
       const from = `${businessName.replace(/[<>"]/g, "")} <${fromAddress}>`;
       const replyTo = business?.owner_email?.trim() || undefined;
 
-      let sentDelta = 0;
-      let failedDelta = 0;
       for (const recipient of batch) {
+        // Atomic claim (pending → sent) BEFORE the send: an overlapping
+        // sweep or post-crash retry loses the claim and skips, so nobody
+        // gets the campaign twice. A send failure downgrades the claim.
+        const claimed = await claimRecipient(recipient.id, db);
+        if (!claimed) continue;
         const unsubscribeUrl = buildMarketingUnsubscribeUrl(
           appUrl,
           campaign.business_id,
@@ -228,25 +250,25 @@ export async function processCampaignSweep(
             unsubscribeUrl,
             ...(replyTo ? { replyTo } : {})
           });
-          await markRecipient(recipient.id, "sent", null, db);
-          sentDelta += 1;
+          result.sent += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
           await markRecipient(recipient.id, "failed", message.slice(0, 300), db);
-          failedDelta += 1;
+          result.failed += 1;
         }
       }
+      // Convergent counters derived from the recipient rows — immune to
+      // concurrent-sweep read-modify-write drift.
+      const [sentCount, failedCount] = await Promise.all([
+        countRecipientsByStatus(campaign.id, "sent", db),
+        countRecipientsByStatus(campaign.id, "failed", db)
+      ]);
       await patchEmailCampaign(
         campaign.business_id,
         campaign.id,
-        {
-          recipients_sent: campaign.recipients_sent + sentDelta,
-          recipients_failed: campaign.recipients_failed + failedDelta
-        },
+        { recipients_sent: sentCount, recipients_failed: failedCount },
         db
       );
-      result.sent += sentDelta;
-      result.failed += failedDelta;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       result.errors.push({ campaignId: campaign.id, message });

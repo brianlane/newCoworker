@@ -11,6 +11,8 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  claimRecipient,
+  countRecipientsByStatus,
   deleteEmailCampaign,
   getEmailCampaign,
   insertCampaignRecipients,
@@ -167,6 +169,8 @@ describe("default-client paths", () => {
       { campaign_id: CAMPAIGN, business_id: BIZ, contact_id: "x", email: "a@b.c" }
     ]);
     await markRecipient("r1", "sent", null);
+    await claimRecipient("r1");
+    await countRecipientsByStatus(CAMPAIGN, "sent");
     await patchEmailCampaign(BIZ, CAMPAIGN, { subject: "t" });
     await transitionEmailCampaign(BIZ, CAMPAIGN, "draft", { status: "cancelled" });
     await deleteEmailCampaign(BIZ, CAMPAIGN);
@@ -194,6 +198,38 @@ describe("recipients", () => {
     await expect(
       insertCampaignRecipients(rows, makeDb(chain({ error: { message: "snap" } })))
     ).rejects.toThrow(/snap/);
+  });
+
+  it("claims atomically (pending → sent) and reports lost claims", async () => {
+    const won = chain({ data: [{ id: "r1" }], error: null });
+    expect(await claimRecipient("r1", makeDb(won))).toBe(true);
+    expect(won.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "sent", sent_at: expect.any(String) })
+    );
+    expect(won.eq).toHaveBeenCalledWith("status", "pending");
+
+    const lost = chain({ data: [], error: null });
+    expect(await claimRecipient("r1", makeDb(lost))).toBe(false);
+    await expect(
+      claimRecipient("r1", makeDb(chain({ data: null, error: { message: "cl" } })))
+    ).rejects.toThrow(/cl/);
+  });
+
+  it("counts recipients by status (null count coerces to 0)", async () => {
+    const c = chain();
+    (c as unknown as { then: unknown }).then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ count: 7, error: null }).then(resolve);
+    expect(await countRecipientsByStatus("c-1", "sent", makeDb(c))).toBe(7);
+
+    const nullCount = chain();
+    (nullCount as unknown as { then: unknown }).then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ count: null, error: null }).then(resolve);
+    expect(await countRecipientsByStatus("c-1", "failed", makeDb(nullCount))).toBe(0);
+
+    const err = chain();
+    (err as unknown as { then: unknown }).then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ count: null, error: { message: "cnt" } }).then(resolve);
+    await expect(countRecipientsByStatus("c-1", "sent", makeDb(err))).rejects.toThrow(/cnt/);
   });
 
   it("lists pending batches and stamps outcomes", async () => {
