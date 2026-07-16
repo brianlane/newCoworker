@@ -46,7 +46,6 @@ export type IntegrationDef = {
 /** Ordered category labels for the hub page. */
 export const INTEGRATION_CATEGORIES = [
   "Workspace",
-  "Scheduling",
   "Lead sources",
   "Meetings",
   "Custom",
@@ -66,7 +65,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   {
     slug: "vagaro",
     name: "Vagaro",
-    category: "Scheduling",
+    category: "Workspace",
     benefit:
       "Let your coworker check real availability and book appointments on your Vagaro calendar, and start AiFlows from Vagaro events.",
     icon: CalendarClock
@@ -74,7 +73,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   {
     slug: "calendly",
     name: "Calendly",
-    category: "Scheduling",
+    category: "Workspace",
     benefit:
       "Let your coworker offer your Calendly availability and text customers a booking link they confirm on your Calendly page.",
     icon: CalendarRange
@@ -82,7 +81,7 @@ export const INTEGRATIONS: IntegrationDef[] = [
   {
     slug: "caldav",
     name: "Apple iCloud / CalDAV",
-    category: "Scheduling",
+    category: "Workspace",
     benefit:
       "Connect an iCloud, Nextcloud, or any CalDAV calendar so your coworker can check availability and book straight onto it.",
     icon: CalendarDays
