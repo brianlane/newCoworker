@@ -77,6 +77,92 @@ export function metaLeadFollowUpTemplate(): AiFlowTemplate {
   };
 }
 
+/** Review links ride inside an SMS body (1600-char cap); keep them sane. */
+export const REVIEW_LINK_MAX_LENGTH = 300;
+
+/**
+ * Normalize an owner-pasted review link for embedding in the template's SMS
+ * body: trims, requires http(s), strips `{`/`}` so a pasted value can never
+ * smuggle a `{{vars.x}}` reference into the flow (an unknown var would fail
+ * validation and 400 the install), and caps the length. Returns null when
+ * the value isn't usable as a link.
+ */
+export function cleanReviewLink(raw: string): string | null {
+  const link = raw.trim().replace(/[{}]/g, "");
+  if (link.length === 0 || link.length > REVIEW_LINK_MAX_LENGTH) return null;
+  if (!/^https?:\/\/\S+$/i.test(link)) return null;
+  return link;
+}
+
+/**
+ * "Ask for a review after appointments" (the GHL Reviews-AI answer, minus
+ * the platform lock-in): when a calendar appointment ENDS (plus a settle-in
+ * hour), read the customer's name + phone off the event, text them the
+ * business's review link, and brief the owner. Parameterized on the review
+ * link because it's per-business — the installer passes the owner's pasted
+ * Google (or Yelp/Facebook) review URL, pre-cleaned by cleanReviewLink.
+ * Installed DISABLED so the owner reviews the wording before anything fires.
+ *
+ * The send skips gracefully when the event carries no usable phone (the
+ * send_sms planner's empty-recipient skip), so all-day blocks and internal
+ * meetings never text anyone.
+ */
+export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
+  return {
+    key: "review_request_after_appointment",
+    name: "Ask for a review after appointments",
+    definition: {
+      version: 1,
+      trigger: {
+        channel: "calendar",
+        on: "event_end",
+        followMinutes: 60,
+        calendar: "both",
+        conditions: []
+      },
+      steps: [
+        {
+          id: "s_extract",
+          type: "extract_text",
+          fields: [
+            {
+              name: "customer_name",
+              description:
+                "The customer/attendee's first name (not the business owner or organizer). 'there' if unknown."
+            },
+            {
+              name: "customer_phone",
+              description:
+                "The customer's phone number, digits and + only. 'none' if the event has no customer phone."
+            }
+          ]
+        },
+        {
+          id: "s_text_review",
+          type: "send_sms",
+          to: "{{vars.customer_phone}}",
+          body:
+            "Hi {{vars.customer_name}}, thanks for coming in today! If you had a " +
+            "good experience, would you mind leaving us a quick review? It really " +
+            `helps: ${reviewLink}`
+        },
+        {
+          id: "s_notify_owner",
+          type: "notify_owner",
+          // {{vars.actions_taken}} is the engine's truthful ledger of what
+          // actually went out: "texted +1602… " on a send, "skipped a text
+          // to 'TBD' …" when the extracted phone wasn't usable — so this
+          // brief can never claim a text that the send step skipped.
+          message:
+            "Appointment \u201c{{trigger.event_title}}\u201d wrapped up. Review " +
+            "request for {{vars.customer_name}}: {{vars.actions_taken}}",
+          when: { var: "customer_phone", notEquals: "none" }
+        }
+      ]
+    }
+  };
+}
+
 /**
  * "Send new leads your price sheet": when a new lead texts in, extract their
  * details, file them, text them the chosen document as an expiring link, and
