@@ -91,7 +91,12 @@ import {
   createSseToolCallIndexNormalizer,
   isAiBudgetModel,
   extractOpenAiUsage,
-  createSseUsageCollector
+  createSseUsageCollector,
+  needsThoughtSignatures,
+  createSignatureCache,
+  harvestThoughtSignatures,
+  injectThoughtSignatures,
+  createSseSignatureHarvester
 } from "./routing.js";
 export {
   pickUpstream,
@@ -101,8 +106,20 @@ export {
   createSseToolCallIndexNormalizer,
   isAiBudgetModel,
   extractOpenAiUsage,
-  createSseUsageCollector
+  createSseUsageCollector,
+  needsThoughtSignatures,
+  createSignatureCache,
+  harvestThoughtSignatures,
+  injectThoughtSignatures,
+  createSseSignatureHarvester
 };
+
+// Gemini 3.x thought-signature LRU (see routing.js). Process-lifetime by
+// design: the router container is long-lived and every Rowboat turn for this
+// box flows through it, so a conversation's harvest and re-inject hit the
+// same Map. A restart only costs quality, not correctness — signature-less
+// tool calls fall back to the validator placeholder.
+const thoughtSignatureCache = createSignatureCache();
 
 function buildUpstreamTarget(upstream, pathname) {
   if (upstream === "gemini") {
@@ -179,7 +196,14 @@ async function handleRoutedRequest(req, res) {
     requestPath === "/v1/chat/completions" &&
     isAiBudgetModel(parsed?.model);
 
-  // Build the outgoing body once, applying two rewrites where needed:
+  // Gemini 3.x tool-calling repair: harvest signatures from responses and
+  // re-inject them on requests (Rowboat drops them — see routing.js).
+  const shimThoughtSignatures =
+    upstream === "gemini" &&
+    requestPath === "/v1/chat/completions" &&
+    needsThoughtSignatures(parsed?.model);
+
+  // Build the outgoing body once, applying three rewrites where needed:
   //  1) Collapse multiple system messages — Gemini's OpenAI-compat keeps only
   //     the LAST, which silently dropped Rowboat's vault-grounded agent
   //     instructions when a second system message was present (see routing.js).
@@ -187,6 +211,9 @@ async function handleRoutedRequest(req, res) {
   //     the upstream emits a terminal `{choices:[],usage:{...}}` chunk we can
   //     harvest exact tokens from. (OpenAI-compat consumers like Rowboat's AI
   //     SDK ignore the usage-only chunk, so this is transparent to Rowboat.)
+  //  3) On a Gemini 3.x turn, restore `thought_signature` on replayed
+  //     assistant tool calls (cached original, else placeholder) so turn 2+
+  //     of tool-calling conversations stops 400ing.
   if (parsed) {
     let outgoing = Array.isArray(parsed.messages) ? mergeSystemMessages(parsed) : parsed;
     if (meterGemini && parsed.stream === true) {
@@ -194,6 +221,15 @@ async function handleRoutedRequest(req, res) {
         ...outgoing,
         stream_options: { ...(outgoing.stream_options ?? {}), include_usage: true }
       };
+    }
+    if (shimThoughtSignatures && Array.isArray(outgoing.messages)) {
+      const result = injectThoughtSignatures(outgoing, thoughtSignatureCache);
+      if (result.cached > 0 || result.placeholders > 0) {
+        console.log(
+          `llm-router: thought-signature inject model=${parsed.model} cached=${result.cached} placeholder=${result.placeholders}`
+        );
+      }
+      outgoing = result.body;
     }
     if (outgoing !== parsed) {
       bodyBuf = Buffer.from(JSON.stringify(outgoing), "utf8");
@@ -258,8 +294,13 @@ async function handleRoutedRequest(req, res) {
   // usage collector; buffered JSON bodies accumulate into a string we parse
   // once at end-of-stream. The bytes forwarded downstream are unchanged.
   const usageCollector = meterGemini && isSse ? createSseUsageCollector() : null;
-  const jsonDecoder = meterGemini && !isSse ? new TextDecoder("utf-8") : null;
-  let jsonBuf = meterGemini && !isSse ? "" : null;
+  // Thought-signature harvesting shares the buffered JSON body with metering
+  // on non-SSE turns; SSE turns get their own read-only line scanner.
+  const signatureHarvester =
+    shimThoughtSignatures && isSse ? createSseSignatureHarvester(thoughtSignatureCache) : null;
+  const collectJsonBody = (meterGemini || shimThoughtSignatures) && !isSse;
+  const jsonDecoder = collectJsonBody ? new TextDecoder("utf-8") : null;
+  let jsonBuf = collectJsonBody ? "" : null;
 
   const reader = upstreamResp.body.getReader();
   try {
@@ -270,6 +311,7 @@ async function handleRoutedRequest(req, res) {
       if (normalizer) {
         const text = decoder.decode(value, { stream: true });
         if (usageCollector) usageCollector.collect(text);
+        if (signatureHarvester) signatureHarvester.collect(text);
         const out = normalizer.transform(text);
         if (out) res.write(out);
       } else {
@@ -280,22 +322,32 @@ async function handleRoutedRequest(req, res) {
     if (normalizer) {
       const tailText = decoder.decode();
       if (usageCollector) usageCollector.collect(tailText);
+      if (signatureHarvester) signatureHarvester.collect(tailText);
       const tail = normalizer.transform(tailText) + normalizer.flush();
       if (tail) res.write(tail);
     }
-    // Stream completed cleanly — extract the exact usage and report it.
+    if (signatureHarvester) signatureHarvester.flush();
+    // Stream completed cleanly — parse the buffered JSON body once for both
+    // consumers (usage metering + signature harvest), then report usage.
+    let jsonParsed = null;
+    if (jsonBuf !== null) {
+      jsonBuf += jsonDecoder.decode();
+      try {
+        jsonParsed = JSON.parse(jsonBuf);
+      } catch {
+        jsonParsed = null;
+      }
+    }
+    if (shimThoughtSignatures && jsonParsed) {
+      harvestThoughtSignatures(jsonParsed, thoughtSignatureCache);
+    }
     if (meterGemini) {
       let usage = null;
       if (usageCollector) {
         usageCollector.flush();
         usage = usageCollector.result();
-      } else if (jsonBuf !== null) {
-        jsonBuf += jsonDecoder.decode();
-        try {
-          usage = extractOpenAiUsage(JSON.parse(jsonBuf));
-        } catch {
-          usage = null;
-        }
+      } else if (jsonParsed) {
+        usage = extractOpenAiUsage(jsonParsed);
       }
       if (usage) reportGeminiSpend(parsed?.model, usage);
     }

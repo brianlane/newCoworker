@@ -233,6 +233,185 @@ export function createSseToolCallIndexNormalizer() {
   };
 }
 
+/**
+ * ── Gemini 3.x thought-signature round-trip ────────────────────────────────
+ *
+ * Gemini 3.x models attach `extra_content.google.thought_signature` to every
+ * tool call they emit on the OpenAI-compat endpoint, and REQUIRE the same
+ * signature to be echoed back on the assistant `tool_calls` message when the
+ * conversation is replayed — otherwise turn 2 of any tool-calling
+ * conversation fails with HTTP 400 "Function call is missing a
+ * thought_signature" (verified live 2026-07-16; this is why PR #602 pinned
+ * SMS to gemini-2.5-flash). Rowboat's `@openai/agents` + AI SDK layers strip
+ * unknown fields when they rebuild message history, so the signature never
+ * survives Rowboat.
+ *
+ * This shim makes the router repair that transparently:
+ *   - HARVEST: every gemini-3.x response (JSON body or SSE deltas) has its
+ *     tool-call signatures cached in an in-memory LRU keyed by tool-call id
+ *     (ids are upstream-generated and unique per call; conversations are
+ *     box-local so one router process sees both sides).
+ *   - INJECT: on each gemini-3.x request, assistant `tool_calls` lacking a
+ *     signature get the cached one back; when the cache has nothing (router
+ *     restart, evicted, or history imported from another model) they get
+ *     Google's documented validator-bypass placeholder instead — verified
+ *     live to be accepted. Real signatures preserve reasoning quality; the
+ *     placeholder guarantees no 400s.
+ *
+ * Gemini 2.x has no signatures and is untouched (`needsThoughtSignatures`
+ * gates on the model family), and existing signatures are never overwritten.
+ */
+
+/** Google's documented bypass value for histories without real signatures. */
+export const THOUGHT_SIGNATURE_PLACEHOLDER = "skip_thought_signature_validator";
+
+/** Whether this model family requires thought signatures on replayed tool calls. */
+export function needsThoughtSignatures(model) {
+  if (typeof model !== "string") return false;
+  return /^gemini[-_.]3/i.test(model.trim());
+}
+
+/**
+ * Minimal insertion-order LRU for tool-call-id → signature. Signatures are
+ * ~300-byte opaque strings; 2000 entries ≈ well under a MB and far beyond
+ * any live conversation's tool-call count on one box.
+ */
+export function createSignatureCache(max = 2000) {
+  const map = new Map();
+  return {
+    set(id, signature) {
+      if (typeof id !== "string" || id === "") return;
+      if (typeof signature !== "string" || signature === "") return;
+      // Re-insert so recently seen ids survive eviction longest.
+      if (map.has(id)) map.delete(id);
+      map.set(id, signature);
+      while (map.size > max) {
+        map.delete(map.keys().next().value);
+      }
+    },
+    get(id) {
+      return map.get(id);
+    },
+    size() {
+      return map.size;
+    }
+  };
+}
+
+/**
+ * Pull `extra_content.google.thought_signature` off every tool call in a
+ * parsed chat-completions payload — non-streamed (`choices[].message`) and
+ * streamed (`choices[].delta`) alike (Gemini's OpenAI-compat sends each
+ * streamed tool call complete in a single delta, id + signature included).
+ * Returns how many signatures were cached.
+ */
+export function harvestThoughtSignatures(payload, cache) {
+  if (!payload || !Array.isArray(payload.choices)) return 0;
+  let harvested = 0;
+  for (const choice of payload.choices) {
+    for (const container of [choice?.message, choice?.delta]) {
+      const calls = container?.tool_calls;
+      if (!Array.isArray(calls)) continue;
+      for (const tc of calls) {
+        const id = tc?.id;
+        const signature = tc?.extra_content?.google?.thought_signature;
+        if (typeof id === "string" && id && typeof signature === "string" && signature) {
+          cache.set(id, signature);
+          harvested += 1;
+        }
+      }
+    }
+  }
+  return harvested;
+}
+
+/**
+ * Return a copy of `body` where every assistant `tool_calls[]` entry carries
+ * a thought signature: the cached one for its id when available, else the
+ * placeholder. Entries that already have a signature are left untouched.
+ * Returns `{ body, cached, placeholders }`; `body` is the ORIGINAL object
+ * when nothing needed injection (so callers can cheaply detect no-ops).
+ */
+export function injectThoughtSignatures(body, cache) {
+  if (!body || !Array.isArray(body.messages)) {
+    return { body, cached: 0, placeholders: 0 };
+  }
+  let cached = 0;
+  let placeholders = 0;
+  let messages = null;
+
+  body.messages.forEach((msg, mi) => {
+    if (!msg || msg.role !== "assistant" || !Array.isArray(msg.tool_calls)) return;
+    let calls = null;
+    msg.tool_calls.forEach((tc, ti) => {
+      if (!tc || typeof tc !== "object") return;
+      const existing = tc.extra_content?.google?.thought_signature;
+      if (typeof existing === "string" && existing !== "") return;
+      const fromCache = typeof tc.id === "string" ? cache.get(tc.id) : undefined;
+      const signature = fromCache ?? THOUGHT_SIGNATURE_PLACEHOLDER;
+      if (fromCache) cached += 1;
+      else placeholders += 1;
+      if (!calls) calls = [...msg.tool_calls];
+      calls[ti] = {
+        ...tc,
+        extra_content: {
+          ...(tc.extra_content ?? {}),
+          google: { ...(tc.extra_content?.google ?? {}), thought_signature: signature }
+        }
+      };
+    });
+    if (calls) {
+      if (!messages) messages = [...body.messages];
+      messages[mi] = { ...msg, tool_calls: calls };
+    }
+  });
+
+  if (!messages) return { body, cached, placeholders };
+  return { body: { ...body, messages }, cached, placeholders };
+}
+
+/**
+ * Stateful line-buffered SSE scanner that feeds every `data: {...}` event
+ * through `harvestThoughtSignatures`. Same chunk-splitting contract as
+ * `createSseUsageCollector` (buffers to the last newline; `flush()` drains
+ * the trailing unterminated line at end-of-stream). Read-only — never
+ * rewrites the stream.
+ */
+export function createSseSignatureHarvester(cache) {
+  let buf = "";
+
+  const scanLine = (line) => {
+    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (!bare.startsWith("data:")) return;
+    const data = bare.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return;
+    }
+    harvestThoughtSignatures(parsed, cache);
+  };
+
+  return {
+    collect(text) {
+      buf += text;
+      const lastNl = buf.lastIndexOf("\n");
+      if (lastNl === -1) return;
+      const complete = buf.slice(0, lastNl);
+      buf = buf.slice(lastNl + 1);
+      for (const line of complete.split("\n")) scanLine(line);
+    },
+    flush() {
+      if (buf) {
+        for (const line of buf.split("\n")) scanLine(line);
+        buf = "";
+      }
+    }
+  };
+}
+
 // Headers we must NOT copy from the upstream response onto our own response.
 //
 //   - transfer-encoding / connection / keep-alive: hop-by-hop framing that
