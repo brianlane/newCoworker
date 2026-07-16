@@ -631,10 +631,14 @@ export async function registerWhatsAppTemplates(
         status: typeof payload?.status === "string" ? payload.status : "PENDING"
       });
     } catch (err) {
-      // Re-connects hit "name already exists" — that means a prior
-      // registration is live; report PENDING and let the status fetch
-      // below reconcile. Anything else is reported as FAILED (the deliver
-      // helper falls back to window-only sends for that template).
+      // Every registration failure reports FAILED — including the
+      // reconnect-time "name already exists" 400, which is
+      // indistinguishable from a genuinely rejected payload at this
+      // layer. The connect route follows up with
+      // fetchWhatsAppTemplateStatuses, which flips truly-registered
+      // templates to their LIVE review status; a template that stays
+      // FAILED just falls back to window-only sends instead of posing as
+      // pending review forever.
       logger.warn("whatsapp template registration failed", {
         wabaId,
         template: template.name,
@@ -643,7 +647,7 @@ export async function registerWhatsAppTemplates(
       results.push({
         name: template.name,
         language: template.language,
-        status: (err as MetaApiError).status === 400 ? "PENDING" : "FAILED"
+        status: "FAILED"
       });
     }
   }

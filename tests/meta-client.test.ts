@@ -545,12 +545,12 @@ describe("registerWhatsAppTemplates", () => {
     expect(body.category).toBe("UTILITY");
   });
 
-  it("maps 400 (already exists) to PENDING and other failures to FAILED", async () => {
+  it("maps every registration failure to FAILED (the connect route's live status fetch reconciles reconnects)", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(400, { error: "name already exists" }))
       .mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
     const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
-    expect(results.map((r) => r.status)).toEqual(["PENDING", "FAILED"]);
+    expect(results.map((r) => r.status)).toEqual(["FAILED", "FAILED"]);
   });
 });
 

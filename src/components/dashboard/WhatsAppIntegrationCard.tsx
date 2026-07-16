@@ -135,7 +135,15 @@ export function WhatsAppIntegrationCard({
   useEffect(() => {
     if (!configured || connection) return;
     const onMessage = (event: MessageEvent) => {
-      if (!event.origin.endsWith("facebook.com")) return;
+      // Exact host allowlist — a suffix string check would also match
+      // "evilfacebook.com". The dot boundary keeps subdomains valid.
+      let host: string;
+      try {
+        host = new URL(event.origin).hostname;
+      } catch {
+        return;
+      }
+      if (host !== "facebook.com" && !host.endsWith(".facebook.com")) return;
       try {
         const data = JSON.parse(event.data as string) as {
           type?: string;
