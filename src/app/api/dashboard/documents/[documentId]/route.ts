@@ -197,6 +197,25 @@ export async function PATCH(request: Request, context: RouteContext) {
     }
 
     await patchBusinessDocument(body.data.businessId, documentId, patch);
+
+    // Serial re-check closes the pre-check cap race on LINKING (same
+    // pattern as the upload route): concurrent link requests can each pass
+    // the pre-count, so anyone who lands past the cap reverts their own
+    // link (and the audience snap that rode along with it).
+    if (patch.contact_id && existing.contact_id === null) {
+      const linkedAfter = await countBusinessDocuments(body.data.businessId, "contact_records");
+      if (linkedAfter > CONTACT_DOCUMENT_RECORDS_LIMIT) {
+        await patchBusinessDocument(body.data.businessId, documentId, {
+          contact_id: null,
+          ...(patch.audience !== undefined ? { audience: existing.audience } : {})
+        });
+        return errorResponse(
+          "VALIDATION_ERROR",
+          `Contact document limit reached (${CONTACT_DOCUMENT_RECORDS_LIMIT}).`
+        );
+      }
+    }
+
     void syncVaultToVpsAndLog(body.data.businessId);
     const updated = await getBusinessDocument(body.data.businessId, documentId);
     return successResponse({ document: updated });

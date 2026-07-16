@@ -347,7 +347,11 @@ export async function DELETE(
     if (existing) {
       await deleteContactLinkedDocuments(businessId, existing.id);
     }
-    await deleteCustomerMemory(businessId, customerE164);
+    // The URL segment may be a merged-away ALIAS; getCustomerMemory resolved
+    // it alias-aware to the surviving row. Delete by that row's PRIMARY
+    // number — deleting by the alias spelling would remove nothing while
+    // the documents cleanup above already ran.
+    await deleteCustomerMemory(businessId, existing?.customer_e164 ?? customerE164);
     return successResponse({ ok: true });
   } catch (err) {
     return handleRouteError(err);

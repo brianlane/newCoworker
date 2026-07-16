@@ -30,10 +30,11 @@ export const DOCUMENT_RENEWAL_SOON_DAYS = 30;
 /**
  * Flat cap on contact-linked record documents (policies, contracts,
  * memberships). Separate from the per-tier knowledge-library cap because a
- * book of business legitimately holds hundreds of records: linked records
- * skip Gemini ingestion and stay out of the client vault digest unless the
- * owner widens their audience, so the tier cap's cost rationale does not
- * apply. This limit is abuse-safety only.
+ * book of business legitimately holds hundreds of records: CSV-imported
+ * records carry no file and skip Gemini ingestion entirely, records default
+ * to the staff audience so they stay out of the client vault digest, and
+ * owner-attended file uploads (which DO extract, linked or not) are
+ * naturally self-limiting. This limit is abuse-safety only.
  */
 export const CONTACT_DOCUMENT_RECORDS_LIMIT = 2000;
 
