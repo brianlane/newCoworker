@@ -260,7 +260,9 @@ export async function docExtract(
       .eq("id", input.businessId)
       .maybeSingle();
     const tier = (bizRow as { tier?: string | null } | null)?.tier ?? null;
-    const count = await countBusinessDocuments(input.businessId, db);
+    // Filed flow documents live in the LIBRARY scope (no contact linkage),
+    // so the library cap is the one that applies.
+    const count = await countBusinessDocuments(input.businessId, "library", db);
     if (count >= documentLimitForTier(tier)) {
       return { ok: true, vars, filed: null, fileError: "document limit reached for your plan" };
     }
