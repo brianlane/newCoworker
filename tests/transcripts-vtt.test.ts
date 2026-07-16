@@ -72,6 +72,21 @@ describe("vttToPlainText", () => {
     expect(vttToPlainText(vtt)).toBe("just narration");
   });
 
+  it("keeps digits-only cue payload — only block-position numeric cue ids drop", () => {
+    const vtt = [
+      "WEBVTT",
+      "",
+      "7",
+      "00:00:01.000 --> 00:00:02.000",
+      "Dania: How many seats?",
+      "",
+      "8",
+      "00:00:02.500 --> 00:00:03.500",
+      "42"
+    ].join("\n");
+    expect(vttToPlainText(vtt)).toBe("Dania: How many seats?\n42");
+  });
+
   it("appends wrapped continuation lines of the SAME cue to the utterance above", () => {
     const vtt = [
       "WEBVTT",

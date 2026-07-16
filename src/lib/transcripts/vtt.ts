@@ -77,8 +77,9 @@ export function vttToPlainText(raw: string): string {
       cueHasPayload = false;
       continue;
     }
-    // Bare numeric cue identifiers ("1", "42").
-    if (/^\d+$/.test(trimmed)) continue;
+    // Bare numeric cue identifiers ("1", "42") — block position only; a
+    // digits-only line INSIDE a cue payload is spoken content ("42").
+    if (!inCue && /^\d+$/.test(trimmed)) continue;
 
     // Inline tags: `<v Jane Doe>text</v>` carries the speaker; other tags
     // (<c>, <i>, timestamps like <00:01:02.000>) are decoration. Stripped
