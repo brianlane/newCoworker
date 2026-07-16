@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import { AGENT_TEMPLATES } from "@/lib/agents/templates";
 
 type AgentItem = {
   id: string;
@@ -381,6 +382,33 @@ export function AgentsManager({
 
         {showCreate && (
           <div className="mt-4 space-y-3 border-t border-parchment/10 pt-4">
+            <div>
+              <label className={labelClass}>Start from a template (optional)</label>
+              <div className="flex flex-wrap gap-2">
+                {AGENT_TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    title={t.description}
+                    onClick={() => {
+                      // Prefill only — nothing is saved until Create, and a
+                      // template-created agent runs like any other: manually,
+                      // never from a trigger.
+                      setCreateName(t.name);
+                      setCreateInstructions(t.instructions);
+                      setCreateFormat(t.outputFormat);
+                    }}
+                    className="rounded-md border border-signal-teal/40 px-2.5 py-1.5 text-xs text-signal-teal hover:bg-signal-teal/10 transition-colors"
+                  >
+                    {t.name}
+                  </button>
+                ))}
+              </div>
+              <p className="mt-1 text-[11px] text-parchment/40">
+                Templates prefill the form below — review and adjust before creating. The quote
+                templates organize and compare information only; they never make recommendations.
+              </p>
+            </div>
             <div>
               <label className={labelClass}>Name</label>
               <input
