@@ -103,12 +103,17 @@ describe("documentReceiptTemplate", () => {
     expect(tpl.name.length).toBeGreaterThan(0);
   });
 
-  it("fires only on mail carrying attachments (the scope's appended line)", () => {
+  it("fires only on mail carrying attachments (anchored to the appended marker line)", () => {
     const def = documentReceiptTemplate().definition;
     expect(def.trigger).toMatchObject({
       channel: "tenant_email",
-      conditions: [{ type: "contains", value: "attachments:", caseInsensitive: true }]
+      conditions: [{ type: "regex", value: "\\n\\[inbound attachments\\] .+$" }]
     });
+    const pattern = new RegExp("\\n\\[inbound attachments\\] .+$", "i");
+    // Matches the appended marker line…
+    expect(pattern.test("subject\nbody\n\n[inbound attachments] license.pdf")).toBe(true);
+    // …but not prose that merely mentions attachments.
+    expect(pattern.test("subject\nSee the attachments: license.pdf\nthanks")).toBe(false);
   });
 
   it("confirms to the sender naming the files, then briefs the owner", () => {

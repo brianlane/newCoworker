@@ -166,10 +166,12 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
 /**
  * "Confirm document receipt": when the AI coworker's own mailbox receives
  * an email carrying attachments, email the sender a receipt confirmation
- * (naming the files) and brief the owner. The trigger keys off the
- * `attachments: …` line the inbound path appends to windowText — a mail
- * with no attachments never fires it. Installed DISABLED so the owner
- * reviews the wording (and their connected sending mailbox) first.
+ * (naming the files) and brief the owner. The trigger is a regex anchored
+ * to the `[inbound attachments] …` line the inbound path appends to the
+ * very END of windowText — a mail with no attachments never fires it, and
+ * prose that merely says "attachments:" can't false-positive. Installed
+ * DISABLED so the owner reviews the wording (and their connected sending
+ * mailbox) first.
  *
  * No parameters: {{trigger.attachments}} carries the filenames and
  * {{trigger.from}} the sender, both supplied by the tenant_email scope.
@@ -182,7 +184,9 @@ export function documentReceiptTemplate(): AiFlowTemplate {
       version: 1,
       trigger: {
         channel: "tenant_email",
-        conditions: [{ type: "contains", value: "attachments:", caseInsensitive: true }]
+        // Anchored to the end of windowText, where the inbound path appends
+        // the marker line (see EMAIL_ATTACHMENTS_MARKER in trigger-eval).
+        conditions: [{ type: "regex", value: "\\n\\[inbound attachments\\] .+$" }]
       },
       steps: [
         {

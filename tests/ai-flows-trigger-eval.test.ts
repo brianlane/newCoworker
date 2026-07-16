@@ -298,9 +298,11 @@ describe("tenantEmailTriggerScope", () => {
       bodyText: "x".repeat(EMAIL_WINDOW_TEXT_MAX),
       attachmentNames: ["license.pdf", "  proof of address.pdf  ", ""]
     });
-    expect(scope.windowText.endsWith("\n\nattachments: license.pdf, proof of address.pdf")).toBe(
-      true
-    );
+    expect(
+      scope.windowText.endsWith("\n\n[inbound attachments] license.pdf, proof of address.pdf")
+    ).toBe(true);
+    // The starter template's anchored trigger regex matches the appended line.
+    expect(/\n\[inbound attachments\] .+$/.test(scope.windowText)).toBe(true);
     expect(scope.attachments).toBe("license.pdf, proof of address.pdf");
     expect(scope.attachment_count).toBe(2);
   });

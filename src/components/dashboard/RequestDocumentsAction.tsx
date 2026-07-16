@@ -42,7 +42,10 @@ export function RequestDocumentsAction({
   const [docs, setDocs] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [sent, setSent] = useState(false);
+  /** Honest post-send status: the tag write can fail independently. */
+  const [sentStatus, setSentStatus] = useState<
+    "tagged" | "already_tracked" | "tag_failed" | null
+  >(null);
 
   const alreadyAwaiting = currentTags.some(
     (t) => t.trim().toLowerCase() === AWAITING_DOCUMENTS_TAG
@@ -72,19 +75,23 @@ export function RequestDocumentsAction({
         return;
       }
       // Tag AFTER the send succeeded so a quota refusal never leaves a
-      // phantom "awaiting" state. Best-effort: a tag failure still counts
-      // as sent (the text went out), it just isn't tracked.
-      if (!alreadyAwaiting) {
-        await fetch(
+      // phantom "awaiting" state. The tag write can fail independently —
+      // report that honestly instead of claiming "tracked".
+      if (alreadyAwaiting) {
+        setSentStatus("already_tracked");
+      } else {
+        const tagged = await fetch(
           `/api/dashboard/customers/${encodeURIComponent(customerE164)}?businessId=${encodeURIComponent(businessId)}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ tags: [...currentTags, AWAITING_DOCUMENTS_TAG] })
           }
-        ).catch(() => {});
+        )
+          .then(async (res) => ((await res.json()) as { ok?: boolean }).ok === true)
+          .catch(() => false);
+        setSentStatus(tagged ? "tagged" : "tag_failed");
       }
-      setSent(true);
       setDocs("");
     } catch {
       setError("Could not send the request — try again.");
@@ -120,7 +127,17 @@ export function RequestDocumentsAction({
             <Button type="button" variant="primary" size="sm" onClick={send} loading={sending}>
               Text the request
             </Button>
-            {sent && <span className="text-xs text-claw-green">Request sent and tagged.</span>}
+            {sentStatus === "tagged" && (
+              <span className="text-xs text-claw-green">Request sent and tagged.</span>
+            )}
+            {sentStatus === "already_tracked" && (
+              <span className="text-xs text-claw-green">Request sent (already tracked).</span>
+            )}
+            {sentStatus === "tag_failed" && (
+              <span className="text-xs text-spark-orange">
+                Request sent, but tagging failed — add the {AWAITING_DOCUMENTS_TAG} tag manually.
+              </span>
+            )}
           </div>
           {error && (
             <p className="text-xs text-spark-orange" role="alert">

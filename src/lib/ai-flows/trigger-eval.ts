@@ -169,6 +169,16 @@ export function emailTriggerScope(msg: InboundEmailMessage): TriggerScope {
 /** Cap on the attachment-names line appended to tenant-mail windowText. */
 export const EMAIL_ATTACHMENT_NAMES_MAX = 500;
 
+/**
+ * Marker prefixing the appended attachment-names line. Bracketed and
+ * guaranteed to sit at the very END of windowText, so receipt flows can
+ * anchor on `\n\[inbound attachments\] .+$` — prose that merely mentions
+ * attachments can't false-positive (only a body deliberately ENDING with
+ * this exact bracketed line could, and the worst case is a courteous
+ * confirmation email).
+ */
+export const EMAIL_ATTACHMENTS_MARKER = "[inbound attachments]";
+
 export function tenantEmailTriggerScope(
   msg: InboundEmailMessage & {
     toEmail?: string;
@@ -200,7 +210,7 @@ export function tenantEmailTriggerScope(
     .filter((n) => n.length > 0);
   const attachmentsLine =
     attachmentNames.length > 0
-      ? `attachments: ${attachmentNames.join(", ").slice(0, EMAIL_ATTACHMENT_NAMES_MAX)}`
+      ? `${EMAIL_ATTACHMENTS_MARKER} ${attachmentNames.join(", ").slice(0, EMAIL_ATTACHMENT_NAMES_MAX)}`
       : "";
   const bodyWindow = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
   const windowText = attachmentsLine ? `${bodyWindow}\n\n${attachmentsLine}` : bodyWindow;
