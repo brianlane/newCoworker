@@ -270,8 +270,46 @@ function log(level, event, data = {}) {
   shipSystemLog(level, event, data);
 }
 
+// undici buries the actionable failure reason (ETIMEDOUT, ENOTFOUND,
+// ECONNRESET, ...) inside error.cause and reports only "TypeError: fetch
+// failed" — and supabase-js then flattens the thrown error into a message
+// STRING, dropping the cause entirely. Wrap fetch so the cause codes are
+// appended to the message before supabase-js flattens it; every supabase
+// error downstream becomes diagnosable ("fetch failed (ETIMEDOUT)").
+function describeCauseChain(err) {
+  const parts = [];
+  let cur = err?.cause;
+  for (let depth = 0; cur && depth < 5; depth++) {
+    // AggregateError (e.g. happy-eyeballs multi-address ECONNREFUSED) carries
+    // its members in .errors rather than .cause.
+    for (const e of Array.isArray(cur.errors) ? cur.errors : [cur]) {
+      const part = e?.code || e?.message;
+      if (part && !parts.includes(String(part))) parts.push(String(part));
+    }
+    cur = cur.cause;
+  }
+  return parts.join(", ");
+}
+
+async function fetchWithCauseInMessage(...args) {
+  try {
+    return await fetch(...args);
+  } catch (err) {
+    const cause = describeCauseChain(err);
+    if (cause && err instanceof Error) {
+      const wrapped = new TypeError(`${err.message} (${cause})`, {
+        cause: err.cause
+      });
+      wrapped.stack = err.stack;
+      throw wrapped;
+    }
+    throw err;
+  }
+}
+
 const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-  auth: { persistSession: false }
+  auth: { persistSession: false },
+  global: { fetch: fetchWithCauseInMessage }
 });
 
 // Mirror every structured log line into the platform's system_logs table so
@@ -313,15 +351,78 @@ function shipSystemLog(level, event, data = {}) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Transient-failure handling for the queue RPCs (claim + stale-reclaim).
+//
+// These RPCs run on every 30s sweep, so a one-off VPS→Supabase network blip
+// (DNS hiccup, connection reset, socket timeout — undici's "fetch failed")
+// is harmless by design: nothing is lost, the next sweep retries (reliability
+// contract at the top of this file). But logging every blip at `error` put a
+// red "reclaim_failed — TypeError: fetch failed" row in the admin System
+// Errors feed each time any tenant box hiccupped. Treatment:
+//   * a transient failure gets ONE inline retry after QUEUE_RPC_RETRY_MS
+//     (sweep RPCs only — claims are re-driven by Realtime / the next sweep);
+//   * a failure that survives the retry logs `warn` (`<event>_transient`)
+//     until QUEUE_RPC_ERROR_AFTER consecutive failures of that RPC (~90s of
+//     sustained connectivity loss at the 30s sweep) — then it escalates to
+//     `error` under the original event name so existing alerting still fires;
+//   * non-transient failures keep their original level immediately (a
+//     missing RPC or auth failure is a real defect, not network weather).
+// ---------------------------------------------------------------------------
+
+const QUEUE_RPC_RETRY_MS = 2000;
+const QUEUE_RPC_ERROR_AFTER = 3;
+
+const TRANSIENT_RPC_ERROR_RE =
+  /fetch failed|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|UND_ERR|socket hang up|network|abort/i;
+
+function isTransientRpcError(message) {
+  return TRANSIENT_RPC_ERROR_RE.test(String(message || ""));
+}
+
+const consecutiveTransientRpcFailures = new Map();
+
+function logQueueRpcFailure(event, errorMessage, { nonTransientLevel = "error" } = {}) {
+  if (!isTransientRpcError(errorMessage)) {
+    consecutiveTransientRpcFailures.delete(event);
+    log(nonTransientLevel, event, { error: errorMessage });
+    return;
+  }
+  const n = (consecutiveTransientRpcFailures.get(event) || 0) + 1;
+  consecutiveTransientRpcFailures.set(event, n);
+  if (n >= QUEUE_RPC_ERROR_AFTER) {
+    log("error", event, { error: errorMessage, consecutiveFailures: n });
+  } else {
+    log("warn", `${event}_transient`, { error: errorMessage, consecutiveFailures: n });
+  }
+}
+
+function clearQueueRpcFailure(event) {
+  consecutiveTransientRpcFailures.delete(event);
+}
+
+// Sweep RPCs get one inline retry on a transient failure: most blips are
+// sub-second, so a single spaced retry inside the same sweep absorbs them
+// without waiting a full SWEEP_INTERVAL_MS.
+async function rpcWithTransientRetry(fn, params) {
+  let res = await sb.rpc(fn, params);
+  if (res.error && isTransientRpcError(res.error.message)) {
+    await sleep(QUEUE_RPC_RETRY_MS);
+    res = await sb.rpc(fn, params);
+  }
+  return res;
+}
+
 async function claimNextJob() {
   const { data, error } = await sb.rpc("claim_chat_job", {
     p_worker_id: WORKER_ID,
     p_business_id: BUSINESS_ID
   });
   if (error) {
-    log("error", "claim_failed", { error: error.message });
+    logQueueRpcFailure("claim_failed", error.message);
     return null;
   }
+  clearQueueRpcFailure("claim_failed");
   return data && data.length > 0 ? data[0] : null;
 }
 
@@ -1233,20 +1334,28 @@ async function claimNextWebchatJob() {
   if (error) {
     // A missing RPC (platform migration not applied yet) is expected during
     // rollout ordering — log once per sweep at warn, never crash the drain.
-    log("warn", "webchat_claim_failed", { error: error.message });
+    // Transient network failures escalate to error only when persistent.
+    logQueueRpcFailure("webchat_claim_failed", error.message, {
+      nonTransientLevel: "warn"
+    });
     return null;
   }
+  clearQueueRpcFailure("webchat_claim_failed");
   return data && data.length > 0 ? data[0] : null;
 }
 
 async function reclaimStaleWebchat() {
-  const { data, error } = await sb.rpc("reclaim_stale_webchat_jobs", {
+  const { data, error } = await rpcWithTransientRetry("reclaim_stale_webchat_jobs", {
     p_max_age_ms: STALE_CLAIM_MS
   });
   if (error) {
-    log("warn", "webchat_reclaim_failed", { error: error.message });
+    // Same rollout-ordering tolerance as claimNextWebchatJob above.
+    logQueueRpcFailure("webchat_reclaim_failed", error.message, {
+      nonTransientLevel: "warn"
+    });
     return 0;
   }
+  clearQueueRpcFailure("webchat_reclaim_failed");
   const n = Array.isArray(data) ? data.length : 0;
   if (n > 0) {
     log("warn", "webchat_reclaimed_stale", { count: n, ids: data.map((j) => j.id) });
@@ -1444,13 +1553,14 @@ async function processWebchatLoop() {
 }
 
 async function reclaimStale() {
-  const { data, error } = await sb.rpc("reclaim_stale_chat_jobs", {
+  const { data, error } = await rpcWithTransientRetry("reclaim_stale_chat_jobs", {
     p_max_age_ms: STALE_CLAIM_MS
   });
   if (error) {
-    log("error", "reclaim_failed", { error: error.message });
+    logQueueRpcFailure("reclaim_failed", error.message);
     return 0;
   }
+  clearQueueRpcFailure("reclaim_failed");
   const n = Array.isArray(data) ? data.length : 0;
   if (n > 0) {
     log("warn", "reclaimed_stale", { count: n, ids: data.map((j) => j.id) });
