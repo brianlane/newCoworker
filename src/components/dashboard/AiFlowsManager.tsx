@@ -131,6 +131,10 @@ type EditorState = {
   enabled: boolean;
   suppressDefaultReply: boolean;
   captureStepScreenshots: boolean;
+  /** Cancel a contact's pending runs of this flow when they text back. */
+  stopOnResponse: boolean;
+  /** Uncheck to enroll each contact at most once (GHL "allow re-entry"). */
+  allowReentry: boolean;
   channel: FlowTrigger["channel"];
   correlationWindowMinutes: number;
   conditions: TriggerCondition[];
@@ -195,6 +199,8 @@ function emptyEditor(): EditorState {
     enabled: true,
     suppressDefaultReply: false,
     captureStepScreenshots: false,
+    stopOnResponse: false,
+    allowReentry: true,
     channel: "sms",
     correlationWindowMinutes: 10,
     conditions: [{ type: "has_url" }],
@@ -385,6 +391,8 @@ function editorFromRow(row: AiFlowRow): EditorState {
     enabled: row.enabled,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
+    stopOnResponse: def.options?.stopOnResponse ?? false,
+    allowReentry: def.options?.allowReentry ?? true,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -403,6 +411,8 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     enabled: false,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
+    stopOnResponse: def.options?.stopOnResponse ?? false,
+    allowReentry: def.options?.allowReentry ?? true,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -824,7 +834,9 @@ function toDefinition(s: EditorState): AiFlowDefinition {
       : {}),
     options: {
       suppressDefaultReply: s.suppressDefaultReply,
-      captureStepScreenshots: s.captureStepScreenshots
+      captureStepScreenshots: s.captureStepScreenshots,
+      stopOnResponse: s.stopOnResponse,
+      allowReentry: s.allowReentry
     }
   };
 }
@@ -1469,6 +1481,8 @@ export function AiFlowsManager({
         enabled: warnings.length > 0 ? false : (e?.enabled ?? true),
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
         captureStepScreenshots: e?.captureStepScreenshots ?? def.options?.captureStepScreenshots ?? false,
+        stopOnResponse: def.options?.stopOnResponse ?? false,
+        allowReentry: def.options?.allowReentry ?? true,
         ...triggerToEditorFields(def.trigger),
         extraTriggers: def.triggers ?? [],
         editingTriggerIndex: 0,
@@ -2499,6 +2513,36 @@ export function AiFlowsManager({
             />
             Capture screenshots of each browser step (for debugging failures)
           </label>
+          <div>
+            <label className="flex items-center gap-2 text-sm text-parchment/70">
+              <input
+                type="checkbox"
+                checked={editor.stopOnResponse}
+                onChange={(ev) => setEditor({ ...editor, stopOnResponse: ev.target.checked })}
+              />
+              Stop for a contact when they reply
+            </label>
+            <p className="mt-1 pl-6 text-[11px] text-parchment/40">
+              When the contact texts back, their pending runs of this flow end so the
+              remaining follow-ups don&apos;t fire at someone who already answered. A step
+              that&apos;s explicitly waiting for their reply still handles it.
+            </p>
+          </div>
+          <div>
+            <label className="flex items-center gap-2 text-sm text-parchment/70">
+              <input
+                type="checkbox"
+                checked={editor.allowReentry}
+                onChange={(ev) => setEditor({ ...editor, allowReentry: ev.target.checked })}
+              />
+              Allow contacts to go through this flow more than once
+            </label>
+            <p className="mt-1 pl-6 text-[11px] text-parchment/40">
+              Uncheck to enroll each contact at most once — a lead who already ran this
+              flow won&apos;t be re-enrolled when it triggers for them again. Test runs
+              never count.
+            </p>
+          </div>
           <label className="flex items-center gap-2 text-sm text-parchment/70">
             <input
               type="checkbox"

@@ -28,6 +28,7 @@ import {
   resolveFromMatchesRefValues,
   type ContactRefSupabase
 } from "./contact_ref.ts";
+import { reentryBlocked } from "./reentry.ts";
 import type { TriggerCondition } from "./types.ts";
 
 export type ContactEventKind = "contact_created" | "tag_changed" | "owner_assigned";
@@ -205,6 +206,10 @@ export async function enqueueContactEventRuns(
         }
       }
       if (!matched) continue;
+
+      // Re-entry gate: a flow with allowReentry=false never re-enrolls a
+      // contact who already has a (non-test) run of it.
+      if (await reentryBlocked(supabase, row.id, def, input.contact.e164)) continue;
 
       // Drip pacing (definition.drip): stagger this run after the flow's
       // latest scheduled one — a tag storm or bulk import enrolls hundreds

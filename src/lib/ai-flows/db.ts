@@ -13,6 +13,8 @@ import {
   type AiFlowDefinition,
   parseAiFlowDefinition
 } from "@/lib/ai-flows/schema";
+import { reentryBlocked } from "../../../supabase/functions/_shared/ai_flows/reentry";
+import { isTestModeTrigger } from "../../../supabase/functions/_shared/ai_flows/test_mode";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -289,13 +291,39 @@ export type EnqueueAiFlowRunInput = {
  * the Telnyx webhook's enqueue (manual "Run now", inbound-email triggers).
  * Returns the row, or null when `dedupeKey` was already enqueued for this
  * flow (unique-violation 23505 — the benign "another poller tick got here
- * first" outcome).
+ * first" outcome) or when the flow blocks re-entry and `trigger.from`
+ * already has a run of it (same "already handled" outcome for callers).
  */
 export async function enqueueAiFlowRun(
   input: EnqueueAiFlowRunInput,
   client?: SupabaseClient
 ): Promise<AiFlowRunRow | null> {
   const db = await resolveDb(client);
+  // One definition read serves both flow-level enqueue gates below (re-entry
+  // and drip). Best-effort: on a read failure both gates default to "no
+  // gate" — losing the lead is worse than a duplicate or a burst.
+  let definition: { drip?: { intervalMinutes?: number } } | null = null;
+  try {
+    const { data: flowRow } = await db
+      .from("ai_flows")
+      .select("definition")
+      .eq("id", input.flowId)
+      .maybeSingle();
+    definition =
+      (flowRow as { definition?: { drip?: { intervalMinutes?: number } } } | null)
+        ?.definition ?? null;
+  } catch (e) {
+    console.error("enqueueAiFlowRun definition read", e);
+  }
+
+  // Re-entry gate (options.allowReentry === false): a contact who already
+  // has a (non-test) run of this flow is not enrolled again. Test runs
+  // bypass the gate entirely — testing must always work.
+  if (!isTestModeTrigger(input.trigger) && definition) {
+    const from = typeof input.trigger.from === "string" ? input.trigger.from : "";
+    if (await reentryBlocked(db, input.flowId, definition, from)) return null;
+  }
+
   // Drip pacing (definition.drip): stagger this run intervalMinutes after
   // the flow's latest already-scheduled run, so a bulk enqueue (backlog
   // import, webhook burst) trickles instead of bursting. An explicit
@@ -306,14 +334,7 @@ export async function enqueueAiFlowRun(
   let dripClaimAt: string | null = null;
   if (!input.earliestClaimAt) {
     try {
-      const { data: flowRow } = await db
-        .from("ai_flows")
-        .select("definition")
-        .eq("id", input.flowId)
-        .maybeSingle();
-      const drip = (flowRow as { definition?: { drip?: { intervalMinutes?: number } } } | null)
-        ?.definition?.drip;
-      const intervalMinutes = drip?.intervalMinutes;
+      const intervalMinutes = definition?.drip?.intervalMinutes;
       if (typeof intervalMinutes === "number" && intervalMinutes >= 1) {
         const { data: lastRow } = await db
           .from("ai_flow_runs")

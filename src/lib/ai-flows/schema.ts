@@ -1205,7 +1205,14 @@ export const aiFlowDefinitionSchema = z.object({
       // Per-flow opt-in: capture a screenshot on every browse step (and a
       // before/at-failure pair when a browse_action breaks) for the run
       // "investigate" view. Default off so most flows pay no extra latency.
-      captureStepScreenshots: z.boolean().optional()
+      captureStepScreenshots: z.boolean().optional(),
+      // GHL "stop on response": an inbound SMS from the lead cancels their
+      // pending runs of this flow (the run whose wait_for_reply consumed the
+      // reply is exempt). Default off.
+      stopOnResponse: z.boolean().optional(),
+      // GHL "allow re-entry": explicitly false blocks enrolling a contact
+      // who already has a run of this flow. Default (undefined) = allowed.
+      allowReentry: z.boolean().optional()
     })
     .optional()
 });
@@ -1841,6 +1848,15 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
         if (ev.kind !== "tag_added" && ev.tag !== undefined) {
           issues.push(
             `Step "${step.id}" sets a tag on a "${ev.kind}" goal event; tags only apply to "tag_added".`
+          );
+        }
+        // Contradiction guard: a "replied" goal wants the run to CONTINUE at
+        // the checkpoint when the lead replies, while stopOnResponse wants
+        // that same reply to CANCEL the run. Refuse the combination so the
+        // runtime never has to pick one silently.
+        if (ev.kind === "replied" && def.options?.stopOnResponse === true) {
+          issues.push(
+            `Step "${step.id}" watches for a reply, but this flow is set to stop when the contact replies; turn off "stop on response" or remove the replied goal.`
           );
         }
       }
