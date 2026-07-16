@@ -166,6 +166,9 @@ export function emailTriggerScope(msg: InboundEmailMessage): TriggerScope {
  * tagged with the distinct channel and the recipient address so steps can
  * template the mailbox the mail arrived at.
  */
+/** Cap on the attachment-names line appended to tenant-mail windowText. */
+export const EMAIL_ATTACHMENT_NAMES_MAX = 500;
+
 export function tenantEmailTriggerScope(
   msg: InboundEmailMessage & {
     toEmail?: string;
@@ -183,9 +186,24 @@ export function tenantEmailTriggerScope(
      */
     documentRef?: string;
     documentName?: string;
+    /**
+     * Filenames of every attachment on the mail. Appended to windowText as
+     * an `attachments: …` line (AFTER the body slice, so a long body can't
+     * truncate it away) and exposed as {{trigger.attachments}} — this is
+     * what document-receipt flows condition on and confirm back.
+     */
+    attachmentNames?: string[];
   }
 ): TriggerScope {
-  const windowText = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
+  const attachmentNames = (msg.attachmentNames ?? [])
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
+  const attachmentsLine =
+    attachmentNames.length > 0
+      ? `attachments: ${attachmentNames.join(", ").slice(0, EMAIL_ATTACHMENT_NAMES_MAX)}`
+      : "";
+  const bodyWindow = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
+  const windowText = attachmentsLine ? `${bodyWindow}\n\n${attachmentsLine}` : bodyWindow;
   return {
     channel: "tenant_email",
     windowText,
@@ -197,7 +215,9 @@ export function tenantEmailTriggerScope(
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {}),
     image: msg.imageRef ?? "",
     document: msg.documentRef ?? "",
-    document_name: (msg.documentName ?? "").slice(0, 255)
+    document_name: (msg.documentName ?? "").slice(0, 255),
+    attachments: attachmentNames.join(", ").slice(0, EMAIL_ATTACHMENT_NAMES_MAX),
+    attachment_count: attachmentNames.length
   };
 }
 

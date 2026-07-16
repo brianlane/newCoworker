@@ -33,6 +33,8 @@ import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction"
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { listTeamMembers } from "@/lib/db/employees";
 import { listBusinessDocumentsForContact } from "@/lib/documents/db";
+import { RequestDocumentsAction } from "@/components/dashboard/RequestDocumentsAction";
+import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 
 export const dynamic = "force-dynamic";
 
@@ -87,7 +89,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   // as ONE parallel group. This matters doubly for residency (vps-mode)
   // tenants, where each read is a tunnel round-trip to their box —
   // serially these were ~5 RTTs, now the page pays one.
-  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments] =
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments, mailboxAddress] =
     await Promise.all([
       listSmsHistoryForCustomer(business.id, memory.customer_e164, {
         limit: 50,
@@ -129,7 +131,12 @@ export default async function CustomerDetailPage({ params }: Props) {
       ).catch(() => [] as ActivityItem[]),
       // Linked records (policies, contracts, memberships); tolerated so a
       // documents-table error never blocks the profile page.
-      listBusinessDocumentsForContact(business.id, memory.id, db).catch(() => [])
+      listBusinessDocumentsForContact(business.id, memory.id, db).catch(() => []),
+      // AI mailbox address for the "Request documents" action; tolerated —
+      // a mailbox-table error just hides the action.
+      ensureTenantMailbox(business.id, db)
+        .then((row) => tenantMailboxAddress(row.local_part))
+        .catch(() => null)
     ]);
   // Merge is "same person, two numbers" — only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
@@ -234,6 +241,20 @@ export default async function CustomerDetailPage({ params }: Props) {
         customerE164={memory.customer_e164}
         initialMode={memory.sms_reply_mode}
       />
+
+      {/* Document request: customers with a real (textable) number only —
+          short-code/service rows can't receive the request SMS. */}
+      {memory.type === "customer" &&
+        /^\+[1-9]\d{6,15}$/.test(memory.customer_e164) &&
+        mailboxAddress && (
+          <RequestDocumentsAction
+            businessId={business.id}
+            customerE164={memory.customer_e164}
+            customerName={headerName === memory.customer_e164 ? "" : headerName}
+            mailboxAddress={mailboxAddress}
+            currentTags={memory.tags ?? []}
+          />
+        )}
 
       {/* Merge is customer-to-customer only. Hide it when THIS profile is a
           non-customer (company short code, vendor, tester, owner/employee) so a

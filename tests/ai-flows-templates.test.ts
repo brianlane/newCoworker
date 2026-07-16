@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   cleanReviewLink,
+  documentReceiptTemplate,
   metaLeadFollowUpTemplate,
   priceSheetShareTemplate,
   reviewRequestTemplate,
@@ -89,6 +90,38 @@ describe("reviewRequestTemplate", () => {
     const notify = def.steps[2];
     if (notify.type === "notify_owner") {
       expect(notify.when).toEqual({ var: "customer_phone", notEquals: "none" });
+    }
+  });
+});
+
+describe("documentReceiptTemplate", () => {
+  it("is a valid definition the install route can persist as-is", () => {
+    const tpl = documentReceiptTemplate();
+    const def = parseAiFlowDefinition(tpl.definition);
+    expect(def.trigger.channel).toBe("tenant_email");
+    expect(tpl.key).toBe("document_receipt_confirmation");
+    expect(tpl.name.length).toBeGreaterThan(0);
+  });
+
+  it("fires only on mail carrying attachments (the scope's appended line)", () => {
+    const def = documentReceiptTemplate().definition;
+    expect(def.trigger).toMatchObject({
+      channel: "tenant_email",
+      conditions: [{ type: "contains", value: "attachments:", caseInsensitive: true }]
+    });
+  });
+
+  it("confirms to the sender naming the files, then briefs the owner", () => {
+    const def = documentReceiptTemplate().definition;
+    expect(def.steps.map((s) => s.type)).toEqual(["send_email", "notify_owner"]);
+    const confirm = def.steps[0];
+    if (confirm.type === "send_email") {
+      expect(confirm.to).toBe("{{trigger.from}}");
+      expect(confirm.body).toContain("{{trigger.attachments}}");
+    }
+    const notify = def.steps[1];
+    if (notify.type === "notify_owner") {
+      expect(notify.message).toContain("{{trigger.attachments}}");
     }
   });
 });

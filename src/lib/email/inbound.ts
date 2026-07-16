@@ -199,7 +199,10 @@ export async function processInboundTenantEmail(
           documentRef: `email-attachments:${firstDocument.path}`,
           documentName: firstDocument.filename
         }
-      : {})
+      : {}),
+    // Filenames ride into windowText + {{trigger.attachments}} so
+    // document-receipt flows can condition on and confirm them.
+    attachmentNames: ownAttachments.map((a) => a.filename)
   });
 
   const flows = await loadTenantEmailFlows(db, businessId);

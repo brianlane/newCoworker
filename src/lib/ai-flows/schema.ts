@@ -169,7 +169,12 @@ export const TRIGGER_SCOPE_KEYS = [
   // other channel) — the default source of a doc_extract step. document_name
   // is its display filename for templates/notifications.
   "document",
-  "document_name"
+  "document_name",
+  // tenant_email only: the comma-separated attachment filenames and their
+  // count — what document-receipt confirmations name back to the sender.
+  // "" / absent on every other channel.
+  "attachments",
+  "attachment_count"
 ] as const;
 
 /**
