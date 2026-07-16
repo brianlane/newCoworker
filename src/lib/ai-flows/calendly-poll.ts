@@ -20,8 +20,9 @@
  *     trigger conditions AND flow steps ({{trigger.windowText}} →
  *     extract_text) can use it. The invitee timezone matters because a
  *     "confirm our call at [time] today" text must quote the INVITEE's local
- *     time, not the business's. Enrichment is additive and never fatal: an
- *     invitees call failing still fires the flow with event-only context.
+ *     time, not the business's. An event whose enrichment failed is deferred
+ *     to the next tick instead of fired bare — the per-occurrence dedupe key
+ *     means a bare firing would lock the flow out of invitee context forever.
  *   - `event_created` has no server-side created-at filter, so the fetcher
  *     scans upcoming events (bounded window) and the poller's
  *     `eventCreatedDue` lookback does the actual gating — identical to how
@@ -52,6 +53,15 @@ export const CALENDLY_INVITEE_FETCH_CAP = 25;
  * bookings, which overwhelmingly start within days.
  */
 export const CALENDLY_CREATED_SCAN_DAYS = 30;
+
+/**
+ * event_created also reaches this far BACK: a booking made moments ago for
+ * a start time already in the past (retro bookings, "book me in for the
+ * slot that just started") would otherwise never enter the candidate set —
+ * Google's updatedMin listing catches those, so this keeps parity. The
+ * created-lookback due gate still decides what actually fires.
+ */
+export const CALENDLY_CREATED_SCAN_BACK_DAYS = 1;
 
 /**
  * end-mode listing assumes no event runs longer than this (the listing
@@ -312,7 +322,7 @@ export async function fetchCalendlyCandidateEvents(
   if (windows.createdScan) {
     await listSafely("created", {
       status: "active",
-      min_start_time: iso(nowMs),
+      min_start_time: iso(nowMs - CALENDLY_CREATED_SCAN_BACK_DAYS * dayMs),
       max_start_time: iso(nowMs + CALENDLY_CREATED_SCAN_DAYS * dayMs)
     });
   }
@@ -347,26 +357,39 @@ export async function fetchCalendlyCandidateEvents(
 
   const due = collected.filter(args.dueFilter);
 
-  // Invitee enrichment for due events only, capped. Additive and non-fatal:
-  // a failed invitees call leaves the event firing with event-only context.
-  let enriched = 0;
+  // Invitee enrichment for due events only, capped. An event whose
+  // enrichment was skipped (cap) or failed is WITHHELD from this tick
+  // rather than fired bare: the run dedupe key is per (event, occurrence),
+  // so firing once without invitee phone/timezone would permanently lock
+  // the flow out of that context — the next tick (~1 min) retries while
+  // the event is still due. A successful invitees call with zero invitees
+  // is a legitimate enrichment (the event simply has none) and fires.
+  const ready: CalendarEventInput[] = [];
+  let attempted = 0;
   for (const ev of due) {
-    if (enriched >= CALENDLY_INVITEE_FETCH_CAP) {
+    if (attempted >= CALENDLY_INVITEE_FETCH_CAP) {
       overflowed = true;
       break;
     }
-    enriched += 1;
+    attempted += 1;
     try {
       const res = await request(businessId, conn, {
         endpoint: `/scheduled_events/${encodeURIComponent(ev.id)}/invitees`,
         method: "GET",
         params: { count: "10" }
       });
-      if (!res) continue;
+      if (!res) {
+        logger.warn("calendly poll: invitee enrichment refused; event deferred to next tick", {
+          businessId,
+          eventId: ev.id
+        });
+        continue;
+      }
       const invitees = (res.data as { collection?: RawInvitee[] })?.collection ?? [];
       applyInviteeContext(ev, invitees);
+      ready.push(ev);
     } catch (err) {
-      logger.warn("calendly poll: invitee enrichment failed", {
+      logger.warn("calendly poll: invitee enrichment failed; event deferred to next tick", {
         businessId,
         eventId: ev.id,
         error: err instanceof Error ? err.message : String(err)
@@ -374,5 +397,5 @@ export async function fetchCalendlyCandidateEvents(
     }
   }
 
-  return { events: due, overflowed };
+  return { events: ready, overflowed };
 }

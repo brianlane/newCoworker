@@ -13,6 +13,7 @@ vi.mock("@/lib/logger", () => ({
 import {
   CALENDLY_CANCELED_SCAN_BACK_DAYS,
   CALENDLY_CANCELED_SCAN_FORWARD_DAYS,
+  CALENDLY_CREATED_SCAN_BACK_DAYS,
   CALENDLY_CREATED_SCAN_DAYS,
   CALENDLY_END_MAX_EVENT_MINUTES,
   CALENDLY_INVITEE_FETCH_CAP,
@@ -282,6 +283,9 @@ describe("fetchCalendlyCandidateEvents", () => {
     const day = 24 * 60 * 60_000;
     expect(seenParams[0]).toMatchObject({
       status: "active",
+      // Reaches BACK too: a just-made booking whose start already passed
+      // must still enter the created-mode candidate set (Google parity).
+      min_start_time: new Date(NOW - CALENDLY_CREATED_SCAN_BACK_DAYS * day).toISOString(),
       max_start_time: new Date(NOW + CALENDLY_CREATED_SCAN_DAYS * day).toISOString()
     });
     expect(seenParams[1]).toMatchObject({
@@ -417,7 +421,10 @@ describe("fetchCalendlyCandidateEvents", () => {
     expect(res.events).toEqual([]);
   });
 
-  it("caps invitee enrichment (overflow-flagged) and tolerates refused/thrown invitee calls", async () => {
+  it("caps invitee enrichment (overflow-flagged) and DEFERS refused/thrown/capped events to the next tick", async () => {
+    // Bugbot High: firing an un-enriched event burns the per-occurrence
+    // dedupe key, permanently locking the flow out of invitee context — so
+    // failed/skipped enrichment withholds the event this tick instead.
     const many = Array.from({ length: CALENDLY_INVITEE_FETCH_CAP + 2 }, (_, i) =>
       rawEvent(`EV${i}`)
     );
@@ -426,10 +433,10 @@ describe("fetchCalendlyCandidateEvents", () => {
       events: () => ({ collection: many }),
       invitees: (uuid) => {
         inviteeCalls += 1;
-        if (uuid === "EV0") return null; // transport refusal — event still fires
-        if (uuid === "EV1") throw new Error("calendly 500"); // thrown Error — logged, not fatal
-        if (uuid === "EV2") throw "calendly string blast"; // thrown non-Error — stringified
-        if (uuid === "EV3") return {}; // body without a collection — tolerated
+        if (uuid === "EV0") return null; // transport refusal — deferred
+        if (uuid === "EV1") throw new Error("calendly 500"); // thrown Error — deferred
+        if (uuid === "EV2") throw "calendly string blast"; // thrown non-Error — deferred
+        if (uuid === "EV3") return {}; // no collection = zero invitees — a SUCCESS, fires
         return { collection: [{ name: "I", email: "i@x.co" }] };
       }
     });
@@ -444,11 +451,14 @@ describe("fetchCalendlyCandidateEvents", () => {
       { request: fn }
     );
     expect(res.overflowed).toBe(true);
-    expect(res.events).toHaveLength(CALENDLY_INVITEE_FETCH_CAP + 2);
     expect(inviteeCalls).toBe(CALENDLY_INVITEE_FETCH_CAP);
-    // EV0 (refused), EV1/EV2 (thrown), EV3 (no collection) still fire, just
-    // without invitee context.
-    for (const i of [0, 1, 2, 3]) expect(res.events[i].attendees).toBeUndefined();
-    expect(res.events[4].attendees).toEqual(["I <i@x.co>"]);
+    // 25 attempts: EV0/EV1/EV2 deferred; EV3..EV24 returned (22 events);
+    // EV25/EV26 beyond the cap are deferred too.
+    expect(res.events).toHaveLength(CALENDLY_INVITEE_FETCH_CAP - 3);
+    expect(res.events.map((e) => e.id)).not.toContain("EV0");
+    expect(res.events.map((e) => e.id)).not.toContain("EV25");
+    expect(res.events[0].id).toBe("EV3");
+    expect(res.events[0].attendees).toBeUndefined(); // zero invitees — still fires
+    expect(res.events[1].attendees).toEqual(["I <i@x.co>"]);
   });
 });
