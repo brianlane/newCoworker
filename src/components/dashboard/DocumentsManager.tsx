@@ -156,8 +156,10 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     let cancelled = false;
     (async () => {
       try {
+        // 200 is MAX_LIST_LIMIT on the customers API — a larger value fails
+        // validation and would hide the picker entirely.
         const res = await fetch(
-          `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&limit=500`,
+          `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&limit=200`,
           { cache: "no-store" }
         );
         const json = (await res.json()) as {
