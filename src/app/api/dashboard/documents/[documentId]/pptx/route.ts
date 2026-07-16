@@ -48,7 +48,8 @@ export async function GET(request: Request, context: RouteContext) {
       status: 200,
       headers: {
         "Content-Type": PPTX_MIME,
-        "Content-Disposition": `attachment; filename="${pptxFilename(document.title)}"`
+        "Content-Disposition": `attachment; filename="${pptxFilename(document.title)}"`,
+        "cache-control": "no-store"
       }
     });
   } catch (err) {
