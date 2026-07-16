@@ -528,9 +528,11 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                       {renewal.text}
                     </span>
                   )}
-                  {linkedContact && (
+                  {doc.contact_id && (
                     <span className="rounded border border-signal-teal/40 px-1.5 py-0.5 text-[11px] text-signal-teal/90">
-                      {contactLabel(linkedContact)}
+                      {/* The picker list is capped at the API's 200-contact page;
+                          a linked contact beyond it still shows as linked. */}
+                      {linkedContact ? contactLabel(linkedContact) : "Linked contact"}
                     </span>
                   )}
                   <span className="ml-auto text-[11px] text-parchment/35">
@@ -632,6 +634,12 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                             }
                           >
                             <option value="">— not linked —</option>
+                            {/* A linked contact beyond the 200-contact picker
+                                page keeps its own option so the select never
+                                misreports the doc as unlinked. */}
+                            {doc.contact_id && !contacts.some((c) => c.id === doc.contact_id) && (
+                              <option value={doc.contact_id}>Linked contact (kept)</option>
+                            )}
                             {contacts.map((c) => (
                               <option key={c.id} value={c.id}>
                                 {contactLabel(c)}
