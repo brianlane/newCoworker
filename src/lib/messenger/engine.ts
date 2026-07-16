@@ -54,8 +54,17 @@ import { logger } from "@/lib/logger";
 export const MESSENGER_ENGINE_OVER_CAP_REFUSAL =
   "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
 
-/** Same default model as the other customer chat surfaces. */
-export const MESSENGER_ENGINE_DEFAULT_MODEL = "gemini-2.5-flash-lite";
+/**
+ * Default bumped 2.5-flash-lite → 2.5-flash (2026-07-16): the lite tier is
+ * the model class behind the Truly SMS incident (Jul 14, ignored a system
+ * preamble containing the answer) and the KYP Ads dashboard-chat session
+ * (Jul 15, context-blind non-sequiturs and invented policy). Messenger is a
+ * conversational lead-qualification surface — same stakes as SMS, which
+ * runs 2.5-flash for the same reason ($0.30/$2.50 per 1M, priced in
+ * _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts). Webchat
+ * deliberately stays on lite (anonymous, unmetered public traffic).
+ */
+export const MESSENGER_ENGINE_DEFAULT_MODEL = "gemini-2.5-flash";
 
 export function messengerEngineModel(
   env: Record<string, string | undefined> = process.env
