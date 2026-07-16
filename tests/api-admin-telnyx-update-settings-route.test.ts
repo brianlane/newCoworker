@@ -127,4 +127,17 @@ describe("POST /api/admin/telnyx/update-settings", () => {
       expect.objectContaining({ smsFallbackEnabled: false })
     );
   });
+
+  it("accepts the bridge stale-alert mute toggle", async () => {
+    await POST(request({ businessId: BIZ, bridgeStaleAlertMuted: true }));
+    expect(upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ bridgeStaleAlertMuted: true })
+    );
+  });
+
+  it("leaves the bridge mute undefined when the client omits it", async () => {
+    await POST(request({ businessId: BIZ, transferEnabled: true }));
+    const call = vi.mocked(upsertBusinessTelnyxSettings).mock.calls[0][0] as Record<string, unknown>;
+    expect(call.bridgeStaleAlertMuted).toBeUndefined();
+  });
 });

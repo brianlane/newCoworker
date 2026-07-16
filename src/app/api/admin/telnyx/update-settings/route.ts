@@ -16,7 +16,8 @@ const schema = z.object({
     .union([z.string().min(0).max(25), z.null()])
     .optional(),
   transferEnabled: z.boolean().optional(),
-  smsFallbackEnabled: z.boolean().optional()
+  smsFallbackEnabled: z.boolean().optional(),
+  bridgeStaleAlertMuted: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -46,7 +47,8 @@ export async function POST(request: Request) {
       businessId: body.businessId,
       forwardToE164: normalizedForward,
       transferEnabled: body.transferEnabled,
-      smsFallbackEnabled: body.smsFallbackEnabled
+      smsFallbackEnabled: body.smsFallbackEnabled,
+      bridgeStaleAlertMuted: body.bridgeStaleAlertMuted
     });
     return successResponse({ settings });
   } catch (err) {
