@@ -332,7 +332,24 @@ export async function processCampaignSweep(
           result.sent += 1;
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          await markRecipient(recipient.id, "failed", message.slice(0, 300), db);
+          // The downgrade must never be skipped by its own failure — a
+          // claimed row left `sent` would read as delivered and never
+          // retry. If even the downgrade write fails, record it loudly.
+          try {
+            await markRecipient(recipient.id, "failed", message.slice(0, 300), db);
+          } catch (markErr) {
+            const markMessage = markErr instanceof Error ? markErr.message : String(markErr);
+            result.errors.push({
+              campaignId: campaign.id,
+              message: `recipient ${recipient.id} failed to send AND to downgrade (may read as sent): ${markMessage}`
+            });
+            logger.error("email-campaign-sweep: failed-send downgrade failed", {
+              campaignId: campaign.id,
+              recipientId: recipient.id,
+              sendError: message,
+              markError: markMessage
+            });
+          }
           result.failed += 1;
         }
       }

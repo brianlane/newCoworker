@@ -326,6 +326,24 @@ describe("processCampaignSweep — sending", () => {
     expect(mark).not.toHaveBeenCalledWith("r2", "sent", null, db);
   });
 
+  it("a failed downgrade write is recorded loudly and never aborts the batch", async () => {
+    const sendEmail = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("bounce"))
+      .mockResolvedValueOnce("resend-id");
+    mark.mockRejectedValueOnce(new Error("db down"));
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([recipient("r1", "bad@x.test"), recipient("r2", "ok@x.test")]);
+    const { db } = makeDb([]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    // The second recipient still went out despite the first's double failure.
+    expect(result.sent).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.errors).toEqual([
+      { campaignId: "c-1", message: expect.stringContaining("failed to send AND to downgrade") }
+    ]);
+  });
+
   it("re-snapshots a sending campaign whose snapshot never landed before draining", async () => {
     const sendEmail = vi.fn(async () => "resend-id");
     // Crashed between claim and snapshot: sending, but snapshotted_at null.
