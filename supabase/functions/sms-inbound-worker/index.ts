@@ -11,6 +11,8 @@
  * `complete_sms_inbound_job(..., 'pending')` exists for the same pattern (see migration comment on that RPC).
  *
  * Secrets: SUPABASE_*, ROWBOAT_VPS_CHAT_BEARER (or ROWBOAT_GATEWAY_TOKEN), ROWBOAT_CHAT_URL_TEMPLATE,
+ * OWNER_SMS_PLATFORM_URL (falls back to AIFLOW_PLATFORM_URL) + OWNER_SMS_OPERATOR_ENABLED
+ * (default true) for owner-operator turns via /api/internal/owner-sms-turn,
  *          TELNYX_API_KEY, TELNYX_MESSAGING_PROFILE_ID, TELNYX_SMS_FROM_E164,
  *          INTERNAL_CRON_SECRET (Authorization: Bearer) for this endpoint.
  */
@@ -96,6 +98,71 @@ const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
 // at 'processing' until the stale-claim recovery requeues it.
 // (Codex P1 / Cursor Bugbot Medium feedback on PR #74.)
 const ROWBOAT_RETRY_BUDGET_MS = 80_000;
+
+// --- Owner-operator turns (owner texting their own business line) ----------
+// The Rowboat staff persona has no send_sms / automation tools (its tool
+// webhook carries no sender context, so owner-only tools can't be gated
+// there). Owner turns instead run on the PLATFORM's inline dashboard-chat
+// engine via /api/internal/owner-sms-turn — full operator tool surface
+// (send_sms, calendar, list/run AiFlows) with the owner identity verified
+// server-side. Falls back to the Rowboat staff path on any failure, and is
+// skipped entirely when the platform URL/bearer are not configured (local
+// integration runs) or the kill switch is off.
+const OWNER_SMS_OPERATOR_ENABLED =
+  (Deno.env.get("OWNER_SMS_OPERATOR_ENABLED") ?? "true").trim().toLowerCase() !== "false";
+const OWNER_SMS_PLATFORM_URL = (
+  Deno.env.get("OWNER_SMS_PLATFORM_URL") ??
+  Deno.env.get("AIFLOW_PLATFORM_URL") ??
+  ""
+).replace(/\/+$/, "");
+// Same worst-case budget shape as the Rowboat call: bounded so a hung
+// platform function can't stall the whole claimed batch past the cron cap.
+const OWNER_SMS_TURN_TIMEOUT_MS = 75_000;
+
+/**
+ * Run one owner-operator turn on the platform engine. Null = unavailable /
+ * failed / timed out — the caller falls back to the Rowboat staff path.
+ */
+async function callOwnerOperatorTurn(args: {
+  businessId: string;
+  ownerE164: string;
+  ownerName: string | null;
+  text: string;
+}): Promise<string | null> {
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!OWNER_SMS_OPERATOR_ENABLED || !OWNER_SMS_PLATFORM_URL || !token) return null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), OWNER_SMS_TURN_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${OWNER_SMS_PLATFORM_URL}/api/internal/owner-sms-turn`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        businessId: args.businessId,
+        ownerE164: args.ownerE164,
+        ownerName: args.ownerName,
+        text: args.text
+      }),
+      signal: controller.signal
+    });
+    if (!res.ok) {
+      console.error("owner operator turn HTTP", res.status);
+      return null;
+    }
+    const payload = (await res.json().catch(() => null)) as
+      | { ok?: boolean; reply?: string }
+      | null;
+    if (!payload?.ok || typeof payload.reply !== "string" || !payload.reply.trim()) {
+      return null;
+    }
+    return payload.reply.trim();
+  } catch (e) {
+    console.error("owner operator turn failed", e instanceof Error ? e.message : String(e));
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 // --- SMS chat spend cap (shared fuse with owner-dashboard chat) -------------
 // Inbound SMS now runs on Gemini (the `Coworker` agent was repointed off local
@@ -1018,6 +1085,31 @@ serve(async (req: Request) => {
     let reply = (job.rowboat_reply_cached ?? "").trim();
 
     try {
+      // Owner-operator turn: the OWNER texting their own line gets the
+      // platform engine with the full operator tool surface (send_sms,
+      // calendar, list/run AiFlows) — the Rowboat staff persona below has
+      // none of those (its tool webhook can't tell who's texting). Any
+      // failure falls straight through to the Rowboat staff path, so a
+      // platform hiccup never silences the owner.
+      if (!reply && job.staff_kind === "owner") {
+        const operatorReply = await callOwnerOperatorTurn({
+          businessId: job.business_id,
+          ownerE164: fromE164,
+          ownerName: job.staff_name?.trim() || null,
+          text: userText
+        });
+        if (operatorReply) {
+          reply = operatorReply;
+          // No Rowboat call this turn — keep any existing thread binding
+          // untouched for the customer-path turns that still use it.
+          convId = thread?.rowboat_conversation_id?.trim() || undefined;
+          await telemetryRecord(supabase, "sms_owner_operator_turn", {
+            job_id: job.id,
+            business_id: job.business_id
+          });
+        }
+      }
+
       if (!reply) {
         const existingConv = thread?.rowboat_conversation_id?.trim() ?? null;
 

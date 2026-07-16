@@ -509,7 +509,9 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     calendar_find_slots: true,
     calendar_book_appointment: true,
     calendar_reschedule_appointment: true,
-    calendar_cancel_appointment: true
+    calendar_cancel_appointment: true,
+    list_aiflows: true,
+    run_aiflow: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -524,7 +526,9 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       "calendar_find_slots",
       "calendar_book_appointment",
       "calendar_reschedule_appointment",
-      "calendar_cancel_appointment"
+      "calendar_cancel_appointment",
+      "list_aiflows",
+      "run_aiflow"
     ]);
   });
 
