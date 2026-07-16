@@ -260,6 +260,10 @@ describe("provisioning/orchestrate", () => {
     // re-sets the var explicitly, which keeps the populated branch
     // covered.
     delete process.env.VOICE_TRANSCRIPTION_ENABLED;
+    // Same scrub rationale as VOICE_TRANSCRIPTION_ENABLED: the deploy-command
+    // builder reads GEMINI_LIVE_SESSION_MAX_MS ?? "" and a leaked shell export
+    // would leave the empty-fallback branch uncovered.
+    delete process.env.GEMINI_LIVE_SESSION_MAX_MS;
     vi.clearAllMocks();
   });
 
@@ -619,6 +623,7 @@ describe("provisioning/orchestrate", () => {
     expect(cmd).toContain("GOOGLE_API_KEY=''");
     expect(cmd).toContain("GEMINI_LIVE_MODEL=''");
     expect(cmd).toContain("GEMINI_LIVE_ENABLED=''");
+    expect(cmd).toContain("GEMINI_LIVE_SESSION_MAX_MS=''");
     expect(cmd).toContain("GEMINI_ROWBOAT_MODEL=''");
     expect(cmd).toContain("OWNER_CHAT_MODEL=''");
     expect(cmd).toContain("APP_BASE_URL=''");
@@ -801,6 +806,8 @@ describe("provisioning/orchestrate", () => {
     // tests in this file leave the var unset, which already covers the
     // empty-fallback branch.
     process.env.VOICE_TRANSCRIPTION_ENABLED = "true";
+    // Per-box session cap override (the HQ demo line pins 5 minutes).
+    process.env.GEMINI_LIVE_SESSION_MAX_MS = "300000";
     process.env.VOICE_BRIDGE_SRC = "/opt/newcoworker-repo/vps/voice-bridge";
     process.env.VOICE_NAME = "Puck";
     process.env.SMS_CHAT_MODEL = "gemini-2.5-flash-lite";
@@ -815,6 +822,7 @@ describe("provisioning/orchestrate", () => {
     expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.1-flash-live-preview");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_ENABLED", "false");
     expectDeployHasEnv(cmd, "VOICE_TRANSCRIPTION_ENABLED", "true");
+    expectDeployHasEnv(cmd, "GEMINI_LIVE_SESSION_MAX_MS", "300000");
     expectDeployHasEnv(cmd, "VOICE_BRIDGE_SRC", "/opt/newcoworker-repo/vps/voice-bridge");
     expectDeployHasEnv(cmd, "VOICE_NAME", "Puck");
     expectDeployHasEnv(cmd, "SMS_CHAT_MODEL", "gemini-2.5-flash-lite");
