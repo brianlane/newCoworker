@@ -139,6 +139,9 @@ function buildDeployEnvPrefix(
     ["VOICE_NAME", modelOverrides?.voiceName ?? process.env.VOICE_NAME ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     ["VOICE_TRANSCRIPTION_ENABLED", process.env.VOICE_TRANSCRIPTION_ENABLED ?? ""],
+    // Optional per-box Gemini Live session cap (ms); blank preserves the value
+    // already on the box (deploy-client.sh ladder), else the 14-min default.
+    ["GEMINI_LIVE_SESSION_MAX_MS", process.env.GEMINI_LIVE_SESSION_MAX_MS ?? ""],
     ["GEMINI_ROWBOAT_MODEL", process.env.GEMINI_ROWBOAT_MODEL ?? ""],
     ["OWNER_CHAT_MODEL", modelOverrides?.ownerChatModel ?? process.env.OWNER_CHAT_MODEL ?? ""],
     ["SMS_CHAT_MODEL", modelOverrides?.smsChatModel ?? process.env.SMS_CHAT_MODEL ?? ""],
