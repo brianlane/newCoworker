@@ -88,6 +88,30 @@ describe("planStep: send_whatsapp", () => {
     ).toEqual({ ok: true, action: { kind: "send_whatsapp", to: "+15551234567", body: "Hi Joe" } });
   });
 
+  it("accepts plus-less international digits (wa_id round-trips from inbound vars)", () => {
+    expect(
+      planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
+        vars: { lead_phone: "447911123456", name: "Joe" }
+      })
+    ).toEqual({ ok: true, action: { kind: "send_whatsapp", to: "+447911123456", body: "Hi Joe" } });
+
+    // Leading-zero national formats stay unparseable (E.164 never starts
+    // with 0), and templated ones skip rather than fail.
+    expect(
+      planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
+        vars: { lead_phone: "07911123456", name: "Joe" }
+      })
+    ).toEqual({
+      ok: true,
+      action: {
+        kind: "send_whatsapp",
+        to: "",
+        body: "Hi Joe",
+        skipReason: "unparseable_recipient_phone"
+      }
+    });
+  });
+
   it("treats a wholly absent `to` as a literal empty recipient (hard failure)", () => {
     expect(planStep({ ...base } as FlowStep, { vars: { name: "Joe" } })).toEqual({
       ok: false,

@@ -859,7 +859,18 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         }
         return { ok: false, error: "send_whatsapp: recipient is empty after templating" };
       }
-      const waTo = isE164(waToRaw) ? waToRaw : normalizeNanpToE164(waToRaw);
+      // Unlike SMS (Telnyx, NANP-biased), WhatsApp recipients are wa_ids:
+      // plus-less INTERNATIONAL digit runs round-trip straight from
+      // inbound webhooks and lead vars (e.g. UK "447911123456"). Accept
+      // E.164, NANP shapes, and any 8-15 digit non-zero-leading run —
+      // mirroring the deliver helper's toWaId.
+      const waDigits = waToRaw.replace(/\D/g, "");
+      const waTo = isE164(waToRaw)
+        ? waToRaw
+        : (normalizeNanpToE164(waToRaw) ??
+          (waDigits.length >= 8 && waDigits.length <= 15 && !waDigits.startsWith("0")
+            ? `+${waDigits}`
+            : null));
       if (!waTo) {
         if (waFromTemplateVar) {
           return {
