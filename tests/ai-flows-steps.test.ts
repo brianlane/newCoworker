@@ -475,6 +475,31 @@ describe("planStep: wait_for_reply", () => {
     );
     expect(capped.ok && capped.action.kind === "wait_for_reply" && capped.action.timeoutMinutes).toBe(43200);
   });
+  it("timeoutMinutesTemplate wins when it renders to a positive number", () => {
+    const timeoutOf = (vars: Record<string, string>): number | false => {
+      const plan = planStep(
+        {
+          id: "w4",
+          type: "wait_for_reply",
+          phoneVar: "p",
+          timeoutMinutes: 60,
+          timeoutMinutesTemplate: "{{vars.report_wait_minutes}}"
+        } as FlowStep,
+        { vars: { p: "+16025551234", ...vars } }
+      );
+      return plan.ok && plan.action.kind === "wait_for_reply" && plan.action.timeoutMinutes;
+    };
+    // A math step's "eta + 60" output sizes the window dynamically.
+    expect(timeoutOf({ report_wait_minutes: "90" })).toBe(90);
+    // Unparseable (math's not_a_number sentinel), empty, zero, or negative
+    // renders all fall back to the static timeoutMinutes.
+    expect(timeoutOf({ report_wait_minutes: "not_a_number" })).toBe(60);
+    expect(timeoutOf({})).toBe(60);
+    expect(timeoutOf({ report_wait_minutes: "0" })).toBe(60);
+    expect(timeoutOf({ report_wait_minutes: "-15" })).toBe(60);
+    // A rendered value still respects the 30-day ceiling.
+    expect(timeoutOf({ report_wait_minutes: "999999" })).toBe(43200);
+  });
   it("completes only via ITS OWN marker — a stale saveAs from an earlier wait still parks", () => {
     // Marker set (this step's resume/timeout ran) → no-op completion.
     const resolved = planStep(step, {

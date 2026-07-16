@@ -124,6 +124,7 @@ import type {
   SmsTrigger
 } from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
+import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -498,6 +499,15 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // was already persisted into run.context.vars.
   if (scope.vars.claimed_agent === undefined) {
     scope.vars.claimed_agent = "none";
+  }
+  // Same seeding rule for the claimer's phone ("none") and stated ETA ("0"):
+  // closed/zero until a route_to_team actually records a claim, never
+  // clobbering a persisted claim on resume.
+  if (scope.vars.claimed_agent_phone === undefined) {
+    scope.vars.claimed_agent_phone = "none";
+  }
+  if (scope.vars.claimed_agent_eta_minutes === undefined) {
+    scope.vars.claimed_agent_eta_minutes = "0";
   }
   // Engine-provided {{vars.group_lead_phone}}: in a group-text trigger (e.g. a
   // referral service's intro thread) the lead's number never appears in the
@@ -5217,6 +5227,8 @@ async function routeToTeamStep(
     delete routing.late_claimed;
     delete routing.claim_timeframe;
     scope.vars.claimed_agent = "none";
+    scope.vars.claimed_agent_phone = "none";
+    scope.vars.claimed_agent_eta_minutes = "0";
     // Notify the owner the lead bounced back. Reuse the tenant's owner-fallback
     // copy (their "back to you" wording) with a leading line naming who let it
     // go, so the owner knows it was claimed-then-released (not never claimed).
@@ -5257,6 +5269,11 @@ async function routeToTeamStep(
     // `when: { var: "claimed_agent", notEquals: "none" }`. Mirrors routing into
     // scope.vars (which `when` guards read). Name preferred, phone as fallback.
     scope.vars.claimed_agent = claimedName || claimedBy || "none";
+    // The claimer's E.164 (so a later wait_for_reply can park on THEIR next
+    // text) and their stated ETA as whole minutes ("0" when absent/vague) —
+    // parsed here, while the timeframe is still in hand before it's cleared.
+    scope.vars.claimed_agent_phone = claimedBy || "none";
+    scope.vars.claimed_agent_eta_minutes = String(parseEtaMinutes(claimTimeframe));
     delete routing.last_event;
     delete routing.reply_from;
     delete routing.offered;
@@ -5366,6 +5383,8 @@ async function routeToTeamStep(
     evaluateStepCondition(action.ownerDirectWhen, scope)
   ) {
     scope.vars.claimed_agent = "none";
+    scope.vars.claimed_agent_phone = "none";
+    scope.vars.claimed_agent_eta_minutes = "0";
     const body = renderTemplate(action.ownerDirectTemplate, scope);
     await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
     appendActionTaken(
@@ -5438,6 +5457,9 @@ async function routeToTeamStep(
       // auto-assigned lead could never be handed back (Bugbot on PR #580).
       routing.route_step_index = stepIndex;
       scope.vars.claimed_agent = agent.name || agent.phone;
+      // Auto-assign has no claim handshake, so there is never a stated ETA.
+      scope.vars.claimed_agent_phone = agent.phone;
+      scope.vars.claimed_agent_eta_minutes = "0";
       const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
       const fyiBody =
         "New lead assigned to you (auto-assign is on — it's yours, no reply " +
@@ -5551,6 +5573,8 @@ async function routeToTeamStep(
   // claimed_agent="none" so claim-gated LATER steps (e.g. the lead marketing
   // text/email) are skipped — only ungated steps like notify_owner still run.
   scope.vars.claimed_agent = "none";
+  scope.vars.claimed_agent_phone = "none";
+  scope.vars.claimed_agent_eta_minutes = "0";
   let body = renderTemplate(action.ownerFallbackTemplate, scope);
   // Appended (not templated) so EVERY flow's fallback notice carries the pass
   // reasons teammates stated ("2, <reason>") without editing each template.

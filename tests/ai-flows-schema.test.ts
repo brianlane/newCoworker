@@ -1597,6 +1597,70 @@ describe("trigger channels", () => {
     ).toThrow(AiFlowValidationError);
   });
 
+  it("accepts the engine-provided claimed_agent_phone as a wait_for_reply phoneVar", () => {
+    // The bad-phone-report pattern: after a route_to_team claim, park on the
+    // CLAIMING teammate's next text and classify it. claimed_agent_phone /
+    // claimed_agent_eta_minutes are engine-provided (no step produces them).
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "webhook", conditions: [] },
+      steps: [
+        { id: "e", type: "extract_text", fields: [{ name: "lead_phone" }] },
+        {
+          id: "r",
+          type: "route_to_team",
+          offerTemplate: "New lead {{vars.lead_phone}} — reply 1 to claim.",
+          ownerFallbackTemplate: "Back to you.",
+          responseMinutes: 10
+        },
+        {
+          id: "m",
+          type: "math",
+          operation: "add",
+          left: "{{vars.claimed_agent_eta_minutes}}",
+          right: "60",
+          saveAs: "report_wait_minutes",
+          when: { var: "claimed_agent_phone", notEquals: "none" }
+        },
+        {
+          id: "w",
+          type: "wait_for_reply",
+          phoneVar: "claimed_agent_phone",
+          saveAs: "agent_report",
+          timeoutMinutes: 60,
+          timeoutMinutesTemplate: "{{vars.report_wait_minutes}}",
+          when: { var: "claimed_agent_phone", notEquals: "none" }
+        }
+      ]
+    });
+    const wait = def.steps[3];
+    expect(wait.type === "wait_for_reply" && wait.timeoutMinutesTemplate).toBe(
+      "{{vars.report_wait_minutes}}"
+    );
+  });
+
+  it("scope-checks timeoutMinutesTemplate like any other template", () => {
+    try {
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "webhook", conditions: [] },
+        steps: [
+          { id: "e", type: "extract_text", fields: [{ name: "p" }] },
+          {
+            id: "w",
+            type: "wait_for_reply",
+            phoneVar: "p",
+            timeoutMinutesTemplate: "{{vars.ghost_minutes}}"
+          }
+        ]
+      });
+      expect.unreachable("expected timeoutMinutesTemplate scope check to fail");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AiFlowValidationError);
+      expect((err as AiFlowValidationError).issues.join(" ")).toContain("ghost_minutes");
+    }
+  });
+
   it("accepts additional triggers (OR set) and summarizes the extra count", () => {
     const def = parseAiFlowDefinition({
       version: 1,
