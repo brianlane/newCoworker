@@ -405,6 +405,16 @@ describe("processCampaignSweep — sending", () => {
       },
       db
     );
+
+    // A lost completion race is NOT counted — the winner reports it.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([]);
+    countByStatus.mockResolvedValue(0);
+    transition.mockResolvedValue(false);
+    const lost = await processCampaignSweep({ client: makeDb([]).db, now: () => NOW });
+    expect(lost.completed).toBe(0);
   });
 
   it("isolates a per-campaign batch error (incl. non-Error throws) and defaults the clock", async () => {

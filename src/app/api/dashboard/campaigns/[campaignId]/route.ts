@@ -67,11 +67,18 @@ export async function PATCH(request: Request, context: RouteContext) {
           status: "cancelled"
         }));
       if (!cancelled) {
-        return errorResponse(
-          "VALIDATION_ERROR",
-          "This campaign already started sending and can't be cancelled.",
-          409
-        );
+        // Say what actually blocked it — "already sending" would be wrong
+        // for a campaign that's already cancelled or finished.
+        const current = await getEmailCampaign(body.data.businessId, campaignId);
+        if (current?.status === "cancelled") {
+          // Idempotent: someone (or a parallel tab) cancelled it first.
+          return successResponse({ campaign: current });
+        }
+        const reason =
+          current?.status === "sent"
+            ? "This campaign already finished sending."
+            : "This campaign already started sending and can't be cancelled.";
+        return errorResponse("VALIDATION_ERROR", reason, 409);
       }
       const updated = await getEmailCampaign(body.data.businessId, campaignId);
       return successResponse({ campaign: updated });

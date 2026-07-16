@@ -270,8 +270,10 @@ export async function processCampaignSweep(
       if (batch.length === 0) {
         // Completion carries freshly derived counters — a prior batch that
         // crashed between sending and its counter patch must not close the
-        // campaign with stale zeros.
-        await transitionEmailCampaign(
+        // campaign with stale zeros. Counted only when the guarded
+        // transition actually moved the row (a racing sweep's completion
+        // is theirs to report).
+        const completed = await transitionEmailCampaign(
           campaign.business_id,
           campaign.id,
           "sending",
@@ -282,7 +284,7 @@ export async function processCampaignSweep(
           },
           db
         );
-        result.completed += 1;
+        if (completed) result.completed += 1;
         continue;
       }
 
