@@ -269,7 +269,7 @@ describe("display formatting", () => {
   it("builds the full display-row set (everything except IP — which is never stored)", () => {
     const rows = visitorMetaDisplayRows(meta);
     expect(rows).toEqual([
-      { label: "Location", value: "Phoenix, AZ, US" },
+      { label: "Location (IP-based, approx.)", value: "Phoenix, AZ, US" },
       { label: "Device", value: "Chrome on macOS" },
       { label: "Language", value: "en-US" },
       { label: "Local timezone", value: "America/Phoenix" },

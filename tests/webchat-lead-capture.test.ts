@@ -13,7 +13,10 @@ vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
 }));
 
-import { captureWebchatLead } from "@/lib/webchat/lead-capture";
+import {
+  captureWebchatLead,
+  WEBCHAT_CAPTURE_NO_CONTACT_MESSAGE
+} from "@/lib/webchat/lead-capture";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import {
   getWebchatSessionById,
@@ -61,9 +64,58 @@ describe("captureWebchatLead", () => {
     expect(mockLog).not.toHaveBeenCalled();
   });
 
+  it("refuses a capture with no way to reach the visitor (nothing written, model told nothing was saved)", async () => {
+    // The production bug: visitor said "go ahead and capture my details"
+    // without ever sharing any — an interest-only capture succeeded and
+    // the assistant claimed success. Now it refuses with guidance.
+    const out = await captureWebchatLead(BIZ, {
+      interest: "HIPAA compliance discussion",
+      notes: "Wants the team to reach out"
+    });
+    expect(out).toEqual({
+      ok: false,
+      detail: "no_contact_details",
+      message: WEBCHAT_CAPTURE_NO_CONTACT_MESSAGE
+    });
+    expect(WEBCHAT_CAPTURE_NO_CONTACT_MESSAGE).toContain("Nothing was saved");
+    expect(mockLog).not.toHaveBeenCalled();
+
+    // A bare name is just as unreachable.
+    const nameOnly = await captureWebchatLead(BIZ, { name: "Ada" });
+    expect(nameOnly.ok).toBe(false);
+    expect(mockLog).not.toHaveBeenCalled();
+
+    // Session resolves but has no contact on file either → still refused.
+    mockGetSession.mockResolvedValueOnce(sessionRow);
+    const noSessionContact = await captureWebchatLead(BIZ, {
+      interest: "pricing",
+      sessionRef: SESSION
+    });
+    expect(noSessionContact.ok).toBe(false);
+    expect(mockLog).not.toHaveBeenCalled();
+  });
+
+  it("allows an interest-only capture when the session already has contact on file", async () => {
+    mockGetSession.mockResolvedValueOnce({
+      ...sessionRow,
+      visitor_phone: "+15551234567"
+    });
+    const out = await captureWebchatLead(BIZ, {
+      interest: "Standard plan questions",
+      sessionRef: SESSION
+    });
+    expect(out.ok).toBe(true);
+    expect(mockLog).toHaveBeenCalledTimes(1);
+    expect(mockLog.mock.calls[0][0].log_payload).toMatchObject({
+      interest: "Standard plan questions",
+      sessionId: SESSION
+    });
+  });
+
   it("logs the lead with a webchat task type and trimmed fields", async () => {
     const out = await captureWebchatLead(BIZ, {
       name: " Ada Lovelace ",
+      email: "ada@example.com",
       interest: "Kitchen remodel",
       sessionRef: undefined
     });
@@ -78,7 +130,7 @@ describe("captureWebchatLead", () => {
       visitorName: "Ada Lovelace",
       interest: "Kitchen remodel",
       visitorPhone: null,
-      visitorEmail: null,
+      visitorEmail: "ada@example.com",
       sessionId: null
     });
     expect(mockGetSession).not.toHaveBeenCalled();
@@ -103,19 +155,31 @@ describe("captureWebchatLead", () => {
 
   it("drops cross-tenant and malformed session refs (lead still logged)", async () => {
     mockGetSession.mockResolvedValueOnce({ ...sessionRow, business_id: "other" });
-    const crossTenant = await captureWebchatLead(BIZ, { name: "Eve", sessionRef: SESSION });
+    const crossTenant = await captureWebchatLead(BIZ, {
+      name: "Eve",
+      email: "eve@example.com",
+      sessionRef: SESSION
+    });
     expect(crossTenant.ok).toBe(true);
     expect(mockLog.mock.calls[0][0].log_payload).toMatchObject({ sessionId: null });
     expect(mockMerge).not.toHaveBeenCalled();
 
-    const malformed = await captureWebchatLead(BIZ, { name: "Eve", sessionRef: "not-a-uuid" });
+    const malformed = await captureWebchatLead(BIZ, {
+      name: "Eve",
+      email: "eve@example.com",
+      sessionRef: "not-a-uuid"
+    });
     expect(malformed.ok).toBe(true);
     expect(mockGetSession).toHaveBeenCalledTimes(1); // malformed ref never hits the DB
   });
 
   it("tolerates a failed session lookup / merge (warn + continue, Error and non-Error shapes)", async () => {
     mockGetSession.mockRejectedValueOnce(new Error("db down"));
-    const lookupFail = await captureWebchatLead(BIZ, { name: "Ada", sessionRef: SESSION });
+    const lookupFail = await captureWebchatLead(BIZ, {
+      name: "Ada",
+      email: "ada@example.com",
+      sessionRef: SESSION
+    });
     expect(lookupFail.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       "webchat lead-capture: session lookup failed",
@@ -124,7 +188,11 @@ describe("captureWebchatLead", () => {
 
     // Non-Error rejection (PG drivers can surface plain strings).
     mockGetSession.mockRejectedValueOnce("lookup boom");
-    const lookupFailStr = await captureWebchatLead(BIZ, { name: "Ada", sessionRef: SESSION });
+    const lookupFailStr = await captureWebchatLead(BIZ, {
+      name: "Ada",
+      email: "ada@example.com",
+      sessionRef: SESSION
+    });
     expect(lookupFailStr.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       "webchat lead-capture: session lookup failed",
@@ -135,7 +203,11 @@ describe("captureWebchatLead", () => {
     mockLog.mockResolvedValue({} as never);
     mockGetSession.mockResolvedValueOnce(sessionRow);
     mockMerge.mockRejectedValueOnce("merge boom");
-    const mergeFail = await captureWebchatLead(BIZ, { name: "Ada", sessionRef: SESSION });
+    const mergeFail = await captureWebchatLead(BIZ, {
+      name: "Ada",
+      email: "ada@example.com",
+      sessionRef: SESSION
+    });
     expect(mergeFail.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       "webchat lead-capture: session contact merge failed",
@@ -144,7 +216,11 @@ describe("captureWebchatLead", () => {
 
     mockGetSession.mockResolvedValueOnce(sessionRow);
     mockMerge.mockRejectedValueOnce(new Error("merge err"));
-    const mergeFailErr = await captureWebchatLead(BIZ, { name: "Ada", sessionRef: SESSION });
+    const mergeFailErr = await captureWebchatLead(BIZ, {
+      name: "Ada",
+      email: "ada@example.com",
+      sessionRef: SESSION
+    });
     expect(mergeFailErr.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
       "webchat lead-capture: session contact merge failed",

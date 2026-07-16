@@ -163,11 +163,13 @@ export default async function AdminSiteWebchatPage() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         {header}
+        {/* Replies come straight from Gemini — this config container is
+            where the engine toggle, knowledge vault, and AI budget live. */}
         <Link
           href={`/admin/${settings.business_id}`}
           className="text-sm text-claw-green hover:underline shrink-0 mt-1"
         >
-          Backing business →
+          Engine &amp; knowledge settings →
         </Link>
       </div>
 

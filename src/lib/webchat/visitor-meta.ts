@@ -300,7 +300,10 @@ export function visitorMetaDisplayRows(meta: WebchatVisitorMeta | null): Visitor
   if (!meta) return [];
   const rows: VisitorMetaRow[] = [];
   const location = formatVisitorLocation(meta);
-  if (location) rows.push({ label: "Location", value: location });
+  // "approx." because IP geolocation reflects the network egress point,
+  // not the person: mobile carrier gateways and iCloud Private Relay
+  // routinely place a visitor hundreds of miles away.
+  if (location) rows.push({ label: "Location (IP-based, approx.)", value: location });
   const device = formatVisitorDevice(meta);
   if (device) rows.push({ label: "Device", value: device });
   const c = meta.client;

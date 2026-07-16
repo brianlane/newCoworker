@@ -42,7 +42,19 @@ export type CaptureWebchatLeadArgs = {
 
 export type CaptureWebchatLeadResult =
   | { ok: true; data: { logId: string } }
-  | { ok: false; detail: string };
+  | { ok: false; detail: string; message?: string };
+
+/**
+ * Guidance fed back to the model when a capture carries no way to reach
+ * the visitor. Explicit "nothing was saved" so the model can't tell the
+ * visitor their details were captured (observed in production: visitor
+ * said "go ahead and capture my details" without ever sharing any, the
+ * interest-only capture succeeded, and the assistant claimed success).
+ */
+export const WEBCHAT_CAPTURE_NO_CONTACT_MESSAGE =
+  "Nothing was saved: there is no phone number or email for this visitor, so the team " +
+  "has no way to reach them. Ask for a phone number or email address, then call this " +
+  "tool again with it. Do NOT tell the visitor their details were captured.";
 
 export async function captureWebchatLead(
   businessId: string,
@@ -63,12 +75,16 @@ export async function captureWebchatLead(
   // Cross-tenant refs are dropped (business_id mismatch), invalid refs are
   // ignored — the lead log below is written either way.
   let sessionId: string | null = null;
+  let sessionHasContact = false;
   const ref = args.sessionRef?.trim();
   if (ref && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(ref)) {
     try {
       const session = await getWebchatSessionById(ref);
       if (session && session.business_id === businessId) {
         sessionId = session.id;
+        sessionHasContact = Boolean(
+          session.visitor_email?.trim() || session.visitor_phone?.trim()
+        );
       }
     } catch (err) {
       logger.warn("webchat lead-capture: session lookup failed", {
@@ -76,6 +92,19 @@ export async function captureWebchatLead(
         error: err instanceof Error ? err.message : String(err)
       });
     }
+  }
+
+  // A lead the team cannot REACH is not a lead. Refuse unless this call
+  // (or the session's pre-chat form / an earlier capture) provided a phone
+  // or email — a name or interest alone gives the team nobody to contact.
+  // Interest-only captures stay allowed for sessions whose contact is
+  // already on file (they enrich a reachable lead).
+  if (!phone && !email && !sessionHasContact) {
+    return {
+      ok: false,
+      detail: "no_contact_details",
+      message: WEBCHAT_CAPTURE_NO_CONTACT_MESSAGE
+    };
   }
 
   const logId = randomUUID();
