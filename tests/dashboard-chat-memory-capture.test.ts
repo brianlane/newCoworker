@@ -16,6 +16,7 @@ import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { BULLETS_MAX_CHARS } from "@/lib/dashboard-chat/memory-append";
 import {
+  OWNER_MEMORY_SYSTEM_PROMPT,
   captureOwnerRuleInline,
   composeExtractionInput,
   extractExistingBullets,
@@ -96,6 +97,27 @@ describe("extractExistingBullets / composeExtractionInput", () => {
     });
     expect(full).toContain("ASSISTANT REPLY");
     expect(full).toContain("- a\n- b");
+  });
+
+  it("frames the assistant reply as reference-resolution context, never a value source", () => {
+    // Regression pin (KYP Ads, Jul 2026): the old framing called the reply a
+    // "STRONG signal to save" and a source for "exact values", so
+    // assistant-INVENTED policy ("cancel via Calendly", a WhatsApp contact at
+    // a number the owner said was going away) was persisted as durable fact.
+    const out = composeExtractionInput("msg", { assistantReply: "reply" });
+    expect(out).toContain("reference-resolution context ONLY");
+    expect(out).toContain("IGNORE any claim");
+    expect(out).not.toMatch(/STRONG signal/i);
+  });
+});
+
+describe("OWNER_MEMORY_SYSTEM_PROMPT contract", () => {
+  it("pins the owner-only source rule and the KYP anti-patterns", () => {
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("ONLY SOURCE OF SAVED FACTS");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("suggestions, proposals, drafts, plans");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("open or undecided items");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("wrong, changing, or going away");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).not.toMatch(/strong save\s*signal/i);
   });
 });
 
