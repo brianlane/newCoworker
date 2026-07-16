@@ -36,7 +36,13 @@ export const CALENDLY_DIRECT_KEY = "calendly-direct";
  * key for the provider.
  */
 export const CALDAV_DIRECT_KEY = "caldav-direct";
-export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "outlook"] as const;
+// The broad all-in-one "google" workspace connection carries Gmail scopes
+// (verified: the Gmail profile identity probe resolves on live connections),
+// so it is a sendable/readable mailbox too. Dedicated mail connections come
+// first — a deliberate Gmail connect wins over the all-in-one — and Google
+// wins over Microsoft, matching calendar resolution. The broad "outlook"
+// key doubles as the dedicated Microsoft mail key, so it is already here.
+export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "google", "outlook"] as const;
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
 export type ResolvedVoiceConnection = {
