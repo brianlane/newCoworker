@@ -1222,12 +1222,15 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
 
   // Recent route_to_team runs this teammate may have claimed. A claim finalizes
   // the run as 'done' (claimed_by stamped on routing); include the same statuses
-  // as late-claim so a re-opened/parked run is still findable.
+  // as late-claim so a re-opened/parked run is still findable. awaiting_reply is
+  // included because a post-claim flow can park a wait_for_reply on the CLAIMER
+  // (the bad-phone-report pattern) — without it their "86" would miss the
+  // unclaim and be swallowed by that wait as a "report" text.
   const { data: rows } = await supabase
     .from("ai_flow_runs")
     .select("id, status, context, updated_at, revision")
     .eq("business_id", businessId)
-    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
+    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval", "awaiting_reply"])
     .not("context->routing", "is", null)
     .order("updated_at", { ascending: false })
     .limit(25);
@@ -1287,7 +1290,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
     })
     .eq("id", match.id)
     .eq("revision", match.revision)
-    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval"])
+    .in("status", ["done", "awaiting_agent", "queued", "awaiting_approval", "awaiting_reply"])
     .select("id");
   if (reopenErr) {
     console.error("ai_flow_runs unclaim reopen", reopenErr);

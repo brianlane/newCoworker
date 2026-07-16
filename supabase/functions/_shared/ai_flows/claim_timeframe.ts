@@ -30,3 +30,35 @@ export function parseClaimWithTimeframe(
   if (!m) return null;
   return { digit: m[1], timeframe: m[2].trim().slice(0, MAX_CLAIM_TIMEFRAME_LEN) };
 }
+
+/** parseEtaMinutes never returns more than 30 days (mirrors MAX_WAIT_MINUTES). */
+export const MAX_ETA_MINUTES = 43200;
+
+/** Duration tokens: "20 min", "1.5 hours", "2h", "1 hr 30 min", ... */
+const ETA_TOKEN_RE = /(\d+(?:\.\d+)?)\s*(hours?|hrs?|h|minutes?|mins?|m)\b/g;
+
+/**
+ * Parse a claim timeframe ("20 min", "1 hour", "45") into whole minutes for
+ * the `claimed_agent_eta_minutes` engine var. Deliberately conservative: only
+ * explicit durations parse (summed when combined, "1 hr 30 min" → 90); a bare
+ * number is minutes; anything vague ("tonight", "after work") returns 0 so a
+ * consuming wait just uses its base window.
+ */
+export function parseEtaMinutes(timeframe: string): number {
+  const text = timeframe.trim().toLowerCase();
+  if (!text) return 0;
+  if (/^\d+(\.\d+)?$/.test(text)) {
+    return Math.min(Math.round(Number(text)), MAX_ETA_MINUTES);
+  }
+  let total = 0;
+  let matched = false;
+  ETA_TOKEN_RE.lastIndex = 0;
+  let m: RegExpExecArray | null;
+  while ((m = ETA_TOKEN_RE.exec(text)) !== null) {
+    matched = true;
+    const value = Number(m[1]);
+    total += m[2].startsWith("h") ? value * 60 : value;
+  }
+  if (!matched) return 0;
+  return Math.min(Math.round(total), MAX_ETA_MINUTES);
+}

@@ -99,6 +99,14 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
  *     (or "none" on owner-fallback / no claim), so LATER steps can gate on
  *     `when: { var: "claimed_agent", notEquals: "none" }` to run only after a
  *     teammate accepted the lead. Empty string before any route_to_team runs.
+ *   - `claimed_agent_phone`: the claiming teammate's E.164 phone (or "none",
+ *     same lifecycle as `claimed_agent`), so a LATER `wait_for_reply` can
+ *     park on the CLAIMER's next text (e.g. "that lead's number is
+ *     disconnected") — not just on the lead's.
+ *   - `claimed_agent_eta_minutes`: the ETA a claimer stated ("1, 20 min" →
+ *     "20"), parsed to whole minutes; "0" when they claimed with a bare "1"
+ *     or the ETA wasn't a parseable duration. Feed it through a `math` step
+ *     to size a follow-up wait (e.g. ETA + 60).
  *   - `group_lead_phone`: on a group-text trigger, the lead's E.164 number —
  *     the one thread participant who is neither the alert's sender nor any of
  *     the business's own numbers (e.g. the seller in a referral service's
@@ -112,6 +120,8 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
 export const ENGINE_PROVIDED_VARS = [
   "actions_taken",
   "claimed_agent",
+  "claimed_agent_phone",
+  "claimed_agent_eta_minutes",
   "group_lead_phone"
 ] as const;
 
@@ -859,6 +869,12 @@ const nonBranchStepMembers = [
     phoneVar: varName,
     saveAs: varName.optional(),
     timeoutMinutes: z.number().int().min(1).max(43200).optional(),
+    // Dynamic timeout: a template rendering to whole minutes (e.g.
+    // "{{vars.report_wait_minutes}}" produced by a math step). When it
+    // renders to a positive number it wins; otherwise (empty, not_a_number)
+    // the step falls back to timeoutMinutes / the 1440 default. Clamped to
+    // the same 1..43200 range at run time.
+    timeoutMinutesTemplate: z.string().min(1).max(300).optional(),
     when: whenSchema.optional()
   }),
   // Batch-flow outbound AI call: dial the phone in `toVar`, run the rendered
@@ -1361,6 +1377,10 @@ function templateStringsForStep(step: FlowStep): string[] {
     // against run vars.
     case "place_ai_call":
       return [step.personaTemplate, step.contextTemplate ?? "", step.transfer?.preSmsTemplate ?? ""];
+    // wait_for_reply's dynamic timeout template references vars (e.g. a math
+    // step's output), so it gets the same scope checking as any other template.
+    case "wait_for_reply":
+      return [step.timeoutMinutesTemplate ?? ""];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1370,8 +1390,6 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "update_contact":
     // classify carries var NAMES, category tokens, and a plain-text question.
     case "classify":
-    // wait_for_reply carries only var NAMES and durations — no templates.
-    case "wait_for_reply":
     // goal carries a display label and literal event kinds/tags — no templates.
     case "goal":
     // branch: the question/labels are display copy and the conditions are
