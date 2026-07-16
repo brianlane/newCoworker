@@ -72,6 +72,31 @@ describe("vttToPlainText", () => {
     expect(vttToPlainText(vtt)).toBe("just narration");
   });
 
+  it("drops the whole WEBVTT header block (Kind/Language metadata), not just the signature", () => {
+    const vtt = [
+      "WEBVTT",
+      "Kind: captions",
+      "Language: en-US",
+      "",
+      "00:00:01.000 --> 00:00:02.000",
+      "Dania: Hello"
+    ].join("\n");
+    expect(vttToPlainText(vtt)).toBe("Dania: Hello");
+  });
+
+  it("keeps cue payload lines that START with NOTE — only block-position NOTE/STYLE/REGION skip", () => {
+    const vtt = [
+      "WEBVTT",
+      "",
+      "NOTE this really is a comment block",
+      "with a second comment line",
+      "",
+      "00:00:01.000 --> 00:00:02.000",
+      "NOTE: review the contract before Friday"
+    ].join("\n");
+    expect(vttToPlainText(vtt)).toBe("NOTE: review the contract before Friday");
+  });
+
   it("does not treat a colonless or empty-payload line as a speaker", () => {
     const vtt = [
       "WEBVTT",

@@ -45,21 +45,33 @@ export function vttToPlainText(raw: string): string {
   const lines = raw.replace(/^\uFEFF/, "").split(/\r\n?|\n/);
   const out: string[] = [];
   let inSkipBlock = false;
+  // True between a cue timing line and the next blank line — payload
+  // territory, where NOTE/STYLE/REGION are spoken words, not block markers.
+  let inCue = false;
   let lastSpeaker: string | null = null;
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed === "") {
       inSkipBlock = false;
+      inCue = false;
       continue;
     }
-    if (/^WEBVTT/i.test(trimmed)) continue;
-    if (/^(NOTE|STYLE|REGION)\b/.test(trimmed)) {
+    if (/^WEBVTT/i.test(trimmed)) {
+      // The header BLOCK (optional "Kind:"/"Language:" metadata lines) runs
+      // until the first blank line — none of it is dialogue.
+      inSkipBlock = true;
+      continue;
+    }
+    if (!inCue && /^(NOTE|STYLE|REGION)\b/.test(trimmed)) {
       inSkipBlock = true;
       continue;
     }
     if (inSkipBlock) continue;
-    if (CUE_TIMING_RE.test(trimmed)) continue;
+    if (CUE_TIMING_RE.test(trimmed)) {
+      inCue = true;
+      continue;
+    }
     // Bare numeric cue identifiers ("1", "42").
     if (/^\d+$/.test(trimmed)) continue;
 
