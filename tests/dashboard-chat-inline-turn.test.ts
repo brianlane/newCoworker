@@ -576,7 +576,12 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     // Bugbot High (PR #668): an inline failure after send_sms already ran
     // would re-enqueue the turn on the worker, which re-answers the same
     // owner message and could text/book AGAIN.
-    const runActionTool = vi.fn(async () => ({ ok: true, messageId: "msg-1" }));
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      messageId: "msg-1",
+      toE164: "+15145188192",
+      sentBody: "This is a test message."
+    }));
     const chatStep = vi
       .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
       .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
@@ -586,7 +591,12 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       runActionTool
     });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.content).toContain("Check the Texts page");
+    if (res.ok) {
+      // The degraded line carries the FACTS the lost wrap-up would have
+      // relayed — recipient and exact body.
+      expect(res.content).toContain("hit a hiccup writing my summary");
+      expect(res.content).toContain('Text sent to +15145188192 — "This is a test message."');
+    }
   });
 
   it("never bounces to the worker after a side-effecting tool ran — an EMPTY wrap-up degrades too", async () => {
@@ -602,7 +612,68 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       runActionTool
     });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.content).toContain("requested action went through");
+    if (res.ok) {
+      expect(res.content).toContain("requested action went through");
+      expect(res.content).toContain("The appointment was canceled.");
+    }
+  });
+
+  it("preserves a Calendly reschedule/booking LINK in the degraded wrap-up", async () => {
+    // Bugbot Medium (3rd round): reschedule_link_created succeeded but the
+    // wrap-up died — the stored reply must still hand the owner the link.
+    for (const [tool, resultData, needle] of [
+      [
+        "calendar_reschedule_appointment",
+        { rescheduleLink: "https://calendly.com/r/abc" },
+        "NOT moved until the attendee picks the new time): https://calendly.com/r/abc"
+      ],
+      [
+        "calendar_book_appointment",
+        { bookingLink: "https://calendly.com/b/xyz" },
+        "NOT booked until the attendee completes it): https://calendly.com/b/xyz"
+      ]
+    ] as const) {
+      const runActionTool = vi.fn(async () => ({ ok: true, data: resultData }));
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(
+          toolStep(tool, {
+            newStartIso: "2026-07-21T15:00:00-04:00",
+            newEndIso: "2026-07-21T15:30:00-04:00",
+            startIso: "2026-07-21T15:00:00-04:00",
+            endIso: "2026-07-21T15:30:00-04:00",
+            summary: "Call",
+            attendeeName: "Uday"
+          })
+        )
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+        chatStep,
+        runActionTool
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.content).toContain(needle);
+    }
+  });
+
+  it("uses the linkless note arms when book/reschedule succeed without links, and tolerates a linkless send result", async () => {
+    for (const [tool, needle] of [
+      ["calendar_book_appointment", "The appointment was booked."],
+      ["calendar_reschedule_appointment", "The appointment was rescheduled."],
+      ["send_sms", "Text sent to the recipient."]
+    ] as const) {
+      const runActionTool = vi.fn(async () => ({ ok: true }));
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep(tool, {}))
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+        chatStep,
+        runActionTool
+      });
+      expect(res.ok).toBe(true);
+      if (res.ok) expect(res.content).toContain(needle);
+    }
   });
 
   it("a pure READ tool (calendar_find_slots) does NOT suppress the worker fallback", async () => {

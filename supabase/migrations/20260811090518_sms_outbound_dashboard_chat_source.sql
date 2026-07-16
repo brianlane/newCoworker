@@ -1,3 +1,10 @@
+-- Version stamp note: this file must sort AFTER 20260809000000_sms_outbound
+-- _mcp_source.sql (each source migration drops and re-adds the CHECK with
+-- the full value list — an earlier stamp would let the mcp migration clobber
+-- 'dashboard_chat' on a fresh migrate) and after the ledger's current max
+-- (20260811063723), which is ahead of wall-clock time; the HHMMSS half is
+-- the real creation time.
+--
 -- Allow 'dashboard_chat' as an sms_outbound_log source: outbound texts the
 -- dashboard-chat assistant sends through its send_sms tool (both the inline
 -- executor in src/lib/dashboard-chat/action-tools.ts and the Rowboat

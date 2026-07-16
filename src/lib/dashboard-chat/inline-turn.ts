@@ -55,7 +55,8 @@ import {
   actionToolDeclarations,
   executeActionTool,
   isActionToolName,
-  type ActionToolGates
+  type ActionToolGates,
+  type ActionToolName
 } from "@/lib/dashboard-chat/action-tools";
 import { logger } from "@/lib/logger";
 
@@ -226,6 +227,39 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "calendar_cancel_appointment"
 ]);
 
+/** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
+type SideEffectLog = { happened: boolean; notes: string[] };
+
+/**
+ * The owner-facing fact line for one confirmed side effect, used when the
+ * wrap-up model step fails or goes silent. Without it the degraded reply
+ * would swallow load-bearing values — most critically a Calendly
+ * reschedule/booking LINK the owner still has to send onward.
+ */
+function sideEffectNote(name: ActionToolName, result: unknown): string {
+  const r = result as {
+    toE164?: unknown;
+    sentBody?: unknown;
+    data?: { bookingLink?: unknown; rescheduleLink?: unknown };
+  };
+  if (name === "send_sms") {
+    const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
+    const body = typeof r.sentBody === "string" ? ` — "${r.sentBody}"` : "";
+    return `Text sent to ${to}${body}.`;
+  }
+  if (name === "calendar_book_appointment") {
+    return typeof r.data?.bookingLink === "string"
+      ? `Single-use booking link created (the appointment is NOT booked until the attendee completes it): ${r.data.bookingLink}`
+      : "The appointment was booked.";
+  }
+  if (name === "calendar_reschedule_appointment") {
+    return typeof r.data?.rescheduleLink === "string"
+      ? `Reschedule link created (the appointment is NOT moved until the attendee picks the new time): ${r.data.rescheduleLink}`
+      : "The appointment was rescheduled.";
+  }
+  return "The appointment was canceled.";
+}
+
 /** Execute one requested tool call; returns the functionResponse payload. */
 async function executeToolCall(
   businessId: string,
@@ -235,7 +269,7 @@ async function executeToolCall(
   lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>,
   runActionTool: NonNullable<InlineTurnDeps["runActionTool"]>,
   declaredActionTools: ReadonlySet<string>,
-  sideEffects: { happened: boolean }
+  sideEffects: SideEffectLog
 ): Promise<unknown> {
   // Action tools (send_sms + calendar lifecycle): only dispatch names that
   // were actually DECLARED this turn — a Settings-disabled tool the model
@@ -256,6 +290,7 @@ async function executeToolCall(
       (result as { ok?: unknown }).ok === true
     ) {
       sideEffects.happened = true;
+      sideEffects.notes.push(sideEffectNote(call.name, result));
     }
     return result;
   }
@@ -399,10 +434,11 @@ export async function runInlineChatTurn(
 
   const drafts: InlineChatDraft[] = [];
   const texts: string[] = [];
-  // Set the moment a SIDE_EFFECT_TOOLS call is dispatched — from then on
-  // this turn must never resolve ok:false (the worker fallback would rerun
-  // the owner's message and duplicate the send/booking).
-  const sideEffects = { happened: false };
+  // Set the moment a SIDE_EFFECT_TOOLS call CONFIRMS (ok:true) — from then
+  // on this turn must never resolve ok:false (the worker fallback would
+  // rerun the owner's message and duplicate the send/booking). Notes carry
+  // the facts a degraded wrap-up must not lose (links, sent bodies).
+  const sideEffects: SideEffectLog = { happened: false, notes: [] };
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
@@ -506,12 +542,13 @@ export async function runInlineChatTurn(
     ok: true,
     // A tool-created draft (or committed side effect) with a silent final
     // step still deserves an honest line — and must not fail the turn,
-    // which would re-run it on the worker.
+    // which would re-run it on the worker. The side-effect notes carry the
+    // facts the lost wrap-up would have relayed (links, sent bodies).
     content:
       content ||
       (drafts.length > 0
         ? "Done — I've prepared a draft for you. Open it from the card below to review and save."
-        : "Done — the requested action went through, but I hit a hiccup writing my summary. Check the Texts page or your calendar to confirm the details."),
+        : `Done — the requested action went through, but I hit a hiccup writing my summary. What happened:\n${sideEffects.notes.map((n) => `- ${n}`).join("\n")}`),
     drafts
   };
 }
