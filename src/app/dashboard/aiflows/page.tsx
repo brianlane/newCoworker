@@ -5,8 +5,10 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlows } from "@/lib/ai-flows/db";
+import { reviewRequestTemplate } from "@/lib/ai-flows/templates";
 import { Card } from "@/components/ui/Card";
 import { AiFlowsManager } from "@/components/dashboard/AiFlowsManager";
+import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
 
 export const dynamic = "force-dynamic";
 
@@ -34,6 +36,10 @@ export default async function AiFlowsPage({ searchParams }: Props) {
   const businessType = (businesses?.[0]?.business_type as string | null | undefined) ?? null;
 
   const flows = businessId ? await listAiFlows(businessId) : [];
+  // The review-request starter (matched by name, like the Meta guide's) — the
+  // template needs a link only for definition building, not for detection.
+  const reviewStarterName = reviewRequestTemplate("https://example.invalid").name;
+  const reviewStarter = flows.find((f) => f.name === reviewStarterName) ?? null;
 
   return (
     <div className="max-w-4xl space-y-8">
@@ -86,13 +92,21 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           </a>
         </Card>
       ) : (
-        <AiFlowsManager
-          businessId={businessId}
-          businessType={businessType}
-          initialFlows={flows}
-          initialEditId={edit ?? null}
-          initialAdaptDraft={adapt === "1"}
-        />
+        <>
+          <ReviewRequestCard
+            businessId={businessId}
+            installedFlow={
+              reviewStarter ? { id: reviewStarter.id, enabled: reviewStarter.enabled } : null
+            }
+          />
+          <AiFlowsManager
+            businessId={businessId}
+            businessType={businessType}
+            initialFlows={flows}
+            initialEditId={edit ?? null}
+            initialAdaptDraft={adapt === "1"}
+          />
+        </>
       )}
     </div>
   );
