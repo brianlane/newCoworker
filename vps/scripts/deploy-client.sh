@@ -274,8 +274,9 @@ GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.5-flash"
 # same context-blindness class as the 2026-07-14 Truly incident that bumped
 # SMS_CHAT_MODEL below ($0.30/$2.50 per 1M, priced in
 # _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts). Gemini 3.x
-# stays unusable on this path (Rowboat drops thought_signature — see
-# SMS_CHAT_MODEL note).
+# is usable on this path since the llm-router thought-signature shim
+# (PR #683) but stays non-default on cost/latency — see the SMS_CHAT_MODEL
+# note for the measurements.
 OWNER_CHAT_MODEL_DEFAULT="gemini-2.5-flash"
 OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
 
@@ -310,15 +311,20 @@ esac
 # exact answer context and replied context-blind ("I need a bit more context"
 # to a lead's renewal date); 2.5-flash reads the same prompt correctly
 # ($0.30/$2.50 per 1M, priced in _shared/chat_spend_cap.ts +
-# src/lib/billing/ai-spend-meter.ts). Gemini 3.x models are NOT usable on
-# this path yet: their OpenAI-compat tool calls require thought_signature
-# round-tripping that Rowboat's AI SDK drops, so the SECOND turn of any
-# tool-calling conversation 400s ("Function call is missing a
-# thought_signature") — verified live on the Truly box, 2026-07-14. Same
-# keyless safety fallback as OWNER_CHAT_MODEL: a gemini-* tag needs
-# GOOGLE_API_KEY (the llm-router 503s gemini-* without one), so degrade to
-# the local tag on a keyless host. Override SMS_CHAT_MODEL to a local tag to
-# keep SMS fully local.
+# src/lib/billing/ai-spend-meter.ts). Gemini 3.x models are USABLE on this
+# path since PR #683: the llm-router round-trips thought_signature on tool
+# calls (Rowboat's AI SDK drops it; the router re-injects cached/placeholder
+# signatures), verified live 2026-07-16 with zero 400s on multi-turn
+# gemini-3.5-flash tool calling. 2.5-flash stays the DEFAULT on cost +
+# latency, not capability: measured on identical SMS probes, 3.5-flash ran
+# ~$0.026/turn at 8-13s vs 2.5-flash ~$0.004/turn at 2-4s (~7x cost, list
+# $1.50/$9.00 vs $0.30/$2.50 per 1M with thinking billed as output) for
+# marginal quality gain — a poor trade against the shared $10/period AI
+# budget. Override SMS_CHAT_MODEL=gemini-3.5-flash per tenant when the
+# quality trade is worth it. Same keyless safety fallback as
+# OWNER_CHAT_MODEL: a gemini-* tag needs GOOGLE_API_KEY (the llm-router 503s
+# gemini-* without one), so degrade to the local tag on a keyless host.
+# Override SMS_CHAT_MODEL to a local tag to keep SMS fully local.
 SMS_CHAT_MODEL_DEFAULT="gemini-2.5-flash"
 SMS_CHAT_MODEL=${SMS_CHAT_MODEL:-${SMS_CHAT_MODEL_DEFAULT}}
 case "${SMS_CHAT_MODEL}" in
