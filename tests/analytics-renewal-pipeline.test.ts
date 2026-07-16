@@ -24,7 +24,7 @@ type TableResult = { data: unknown; error: { message: string } | null };
 function makeDb(queues: Record<string, TableResult[]>) {
   const from = vi.fn((table: string) => {
     const chain: Record<string, unknown> = {};
-    for (const m of ["select", "eq", "not", "lte", "order", "limit", "in"]) {
+    for (const m of ["select", "eq", "not", "gte", "lte", "order", "limit", "in"]) {
       chain[m] = vi.fn(() => chain);
     }
     (chain as { then: unknown }).then = (resolve: (v: unknown) => unknown) => {

@@ -41,8 +41,8 @@ export function RenewalPipelineCard({ pipeline }: { pipeline: RenewalPipeline })
     <Card>
       <h2 className="text-sm font-semibold text-parchment">Renewal pipeline</h2>
       <p className="text-xs text-parchment/50 mt-0.5 mb-3">
-        Documents with a renewal date in the next 90 days
-        {pipeline.clipped ? " (showing the soonest — list capped)" : ""}
+        Overdue first, then everything renewing in the next 90 days
+        {pipeline.clipped ? " (list capped at the most urgent)" : ""}
       </p>
       <div className="grid grid-cols-4 gap-2 mb-4">
         {(Object.keys(BUCKET_LABELS) as RenewalBucket[]).map((bucket) => (
@@ -117,7 +117,17 @@ export function ResponseTimeCard({ stats }: { stats: ResponseTimeStats }) {
         {stats.clipped ? " — most recent texts only" : ""}
       </p>
       {stats.repliedCount === 0 ? (
-        <p className="text-xs text-parchment/40">No replied texts in the window yet.</p>
+        <>
+          <p className="text-xs text-parchment/40">No replied texts in the window yet.</p>
+          {/* Dead-letters matter MOST when nothing got a reply — never hide
+              them behind the replied-count branch. */}
+          {stats.deadLetterCount > 0 && (
+            <p className="text-[11px] text-spark-orange mt-2">
+              {stats.deadLetterCount} inbound text{stats.deadLetterCount === 1 ? "" : "s"} needed
+              human follow-up.
+            </p>
+          )}
+        </>
       ) : (
         <>
           <div className="grid grid-cols-3 gap-2">

@@ -16,6 +16,13 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Furthest-out renewals the report shows. */
 export const RENEWAL_PIPELINE_WINDOW_DAYS = 90;
+/**
+ * Furthest-BACK overdue renewals the report shows. A record more than a
+ * year past due is stale bookkeeping, not an active pipeline item — and
+ * without a floor, a pile of ancient rows could fill the ascending scan
+ * cap and push genuinely upcoming renewals out of a capped report.
+ */
+export const RENEWAL_PIPELINE_LOOKBACK_DAYS = 365;
 /** Row cap per report render; beyond it the report flags `clipped`. */
 export const RENEWAL_PIPELINE_SCAN_LIMIT = 500;
 
@@ -62,12 +69,19 @@ export async function getRenewalPipeline(
   const horizonIso = new Date(
     now.getTime() + RENEWAL_PIPELINE_WINDOW_DAYS * DAY_MS
   ).toISOString();
+  const floorIso = new Date(
+    now.getTime() - RENEWAL_PIPELINE_LOOKBACK_DAYS * DAY_MS
+  ).toISOString();
 
+  // Ascending renewal_date = most-overdue first, then soonest upcoming —
+  // the urgency order. The lookback floor keeps stale years-old rows from
+  // filling the cap and crowding out the upcoming window.
   const { data, error } = await db
     .from("business_documents")
     .select("id, title, category, renewal_date, contact_id, assigned_employee_id")
     .eq("business_id", businessId)
     .not("renewal_date", "is", null)
+    .gte("renewal_date", floorIso)
     .lte("renewal_date", horizonIso)
     .order("renewal_date", { ascending: true })
     .limit(RENEWAL_PIPELINE_SCAN_LIMIT);
