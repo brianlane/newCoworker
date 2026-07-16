@@ -72,6 +72,22 @@ describe("vttToPlainText", () => {
     expect(vttToPlainText(vtt)).toBe("just narration");
   });
 
+  it("appends wrapped continuation lines of the SAME cue to the utterance above", () => {
+    const vtt = [
+      "WEBVTT",
+      "",
+      "00:00:01.000 --> 00:00:04.000",
+      "Dania: Hello",
+      "everyone today",
+      "",
+      "00:00:04.500 --> 00:00:06.000",
+      "Dania: Second cue"
+    ].join("\n");
+    // The continuation stays with Dania's line AND the speaker keeps
+    // running, so the next cue from Dania merges too.
+    expect(vttToPlainText(vtt)).toBe("Dania: Hello everyone today Second cue");
+  });
+
   it("drops the whole WEBVTT header block (Kind/Language metadata), not just the signature", () => {
     const vtt = [
       "WEBVTT",

@@ -48,6 +48,9 @@ export function vttToPlainText(raw: string): string {
   // True between a cue timing line and the next blank line — payload
   // territory, where NOTE/STYLE/REGION are spoken words, not block markers.
   let inCue = false;
+  // True once the current cue emitted a payload line — later lines of the
+  // SAME cue are wrapped continuations of it, not new utterances.
+  let cueHasPayload = false;
   let lastSpeaker: string | null = null;
 
   for (const line of lines) {
@@ -55,6 +58,7 @@ export function vttToPlainText(raw: string): string {
     if (trimmed === "") {
       inSkipBlock = false;
       inCue = false;
+      cueHasPayload = false;
       continue;
     }
     if (/^WEBVTT/i.test(trimmed)) {
@@ -70,6 +74,7 @@ export function vttToPlainText(raw: string): string {
     if (inSkipBlock) continue;
     if (CUE_TIMING_RE.test(trimmed)) {
       inCue = true;
+      cueHasPayload = false;
       continue;
     }
     // Bare numeric cue identifiers ("1", "42").
@@ -107,10 +112,16 @@ export function vttToPlainText(raw: string): string {
     } else if (speaker) {
       out.push(`${speaker}: ${text}`);
       lastSpeaker = speaker;
+    } else if (cueHasPayload && out.length > 0) {
+      // A speakerless SECOND line of the same cue is a wrapped continuation
+      // of the utterance above ("Dania: Hello" + "everyone today"), not a
+      // new speakerless line — append and keep the speaker running.
+      out[out.length - 1] += ` ${text}`;
     } else {
       out.push(text);
       lastSpeaker = null;
     }
+    cueHasPayload = true;
   }
   return out.join("\n").trim();
 }
