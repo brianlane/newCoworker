@@ -133,6 +133,13 @@ export async function proxy(request: NextRequest) {
     // CSRF would 403 every status update. Same rationale as the exemptions
     // above.
     pathname !== "/api/telnyx/porting-webhook" &&
+    // /api/marketing/unsubscribe is the RFC 8058 one-click unsubscribe
+    // target: mail clients (Gmail/Apple Mail) POST it server-to-server with
+    // no Origin header, authenticated solely by the per-contact HMAC token
+    // in the URL — never by a session cookie. CSRF would 403 the native
+    // one-click opt-out, breaking the compliance path campaign mail
+    // advertises. Same rationale as the exemptions above.
+    pathname !== "/api/marketing/unsubscribe" &&
     // /api/public/v1/* is the public REST API (Zapier et al.) authenticated
     // solely by an `Authorization: Bearer nck_…` API key hashed against
     // api_keys (authenticatePublicApiRequest) — never by a session cookie.
