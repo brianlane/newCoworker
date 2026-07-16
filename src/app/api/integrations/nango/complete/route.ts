@@ -11,6 +11,7 @@ import {
 } from "@/lib/nango/server";
 import {
   fetchProviderAccountIdentity,
+  nangoIdentityPatchBody,
   providerAccountMetadata
 } from "@/lib/nango/account-identity";
 import { z } from "zod";
@@ -100,6 +101,28 @@ export async function POST(request: Request) {
         connectionId: parsed.connectionId,
         metadata: { ...base, ...identityMetadata }
       });
+
+      // Push the real account onto NANGO's record too, so its dashboard's
+      // "Customer" column shows the connected mailbox instead of whichever
+      // dashboard login started the session. Cosmetic on Nango's side —
+      // never fail the connect over it.
+      const patch = nangoIdentityPatchBody(parsed.businessId, identity);
+      if (patch) {
+        try {
+          await nango.patchConnection(
+            {
+              connectionId: parsed.connectionId,
+              provider_config_key: parsed.providerConfigKey
+            },
+            patch
+          );
+        } catch (patchErr) {
+          console.error(
+            "nango/complete: identity tag push failed (non-fatal)",
+            patchErr instanceof Error ? patchErr.message : patchErr
+          );
+        }
+      }
     }
 
     return successResponse({ connected: true });

@@ -9,6 +9,7 @@ vi.mock("@/lib/nango/workspace", () => ({
 import {
   fetchProviderAccountIdentity,
   identityAttemptsForProviderKey,
+  nangoIdentityPatchBody,
   providerAccountMetadata
 } from "@/lib/nango/account-identity";
 
@@ -210,6 +211,41 @@ describe("fetchProviderAccountIdentity", () => {
       email: null,
       displayName: null
     });
+  });
+});
+
+describe("nangoIdentityPatchBody", () => {
+  it("builds end_user + tags from a full identity", () => {
+    expect(nangoIdentityPatchBody("biz-1", { email: "a@b.co", displayName: "A" })).toEqual({
+      end_user: { id: "biz-1", email: "a@b.co", display_name: "A" },
+      tags: {
+        end_user_id: "biz-1",
+        end_user_email: "a@b.co",
+        end_user_display_name: "A"
+      }
+    });
+  });
+
+  it("falls back to the email as display name when the probe has none", () => {
+    expect(nangoIdentityPatchBody("biz-1", { email: "a@b.co", displayName: null })).toEqual({
+      end_user: { id: "biz-1", email: "a@b.co", display_name: "a@b.co" },
+      tags: {
+        end_user_id: "biz-1",
+        end_user_email: "a@b.co",
+        end_user_display_name: "a@b.co"
+      }
+    });
+  });
+
+  it("omits the email tag when only a display name resolved", () => {
+    expect(nangoIdentityPatchBody("biz-1", { email: null, displayName: "Owner" })).toEqual({
+      end_user: { id: "biz-1", display_name: "Owner" },
+      tags: { end_user_id: "biz-1", end_user_display_name: "Owner" }
+    });
+  });
+
+  it("returns null for the null identity (leave Nango untouched)", () => {
+    expect(nangoIdentityPatchBody("biz-1", { email: null, displayName: null })).toBeNull();
   });
 });
 

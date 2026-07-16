@@ -159,3 +159,42 @@ export function providerAccountMetadata(
   if (identity.displayName) meta.provider_account_display_name = identity.displayName;
   return meta;
 }
+
+export type NangoIdentityPatchBody = {
+  end_user: { id: string; email?: string; display_name?: string };
+  tags: Record<string, string>;
+};
+
+/**
+ * Body for `nango.patchConnection` that makes NANGO's own dashboard show the
+ * real provider account instead of the dashboard login that started the
+ * session. Nango's connections list displays the `end_user_email` /
+ * `end_user_display_name` tags; the legacy `end_user` object is kept in sync
+ * (same `id` = businessId, which our complete/verify path reads). Returns
+ * null when the probe resolved nothing — leave Nango's record untouched.
+ *
+ * Note: Nango replaces the whole tag object on patch. Every tag we ever set
+ * is included here, so the replace is complete, not lossy.
+ */
+export function nangoIdentityPatchBody(
+  businessId: string,
+  identity: ProviderAccountIdentity
+): NangoIdentityPatchBody | null {
+  // Null display name here means the whole identity is empty (email doubles
+  // as the display name when the probe resolved no name).
+  const displayName = identity.displayName ?? identity.email;
+  if (!displayName) return null;
+  const tags: Record<string, string> = {
+    end_user_id: businessId,
+    end_user_display_name: displayName
+  };
+  if (identity.email) tags.end_user_email = identity.email;
+  return {
+    end_user: {
+      id: businessId,
+      display_name: displayName,
+      ...(identity.email ? { email: identity.email } : {})
+    },
+    tags
+  };
+}

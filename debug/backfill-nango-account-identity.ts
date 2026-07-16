@@ -1,24 +1,29 @@
 #!/usr/bin/env tsx
 /**
  * One-off: backfill `provider_account_email` / `provider_account_display_name`
- * onto existing `workspace_oauth_connections.metadata`.
+ * onto existing `workspace_oauth_connections.metadata`, and push the same
+ * identity to NANGO's connection record (end_user + tags) so Nango's own
+ * dashboard "Customer" column shows the connected mailbox instead of the
+ * dashboard login that started the connect session.
  *
  * Connect-UI rows were labeled with Nango's `end_user` (the dashboard login
  * that started the session), so two Google accounts connected by the same
  * login are indistinguishable in every mailbox picker. New connects resolve
- * the REAL account at completion (/api/integrations/nango/complete); this
- * script runs the same provider probes for rows connected before the fix.
+ * the REAL account at completion (/api/integrations/nango/complete) and push
+ * it to Nango; this script does both for rows connected before those fixes.
  *
  * Dry-run by default; pass --apply to write. Optional --business <uuid> to
- * scope to one tenant. Rows that already have provider_account_email are
- * skipped (idempotent).
+ * scope to one tenant. Rows that already have provider_account_email skip
+ * the provider probe but still get the Nango tag push (idempotent).
  */
 import { loadEnv } from "./_shared.ts";
 import { createClient } from "@supabase/supabase-js";
 import { getNangoClient } from "../src/lib/nango/server.ts";
 import {
+  nangoIdentityPatchBody,
   probeProviderAccountIdentity,
-  providerAccountMetadata
+  providerAccountMetadata,
+  type ProviderAccountIdentity
 } from "../src/lib/nango/account-identity.ts";
 
 loadEnv();
@@ -55,47 +60,79 @@ async function main() {
   console.log(`${rows.length} connection(s)${ONLY_BUSINESS ? ` for ${ONLY_BUSINESS}` : ""}; ${APPLY ? "APPLY" : "dry-run"}`);
 
   let resolved = 0;
-  let skipped = 0;
   let unresolved = 0;
+  let nangoPushed = 0;
 
   for (const row of rows) {
     const meta = row.metadata ?? {};
     const tail = row.connection_id.slice(-6);
-    if (typeof meta.provider_account_email === "string" && meta.provider_account_email) {
-      skipped += 1;
-      console.log(`  skip   ${row.business_id} ${row.provider_config_key} …${tail} (already ${meta.provider_account_email})`);
-      continue;
-    }
 
-    const identity = await probeProviderAccountIdentity(row.provider_config_key, async (endpoint) => {
-      const res = await nango.proxy({
-        endpoint,
-        method: "GET",
-        providerConfigKey: row.provider_config_key,
-        connectionId: row.connection_id
-      });
-      return res ? { data: res.data as unknown } : null;
-    });
+    // Rows already stamped by a previous run / the complete route reuse the
+    // stored identity for the Nango push instead of re-probing the provider.
+    const stored: ProviderAccountIdentity | null =
+      typeof meta.provider_account_email === "string" && meta.provider_account_email
+        ? {
+            email: meta.provider_account_email,
+            displayName:
+              typeof meta.provider_account_display_name === "string" &&
+              meta.provider_account_display_name
+                ? meta.provider_account_display_name
+                : null
+          }
+        : null;
 
-    const patch = providerAccountMetadata(identity);
-    if (Object.keys(patch).length === 0) {
+    const identity =
+      stored ??
+      (await probeProviderAccountIdentity(row.provider_config_key, async (endpoint) => {
+        const res = await nango.proxy({
+          endpoint,
+          method: "GET",
+          providerConfigKey: row.provider_config_key,
+          connectionId: row.connection_id
+        });
+        return res ? { data: res.data as unknown } : null;
+      }));
+
+    const metaPatch = providerAccountMetadata(identity);
+    if (Object.keys(metaPatch).length === 0) {
       unresolved += 1;
       console.log(`  ??     ${row.business_id} ${row.provider_config_key} …${tail} — no identity resolved (missing scope or unsupported provider)`);
       continue;
     }
 
     resolved += 1;
-    console.log(`  found  ${row.business_id} ${row.provider_config_key} …${tail} → ${identity.email ?? identity.displayName}`);
-    if (APPLY) {
+    console.log(
+      `  ${stored ? "stored" : "found "} ${row.business_id} ${row.provider_config_key} …${tail} → ${identity.email ?? identity.displayName}`
+    );
+
+    if (APPLY && !stored) {
       const { error: upErr } = await db
         .from("workspace_oauth_connections")
-        .update({ metadata: { ...meta, ...patch }, updated_at: new Date().toISOString() })
+        .update({ metadata: { ...meta, ...metaPatch }, updated_at: new Date().toISOString() })
         .eq("id", row.id);
       if (upErr) throw new Error(`update ${row.id}: ${upErr.message}`);
     }
+
+    const nangoPatch = nangoIdentityPatchBody(row.business_id, identity);
+    if (nangoPatch && APPLY) {
+      try {
+        await nango.patchConnection(
+          { connectionId: row.connection_id, provider_config_key: row.provider_config_key },
+          nangoPatch
+        );
+        nangoPushed += 1;
+        console.log(`         pushed to Nango (end_user + tags)`);
+      } catch (err) {
+        console.error(
+          `         Nango push failed (non-fatal): ${err instanceof Error ? err.message : err}`
+        );
+      }
+    }
   }
 
-  console.log(`done: ${resolved} resolved, ${skipped} already set, ${unresolved} unresolved${APPLY ? "" : " (dry-run, nothing written)"}`);
+  console.log(
+    `done: ${resolved} resolved, ${unresolved} unresolved, ${nangoPushed} pushed to Nango${APPLY ? "" : " (dry-run, nothing written)"}`
+  );
 }
 
 main().catch((err) => {
