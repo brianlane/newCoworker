@@ -9,10 +9,19 @@ export function getNangoClient(): Nango {
   return new Nango({ host, secretKey });
 }
 
-/** Nango connection payloads may use snake_case or camelCase depending on version. */
+/**
+ * Nango connection payloads may use snake_case or camelCase depending on
+ * version; the legacy `end_user` object is deprecated in favor of a
+ * `tags.end_user_id` tag, so read the tag first and fall back to the object.
+ */
 export function readConnectionEndUserId(connection: unknown): string | undefined {
   if (!connection || typeof connection !== "object") return undefined;
   const o = connection as Record<string, unknown>;
+  const tags = o.tags;
+  if (tags && typeof tags === "object") {
+    const tagId = (tags as Record<string, unknown>).end_user_id;
+    if (typeof tagId === "string" && tagId.length > 0) return tagId;
+  }
   const eu = o.end_user ?? o.endUser;
   if (!eu || typeof eu !== "object") return undefined;
   const id = (eu as Record<string, unknown>).id;

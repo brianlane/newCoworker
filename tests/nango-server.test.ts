@@ -63,6 +63,30 @@ describe("lib/nango/server", () => {
       expect(readConnectionEndUserId({ endUser: { id: "biz-2" } })).toBe("biz-2");
     });
 
+    it("prefers the end_user_id tag over the deprecated end_user object", () => {
+      expect(
+        readConnectionEndUserId({
+          tags: { end_user_id: "biz-tag" },
+          end_user: { id: "biz-legacy" }
+        })
+      ).toBe("biz-tag");
+    });
+
+    it("falls back to end_user when the tag is missing, blank, or non-string", () => {
+      expect(
+        readConnectionEndUserId({ tags: {}, end_user: { id: "biz-3" } })
+      ).toBe("biz-3");
+      expect(
+        readConnectionEndUserId({ tags: { end_user_id: "" }, end_user: { id: "biz-4" } })
+      ).toBe("biz-4");
+      expect(
+        readConnectionEndUserId({ tags: { end_user_id: 7 }, end_user: { id: "biz-5" } })
+      ).toBe("biz-5");
+      expect(
+        readConnectionEndUserId({ tags: "bogus", end_user: { id: "biz-6" } })
+      ).toBe("biz-6");
+    });
+
     it("returns undefined for invalid payloads", () => {
       expect(readConnectionEndUserId(null)).toBeUndefined();
       expect(readConnectionEndUserId(undefined)).toBeUndefined();
