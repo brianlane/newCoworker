@@ -48,6 +48,7 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "customers", label: "Contacts", href: "/dashboard/customers" },
   { key: "employees", label: "Employees", href: "/dashboard/employees" },
   { key: "memory", label: "Memory", href: "/dashboard/memory" },
+  { key: "marketing", label: "Marketing", href: "/dashboard/marketing" },
   { key: "import-export", label: "Import / Export", href: "/dashboard/import-export" },
   { key: "integrations", label: "Integrations", href: "/dashboard/integrations" },
   { key: "billing", label: "Billing", href: "/dashboard/billing" },
