@@ -198,10 +198,11 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     await patchBusinessDocument(body.data.businessId, documentId, patch);
 
-    // Serial re-check closes the pre-check cap race on LINKING (same
-    // pattern as the upload route): concurrent link requests can each pass
-    // the pre-count, so anyone who lands past the cap reverts their own
-    // link (and the audience snap that rode along with it).
+    // Serial re-check closes the pre-check cap race in BOTH directions
+    // (same pattern as the upload route): concurrent link/unlink requests
+    // can each pass the pre-count, so anyone who lands past the destination
+    // pool's cap reverts their own move (and, for a link, the audience snap
+    // that rode along with it).
     if (patch.contact_id && existing.contact_id === null) {
       const linkedAfter = await countBusinessDocuments(body.data.businessId, "contact_records");
       if (linkedAfter > CONTACT_DOCUMENT_RECORDS_LIMIT) {
@@ -212,6 +213,19 @@ export async function PATCH(request: Request, context: RouteContext) {
         return errorResponse(
           "VALIDATION_ERROR",
           `Contact document limit reached (${CONTACT_DOCUMENT_RECORDS_LIMIT}).`
+        );
+      }
+    } else if (body.data.contactId === null && existing.contact_id !== null) {
+      const business = await getBusiness(body.data.businessId);
+      const limit = documentLimitForTier(business?.tier);
+      const libraryAfter = await countBusinessDocuments(body.data.businessId, "library");
+      if (libraryAfter > limit) {
+        await patchBusinessDocument(body.data.businessId, documentId, {
+          contact_id: existing.contact_id
+        });
+        return errorResponse(
+          "VALIDATION_ERROR",
+          `Document limit reached for your plan (${limit}). Unlinking would exceed it — delete a library document first.`
         );
       }
     }
