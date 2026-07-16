@@ -87,6 +87,13 @@ vi.mock("@/lib/dashboard-chat/summarizer", () => ({
   summarizeThread: vi.fn(async () => ({ ok: true, summary: "" }))
 }));
 
+vi.mock("@/lib/voice-tools/connections", () => ({
+  // Default: nothing connected — the integrations status line still renders
+  // (with "not connected" arms); tests that exercise providers override.
+  resolveCalendarConnection: vi.fn(async () => null),
+  resolveEmailConnection: vi.fn(async () => null)
+}));
+
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -104,6 +111,10 @@ import { listCustomerMemories } from "@/lib/customer-memory/db";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
 import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import {
+  resolveCalendarConnection,
+  resolveEmailConnection
+} from "@/lib/voice-tools/connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
@@ -440,6 +451,68 @@ describe("POST /api/dashboard/chat — OWNER_PREAMBLE persona pin", () => {
     expect(preamble).toMatch(/no fabrication/i);
     expect(preamble).toContain("/dashboard/calls");
     expect(preamble).toContain("/dashboard/messages");
+  });
+
+  it("OWNER_PREAMBLE carries the KYP-review guardrails: channel honesty, AiFlows awareness, owner decisions, exact send bodies", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const preamble = vi.mocked(insertChatJob).mock.calls[0][0].inputMessages[0].content;
+    // "can u send problems to my whatsapp?" → "noted" (unsupported channel).
+    expect(preamble).toContain("YOUR CHANNELS ARE SMS TEXTING, PHONE CALLS, AND EMAIL");
+    expect(preamble).toContain("WhatsApp");
+    // "where are the ai flows?" → "I can't access AI flows".
+    expect(preamble).toContain("AUTOMATIONS (AIFLOWS)");
+    expect(preamble).toContain("/dashboard/aiflows");
+    // Owner pasted an advisor checklist → the model answered it FOR him.
+    expect(preamble).toContain("THE OWNER'S DECISIONS ARE THEIRS");
+    // Resend after "didn't receive anything" texted the model's own previous
+    // chat reply ("The text has been sent.") as the SMS body.
+    expect(preamble).toContain("resend the SAME intended message");
+    expect(preamble).toContain("state the EXACT body that was sent");
+  });
+});
+
+describe("POST /api/dashboard/chat — connected-integrations status line", () => {
+  it("injects the ground-truth line with not-connected arms by default", async () => {
+    await POST(jsonRequest({ businessId: BIZ, message: "are you connected to calendly?" }));
+    const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    const line = inputMessages.find(
+      (m) => m.role === "system" && m.content.includes("CONNECTED INTEGRATIONS")
+    );
+    expect(line).toBeDefined();
+    expect(line!.content).toContain("Calendar: not connected");
+    expect(line!.content).toContain("Email mailbox: not connected");
+    expect(line!.content).toContain("never guess");
+  });
+
+  it("labels the resolved calendar provider (Calendly link-mode caveat) and mailbox on BOTH variants", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "c1"
+    } as never);
+    vi.mocked(resolveEmailConnection).mockResolvedValueOnce({
+      provider: "google",
+      providerConfigKey: "google-mail",
+      connectionId: "e1"
+    } as never);
+    vi.mocked(listMessages).mockResolvedValueOnce([{ role: "user", content: "x" }] as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    const { inputMessages, statelessInputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    for (const variant of [inputMessages, statelessInputMessages!]) {
+      const line = variant.find((m) => m.content.includes("CONNECTED INTEGRATIONS"));
+      expect(line).toBeDefined();
+      expect(line!.content).toContain("Calendly");
+      expect(line!.content).toContain("cannot book on their behalf");
+      expect(line!.content).toContain("Google mailbox connected");
+    }
+  });
+
+  it("degrades to NO line (never a failed turn) when the resolvers throw", async () => {
+    vi.mocked(resolveCalendarConnection).mockRejectedValueOnce(new Error("nango down"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hi" }));
+    expect(res.status).toBe(200);
+    const { inputMessages } = vi.mocked(insertChatJob).mock.calls[0][0];
+    expect(inputMessages.some((m) => m.content.includes("CONNECTED INTEGRATIONS"))).toBe(false);
   });
 });
 

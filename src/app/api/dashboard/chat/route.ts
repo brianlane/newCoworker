@@ -119,6 +119,7 @@ import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
 import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { resolveCalendarConnection, resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime } from "@/lib/documents/ingest";
@@ -301,11 +302,17 @@ DATES IN NOTES MAY BE STALE. Customer summaries and notes were written on earlie
 
 CUSTOMER NAMES. The name on a customer's header line in your "Recent customer activity" notes is the owner's own label for that contact and is authoritative. When a summary or pinned excerpt beneath it uses a different or fuller name, ALWAYS refer to the customer by the header name.
 
-TOOL RESULTS ARE THE TRUTH. When you call a tool, report what it ACTUALLY returned. If it says it did not update, did not send, or was refused, say so plainly and suggest what the owner can do instead — never claim an action happened when the tool result says otherwise, and never claim an action happened without a tool result confirming it.
+TOOL RESULTS ARE THE TRUTH. When you call a tool, report what it ACTUALLY returned. If it says it did not update, did not send, or was refused, say so plainly and suggest what the owner can do instead — never claim an action happened when the tool result says otherwise, and never claim an action happened without a tool result confirming it. When you send a text or email, state the EXACT body that was sent (e.g. 'I texted +1514…: "This is a test message."') — never a bare "it has been sent". If the owner says a message didn't arrive and asks you to resend, resend the SAME intended message — never your own previous chat reply.
+
+YOUR CHANNELS ARE SMS TEXTING, PHONE CALLS, AND EMAIL — NOTHING ELSE. You cannot send or receive WhatsApp, Telegram, or any other messaging-app content, and you must never agree to reach anyone on those. If the owner asks for an unsupported channel, say plainly that it isn't supported today and offer SMS or email instead. If the owner says their number or address is changing or going away (e.g. relocating abroad), NEVER "note" the old value as the go-forward contact — ask for the concrete new number or address that should replace it.
+
+AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description.
+
+THE OWNER'S DECISIONS ARE THEIRS. When the owner pastes a list of questions, considerations, or options for THEM to decide (setup checklists, advisor notes, "things to think about"), walk through the items and ASK for their choices — never answer the questions on their behalf, never invent policies, contact details, or preferences they haven't stated, and never present your own assumptions as settled decisions.
 
 BE PROACTIVE WITH TOOLS. When the owner asks how to do something you can do yourself with your tools (send a follow-up SMS or email, book/reschedule/cancel an appointment, share a document), don't answer with generic advice — propose the concrete action for the specific customer under discussion and offer a draft they can approve (e.g. "Want me to text Juhu a follow-up? Here's a draft: …"). Never close by offering to "find more general information".
 
-PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically — you have no tool to save it yourself. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything, and do NOT assert it is in memory — a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.`;
+PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything unless a tool result in THIS turn confirms the save — a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.`;
 
 export { OWNER_PREAMBLE };
 
@@ -347,6 +354,57 @@ Rules:
 export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL — DISABLED.
 
 You cannot send emails on this surface. If the owner asks you to send an email, do NOT pretend to send one and do NOT output any tool-call syntax — tell them plainly that email sending is turned off, and that they can enable the "Send email" tool under Settings → Coworker tools on the dashboard.`;
+
+/**
+ * Human labels for the calendar providers resolveCalendarConnection can
+ * return. Calendly gets its link-mode caveat inline so the model never
+ * promises direct booking on a link-only provider.
+ */
+const CALENDAR_PROVIDER_LABELS: Record<string, string> = {
+  vagaro: "Vagaro (real availability search + direct booking)",
+  google: "Google Calendar",
+  microsoft: "Outlook Calendar",
+  caldav: "CalDAV (e.g. iCloud)",
+  calendly:
+    "Calendly (slot search + scheduling links — booking hands the person a single-use link, it cannot book on their behalf)"
+};
+
+/**
+ * Per-turn "what is actually connected" system line, so the model answers
+ * "are you connected to Calendly?" from ground truth instead of guessing —
+ * the KYP Ads conversation (Jul 15) had the assistant deny, then claim,
+ * Calendly access within four turns while a live Calendly connection
+ * existed the whole time. Best-effort: a resolver failure degrades to no
+ * line (the model then honestly doesn't know), never a failed turn.
+ */
+async function buildIntegrationsStatusLine(businessId: string): Promise<string | null> {
+  try {
+    const [calendar, email] = await Promise.all([
+      resolveCalendarConnection(businessId),
+      resolveEmailConnection(businessId)
+    ]);
+    const calendarLabel = calendar
+      ? CALENDAR_PROVIDER_LABELS[calendar.provider] ?? calendar.provider
+      : "not connected";
+    const emailLabel = email
+      ? email.provider === "google"
+        ? "Google mailbox connected"
+        : "Microsoft mailbox connected"
+      : "not connected";
+    return (
+      "CONNECTED INTEGRATIONS (ground truth for THIS turn — answer connection questions from this line, never guess or ask the owner for API details):\n" +
+      `- Calendar: ${calendarLabel}\n` +
+      `- Email mailbox: ${emailLabel}\n` +
+      "- Texting: the business's own SMS number (always available on this platform)."
+    );
+  } catch (err) {
+    logger.warn("dashboard chat: integrations status line failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
 
 /**
  * Build the message array sent to Rowboat for one chat turn. Stored on
@@ -407,6 +465,11 @@ function buildRowboatChatMessages(args: {
   emailToolEnabled: boolean;
   /** Business IANA timezone for the date/time line; null/undefined = UTC. */
   businessTimezone?: string | null;
+  /**
+   * Per-turn connected-integrations ground truth (see
+   * buildIntegrationsStatusLine). Null/omitted ⇒ no line.
+   */
+  integrationsLine?: string | null;
 }): DashboardChatJobInputMessage[] {
   const out: DashboardChatJobInputMessage[] = [];
   // ALWAYS first: OWNER_PREAMBLE establishes that this is the
@@ -423,6 +486,10 @@ function buildRowboatChatMessages(args: {
     role: "system",
     content: args.emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE
   });
+  const integrationsLine = args.integrationsLine?.trim();
+  if (integrationsLine) {
+    out.push({ role: "system", content: integrationsLine });
+  }
   const customerPreamble = args.customerPreamble?.trim();
   if (customerPreamble) {
     out.push({ role: "system", content: customerPreamble });
@@ -685,6 +752,11 @@ export async function POST(request: Request) {
       ? `[Attached: ${attachment.filename}] ${body.message}`
       : body.message;
 
+    // Connected-integrations ground truth for BOTH turn paths (the worker
+    // agent's vault instructions describe the business, not its live
+    // connections). Best-effort; null adds no block.
+    const integrationsLine = await buildIntegrationsStatusLine(body.businessId);
+
     const inputMessages = buildRowboatChatMessages({
       summaryMd: thread.summary_md,
       tail: tail.slice(-RESEND_TAIL_MESSAGES),
@@ -692,7 +764,8 @@ export async function POST(request: Request) {
       includeTailContext: true,
       customerPreamble,
       emailToolEnabled,
-      businessTimezone: flags.timezone
+      businessTimezone: flags.timezone,
+      integrationsLine
     });
     const statelessInputMessages = hasContinuation
       ? buildRowboatChatMessages({
@@ -702,7 +775,8 @@ export async function POST(request: Request) {
           includeTailContext: true,
           customerPreamble,
           emailToolEnabled,
-          businessTimezone: flags.timezone
+          businessTimezone: flags.timezone,
+          integrationsLine
         })
       : null;
 

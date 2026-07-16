@@ -265,7 +265,18 @@ GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.5-flash"
 # correct vs ~100s+ on qwen, for ~$0.0003/turn (see debug/bench-* + the
 # dashboard-chat-model-benchmark canvas). Override to a local tag (e.g.
 # qwen3:4b-instruct) to fall back to fully-local owner chat.
-OWNER_CHAT_MODEL_DEFAULT="gemini-2.5-flash-lite"
+# Default bumped 2.5-flash-lite → 2.5-flash after the 2026-07-15 KYP Ads
+# owner-chat session: the lite model answered "yeah" with a business-hours
+# non-sequitur, contradicted itself about the tenant's live Calendly
+# connection within four turns, answered the owner's own decision checklist
+# on his behalf (inventing policy + telling him to text his own number), and
+# on an SMS resend passed its previous CHAT reply as the message body — the
+# same context-blindness class as the 2026-07-14 Truly incident that bumped
+# SMS_CHAT_MODEL below ($0.30/$2.50 per 1M, priced in
+# _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts). Gemini 3.x
+# stays unusable on this path (Rowboat drops thought_signature — see
+# SMS_CHAT_MODEL note).
+OWNER_CHAT_MODEL_DEFAULT="gemini-2.5-flash"
 OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
 
 # Safety fallback: a gemini-* OwnerCoworker model is only reachable when
