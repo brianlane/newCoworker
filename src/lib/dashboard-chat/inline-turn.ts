@@ -59,9 +59,17 @@ import {
   type ActionToolName
 } from "@/lib/dashboard-chat/action-tools";
 import { logger } from "@/lib/logger";
+import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 
 /** Attachment formats the inline turn understands. */
-export const CHAT_ATTACHMENT_TEXT_MIME_TYPES = ["text/plain", "text/markdown", "text/csv"] as const;
+export const CHAT_ATTACHMENT_TEXT_MIME_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  // Meeting transcripts (Zoom/Meet/Teams) — converted from cue soup to
+  // "Speaker: sentence" lines below, NEVER sent as a PDF inline part.
+  VTT_MIME_TYPE
+] as const;
 export const CHAT_ATTACHMENT_PDF_MIME_TYPE = "application/pdf";
 /** Inline text from an attachment is clipped to keep the prompt bounded. */
 export const CHAT_ATTACHMENT_MAX_TEXT_CHARS = 40_000;
@@ -179,11 +187,9 @@ export function buildAttachmentParts(attachment: InlineTurnAttachment): {
 } {
   const mime = attachment.mimeType.trim().toLowerCase();
   if ((CHAT_ATTACHMENT_TEXT_MIME_TYPES as readonly string[]).includes(mime)) {
-    const text = attachment.data
-      .toString("utf8")
-      .replace(/\u0000/g, "")
-      .trim()
-      .slice(0, CHAT_ATTACHMENT_MAX_TEXT_CHARS);
+    const decoded = attachment.data.toString("utf8").replace(/\u0000/g, "");
+    const asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    const text = asText.trim().slice(0, CHAT_ATTACHMENT_MAX_TEXT_CHARS);
     return {
       textBlock: `Attached file "${attachment.filename}" (may be truncated):\n---\n${text}\n---`,
       inlinePart: null

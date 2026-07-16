@@ -32,7 +32,7 @@ import {
   parseExpirationInput
 } from "@/lib/documents/core";
 import { getTeamMember } from "@/lib/db/employees";
-import { ingestDocument, isSupportedDocumentMime } from "@/lib/documents/ingest";
+import { ingestDocument, isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 
@@ -78,11 +78,13 @@ export async function POST(request: Request) {
     const file = form.get("file");
     if (!(file instanceof File)) return errorResponse("VALIDATION_ERROR", "file is required");
 
-    const mimeType = file.type.trim().toLowerCase();
+    // normalizeUploadMime maps VTT transcripts (text/vtt, or a .vtt name
+    // under a blank/octet-stream reported type) onto their canonical mime.
+    const mimeType = normalizeUploadMime(file.type, file.name);
     if (!isSupportedDocumentMime(mimeType)) {
       return errorResponse(
         "VALIDATION_ERROR",
-        "Only PDF, plain text, markdown, or CSV documents are supported"
+        "Only PDF, plain text, markdown, CSV, or VTT transcript documents are supported"
       );
     }
     if (file.size === 0 || file.size > MAX_DOCUMENT_BYTES) {

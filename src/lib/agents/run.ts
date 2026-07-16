@@ -28,9 +28,17 @@ import {
   resolveOutputTarget,
   type AgentOutputFormat
 } from "./core";
+import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 
 /** Text formats decoded locally; PDFs go to Gemini as inlineData. */
-export const AGENT_TEXT_MIME_TYPES = ["text/plain", "text/markdown", "text/csv"] as const;
+export const AGENT_TEXT_MIME_TYPES = [
+  "text/plain",
+  "text/markdown",
+  "text/csv",
+  // Meeting transcripts (Zoom/Meet/Teams). Converted to "Speaker: sentence"
+  // lines before prompting — see transcripts/vtt.ts.
+  VTT_MIME_TYPE
+] as const;
 export const AGENT_PDF_MIME_TYPE = "application/pdf";
 
 const DEFAULT_AGENT_MODEL = "gemini-3.5-flash";
@@ -94,11 +102,9 @@ export async function executeAgentRun(
   let prompt: string;
   let inlineParts: GeminiGenerateTextParams["inlineParts"];
   if (isText) {
-    const rawText = input.data
-      .toString("utf8")
-      .replace(/\u0000/g, "")
-      .trim()
-      .slice(0, AGENT_INPUT_MAX_TEXT_CHARS);
+    const decoded = input.data.toString("utf8").replace(/\u0000/g, "");
+    const asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    const rawText = asText.trim().slice(0, AGENT_INPUT_MAX_TEXT_CHARS);
     if (rawText.length === 0) return { ok: false, error: "empty_content" };
     prompt = buildAgentRunPrompt({
       instructions: input.agent.instructions,

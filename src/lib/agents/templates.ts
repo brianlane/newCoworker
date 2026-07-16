@@ -48,6 +48,30 @@ export const AGENT_TEMPLATES: AgentTemplate[] = [
     ].join("\n")
   },
   {
+    id: "meeting_minutes",
+    name: "Meeting minutes",
+    description:
+      "Turn a meeting transcript (Zoom .vtt or pasted notes) into structured minutes with action items.",
+    outputFormat: "markdown",
+    instructions: [
+      "The attached material is a meeting transcript (a Zoom/Meet/Teams recording transcript or typed notes).",
+      "",
+      "Produce, in this exact order:",
+      "",
+      "1. **Meeting summary** — 3-5 sentences: what the meeting was about and what was concluded.",
+      "",
+      "2. **Attendees** — every distinct speaker/participant named in the transcript.",
+      "",
+      "3. **Key discussion points** — short bullets per topic, preserving concrete facts (numbers, dates, names, decisions) exactly as stated.",
+      "",
+      "4. **Decisions made** — each explicit decision, with who made or approved it when stated.",
+      "",
+      "5. **Action items** — a `- [ ]` checkbox list: task, owner (if stated), and due date (if stated). Write \"owner not stated\" rather than guessing.",
+      "",
+      "Rules: never invent facts, attendees, decisions, or deadlines that are not in the transcript. Flag anything ambiguous or inaudible instead of resolving it yourself."
+    ].join("\n")
+  },
+  {
     id: "quote_request_package",
     name: "Quote request package",
     description:

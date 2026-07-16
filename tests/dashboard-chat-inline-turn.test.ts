@@ -91,6 +91,20 @@ describe("buildAttachmentParts", () => {
     expect(inlinePart).toBeNull();
   });
 
+  it("converts VTT transcripts to speaker lines inline — NEVER as a PDF part", () => {
+    const att: InlineTurnAttachment = {
+      filename: "meeting.vtt",
+      mimeType: "text/vtt",
+      data: Buffer.from(
+        "WEBVTT\n\n1\n00:00:01.000 --> 00:00:04.000\nDania: The premium is $1,240 per year."
+      )
+    };
+    const { textBlock, inlinePart } = buildAttachmentParts(att);
+    expect(textBlock).toContain("Dania: The premium is $1,240 per year.");
+    expect(textBlock).not.toContain("-->");
+    expect(inlinePart).toBeNull();
+  });
+
   it("rides PDFs along as inlineData", () => {
     const att: InlineTurnAttachment = {
       filename: "menu.pdf",
