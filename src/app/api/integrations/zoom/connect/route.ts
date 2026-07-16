@@ -15,7 +15,7 @@ import { logger } from "@/lib/logger";
 const businessIdSchema = z.string().uuid();
 
 function dashboardRedirect(request: Request, params: Record<string, string>) {
-  const url = new URL("/dashboard/integrations", request.url);
+  const url = new URL("/dashboard/integrations/zoom", request.url);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return NextResponse.redirect(url);
 }
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
     const user = await getAuthUser();
     if (!user?.email) {
       return NextResponse.redirect(
-        new URL("/login?redirectTo=/dashboard/integrations", request.url)
+        new URL("/login?redirectTo=/dashboard/integrations/zoom", request.url)
       );
     }
     if (!user.isAdmin) {

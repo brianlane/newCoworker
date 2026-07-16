@@ -122,10 +122,10 @@ export default function ZoomIntegrationDocsPage() {
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <StepCard step="1 · Open" title="Go to Dashboard → Integrations">
             Sign in at newcoworker.com, open{" "}
-            <Link href="/dashboard/integrations" className="text-claw-green hover:underline">
-              Dashboard → Integrations
+            <Link href="/dashboard/integrations/zoom" className="text-claw-green hover:underline">
+              Dashboard → Integrations → Zoom
             </Link>
-            , and find the <b>Zoom</b> card.
+            .
           </StepCard>
           <StepCard step="2 · Authorize" title="Click Connect and approve on Zoom">
             You&apos;re sent to Zoom&apos;s consent screen listing exactly what New Coworker may
@@ -195,10 +195,13 @@ export default function ZoomIntegrationDocsPage() {
             <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-parchment/50">
               <li>
                 Open{" "}
-                <Link href="/dashboard/integrations" className="text-claw-green hover:underline">
-                  Dashboard → Integrations
-                </Link>{" "}
-                and find the Zoom card.
+                <Link
+                  href="/dashboard/integrations/zoom"
+                  className="text-claw-green hover:underline"
+                >
+                  Dashboard → Integrations → Zoom
+                </Link>
+                .
               </li>
               <li>Click <b>Disconnect</b> and confirm.</li>
               <li>

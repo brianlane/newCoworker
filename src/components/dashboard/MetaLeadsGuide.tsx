@@ -245,11 +245,13 @@ export function MetaLeadsGuide({
           <StepHeading n={3} title="Fastest path: connect Facebook directly (no bridge)" />
           <p className="mt-2 text-sm text-parchment/70">
             On the{" "}
-            <Link href="/dashboard/integrations" className="text-signal-teal hover:underline">
-              Integrations page
+            <Link
+              href="/dashboard/integrations/meta"
+              className="text-signal-teal hover:underline"
+            >
+              Meta Lead Ads integration page
             </Link>
-            , the <strong>Meta Lead Ads</strong> card connects your Facebook Page to your
-            coworker in two clicks — log into Facebook, pick your Page, done. Leads arrive
+            , connect your Facebook Page to your coworker in two clicks — log into Facebook, pick your Page, done. Leads arrive
             the moment they&apos;re submitted, with no Make.com or Zapier account and no
             field mapping. Your flow from step 1 works unchanged.
           </p>
@@ -286,8 +288,11 @@ export function MetaLeadsGuide({
             {hasApiKey ? (
               <span className="text-xs text-parchment/50">
                 You already have a key. Reuse it if you saved it, or manage keys on the{" "}
-                <Link href="/dashboard/integrations" className="text-signal-teal hover:underline">
-                  Integrations page
+                <Link
+                  href="/dashboard/integrations/zapier-api"
+                  className="text-signal-teal hover:underline"
+                >
+                  Zapier &amp; API page
                 </Link>
                 .
               </span>

@@ -139,7 +139,7 @@ export function NangoEmailIntegrationActions({ businessId, connections }: Props)
             } | null;
             if (done.ok) {
               ui.close();
-              window.location.href = "/dashboard/integrations?workspace=connected";
+              window.location.href = "/dashboard/integrations/workspace?workspace=connected";
             } else {
               setBanner(doneJson?.error?.message ?? "Could not save connection");
             }

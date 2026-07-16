@@ -4,8 +4,8 @@
  * Validates the HMAC-signed `state` (binds the code to a business and a
  * 15-minute window), exchanges the code for a long-lived user token, and
  * stores a `pending` meta_connection. The owner finishes on
- * /dashboard/integrations, where the Meta card lists their Pages for the
- * final pick (which activates the connection and subscribes leadgen).
+ * /dashboard/integrations/meta, where the Meta card lists their Pages for
+ * the final pick (which activates the connection and subscribes leadgen).
  *
  * Always redirects back to the integrations page — errors land as a
  * `?error=` banner, never a JSON 500, because this URL is user-facing.
@@ -30,7 +30,7 @@ import { logger } from "@/lib/logger";
 export const dynamic = "force-dynamic";
 
 function dashboardRedirect(request: NextRequest, params: Record<string, string>) {
-  const url = new URL("/dashboard/integrations", request.nextUrl.origin);
+  const url = new URL("/dashboard/integrations/meta", request.nextUrl.origin);
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
   return NextResponse.redirect(url);
 }

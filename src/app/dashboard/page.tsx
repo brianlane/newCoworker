@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
@@ -312,12 +313,12 @@ export default async function DashboardPage() {
                 <p className="text-xs text-parchment/40 mt-1">Review what your coworker has learned</p>
               </Card>
             </a>
-            <a href="/dashboard/integrations" className="block">
+            <Link href="/dashboard/integrations" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
                 <p className="font-semibold text-signal-teal text-sm">Integrations →</p>
                 <p className="text-xs text-parchment/40 mt-1">Connections and platform settings</p>
               </Card>
-            </a>
+            </Link>
             <a href="/dashboard/notifications" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
                 <p className="font-semibold text-signal-teal text-sm">Notifications →</p>

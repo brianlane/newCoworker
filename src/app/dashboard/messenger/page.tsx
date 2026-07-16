@@ -8,6 +8,7 @@
  * "connect Facebook first" state instead of a 404.
  */
 
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
@@ -78,12 +79,12 @@ export default async function DashboardMessengerPage() {
               Once connected, every Messenger and Instagram DM lands here and your
               coworker replies within seconds.
             </p>
-            <a
-              href="/dashboard/integrations"
+            <Link
+              href="/dashboard/integrations/meta"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
             >
               Connect Facebook →
-            </a>
+            </Link>
           </div>
         </Card>
       </div>
