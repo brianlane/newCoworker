@@ -24,6 +24,7 @@ type CampaignItem = {
   recipients_total: number;
   recipients_sent: number;
   recipients_failed: number;
+  recipients_skipped: number;
   created_at: string;
 };
 
@@ -259,6 +260,7 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
                     <span className="text-[11px] text-parchment/50">
                       {c.recipients_sent}/{c.recipients_total} sent
                       {c.recipients_failed > 0 ? ` · ${c.recipients_failed} failed` : ""}
+                      {c.recipients_skipped > 0 ? ` · ${c.recipients_skipped} unsubscribed` : ""}
                     </span>
                   )}
                   <span className="ml-auto flex gap-2">

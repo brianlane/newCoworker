@@ -14,6 +14,7 @@ import {
   claimRecipient,
   countRecipientsByStatus,
   deleteEmailCampaign,
+  deletePendingRecipients,
   getEmailCampaign,
   insertCampaignRecipients,
   insertEmailCampaign,
@@ -176,6 +177,7 @@ describe("default-client paths", () => {
     await markRecipient("r1", "sent", null);
     await claimRecipient("r1");
     await countRecipientsByStatus(CAMPAIGN, "sent");
+    await deletePendingRecipients(CAMPAIGN);
     await patchEmailCampaign(BIZ, CAMPAIGN, { subject: "t" });
     await transitionEmailCampaign(BIZ, CAMPAIGN, "draft", { status: "cancelled" });
     await deleteEmailCampaign(BIZ, CAMPAIGN);
@@ -203,6 +205,16 @@ describe("recipients", () => {
     await expect(
       insertCampaignRecipients(rows, makeDb(chain({ error: { message: "snap" } })))
     ).rejects.toThrow(/snap/);
+  });
+
+  it("clears only PENDING rows before a re-snapshot", async () => {
+    const c = chain({ error: null });
+    await deletePendingRecipients(CAMPAIGN, makeDb(c));
+    expect(c.delete).toHaveBeenCalled();
+    expect(c.eq).toHaveBeenCalledWith("status", "pending");
+    await expect(
+      deletePendingRecipients(CAMPAIGN, makeDb(chain({ error: { message: "dp" } })))
+    ).rejects.toThrow(/dp/);
   });
 
   it("claims atomically (pending → sent) and reports lost claims", async () => {

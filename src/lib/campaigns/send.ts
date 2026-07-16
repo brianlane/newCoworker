@@ -32,6 +32,7 @@ import {
   CAMPAIGN_MAX_RECIPIENTS,
   claimRecipient,
   countRecipientsByStatus,
+  deletePendingRecipients,
   insertCampaignRecipients,
   listDueScheduledCampaigns,
   listPendingRecipients,
@@ -39,6 +40,7 @@ import {
   markRecipient,
   patchEmailCampaign,
   transitionEmailCampaign,
+  type CampaignRecipientRow,
   type EmailCampaignRow
 } from "./db";
 
@@ -151,8 +153,45 @@ async function snapshotRecipients(
       contact_id: c.id,
       email: c.email.trim()
     }));
+  // Clear any UNSENT rows from an earlier partial snapshot first — the
+  // campaign is still scheduled (nothing drains until it's `sending`), and
+  // stale pendings for since-unsubscribed / since-untagged contacts must
+  // not survive into the send.
+  await deletePendingRecipients(campaign.id, db);
   await insertCampaignRecipients(rows, db);
   return rows.length;
+}
+
+/**
+ * Contacts in this batch suppressed AFTER the snapshot (late one-click
+ * unsubscribes). Fails open on a lookup error — the snapshot already
+ * filtered, this is the last-mile re-check.
+ */
+async function suppressedContactIds(
+  db: SupabaseClient,
+  recipients: CampaignRecipientRow[]
+): Promise<Set<string>> {
+  const ids = recipients.map((r) => r.contact_id);
+  const { data, error } = await db
+    .from("contacts")
+    .select("id")
+    .in("id", ids)
+    .not("marketing_unsubscribed_at", "is", null);
+  if (error) throw new Error(`suppressedContactIds: ${error.message}`);
+  return new Set(((data as Array<{ id: string }> | null) ?? []).map((r) => r.id));
+}
+
+/** Derive the campaign's outcome counters from its recipient rows. */
+async function deriveCounters(
+  db: SupabaseClient,
+  campaignId: string
+): Promise<{ recipients_sent: number; recipients_failed: number; recipients_skipped: number }> {
+  const [sent, failed, skipped] = await Promise.all([
+    countRecipientsByStatus(campaignId, "sent", db),
+    countRecipientsByStatus(campaignId, "failed", db),
+    countRecipientsByStatus(campaignId, "skipped", db)
+  ]);
+  return { recipients_sent: sent, recipients_failed: failed, recipients_skipped: skipped };
 }
 
 /**
@@ -208,11 +247,18 @@ export async function processCampaignSweep(
     try {
       const batch = await listPendingRecipients(campaign.id, CAMPAIGN_BATCH_PER_SWEEP, db);
       if (batch.length === 0) {
+        // Completion carries freshly derived counters — a prior batch that
+        // crashed between sending and its counter patch must not close the
+        // campaign with stale zeros.
         await transitionEmailCampaign(
           campaign.business_id,
           campaign.id,
           "sending",
-          { status: "sent", completed_at: now.toISOString() },
+          {
+            status: "sent",
+            completed_at: now.toISOString(),
+            ...(await deriveCounters(db, campaign.id))
+          },
           db
         );
         result.completed += 1;
@@ -226,12 +272,20 @@ export async function processCampaignSweep(
       const from = `${businessName.replace(/[<>"]/g, "")} <${fromAddress}>`;
       const replyTo = business?.owner_email?.trim() || undefined;
 
+      // Last-mile suppression re-check: a one-click unsubscribe AFTER the
+      // snapshot must stop the remaining batches, not just future campaigns.
+      const suppressed = await suppressedContactIds(db, batch);
+
       for (const recipient of batch) {
         // Atomic claim (pending → sent) BEFORE the send: an overlapping
         // sweep or post-crash retry loses the claim and skips, so nobody
         // gets the campaign twice. A send failure downgrades the claim.
         const claimed = await claimRecipient(recipient.id, db);
         if (!claimed) continue;
+        if (suppressed.has(recipient.contact_id)) {
+          await markRecipient(recipient.id, "skipped", "unsubscribed after scheduling", db);
+          continue;
+        }
         const unsubscribeUrl = buildMarketingUnsubscribeUrl(
           appUrl,
           campaign.business_id,
@@ -263,14 +317,10 @@ export async function processCampaignSweep(
       }
       // Convergent counters derived from the recipient rows — immune to
       // concurrent-sweep read-modify-write drift.
-      const [sentCount, failedCount] = await Promise.all([
-        countRecipientsByStatus(campaign.id, "sent", db),
-        countRecipientsByStatus(campaign.id, "failed", db)
-      ]);
       await patchEmailCampaign(
         campaign.business_id,
         campaign.id,
-        { recipients_sent: sentCount, recipients_failed: failedCount },
+        await deriveCounters(db, campaign.id),
         db
       );
     } catch (err) {

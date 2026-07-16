@@ -44,6 +44,8 @@ create table if not exists public.email_campaigns (
   recipients_total integer not null default 0,
   recipients_sent integer not null default 0,
   recipients_failed integer not null default 0,
+  -- Recipients suppressed AFTER snapshotting (one-click unsubscribe mid-send).
+  recipients_skipped integer not null default 0,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -65,8 +67,9 @@ create table if not exists public.email_campaign_recipients (
   business_id uuid not null references public.businesses(id) on delete cascade,
   contact_id uuid not null,
   email text not null,
+  -- 'skipped' = suppressed between snapshot and send (late unsubscribe).
   status text not null default 'pending'
-    check (status in ('pending', 'sent', 'failed')),
+    check (status in ('pending', 'sent', 'failed', 'skipped')),
   error_detail text,
   sent_at timestamptz,
   created_at timestamptz not null default now(),

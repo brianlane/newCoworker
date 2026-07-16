@@ -17,6 +17,7 @@ vi.mock("@/lib/campaigns/db", async (importOriginal) => ({
   listSendingCampaigns: vi.fn(),
   listPendingRecipients: vi.fn(),
   insertCampaignRecipients: vi.fn(),
+  deletePendingRecipients: vi.fn(),
   claimRecipient: vi.fn(),
   countRecipientsByStatus: vi.fn(),
   markRecipient: vi.fn(),
@@ -41,6 +42,7 @@ import {
 import {
   claimRecipient,
   countRecipientsByStatus,
+  deletePendingRecipients,
   insertCampaignRecipients,
   listDueScheduledCampaigns,
   listPendingRecipients,
@@ -60,6 +62,7 @@ const listDue = vi.mocked(listDueScheduledCampaigns);
 const listSending = vi.mocked(listSendingCampaigns);
 const listPending = vi.mocked(listPendingRecipients);
 const insertRecipients = vi.mocked(insertCampaignRecipients);
+const deletePendings = vi.mocked(deletePendingRecipients);
 const claim = vi.mocked(claimRecipient);
 const countByStatus = vi.mocked(countRecipientsByStatus);
 const mark = vi.mocked(markRecipient);
@@ -80,6 +83,7 @@ function campaign(overrides: Partial<EmailCampaignRow> = {}): EmailCampaignRow {
     recipients_total: 0,
     recipients_sent: 0,
     recipients_failed: 0,
+    recipients_skipped: 0,
     created_at: "2026-07-15T00:00:00Z",
     updated_at: "2026-07-15T00:00:00Z",
     ...overrides
@@ -107,7 +111,7 @@ function makeDb(
 ) {
   const calls: Array<{ name: string; args: unknown[] }> = [];
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "not", "is", "order", "limit", "contains"]) {
+  for (const m of ["select", "eq", "not", "is", "in", "order", "limit", "contains"]) {
     chain[m] = vi.fn((...args: unknown[]) => {
       calls.push({ name: m, args });
       return chain;
@@ -131,6 +135,7 @@ beforeEach(() => {
   listSending.mockResolvedValue([]);
   listPending.mockResolvedValue([]);
   insertRecipients.mockResolvedValue(undefined);
+  deletePendings.mockResolvedValue(undefined);
   claim.mockResolvedValue(true);
   countByStatus.mockResolvedValue(0);
   mark.mockResolvedValue(undefined);
@@ -176,9 +181,13 @@ describe("processCampaignSweep — promotion", () => {
     const rows = insertRecipients.mock.calls[0][0];
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ contact_id: "a", email: "jane@x.test" });
-    // Snapshot-first: the promotion carries the total and happens after
-    // the rows exist, so a snapshot failure can never strand a
-    // recipient-less `sending` campaign.
+    // Snapshot-first: stale pendings from an earlier partial snapshot are
+    // cleared, the rows are written, THEN the promotion carries the total —
+    // a snapshot failure can never strand a recipient-less `sending`
+    // campaign, and stale pending rows can never survive a re-snapshot.
+    expect(deletePendings.mock.invocationCallOrder[0]).toBeLessThan(
+      insertRecipients.mock.invocationCallOrder[0]
+    );
     expect(insertRecipients.mock.invocationCallOrder[0]).toBeLessThan(
       transition.mock.invocationCallOrder[0]
     );
@@ -260,9 +269,23 @@ describe("processCampaignSweep — sending", () => {
     expect(patch).toHaveBeenCalledWith(
       BIZ,
       "c-1",
-      { recipients_sent: 5, recipients_failed: 0 },
+      { recipients_sent: 5, recipients_failed: 0, recipients_skipped: 0 },
       db
     );
+  });
+
+  it("skips (without emailing) recipients who unsubscribed after the snapshot", async () => {
+    const sendEmail = vi.fn(async () => "resend-id");
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([recipient("r1", "jane@x.test"), recipient("r2", "bob@x.test")]);
+    // The contacts query in the SENDING phase is the suppression re-check:
+    // contact-r1 comes back as unsubscribed.
+    const { db } = makeDb([{ id: "contact-r1", email: "jane@x.test" }]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    expect(result.sent).toBe(1);
+    expect(sendEmail).toHaveBeenCalledTimes(1);
+    expect((sendEmail.mock.calls[0] as unknown[])[1]).toBe("bob@x.test");
+    expect(mark).toHaveBeenCalledWith("r1", "skipped", "unsubscribed after scheduling", db);
   });
 
   it("a lost claim skips the recipient (overlapping sweep can't double-send)", async () => {
@@ -292,17 +315,28 @@ describe("processCampaignSweep — sending", () => {
     expect(mark).not.toHaveBeenCalledWith("r2", "sent", null, db);
   });
 
-  it("completes a campaign with no pending recipients left", async () => {
+  it("completes a campaign with no pending recipients left, refreshing counters", async () => {
     listSending.mockResolvedValue([campaign({ status: "sending" })]);
     listPending.mockResolvedValue([]);
+    countByStatus.mockImplementation(async (_id, status) =>
+      status === "sent" ? 9 : status === "failed" ? 1 : 0
+    );
     const { db } = makeDb([]);
     const result = await processCampaignSweep({ client: db, now: () => NOW });
     expect(result.completed).toBe(1);
+    // Completion carries freshly derived counters — a batch that crashed
+    // before its counter patch can't close the campaign with stale zeros.
     expect(transition).toHaveBeenCalledWith(
       BIZ,
       "c-1",
       "sending",
-      { status: "sent", completed_at: NOW.toISOString() },
+      {
+        status: "sent",
+        completed_at: NOW.toISOString(),
+        recipients_sent: 9,
+        recipients_failed: 1,
+        recipients_skipped: 0
+      },
       db
     );
   });
@@ -313,6 +347,25 @@ describe("processCampaignSweep — sending", () => {
     const { db } = makeDb([]);
     const result = await processCampaignSweep({ client: db });
     expect(result.errors).toEqual([{ campaignId: "c-1", message: "string failure" }]);
+  });
+
+  it("suppression re-check tolerates a null payload and isolates a lookup failure", async () => {
+    const sendEmail = vi.fn(async () => "resend-id");
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([recipient("r1", "jane@x.test")]);
+    const { db } = makeDb(null); // null contacts payload → nobody suppressed
+    const ok = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    expect(ok.sent).toBe(1);
+
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([recipient("r1", "jane@x.test")]);
+    const failing = makeDb(null, { message: "sup boom" });
+    const bad = await processCampaignSweep({ client: failing.db, now: () => NOW, sendEmail });
+    expect(bad.errors).toEqual([
+      { campaignId: "c-1", message: expect.stringContaining("sup boom") }
+    ]);
   });
 
   it("isolates an Error-typed batch failure too", async () => {

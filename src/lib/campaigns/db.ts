@@ -27,9 +27,13 @@ export type EmailCampaignRow = {
   recipients_total: number;
   recipients_sent: number;
   recipients_failed: number;
+  /** Suppressed after snapshotting (late one-click unsubscribes). */
+  recipients_skipped: number;
   created_at: string;
   updated_at: string;
 };
+
+export type CampaignRecipientStatus = "pending" | "sent" | "failed" | "skipped";
 
 export type CampaignRecipientRow = {
   id: string;
@@ -37,7 +41,7 @@ export type CampaignRecipientRow = {
   business_id: string;
   contact_id: string;
   email: string;
-  status: "pending" | "sent" | "failed";
+  status: CampaignRecipientStatus;
   error_detail: string | null;
   sent_at: string | null;
   created_at: string;
@@ -104,6 +108,7 @@ export type EmailCampaignPatch = Partial<
     | "recipients_total"
     | "recipients_sent"
     | "recipients_failed"
+    | "recipients_skipped"
   >
 >;
 
@@ -199,6 +204,25 @@ export async function listSendingCampaigns(client?: SupabaseClient): Promise<Ema
   return (data ?? []) as EmailCampaignRow[];
 }
 
+/**
+ * Clear a campaign's UNSENT snapshot rows (sent/failed/skipped history is
+ * kept). Called before re-snapshotting a still-scheduled campaign so a
+ * prior partial snapshot can't leave stale pending rows — contacts who
+ * unsubscribed or lost the audience tag since must not be drained later.
+ */
+export async function deletePendingRecipients(
+  campaignId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("email_campaign_recipients")
+    .delete()
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending");
+  if (error) throw new Error(`deletePendingRecipients: ${error.message}`);
+}
+
 /** Insert the audience snapshot (idempotent per contact via the unique key). */
 export async function insertCampaignRecipients(
   rows: Array<Pick<CampaignRecipientRow, "campaign_id" | "business_id" | "contact_id" | "email">>,
@@ -253,10 +277,10 @@ export async function claimRecipient(
   return Array.isArray(data) && data.length > 0;
 }
 
-/** Outcome stamp for one recipient (downgrades a claimed row on send failure). */
+/** Outcome stamp for one recipient (downgrades a claimed row on failure/skip). */
 export async function markRecipient(
   recipientId: string,
-  status: "sent" | "failed",
+  status: "sent" | "failed" | "skipped",
   errorDetail: string | null,
   client?: SupabaseClient
 ): Promise<void> {
@@ -279,7 +303,7 @@ export async function markRecipient(
  */
 export async function countRecipientsByStatus(
   campaignId: string,
-  status: "pending" | "sent" | "failed",
+  status: CampaignRecipientStatus,
   client?: SupabaseClient
 ): Promise<number> {
   const db = client ?? (await createSupabaseServiceClient());
