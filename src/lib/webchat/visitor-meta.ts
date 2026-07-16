@@ -26,30 +26,67 @@ export const VISITOR_META_MAX_URL_CHARS = 500;
 /** Page-trail cap — enough to see a journey, never unbounded. */
 export const VISITOR_META_MAX_PAGES = 20;
 
-const urlField = z.string().trim().max(2000).transform((s) => s.slice(0, VISITOR_META_MAX_URL_CHARS));
+/**
+ * Field parsers are individually FORGIVING: one malformed value (an empty
+ * `screen`, an over-long language tag, a non-boolean flag) degrades to
+ * undefined instead of failing the whole payload — a single bad field must
+ * never drop everything else the loader collected (Bugbot Medium on PR
+ * #653). Empty/whitespace strings become undefined; URLs are truncated,
+ * never rejected, for length.
+ */
+const trimmedField = (max: number) =>
+  z.preprocess(
+    (v) => {
+      if (typeof v !== "string") return undefined;
+      const t = v.trim();
+      return t ? t.slice(0, max) : undefined;
+    },
+    z.string().optional()
+  );
+
+const urlField = trimmedField(VISITOR_META_MAX_URL_CHARS);
+
+const screenField = z.preprocess(
+  (v) =>
+    typeof v === "string" && /^\d{1,5}x\d{1,5}$/.test(v.trim()) ? v.trim() : undefined,
+  z.string().optional()
+);
+
+const returningField = z.preprocess(
+  (v) => (typeof v === "boolean" ? v : undefined),
+  z.boolean().optional()
+);
+
+const timeOnPageField = z.preprocess(
+  (v) =>
+    typeof v === "number" && Number.isInteger(v) && v >= 0 && v <= 7 * 24 * 60 * 60 * 1000
+      ? v
+      : undefined,
+  z.number().optional()
+);
 
 /** Client-reported meta on the session-start POST. Everything optional. */
 export const webchatClientMetaSchema = z.object({
-  page: urlField.optional(),
-  referrer: urlField.optional(),
+  page: urlField,
+  referrer: urlField,
   utm: z
-    .object({
-      source: z.string().trim().max(200).optional(),
-      medium: z.string().trim().max(200).optional(),
-      campaign: z.string().trim().max(200).optional(),
-      term: z.string().trim().max(200).optional(),
-      content: z.string().trim().max(200).optional()
-    })
-    .optional(),
-  language: z.string().trim().max(35).optional(),
-  screen: z
-    .string()
-    .trim()
-    .regex(/^\d{1,5}x\d{1,5}$/)
-    .optional(),
-  timezone: z.string().trim().max(64).optional(),
-  returning: z.boolean().optional(),
-  timeOnPageMs: z.number().int().min(0).max(7 * 24 * 60 * 60 * 1000).optional()
+    .preprocess(
+      (v) => (v && typeof v === "object" && !Array.isArray(v) ? v : undefined),
+      z
+        .object({
+          source: trimmedField(200),
+          medium: trimmedField(200),
+          campaign: trimmedField(200),
+          term: trimmedField(200),
+          content: trimmedField(200)
+        })
+        .optional()
+    ),
+  language: trimmedField(35),
+  screen: screenField,
+  timezone: trimmedField(64),
+  returning: returningField,
+  timeOnPageMs: timeOnPageField
 });
 
 export type WebchatClientMeta = z.infer<typeof webchatClientMetaSchema>;
@@ -148,11 +185,34 @@ export function buildVisitorMeta(args: {
   const device = deviceFromUserAgent(args.headers.get("user-agent"));
   if (geo) meta.geo = geo;
   if (device) meta.device = device;
-  if (args.clientMeta && Object.keys(args.clientMeta).length > 0) {
-    meta.client = args.clientMeta;
-    if (args.clientMeta.page) meta.pages = [args.clientMeta.page];
+  const client = compactClientMeta(args.clientMeta);
+  if (client) {
+    meta.client = client;
+    if (client.page) meta.pages = [client.page];
   }
   return Object.keys(meta).length > 0 ? meta : null;
+}
+
+/**
+ * Drop undefined-valued keys (the forgiving field parsers emit them for
+ * present-but-invalid inputs) so an all-invalid payload stores NOTHING,
+ * not `client: {}`.
+ */
+function compactClientMeta(raw: WebchatClientMeta | null | undefined): WebchatClientMeta | null {
+  if (!raw) return null;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (v === undefined) continue;
+    if (k === "utm" && v && typeof v === "object") {
+      const utm = Object.fromEntries(
+        Object.entries(v).filter(([, uv]) => uv !== undefined)
+      );
+      if (Object.keys(utm).length > 0) out.utm = utm;
+      continue;
+    }
+    out[k] = v;
+  }
+  return Object.keys(out).length > 0 ? (out as WebchatClientMeta) : null;
 }
 
 /** Defensive read of a stored jsonb column into the typed shape. */

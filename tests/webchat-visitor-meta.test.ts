@@ -32,9 +32,33 @@ describe("webchatClientMetaSchema", () => {
     expect(parsed.returning).toBe(true);
   });
 
-  it("rejects malformed screen strings and negative durations", () => {
-    expect(webchatClientMetaSchema.safeParse({ screen: "wide" }).success).toBe(false);
-    expect(webchatClientMetaSchema.safeParse({ timeOnPageMs: -1 }).success).toBe(false);
+  it("degrades invalid fields to undefined instead of failing the payload", () => {
+    // The loader sends screen:"" when dimensions are unavailable — that must
+    // not drop the rest of the payload (Bugbot Medium on PR #653).
+    const parsed = webchatClientMetaSchema.parse({
+      screen: "",
+      language: "en",
+      timeOnPageMs: -1,
+      returning: "yes",
+      page: "   ",
+      referrer: 42,
+      utm: "not-an-object",
+      timezone: ""
+    });
+    expect(parsed.language).toBe("en");
+    expect(parsed.screen).toBeUndefined();
+    expect(parsed.timeOnPageMs).toBeUndefined();
+    expect(parsed.returning).toBeUndefined();
+    expect(parsed.page).toBeUndefined();
+    expect(parsed.referrer).toBeUndefined();
+    expect(parsed.utm).toBeUndefined();
+    expect(parsed.timezone).toBeUndefined();
+
+    expect(webchatClientMetaSchema.parse({ screen: "wide" }).screen).toBeUndefined();
+    expect(webchatClientMetaSchema.parse({ timeOnPageMs: 1.5 }).timeOnPageMs).toBeUndefined();
+    expect(
+      webchatClientMetaSchema.parse({ timeOnPageMs: 8 * 24 * 60 * 60 * 1000 }).timeOnPageMs
+    ).toBeUndefined();
     expect(webchatClientMetaSchema.safeParse({}).success).toBe(true);
   });
 });
@@ -141,6 +165,28 @@ describe("buildVisitorMeta", () => {
     expect(buildVisitorMeta({ headers: h, clientMeta: { language: "fr" } })).toEqual({
       geo: { country: "CA" },
       client: { language: "fr" }
+    });
+  });
+
+  it("compacts undefined-valued keys so all-invalid payloads store nothing", () => {
+    // Present-but-invalid fields parse to undefined; the stored client
+    // object must not carry them (or exist at all when nothing survived).
+    const allInvalid = webchatClientMetaSchema.parse({ screen: "", page: "  " });
+    expect(buildVisitorMeta({ headers: new Headers(), clientMeta: allInvalid })).toBeNull();
+
+    const mixed = webchatClientMetaSchema.parse({
+      screen: "",
+      language: "en",
+      utm: { source: "", medium: "cpc" }
+    });
+    expect(buildVisitorMeta({ headers: new Headers(), clientMeta: mixed })).toEqual({
+      client: { language: "en", utm: { medium: "cpc" } }
+    });
+
+    // A UTM object whose every field was invalid disappears entirely.
+    const emptyUtm = webchatClientMetaSchema.parse({ language: "en", utm: { source: "" } });
+    expect(buildVisitorMeta({ headers: new Headers(), clientMeta: emptyUtm })).toEqual({
+      client: { language: "en" }
     });
   });
 });

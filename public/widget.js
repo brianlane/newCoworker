@@ -142,6 +142,9 @@
       ensureFrame();
       frame.style.cssText = panelStyle();
       btn.setAttribute("aria-label", "Close chat");
+      // Fresh context on every open — the visitor may be on a different
+      // page (and time-on-page has moved) since the last snapshot.
+      postToFrame({ type: "ncw:meta", meta: collectMeta() });
     } else if (frame) {
       frame.style.cssText = panelStyle() + "display:none;";
       btn.setAttribute("aria-label", "Open chat");

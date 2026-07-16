@@ -193,12 +193,14 @@ export async function GET(request: Request) {
     // Visitor context arrives from the LOADER on the host page (the only
     // place that can see the page URL / referrer / campaign params). Only
     // the direct parent is trusted as a sender; the payload is validated
-    // server-side regardless.
+    // server-side regardless. Later ncw:meta payloads REPLACE the stored
+    // one — the loader re-sends on every open, so a session started on the
+    // visitor's second page carries that page, not a frozen first snapshot.
     window.addEventListener("message", function (ev) {
       if (ev.source !== window.parent) return;
       var d = ev.data;
       if (!d) return;
-      if (d.type === "ncw:meta" && d.meta && typeof d.meta === "object" && !meta) {
+      if (d.type === "ncw:meta" && d.meta && typeof d.meta === "object") {
         meta = d.meta;
         if (typeof d.meta.page === "string") currentPage = d.meta.page;
       }
