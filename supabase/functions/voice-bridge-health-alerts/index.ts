@@ -62,7 +62,9 @@ serve(async (req: Request) => {
   // `bridge_last_heartbeat_at` is NULL. computeStaleBridges handles both.
   const { data: bridgeRows, error: bridgeErr } = await supabase
     .from("business_telnyx_settings")
-    .select("business_id, bridge_last_heartbeat_at, telnyx_connection_id");
+    .select(
+      "business_id, bridge_last_heartbeat_at, telnyx_connection_id, bridge_stale_alert_muted"
+    );
   if (bridgeErr) {
     console.error("business_telnyx_settings select failed", bridgeErr);
     await telemetryRecord(supabase, "voice_bridge_health_error", {
@@ -91,6 +93,7 @@ serve(async (req: Request) => {
       business_id: string;
       bridge_last_heartbeat_at: string | null;
       telnyx_connection_id: string | null;
+      bridge_stale_alert_muted: boolean | null;
     }>,
     nowMs,
     bridgeStaleSeconds

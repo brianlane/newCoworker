@@ -106,6 +106,44 @@ describe("computeStaleBridges", () => {
     ];
     expect(computeStaleBridges(rows, NOW_MS, 300)).toEqual([]);
   });
+
+  it("skips muted rows even when stale (bridge_stale_alert_muted)", () => {
+    const rows = [
+      {
+        business_id: "biz-muted-stale",
+        bridge_last_heartbeat_at: new Date(NOW_MS - 600_000).toISOString(),
+        telnyx_connection_id: "conn-4",
+        bridge_stale_alert_muted: true
+      },
+      {
+        business_id: "biz-muted-never",
+        bridge_last_heartbeat_at: null,
+        telnyx_connection_id: "conn-5",
+        bridge_stale_alert_muted: true
+      }
+    ];
+    expect(computeStaleBridges(rows, NOW_MS, 300)).toEqual([]);
+  });
+
+  it("still flags stale rows when the mute flag is false or null", () => {
+    const heartbeat = new Date(NOW_MS - 600_000).toISOString();
+    const rows = [
+      {
+        business_id: "biz-unmuted",
+        bridge_last_heartbeat_at: heartbeat,
+        telnyx_connection_id: "conn-6",
+        bridge_stale_alert_muted: false
+      },
+      {
+        business_id: "biz-null-mute",
+        bridge_last_heartbeat_at: null,
+        telnyx_connection_id: "conn-7",
+        bridge_stale_alert_muted: null
+      }
+    ];
+    const out = computeStaleBridges(rows, NOW_MS, 300);
+    expect(out.map((b) => b.business_id)).toEqual(["biz-unmuted", "biz-null-mute"]);
+  });
 });
 
 describe("computeStuckSettlements", () => {
