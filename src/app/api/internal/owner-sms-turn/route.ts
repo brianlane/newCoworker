@@ -60,7 +60,10 @@ const SMS_REPLY_MAX_CHARS = 1200;
 /** Recent owner-thread messages replayed for continuity. */
 const OWNER_SMS_TAIL_MESSAGES = 12;
 
-const SMS_SURFACE_BLOCK = `THIS CONVERSATION IS OVER SMS. You are texting with the OWNER on their own phone (identity verified by the platform from their number — do not ask them to prove who they are). Everything in OWNER MODE applies here exactly as on the dashboard.
+// Exported for the live-AI e2e suite (tests/e2e/kyp-owner-sms-operator):
+// the replay must run against the EXACT production string, not a paraphrase
+// (same convention as sms_prompt_lines.ts / the exported OWNER_PREAMBLE).
+export const SMS_SURFACE_BLOCK = `THIS CONVERSATION IS OVER SMS. You are texting with the OWNER on their own phone (identity verified by the platform from their number — do not ask them to prove who they are). Everything in OWNER MODE applies here exactly as on the dashboard.
 - Keep replies SHORT and plain-text: no markdown, no bullets unless truly needed, well under ${SMS_REPLY_MAX_CHARS} characters.
 - You HAVE working tools on this surface (texting, calendar, running automations). Use them per your rules; never claim you can't act just because this is SMS.
 - When you need a decision (e.g. presenting options), ask ONE clear question and wait for their reply.`;
