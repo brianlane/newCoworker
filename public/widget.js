@@ -74,8 +74,11 @@
   }
 
   // SPA navigation: keep the frame's notion of "current page" fresh so the
-  // conversation's page trail follows the visitor.
+  // conversation's page trail follows the visitor, and restart the
+  // time-on-page clock — timeOnPageMs means "time on the page where the
+  // chat was opened", not the whole visit.
   function notifyPage() {
+    loadedAt = Date.now();
     postToFrame({ type: "ncw:page", page: String(location.href).slice(0, 2000) });
   }
   try {
