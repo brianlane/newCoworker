@@ -515,6 +515,90 @@ export function EngagementCard({ view }: { view: EngagementView }) {
   );
 }
 
+export type LeadSourceRowView = {
+  label: string;
+  newContacts: number;
+  engaged: number;
+  claimed: number;
+};
+
+export type LeadSourcesView = {
+  totalNewContacts: number;
+  untracked: number;
+  channels: LeadSourceRowView[];
+  tags: LeadSourceRowView[];
+  windowDays: number;
+  clipped: boolean;
+};
+
+function LeadSourceTable({ title, rows }: { title: string; rows: LeadSourceRowView[] }) {
+  const pct = (part: number, whole: number) =>
+    whole > 0 ? `${Math.round((part / whole) * 100)}%` : "—";
+  return (
+    <div className="min-w-0 flex-1">
+      <p className="text-xs text-parchment/50 mb-1.5">{title}</p>
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="text-left text-[11px] uppercase tracking-wide text-parchment/40">
+            <th className="pb-1 font-normal">Source</th>
+            <th className="pb-1 pr-2 text-right font-normal">New</th>
+            <th className="pb-1 pr-2 text-right font-normal">Engaged</th>
+            <th className="pb-1 text-right font-normal">Claimed</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.label} className="border-t border-parchment/10">
+              <td className="py-1 pr-2 text-parchment/80 truncate max-w-[10rem]">{r.label}</td>
+              <td className="py-1 pr-2 text-right text-parchment/70">{r.newContacts}</td>
+              <td className="py-1 pr-2 text-right text-parchment/50">
+                {pct(r.engaged, r.newContacts)}
+              </td>
+              <td className="py-1 text-right text-parchment/50">
+                {pct(r.claimed, r.newContacts)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * Where this window's new leads came from — channels (last_channel) and the
+ * source tags intake flows stamp — with per-source engagement and claim
+ * rates. Untracked = new contacts carrying no source signal at all.
+ */
+export function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
+  return (
+    <Card>
+      <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">
+        Lead sources ({view.windowDays} days)
+      </p>
+      <p className="text-sm text-parchment/70">
+        {view.totalNewContacts.toLocaleString()} new contact
+        {view.totalNewContacts === 1 ? "" : "s"}
+        {view.untracked > 0 ? (
+          <span className="text-parchment/45"> · {view.untracked} with no source signal</span>
+        ) : null}
+      </p>
+      <div className="mt-3 flex flex-col gap-4 sm:flex-row sm:gap-8">
+        {view.channels.length > 0 && (
+          <LeadSourceTable title="By channel" rows={view.channels} />
+        )}
+        {view.tags.length > 0 && <LeadSourceTable title="By tag" rows={view.tags} />}
+      </div>
+      {view.clipped ? (
+        <p className="text-[11px] text-amber-300/80 mt-2">
+          Large window — counts cover the first{" "}
+          {view.totalNewContacts.toLocaleString()} new contacts scanned.
+        </p>
+      ) : null}
+    </Card>
+  );
+}
+
 export type EmployeePerformanceView = {
   memberId: string;
   name: string;

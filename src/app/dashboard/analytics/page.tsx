@@ -49,6 +49,7 @@ import {
   type DayDetailCall
 } from "@/lib/analytics/dashboard-analytics";
 import { getEngagementOverview } from "@/lib/analytics/engagement";
+import { getLeadSourceOverview } from "@/lib/analytics/lead-sources";
 import { getEmployeePerformance } from "@/lib/analytics/employee-performance";
 import {
   FORECAST_MIN_DAYS,
@@ -64,6 +65,7 @@ import {
   EmployeePerformanceCard,
   EngagementCard,
   FlowFunnelCard,
+  LeadSourcesCard,
   PeakHoursCard,
   SegmentDetailCard,
   SentimentMixCard,
@@ -210,6 +212,7 @@ export default async function DashboardAnalyticsPage(props: {
     previousPeriod,
     snapshotSeries,
     engagement,
+    leadSources,
     teamPerformance,
     flowFunnels,
     dayDetail,
@@ -228,6 +231,8 @@ export default async function DashboardAnalyticsPage(props: {
       getSnapshotSeries(business.id, 84, { client: db, now }).catch(() => null),
       // Segment counts + the quiet win-back shortlist; a blip hides the card.
       getEngagementOverview(business.id, { client: db, now }).catch(() => null),
+      // Where new leads came from (channels + source tags); a blip hides it.
+      getLeadSourceOverview(business.id, { client: db, now }).catch(() => null),
       // Owner-only roster leaderboard — never even fetched for team viewers.
       isOwnerViewer
         ? getEmployeePerformance(business.id, { client: db, now }).catch(() => null)
@@ -470,6 +475,10 @@ export default async function DashboardAnalyticsPage(props: {
       )}
 
       {engagement && engagement.total > 0 && <EngagementCard view={engagement} />}
+
+      {leadSources && leadSources.totalNewContacts > 0 && (
+        <LeadSourcesCard view={leadSources} />
+      )}
 
       {teamPerformance && teamPerformance.length > 0 && (
         <EmployeePerformanceCard rows={teamPerformance} />
