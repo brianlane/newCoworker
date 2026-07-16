@@ -623,6 +623,26 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     });
   });
 
+  it("a FAILED side-effect tool (ok:false) does NOT suppress the worker fallback either", async () => {
+    // Bugbot Medium (2nd round): a cleanly-refused send (opt-out, quota,
+    // validation) committed nothing — pinning the turn would suppress a
+    // legitimate fallback AND let the degraded copy imply a send happened.
+    const runActionTool = vi.fn(async () => ({ ok: false, message: "recipient_opted_out" }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res).toEqual({
+      ok: false,
+      error: "model_failed",
+      detail: "gemini_http_500:wrap-up died"
+    });
+  });
+
   it("fails CLOSED on an action tool the model calls but that was not declared", async () => {
     const runActionTool = vi.fn();
     const chatStep = vi

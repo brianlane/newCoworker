@@ -244,10 +244,20 @@ async function executeToolCall(
     if (!declaredActionTools.has(call.name)) {
       return { ok: false, message: `unknown tool: ${call.name}` };
     }
-    // Marked BEFORE dispatch: even a failed send may have left the process
-    // (e.g. a timeout after Telnyx accepted), so err on the safe side.
-    if (SIDE_EFFECT_TOOLS.has(call.name)) sideEffects.happened = true;
-    return runActionTool(businessId, { name: call.name, args: call.args });
+    const result = await runActionTool(businessId, { name: call.name, args: call.args });
+    // Marked only on a CONFIRMED effect (ok:true): a cleanly-refused send
+    // (opt-out, validation, quota) or failed booking committed nothing, so
+    // pinning the turn would both suppress a legitimate worker fallback and
+    // let the degraded copy imply an action that never happened.
+    if (
+      SIDE_EFFECT_TOOLS.has(call.name) &&
+      typeof result === "object" &&
+      result !== null &&
+      (result as { ok?: unknown }).ok === true
+    ) {
+      sideEffects.happened = true;
+    }
+    return result;
   }
   if (call.name === "business_knowledge_lookup") {
     const question = typeof call.args.question === "string" ? call.args.question.trim() : "";
