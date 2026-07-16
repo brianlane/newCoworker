@@ -23,6 +23,8 @@ export type EmailCampaignRow = {
   status: EmailCampaignStatus;
   send_at: string | null;
   started_at: string | null;
+  /** When the audience snapshot landed; null = promotion crashed pre-snapshot. */
+  snapshotted_at: string | null;
   completed_at: string | null;
   recipients_total: number;
   recipients_sent: number;
@@ -104,6 +106,7 @@ export type EmailCampaignPatch = Partial<
     | "status"
     | "send_at"
     | "started_at"
+    | "snapshotted_at"
     | "completed_at"
     | "recipients_total"
     | "recipients_sent"

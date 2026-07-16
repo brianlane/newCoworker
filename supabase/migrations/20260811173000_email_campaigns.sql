@@ -40,6 +40,10 @@ create table if not exists public.email_campaigns (
     check (status in ('draft', 'scheduled', 'sending', 'sent', 'cancelled')),
   send_at timestamptz,
   started_at timestamptz,
+  -- Set once the audience snapshot has been written. A `sending` campaign
+  -- with this NULL crashed between promotion and snapshot; the sweep
+  -- retries the snapshot instead of completing it empty.
+  snapshotted_at timestamptz,
   completed_at timestamptz,
   recipients_total integer not null default 0,
   recipients_sent integer not null default 0,

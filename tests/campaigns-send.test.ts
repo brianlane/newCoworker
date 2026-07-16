@@ -84,6 +84,7 @@ function campaign(overrides: Partial<EmailCampaignRow> = {}): EmailCampaignRow {
     recipients_sent: 0,
     recipients_failed: 0,
     recipients_skipped: 0,
+    snapshotted_at: "2026-07-16T17:00:01Z",
     created_at: "2026-07-15T00:00:00Z",
     updated_at: "2026-07-15T00:00:00Z",
     ...overrides
@@ -168,7 +169,7 @@ describe("unsubscribe tokens", () => {
 });
 
 describe("processCampaignSweep — promotion", () => {
-  it("snapshots a suppressed/de-duped audience FIRST, then promotes with the total", async () => {
+  it("claims FIRST (single writer), then snapshots a suppressed/de-duped audience", async () => {
     const { db, calls } = makeDb([
       { id: "a", email: "jane@x.test" },
       { id: "b", email: "JANE@x.test " }, // same address, different row → one mail
@@ -181,21 +182,27 @@ describe("processCampaignSweep — promotion", () => {
     const rows = insertRecipients.mock.calls[0][0];
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ contact_id: "a", email: "jane@x.test" });
-    // Snapshot-first: stale pendings from an earlier partial snapshot are
-    // cleared, the rows are written, THEN the promotion carries the total —
-    // a snapshot failure can never strand a recipient-less `sending`
-    // campaign, and stale pending rows can never survive a re-snapshot.
+    // Claim-first: the guarded transition is the single-writer lock — an
+    // overlapping sweep on a stale due-list loses it BEFORE touching any
+    // recipient rows. Then stale pendings clear, rows land, and the
+    // snapshot stamp + total is recorded.
+    expect(transition.mock.invocationCallOrder[0]).toBeLessThan(
+      deletePendings.mock.invocationCallOrder[0]
+    );
     expect(deletePendings.mock.invocationCallOrder[0]).toBeLessThan(
       insertRecipients.mock.invocationCallOrder[0]
-    );
-    expect(insertRecipients.mock.invocationCallOrder[0]).toBeLessThan(
-      transition.mock.invocationCallOrder[0]
     );
     expect(transition).toHaveBeenCalledWith(
       BIZ,
       "c-1",
       "scheduled",
-      { status: "sending", started_at: NOW.toISOString(), recipients_total: 1 },
+      { status: "sending", started_at: NOW.toISOString() },
+      db
+    );
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      "c-1",
+      { snapshotted_at: NOW.toISOString(), recipients_total: 1 },
       db
     );
     // The scan applied the customer/email/suppression filters, in a
@@ -207,7 +214,7 @@ describe("processCampaignSweep — promotion", () => {
     ]);
   });
 
-  it("matches the audience tag case-insensitively and tolerates a losing cancel race", async () => {
+  it("matches the audience tag case-insensitively; a lost claim never touches recipient rows", async () => {
     const tagged = makeDb([
       { id: "a", email: "a@x.test", tags: ["VIP", "buyer"] }, // matches "vip"
       { id: "b", email: "b@x.test", tags: ["other"] }, // no match
@@ -222,19 +229,23 @@ describe("processCampaignSweep — promotion", () => {
     vi.clearAllMocks();
     listDue.mockResolvedValue([campaign()]);
     listSending.mockResolvedValue([]);
-    transition.mockResolvedValue(false); // cancel won the race
+    transition.mockResolvedValue(false); // cancel/another sweep won the race
     const { db } = makeDb([]);
     const result = await processCampaignSweep({ client: db, now: () => NOW });
-    // The (idempotent) snapshot ran, but the campaign stays cancelled.
     expect(result.promoted).toBe(0);
+    // The loser must not delete or insert a live campaign's queue.
+    expect(deletePendings).not.toHaveBeenCalled();
+    expect(insertRecipients).not.toHaveBeenCalled();
   });
 
-  it("a snapshot failure leaves the campaign scheduled for retry (no promotion)", async () => {
+  it("a snapshot failure after the claim leaves snapshotted_at unset for the drain to retry", async () => {
     const { db } = makeDb(null, { message: "scan boom" });
     listDue.mockResolvedValue([campaign()]);
     const result = await processCampaignSweep({ client: db, now: () => NOW });
     expect(result.errors).toEqual([{ campaignId: "c-1", message: expect.stringContaining("scan boom") }]);
-    expect(transition).not.toHaveBeenCalled();
+    // The claim happened; the snapshot stamp did not.
+    expect(transition).toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
   });
 });
 
@@ -313,6 +324,25 @@ describe("processCampaignSweep — sending", () => {
     expect(result.failed).toBe(1);
     expect(mark).toHaveBeenCalledWith("r1", "failed", "bounce", db);
     expect(mark).not.toHaveBeenCalledWith("r2", "sent", null, db);
+  });
+
+  it("re-snapshots a sending campaign whose snapshot never landed before draining", async () => {
+    const sendEmail = vi.fn(async () => "resend-id");
+    // Crashed between claim and snapshot: sending, but snapshotted_at null.
+    listSending.mockResolvedValue([campaign({ status: "sending", snapshotted_at: null })]);
+    listPending.mockResolvedValue([recipient("r1", "jane@x.test")]);
+    const { db } = makeDb([{ id: "a", email: "jane@x.test" }]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    // The snapshot retried (delete + insert + stamp), then the drain sent.
+    expect(deletePendings).toHaveBeenCalledWith("c-1", db);
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      "c-1",
+      { snapshotted_at: NOW.toISOString(), recipients_total: 1 },
+      db
+    );
+    expect(result.sent).toBe(1);
+    expect(result.completed).toBe(0);
   });
 
   it("completes a campaign with no pending recipients left, refreshing counters", async () => {
@@ -405,10 +435,9 @@ describe("processCampaignSweep — sending", () => {
     const result = await processCampaignSweep({ client: db, now: () => NOW });
     expect(result.promoted).toBe(1);
     expect(insertRecipients).toHaveBeenCalledWith([], db);
-    expect(transition).toHaveBeenCalledWith(
+    expect(patch).toHaveBeenCalledWith(
       BIZ,
       "c-1",
-      "scheduled",
       expect.objectContaining({ recipients_total: 0 }),
       db
     );

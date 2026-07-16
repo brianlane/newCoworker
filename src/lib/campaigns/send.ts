@@ -153,10 +153,11 @@ async function snapshotRecipients(
       contact_id: c.id,
       email: c.email.trim()
     }));
-  // Clear any UNSENT rows from an earlier partial snapshot first — the
-  // campaign is still scheduled (nothing drains until it's `sending`), and
-  // stale pendings for since-unsubscribed / since-untagged contacts must
-  // not survive into the send.
+  // Clear any UNSENT rows from an earlier partial snapshot first, so stale
+  // pendings for since-unsubscribed / since-untagged contacts never survive
+  // into the send. Only the claim winner (or a snapshot retry on a campaign
+  // whose snapshot never landed) reaches this — an overlapping sweep loses
+  // the guarded transition before it could touch a live queue.
   await deletePendingRecipients(campaign.id, db);
   await insertCampaignRecipients(rows, db);
   return rows.length;
@@ -212,25 +213,33 @@ export async function processCampaignSweep(
 
   const result: CampaignSweepResult = { promoted: 0, sent: 0, failed: 0, completed: 0, errors: [] };
 
-  // 1) Snapshot due campaigns' audiences, THEN promote. Snapshot-first
-  //    means a snapshot failure leaves the campaign `scheduled` for the
-  //    next sweep to retry — never a recipient-less `sending` campaign
-  //    that would complete to `sent` without delivering a thing. The
-  //    snapshot is an idempotent upsert, and rows for a campaign that a
-  //    racing cancel wins stay inert (only `sending` campaigns drain).
+  // 1) CLAIM-FIRST promotion: the guarded scheduled→sending transition is
+  //    the single-writer lock — exactly one sweep (and never a racing
+  //    cancel loser) proceeds to snapshot, so an overlapping sweep working
+  //    from a stale due-list can never touch a live campaign's recipient
+  //    rows. Only the claim winner snapshots, then stamps snapshotted_at +
+  //    recipients_total. A snapshot failure AFTER the claim leaves
+  //    snapshotted_at NULL — the drain phase below retries the snapshot
+  //    (idempotent) instead of completing the campaign empty.
   const due = await listDueScheduledCampaigns(now.toISOString(), db);
   for (const campaign of due) {
     try {
-      const total = await snapshotRecipients(db, campaign);
       const moved = await transitionEmailCampaign(
         campaign.business_id,
         campaign.id,
         "scheduled",
-        { status: "sending", started_at: now.toISOString(), recipients_total: total },
+        { status: "sending", started_at: now.toISOString() },
         db
       );
       if (!moved) continue; // cancelled (or promoted) under us — their win
       result.promoted += 1;
+      const total = await snapshotRecipients(db, campaign);
+      await patchEmailCampaign(
+        campaign.business_id,
+        campaign.id,
+        { snapshotted_at: now.toISOString(), recipients_total: total },
+        db
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       result.errors.push({ campaignId: campaign.id, message });
@@ -245,6 +254,18 @@ export async function processCampaignSweep(
   const sending = await listSendingCampaigns(db);
   for (const campaign of sending) {
     try {
+      // A `sending` campaign without a landed snapshot crashed between its
+      // claim and the snapshot — retry the (idempotent) snapshot now so
+      // the empty-pending check below can never complete it unsent.
+      if (!campaign.snapshotted_at) {
+        const total = await snapshotRecipients(db, campaign);
+        await patchEmailCampaign(
+          campaign.business_id,
+          campaign.id,
+          { snapshotted_at: now.toISOString(), recipients_total: total },
+          db
+        );
+      }
       const batch = await listPendingRecipients(campaign.id, CAMPAIGN_BATCH_PER_SWEEP, db);
       if (batch.length === 0) {
         // Completion carries freshly derived counters — a prior batch that
