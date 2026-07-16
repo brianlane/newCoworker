@@ -1,8 +1,8 @@
 /**
  * Inline dashboard-chat turn engine
  * (src/lib/dashboard-chat/inline-turn.ts): attachment rendering, the model
- * ↔ tool loop (create_aiflow / create_agent drafts), metering, and every
- * failure classification.
+ * ↔ tool loop (create_aiflow / create_agent drafts / business_knowledge_lookup),
+ * the 404 model fallback, metering, and every failure classification.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -115,6 +115,57 @@ describe("runInlineChatTurn — plain turns", () => {
     expect(meter).toHaveBeenCalledWith(
       expect.objectContaining({ businessId: BIZ, surface: "dashboard_chat" })
     );
+  });
+
+  it("defaults to a model that exists on the Gemini API (gemini-3.5-flash)", async () => {
+    // Regression pin: the launch default was gemini-3.1-flash, an id that
+    // does not exist on the API — every inline turn 404'd, silently
+    // demoting text turns to the worker and hard-failing attachment turns.
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs(), { chatStep });
+    expect(chatStep.mock.calls[0][0].model).toBe("gemini-3.5-flash");
+  });
+
+  it("declares the knowledge tool by default and omits it when the toggle is off", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs(), { chatStep });
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).toContain("business_knowledge_lookup");
+
+    const chatStep2 = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs({ knowledgeToolEnabled: false }), { chatStep: chatStep2 });
+    const declared2 = chatStep2.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared2).not.toContain("business_knowledge_lookup");
+    expect(declared2).toEqual(["create_aiflow", "create_agent"]);
+  });
+
+  it("degrades to the fallback model when the configured model 404s, and stays there", async () => {
+    process.env.DASHBOARD_CHAT_MODEL = "gemini-9.9-retired";
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockRejectedValueOnce(new Error("gemini_http_404:not found"))
+      .mockResolvedValueOnce(toolStep("create_agent", { name: "A", instructions: "B" }))
+      .mockResolvedValueOnce(textStep("Drafted."));
+    const res = await runInlineChatTurn(baseArgs(), { chatStep });
+    expect(res).toMatchObject({ ok: true, content: "Drafted." });
+    expect(chatStep.mock.calls.map((c) => c[0].model)).toEqual([
+      "gemini-9.9-retired",
+      "gemini-3-flash-preview",
+      // Later steps of the SAME turn keep the fallback — no re-404 per step.
+      "gemini-3-flash-preview"
+    ]);
+    // Metering reflects the model that actually answered.
+    expect(meter.mock.calls[0][0]).toMatchObject({ model: "gemini-3-flash-preview" });
+  });
+
+  it("does NOT retry when the fallback model itself 404s", async () => {
+    process.env.DASHBOARD_CHAT_MODEL = "gemini-3-flash-preview";
+    const chatStep = vi.fn(async () => {
+      throw new Error("gemini_http_404:gone");
+    });
+    const res = await runInlineChatTurn(baseArgs(), { chatStep });
+    expect(res).toEqual({ ok: false, error: "model_failed", detail: "gemini_http_404:gone" });
+    expect(chatStep).toHaveBeenCalledTimes(1);
   });
 
   it("attaches text and PDF parts to the user turn", async () => {
@@ -363,5 +414,91 @@ describe("runInlineChatTurn — creation tools", () => {
     // Every bounded step created a draft; content falls back to the stock line.
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.drafts).toHaveLength(4);
+  });
+});
+
+describe("runInlineChatTurn — business_knowledge_lookup", () => {
+  function knowledgeResponseOf(chatStep: ReturnType<typeof vi.fn>): unknown {
+    const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
+      functionResponse: { name: string; response: { result: unknown } };
+    };
+    expect(fr.functionResponse.name).toBe("business_knowledge_lookup");
+    return fr.functionResponse.response.result;
+  }
+
+  it("answers from the knowledge core (staff audience, clipped question)", async () => {
+    const lookupKnowledge = vi.fn(async () => ({
+      ok: true as const,
+      data: { answer: "Renewals: we reach out 60 days before the term ends." }
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("business_knowledge_lookup", { question: "  What is our renewal process?  " })
+      )
+      .mockResolvedValueOnce(textStep("Per your knowledge base: 60 days before term end."));
+    const res = await runInlineChatTurn(baseArgs(), { chatStep, lookupKnowledge });
+    expect(res).toMatchObject({
+      ok: true,
+      content: "Per your knowledge base: 60 days before term end."
+    });
+    expect(lookupKnowledge).toHaveBeenCalledWith(BIZ, "What is our renewal process?", {
+      audience: "staff"
+    });
+    expect(knowledgeResponseOf(chatStep)).toEqual({
+      ok: true,
+      answer: "Renewals: we reach out 60 days before the term ends."
+    });
+  });
+
+  it("returns an honest do-not-invent message when the lookup reports failure", async () => {
+    // Both failure shapes: ok:false, and the defensive ok:true-with-no-data.
+    for (const result of [
+      { ok: false as const, detail: "timeout" },
+      { ok: true as const }
+    ]) {
+      vi.clearAllMocks();
+      meter.mockResolvedValue(undefined);
+      const lookupKnowledge = vi.fn(async () => result);
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep("business_knowledge_lookup", { question: "hours?" }))
+        .mockResolvedValueOnce(textStep("I couldn't check the knowledge base just now."));
+      const res = await runInlineChatTurn(baseArgs(), { chatStep, lookupKnowledge });
+      expect(res.ok).toBe(true);
+      expect(knowledgeResponseOf(chatStep)).toMatchObject({
+        ok: false,
+        message: expect.stringContaining("do NOT invent")
+      });
+    }
+  });
+
+  it("survives a thrown lookup (Error and non-Error alike)", async () => {
+    for (const thrown of [new Error("db down"), "string blast"]) {
+      vi.clearAllMocks();
+      meter.mockResolvedValue(undefined);
+      const lookupKnowledge = vi.fn(async () => {
+        throw thrown;
+      });
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep("business_knowledge_lookup", { question: "hours?" }))
+        .mockResolvedValueOnce(textStep("Couldn't check right now."));
+      const res = await runInlineChatTurn(baseArgs(), { chatStep, lookupKnowledge });
+      expect(res.ok).toBe(true);
+      expect(knowledgeResponseOf(chatStep)).toMatchObject({ ok: false });
+    }
+  });
+
+  it("rejects a missing/non-string question without calling the core", async () => {
+    const lookupKnowledge = vi.fn();
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("business_knowledge_lookup", { question: 42 }))
+      .mockResolvedValueOnce(textStep("What would you like to know?"));
+    const res = await runInlineChatTurn(baseArgs(), { chatStep, lookupKnowledge });
+    expect(res.ok).toBe(true);
+    expect(lookupKnowledge).not.toHaveBeenCalled();
+    expect(knowledgeResponseOf(chatStep)).toEqual({ ok: false, message: "question is required" });
   });
 });

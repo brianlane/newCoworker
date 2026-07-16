@@ -654,6 +654,15 @@ export async function POST(request: Request) {
       "send_email"
     );
 
+    // Same gate the Rowboat tool-call route checks before dispatching
+    // dashboard_business_knowledge_lookup (default ON in the registry).
+    // Read here so the inline path only declares the tool when allowed.
+    const knowledgeToolEnabled = await isAgentToolEnabled(
+      body.businessId,
+      "dashboard",
+      "business_knowledge_lookup"
+    );
+
     // Two message arrays:
     //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
     //     recent tail (last RESEND_TAIL_MESSAGES) as a system block so
@@ -745,7 +754,8 @@ export async function POST(request: Request) {
         businessId: body.businessId,
         systemInstruction,
         userMessage: `[Dashboard] ${storedUserMessage}`,
-        attachment
+        attachment,
+        knowledgeToolEnabled
       });
 
       if (inline.ok) {

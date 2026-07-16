@@ -12,6 +12,13 @@
  *     reusable agent — both are returned as DRAFTS the UI hands off to the
  *     builder/editor for review; nothing is persisted here.
  *
+ * It also exposes `business_knowledge_lookup` (the same core the Rowboat
+ * dashboard agent calls through /api/rowboat/tool-call, staff audience) so
+ * the PRIMARY path keeps knowledge-base grounding — without it, owner
+ * questions like "what's our renewal process?" would only be answerable on
+ * the worker FALLBACK path. Declared only when the owner's Settings →
+ * Coworker tools toggle allows it (same gate the Rowboat route checks).
+ *
  * The caller (chat route) owns prompt assembly (same system blocks as the
  * worker path), persistence, email-block fulfilment, and memory capture.
  * Every model step is metered into the shared AI budget (surface
@@ -38,6 +45,7 @@ import {
   AGENT_NAME_MAX_CHARS,
   type AgentOutputFormat
 } from "@/lib/agents/core";
+import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { logger } from "@/lib/logger";
 
 /** Attachment formats the inline turn understands. */
@@ -109,10 +117,40 @@ const CREATION_TOOLS: GeminiFunctionDeclaration[] = [
   }
 ];
 
+/**
+ * Knowledge-base grounding for the inline path. Same core + staff audience
+ * as the Rowboat dashboard agent's `dashboard_business_knowledge_lookup`;
+ * only declared when the owner's Settings toggle allows it.
+ */
+const KNOWLEDGE_TOOL: GeminiFunctionDeclaration = {
+  name: "business_knowledge_lookup",
+  description:
+    "Answer a question about THIS business from its approved knowledge base: uploaded business documents, the crawled website summary, and the business's identity/memory. Use whenever the owner asks an operational or business-specific question (processes, policies, required documents, services, hours, what the website says). Returns a grounded answer, or an honest not-found — never invent an answer instead of calling this.",
+  parameters: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description: "The owner's question, self-contained (include the subject, not just 'it')."
+      }
+    },
+    required: ["question"]
+  }
+};
+
 /** Bound on model↔tool round-trips per turn. */
 const MAX_TOOL_STEPS = 4;
 
-const DEFAULT_INLINE_MODEL = "gemini-3.1-flash";
+const DEFAULT_INLINE_MODEL = "gemini-3.5-flash";
+/**
+ * Same 404 safety net as knowledge-tools/handlers.ts: a configured (or
+ * newly defaulted) model id that Google has retired/renamed must degrade to
+ * a known-live id instead of killing the whole inline path — a dead inline
+ * path silently demotes text turns to the worker and hard-fails attachment
+ * turns (exactly what shipped when the default was `gemini-3.1-flash`, an
+ * id that does not exist on the Gemini API).
+ */
+const INLINE_FALLBACK_MODEL = "gemini-3-flash-preview";
 
 function resolveModel(): string {
   const configured = (process.env.DASHBOARD_CHAT_MODEL ?? "").trim();
@@ -157,6 +195,8 @@ export type InlineTurnDeps = {
     args: { businessId: string; description: string },
     deps?: CompileFlowDeps
   ) => Promise<CompileFlowResult>;
+  /** Injectable knowledge lookup (tests). */
+  lookupKnowledge?: typeof lookupBusinessKnowledge;
 };
 
 /** Execute one requested tool call; returns the functionResponse payload. */
@@ -164,8 +204,40 @@ async function executeToolCall(
   businessId: string,
   call: { name: string; args: Record<string, unknown> },
   drafts: InlineChatDraft[],
-  compileFlow: NonNullable<InlineTurnDeps["compileFlow"]>
+  compileFlow: NonNullable<InlineTurnDeps["compileFlow"]>,
+  lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>
 ): Promise<unknown> {
+  if (call.name === "business_knowledge_lookup") {
+    const question = typeof call.args.question === "string" ? call.args.question.trim() : "";
+    if (!question) {
+      return { ok: false, message: "question is required" };
+    }
+    try {
+      // Owner dashboard reads as staff — sees internal docs, same audience
+      // the Rowboat tool-call route resolves for dashboard_* tool names.
+      const result = await lookupKnowledge(businessId, question.slice(0, 2000), {
+        audience: "staff"
+      });
+      if (!result.ok || !result.data) {
+        return {
+          ok: false,
+          message:
+            "The knowledge base couldn't answer right now. Tell the owner you couldn't check the knowledge base — do NOT invent an answer."
+        };
+      }
+      return { ok: true, answer: result.data.answer };
+    } catch (err) {
+      logger.warn("dashboard-chat business_knowledge_lookup tool failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return {
+        ok: false,
+        message:
+          "The knowledge base couldn't answer right now. Tell the owner you couldn't check the knowledge base — do NOT invent an answer."
+      };
+    }
+  }
   if (call.name === "create_aiflow") {
     const description = typeof call.args.description === "string" ? call.args.description.trim() : "";
     if (!description) {
@@ -229,16 +301,25 @@ export async function runInlineChatTurn(
     /** The owner's message, already carrying the "[Dashboard] " channel marker. */
     userMessage: string;
     attachment?: InlineTurnAttachment | null;
+    /**
+     * Settings → Coworker tools gate for `business_knowledge_lookup`
+     * (dashboard agent). The route reads it once per turn, exactly like
+     * `emailToolEnabled`; when false the tool is not even declared.
+     */
+    knowledgeToolEnabled?: boolean;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
-  /* c8 ignore next 2 -- production defaults; tests inject */
+  /* c8 ignore next 3 -- production defaults; tests inject */
   const chatStep = deps.chatStep ?? geminiChatStep;
   const compileFlow = deps.compileFlow ?? compileAiFlowFromDescription;
+  const lookupKnowledge = deps.lookupKnowledge ?? lookupBusinessKnowledge;
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };
-  const model = resolveModel();
+  let model = resolveModel();
+  const tools =
+    args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL];
 
   const userParts: Array<Record<string, unknown>> = [{ text: args.userMessage }];
   if (args.attachment) {
@@ -258,16 +339,34 @@ export async function runInlineChatTurn(
     const timer = setTimeout(() => controller.abort(), 90_000);
     let result: GeminiChatStepResult;
     try {
-      result = await chatStep({
+      const stepParams = {
         apiKey,
-        model,
         systemInstruction: args.systemInstruction,
         contents,
-        tools: CREATION_TOOLS,
+        tools,
         temperature: 0.3,
         maxOutputTokens: 4000,
         signal: controller.signal
-      });
+      };
+      try {
+        result = await chatStep({ ...stepParams, model });
+      } catch (err) {
+        // Retired/renamed model id: degrade to the known-live fallback for
+        // the REST of the turn instead of failing the whole inline path
+        // (mirrors knowledge-tools/handlers.ts). Any other error rethrows
+        // to the outer handler unchanged.
+        const detail = err instanceof Error ? err.message : String(err);
+        if (!/^gemini_http_404(?::|$)/.test(detail) || model === INLINE_FALLBACK_MODEL) {
+          throw err;
+        }
+        logger.warn("dashboard-chat inline turn: model 404; using fallback model", {
+          businessId: args.businessId,
+          from: model,
+          to: INLINE_FALLBACK_MODEL
+        });
+        model = INLINE_FALLBACK_MODEL;
+        result = await chatStep({ ...stepParams, model });
+      }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       logger.warn("dashboard-chat inline turn: model step failed", {
@@ -308,7 +407,7 @@ export async function runInlineChatTurn(
     for (const call of result.functionCalls) {
       responses.push({
         name: call.name,
-        response: await executeToolCall(args.businessId, call, drafts, compileFlow)
+        response: await executeToolCall(args.businessId, call, drafts, compileFlow, lookupKnowledge)
       });
     }
     contents.push(buildFunctionResponseContent(responses));
