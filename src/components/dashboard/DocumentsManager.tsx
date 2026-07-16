@@ -681,7 +681,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                         value={draftContent}
                         onChange={(e) => setDraftContent(e.target.value)}
                       />
-                      <div className="mt-2">
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Button
                           type="button"
                           variant="secondary"
@@ -691,6 +691,28 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                         >
                           Save content
                         </Button>
+                        {/* The export builds from SAVED, ready content — the
+                            route rejects processing/failed/empty docs, and with
+                            unsaved edits the link would silently ship an older
+                            deck, so both gate the control. */}
+                        {doc.status === "ready" && (doc.content_md ?? "").trim().length > 0 ? (
+                          draftContent === (doc.content_md ?? "") ? (
+                            <a
+                              href={`/api/dashboard/documents/${doc.id}/pptx?businessId=${encodeURIComponent(businessId)}`}
+                              className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
+                              title="Headings become slides, bullets become bullets"
+                            >
+                              Download as PowerPoint
+                            </a>
+                          ) : (
+                            <span
+                              className="inline-flex items-center rounded-md border border-parchment/10 px-3 py-1.5 text-xs text-parchment/40 cursor-not-allowed"
+                              title="Save your content edits first — the export uses saved content"
+                            >
+                              Download as PowerPoint (save first)
+                            </span>
+                          )
+                        ) : null}
                       </div>
                     </div>
                     <div>
