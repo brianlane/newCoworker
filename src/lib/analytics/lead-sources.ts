@@ -20,6 +20,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { analyticsWindowStart } from "@/lib/analytics/dashboard-analytics";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -110,7 +111,10 @@ export async function getLeadSourceOverview(
   const db = opts.client ?? (await createSupabaseServiceClient());
   const now = opts.now ?? new Date();
   const windowDays = opts.windowDays ?? LEAD_SOURCE_WINDOW_DAYS;
-  const since = new Date(now.getTime() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+  // UTC day-aligned window start, matching every other analytics card on the
+  // page (volume, funnels, peak hours) — the same "30 days" label must mean
+  // the same contacts everywhere.
+  const since = analyticsWindowStart(now, windowDays).toISOString();
 
   const { data, error } = await db
     .from("contacts")
@@ -118,6 +122,9 @@ export async function getLeadSourceOverview(
     .eq("business_id", businessId)
     .eq("type", "customer")
     .gte("created_at", since)
+    // Newest-first so a capped scan deterministically keeps the MOST RECENT
+    // contacts (the clipped footnote says exactly that).
+    .order("created_at", { ascending: false })
     .limit(LEAD_SOURCE_SCAN_LIMIT);
   if (error) throw new Error(`getLeadSourceOverview: ${error.message}`);
 

@@ -591,8 +591,8 @@ export function LeadSourcesCard({ view }: { view: LeadSourcesView }) {
       </div>
       {view.clipped ? (
         <p className="text-[11px] text-amber-300/80 mt-2">
-          Large window — counts cover the first{" "}
-          {view.totalNewContacts.toLocaleString()} new contacts scanned.
+          Large window — counts cover the{" "}
+          {view.totalNewContacts.toLocaleString()} most recent new contacts.
         </p>
       ) : null}
     </Card>

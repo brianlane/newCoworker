@@ -7,6 +7,7 @@ import {
   LEAD_SOURCE_WINDOW_DAYS,
   type LeadSourceContact
 } from "@/lib/analytics/lead-sources";
+import { analyticsWindowStart } from "@/lib/analytics/dashboard-analytics";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -106,7 +107,7 @@ type Result = { data: unknown; error: unknown };
 function mockDb(result: Result) {
   const calls: Array<{ name: string; args: unknown[] }> = [];
   const chain: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "gte", "limit"]) {
+  for (const m of ["select", "eq", "gte", "order", "limit"]) {
     chain[m] = (...args: unknown[]) => {
       calls.push({ name: m, args });
       return chain;
@@ -122,7 +123,7 @@ function mockDb(result: Result) {
 describe("getLeadSourceOverview", () => {
   const NOW = new Date("2026-07-16T00:00:00.000Z");
 
-  it("scans the window's new customer contacts and folds them", async () => {
+  it("scans the window's new customer contacts (day-aligned, newest first) and folds them", async () => {
     const { db, calls } = mockDb({ data: [row(), row({ last_channel: "voice" })], error: null });
     const overview = await getLeadSourceOverview("biz-1", { client: db as never, now: NOW });
     expect(overview.totalNewContacts).toBe(2);
@@ -131,11 +132,16 @@ describe("getLeadSourceOverview", () => {
     expect(calls.some((c) => c.name === "eq" && c.args[0] === "type" && c.args[1] === "customer")).toBe(
       true
     );
+    // UTC day-aligned window start — the same boundary every other analytics
+    // card on the page uses.
     const gte = calls.find((c) => c.name === "gte")!;
     expect(gte.args[0]).toBe("created_at");
     expect(gte.args[1]).toBe(
-      new Date(NOW.getTime() - LEAD_SOURCE_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString()
+      analyticsWindowStart(NOW, LEAD_SOURCE_WINDOW_DAYS).toISOString()
     );
+    // Newest-first so a capped scan keeps the most recent contacts.
+    const order = calls.find((c) => c.name === "order")!;
+    expect(order.args).toEqual(["created_at", { ascending: false }]);
   });
 
   it("supports a custom window, marks a capped scan, and handles null rows", async () => {
