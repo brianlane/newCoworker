@@ -124,8 +124,16 @@ export default async function IntegrationDetailPage({
 
   const q = await searchParams;
   const ctx = await loadIntegrationsContext(`/dashboard/integrations/${integration.slug}`);
-  if (!ctx.businessId) redirect("/dashboard/integrations");
-  if (integration.ownerOnly && !ctx.canManageApiKeys) redirect("/dashboard/integrations");
+  if (!ctx.businessId || (integration.ownerOnly && !ctx.canManageApiKeys)) {
+    // Forward the OAuth-callback banner params so the hub still shows the
+    // error/success message instead of silently dropping it.
+    const forwarded = new URLSearchParams();
+    if (q.error) forwarded.set("error", q.error);
+    if (q.workspace) forwarded.set("workspace", q.workspace);
+    if (q.meta) forwarded.set("meta", q.meta);
+    const qs = forwarded.toString();
+    redirect(`/dashboard/integrations${qs ? `?${qs}` : ""}`);
+  }
 
   const Icon = integration.icon;
 
