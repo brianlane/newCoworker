@@ -19,6 +19,11 @@
  * the worker FALLBACK path. Declared only when the owner's Settings →
  * Coworker tools toggle allows it (same gate the Rowboat route checks).
  *
+ * ACTION-TOOL PARITY (see action-tools.ts): `send_sms` and the calendar
+ * lifecycle tools (find/book/reschedule/cancel) are declared per the same
+ * Settings gates the Rowboat dispatch enforces, so the primary path can
+ * text and manage appointments exactly like the worker path always could.
+ *
  * The caller (chat route) owns prompt assembly (same system blocks as the
  * worker path), persistence, email-block fulfilment, and memory capture.
  * Every model step is metered into the shared AI budget (surface
@@ -46,6 +51,12 @@ import {
   type AgentOutputFormat
 } from "@/lib/agents/core";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import {
+  actionToolDeclarations,
+  executeActionTool,
+  isActionToolName,
+  type ActionToolGates
+} from "@/lib/dashboard-chat/action-tools";
 import { logger } from "@/lib/logger";
 
 /** Attachment formats the inline turn understands. */
@@ -197,6 +208,8 @@ export type InlineTurnDeps = {
   ) => Promise<CompileFlowResult>;
   /** Injectable knowledge lookup (tests). */
   lookupKnowledge?: typeof lookupBusinessKnowledge;
+  /** Injectable action-tool executor (tests). */
+  runActionTool?: typeof executeActionTool;
 };
 
 /** Execute one requested tool call; returns the functionResponse payload. */
@@ -205,8 +218,19 @@ async function executeToolCall(
   call: { name: string; args: Record<string, unknown> },
   drafts: InlineChatDraft[],
   compileFlow: NonNullable<InlineTurnDeps["compileFlow"]>,
-  lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>
+  lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>,
+  runActionTool: NonNullable<InlineTurnDeps["runActionTool"]>,
+  declaredActionTools: ReadonlySet<string>
 ): Promise<unknown> {
+  // Action tools (send_sms + calendar lifecycle): only dispatch names that
+  // were actually DECLARED this turn — a Settings-disabled tool the model
+  // hallucinates a call to must fail closed, not execute anyway.
+  if (isActionToolName(call.name)) {
+    if (!declaredActionTools.has(call.name)) {
+      return { ok: false, message: `unknown tool: ${call.name}` };
+    }
+    return runActionTool(businessId, { name: call.name, args: call.args });
+  }
   if (call.name === "business_knowledge_lookup") {
     const question = typeof call.args.question === "string" ? call.args.question.trim() : "";
     if (!question) {
@@ -307,19 +331,35 @@ export async function runInlineChatTurn(
      * `emailToolEnabled`; when false the tool is not even declared.
      */
     knowledgeToolEnabled?: boolean;
+    /**
+     * Settings → Coworker tools gates for the ACTION tools (send_sms +
+     * calendar lifecycle) — worker-path parity: the Rowboat OwnerCoworker
+     * has had these since launch, so the primary path must too. Omitted
+     * (e.g. older callers/tests) ⇒ no action tools declared.
+     */
+    actionToolGates?: ActionToolGates | null;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
-  /* c8 ignore next 3 -- production defaults; tests inject */
+  /* c8 ignore next 4 -- production defaults; tests inject */
   const chatStep = deps.chatStep ?? geminiChatStep;
   const compileFlow = deps.compileFlow ?? compileAiFlowFromDescription;
   const lookupKnowledge = deps.lookupKnowledge ?? lookupBusinessKnowledge;
+  const runActionTool = deps.runActionTool ?? executeActionTool;
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };
   let model = resolveModel();
-  const tools =
-    args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL];
+  const actionDeclarations = args.actionToolGates
+    ? actionToolDeclarations(args.actionToolGates)
+    : [];
+  const declaredActionTools: ReadonlySet<string> = new Set(
+    actionDeclarations.map((d) => d.name)
+  );
+  const tools = [
+    ...(args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL]),
+    ...actionDeclarations
+  ];
 
   const userParts: Array<Record<string, unknown>> = [{ text: args.userMessage }];
   if (args.attachment) {
@@ -407,7 +447,15 @@ export async function runInlineChatTurn(
     for (const call of result.functionCalls) {
       responses.push({
         name: call.name,
-        response: await executeToolCall(args.businessId, call, drafts, compileFlow, lookupKnowledge)
+        response: await executeToolCall(
+          args.businessId,
+          call,
+          drafts,
+          compileFlow,
+          lookupKnowledge,
+          runActionTool,
+          declaredActionTools
+        )
       });
     }
     contents.push(buildFunctionResponseContent(responses));

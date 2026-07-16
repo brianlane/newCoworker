@@ -502,3 +502,95 @@ describe("runInlineChatTurn — business_knowledge_lookup", () => {
     expect(knowledgeResponseOf(chatStep)).toEqual({ ok: false, message: "question is required" });
   });
 });
+
+describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
+  const ALL_ON = {
+    send_sms: true,
+    calendar_find_slots: true,
+    calendar_book_appointment: true,
+    calendar_reschedule_appointment: true,
+    calendar_cancel_appointment: true
+  };
+
+  it("declares gated action tools alongside the creation tools", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), { chatStep });
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).toEqual([
+      "create_aiflow",
+      "create_agent",
+      "business_knowledge_lookup",
+      "send_sms",
+      "calendar_find_slots",
+      "calendar_book_appointment",
+      "calendar_reschedule_appointment",
+      "calendar_cancel_appointment"
+    ]);
+  });
+
+  it("omits Settings-disabled action tools and declares none without gates", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(
+      baseArgs({ actionToolGates: { ...ALL_ON, send_sms: false } }),
+      { chatStep }
+    );
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).not.toContain("send_sms");
+    expect(declared).toContain("calendar_find_slots");
+
+    const chatStep2 = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs(), { chatStep: chatStep2 });
+    const declared2 = chatStep2.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared2).toEqual(["create_aiflow", "create_agent", "business_knowledge_lookup"]);
+  });
+
+  it("dispatches a declared action tool call to the executor and feeds the result back", async () => {
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      messageId: "msg-9",
+      sentBody: "This is a test message."
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("send_sms", { toE164: "+15145188192", body: "This is a test message." })
+      )
+      .mockResolvedValueOnce(textStep("Sent: \"This is a test message.\""));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res).toMatchObject({ ok: true, content: 'Sent: "This is a test message."' });
+    expect(runActionTool).toHaveBeenCalledWith(BIZ, {
+      name: "send_sms",
+      args: { toE164: "+15145188192", body: "This is a test message." }
+    });
+    const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
+      functionResponse: { name: string; response: { result: { messageId: string } } };
+    };
+    expect(fr.functionResponse.name).toBe("send_sms");
+    expect(fr.functionResponse.response.result.messageId).toBe("msg-9");
+  });
+
+  it("fails CLOSED on an action tool the model calls but that was not declared", async () => {
+    const runActionTool = vi.fn();
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
+      .mockResolvedValueOnce(textStep("I can't send texts right now."));
+    // Gates present but send_sms OFF — a hallucinated call must not execute.
+    const res = await runInlineChatTurn(
+      baseArgs({ actionToolGates: { ...ALL_ON, send_sms: false } }),
+      { chatStep, runActionTool }
+    );
+    expect(res.ok).toBe(true);
+    expect(runActionTool).not.toHaveBeenCalled();
+    const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
+      functionResponse: { response: { result: { ok: boolean; message: string } } };
+    };
+    expect(fr.functionResponse.response.result).toEqual({
+      ok: false,
+      message: "unknown tool: send_sms"
+    });
+  });
+});

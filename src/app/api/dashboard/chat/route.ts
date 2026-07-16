@@ -116,6 +116,7 @@ import {
   fulfillEmailBlocks
 } from "@/lib/dashboard-chat/email-blocks";
 import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import { getBusinessConfig } from "@/lib/db/configs";
 import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
@@ -449,6 +450,74 @@ function buildRowboatChatMessages(args: {
   return out;
 }
 
+/**
+ * Per-side cap on the identity/memory blocks injected into the INLINE
+ * systemInstruction. Generous (Gemini flash context is huge) but bounded so
+ * a pathological memory_md can't dominate the prompt. Memory keeps its TAIL
+ * (owner-chat capture sections append newest-last).
+ */
+const BUSINESS_CONTEXT_MAX_CHARS = 12_000;
+
+/**
+ * Business identity + memory system block for the INLINE path. The worker
+ * path gets these via the Rowboat agent's seeded instructions (vault sync);
+ * the inline call would otherwise answer configuration questions blind.
+ * Best-effort: a read failure degrades to no block, never a failed turn.
+ */
+async function buildBusinessContextBlock(businessId: string): Promise<string | null> {
+  try {
+    const config = await getBusinessConfig(businessId);
+    if (!config) return null;
+    const clipHead = (s: string): string =>
+      s.length > BUSINESS_CONTEXT_MAX_CHARS
+        ? `${s.slice(0, BUSINESS_CONTEXT_MAX_CHARS)}\n… (truncated)`
+        : s;
+    const clipTail = (s: string): string =>
+      s.length > BUSINESS_CONTEXT_MAX_CHARS
+        ? `… (older content truncated)\n${s.slice(-BUSINESS_CONTEXT_MAX_CHARS)}`
+        : s;
+    const identity = (config.identity_md ?? "").trim();
+    const memory = (config.memory_md ?? "").trim();
+    if (!identity && !memory) return null;
+    const parts = ["YOUR BUSINESS CONFIGURATION (identity + memory — the owner's own data; quote from it freely):"];
+    if (identity) parts.push(`# identity.md\n${clipHead(identity)}`);
+    if (memory) parts.push(`# memory.md\n${clipTail(memory)}`);
+    return parts.join("\n\n");
+  } catch (err) {
+    logger.warn("dashboard chat: business context block read failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
+ * Telemetry for a text turn that could NOT run on the inline primary path
+ * for a non-cap reason. The July 2026 dead-model incident (default id
+ * `gemini-3.1-flash`, which does not exist on the Gemini API) demoted every
+ * dashboard turn to the worker for days with zero platform signal — wire
+ * dashboards/alerts to `dashboard_chat_inline_fallback`. Best-effort.
+ */
+async function emitInlineFallbackTelemetry(
+  businessId: string,
+  reason: "no_api_key" | "inline_failed",
+  detail?: string
+): Promise<void> {
+  try {
+    const db = await createSupabaseServiceClient();
+    await db.rpc("telemetry_record", {
+      p_event_type: "dashboard_chat_inline_fallback",
+      p_payload: { business_id: businessId, reason, detail: detail ?? null }
+    });
+  } catch (err) {
+    logger.warn("dashboard chat: inline fallback telemetry emit failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 // =====================================================================
 // POST — write user message + enqueue a job + return 200
 // =====================================================================
@@ -663,6 +732,30 @@ export async function POST(request: Request) {
       "business_knowledge_lookup"
     );
 
+    // Action tools for the INLINE path (worker parity — the Rowboat
+    // OwnerCoworker declares these same tools, gated per call by the
+    // tool-call route). Each read resolves errors to the registry default.
+    const [
+      smsToolEnabled,
+      calFindEnabled,
+      calBookEnabled,
+      calRescheduleEnabled,
+      calCancelEnabled
+    ] = await Promise.all([
+      isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment")
+    ]);
+    const actionToolGates = {
+      send_sms: smsToolEnabled,
+      calendar_find_slots: calFindEnabled,
+      calendar_book_appointment: calBookEnabled,
+      calendar_reschedule_appointment: calRescheduleEnabled,
+      calendar_cancel_appointment: calCancelEnabled
+    };
+
     // Two message arrays:
     //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
     //     recent tail (last RESEND_TAIL_MESSAGES) as a system block so
@@ -720,11 +813,17 @@ export async function POST(request: Request) {
       });
       return null;
     });
+    const apiKeyPresent = Boolean(process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY);
     const route = resolveChatTurnRoute({
       hasAttachment: attachment !== null,
-      apiKeyPresent: Boolean(process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY),
+      apiKeyPresent,
       spend
     });
+    // Non-cap worker routing means the PRIMARY path is unavailable — make
+    // that loud (over-cap worker routing is expected and stays silent).
+    if (route.kind === "worker" && !apiKeyPresent) {
+      void emitInlineFallbackTelemetry(body.businessId, "no_api_key");
+    }
 
     // Persist the user message BEFORE running/enqueueing the turn. If the
     // turn fails for any reason the user's typed message is still saved —
@@ -746,16 +845,24 @@ export async function POST(request: Request) {
     if (route.kind === "inline") {
       // Prompt parity with the worker path: the same system blocks, joined
       // into Gemini's systemInstruction; the user turn is the marked message.
-      const systemInstruction = inputMessages
-        .filter((m) => m.role === "system")
-        .map((m) => m.content)
-        .join("\n\n");
+      // PLUS the business identity/memory block — the worker path carries
+      // those inside the Rowboat agent's seeded instructions (vault sync),
+      // so without this the primary path answered configuration questions
+      // blind ("are you connected to Calendly?" guesses, invented policy).
+      // Deliberately NOT added to inputMessages: the worker prompt already
+      // has it agent-side, and duplicating it would balloon CPU prefill.
+      const businessContextBlock = await buildBusinessContextBlock(body.businessId);
+      const systemInstruction = [
+        ...inputMessages.filter((m) => m.role === "system").map((m) => m.content),
+        ...(businessContextBlock ? [businessContextBlock] : [])
+      ].join("\n\n");
       const inline = await runInlineChatTurn({
         businessId: body.businessId,
         systemInstruction,
         userMessage: `[Dashboard] ${storedUserMessage}`,
         attachment,
-        knowledgeToolEnabled
+        knowledgeToolEnabled,
+        actionToolGates
       });
 
       if (inline.ok) {
@@ -808,6 +915,10 @@ export async function POST(request: Request) {
         error: inline.error,
         detail: inline.detail
       });
+      // A dying primary path must be LOUD: the July 2026 dead-model id
+      // (gemini-3.1-flash) demoted every text turn to the worker for weeks
+      // with zero signal. Best-effort — never fails the turn.
+      void emitInlineFallbackTelemetry(body.businessId, "inline_failed", inline.detail ?? inline.error);
       if (attachment) {
         return await finishInlineTurn({
           businessId: body.businessId,
