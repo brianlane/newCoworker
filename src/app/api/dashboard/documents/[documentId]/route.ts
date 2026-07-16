@@ -173,6 +173,14 @@ export async function PATCH(request: Request, context: RouteContext) {
         }
         if (!contactRow) return errorResponse("VALIDATION_ERROR", "Contact not found");
         patch.contact_id = body.data.contactId;
+        // Linking makes this a person's record: unless the same request
+        // explicitly sets an audience, snap to internal-only — a policy or
+        // contract must never stay reachable from customer channels by
+        // default (same posture as linked uploads and the CSV importer).
+        // The owner can widen it deliberately afterward.
+        if (movingToLinked && body.data.audience === undefined) {
+          patch.audience = "staff";
+        }
       }
     }
     if (body.data.assignedEmployeeId !== undefined) {

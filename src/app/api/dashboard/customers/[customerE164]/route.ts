@@ -41,6 +41,7 @@ import {
 import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
 
 export const dynamic = "force-dynamic";
 
@@ -336,7 +337,16 @@ export async function DELETE(
     // (idempotent retries from a flaky network shouldn't 404). The
     // SMS/voice history rows are NOT cascaded — those are facts about
     // what was sent/said, retained for the channel-specific dashboards.
-    // Only the rollup memory is removed.
+    // Only the rollup memory is removed — plus the person's linked record
+    // documents (policies/contracts), which must not silently become
+    // unlinked knowledge-library docs via the FK's SET NULL (that would
+    // leak their data into the library AND mint library docs past the tier
+    // cap). Signed documents are retained legal evidence and unlink
+    // instead. Cleanup failure aborts the delete so nothing orphans.
+    const existing = await getCustomerMemory(businessId, customerE164);
+    if (existing) {
+      await deleteContactLinkedDocuments(businessId, existing.id);
+    }
     await deleteCustomerMemory(businessId, customerE164);
     return successResponse({ ok: true });
   } catch (err) {
