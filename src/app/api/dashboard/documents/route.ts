@@ -93,7 +93,12 @@ export async function POST(request: Request) {
     const title = (titleRaw || file.name.replace(/\.[a-z0-9]+$/i, "")).slice(0, 200);
     if (!title) return errorResponse("VALIDATION_ERROR", "title is required");
     const category = String(form.get("category") ?? "general").trim().slice(0, 100) || "general";
-    const audience = audienceSchema.safeParse(form.get("audience") ?? "both");
+    // Contact-linked records default to internal-only (matching the CSV
+    // importer): a customer's policy/contract must never reach customer
+    // channels unless the owner deliberately widens it. Library uploads
+    // keep the historical "both" default.
+    const audienceDefault = String(form.get("contactId") ?? "").trim() ? "staff" : "both";
+    const audience = audienceSchema.safeParse(form.get("audience") ?? audienceDefault);
     if (!audience.success) {
       return errorResponse("VALIDATION_ERROR", "audience must be clients, staff, or both");
     }

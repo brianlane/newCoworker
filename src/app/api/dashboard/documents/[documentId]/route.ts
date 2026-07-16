@@ -91,33 +91,41 @@ export async function PATCH(request: Request, context: RouteContext) {
       }
     }
     if (body.data.expiresAt !== undefined) {
+      let nextExpires: string | null;
       if (body.data.expiresAt === null || body.data.expiresAt.trim() === "") {
-        patch.expires_at = null;
+        nextExpires = null;
       } else {
         // Date-only inputs mean "usable through that day" (end-of-day).
-        const parsed = parseExpirationInput(body.data.expiresAt);
-        if (!parsed) {
+        nextExpires = parseExpirationInput(body.data.expiresAt);
+        if (!nextExpires) {
           return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
         }
-        patch.expires_at = parsed;
       }
-      // Changing the date re-arms the sweep's reminders.
-      patch.expiring_soon_notified_at = null;
-      patch.expired_notified_at = null;
+      // Only a CHANGED date re-arms the sweep's reminders — re-submitting
+      // the same date (the UI sends the field on every save) must not
+      // trigger duplicate notifications.
+      if (nextExpires !== existing.expires_at) {
+        patch.expires_at = nextExpires;
+        patch.expiring_soon_notified_at = null;
+        patch.expired_notified_at = null;
+      }
     }
     if (body.data.renewalDate !== undefined) {
+      let nextRenewal: string | null;
       if (body.data.renewalDate === null || body.data.renewalDate.trim() === "") {
-        patch.renewal_date = null;
+        nextRenewal = null;
       } else {
         // Same end-of-day semantics as expiresAt.
-        const parsed = parseExpirationInput(body.data.renewalDate);
-        if (!parsed) {
+        nextRenewal = parseExpirationInput(body.data.renewalDate);
+        if (!nextRenewal) {
           return errorResponse("VALIDATION_ERROR", "renewalDate is not a date");
         }
-        patch.renewal_date = parsed;
       }
-      // A new renewal date re-arms the sweep's reminder.
-      patch.renewal_due_notified_at = null;
+      // Same changed-only rule: an unchanged renewal date keeps its stamp.
+      if (nextRenewal !== existing.renewal_date) {
+        patch.renewal_date = nextRenewal;
+        patch.renewal_due_notified_at = null;
+      }
     }
     if (body.data.contactId !== undefined) {
       // Linking/unlinking moves the document BETWEEN cap pools (per-tier
