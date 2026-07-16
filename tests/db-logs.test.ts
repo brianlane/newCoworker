@@ -128,6 +128,30 @@ describe("db/logs", () => {
     await expect(getRecentAlertsAll(5, db as never)).resolves.toEqual([]);
   });
 
+  it("getRecentAlertsAll excludes muted businesses", async () => {
+    const not = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      not,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentAlertsAll(5, db as never, { excludeBusinessIds: ["biz-a", "biz-b"] });
+    expect(not).toHaveBeenCalledWith("business_id", "in", "(biz-a,biz-b)");
+  });
+
+  it("getRecentAlertsAll skips the exclusion clause for an empty list", async () => {
+    const not = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      not,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentAlertsAll(5, db as never, { excludeBusinessIds: [] });
+    expect(not).not.toHaveBeenCalled();
+  });
+
   it("getRecentLogsAll returns logs", async () => {
     const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null }) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
@@ -147,5 +171,29 @@ describe("db/logs", () => {
     const db = { ...mockDb(), limit: vi.fn().mockResolvedValue({ data: null, error: null }) };
 
     await expect(getRecentLogsAll(5, db as never)).resolves.toEqual([]);
+  });
+
+  it("getRecentLogsAll excludes muted businesses", async () => {
+    const not = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      not,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentLogsAll(5, db as never, { excludeBusinessIds: ["biz-a"] });
+    expect(not).toHaveBeenCalledWith("business_id", "in", "(biz-a)");
+  });
+
+  it("getRecentLogsAll skips the exclusion clause for an empty list", async () => {
+    const not = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      not,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentLogsAll(5, db as never, { excludeBusinessIds: [] });
+    expect(not).not.toHaveBeenCalled();
   });
 });

@@ -19,6 +19,11 @@
  * the worker FALLBACK path. Declared only when the owner's Settings →
  * Coworker tools toggle allows it (same gate the Rowboat route checks).
  *
+ * ACTION-TOOL PARITY (see action-tools.ts): `send_sms` and the calendar
+ * lifecycle tools (find/book/reschedule/cancel) are declared per the same
+ * Settings gates the Rowboat dispatch enforces, so the primary path can
+ * text and manage appointments exactly like the worker path always could.
+ *
  * The caller (chat route) owns prompt assembly (same system blocks as the
  * worker path), persistence, email-block fulfilment, and memory capture.
  * Every model step is metered into the shared AI budget (surface
@@ -46,6 +51,13 @@ import {
   type AgentOutputFormat
 } from "@/lib/agents/core";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import {
+  actionToolDeclarations,
+  executeActionTool,
+  isActionToolName,
+  type ActionToolGates,
+  type ActionToolName
+} from "@/lib/dashboard-chat/action-tools";
 import { logger } from "@/lib/logger";
 
 /** Attachment formats the inline turn understands. */
@@ -197,7 +209,56 @@ export type InlineTurnDeps = {
   ) => Promise<CompileFlowResult>;
   /** Injectable knowledge lookup (tests). */
   lookupKnowledge?: typeof lookupBusinessKnowledge;
+  /** Injectable action-tool executor (tests). */
+  runActionTool?: typeof executeActionTool;
 };
+
+/**
+ * Action tools whose execution commits an IRREVERSIBLE side effect (a text
+ * leaves, a calendar mutates, a link is minted). find_slots is a pure read.
+ * Once one of these has RUN, a later model-step failure must never bounce
+ * the turn to the worker fallback — the worker would re-answer the same
+ * owner message and could re-send/re-book (Bugbot High on PR #668).
+ */
+const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
+  "send_sms",
+  "calendar_book_appointment",
+  "calendar_reschedule_appointment",
+  "calendar_cancel_appointment"
+]);
+
+/** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
+type SideEffectLog = { happened: boolean; notes: string[] };
+
+/**
+ * The owner-facing fact line for one confirmed side effect, used when the
+ * wrap-up model step fails or goes silent. Without it the degraded reply
+ * would swallow load-bearing values — most critically a Calendly
+ * reschedule/booking LINK the owner still has to send onward.
+ */
+function sideEffectNote(name: ActionToolName, result: unknown): string {
+  const r = result as {
+    toE164?: unknown;
+    sentBody?: unknown;
+    data?: { bookingLink?: unknown; rescheduleLink?: unknown };
+  };
+  if (name === "send_sms") {
+    const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
+    const body = typeof r.sentBody === "string" ? ` — "${r.sentBody}"` : "";
+    return `Text sent to ${to}${body}.`;
+  }
+  if (name === "calendar_book_appointment") {
+    return typeof r.data?.bookingLink === "string"
+      ? `Single-use booking link created (the appointment is NOT booked until the attendee completes it): ${r.data.bookingLink}`
+      : "The appointment was booked.";
+  }
+  if (name === "calendar_reschedule_appointment") {
+    return typeof r.data?.rescheduleLink === "string"
+      ? `Reschedule link created (the appointment is NOT moved until the attendee picks the new time): ${r.data.rescheduleLink}`
+      : "The appointment was rescheduled.";
+  }
+  return "The appointment was canceled.";
+}
 
 /** Execute one requested tool call; returns the functionResponse payload. */
 async function executeToolCall(
@@ -205,8 +266,34 @@ async function executeToolCall(
   call: { name: string; args: Record<string, unknown> },
   drafts: InlineChatDraft[],
   compileFlow: NonNullable<InlineTurnDeps["compileFlow"]>,
-  lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>
+  lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>,
+  runActionTool: NonNullable<InlineTurnDeps["runActionTool"]>,
+  declaredActionTools: ReadonlySet<string>,
+  sideEffects: SideEffectLog
 ): Promise<unknown> {
+  // Action tools (send_sms + calendar lifecycle): only dispatch names that
+  // were actually DECLARED this turn — a Settings-disabled tool the model
+  // hallucinates a call to must fail closed, not execute anyway.
+  if (isActionToolName(call.name)) {
+    if (!declaredActionTools.has(call.name)) {
+      return { ok: false, message: `unknown tool: ${call.name}` };
+    }
+    const result = await runActionTool(businessId, { name: call.name, args: call.args });
+    // Marked only on a CONFIRMED effect (ok:true): a cleanly-refused send
+    // (opt-out, validation, quota) or failed booking committed nothing, so
+    // pinning the turn would both suppress a legitimate worker fallback and
+    // let the degraded copy imply an action that never happened.
+    if (
+      SIDE_EFFECT_TOOLS.has(call.name) &&
+      typeof result === "object" &&
+      result !== null &&
+      (result as { ok?: unknown }).ok === true
+    ) {
+      sideEffects.happened = true;
+      sideEffects.notes.push(sideEffectNote(call.name, result));
+    }
+    return result;
+  }
   if (call.name === "business_knowledge_lookup") {
     const question = typeof call.args.question === "string" ? call.args.question.trim() : "";
     if (!question) {
@@ -307,19 +394,35 @@ export async function runInlineChatTurn(
      * `emailToolEnabled`; when false the tool is not even declared.
      */
     knowledgeToolEnabled?: boolean;
+    /**
+     * Settings → Coworker tools gates for the ACTION tools (send_sms +
+     * calendar lifecycle) — worker-path parity: the Rowboat OwnerCoworker
+     * has had these since launch, so the primary path must too. Omitted
+     * (e.g. older callers/tests) ⇒ no action tools declared.
+     */
+    actionToolGates?: ActionToolGates | null;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
-  /* c8 ignore next 3 -- production defaults; tests inject */
+  /* c8 ignore next 4 -- production defaults; tests inject */
   const chatStep = deps.chatStep ?? geminiChatStep;
   const compileFlow = deps.compileFlow ?? compileAiFlowFromDescription;
   const lookupKnowledge = deps.lookupKnowledge ?? lookupBusinessKnowledge;
+  const runActionTool = deps.runActionTool ?? executeActionTool;
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_failed", detail: "not_configured" };
   let model = resolveModel();
-  const tools =
-    args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL];
+  const actionDeclarations = args.actionToolGates
+    ? actionToolDeclarations(args.actionToolGates)
+    : [];
+  const declaredActionTools: ReadonlySet<string> = new Set(
+    actionDeclarations.map((d) => d.name)
+  );
+  const tools = [
+    ...(args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL]),
+    ...actionDeclarations
+  ];
 
   const userParts: Array<Record<string, unknown>> = [{ text: args.userMessage }];
   if (args.attachment) {
@@ -331,6 +434,11 @@ export async function runInlineChatTurn(
 
   const drafts: InlineChatDraft[] = [];
   const texts: string[] = [];
+  // Set the moment a SIDE_EFFECT_TOOLS call CONFIRMS (ok:true) — from then
+  // on this turn must never resolve ok:false (the worker fallback would
+  // rerun the owner's message and duplicate the send/booking). Notes carry
+  // the facts a degraded wrap-up must not lose (links, sent bodies).
+  const sideEffects: SideEffectLog = { happened: false, notes: [] };
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
@@ -376,10 +484,11 @@ export async function runInlineChatTurn(
       });
       // A wrap-up step that fails AFTER a tool already produced drafts must
       // not discard them — the compile spend is real and the draft is the
-      // deliverable. Degrade to the stock hand-off line instead of failing
-      // the turn (which would drop the cards and, on text turns, bounce the
-      // whole turn to the worker).
-      if (drafts.length > 0) break;
+      // deliverable. Same for a turn that already COMMITTED a side effect
+      // (a text sent, an appointment mutated): failing it would bounce the
+      // turn to the worker, which re-answers the same owner message and
+      // could re-send/re-book. Degrade to an honest stored line instead.
+      if (drafts.length > 0 || sideEffects.happened) break;
       return { ok: false, error: "model_failed", detail };
     } finally {
       clearTimeout(timer);
@@ -407,7 +516,16 @@ export async function runInlineChatTurn(
     for (const call of result.functionCalls) {
       responses.push({
         name: call.name,
-        response: await executeToolCall(args.businessId, call, drafts, compileFlow, lookupKnowledge)
+        response: await executeToolCall(
+          args.businessId,
+          call,
+          drafts,
+          compileFlow,
+          lookupKnowledge,
+          runActionTool,
+          declaredActionTools,
+          sideEffects
+        )
       });
     }
     contents.push(buildFunctionResponseContent(responses));
@@ -417,15 +535,28 @@ export async function runInlineChatTurn(
   }
 
   const content = texts.join("\n\n").trim();
-  if (!content && drafts.length === 0) {
+  if (!content && drafts.length === 0 && !sideEffects.happened) {
     return { ok: false, error: "empty" };
   }
-  return {
-    ok: true,
-    // A tool-created draft with a silent final step still deserves a line.
-    content:
-      content ||
-      "Done — I've prepared a draft for you. Open it from the card below to review and save.",
-    drafts
-  };
+  // A tool-created draft (or committed side effect) with a silent final
+  // step still deserves an honest line — and must not fail the turn, which
+  // would re-run it on the worker. BOTH facts are reported when both
+  // happened: the draft hand-off AND the side-effect notes (links, sent
+  // bodies) the lost wrap-up would have relayed.
+  let fallback = content;
+  if (!fallback) {
+    const parts: string[] = [];
+    if (drafts.length > 0) {
+      parts.push(
+        "Done — I've prepared a draft for you. Open it from the card below to review and save."
+      );
+    }
+    if (sideEffects.happened) {
+      parts.push(
+        `${parts.length > 0 ? "Also completed" : "Done — the requested action went through"}, though I hit a hiccup writing my summary. What happened:\n${sideEffects.notes.map((n) => `- ${n}`).join("\n")}`
+      );
+    }
+    fallback = parts.join("\n\n");
+  }
+  return { ok: true, content: fallback, drafts };
 }

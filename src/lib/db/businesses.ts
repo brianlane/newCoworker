@@ -48,6 +48,12 @@ export type BusinessRow = {
   enterprise_limits?: Record<string, unknown> | null;
   /** Lifetime abuse-tracking profile — null for pre-lifecycle businesses. */
   customer_profile_id?: string | null;
+  /** Admin dashboard mutes — hide this business from the fleet-wide feeds
+   *  (Recent Activity / System Errors / Recent Alerts). Managed via
+   *  src/lib/db/admin-mutes.ts. */
+  admin_mute_activity?: boolean;
+  admin_mute_errors?: boolean;
+  admin_mute_alerts?: boolean;
   /**
    * Industry slug chosen during onboarding (e.g. "real_estate"). Drives
    * per-industry behavior such as compliance guardrails and AiFlow example

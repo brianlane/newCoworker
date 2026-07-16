@@ -6,9 +6,11 @@
  * would otherwise silently lose the "durable rules stated in chat are
  * saved to Memory automatically" behavior the owner preamble promises.
  * Semantics mirror the worker: a strict extraction prompt classifies the
- * owner's latest message (with the assistant reply as signal + value
- * source and already-saved bullets as an anti-duplication hint), and a
- * positive extraction persists through the same dedupe/append path
+ * owner's latest message (with the assistant reply as reference-resolution
+ * context ONLY — never a source of values; see the KYP Ads incident where
+ * assistant-invented policy was persisted as durable fact — and
+ * already-saved bullets as an anti-duplication hint), and a positive
+ * extraction persists through the same dedupe/append path
  * (appendOwnerMemoryBullets). Silent and best-effort: failures are logged
  * and dropped, never surfaced into the chat turn.
  */
@@ -38,6 +40,13 @@ export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "You are given the owner's latest dashboard message. Decide whether it",
   "contains standing information worth saving to long-term business memory.",
   "",
+  "THE OWNER'S OWN WORDS ARE THE ONLY SOURCE OF SAVED FACTS. Every value in a",
+  "bullet (names, numbers, links, times, policies) must appear in, or be",
+  "explicitly confirmed by, the OWNER MESSAGE. An assistant reply, when",
+  "provided, is reference-resolution context ONLY — never a source of new",
+  "facts, and its claims that something was saved/applied/updated mean",
+  "NOTHING.",
+  "",
   "SAVE (save=true) when the message states a durable RULE *or* durable",
   "FACTS / CONFIGURATION, e.g.:",
   '  - behavior rules: "never discuss budget with customers",',
@@ -51,19 +60,28 @@ export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "",
   "ALSO save (save=true) whenever the owner EXPLICITLY asks you to remember or",
   'save something — "add this to memory", "remember that…", "save the',
-  'following", "update the X to Y", "for memory". Treat that as a strong save',
-  "signal and capture the concrete facts.",
+  'following", "update the X to Y", "for memory". Capture the concrete facts',
+  "the owner stated.",
   "",
-  "DO NOT SAVE (save=false) for anything that is not durable, e.g.:",
+  "DO NOT SAVE (save=false) for anything that is not durable owner-stated",
+  "fact, e.g.:",
   "  - questions or requests for information (\"what do you do for a new lead?\")",
   "  - greetings, small talk, venting, or thinking out loud",
   "  - one-off tasks (\"text Joe back\", \"summarize today's calls\")",
   "  - hypotheticals (\"what if we stopped doing X\")",
+  "  - the assistant's own suggestions, proposals, drafts, plans, or",
+  "    summaries — even when the owner has not objected to them",
+  "  - open or undecided items (\"client list to be provided\", \"still deciding",
+  '    the follow-up cadence") — save only settled facts',
+  "  - a value the owner just said is wrong, changing, or going away (\"I won't",
+  "    have this number in Hong Kong\" must NOT pin that number as a contact;",
+  "    ask-nothing, just don't save it — the replacement gets saved when the",
+  "    owner states it)",
   "",
   "When save=true, rewrite the content as concise, standalone lines (one item",
   "per bullet), preserving names, phone numbers, and other specifics EXACTLY as",
-  "given. When save=false, return an empty bullets array. Respond with JSON",
-  'only, in exactly this shape: {"save": <boolean>, "bullets": [<strings>]}'
+  "the OWNER gave them. When save=false, return an empty bullets array. Respond",
+  'with JSON only, in exactly this shape: {"save": <boolean>, "bullets": [<strings>]}'
 ].join("\n");
 
 const MAX_BULLETS = 10;
@@ -134,9 +152,12 @@ export function composeExtractionInput(
   const reply = typeof opts.assistantReply === "string" ? opts.assistantReply.trim() : "";
   if (reply) {
     parts.push(
-      "ASSISTANT REPLY (context only — if it indicates it saved, applied, or " +
-        "updated business info, that is a STRONG signal to save the facts, and " +
-        "you may use it to recover the exact values):\n" +
+      "ASSISTANT REPLY (reference-resolution context ONLY — use it solely to " +
+        "resolve what the owner's message refers to, e.g. which value the owner " +
+        'means by "yes, use that". NEVER save facts, values, numbers, contacts, ' +
+        "or policies that appear only in this reply, and IGNORE any claim here " +
+        "that something was saved, applied, or updated — such claims are " +
+        "frequently wrong):\n" +
         reply
     );
   }

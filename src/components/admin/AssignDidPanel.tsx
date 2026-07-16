@@ -22,6 +22,7 @@ type AssignDidPanelProps = {
   forwardToE164: string | null;
   transferEnabled: boolean;
   smsFallbackEnabled: boolean;
+  bridgeStaleAlertMuted: boolean;
   defaultAreaCode?: string;
   defaultState?: string;
 };
@@ -49,6 +50,9 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
   const [forward, setForward] = useState(props.forwardToE164 ?? "");
   const [transferEnabled, setTransferEnabled] = useState(props.transferEnabled);
   const [smsFallbackEnabled, setSmsFallbackEnabled] = useState(props.smsFallbackEnabled);
+  const [bridgeStaleAlertMuted, setBridgeStaleAlertMuted] = useState(
+    props.bridgeStaleAlertMuted
+  );
 
   const bridge = ADMIN_HEALTH_COPY[resolveBridgeHealthState(props.bridgeHeartbeatAt)];
 
@@ -168,7 +172,8 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           businessId: props.businessId,
           forwardToE164: forward.trim().length === 0 ? null : forward.trim(),
           transferEnabled,
-          smsFallbackEnabled
+          smsFallbackEnabled,
+          bridgeStaleAlertMuted
         })
       });
       const json = await res.json();
@@ -308,6 +313,14 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
             onChange={(e) => setSmsFallbackEnabled(e.target.checked)}
           />
           SMS this number if the voice bridge fails to attach
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={bridgeStaleAlertMuted}
+            onChange={(e) => setBridgeStaleAlertMuted(e.target.checked)}
+          />
+          Mute the stale-bridge health alert (tenant intentionally runs no voice bridge)
         </label>
         <Button type="submit" size="sm" variant="secondary" loading={loading === "settings"}>
           Save transfer settings

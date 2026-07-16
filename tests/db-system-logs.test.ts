@@ -206,6 +206,22 @@ describe("db/system-logs", () => {
     await expect(listSystemLogErrorsAll(5, db as never)).resolves.toEqual([]);
   });
 
+  it("listSystemLogErrorsAll excludes muted businesses but keeps platform rows", async () => {
+    const db = mockDb();
+    await listSystemLogErrorsAll(10, db as never, {
+      excludeBusinessIds: ["biz-a", "biz-b"]
+    });
+    expect(db.or).toHaveBeenCalledWith(
+      "business_id.is.null,business_id.not.in.(biz-a,biz-b)"
+    );
+  });
+
+  it("listSystemLogErrorsAll skips the exclusion clause for an empty list", async () => {
+    const db = mockDb();
+    await listSystemLogErrorsAll(10, db as never, { excludeBusinessIds: [] });
+    expect(db.or).not.toHaveBeenCalled();
+  });
+
   it("listSystemLogErrorsAll throws on error", async () => {
     const db = mockDb({
       limit: vi.fn().mockResolvedValue({ data: null, error: { message: "err" } })

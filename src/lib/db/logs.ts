@@ -33,15 +33,30 @@ export async function insertCoworkerLog(
   return row as LogRow;
 }
 
+export type FleetFeedOptions = {
+  /**
+   * Businesses hidden from the fleet-wide feed (admin notification mutes —
+   * see src/lib/db/admin-mutes.ts). Filtered in the query so a muted tenant
+   * can't consume the row limit.
+   */
+  excludeBusinessIds?: string[];
+};
+
 export async function getRecentAlertsAll(
   limit = 20,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: FleetFeedOptions
 ): Promise<LogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
+  let q = db
     .from("coworker_logs")
     .select()
-    .in("status", ["urgent_alert", "error"])
+    .in("status", ["urgent_alert", "error"]);
+  const excluded = options?.excludeBusinessIds ?? [];
+  if (excluded.length > 0) {
+    q = q.not("business_id", "in", `(${excluded.join(",")})`);
+  }
+  const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -51,12 +66,16 @@ export async function getRecentAlertsAll(
 
 export async function getRecentLogsAll(
   limit = 20,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: FleetFeedOptions
 ): Promise<LogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("coworker_logs")
-    .select()
+  let q = db.from("coworker_logs").select();
+  const excluded = options?.excludeBusinessIds ?? [];
+  if (excluded.length > 0) {
+    q = q.not("business_id", "in", `(${excluded.join(",")})`);
+  }
+  const { data, error } = await q
     .order("created_at", { ascending: false })
     .limit(limit);
 

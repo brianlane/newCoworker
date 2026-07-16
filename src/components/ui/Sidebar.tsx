@@ -101,8 +101,9 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
         data-mobile-nav-trigger
         className={[
           "fixed left-3 top-3 z-50 inline-flex h-11 w-11 items-center justify-center rounded-lg border border-parchment/10 bg-deep-ink/90 text-parchment backdrop-blur-sm transition-all duration-200 lg:hidden",
-          // Keep it reachable while the drawer is open regardless of scroll.
-          navHidden && !open ? "pointer-events-none -translate-y-16 opacity-0" : ""
+          // Hidden while the drawer is open (it sits above the drawer and
+          // duplicates its X close button) and while scrolling down.
+          navHidden || open ? "pointer-events-none -translate-y-16 opacity-0" : ""
         ].join(" ")}
       >
         <Menu size={20} />

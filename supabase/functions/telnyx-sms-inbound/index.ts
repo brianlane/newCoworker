@@ -39,6 +39,8 @@ import {
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
+import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
+import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
 import { parseRouting } from "../_shared/ai_flows/routing.ts";
 import {
   matchLateClaimReply,
@@ -278,6 +280,10 @@ async function evaluateAndEnqueueAiFlows(
   let suppressingRunQueued = false;
   try {
     for (const m of evalRes.matched) {
+      // Re-entry gate: a flow with allowReentry=false never re-enrolls a
+      // sender who already has a (non-test) run. Suppression is NOT granted
+      // by a blocked enqueue — no run was queued to own the reply.
+      if (await reentryBlocked(supabase, businessId, m.id, m.def, ctx.from ?? "")) continue;
       const { error: runErr } = await supabase.from("ai_flow_runs").insert({
         flow_id: m.id,
         business_id: businessId,
@@ -2687,6 +2693,14 @@ serve(async (req: Request) => {
             event_id: eventId,
             forwarded: true
           });
+          // Stop on response: cancel this sender's pending runs of flows
+          // that stop when the contact replies — BEFORE the enqueue below,
+          // so a run this very reply starts is never eaten by its own
+          // trigger. (Safe Mode never runs the wait-resume, so there are no
+          // freshly-resumed runs to exempt.) Best-effort.
+          if (from) {
+            await stopRunsOnResponse(supabase, businessId, from);
+          }
           // Safe Mode only changes how the CUSTOMER reply is handled (owner does
           // it manually); owner-configured lead automations must still start, so
           // enqueue any matched AiFlow runs. Evaluate BEFORE persisting the job
@@ -2826,6 +2840,17 @@ serve(async (req: Request) => {
       inboundSmsBody(payload)
     );
     const waitReplyResumed = resumedWaitRunIds.length > 0;
+
+    // Stop on response: cancel this sender's pending runs of flows that stop
+    // when the contact replies. Runs whose wait just consumed this reply are
+    // exempt — the flow authored that wait, so the reply flows through its
+    // branch logic instead of canceling it. Runs BEFORE the goal jump (the
+    // schema forbids stopOnResponse + a replied goal on one flow, so the two
+    // never compete) and before the enqueue below, so a run this very reply
+    // starts is never eaten by its own trigger. Best-effort.
+    if (from) {
+      await stopRunsOnResponse(supabase, businessId, from, resumedWaitRunIds);
+    }
 
     // Goal Events: any lead text may fast-forward their OTHER parked/queued
     // runs to a "replied" goal checkpoint. Runs whose wait just consumed this

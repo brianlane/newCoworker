@@ -10,6 +10,9 @@ vi.mock("@/lib/voice-tools/connections", () => ({
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/ai-flows/calendly-poll", () => ({
+  fetchCalendlyCandidateEvents: vi.fn()
+}));
 
 import {
   CALENDAR_CREATED_LOOKBACK_MINUTES,
@@ -32,6 +35,7 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -431,15 +435,129 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
-  it("treats a Calendly connection as not pollable (no provider queries)", async () => {
+  it("treats a Vagaro connection as not pollable (no provider queries)", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
-      provider: "calendly",
-      providerConfigKey: "calendly",
-      connectionId: "cx-calendly"
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
     expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        message: expect.stringContaining("calendar_not_connected")
+      })
+    );
+  });
+
+  it("polls Calendly connections through the dedicated fetcher and enqueues due events", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-calendly"
+    } as never);
+    vi.mocked(fetchCalendlyCandidateEvents).mockResolvedValue({
+      events: [
+        {
+          id: "EV1",
+          title: "KYP Ads Free Strategy",
+          startIso: isoIn(60),
+          endIso: isoIn(90),
+          attendees: ["Uday <u@x.co>"],
+          description: "invitee timezone: America/Toronto",
+          calendar: "primary" as const
+        }
+      ],
+      overflowed: false
+    });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(res).toMatchObject({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+
+    // Windows derive from the flow group; the due filter is the poller's own.
+    const args = vi.mocked(fetchCalendlyCandidateEvents).mock.calls[0][0];
+    expect(args.windows).toEqual({
+      createdScan: false,
+      startHorizonMinutes: 120 + CALENDAR_START_HORIZON_BUFFER_MINUTES,
+      endBackMinutes: null,
+      canceledScan: false
+    });
+    expect(
+      args.dueFilter({ id: "x", title: "t", startIso: isoIn(60), calendar: "primary" })
+    ).toBe(true);
+    expect(
+      args.dueFilter({ id: "x", title: "t", startIso: isoIn(600), calendar: "primary" })
+    ).toBe(false);
+
+    // The enqueued run carries the invitee context in its window text.
+    const enq = vi.mocked(enqueueAiFlowRun).mock.calls[0][0];
+    expect(enq).toMatchObject({ flowId: "f-start", dedupeKey: expect.stringContaining("cal:EV1:") });
+    expect((enq.trigger as { windowText: string }).windowText).toContain(
+      "invitee timezone: America/Toronto"
+    );
+  });
+
+  it("Calendly: derives created/end/canceled windows, logs overflow, and skips shared-only flows", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly",
+      connectionId: "cx-calendly"
+    } as never);
+    vi.mocked(fetchCalendlyCandidateEvents).mockResolvedValue({ events: [], overflowed: true });
+    const res = await pollCalendarTriggers(
+      dbWith([
+        flowRow("f-created", createdTrigger()),
+        flowRow("f-end", endTrigger(30)),
+        flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] }),
+        // Shared-only flow: Calendly has no shared calendar — no events for it.
+        flowRow("f-shared", startTrigger(60, { calendar: "shared" }))
+      ])
+    );
+    expect(res.enqueued).toBe(0);
+    const args = vi.mocked(fetchCalendlyCandidateEvents).mock.calls[0][0];
+    expect(args.windows).toEqual({
+      createdScan: true,
+      // The shared-only start flow contributes NO start horizon.
+      startHorizonMinutes: null,
+      endBackMinutes: 30 + CALENDAR_END_LOOKBACK_MINUTES,
+      canceledScan: true
+    });
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_overflow",
+        message: expect.stringContaining("Calendly poll"),
+        payload: expect.objectContaining({ calendar: "primary" })
+      })
+    );
+  });
+
+  it("Calendly: a shared-only flow group never calls the fetcher", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-calendly"
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-shared", startTrigger(60, { calendar: "shared" }))])
+    );
+    expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
+    expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
+  });
+
+  it("Calendly: a fetcher failure lands in the business-level failure log", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly-direct",
+      connectionId: "cx-calendly"
+    } as never);
+    vi.mocked(fetchCalendlyCandidateEvents).mockRejectedValue(
+      new Error("calendar_not_connected")
+    );
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(res.enqueued).toBe(0);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_calendar_poll_failed",

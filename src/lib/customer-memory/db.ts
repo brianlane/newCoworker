@@ -239,7 +239,14 @@ export type ListCustomerMemoriesOptions = {
 };
 
 export const DEFAULT_LIST_LIMIT = 50;
-export const MAX_LIST_LIMIT = 200;
+/**
+ * Raised from 200 for Smart Lists: the Contacts directory page loads up to
+ * this many rows so saved-segment chip counts (and the overdue/never-
+ * contacted lists especially) evaluate over the whole directory for typical
+ * tenants, not just the 50 most recently active. Rows are light (one select,
+ * no joins); the page notes when a tenant exceeds the cap.
+ */
+export const MAX_LIST_LIMIT = 1000;
 
 export async function listCustomerMemories(
   businessId: string,

@@ -1124,6 +1124,26 @@ export type AiFlowOptions = {
    * pay no extra capture latency/storage.
    */
   captureStepScreenshots?: boolean;
+  /**
+   * GHL "stop on response" / FUB "pause on reply": when true, an inbound SMS
+   * from the lead CANCELS their pending runs of this flow (queued /
+   * awaiting_reply / awaiting_call — never the human-parked states) instead
+   * of letting the remaining follow-ups fire at someone who already answered.
+   * The one run whose wait_for_reply consumed that exact reply is exempt —
+   * it processes the reply through its authored branch logic. Applied by
+   * telnyx-sms-inbound via response_stop.ts. Default off.
+   */
+  stopOnResponse?: boolean;
+  /**
+   * GHL "allow re-entry": when EXPLICITLY false, a contact who already has a
+   * run of this flow (any status, test runs excluded) is not enrolled again.
+   * Enforced best-effort at the lead-keyed enqueue sites (inbound SMS
+   * trigger eval, contact events, the Node enqueueAiFlowRun); enqueues with
+   * no lead identity (e.g. webhook payloads before extraction) are governed
+   * by their own dedupe keys instead. Default (undefined/true) = re-entry
+   * allowed, today's behavior.
+   */
+  allowReentry?: boolean;
 };
 
 /**

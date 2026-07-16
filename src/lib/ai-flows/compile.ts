@@ -23,7 +23,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  "steps": [ ... ],         // 1-25 ordered steps',
   '  "timeWindow": { "timezone": "America/Phoenix", "start": "09:00", "end": "17:00", "daysOfWeek": [1,2,3,4,5] },  // OPTIONAL business-hours gate: texts/emails/notifications/team offers outside the window wait for the next open slot (daysOfWeek optional, 0=Sun). Only include when the user asks for business hours.',
   '  "drip": { "intervalMinutes": 5 },  // OPTIONAL drip pacing: bulk enrollments (imports, webhook bursts) start this many minutes apart instead of all at once. Only include when the user asks to space/stagger/drip sends.',
-  '  "options": { "suppressDefaultReply": <optional bool>, "captureStepScreenshots": <optional bool> }',
+  '  "options": { "suppressDefaultReply": <optional bool>, "captureStepScreenshots": <optional bool>, "stopOnResponse": <optional bool — when the contact texts back, their pending runs of this flow are canceled so remaining follow-ups stop; only include when the user asks to stop/pause the sequence once the lead responds. Never combine with a goal step watching "replied">, "allowReentry": <optional bool — set false ONLY when the user says each contact should go through the flow once / never be re-enrolled> }',
   "}",
   "",
   "Trigger channels (pick the one matching how the workflow should start; if the",

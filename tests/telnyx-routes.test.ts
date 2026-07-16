@@ -81,6 +81,7 @@ const sampleSettings = {
   forward_to_e164: null,
   transfer_enabled: true,
   sms_fallback_enabled: true,
+  bridge_stale_alert_muted: false,
   staff_sms_assistant_reply_enabled: true,
   staff_sms_forward_to_owner_enabled: false,
   updated_at: "2026-01-01T00:00:00Z"
@@ -252,7 +253,8 @@ describe("telnyx-routes DB layer", () => {
       ["path only", { bridgeMediaPath: "/alt" }, "bridge_media_path"],
       ["forward only", { forwardToE164: "+15551234567" }, "forward_to_e164"],
       ["transfer only", { transferEnabled: false }, "transfer_enabled"],
-      ["sms fallback only", { smsFallbackEnabled: false }, "sms_fallback_enabled"]
+      ["sms fallback only", { smsFallbackEnabled: false }, "sms_fallback_enabled"],
+      ["bridge mute only", { bridgeStaleAlertMuted: true }, "bridge_stale_alert_muted"]
     ];
     for (const [, patch, expectedKey] of variants) {
       const c = chain();

@@ -509,6 +509,180 @@ describe("enqueueAiFlowRun drip pacing", () => {
   });
 });
 
+describe("enqueueAiFlowRun re-entry gate", () => {
+  const input = {
+    businessId: "biz-1",
+    flowId: "flow-1",
+    trigger: { channel: "contact_created", windowText: "x", url: null, from: "+16025550111" },
+    dedupeKey: "ce:1"
+  };
+
+  /**
+   * Per-table stub: ai_flows resolves the definition; on ai_flow_runs the
+   * AWAITED builder (`.then`) resolves the re-entry prior-run lookup, the
+   * `maybeSingle` terminal resolves the drip last-slot lookup, and `insert`
+   * records the row.
+   */
+  function makeGateDb(opts: {
+    definition?: Record<string, unknown> | null;
+    flowReadThrows?: boolean;
+    priorRuns?: unknown;
+    priorRunsError?: { message: string } | null;
+    dripLookupThrows?: boolean;
+  }) {
+    const inserts: Record<string, unknown>[] = [];
+    const calls: Array<{ table: string; name: string; args: unknown[] }> = [];
+    const flowsBuilder: Record<string, unknown> = {};
+    for (const m of ["select", "eq"]) flowsBuilder[m] = vi.fn(() => flowsBuilder);
+    flowsBuilder.maybeSingle = vi.fn(async () => {
+      if (opts.flowReadThrows) throw new Error("flows read down");
+      return { data: { definition: opts.definition ?? null }, error: null };
+    });
+    const runsBuilder: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "or", "not", "order", "limit"]) {
+      runsBuilder[m] = (...args: unknown[]) => {
+        calls.push({ table: "ai_flow_runs", name: m, args });
+        return runsBuilder;
+      };
+    }
+    runsBuilder.then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({
+        data: opts.priorRuns ?? [],
+        error: opts.priorRunsError ?? null
+      }).then(resolve);
+    runsBuilder.maybeSingle = async () => {
+      if (opts.dripLookupThrows) throw new Error("drip lookup down");
+      return { data: null, error: null };
+    };
+    runsBuilder.insert = (row: Record<string, unknown>) => {
+      inserts.push(row);
+      return {
+        select: () => ({ single: async () => ({ data: RUN_ROW, error: null }) })
+      };
+    };
+    // The re-entry gate's contact identity expansion: no matching contacts,
+    // so the caller's key passes through unchanged.
+    const contactsBuilder: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "or", "limit"]) {
+      contactsBuilder[m] = vi.fn(() => contactsBuilder);
+    }
+    contactsBuilder.then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ data: [], error: null }).then(resolve);
+    return {
+      inserts,
+      calls,
+      db: {
+        from: (table: string) =>
+          table === "ai_flows"
+            ? flowsBuilder
+            : table === "contacts"
+              ? contactsBuilder
+              : runsBuilder
+      }
+    };
+  }
+
+  const NO_REENTRY_DEF = {
+    version: 1,
+    trigger: { channel: "contact_created", conditions: [] },
+    steps: [],
+    options: { allowReentry: false }
+  };
+
+  it("blocks a contact who already has a (non-test) run: returns null, no insert", async () => {
+    const { db, inserts } = makeGateDb({
+      definition: NO_REENTRY_DEF,
+      priorRuns: [{ id: "r0", context: { trigger: { from: "+16025550111" } } }]
+    });
+    expect(await enqueueAiFlowRun(input, db as never)).toBeNull();
+    expect(inserts).toHaveLength(0);
+  });
+
+  it("prior TEST runs don't count — the contact still enrolls", async () => {
+    const { db, inserts } = makeGateDb({
+      definition: NO_REENTRY_DEF,
+      priorRuns: [
+        { id: "r0", context: { trigger: { from: "+16025550111", test_mode: true } } }
+      ]
+    });
+    expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
+    expect(inserts).toHaveLength(1);
+  });
+
+  it("a first enrollment passes", async () => {
+    const { db, inserts } = makeGateDb({ definition: NO_REENTRY_DEF, priorRuns: [] });
+    expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
+    expect(inserts).toHaveLength(1);
+  });
+
+  it("a non-string trigger.from is treated as no lead identity (gate passes)", async () => {
+    const { db, inserts, calls } = makeGateDb({
+      definition: NO_REENTRY_DEF,
+      priorRuns: [{ id: "r0", context: { trigger: { from: "+16025550111" } } }]
+    });
+    await enqueueAiFlowRun(
+      { ...input, trigger: { ...input.trigger, from: 42 } },
+      db as never
+    );
+    expect(inserts).toHaveLength(1);
+    expect(calls.some((c) => c.name === "or")).toBe(false);
+  });
+
+  it("a test-mode enqueue bypasses the gate entirely (no prior-run lookup)", async () => {
+    const { db, inserts, calls } = makeGateDb({
+      definition: NO_REENTRY_DEF,
+      priorRuns: [{ id: "r0", context: { trigger: { from: "+16025550111" } } }]
+    });
+    await enqueueAiFlowRun(
+      { ...input, trigger: { ...input.trigger, test_mode: true } },
+      db as never
+    );
+    expect(inserts).toHaveLength(1);
+    expect(calls.some((c) => c.name === "or")).toBe(false);
+  });
+
+  it("fails OPEN when the definition read throws (gate off, run enqueued)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, inserts } = makeGateDb({
+      flowReadThrows: true,
+      priorRuns: [{ id: "r0", context: { trigger: { from: "+16025550111" } } }]
+    });
+    expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
+    expect(inserts).toHaveLength(1);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("fails OPEN when the prior-run lookup errors", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, inserts } = makeGateDb({
+      definition: NO_REENTRY_DEF,
+      priorRunsError: { message: "runs down" }
+    });
+    expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
+    expect(inserts).toHaveLength(1);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("a drip last-slot lookup failure still enqueues immediately (drip catch)", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db, inserts } = makeGateDb({
+      definition: {
+        version: 1,
+        trigger: { channel: "contact_created", conditions: [] },
+        steps: [],
+        drip: { intervalMinutes: 5 }
+      },
+      dripLookupThrows: true
+    });
+    expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
+    expect(inserts[0]).not.toHaveProperty("earliest_claim_at");
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+});
+
 describe("listAiFlowRuns", () => {
   it("applies flowId + status filters and clamps a large limit", async () => {
     const { db, builder } = makeDb({ array: [RUN_ROW] });

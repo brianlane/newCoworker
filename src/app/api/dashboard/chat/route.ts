@@ -116,9 +116,11 @@ import {
   fulfillEmailBlocks
 } from "@/lib/dashboard-chat/email-blocks";
 import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import { getBusinessConfig } from "@/lib/db/configs";
 import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { resolveCalendarConnection, resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime } from "@/lib/documents/ingest";
@@ -301,11 +303,17 @@ DATES IN NOTES MAY BE STALE. Customer summaries and notes were written on earlie
 
 CUSTOMER NAMES. The name on a customer's header line in your "Recent customer activity" notes is the owner's own label for that contact and is authoritative. When a summary or pinned excerpt beneath it uses a different or fuller name, ALWAYS refer to the customer by the header name.
 
-TOOL RESULTS ARE THE TRUTH. When you call a tool, report what it ACTUALLY returned. If it says it did not update, did not send, or was refused, say so plainly and suggest what the owner can do instead — never claim an action happened when the tool result says otherwise, and never claim an action happened without a tool result confirming it.
+TOOL RESULTS ARE THE TRUTH. When you call a tool, report what it ACTUALLY returned. If it says it did not update, did not send, or was refused, say so plainly and suggest what the owner can do instead — never claim an action happened when the tool result says otherwise, and never claim an action happened without a tool result confirming it. When you send a text or email, state the EXACT body that was sent (e.g. 'I texted +1514…: "This is a test message."') — never a bare "it has been sent". If the owner says a message didn't arrive and asks you to resend, resend the SAME intended message — never your own previous chat reply.
+
+YOUR CHANNELS ARE SMS TEXTING, PHONE CALLS, AND EMAIL — NOTHING ELSE. You cannot send or receive WhatsApp, Telegram, or any other messaging-app content, and you must never agree to reach anyone on those. If the owner asks for an unsupported channel, say plainly that it isn't supported today and offer SMS or email instead. If the owner says their number or address is changing or going away (e.g. relocating abroad), NEVER "note" the old value as the go-forward contact — ask for the concrete new number or address that should replace it.
+
+AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description.
+
+THE OWNER'S DECISIONS ARE THEIRS. When the owner pastes a list of questions, considerations, or options for THEM to decide (setup checklists, advisor notes, "things to think about"), walk through the items and ASK for their choices — never answer the questions on their behalf, never invent policies, contact details, or preferences they haven't stated, and never present your own assumptions as settled decisions.
 
 BE PROACTIVE WITH TOOLS. When the owner asks how to do something you can do yourself with your tools (send a follow-up SMS or email, book/reschedule/cancel an appointment, share a document), don't answer with generic advice — propose the concrete action for the specific customer under discussion and offer a draft they can approve (e.g. "Want me to text Juhu a follow-up? Here's a draft: …"). Never close by offering to "find more general information".
 
-PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically — you have no tool to save it yourself. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything, and do NOT assert it is in memory — a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.`;
+PERSISTING RULES. When the owner states a durable preference or fact, the system captures it to their Memory automatically. Acknowledge naturally (e.g. "Got it."), but do NOT claim you saved, stored, or updated anything unless a tool result in THIS turn confirms the save — a separate step persists and confirms it. Point them to /dashboard/memory to review or edit. Never ask the owner for their own contact info or business details; they already configured all of that.`;
 
 export { OWNER_PREAMBLE };
 
@@ -347,6 +355,57 @@ Rules:
 export const EMAIL_TOOL_DISABLED_PREAMBLE = `EMAIL TOOL — DISABLED.
 
 You cannot send emails on this surface. If the owner asks you to send an email, do NOT pretend to send one and do NOT output any tool-call syntax — tell them plainly that email sending is turned off, and that they can enable the "Send email" tool under Settings → Coworker tools on the dashboard.`;
+
+/**
+ * Human labels for the calendar providers resolveCalendarConnection can
+ * return. Calendly gets its link-mode caveat inline so the model never
+ * promises direct booking on a link-only provider.
+ */
+const CALENDAR_PROVIDER_LABELS: Record<string, string> = {
+  vagaro: "Vagaro (real availability search + direct booking)",
+  google: "Google Calendar",
+  microsoft: "Outlook Calendar",
+  caldav: "CalDAV (e.g. iCloud)",
+  calendly:
+    "Calendly (slot search + scheduling links — booking hands the person a single-use link, it cannot book on their behalf)"
+};
+
+/**
+ * Per-turn "what is actually connected" system line, so the model answers
+ * "are you connected to Calendly?" from ground truth instead of guessing —
+ * the KYP Ads conversation (Jul 15) had the assistant deny, then claim,
+ * Calendly access within four turns while a live Calendly connection
+ * existed the whole time. Best-effort: a resolver failure degrades to no
+ * line (the model then honestly doesn't know), never a failed turn.
+ */
+async function buildIntegrationsStatusLine(businessId: string): Promise<string | null> {
+  try {
+    const [calendar, email] = await Promise.all([
+      resolveCalendarConnection(businessId),
+      resolveEmailConnection(businessId)
+    ]);
+    const calendarLabel = calendar
+      ? CALENDAR_PROVIDER_LABELS[calendar.provider] ?? calendar.provider
+      : "not connected";
+    const emailLabel = email
+      ? email.provider === "google"
+        ? "Google mailbox connected"
+        : "Microsoft mailbox connected"
+      : "not connected";
+    return (
+      "CONNECTED INTEGRATIONS (ground truth for THIS turn — answer connection questions from this line, never guess or ask the owner for API details):\n" +
+      `- Calendar: ${calendarLabel}\n` +
+      `- Email mailbox: ${emailLabel}\n` +
+      "- Texting: the business's own SMS number (always available on this platform)."
+    );
+  } catch (err) {
+    logger.warn("dashboard chat: integrations status line failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
 
 /**
  * Build the message array sent to Rowboat for one chat turn. Stored on
@@ -407,6 +466,11 @@ function buildRowboatChatMessages(args: {
   emailToolEnabled: boolean;
   /** Business IANA timezone for the date/time line; null/undefined = UTC. */
   businessTimezone?: string | null;
+  /**
+   * Per-turn connected-integrations ground truth (see
+   * buildIntegrationsStatusLine). Null/omitted ⇒ no line.
+   */
+  integrationsLine?: string | null;
 }): DashboardChatJobInputMessage[] {
   const out: DashboardChatJobInputMessage[] = [];
   // ALWAYS first: OWNER_PREAMBLE establishes that this is the
@@ -423,6 +487,10 @@ function buildRowboatChatMessages(args: {
     role: "system",
     content: args.emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE
   });
+  const integrationsLine = args.integrationsLine?.trim();
+  if (integrationsLine) {
+    out.push({ role: "system", content: integrationsLine });
+  }
   const customerPreamble = args.customerPreamble?.trim();
   if (customerPreamble) {
     out.push({ role: "system", content: customerPreamble });
@@ -447,6 +515,74 @@ function buildRowboatChatMessages(args: {
   // customer (defense in depth alongside OWNER_PREAMBLE).
   out.push({ role: "user", content: `[Dashboard] ${args.newUserMessage}` });
   return out;
+}
+
+/**
+ * Per-side cap on the identity/memory blocks injected into the INLINE
+ * systemInstruction. Generous (Gemini flash context is huge) but bounded so
+ * a pathological memory_md can't dominate the prompt. Memory keeps its TAIL
+ * (owner-chat capture sections append newest-last).
+ */
+const BUSINESS_CONTEXT_MAX_CHARS = 12_000;
+
+/**
+ * Business identity + memory system block for the INLINE path. The worker
+ * path gets these via the Rowboat agent's seeded instructions (vault sync);
+ * the inline call would otherwise answer configuration questions blind.
+ * Best-effort: a read failure degrades to no block, never a failed turn.
+ */
+async function buildBusinessContextBlock(businessId: string): Promise<string | null> {
+  try {
+    const config = await getBusinessConfig(businessId);
+    if (!config) return null;
+    const clipHead = (s: string): string =>
+      s.length > BUSINESS_CONTEXT_MAX_CHARS
+        ? `${s.slice(0, BUSINESS_CONTEXT_MAX_CHARS)}\n… (truncated)`
+        : s;
+    const clipTail = (s: string): string =>
+      s.length > BUSINESS_CONTEXT_MAX_CHARS
+        ? `… (older content truncated)\n${s.slice(-BUSINESS_CONTEXT_MAX_CHARS)}`
+        : s;
+    const identity = (config.identity_md ?? "").trim();
+    const memory = (config.memory_md ?? "").trim();
+    if (!identity && !memory) return null;
+    const parts = ["YOUR BUSINESS CONFIGURATION (identity + memory — the owner's own data; quote from it freely):"];
+    if (identity) parts.push(`# identity.md\n${clipHead(identity)}`);
+    if (memory) parts.push(`# memory.md\n${clipTail(memory)}`);
+    return parts.join("\n\n");
+  } catch (err) {
+    logger.warn("dashboard chat: business context block read failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
+ * Telemetry for a text turn that could NOT run on the inline primary path
+ * for a non-cap reason. The July 2026 dead-model incident (default id
+ * `gemini-3.1-flash`, which does not exist on the Gemini API) demoted every
+ * dashboard turn to the worker for days with zero platform signal — wire
+ * dashboards/alerts to `dashboard_chat_inline_fallback`. Best-effort.
+ */
+async function emitInlineFallbackTelemetry(
+  businessId: string,
+  reason: "no_api_key" | "inline_failed",
+  detail?: string
+): Promise<void> {
+  try {
+    const db = await createSupabaseServiceClient();
+    await db.rpc("telemetry_record", {
+      p_event_type: "dashboard_chat_inline_fallback",
+      p_payload: { business_id: businessId, reason, detail: detail ?? null }
+    });
+  } catch (err) {
+    logger.warn("dashboard chat: inline fallback telemetry emit failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 }
 
 // =====================================================================
@@ -663,6 +799,30 @@ export async function POST(request: Request) {
       "business_knowledge_lookup"
     );
 
+    // Action tools for the INLINE path (worker parity — the Rowboat
+    // OwnerCoworker declares these same tools, gated per call by the
+    // tool-call route). Each read resolves errors to the registry default.
+    const [
+      smsToolEnabled,
+      calFindEnabled,
+      calBookEnabled,
+      calRescheduleEnabled,
+      calCancelEnabled
+    ] = await Promise.all([
+      isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment")
+    ]);
+    const actionToolGates = {
+      send_sms: smsToolEnabled,
+      calendar_find_slots: calFindEnabled,
+      calendar_book_appointment: calBookEnabled,
+      calendar_reschedule_appointment: calRescheduleEnabled,
+      calendar_cancel_appointment: calCancelEnabled
+    };
+
     // Two message arrays:
     //   * `inputMessages`: first attempt. ALWAYS includes a BOUNDED
     //     recent tail (last RESEND_TAIL_MESSAGES) as a system block so
@@ -685,6 +845,11 @@ export async function POST(request: Request) {
       ? `[Attached: ${attachment.filename}] ${body.message}`
       : body.message;
 
+    // Connected-integrations ground truth for BOTH turn paths (the worker
+    // agent's vault instructions describe the business, not its live
+    // connections). Best-effort; null adds no block.
+    const integrationsLine = await buildIntegrationsStatusLine(body.businessId);
+
     const inputMessages = buildRowboatChatMessages({
       summaryMd: thread.summary_md,
       tail: tail.slice(-RESEND_TAIL_MESSAGES),
@@ -692,7 +857,8 @@ export async function POST(request: Request) {
       includeTailContext: true,
       customerPreamble,
       emailToolEnabled,
-      businessTimezone: flags.timezone
+      businessTimezone: flags.timezone,
+      integrationsLine
     });
     const statelessInputMessages = hasContinuation
       ? buildRowboatChatMessages({
@@ -702,7 +868,8 @@ export async function POST(request: Request) {
           includeTailContext: true,
           customerPreamble,
           emailToolEnabled,
-          businessTimezone: flags.timezone
+          businessTimezone: flags.timezone,
+          integrationsLine
         })
       : null;
 
@@ -720,11 +887,17 @@ export async function POST(request: Request) {
       });
       return null;
     });
+    const apiKeyPresent = Boolean(process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY);
     const route = resolveChatTurnRoute({
       hasAttachment: attachment !== null,
-      apiKeyPresent: Boolean(process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY),
+      apiKeyPresent,
       spend
     });
+    // Non-cap worker routing means the PRIMARY path is unavailable — make
+    // that loud (over-cap worker routing is expected and stays silent).
+    if (route.kind === "worker" && !apiKeyPresent) {
+      void emitInlineFallbackTelemetry(body.businessId, "no_api_key");
+    }
 
     // Persist the user message BEFORE running/enqueueing the turn. If the
     // turn fails for any reason the user's typed message is still saved —
@@ -746,16 +919,24 @@ export async function POST(request: Request) {
     if (route.kind === "inline") {
       // Prompt parity with the worker path: the same system blocks, joined
       // into Gemini's systemInstruction; the user turn is the marked message.
-      const systemInstruction = inputMessages
-        .filter((m) => m.role === "system")
-        .map((m) => m.content)
-        .join("\n\n");
+      // PLUS the business identity/memory block — the worker path carries
+      // those inside the Rowboat agent's seeded instructions (vault sync),
+      // so without this the primary path answered configuration questions
+      // blind ("are you connected to Calendly?" guesses, invented policy).
+      // Deliberately NOT added to inputMessages: the worker prompt already
+      // has it agent-side, and duplicating it would balloon CPU prefill.
+      const businessContextBlock = await buildBusinessContextBlock(body.businessId);
+      const systemInstruction = [
+        ...inputMessages.filter((m) => m.role === "system").map((m) => m.content),
+        ...(businessContextBlock ? [businessContextBlock] : [])
+      ].join("\n\n");
       const inline = await runInlineChatTurn({
         businessId: body.businessId,
         systemInstruction,
         userMessage: `[Dashboard] ${storedUserMessage}`,
         attachment,
-        knowledgeToolEnabled
+        knowledgeToolEnabled,
+        actionToolGates
       });
 
       if (inline.ok) {
@@ -818,6 +999,12 @@ export async function POST(request: Request) {
           drafts: []
         });
       }
+      // A dying primary path must be LOUD: the July 2026 dead-model id
+      // (gemini-3.1-flash) demoted every text turn to the worker for weeks
+      // with zero signal. Emitted only for turns that actually fall through
+      // to the worker enqueue below (attachment turns store an inline
+      // failure reply instead — they never demote). Best-effort.
+      void emitInlineFallbackTelemetry(body.businessId, "inline_failed", inline.detail ?? inline.error);
     }
 
     // === Worker fallback: enqueue exactly as the pre-inline pipeline ===

@@ -174,6 +174,25 @@ describe("composeExtractionInput", () => {
     const out = composeExtractionInput("hello", { assistantReply: "   ", existingBullets: [] });
     expect(out).toBe("OWNER MESSAGE:\nhello");
   });
+
+  it("frames the assistant reply as reference-resolution context, never a value source", () => {
+    // Regression pin (KYP Ads, Jul 2026): the old "STRONG signal to save"
+    // framing persisted assistant-invented policy as durable business fact.
+    const out = composeExtractionInput("msg", { assistantReply: "reply" });
+    expect(out).toContain("reference-resolution context ONLY");
+    expect(out).toContain("IGNORE any claim");
+    expect(out).not.toMatch(/STRONG signal/i);
+  });
+});
+
+describe("OWNER_MEMORY_SYSTEM_PROMPT contract", () => {
+  it("pins the owner-only source rule and the KYP anti-patterns", () => {
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("ONLY SOURCE OF SAVED FACTS");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("suggestions, proposals, drafts, plans");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("open or undecided items");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).toContain("wrong, changing, or going away");
+    expect(OWNER_MEMORY_SYSTEM_PROMPT).not.toMatch(/strong save\s*signal/i);
+  });
 });
 
 describe("buildExtractionRequestBody", () => {
