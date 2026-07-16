@@ -85,21 +85,25 @@ export function MessagesList({ rows }: { rows: MessageListRow[] }) {
                   className="flex items-center justify-between gap-4 px-3 py-3 rounded-lg hover:bg-parchment/5 transition-colors"
                 >
                   <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-sm font-semibold text-parchment truncate">
+                    {/* flex-wrap (as in CustomersList): the name is the only
+                        shrinkable item, so without wrapping it absorbed all the
+                        squeeze on phones — "Brian" rendered as "Bri…" while the
+                        E.164 and badges kept full width. */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                      <span className="text-sm font-semibold text-parchment truncate" title={c.name}>
                         {c.name}
                       </span>
                       {c.badgeKind && (
-                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                        <span className="shrink-0 text-[10px] uppercase tracking-wide text-parchment/40">
                           {c.badgeKind}
                         </span>
                       )}
                       {c.name !== c.customerE164 && (
-                        <span className="text-[10px] text-parchment/40 font-mono">
+                        <span className="shrink-0 text-[10px] text-parchment/40 font-mono">
                           {c.customerE164}
                         </span>
                       )}
-                      <span className="text-[10px] uppercase tracking-wide text-parchment/40 font-mono">
+                      <span className="shrink-0 text-[10px] uppercase tracking-wide text-parchment/40 font-mono">
                         {c.messageCount} msg{c.messageCount === 1 ? "" : "s"}
                       </span>
                     </div>

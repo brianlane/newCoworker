@@ -446,11 +446,16 @@ export function AgentsManager({
           <Card key={agent.id}>
             <button
               type="button"
-              className="w-full text-left flex items-center justify-between gap-3"
+              className="w-full text-left flex items-start justify-between gap-3"
               onClick={() => void openAgent(agent)}
             >
               <div className="min-w-0">
-                <p className="text-sm font-semibold text-parchment truncate">
+                {/* Clamp to two lines (not single-line truncate) so long agent
+                    names stay readable on phones; tooltip carries the rest. */}
+                <p
+                  className="text-sm font-semibold text-parchment break-words line-clamp-2"
+                  title={agent.name}
+                >
                   {agent.name}
                   {!agent.enabled && (
                     <span className="ml-2 rounded border border-parchment/20 px-1.5 py-0.5 text-[10px] text-parchment/50 align-middle">
@@ -458,9 +463,11 @@ export function AgentsManager({
                     </span>
                   )}
                 </p>
-                <p className="text-xs text-parchment/50 truncate mt-0.5">{agent.instructions}</p>
+                <p className="text-xs text-parchment/50 truncate mt-0.5" title={agent.instructions}>
+                  {agent.instructions}
+                </p>
               </div>
-              <span className="shrink-0 rounded border border-parchment/20 px-1.5 py-0.5 text-[10px] text-parchment/50">
+              <span className="shrink-0 self-start rounded border border-parchment/20 px-1.5 py-0.5 text-[10px] text-parchment/50">
                 {FORMAT_LABELS[agent.output_format]}
               </span>
             </button>

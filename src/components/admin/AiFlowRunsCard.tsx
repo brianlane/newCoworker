@@ -75,7 +75,10 @@ export async function AiFlowRunsCard({ businessId }: { businessId: string }) {
               <li key={run.id} className="py-3 space-y-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div className="flex items-center gap-2 min-w-0">
-                    <p className="text-sm text-parchment font-medium truncate">
+                    <p
+                      className="text-sm text-parchment font-medium truncate"
+                      title={flowNames.get(run.flow_id) ?? "(deleted flow)"}
+                    >
                       {flowNames.get(run.flow_id) ?? "(deleted flow)"}
                     </p>
                     <span className="text-[11px] text-parchment/35 font-mono shrink-0">
