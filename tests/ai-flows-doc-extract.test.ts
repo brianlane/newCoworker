@@ -42,14 +42,24 @@ const PDF_REF = "email-attachments:inbound/msg1/0-renewal.pdf";
 
 type StorageResult = { data: Blob | null; error: { message: string } | null };
 
-/** Service-client fake: storage download/upload + businesses tier read. */
+/**
+ * Service-client fake: storage download/upload/remove, the email_log
+ * ownership lookup, and the businesses tier read.
+ */
 function makeDb(opts: {
   download?: StorageResult;
   uploadError?: { message: string } | null;
   tier?: string | null;
+  /** email_log ownership row (null = ref not on this tenant's mail). */
+  ownerRow?: { id: string } | null;
+  ownerLookupError?: { message: string } | null;
+  removeError?: { message: string } | null;
+  businessRow?: { tier?: string | null; name?: string | null } | null;
 }) {
   const uploads: Array<{ bucket: string; path: string }> = [];
+  const removes: Array<{ bucket: string; paths: string[] }> = [];
   const storageCalls: string[] = [];
+  const ownershipCalls: Array<{ name: string; args: unknown[] }> = [];
   const db = {
     storage: {
       from: (bucket: string) => ({
@@ -60,20 +70,40 @@ function makeDb(opts: {
         upload: async (path: string) => {
           uploads.push({ bucket, path });
           return { error: opts.uploadError ?? null };
+        },
+        remove: async (paths: string[]) => {
+          removes.push({ bucket, paths });
+          return { error: opts.removeError ?? null };
         }
       })
     },
     from: (table: string) => {
       const builder: Record<string, unknown> = {};
-      for (const m of ["select", "eq"]) builder[m] = () => builder;
-      builder.maybeSingle = async () => ({
-        data: table === "businesses" ? { tier: opts.tier ?? "standard", name: "Acme" } : null,
-        error: null
-      });
+      for (const m of ["select", "eq", "contains", "limit"]) {
+        builder[m] = (...args: unknown[]) => {
+          if (table === "email_log") ownershipCalls.push({ name: m, args });
+          return builder;
+        };
+      }
+      builder.maybeSingle = async () => {
+        if (table === "email_log") {
+          return {
+            data: opts.ownerLookupError ? null : opts.ownerRow === undefined ? { id: "log-1" } : opts.ownerRow,
+            error: opts.ownerLookupError ?? null
+          };
+        }
+        return {
+          data:
+            opts.businessRow !== undefined
+              ? opts.businessRow
+              : { tier: opts.tier ?? "standard", name: "Acme" },
+          error: null
+        };
+      };
       return builder;
     }
   };
-  return { db, uploads, storageCalls };
+  return { db, uploads, removes, storageCalls, ownershipCalls };
 }
 
 const okGenerate = vi.fn(async (_params: Record<string, unknown>) => ({
@@ -144,7 +174,7 @@ describe("docExtract", () => {
   const input = { businessId: BIZ, sourceRef: PDF_REF, fields: FIELDS };
 
   it("downloads, extracts via Gemini (PDF inline), and meters the spend", async () => {
-    const { db, storageCalls } = makeDb({});
+    const { db, storageCalls, ownershipCalls } = makeDb({});
     const result = await docExtract(input, { client: db as never, generate: okGenerate as never });
     expect(result).toEqual({
       ok: true,
@@ -152,6 +182,19 @@ describe("docExtract", () => {
       filed: null
     });
     expect(storageCalls).toEqual(["download:email-attachments/inbound/msg1/0-renewal.pdf"]);
+    // The ownership gate keys on this tenant's email_log attachment paths.
+    expect(
+      ownershipCalls.some((c) => c.name === "eq" && c.args[0] === "business_id" && c.args[1] === BIZ)
+    ).toBe(true);
+    expect(
+      ownershipCalls.some(
+        (c) =>
+          c.name === "contains" &&
+          c.args[0] === "attachments" &&
+          JSON.stringify(c.args[1]) ===
+            JSON.stringify([{ storage_path: "inbound/msg1/0-renewal.pdf" }])
+      )
+    ).toBe(true);
     const call = okGenerate.mock.calls[0][0] as Record<string, unknown>;
     expect(call.inlineParts).toEqual([
       { mimeType: "application/pdf", dataBase64: Buffer.from("%PDF-1.4 fake").toString("base64") }
@@ -211,6 +254,22 @@ describe("docExtract", () => {
       ok: false,
       error: "too_large"
     });
+  });
+
+  it("ownership gate: a ref not on this tenant's mail fails CLOSED as not_found", async () => {
+    const { db, storageCalls } = makeDb({ ownerRow: null });
+    expect(
+      await docExtract(input, { client: db as never, generate: okGenerate as never })
+    ).toMatchObject({ ok: false, error: "not_found", detail: "document not on this business's mailbox" });
+    // The bytes are never even downloaded.
+    expect(storageCalls).toEqual([]);
+  });
+
+  it("ownership gate: a lookup fault THROWS (retry) instead of failing open", async () => {
+    const { db } = makeDb({ ownerLookupError: { message: "db down" } });
+    await expect(
+      docExtract(input, { client: db as never, generate: okGenerate as never })
+    ).rejects.toThrow("doc-extract ownership lookup: db down");
   });
 
   it("no API key → extractor_unavailable", async () => {
@@ -309,13 +368,7 @@ describe("docExtract", () => {
   });
 
   it("a null business row still files (tier defaults, no business name)", async () => {
-    const { db } = makeDb({});
-    (db.from as unknown) = () => {
-      const builder: Record<string, unknown> = {};
-      for (const m of ["select", "eq"]) builder[m] = () => builder;
-      builder.maybeSingle = async () => ({ data: null, error: null });
-      return builder;
-    };
+    const { db } = makeDb({ businessRow: null });
     const result = await docExtract(
       { ...input, fileAs: { title: "T", audience: "staff" } },
       { client: db as never, generate: okGenerate as never }
@@ -346,12 +399,25 @@ describe("docExtract", () => {
     expect(copyFail.ok && copyFail.fileError).toContain("bucket down");
 
     vi.mocked(insertBusinessDocument).mockRejectedValueOnce(new Error("insert down"));
-    const { db } = makeDb({});
+    const { db, removes } = makeDb({});
     const insertFail = await docExtract(
       { ...input, fileAs: { title: "T", audience: "staff" } },
       { client: db as never, generate: okGenerate as never }
     );
     expect(insertFail).toMatchObject({ ok: true, filed: null, fileError: "insert down" });
+    // Compensating remove: the failed insert must not orphan the uploaded object.
+    expect(removes).toHaveLength(1);
+    expect(removes[0].bucket).toBe("business-docs");
+    expect(removes[0].paths[0]).toMatch(/\/renewal\.pdf$/);
+
+    // A cleanup failure is logged but never masks the original error.
+    vi.mocked(insertBusinessDocument).mockRejectedValueOnce(new Error("insert down"));
+    const badCleanup = makeDb({ removeError: { message: "remove down" } });
+    const cleanupFail = await docExtract(
+      { ...input, fileAs: { title: "T", audience: "staff" } },
+      { client: badCleanup.db as never, generate: okGenerate as never }
+    );
+    expect(cleanupFail).toMatchObject({ ok: true, filed: null, fileError: "insert down" });
 
     // Non-Error throws stringify.
     vi.mocked(insertBusinessDocument).mockRejectedValueOnce("weird failure");

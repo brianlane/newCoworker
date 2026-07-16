@@ -173,6 +173,28 @@ export async function docExtract(
     return { ok: false, error: "unsupported_type", detail: "only pdf/txt/md/csv documents" };
   }
 
+  // Tenant-ownership gate: the ref came through a template render, so it is
+  // untrusted — only paths recorded on THIS business's own inbound mail
+  // (email_log.attachments) may be read. Fails CLOSED on "no such row"
+  // (another tenant's path reads exactly like a missing document) and
+  // THROWS on a lookup fault (transient → the worker retries; a fail-open
+  // here would be a cross-tenant read). Residency note: dual-mode tenants
+  // keep central email_log copies, so this central check holds; a future
+  // vps-read-mode purge would need the box-side lookup (readMovedRows) —
+  // same caveat as the rest of the central flow engine.
+  const { data: ownerRow, error: ownErr } = await db
+    .from("email_log")
+    .select("id")
+    .eq("business_id", input.businessId)
+    // jsonb containment: attachments @> [{"storage_path": <path>}]
+    .contains("attachments", [{ storage_path: ref.path }])
+    .limit(1)
+    .maybeSingle();
+  if (ownErr) throw new Error(`doc-extract ownership lookup: ${ownErr.message}`);
+  if (!ownerRow) {
+    return { ok: false, error: "not_found", detail: "document not on this business's mailbox" };
+  }
+
   const { data: blob, error: downloadError } = await db.storage
     .from(ref.bucket)
     .download(ref.path);
@@ -280,19 +302,35 @@ export async function docExtract(
     }
 
     const title = input.fileAs.title.slice(0, 200);
-    await insertBusinessDocument(
-      {
-        id: documentId,
-        business_id: input.businessId,
-        title,
-        category: "filed",
-        audience: input.fileAs.audience,
-        storage_path: storagePath,
-        mime_type: mimeType,
-        byte_size: bytes.byteLength
-      },
-      db
-    );
+    try {
+      await insertBusinessDocument(
+        {
+          id: documentId,
+          business_id: input.businessId,
+          title,
+          category: "filed",
+          audience: input.fileAs.audience,
+          storage_path: storagePath,
+          mime_type: mimeType,
+          byte_size: bytes.byteLength
+        },
+        db
+      );
+    } catch (insertErr) {
+      // Compensating remove (mirrors the dashboard upload route): a failed
+      // insert must not orphan the just-uploaded object in the bucket.
+      const { error: removeError } = await db.storage
+        .from(BUSINESS_DOCS_BUCKET)
+        .remove([storagePath]);
+      if (removeError) {
+        logger.warn("aiflows/doc-extract: orphan object cleanup failed", {
+          businessId: input.businessId,
+          storagePath,
+          error: removeError.message
+        });
+      }
+      throw insertErr;
+    }
 
     // Same condense pipeline as dashboard uploads, so the filed copy answers
     // knowledge lookups. An ingest failure leaves the row visible as failed
