@@ -143,6 +143,11 @@ const JOB_POLL_INTERVAL_MS = 1500;
 // a legitimate double-timeout (Bugbot Medium-severity finding).
 const JOB_POLL_TIMEOUT_MS = 9 * 60 * 1000;
 
+// Must match MAX_MESSAGE_CHARS in /api/dashboard/chat (route.ts). The
+// composer BLOCKS an over-long send with a highlighted counter instead of
+// the old maxLength attribute, which silently clipped pastes mid-sentence.
+const MAX_MESSAGE_CHARS = 16_000;
+
 function formatTime(ts?: string): string {
   if (!ts) return "";
   const d = new Date(ts);
@@ -188,6 +193,10 @@ function friendlyErrorMessage(code: string | null): string {
 export function DashboardChat({ businessId, businessName }: Props) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
+  // Trimmed length — the route validates AFTER trim(), so a paste with
+  // trailing whitespace/newlines must not be blocked when its real body fits.
+  const trimmedInputLength = input.trim().length;
+  const inputTooLong = trimmedInputLength > MAX_MESSAGE_CHARS;
   const [sending, setSending] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -736,7 +745,10 @@ export function DashboardChat({ businessId, businessName }: Props) {
   async function handleSubmit(evt: FormEvent<HTMLFormElement>) {
     evt.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || sending || isPaused) return;
+    // Over-long input BLOCKS the send (highlighted counter) instead of
+    // silently clipping — the old maxLength attribute truncated a pasted
+    // onboarding brief mid-sentence with zero signal (KYP Ads, Jul 15).
+    if (!trimmed || sending || isPaused || trimmed.length > MAX_MESSAGE_CHARS) return;
 
     // Optimistic user bubble. Stays even on error because we treat
     // the user's typed message as committed the moment they hit Send;
@@ -1257,7 +1269,6 @@ export function DashboardChat({ businessId, businessName }: Props) {
                   : "Message your coworker. Enter to send, Shift+Enter for a newline."
               }
               disabled={sending || isPaused}
-              maxLength={4000}
               rows={3}
             />
             {(attachedFileName || attachedDocumentId) && (
@@ -1278,8 +1289,13 @@ export function DashboardChat({ businessId, businessName }: Props) {
               </div>
             )}
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-              <span className="text-xs text-parchment/40">
-                {input.length}/4000
+              <span
+                className={
+                  inputTooLong ? "text-xs font-semibold text-spark-orange" : "text-xs text-parchment/40"
+                }
+              >
+                {trimmedInputLength.toLocaleString()}/{MAX_MESSAGE_CHARS.toLocaleString()}
+                {inputTooLong && " — too long to send; trim it or attach it as a file"}
               </span>
               <div className="flex flex-wrap items-center gap-2">
                 <input
@@ -1346,7 +1362,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                   variant="primary"
                   size="sm"
                   loading={sending}
-                  disabled={sending || isPaused || !input.trim()}
+                  disabled={sending || isPaused || !input.trim() || inputTooLong}
                 >
                   Send
                 </Button>

@@ -41,6 +41,16 @@ vi.mock("@/lib/sms/opt-outs", () => ({
   checkSmsOptOut: vi.fn()
 }));
 
+// send_sms writes a best-effort sms_outbound_log row after a successful send.
+const { outboundLogInsert } = vi.hoisted(() => ({
+  outboundLogInsert: vi.fn(async () => ({ error: null }))
+}));
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => ({
+    from: vi.fn(() => ({ insert: outboundLogInsert }))
+  }))
+}));
+
 vi.mock("@/lib/email/owner-mailbox", () => ({
   sendFromOwnerMailbox: vi.fn()
 }));
@@ -398,6 +408,51 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalledWith(expect.anything(), "+15551230000", "On my way", {
       meterBusinessId: BIZ
     });
+  });
+
+  it("records a successful send to sms_outbound_log (source dashboard_chat, Telnyx id)", async () => {
+    // Regression pin (KYP Ads, Jul 15): tool sends were metered but never
+    // logged, so the Texts page showed nothing and diagnosing an undelivered
+    // test text required the Telnyx portal.
+    const content = makeContent("send_sms", { toE164: "+15551230000", body: "On my way" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    await POST(makeRequest(content));
+    expect(outboundLogInsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: BIZ,
+        to_e164: "+15551230000",
+        body: "On my way",
+        source: "dashboard_chat",
+        telnyx_message_id: "msg-1",
+        channel: "sms"
+      })
+    );
+  });
+
+  it("still succeeds when the outbound-log insert fails (returned error and thrown)", async () => {
+    const content = makeContent("send_sms", { toE164: "+15551230000", body: "hi" });
+    for (const behavior of [
+      async () => ({ error: { message: "insert denied" } }),
+      async () => {
+        throw new Error("db down");
+      }
+    ]) {
+      outboundLogInsert.mockImplementationOnce(behavior as never);
+      vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+      const res = await POST(makeRequest(content));
+      expect(await res.json()).toEqual({
+        ok: true,
+        data: { messageId: "msg-1", toE164: "+15551230000" }
+      });
+    }
+  });
+
+  it("does NOT write an outbound-log row when the send itself failed", async () => {
+    vi.mocked(sendTelnyxSms).mockRejectedValue(new Error("telnyx 500"));
+    const content = makeContent("send_sms", { toE164: "+15551230000", body: "hi" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    await POST(makeRequest(content));
+    expect(outboundLogInsert).not.toHaveBeenCalled();
   });
 
   it("maps quota failures to sms_quota_blocked", async () => {

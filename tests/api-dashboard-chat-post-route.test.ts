@@ -247,6 +247,17 @@ describe("POST /api/dashboard/chat — enqueue-and-return contract (PR #79)", ()
     expect(ct).not.toMatch(/x-ndjson/);
   });
 
+  it("accepts a long pasted brief (16k cap — the old 4000 clipped onboarding docs mid-sentence)", async () => {
+    const brief = "K".repeat(15_999);
+    const res = await POST(jsonRequest({ businessId: BIZ, message: brief }));
+    expect(res.status).toBe(200);
+    const userAppendCall = vi.mocked(appendMessage).mock.calls.find((c) => c[1] === "user");
+    expect(userAppendCall?.[2]).toBe(brief);
+
+    const over = await POST(jsonRequest({ businessId: BIZ, message: "K".repeat(16_001) }));
+    expect(over.status).toBe(400);
+  });
+
   it("persists the user message BEFORE enqueueing — if the enqueue fails the typed message is still saved", async () => {
     // Force insertChatJob to throw to verify ordering. appendMessage
     // must still have run with the user's text.

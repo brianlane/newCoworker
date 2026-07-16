@@ -14,6 +14,7 @@ import {
 } from "@/lib/customer-tools/handlers";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
@@ -687,9 +688,40 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         resolveRcs: true
       });
       try {
-        const { id: messageId } = await sendTelnyxSms(config, parsed.data.toE164, parsed.data.body, {
-          meterBusinessId: businessId
-        });
+        const { id: messageId, channel } = await sendTelnyxSms(
+          config,
+          parsed.data.toE164,
+          parsed.data.body,
+          {
+            meterBusinessId: businessId
+          }
+        );
+        // Best-effort durable log so the text renders in the dashboard Text
+        // history like every other outbound path. These sends used to be
+        // invisible platform-side (metered but never logged) — diagnosing the
+        // KYP Ads "didn't receive anything" test texts required the Telnyx
+        // portal. A failed insert must not fail the tool call — the SMS
+        // already went out.
+        try {
+          const db = await createSupabaseServiceClient();
+          const { error: logErr } = await db.from("sms_outbound_log").insert({
+            business_id: businessId,
+            to_e164: parsed.data.toE164,
+            from_e164: config.fromE164 ?? null,
+            body: parsed.data.body,
+            source: "dashboard_chat",
+            run_id: null,
+            flow_id: null,
+            telnyx_message_id: messageId,
+            channel
+          });
+          if (logErr) throw new Error(logErr.message);
+        } catch (logErr) {
+          logger.error("rowboat/tool-call: sms outbound log insert failed", {
+            businessId,
+            error: logErr instanceof Error ? logErr.message : String(logErr)
+          });
+        }
         return { ok: true, data: { messageId, toE164: parsed.data.toE164 } };
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
