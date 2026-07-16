@@ -33,9 +33,11 @@ import { loadEnv } from "../../debug/_shared.ts";
 loadEnv();
 
 // The demo call cap (5 min) + transcript capture for demo QA. Set BEFORE the
-// orchestrator import chain reads process.env at deploy-command build time.
-process.env.GEMINI_LIVE_SESSION_MAX_MS = process.env.GEMINI_LIVE_SESSION_MAX_MS ?? "300000";
-process.env.VOICE_TRANSCRIPTION_ENABLED = process.env.VOICE_TRANSCRIPTION_ENABLED ?? "true";
+// orchestrator reads process.env at deploy-command build time. Hard-set (no
+// ?? fallback): loadEnv() may have imported a platform-wide value from the
+// repo .env, and the whole point of this onboarding is the 5-minute cap.
+process.env.GEMINI_LIVE_SESSION_MAX_MS = "300000";
+process.env.VOICE_TRANSCRIPTION_ENABLED = "true";
 
 const APPLY = process.argv.includes("--apply");
 
