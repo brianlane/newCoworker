@@ -868,6 +868,17 @@ export function AiFlowView({
           failures) for the run investigate view.
         </p>
       )}
+      {definition.options?.stopOnResponse && (
+        <p className="text-xs text-parchment/50">
+          Stops for a contact when they reply — their pending runs of this flow end
+          instead of sending the remaining follow-ups.
+        </p>
+      )}
+      {definition.options?.allowReentry === false && (
+        <p className="text-xs text-parchment/50">
+          Each contact goes through this flow at most once (re-entry is off).
+        </p>
+      )}
     </div>
   );
 }

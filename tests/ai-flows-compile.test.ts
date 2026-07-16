@@ -56,6 +56,11 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"equals":"no_reply"');
   });
 
+  it("documents the flow-level options (stop on response, re-entry)", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("stopOnResponse");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("allowReentry");
+  });
+
   it("offers every push trigger channel so the model never reaches for email+connectionId", () => {
     // The Truly Insurance live-demo failure (Jul 2026): the prompt omitted
     // tenant_email and webhook, so "when we receive an email from Privyr"

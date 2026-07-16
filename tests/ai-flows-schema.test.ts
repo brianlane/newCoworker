@@ -540,6 +540,57 @@ describe("goal step (GHL-style Goal Events)", () => {
       )
     ).toThrow(AiFlowValidationError);
   });
+
+  it("rejects a replied goal on a stopOnResponse flow (the two reply reactions contradict)", () => {
+    const flow = goalFlow({
+      id: "g1",
+      type: "goal",
+      label: "Answered",
+      events: [{ kind: "replied" }]
+    }) as Record<string, unknown>;
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse({ ...flow, options: { stopOnResponse: true } })
+    );
+    expect(issues.some((i) => i.includes("stop when the contact replies"))).toBe(true);
+
+    // A NON-replied goal coexists with stopOnResponse fine.
+    const booked = goalFlow({
+      id: "g1",
+      type: "goal",
+      label: "Booked",
+      events: [{ kind: "appointment_booked" }]
+    }) as Record<string, unknown>;
+    expect(
+      validateDefinitionSemantics(
+        aiFlowDefinitionSchema.parse({ ...booked, options: { stopOnResponse: true } })
+      )
+    ).toEqual([]);
+
+    // And a replied goal without stopOnResponse stays valid.
+    expect(validateDefinitionSemantics(aiFlowDefinitionSchema.parse(flow))).toEqual([]);
+  });
+});
+
+describe("flow options: stopOnResponse / allowReentry", () => {
+  it("round-trips both booleans through parseAiFlowDefinition", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [{ id: "s1", type: "send_sms", to: "{{trigger.from}}", body: "hi" }],
+      options: { stopOnResponse: true, allowReentry: false }
+    });
+    expect(def.options?.stopOnResponse).toBe(true);
+    expect(def.options?.allowReentry).toBe(false);
+  });
+
+  it("both stay optional (omitted options parse unchanged)", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [{ id: "s1", type: "send_sms", to: "{{trigger.from}}", body: "hi" }]
+    });
+    expect(def.options).toBeUndefined();
+  });
 });
 
 describe("upsert_customer step", () => {
