@@ -4,10 +4,13 @@
  * Driven by /api/internal/aiflow-calendar-poll (which the ai-flow-worker's
  * cron tick kicks ~1/min, alongside the email poll): finds every ENABLED flow
  * whose trigger channel is "calendar", reads the watched calendar(s) through
- * the business's connected calendar account (resolved Google-first exactly
- * like the calendar tools — no connectionId lives in the trigger), evaluates
- * the flow's conditions over the event text, and enqueues a queued
- * ai_flow_run per match.
+ * the business's connected calendar account (resolved exactly like the
+ * calendar tools — no connectionId lives in the trigger), evaluates the
+ * flow's conditions over the event text, and enqueues a queued ai_flow_run
+ * per match. Google/Microsoft calendars poll through the Nango fetchers
+ * below; Calendly connections poll through the dedicated fetcher in
+ * calendly-poll.ts (scheduled events + invitee enrichment — Calendly-only
+ * tenants like KYP Ads previously had NO working calendar triggers).
  *
  * Three firing modes per flow:
  *   - event_created: an event whose `created` timestamp falls inside the poll
@@ -38,6 +41,7 @@ import {
 } from "@/lib/voice-tools/connections";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
+import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
 import {
   calendarTriggerScope,
   evaluateTriggerConditions,
@@ -179,6 +183,21 @@ export function eventCanceledDue(
   const updatedMs = Date.parse(ev.updatedIso);
   if (!Number.isFinite(updatedMs)) return false;
   return updatedMs >= nowMs - CALENDAR_CANCELED_LOOKBACK_MINUTES * 60_000;
+}
+
+/** Whether `flow` is due for `ev` at `nowMs` — one place for the mode fork. */
+export function flowDueForEvent(
+  flow: Pick<CalendarFlow, "on" | "leadMinutes" | "followMinutes">,
+  ev: CalendarEventInput,
+  nowMs: number
+): boolean {
+  return flow.on === "event_start"
+    ? eventStartDue(ev, flow.leadMinutes, nowMs)
+    : flow.on === "event_end"
+      ? eventEndDue(ev, flow.followMinutes, nowMs)
+      : flow.on === "event_canceled"
+        ? eventCanceledDue(ev, nowMs)
+        : eventCreatedDue(ev, nowMs);
 }
 
 /** Run-dedupe key for a due event (per-occurrence in start/end modes). */
@@ -562,37 +581,86 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
-      // Calendly/Vagaro connections have no pollable calendar (the fetchers
-      // below speak Google/Graph only) — not connected for triggers.
-      if (!conn || !isWorkspaceCalendarProvider(conn.provider)) {
+      // Vagaro/CalDAV connections have no pollable calendar — not connected
+      // for triggers. Calendly IS pollable (dedicated fetcher below);
+      // Google/Microsoft use the Nango fetchers.
+      if (!conn || (conn.provider !== "calendly" && !isWorkspaceCalendarProvider(conn.provider))) {
         throw new Error("calendar_not_connected");
-      }
-      const link: NangoWorkspaceLink = {
-        connectionId: conn.connectionId,
-        providerConfigKey: conn.providerConfigKey
-      };
-      // Read-only lookup — polling must never create the shared calendar. A
-      // flow watching only a not-yet-created shared calendar is a quiet no-op.
-      const shared = await getSharedCalendar(businessId);
-
-      // One provider query per (source, query kind) regardless of how many
-      // flows watch it: created-mode flows share the lookback listing,
-      // start-mode flows share one upcoming window sized to the largest lead.
-      const targets = new Map<CalendarSource, FetchTarget>();
-      for (const source of ["primary", "shared"] as const) {
-        if (!group.some((f) => f.sources.includes(source))) continue;
-        if (source === "shared" && !shared) continue;
-        targets.set(source, {
-          businessId,
-          link,
-          provider: conn.provider,
-          calendarId: source === "shared" ? shared!.calendarId : null,
-          source
-        });
       }
 
       const eventsBySource = new Map<CalendarSource, CalendarEventInput[]>();
-      for (const [source, target] of targets) {
+
+      if (conn.provider === "calendly") {
+        // Calendly branch: one "primary" source (no shared-calendar concept
+        // on Calendly — shared-only flows quietly see no events). Windows
+        // mirror the workspace path; the due filter is the poller's own
+        // logic so invitee enrichment is spent only on events that can fire.
+        const primaryFlows = group.filter((f) => f.sources.includes("primary"));
+        if (primaryFlows.length > 0) {
+          const leads = primaryFlows
+            .filter((f) => f.on === "event_start")
+            .map((f) => f.leadMinutes);
+          const follows = primaryFlows
+            .filter((f) => f.on === "event_end")
+            .map((f) => f.followMinutes);
+          const fetched = await fetchCalendlyCandidateEvents({
+            businessId,
+            conn,
+            nowMs,
+            windows: {
+              createdScan: primaryFlows.some((f) => f.on === "event_created"),
+              startHorizonMinutes:
+                leads.length > 0
+                  ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+                  : null,
+              endBackMinutes:
+                follows.length > 0
+                  ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
+                  : null,
+              canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
+            },
+            dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
+          });
+          if (fetched.overflowed) {
+            await recordSystemLog({
+              businessId,
+              source: "aiflow",
+              level: "warn",
+              event: "ai_flow_calendar_poll_overflow",
+              message:
+                "Calendly poll hit a listing/enrichment cap this tick; remainder deferred to later polls",
+              payload: { calendar: "primary", events_read: fetched.events.length }
+            });
+          }
+          eventsBySource.set("primary", fetched.events);
+          result.events += fetched.events.length;
+        }
+      } else {
+        const link: NangoWorkspaceLink = {
+          connectionId: conn.connectionId,
+          providerConfigKey: conn.providerConfigKey
+        };
+        // Read-only lookup — polling must never create the shared calendar. A
+        // flow watching only a not-yet-created shared calendar is a quiet no-op.
+        const shared = await getSharedCalendar(businessId);
+
+        // One provider query per (source, query kind) regardless of how many
+        // flows watch it: created-mode flows share the lookback listing,
+        // start-mode flows share one upcoming window sized to the largest lead.
+        const targets = new Map<CalendarSource, FetchTarget>();
+        for (const source of ["primary", "shared"] as const) {
+          if (!group.some((f) => f.sources.includes(source))) continue;
+          if (source === "shared" && !shared) continue;
+          targets.set(source, {
+            businessId,
+            link,
+            provider: conn.provider,
+            calendarId: source === "shared" ? shared!.calendarId : null,
+            source
+          });
+        }
+
+        for (const [source, target] of targets) {
         const collected: CalendarEventInput[] = [];
         const seenIds = new Set<string>();
         const push = (evs: CalendarEventInput[]) => {
@@ -675,6 +743,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
         }
         eventsBySource.set(source, collected);
         result.events += collected.length;
+        }
       }
 
       // Pre-resolve each flow's from_matches saved-contact refs ONCE for this
@@ -702,15 +771,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
       for (const flow of group) {
         for (const source of flow.sources) {
           for (const ev of eventsBySource.get(source) ?? []) {
-            const due =
-              flow.on === "event_start"
-                ? eventStartDue(ev, flow.leadMinutes, nowMs)
-                : flow.on === "event_end"
-                  ? eventEndDue(ev, flow.followMinutes, nowMs)
-                  : flow.on === "event_canceled"
-                    ? eventCanceledDue(ev, nowMs)
-                    : eventCreatedDue(ev, nowMs);
-            if (!due) continue;
+            if (!flowDueForEvent(flow, ev, nowMs)) continue;
             const scope = calendarTriggerScope(ev);
             if (
               !evaluateTriggerConditions(

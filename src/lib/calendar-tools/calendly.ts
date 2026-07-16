@@ -72,7 +72,7 @@ function proxyLink(conn: ResolvedVoiceConnection): ProxyLink {
   return { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
 }
 
-type CalendlyRequestConfig = {
+export type CalendlyRequestConfig = {
   endpoint: string;
   method: "GET" | "POST";
   params?: Record<string, string>;
@@ -83,9 +83,11 @@ type CalendlyRequestConfig = {
  * Transport-agnostic request: direct PAT for dashboard-connected accounts,
  * the Nango proxy otherwise. Null means "not usable" for BOTH transports
  * (missing/inactive direct row or revoked PAT; stale/foreign Nango link),
- * which callers map to `calendar_not_connected`.
+ * which callers map to `calendar_not_connected`. Exported for the AiFlow
+ * calendar-trigger poller (src/lib/ai-flows/calendly-poll.ts), which speaks
+ * the same two transports.
  */
-async function calendlyRequest(
+export async function calendlyRequest(
   businessId: string,
   conn: ResolvedVoiceConnection,
   config: CalendlyRequestConfig
