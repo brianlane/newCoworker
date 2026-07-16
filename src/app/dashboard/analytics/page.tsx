@@ -74,6 +74,16 @@ import {
   type DayDetailTextDisplayRow,
   type TrendWeek
 } from "@/components/dashboard/AnalyticsCards";
+import { getRenewalPipeline } from "@/lib/analytics/renewal-pipeline";
+import { getResponseTimeStats } from "@/lib/analytics/response-times";
+import { getRetentionOverview } from "@/lib/analytics/retention";
+import { getMonthlySummary } from "@/lib/analytics/monthly-summary";
+import {
+  MonthlySummaryCard,
+  RenewalPipelineCard,
+  ResponseTimeCard,
+  RetentionCard
+} from "@/components/dashboard/ReportCards";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { callerLabel } from "@/components/dashboard/voice-transcript-helpers";
 import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
@@ -215,6 +225,10 @@ export default async function DashboardAnalyticsPage(props: {
     leadSources,
     teamPerformance,
     flowFunnels,
+    renewalPipeline,
+    responseTimes,
+    retention,
+    monthlySummary,
     dayDetail,
     sentimentDetail,
     hourDetail
@@ -239,6 +253,12 @@ export default async function DashboardAnalyticsPage(props: {
         : Promise.resolve(null),
       // Per-flow funnel; a blip hides the card.
       getFlowFunnels(business.id, { client: db, now }).catch(() => null),
+      // Reporting suite (renewal pipeline / response times / retention /
+      // monthly rollup) — each degrades to a hidden card on a blip.
+      getRenewalPipeline(business.id, { client: db, now }).catch(() => null),
+      getResponseTimeStats(business.id, { client: db, now }).catch(() => null),
+      getRetentionOverview(business.id, { client: db, now }).catch(() => null),
+      getMonthlySummary(business.id, { client: db, now }).catch(() => null),
       selectedDay
         ? getAnalyticsDayDetail(business.id, selectedDay, { client: db }).catch(() => null)
         : Promise.resolve(null),
@@ -479,6 +499,24 @@ export default async function DashboardAnalyticsPage(props: {
       {leadSources && leadSources.totalNewContacts > 0 && (
         <LeadSourcesCard view={leadSources} />
       )}
+
+      {renewalPipeline &&
+        (renewalPipeline.rows.length > 0 ||
+          Object.values(renewalPipeline.counts).some((c) => c > 0)) && (
+          <RenewalPipelineCard pipeline={renewalPipeline} />
+        )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {responseTimes && (responseTimes.repliedCount > 0 || responseTimes.deadLetterCount > 0) && (
+          <ResponseTimeCard stats={responseTimes} />
+        )}
+        {retention && retention.engagedEver > 0 && <RetentionCard retention={retention} />}
+      </div>
+
+      {monthlySummary &&
+        (monthlySummary.current.coveredDays > 0 || monthlySummary.previous.coveredDays > 0) && (
+          <MonthlySummaryCard summary={monthlySummary} />
+        )}
 
       {teamPerformance && teamPerformance.length > 0 && (
         <EmployeePerformanceCard rows={teamPerformance} />
