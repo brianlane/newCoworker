@@ -27,8 +27,15 @@ type DocumentItem = {
   status: "processing" | "ready" | "failed";
   error_detail: string | null;
   expires_at: string | null;
+  contact_id: string | null;
+  renewal_date: string | null;
+  assigned_employee_id: string | null;
   created_at: string;
 };
+
+type ContactOption = { id: string; customerE164: string; displayName: string | null };
+
+type MemberOption = { id: string; name: string };
 
 type ShareItem = {
   id: string;
@@ -77,6 +84,21 @@ function expiryBadge(doc: DocumentItem): { text: string; tone: string } | null {
   };
 }
 
+function renewalBadge(doc: DocumentItem): { text: string; tone: string } | null {
+  if (!doc.renewal_date) return null;
+  const ms = Date.parse(doc.renewal_date);
+  if (!Number.isFinite(ms)) return null;
+  const days = Math.ceil((ms - Date.now()) / 86_400_000);
+  if (days <= 0) return { text: "Renewal overdue", tone: "text-spark-orange border-spark-orange/50" };
+  if (days <= 30) {
+    return { text: `Renews in ${days}d`, tone: "text-spark-orange border-spark-orange/40" };
+  }
+  return {
+    text: `Renews ${doc.renewal_date.slice(0, 10)}`,
+    tone: "text-parchment/50 border-parchment/20"
+  };
+}
+
 export function DocumentsManager({ businessId }: { businessId: string }) {
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -86,6 +108,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   const [uploadTitle, setUploadTitle] = useState("");
   const [uploadCategory, setUploadCategory] = useState("");
   const [uploadExpires, setUploadExpires] = useState("");
+  const [uploadRenewal, setUploadRenewal] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
   // Per-document expanded panel state. The ref mirrors openId so async
   // fetches can verify the SAME document is still expanded before applying
@@ -95,7 +118,13 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   const openIdRef = useRef<string | null>(null);
   const [draftContent, setDraftContent] = useState("");
   const [draftExpires, setDraftExpires] = useState("");
+  const [draftRenewal, setDraftRenewal] = useState("");
   const [savingDoc, setSavingDoc] = useState(false);
+  // Pickers for linking a document to a contact / assigning a renewal
+  // handler. Loaded once on mount; both selects degrade to hidden when the
+  // directory fetch fails or comes back empty.
+  const [contacts, setContacts] = useState<ContactOption[]>([]);
+  const [members, setMembers] = useState<MemberOption[]>([]);
   const [shares, setShares] = useState<ShareItem[]>([]);
   // Signature requests for the open document + the request form.
   const [signatureRequests, setSignatureRequests] = useState<SignatureRequestItem[]>([]);
@@ -123,6 +152,46 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        // 200 is MAX_LIST_LIMIT on the customers API — a larger value fails
+        // validation and would hide the picker entirely.
+        const res = await fetch(
+          `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&limit=200`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as {
+          ok: boolean;
+          data?: { customers?: ContactOption[] };
+        };
+        if (!cancelled && json.ok && json.data?.customers) setContacts(json.data.customers);
+      } catch {
+        /* contact picker stays hidden */
+      }
+      try {
+        const res = await fetch(
+          `/api/dashboard/employees?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as { ok: boolean; data?: { members?: MemberOption[] } };
+        if (!cancelled && json.ok && json.data?.members) setMembers(json.data.members);
+      } catch {
+        /* assignee picker stays hidden */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [businessId]);
+
+  function contactLabel(option: ContactOption): string {
+    return option.displayName?.trim()
+      ? `${option.displayName} (${option.customerE164})`
+      : option.customerE164;
+  }
+
   async function upload() {
     const file = fileRef.current?.files?.[0];
     if (!file) {
@@ -139,6 +208,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
       if (uploadCategory.trim()) form.set("category", uploadCategory.trim());
       form.set("audience", uploadAudience);
       if (uploadExpires) form.set("expiresAt", uploadExpires);
+      if (uploadRenewal) form.set("renewalDate", uploadRenewal);
       const res = await fetch("/api/dashboard/documents", { method: "POST", body: form });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
       if (!json.ok) {
@@ -148,6 +218,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
       setUploadTitle("");
       setUploadCategory("");
       setUploadExpires("");
+      setUploadRenewal("");
       if (fileRef.current) fileRef.current.value = "";
       await refresh();
     } catch {
@@ -167,6 +238,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     openIdRef.current = doc.id;
     setDraftContent(doc.content_md);
     setDraftExpires(doc.expires_at ? doc.expires_at.slice(0, 10) : "");
+    setDraftRenewal(doc.renewal_date ? doc.renewal_date.slice(0, 10) : "");
     setShares([]);
     setSignatureRequests([]);
     setSigName("");
@@ -384,6 +456,15 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
             onChange={(e) => setUploadExpires(e.target.value)}
           />
         </div>
+        <div>
+          <label className={labelClass}>Renewal date (optional — reminds ahead)</label>
+          <input
+            type="date"
+            className={inputClass}
+            value={uploadRenewal}
+            onChange={(e) => setUploadRenewal(e.target.value)}
+          />
+        </div>
         <div className="flex items-end">
           <Button type="button" variant="primary" size="sm" onClick={upload} loading={uploading}>
             Upload document
@@ -405,6 +486,10 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
         ) : (
           documents.map((doc) => {
             const badge = expiryBadge(doc);
+            const renewal = renewalBadge(doc);
+            const linkedContact = doc.contact_id
+              ? contacts.find((c) => c.id === doc.contact_id)
+              : undefined;
             const open = openId === doc.id;
             return (
               <div key={doc.id} className="rounded-md border border-parchment/10 p-3">
@@ -436,6 +521,18 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                   {badge && (
                     <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
                       {badge.text}
+                    </span>
+                  )}
+                  {renewal && (
+                    <span className={`rounded border px-1.5 py-0.5 text-[11px] ${renewal.tone}`}>
+                      {renewal.text}
+                    </span>
+                  )}
+                  {doc.contact_id && (
+                    <span className="rounded border border-signal-teal/40 px-1.5 py-0.5 text-[11px] text-signal-teal/90">
+                      {/* The picker list is capped at the API's 200-contact page;
+                          a linked contact beyond it still shows as linked. */}
+                      {linkedContact ? contactLabel(linkedContact) : "Linked contact"}
                     </span>
                   )}
                   <span className="ml-auto text-[11px] text-parchment/35">
@@ -498,6 +595,80 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                           </Button>
                         </div>
                       </div>
+                      <div>
+                        <label className={labelClass}>
+                          Renewal date (reminds ahead — the document stays active)
+                        </label>
+                        <div className="flex gap-2">
+                          <input
+                            type="date"
+                            className={inputClass}
+                            value={draftRenewal}
+                            onChange={(e) => setDraftRenewal(e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            loading={savingDoc}
+                            onClick={() =>
+                              void patchDocument(doc.id, {
+                                renewalDate: draftRenewal ? draftRenewal : null
+                              })
+                            }
+                          >
+                            Set
+                          </Button>
+                        </div>
+                      </div>
+                      {contacts.length > 0 && (
+                        <div>
+                          <label className={labelClass}>Linked contact (policy holder)</label>
+                          <select
+                            className={inputClass}
+                            value={doc.contact_id ?? ""}
+                            onChange={(e) =>
+                              void patchDocument(doc.id, {
+                                contactId: e.target.value ? e.target.value : null
+                              })
+                            }
+                          >
+                            <option value="">— not linked —</option>
+                            {/* A linked contact beyond the 200-contact picker
+                                page keeps its own option so the select never
+                                misreports the doc as unlinked. */}
+                            {doc.contact_id && !contacts.some((c) => c.id === doc.contact_id) && (
+                              <option value={doc.contact_id}>Linked contact (kept)</option>
+                            )}
+                            {contacts.map((c) => (
+                              <option key={c.id} value={c.id}>
+                                {contactLabel(c)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      {members.length > 0 && (
+                        <div>
+                          <label className={labelClass}>Renewal handled by</label>
+                          <select
+                            className={inputClass}
+                            value={doc.assigned_employee_id ?? ""}
+                            onChange={(e) =>
+                              void patchDocument(doc.id, {
+                                assignedEmployeeId: e.target.value ? e.target.value : null
+                              })
+                            }
+                          >
+                            <option value="">— unassigned —</option>
+                            {members.map((m) => (
+                              <option key={m.id} value={m.id}>
+                                {m.name}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
                     </div>
                     <div>
                       <label className={labelClass}>

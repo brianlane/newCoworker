@@ -6,7 +6,7 @@ import { Download, FileText, Upload } from "lucide-react";
 
 type Props = { businessId: string };
 
-type CsvType = "contacts" | "employees";
+type CsvType = "contacts" | "employees" | "documents";
 
 type ImportSummary = {
   totalRows: number;
@@ -33,6 +33,12 @@ const DATASETS: { type: CsvType; title: string; blurb: string }[] = [
     type: "employees",
     title: "Employees",
     blurb: "The team roster AiFlows route leads through, including schedules. Import updates by phone number."
+  },
+  {
+    type: "documents",
+    title: "Contact records",
+    blurb:
+      "Policies, leases, contracts, memberships — records linked to a contact with renewal dates. Import your book of business; the contact must exist first."
   }
 ];
 

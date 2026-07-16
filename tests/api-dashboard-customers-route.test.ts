@@ -5,6 +5,10 @@ vi.mock("@/lib/auth", () => ({
   requireBusinessRole: vi.fn()
 }));
 
+vi.mock("@/lib/documents/cleanup", () => ({
+  deleteContactLinkedDocuments: vi.fn(async () => ({ deleted: 0, keptSigned: 0 }))
+}));
+
 vi.mock("@/lib/customer-memory/db", () => ({
   listCustomerMemories: vi.fn(),
   getCustomerMemory: vi.fn(),
@@ -46,6 +50,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { getTeamMember } from "@/lib/db/employees";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+import { deleteContactLinkedDocuments } from "@/lib/documents/cleanup";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const CUSTOMER = "+15551234567";
@@ -556,9 +561,44 @@ describe("DELETE /api/dashboard/customers/:e164", () => {
       email: "o@o.com",
       isAdmin: true
     });
+    vi.mocked(getCustomerMemory).mockResolvedValue(null as never);
     const res = await DETAIL_DELETE(detailUrl(), params(encodeURIComponent(CUSTOMER)));
     expect(res.status).toBe(200);
     expect(deleteCustomerMemory).toHaveBeenCalledWith(BIZ, CUSTOMER);
+    // Already-gone row → nothing to clean up.
+    expect(deleteContactLinkedDocuments).not.toHaveBeenCalled();
+  });
+
+  it("deletes the contact's linked record documents before removing the row", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: "u",
+      email: "o@o.com",
+      isAdmin: true
+    });
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      id: "contact-1",
+      customer_e164: CUSTOMER
+    } as never);
+    const res = await DETAIL_DELETE(detailUrl(), params(encodeURIComponent(CUSTOMER)));
+    expect(res.status).toBe(200);
+    expect(deleteContactLinkedDocuments).toHaveBeenCalledWith(BIZ, "contact-1");
+    expect(deleteCustomerMemory).toHaveBeenCalledWith(BIZ, CUSTOMER);
+  });
+
+  it("aborts the contact delete when document cleanup fails (nothing orphans)", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      userId: "u",
+      email: "o@o.com",
+      isAdmin: true
+    });
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      id: "contact-1",
+      customer_e164: CUSTOMER
+    } as never);
+    vi.mocked(deleteContactLinkedDocuments).mockRejectedValueOnce(new Error("cleanup boom"));
+    const res = await DETAIL_DELETE(detailUrl(), params(encodeURIComponent(CUSTOMER)));
+    expect(res.status).toBe(500);
+    expect(deleteCustomerMemory).not.toHaveBeenCalled();
   });
 
   it("calls requireBusinessRole for non-admin owners before deleting", async () => {

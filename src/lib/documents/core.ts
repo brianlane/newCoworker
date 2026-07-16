@@ -25,6 +25,18 @@ export const DOCUMENT_SUMMARY_MAX_CHARS = 300;
 export const DOCUMENT_SHARE_DEFAULT_TTL_DAYS = 30;
 /** Documents expiring within this window trigger the owner reminder. */
 export const DOCUMENT_EXPIRING_SOON_DAYS = 7;
+/** Documents with a renewal date within this window trigger the renewal reminder. */
+export const DOCUMENT_RENEWAL_SOON_DAYS = 30;
+/**
+ * Flat cap on contact-linked record documents (policies, contracts,
+ * memberships). Separate from the per-tier knowledge-library cap because a
+ * book of business legitimately holds hundreds of records: CSV-imported
+ * records carry no file and skip Gemini ingestion entirely, records default
+ * to the staff audience so they stay out of the client vault digest, and
+ * owner-attended file uploads (which DO extract, linked or not) are
+ * naturally self-limiting. This limit is abuse-safety only.
+ */
+export const CONTACT_DOCUMENT_RECORDS_LIMIT = 2000;
 
 /** Per-tier document-count caps (uploads are refused past the cap). */
 export const DOCUMENT_TIER_LIMITS: Record<string, number> = {
@@ -45,6 +57,22 @@ export function isDocumentExpired(
   const ms = Date.parse(doc.expires_at);
   if (!Number.isFinite(ms)) return false;
   return ms <= now.getTime();
+}
+
+/**
+ * Whether a document's renewal date falls within `days` from `now` —
+ * including already-past dates, so an overdue renewal still reminds. Used
+ * by the daily sweep and the dashboard renewal badges.
+ */
+export function isRenewalDueWithin(
+  doc: Pick<BusinessDocumentRow, "renewal_date">,
+  now: Date = new Date(),
+  days: number = DOCUMENT_RENEWAL_SOON_DAYS
+): boolean {
+  if (!doc.renewal_date) return false;
+  const ms = Date.parse(doc.renewal_date);
+  if (!Number.isFinite(ms)) return false;
+  return ms <= now.getTime() + days * 24 * 60 * 60 * 1000;
 }
 
 /**

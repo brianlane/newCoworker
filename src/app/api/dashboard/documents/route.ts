@@ -27,9 +27,11 @@ import {
 } from "@/lib/documents/db";
 import {
   BUSINESS_DOCS_BUCKET,
+  CONTACT_DOCUMENT_RECORDS_LIMIT,
   documentLimitForTier,
   parseExpirationInput
 } from "@/lib/documents/core";
+import { getTeamMember } from "@/lib/db/employees";
 import { ingestDocument, isSupportedDocumentMime } from "@/lib/documents/ingest";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
@@ -91,7 +93,12 @@ export async function POST(request: Request) {
     const title = (titleRaw || file.name.replace(/\.[a-z0-9]+$/i, "")).slice(0, 200);
     if (!title) return errorResponse("VALIDATION_ERROR", "title is required");
     const category = String(form.get("category") ?? "general").trim().slice(0, 100) || "general";
-    const audience = audienceSchema.safeParse(form.get("audience") ?? "both");
+    // Contact-linked records default to internal-only (matching the CSV
+    // importer): a customer's policy/contract must never reach customer
+    // channels unless the owner deliberately widens it. Library uploads
+    // keep the historical "both" default.
+    const audienceDefault = String(form.get("contactId") ?? "").trim() ? "staff" : "both";
+    const audience = audienceSchema.safeParse(form.get("audience") ?? audienceDefault);
     if (!audience.success) {
       return errorResponse("VALIDATION_ERROR", "audience must be clients, staff, or both");
     }
@@ -103,21 +110,68 @@ export async function POST(request: Request) {
       expiresAt = parseExpirationInput(expiresRaw);
       if (!expiresAt) return errorResponse("VALIDATION_ERROR", "expiresAt is not a date");
     }
+    const renewalRaw = String(form.get("renewalDate") ?? "").trim();
+    let renewalDate: string | null = null;
+    if (renewalRaw) {
+      // Same end-of-day semantics as expiresAt.
+      renewalDate = parseExpirationInput(renewalRaw);
+      if (!renewalDate) return errorResponse("VALIDATION_ERROR", "renewalDate is not a date");
+    }
+    const contactIdRaw = String(form.get("contactId") ?? "").trim();
+    const contactId = contactIdRaw ? z.string().uuid().safeParse(contactIdRaw) : null;
+    if (contactId && !contactId.success) {
+      return errorResponse("VALIDATION_ERROR", "contactId must be a uuid");
+    }
+    const assignedRaw = String(form.get("assignedEmployeeId") ?? "").trim();
+    const assignedEmployeeId = assignedRaw ? z.string().uuid().safeParse(assignedRaw) : null;
+    if (assignedEmployeeId && !assignedEmployeeId.success) {
+      return errorResponse("VALIDATION_ERROR", "assignedEmployeeId must be a uuid");
+    }
 
     if (!user.isAdmin) await requireBusinessRole(businessId.data, "manage_settings");
 
     const business = await getBusiness(businessId.data);
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
-    const limit = documentLimitForTier(business.tier);
-    const existing = await countBusinessDocuments(businessId.data);
+    // Contact-linked records live under their own flat cap; unlinked
+    // knowledge-library docs keep the per-tier cap.
+    const capScope = contactId ? ("contact_records" as const) : ("library" as const);
+    const limit = contactId
+      ? CONTACT_DOCUMENT_RECORDS_LIMIT
+      : documentLimitForTier(business.tier);
+    const existing = await countBusinessDocuments(businessId.data, capScope);
     if (existing >= limit) {
       return errorResponse(
         "VALIDATION_ERROR",
-        `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
+        contactId
+          ? `Contact document limit reached (${limit}).`
+          : `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
       );
     }
 
     const db = await createSupabaseServiceClient();
+
+    // Cross-tenant guards: a linked contact / assigned employee must belong
+    // to this business.
+    if (contactId) {
+      const { data: contactRow, error: contactErr } = await db
+        .from("contacts")
+        .select("id")
+        .eq("business_id", businessId.data)
+        .eq("id", contactId.data)
+        .maybeSingle();
+      if (contactErr) {
+        logger.warn("documents/upload: contact lookup failed", {
+          businessId: businessId.data,
+          error: contactErr.message
+        });
+        return errorResponse("INTERNAL_SERVER_ERROR", "Contact lookup failed");
+      }
+      if (!contactRow) return errorResponse("VALIDATION_ERROR", "Contact not found");
+    }
+    if (assignedEmployeeId) {
+      const member = await getTeamMember(businessId.data, assignedEmployeeId.data);
+      if (!member) return errorResponse("VALIDATION_ERROR", "Assigned employee not found");
+    }
     const documentId = randomUUID();
     const safeName = file.name.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120) || "document";
     const storagePath = `${businessId.data}/${documentId}/${safeName}`;
@@ -159,7 +213,10 @@ export async function POST(request: Request) {
         storage_path: storagePath,
         mime_type: mimeType,
         byte_size: file.size,
-        expires_at: expiresAt
+        expires_at: expiresAt,
+        contact_id: contactId ? contactId.data : null,
+        renewal_date: renewalDate,
+        assigned_employee_id: assignedEmployeeId ? assignedEmployeeId.data : null
       });
     } catch (err) {
       await removeUploadedObject();
@@ -170,13 +227,15 @@ export async function POST(request: Request) {
     // each pass the count above, so anyone who lands past the cap rolls
     // their own row back. Over-rollback on a photo-finish tie is acceptable
     // (both retry; the owner never ends up over their plan's limit).
-    const afterInsert = await countBusinessDocuments(businessId.data);
+    const afterInsert = await countBusinessDocuments(businessId.data, capScope);
     if (afterInsert > limit) {
       await deleteBusinessDocument(businessId.data, documentId);
       await removeUploadedObject();
       return errorResponse(
         "VALIDATION_ERROR",
-        `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
+        contactId
+          ? `Contact document limit reached (${limit}).`
+          : `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
       );
     }
 

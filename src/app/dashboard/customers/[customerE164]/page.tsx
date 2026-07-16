@@ -32,6 +32,7 @@ import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailCompo
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { listTeamMembers } from "@/lib/db/employees";
+import { listBusinessDocumentsForContact } from "@/lib/documents/db";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   // as ONE parallel group. This matters doubly for residency (vps-mode)
   // tenants, where each read is a tunnel round-trip to their box —
   // serially these were ~5 RTTs, now the page pays one.
-  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems] =
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments] =
     await Promise.all([
       listSmsHistoryForCustomer(business.id, memory.customer_e164, {
         limit: 50,
@@ -125,7 +126,10 @@ export default async function CustomerDetailPage({ params }: Props) {
         },
         {},
         db
-      ).catch(() => [] as ActivityItem[])
+      ).catch(() => [] as ActivityItem[]),
+      // Linked records (policies, contracts, memberships); tolerated so a
+      // documents-table error never blocks the profile page.
+      listBusinessDocumentsForContact(business.id, memory.id, db).catch(() => [])
     ]);
   // Merge is "same person, two numbers" — only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
@@ -288,6 +292,49 @@ export default async function CustomerDetailPage({ params }: Props) {
           </ul>
         )}
       </Card>
+
+      {contactDocuments.length > 0 && (
+        <Card>
+          <div className="flex items-center justify-between mb-3">
+            <h2 className="text-sm font-semibold text-parchment">Documents on file</h2>
+            <Link
+              href="/dashboard/memory"
+              className="text-xs text-claw-green hover:underline"
+            >
+              Manage documents →
+            </Link>
+          </div>
+          <ul className="divide-y divide-parchment/10">
+            {contactDocuments.map((doc) => {
+              const badges = contactDocBadges(doc);
+              return (
+                <li key={doc.id} className="py-2 flex flex-wrap items-center gap-2">
+                  <span className="text-sm text-parchment/90">{doc.title}</span>
+                  <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
+                    {doc.category}
+                  </span>
+                  {badges.renewal && (
+                    <span
+                      className={`rounded border px-1.5 py-0.5 text-[11px] ${
+                        badges.renewal.urgent
+                          ? "text-spark-orange border-spark-orange/40"
+                          : "text-parchment/50 border-parchment/20"
+                      }`}
+                    >
+                      {badges.renewal.text}
+                    </span>
+                  )}
+                  {badges.expired && (
+                    <span className="rounded border border-spark-orange/50 px-1.5 py-0.5 text-[11px] text-spark-orange">
+                      Expired
+                    </span>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        </Card>
+      )}
 
       {memory.summary_md?.trim() ? (
         <Card>
@@ -464,6 +511,31 @@ export default async function CustomerDetailPage({ params }: Props) {
       </Card>
     </div>
   );
+}
+
+/**
+ * Renewal/expiry badge state for a linked record document. Module-level
+ * (not inline in JSX) so the wall-clock read stays out of the component
+ * render path, matching the DocumentsManager badge helpers.
+ */
+function contactDocBadges(doc: { renewal_date: string | null; expires_at: string | null }): {
+  renewal: { text: string; urgent: boolean } | null;
+  expired: boolean;
+} {
+  const nowMs = Date.now();
+  let renewal: { text: string; urgent: boolean } | null = null;
+  if (doc.renewal_date) {
+    const ms = Date.parse(doc.renewal_date);
+    if (Number.isFinite(ms)) {
+      const days = Math.ceil((ms - nowMs) / 86_400_000);
+      renewal =
+        days <= 0
+          ? { text: "Renewal overdue", urgent: true }
+          : { text: `Renews ${doc.renewal_date.slice(0, 10)}`, urgent: days <= 30 };
+    }
+  }
+  const expired = Boolean(doc.expires_at && Date.parse(doc.expires_at) <= nowMs);
+  return { renewal, expired };
 }
 
 /**

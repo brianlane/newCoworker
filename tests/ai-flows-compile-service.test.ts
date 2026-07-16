@@ -66,6 +66,10 @@ function readyDoc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumen
     expires_at: null,
     expiring_soon_notified_at: null,
     expired_notified_at: null,
+    contact_id: null,
+    renewal_date: null,
+    assigned_employee_id: null,
+    renewal_due_notified_at: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
