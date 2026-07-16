@@ -19,7 +19,7 @@ import {
   tenantEmailTriggerScope
 } from "@/lib/ai-flows/trigger-eval";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
-import { recordTenantMailboxInbound } from "@/lib/db/email-log";
+import { linkTenantMailboxInboundRun, recordTenantMailboxInbound } from "@/lib/db/email-log";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import {
   findCustomerByEmail,
@@ -167,6 +167,35 @@ export async function processInboundTenantEmail(
       : {})
   });
 
+  // Record the inbound mail on the Emails page BEFORE enqueueing any run:
+  // doc_extract's tenant-ownership gate reads this row's attachment paths,
+  // so a worker that claims a freshly-enqueued run must already find the
+  // row (previously the log write came after the enqueue loop — a run
+  // racing ahead would fail its document read). The flow/run linkage is
+  // backfilled below once the first run exists. Always written, matched or
+  // not — the owner should see what their AI mailbox received.
+  const attachments = ownAttachments.map((a) => ({
+    filename: a.filename,
+    mime_type: a.mimeType,
+    size_bytes: a.size,
+    storage_path: a.path
+  }));
+  const emailLogId = await recordTenantMailboxInbound(
+    {
+      businessId,
+      toEmail: payload.to,
+      fromEmail,
+      subject: payload.subject,
+      bodyText: payload.text,
+      bodyHtml: payload.html ?? null,
+      attachments,
+      flowId: null,
+      runId: null,
+      providerMessageId: payload.messageId
+    },
+    db
+  );
+
   const flows = await loadTenantEmailFlows(db, businessId);
 
   let enqueued = 0;
@@ -218,29 +247,16 @@ export async function processInboundTenantEmail(
     });
   }
 
-  // Always surface the inbound mail on the Emails page, even when nothing
-  // matched — the owner should see what their AI mailbox received.
-  const attachments = ownAttachments.map((a) => ({
-    filename: a.filename,
-    mime_type: a.mimeType,
-    size_bytes: a.size,
-    storage_path: a.path
-  }));
-  await recordTenantMailboxInbound(
-    {
+  // Backfill the flow/run linkage now that runs exist (the row itself was
+  // written before the enqueue loop — see above). Best-effort.
+  if (emailLogId && firstFlowId && firstRunId) {
+    await linkTenantMailboxInboundRun(
       businessId,
-      toEmail: payload.to,
-      fromEmail,
-      subject: payload.subject,
-      bodyText: payload.text,
-      bodyHtml: payload.html ?? null,
-      attachments,
-      flowId: firstFlowId,
-      runId: firstRunId,
-      providerMessageId: payload.messageId
-    },
-    db
-  );
+      emailLogId,
+      { flowId: firstFlowId, runId: firstRunId },
+      db
+    );
+  }
 
   // Cross-channel rollup: if the sender's address is linked to a customer
   // profile, record an `email` interaction so the customer list reflects it

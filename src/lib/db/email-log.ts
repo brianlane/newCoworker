@@ -384,31 +384,69 @@ export type RecordTenantMailboxInboundInput = {
  * Record an inbound email delivered to the tenant's AI mailbox so it shows on
  * the dashboard Emails page. Best-effort: a logging failure never blocks the
  * webhook's 200 (mail is already accepted by Cloudflare at that point).
+ *
+ * Returns the inserted row id (null on failure) so the caller can backfill
+ * the flow/run linkage AFTER enqueueing — the row must exist BEFORE any run
+ * does, because doc_extract's tenant-ownership gate reads this row's
+ * attachment paths (a run racing ahead of the log row would fail its
+ * document read).
  */
 export async function recordTenantMailboxInbound(
   input: RecordTenantMailboxInboundInput,
   client?: SupabaseClient
+): Promise<string | null> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { data, error } = await db
+      .from("email_log")
+      .insert({
+        business_id: input.businessId,
+        direction: "inbound",
+        to_email: input.toEmail,
+        from_email: input.fromEmail,
+        subject: input.subject,
+        body_preview: input.bodyText.slice(0, 500),
+        body_full: input.bodyText,
+        body_html: input.bodyHtml ?? null,
+        attachments: input.attachments ?? [],
+        source: "tenant_mailbox_inbound",
+        run_id: input.runId ?? null,
+        flow_id: input.flowId ?? null,
+        provider_message_id: input.providerMessageId ?? null
+      })
+      .select("id")
+      .maybeSingle();
+    if (error) {
+      console.error("recordTenantMailboxInbound", error.message);
+      return null;
+    }
+    return (data as { id?: string } | null)?.id ?? null;
+  } catch (err) {
+    console.error("recordTenantMailboxInbound", err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+/**
+ * Backfill the flow/run linkage on an inbound mailbox row once runs exist
+ * (the row itself is written BEFORE enqueueing — see above). Best-effort.
+ */
+export async function linkTenantMailboxInboundRun(
+  businessId: string,
+  emailLogId: string,
+  linkage: { flowId: string; runId: string },
+  client?: SupabaseClient
 ): Promise<void> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
-    const { error } = await db.from("email_log").insert({
-      business_id: input.businessId,
-      direction: "inbound",
-      to_email: input.toEmail,
-      from_email: input.fromEmail,
-      subject: input.subject,
-      body_preview: input.bodyText.slice(0, 500),
-      body_full: input.bodyText,
-      body_html: input.bodyHtml ?? null,
-      attachments: input.attachments ?? [],
-      source: "tenant_mailbox_inbound",
-      run_id: input.runId ?? null,
-      flow_id: input.flowId ?? null,
-      provider_message_id: input.providerMessageId ?? null
-    });
-    if (error) console.error("recordTenantMailboxInbound", error.message);
+    const { error } = await db
+      .from("email_log")
+      .update({ flow_id: linkage.flowId, run_id: linkage.runId })
+      .eq("business_id", businessId)
+      .eq("id", emailLogId);
+    if (error) console.error("linkTenantMailboxInboundRun", error.message);
   } catch (err) {
-    console.error("recordTenantMailboxInbound", err instanceof Error ? err.message : err);
+    console.error("linkTenantMailboxInboundRun", err instanceof Error ? err.message : err);
   }
 }
 

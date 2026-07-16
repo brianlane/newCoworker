@@ -16,8 +16,10 @@ vi.mock("@/lib/ai-flows/db", () => ({
 }));
 
 const recordTenantMailboxInbound = vi.fn();
+const linkTenantMailboxInboundRun = vi.fn();
 vi.mock("@/lib/db/email-log", () => ({
-  recordTenantMailboxInbound: (...a: unknown[]) => recordTenantMailboxInbound(...a)
+  recordTenantMailboxInbound: (...a: unknown[]) => recordTenantMailboxInbound(...a),
+  linkTenantMailboxInboundRun: (...a: unknown[]) => linkTenantMailboxInboundRun(...a)
 }));
 
 const recordSystemLog = vi.fn();
@@ -58,6 +60,9 @@ beforeEach(() => {
   resolveBusinessByAddress.mockReset();
   enqueueAiFlowRun.mockReset();
   recordTenantMailboxInbound.mockReset();
+  recordTenantMailboxInbound.mockResolvedValue("log-1");
+  linkTenantMailboxInboundRun.mockReset();
+  linkTenantMailboxInboundRun.mockResolvedValue(undefined);
   recordSystemLog.mockReset();
   findCustomerByEmail.mockReset();
   findCustomerByEmail.mockResolvedValue(null);
@@ -151,17 +156,44 @@ describe("processInboundTenantEmail", () => {
       db
     );
     expect(recordSystemLog).toHaveBeenCalledTimes(2);
+    // The log row is written BEFORE any run exists (doc_extract's ownership
+    // gate reads it), so the record call carries no linkage yet…
     expect(recordTenantMailboxInbound).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: "biz-1",
         toEmail: "amy@newcoworker.com",
         fromEmail: "jane@example.com",
-        flowId: "flow-match",
-        runId: "run-1",
+        flowId: null,
+        runId: null,
         providerMessageId: "<msg-1@example.com>"
       }),
       db
     );
+    // …and the first run's linkage is backfilled afterwards.
+    expect(linkTenantMailboxInboundRun).toHaveBeenCalledWith(
+      "biz-1",
+      "log-1",
+      { flowId: "flow-match", runId: "run-1" },
+      db
+    );
+  });
+
+  it("skips the linkage backfill when the log write failed or nothing matched", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    // Log write failed → no id → no backfill even though a run enqueued.
+    recordTenantMailboxInbound.mockResolvedValueOnce(null);
+    const db = flowsDb({
+      data: [{ id: "flow-match", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-1" });
+    await processInboundTenantEmail(PAYLOAD, db as never);
+    expect(linkTenantMailboxInboundRun).not.toHaveBeenCalled();
+
+    // No matching flow → no run → no backfill.
+    const noMatch = flowsDb({ data: [], error: null });
+    await processInboundTenantEmail(PAYLOAD, noMatch as never);
+    expect(linkTenantMailboxInboundRun).not.toHaveBeenCalled();
   });
 
   it("exposes the first image attachment as trigger.image (email-attachments ref)", async () => {
