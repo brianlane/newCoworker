@@ -149,9 +149,13 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
         {
           id: "s_notify_owner",
           type: "notify_owner",
+          // {{vars.actions_taken}} is the engine's truthful ledger of what
+          // actually went out: "texted +1602… " on a send, "skipped a text
+          // to 'TBD' …" when the extracted phone wasn't usable — so this
+          // brief can never claim a text that the send step skipped.
           message:
-            "Appointment \u201c{{trigger.event_title}}\u201d wrapped up — I texted " +
-            "{{vars.customer_name}} ({{vars.customer_phone}}) your review link.",
+            "Appointment \u201c{{trigger.event_title}}\u201d wrapped up. Review " +
+            "request for {{vars.customer_name}}: {{vars.actions_taken}}",
           when: { var: "customer_phone", notEquals: "none" }
         }
       ]
