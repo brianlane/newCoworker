@@ -60,10 +60,18 @@ export const CALENDLY_CREATED_SCAN_DAYS = 30;
  */
 export const CALENDLY_END_MAX_EVENT_MINUTES = 6 * 60;
 
-/** event_canceled scans starts from this far back… */
+/**
+ * event_canceled scan bounds. Calendly's listing can only filter on START
+ * time (no modified-since filter, unlike Google's updatedMin), so the poll
+ * scans canceled events whose start falls in [-back, +forward] and lets
+ * `eventCanceledDue` gate on the cancellation moment (updated_at). The
+ * forward horizon covers Calendly's own scheduling reality — event types
+ * cap their booking window (60/90 days typical), so a cancellation on an
+ * event starting beyond it is vanishingly rare; one that still happens is
+ * missed, a documented Calendly API limitation rather than a bug.
+ */
 export const CALENDLY_CANCELED_SCAN_BACK_DAYS = 1;
-/** …to this far forward (cancellations mostly hit upcoming events). */
-export const CALENDLY_CANCELED_SCAN_FORWARD_DAYS = 30;
+export const CALENDLY_CANCELED_SCAN_FORWARD_DAYS = 90;
 
 type RawLocation = { type?: string; location?: string | null; join_url?: string };
 
