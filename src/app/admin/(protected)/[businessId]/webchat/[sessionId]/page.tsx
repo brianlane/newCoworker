@@ -11,6 +11,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { getWebchatSessionById, listWebchatMessages } from "@/lib/webchat/db";
+import { VisitorMetaCard } from "@/components/webchat/VisitorMetaCard";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +65,8 @@ export default async function AdminWebchatSessionPage({
           <LocalDateTime iso={session.created_at} style="list" />
         </p>
       </div>
+
+      <VisitorMetaCard visitorMeta={session.visitor_meta ?? null} />
 
       <Card>
         {messages.length === 0 ? (

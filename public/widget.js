@@ -32,6 +32,68 @@
 
   var Z = "2147483000"; // near-max, still leaves headroom for host overlays
 
+  // --- Passive visitor context (no PII: page, referrer, UTM, device hints).
+  // Collected here because the loader runs on the HOST page — the iframe
+  // can't see the visitor's URL, referrer, or campaign params. Sent to the
+  // frame via postMessage; the server validates and stores it with the
+  // session. The visitor's IP is never part of this.
+  var loadedAt = Date.now();
+  var returning = false;
+  try {
+    returning = !!localStorage.getItem("ncw_seen");
+    localStorage.setItem("ncw_seen", "1");
+  } catch (e) { /* private mode */ }
+
+  function collectMeta() {
+    var utm = {};
+    try {
+      var qs = new URLSearchParams(location.search);
+      ["source", "medium", "campaign", "term", "content"].forEach(function (k) {
+        var v = qs.get("utm_" + k);
+        if (v) utm[k] = v.slice(0, 200);
+      });
+    } catch (e) { /* ancient engine */ }
+    var tz = "";
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ""; } catch (e) { /* ignore */ }
+    return {
+      page: String(location.href).slice(0, 2000),
+      referrer: String(document.referrer || "").slice(0, 2000),
+      utm: utm,
+      language: String(navigator.language || "").slice(0, 35),
+      screen: (window.screen && window.screen.width ? window.screen.width + "x" + window.screen.height : ""),
+      timezone: tz.slice(0, 64),
+      returning: returning,
+      timeOnPageMs: Math.max(0, Date.now() - loadedAt)
+    };
+  }
+
+  function postToFrame(msg) {
+    if (frame && frame.contentWindow) {
+      frame.contentWindow.postMessage(msg, origin);
+    }
+  }
+
+  // SPA navigation: keep the frame's notion of "current page" fresh so the
+  // conversation's page trail follows the visitor.
+  function notifyPage() {
+    postToFrame({ type: "ncw:page", page: String(location.href).slice(0, 2000) });
+  }
+  try {
+    var origPush = history.pushState;
+    history.pushState = function () {
+      var r = origPush.apply(this, arguments);
+      notifyPage();
+      return r;
+    };
+    var origReplace = history.replaceState;
+    history.replaceState = function () {
+      var r = origReplace.apply(this, arguments);
+      notifyPage();
+      return r;
+    };
+    window.addEventListener("popstate", notifyPage);
+  } catch (e) { /* history API unavailable */ }
+
   // --- Bubble button -------------------------------------------------
   var btn = document.createElement("button");
   btn.type = "button";
@@ -88,10 +150,16 @@
 
   btn.addEventListener("click", function () { setOpen(!open); });
 
-  // The frame's header close button posts up to us.
+  // The frame's header close button posts up to us; its ready signal asks
+  // for the visitor context (re-sent on every ready, so a frame reload
+  // still gets it).
   window.addEventListener("message", function (ev) {
     if (ev.origin !== origin) return;
-    if (ev.data && ev.data.type === "ncw:close") setOpen(false);
+    if (!ev.data) return;
+    if (ev.data.type === "ncw:close") setOpen(false);
+    if (ev.data.type === "ncw:ready") {
+      postToFrame({ type: "ncw:meta", meta: collectMeta() });
+    }
   });
 
   function mount() { document.body.appendChild(btn); }

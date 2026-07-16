@@ -44,6 +44,8 @@ import {
   WEBCHAT_MAX_MESSAGE_CHARS,
   WEBCHAT_RESEND_TAIL_MESSAGES
 } from "@/lib/webchat/prompt";
+import { appendVisitorPage, parseVisitorMeta } from "@/lib/webchat/visitor-meta";
+import { updateWebchatSessionMeta } from "@/lib/webchat/db";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -62,7 +64,10 @@ const bodySchema = z.object({
   // and RETRIES a network-failed POST with the same value, so a turn that
   // actually persisted server-side is replayed (original message + job)
   // instead of duplicated.
-  clientMessageId: z.string().uuid().optional()
+  clientMessageId: z.string().uuid().optional(),
+  // The page the visitor is on when sending — appended to the session's
+  // visitor_meta page trail (deduped/capped). Best-effort, never blocking.
+  page: z.string().trim().max(2000).optional()
 });
 
 export async function POST(request: Request) {
@@ -226,6 +231,19 @@ export async function POST(request: Request) {
     }
 
     await touchWebchatSession(session.id);
+
+    // Page-trail append — best-effort, after the turn is safely enqueued.
+    if (body.page) {
+      const next = appendVisitorPage(parseVisitorMeta(session.visitor_meta ?? null), body.page);
+      if (next) {
+        await updateWebchatSessionMeta(session.id, next).catch((err) => {
+          logger.warn("widget/message: visitor page-trail update failed", {
+            sessionId: session.id,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        });
+      }
+    }
 
     return successResponse({
       jobId: job.id,

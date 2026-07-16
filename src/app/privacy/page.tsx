@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 
-const EFFECTIVE_DATE = "April 2, 2026";
+const EFFECTIVE_DATE = "July 15, 2026";
 
 export const metadata: Metadata = {
   title: "Privacy Policy",
@@ -122,7 +122,30 @@ export default function PrivacyPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="9. Cookies and Similar Technologies">
+      <LegalSection title="9. Website Chat Widget">
+        <p>
+          Our website — and the websites of businesses that embed the New Coworker chat widget — offers a
+          chat window for talking with an AI assistant. When you use the chat widget, in addition to the
+          messages and any contact details you choose to share, we automatically collect technical and usage
+          information with your session:
+        </p>
+        <ul className="list-disc space-y-2 pl-5">
+          <li>Approximate location (city, region, country, and timezone) derived from your IP address. The IP address itself is not stored with your conversation.</li>
+          <li>Device and browser type (for example, Chrome on macOS, mobile or desktop), browser language, and screen size.</li>
+          <li>The page you were viewing when you opened the chat and pages you visit on that website while the chat is open.</li>
+          <li>How you arrived at the website, such as the referring site and campaign parameters (UTM tags) in the page address.</li>
+          <li>Whether you have visited the website before (stored in your browser&apos;s local storage) and how long you were on the page before starting the chat.</li>
+        </ul>
+        <p>
+          We use this information to provide and improve the chat experience, help the business understand
+          and respond to inquiries, and measure how visitors find the website. It is retained with the
+          conversation and is subject to the same retention and deletion controls as other conversation data.
+          When the widget runs on a business&apos;s own website, that business is the controller of the
+          conversation data and this information is processed on its behalf.
+        </p>
+      </LegalSection>
+
+      <LegalSection title="10. Cookies and Similar Technologies">
         <p>
           We and our service providers may use cookies, local storage, session technologies, and similar tools
           to keep users signed in, remember onboarding progress, secure the application, understand usage, and
@@ -130,7 +153,7 @@ export default function PrivacyPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="10. Data Retention">
+      <LegalSection title="11. Data Retention">
         <p>
           We retain personal information for as long as reasonably necessary to provide the service, comply with
           legal obligations, resolve disputes, enforce agreements, maintain security, and support legitimate
@@ -138,7 +161,7 @@ export default function PrivacyPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="11. Security">
+      <LegalSection title="12. Security">
         <p>
           We use commercially reasonable administrative, technical, and organizational safeguards designed to
           protect information against unauthorized access, loss, misuse, or alteration. No system is completely
@@ -146,7 +169,7 @@ export default function PrivacyPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="12. International Processing">
+      <LegalSection title="13. International Processing">
         <p>
           Your information may be processed or stored in the United States and other jurisdictions where we or
           our service providers operate. Those jurisdictions may have data protection laws that differ from the
@@ -154,7 +177,7 @@ export default function PrivacyPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="13. Your Rights and Choices">
+      <LegalSection title="14. Your Rights and Choices">
         <p>
           Depending on where you live, you may have rights to request access to, correction of, deletion of, or
           portability of personal information, or to object to or limit certain processing. You may also be able
@@ -166,21 +189,21 @@ export default function PrivacyPolicyPage() {
         </p>
       </LegalSection>
 
-      <LegalSection title="14. Children">
+      <LegalSection title="15. Children">
         <p>
           The service is intended for business use and not directed to children under 13. We do not knowingly
           collect personal information directly from children under 13 through the service.
         </p>
       </LegalSection>
 
-      <LegalSection title="15. Changes to This Policy">
+      <LegalSection title="16. Changes to This Policy">
         <p>
           We may update this Privacy Policy from time to time. If we make material changes, we may post the
           revised version on the site, update the effective date above, and take additional steps if required by law.
         </p>
       </LegalSection>
 
-      <LegalSection title="16. Contact Us">
+      <LegalSection title="17. Contact Us">
         <p>
           Questions, requests, or concerns about this Privacy Policy may be sent to{" "}
           <a className="text-signal-teal hover:text-parchment" href={`mailto:${contactEmail}`}>{contactEmail}</a>.

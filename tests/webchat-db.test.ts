@@ -57,6 +57,7 @@ import {
   serializeWebchatMessages,
   touchWebchatSession,
   updateWebchatSessionContact,
+  updateWebchatSessionMeta,
   updateWidgetSettings,
   webchatReplyEngine,
   WEBCHAT_ENGINE_HISTORY_MARKER,
@@ -197,11 +198,20 @@ describe("webchat_sessions accessors", () => {
       session_token_sha256: "hash",
       visitor_name: "Ada",
       visitor_email: null,
-      visitor_phone: null
+      visitor_phone: null,
+      visitor_meta: null
+    });
+
+    // Passive metadata rides the insert when provided.
+    const withMeta = makeBuilder({ data: { id: SESSION }, error: null });
+    supabaseStub.from.mockReturnValueOnce(withMeta);
+    await createWebchatSession(BIZ, "hash", {}, { geo: { country: "US" } }, injected);
+    expect((withMeta.insert as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatchObject({
+      visitor_meta: { geo: { country: "US" } }
     });
 
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
-    await expect(createWebchatSession(BIZ, "hash", {}, injected)).rejects.toThrow(
+    await expect(createWebchatSession(BIZ, "hash", {}, null, injected)).rejects.toThrow(
       "createWebchatSession: x"
     );
   });
@@ -216,6 +226,19 @@ describe("webchat_sessions accessors", () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
     await expect(getWebchatSessionByTokenHash("h")).rejects.toThrow(
       "getWebchatSessionByTokenHash: x"
+    );
+  });
+
+  it("updateWebchatSessionMeta overwrites visitor_meta / throws on error", async () => {
+    const builder = makeBuilder({ data: null, error: null });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await updateWebchatSessionMeta(SESSION, { pages: ["/a"] });
+    expect(builder.update).toHaveBeenCalledWith({ visitor_meta: { pages: ["/a"] } });
+    expect(builder.eq).toHaveBeenCalledWith("id", SESSION);
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "x" } }));
+    await expect(updateWebchatSessionMeta(SESSION, {}, injected)).rejects.toThrow(
+      "updateWebchatSessionMeta: x"
     );
   });
 

@@ -51,6 +51,8 @@ export type WebchatSessionRow = {
   visitor_phone: string | null;
   rowboat_conversation_id: string | null;
   rowboat_state: unknown | null;
+  /** Passive metadata (src/lib/webchat/visitor-meta.ts). Never the IP. */
+  visitor_meta?: unknown | null;
   last_seen_at: string;
   created_at: string;
 };
@@ -230,6 +232,7 @@ export async function createWebchatSession(
   businessId: string,
   sessionTokenSha256: string,
   contact: WebchatContactPatch,
+  visitorMeta?: unknown | null,
   client?: SupabaseClient
 ): Promise<WebchatSessionRow> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -240,12 +243,30 @@ export async function createWebchatSession(
       session_token_sha256: sessionTokenSha256,
       visitor_name: contact.name?.trim() || null,
       visitor_email: contact.email?.trim() || null,
-      visitor_phone: contact.phone?.trim() || null
+      visitor_phone: contact.phone?.trim() || null,
+      visitor_meta: visitorMeta ?? null
     })
     .select()
     .single();
   if (error) throw new Error(`createWebchatSession: ${error.message}`);
   return data as WebchatSessionRow;
+}
+
+/**
+ * Overwrite the session's visitor_meta (page-trail appends). Best-effort
+ * read-modify-write — a lost race drops one page hop, never a message.
+ */
+export async function updateWebchatSessionMeta(
+  sessionId: string,
+  visitorMeta: unknown,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("webchat_sessions")
+    .update({ visitor_meta: visitorMeta })
+    .eq("id", sessionId);
+  if (error) throw new Error(`updateWebchatSessionMeta: ${error.message}`);
 }
 
 export async function getWebchatSessionByTokenHash(
@@ -329,7 +350,7 @@ export async function listWebchatSessionsForBusiness(
   const { data, error } = await db
     .from("webchat_sessions")
     .select(
-      "id, business_id, session_token_sha256, visitor_name, visitor_email, visitor_phone, rowboat_conversation_id, rowboat_state, last_seen_at, created_at, webchat_messages(count)"
+      "id, business_id, session_token_sha256, visitor_name, visitor_email, visitor_phone, rowboat_conversation_id, rowboat_state, visitor_meta, last_seen_at, created_at, webchat_messages(count)"
     )
     .eq("business_id", businessId)
     .order("last_seen_at", { ascending: false })

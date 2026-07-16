@@ -31,6 +31,12 @@ import {
 import { getBusiness } from "@/lib/db/businesses";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
+import {
+  formatVisitorDevice,
+  formatVisitorLocation,
+  formatVisitorSource,
+  parseVisitorMeta
+} from "@/lib/webchat/visitor-meta";
 
 export const dynamic = "force-dynamic";
 
@@ -229,8 +235,14 @@ export default async function AdminSiteWebchatPage() {
             {sessions.map((s) => {
               const who =
                 s.visitor_name || s.visitor_email || s.visitor_phone || "Anonymous visitor";
-              const contactBits = [s.visitor_email, s.visitor_phone]
-                .filter((v) => v && v !== who)
+              const meta = parseVisitorMeta(s.visitor_meta ?? null);
+              const contextBits = [
+                [s.visitor_email, s.visitor_phone].filter((v) => v && v !== who).join(" · "),
+                formatVisitorLocation(meta),
+                formatVisitorDevice(meta),
+                formatVisitorSource(meta)
+              ]
+                .filter(Boolean)
                 .join(" · ");
               const spend = agg.bySession.get(s.id);
               const spendBits = [
@@ -248,7 +260,7 @@ export default async function AdminSiteWebchatPage() {
                     <div className="min-w-0">
                       <p className="text-sm text-parchment truncate">{who}</p>
                       <p className="text-xs text-parchment/40 truncate">
-                        {contactBits || "No contact details captured"}
+                        {contextBits || "No contact details captured"}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
