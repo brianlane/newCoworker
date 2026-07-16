@@ -355,7 +355,20 @@ export async function fetchCalendlyCandidateEvents(
     throw windowFailure instanceof Error ? windowFailure : new Error(String(windowFailure));
   }
 
-  const due = collected.filter(args.dueFilter);
+  // Soonest-starting first: the enrichment cap below walks this order, and
+  // an event_start reminder about to leave its firing window (the event
+  // begins) must never be starved behind a burst of created-due events that
+  // stay due — and keep re-occupying cap slots — for their whole lookback.
+  // Missing/unparseable starts sort last.
+  const due = collected
+    .filter(args.dueFilter)
+    .map((ev, i) => ({ ev, i, startMs: Date.parse(ev.startIso ?? "") }))
+    .sort((a, b) => {
+      const aMs = Number.isFinite(a.startMs) ? a.startMs : Number.POSITIVE_INFINITY;
+      const bMs = Number.isFinite(b.startMs) ? b.startMs : Number.POSITIVE_INFINITY;
+      return aMs === bMs ? a.i - b.i : aMs - bMs;
+    })
+    .map((x) => x.ev);
 
   // Invitee enrichment for due events only, capped. An event whose
   // enrichment was skipped (cap) or failed is WITHHELD from this tick

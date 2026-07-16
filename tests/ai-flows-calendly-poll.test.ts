@@ -461,4 +461,36 @@ describe("fetchCalendlyCandidateEvents", () => {
     expect(res.events[0].attendees).toBeUndefined(); // zero invitees — still fires
     expect(res.events[1].attendees).toEqual(["I <i@x.co>"]);
   });
+
+  it("prioritizes the soonest-starting due events for the enrichment cap (no reminder starvation)", async () => {
+    // Bugbot Medium: created-due events stay due for their whole lookback
+    // and re-occupy cap slots every tick — an imminent event_start reminder
+    // listed after them must still win a slot.
+    const laterStart = new Date(NOW + 10 * 24 * 60 * 60_000).toISOString();
+    const crowd = Array.from({ length: CALENDLY_INVITEE_FETCH_CAP + 1 }, (_, i) =>
+      rawEvent(`CROWD${i}`, { start_time: laterStart })
+    );
+    const imminent = rawEvent("SOON1", {
+      start_time: new Date(NOW + 30 * 60_000).toISOString()
+    });
+    const noStart = rawEvent("NOSTART", { start_time: undefined });
+    const { fn } = requestStub({
+      // The imminent event is listed LAST; the unparseable-start one sorts last.
+      events: () => ({ collection: [...crowd, noStart, imminent] }),
+      invitees: () => ({ collection: [{ name: "I", email: "i@x.co" }] })
+    });
+    const res = await fetchCalendlyCandidateEvents(
+      {
+        businessId: BIZ,
+        conn: CONN,
+        nowMs: NOW,
+        windows: { createdScan: true, startHorizonMinutes: null, endBackMinutes: null, canceledScan: false },
+        dueFilter: () => true
+      },
+      { request: fn }
+    );
+    expect(res.overflowed).toBe(true);
+    expect(res.events[0].id).toBe("SOON1");
+    expect(res.events.map((e) => e.id)).not.toContain("NOSTART");
+  });
 });
