@@ -45,8 +45,9 @@ import {
   friendlyFlowSummary
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
-import { reviewRequestTemplate } from "@/lib/ai-flows/templates";
+import { documentReceiptTemplate, reviewRequestTemplate } from "@/lib/ai-flows/templates";
 import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
+import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard";
 import {
   ContactRefPicker,
   type PickerPerson,
@@ -125,6 +126,8 @@ const VISUAL_BATCH_STEP_TYPES = FLOW_STEP_TYPES.filter((t) => !VOICE_STEP_TYPE_S
 const EDITOR_MODE_STORAGE_KEY = "aiflow-editor-mode";
 /** The review-request starter's flow name (the link arg is irrelevant here). */
 const REVIEW_STARTER_NAME = reviewRequestTemplate("https://example.invalid").name;
+/** The document-receipt starter's flow name. */
+const DOC_RECEIPT_STARTER_NAME = documentReceiptTemplate().name;
 /** Inbound voice flows route a live caller; outbound flows place one call. */
 const INBOUND_VOICE_STEP_TYPES = VOICE_STEP_TYPES.filter((t) => t !== "outbound_call");
 const OUTBOUND_VOICE_STEP_TYPES = ["outbound_call"] as const;
@@ -2623,6 +2626,23 @@ export function AiFlowsManager({
         businessId={businessId}
         installedFlow={(() => {
           const row = flows.find((f) => f.name === REVIEW_STARTER_NAME);
+          return row ? { id: row.id, enabled: row.enabled } : null;
+        })()}
+        onInstalled={reload}
+        onEdit={(flowId) => {
+          const row = flows.find((f) => f.id === flowId);
+          if (!row) return;
+          setAiWarnings([]);
+          const opened = editorFromRow(row);
+          setEditor(opened);
+          setEditorBaseline(JSON.stringify(opened));
+        }}
+      />
+      {/* Document-receipt starter installer — same live-list wiring. */}
+      <DocumentReceiptCard
+        businessId={businessId}
+        installedFlow={(() => {
+          const row = flows.find((f) => f.name === DOC_RECEIPT_STARTER_NAME);
           return row ? { id: row.id, enabled: row.enabled } : null;
         })()}
         onInstalled={reload}

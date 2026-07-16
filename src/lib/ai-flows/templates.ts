@@ -164,6 +164,53 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
 }
 
 /**
+ * "Confirm document receipt": when the AI coworker's own mailbox receives
+ * an email carrying attachments, email the sender a receipt confirmation
+ * (naming the files) and brief the owner. The trigger is a regex anchored
+ * to the `[inbound attachments] …` line the inbound path appends to the
+ * very END of windowText — a mail with no attachments never fires it, and
+ * prose that merely says "attachments:" can't false-positive. Installed
+ * DISABLED so the owner reviews the wording (and their connected sending
+ * mailbox) first.
+ *
+ * No parameters: {{trigger.attachments}} carries the filenames and
+ * {{trigger.from}} the sender, both supplied by the tenant_email scope.
+ */
+export function documentReceiptTemplate(): AiFlowTemplate {
+  return {
+    key: "document_receipt_confirmation",
+    name: "Confirm document receipt",
+    definition: {
+      version: 1,
+      trigger: {
+        channel: "tenant_email",
+        // Anchored to the end of windowText, where the inbound path appends
+        // the marker line (see EMAIL_ATTACHMENTS_MARKER in trigger-eval).
+        conditions: [{ type: "regex", value: "\\n\\[inbound attachments\\] .+$" }]
+      },
+      steps: [
+        {
+          id: "s_confirm",
+          type: "send_email",
+          to: "{{trigger.from}}",
+          subject: "We received your documents",
+          body:
+            "Hi,\n\nJust confirming we received your file(s): {{trigger.attachments}}.\n\n" +
+            "Our team will review them and follow up if anything else is needed.\n\nThank you!"
+        },
+        {
+          id: "s_notify_owner",
+          type: "notify_owner",
+          message:
+            "Documents received from {{trigger.from}}: {{trigger.attachments}}. " +
+            "I emailed them a receipt confirmation — the files are on your Emails page."
+        }
+      ]
+    }
+  };
+}
+
+/**
  * "Send new leads your price sheet": when a new lead texts in, extract their
  * details, file them, text them the chosen document as an expiring link, and
  * wait for the reply. Parameterized on the document because documents are
