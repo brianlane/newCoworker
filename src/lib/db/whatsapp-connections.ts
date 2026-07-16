@@ -146,6 +146,28 @@ export async function getWhatsAppPhoneNumberClaim(
 }
 
 /**
+ * Whether any OTHER business also holds a connection on this WABA (a
+ * multi-number WABA shared across tenants). Consulted before the
+ * reconnect path unsubscribes an abandoned WABA — tearing down the app
+ * subscription would silence every number under it.
+ */
+export async function isWabaClaimedByOtherBusiness(
+  wabaId: string,
+  excludingBusinessId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("whatsapp_connections")
+    .select("business_id")
+    .eq("waba_id", wabaId)
+    .neq("business_id", excludingBusinessId)
+    .limit(1);
+  if (error) throw new Error(`isWabaClaimedByOtherBusiness: ${error.message}`);
+  return ((data as unknown[]) ?? []).length > 0;
+}
+
+/**
  * Embedded Signup landing: create or replace the business's connection.
  * Reconnects overwrite in place (token, WABA, number all refresh).
  */

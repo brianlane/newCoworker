@@ -23,6 +23,7 @@ import {
   getPublicWhatsAppConnection,
   getWhatsAppConnection,
   getWhatsAppPhoneNumberClaim,
+  isWabaClaimedByOtherBusiness,
   saveWhatsAppConnection,
   setWhatsAppConnectionActive,
   updateWhatsAppTemplates,
@@ -157,6 +158,12 @@ export async function POST(request: Request) {
       });
     }
 
+    // Reconnect with a DIFFERENT WABA: capture the abandoned one so its
+    // app subscription can be torn down after the new row is saved (the
+    // Meta callback's ordering — never unsubscribe before the DB commit,
+    // and never a WABA another tenant still routes through).
+    const previous = await getWhatsAppConnection(body.businessId).catch(() => null);
+
     const connection = await saveWhatsAppConnection({
       businessId: body.businessId,
       wabaId: body.wabaId,
@@ -165,6 +172,18 @@ export async function POST(request: Request) {
       accessToken,
       templates
     });
+
+    if (previous?.accessToken && previous.waba_id !== body.wabaId) {
+      const sharedElsewhere = await isWabaClaimedByOtherBusiness(
+        previous.waba_id,
+        body.businessId
+      ).catch(() => true); // fail toward NOT unsubscribing
+      if (!sharedElsewhere) {
+        // Best-effort (never throws): stray webhook deliveries for the
+        // abandoned WABA would be unroutable noise otherwise.
+        await unsubscribeWabaFromApp(previous.waba_id, previous.accessToken);
+      }
+    }
 
     logger.info("whatsapp connected", {
       businessId: body.businessId,

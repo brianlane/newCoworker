@@ -78,6 +78,16 @@ export function WhatsAppIntegrationCard({
   // channels; whichever arrives second completes the connect.
   const sessionInfoRef = useRef<SessionInfo | null>(null);
   const codeRef = useRef<string | null>(null);
+  // Watchdog: if only ONE half ever arrives (popup closed mid-flow, a
+  // blocked message event), the button must not spin forever.
+  const connectTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearConnectTimeout = useCallback(() => {
+    if (connectTimeoutRef.current) {
+      clearTimeout(connectTimeoutRef.current);
+      connectTimeoutRef.current = null;
+    }
+  }, []);
 
   const configured = Boolean(metaAppId && configId);
 
@@ -102,6 +112,7 @@ export function WhatsAppIntegrationCard({
     const code = codeRef.current;
     const info = sessionInfoRef.current;
     if (!code || !info) return; // the other half hasn't arrived yet
+    clearConnectTimeout();
     codeRef.current = null;
     sessionInfoRef.current = null;
     try {
@@ -128,7 +139,10 @@ export function WhatsAppIntegrationCard({
     } finally {
       setConnecting(false);
     }
-  }, [businessId]);
+  }, [businessId, clearConnectTimeout]);
+
+  // Unmount hygiene: never fire the watchdog into a dead component.
+  useEffect(() => clearConnectTimeout, [clearConnectTimeout]);
 
   // Embedded Signup posts the created WABA + phone number ids back via a
   // window message from facebook.com.
@@ -158,6 +172,9 @@ export function WhatsAppIntegrationCard({
           };
           void finishConnect();
         } else if (data.event === "CANCEL") {
+          clearConnectTimeout();
+          codeRef.current = null;
+          sessionInfoRef.current = null;
           setConnecting(false);
         }
       } catch {
@@ -172,10 +189,23 @@ export function WhatsAppIntegrationCard({
     if (!window.FB) return;
     setBanner(null);
     setConnecting(true);
+    // Recovery watchdog: whichever half (code / session ids) never
+    // arrives, reset the button after 2 minutes instead of spinning
+    // until a page refresh. finishConnect clears this on completion.
+    clearConnectTimeout();
+    connectTimeoutRef.current = setTimeout(() => {
+      connectTimeoutRef.current = null;
+      codeRef.current = null;
+      sessionInfoRef.current = null;
+      setConnecting(false);
+      setBanner("WhatsApp setup didn't complete — close any leftover popup and try again.");
+    }, 120_000);
     window.FB.login(
       (response) => {
         const code = response.authResponse?.code;
         if (!code) {
+          clearConnectTimeout();
+          sessionInfoRef.current = null;
           setConnecting(false);
           setBanner("WhatsApp setup was cancelled");
           return;

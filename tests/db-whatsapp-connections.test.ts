@@ -20,6 +20,7 @@ vi.mock("@/lib/integrations/secrets", () => ({
 import {
   WhatsAppConnectionValidationError,
   deleteWhatsAppConnection,
+  isWabaClaimedByOtherBusiness,
   getActiveWhatsAppConnectionByPhoneNumberId,
   getPublicWhatsAppConnection,
   getWhatsAppConnection,
@@ -47,6 +48,8 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     update: vi.fn(() => c),
     delete: vi.fn(() => c),
     eq: vi.fn(() => c),
+    neq: vi.fn(() => c),
+    limit: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
@@ -131,6 +134,31 @@ describe("reads", () => {
     await expect(
       getActiveWhatsAppConnectionByPhoneNumberId("pn-9", makeDb(c3))
     ).rejects.toThrow(/route down/);
+  });
+
+  it("isWabaClaimedByOtherBusiness detects sharing / exclusivity / errors", async () => {
+    const c = chain({ data: [{ business_id: "other-biz" }], error: null });
+    c.eq.mockImplementation(() => c);
+    (c as unknown as { neq: unknown }).neq = vi.fn(() => c);
+    (c as unknown as { limit: unknown }).limit = vi.fn(() => c);
+    expect(await isWabaClaimedByOtherBusiness("waba-9", BIZ, makeDb(c))).toBe(true);
+
+    const c2 = chain({ data: [], error: null });
+    (c2 as unknown as { neq: unknown }).neq = vi.fn(() => c2);
+    (c2 as unknown as { limit: unknown }).limit = vi.fn(() => c2);
+    expect(await isWabaClaimedByOtherBusiness("waba-9", BIZ, makeDb(c2))).toBe(false);
+
+    const c2b = chain({ data: null, error: null });
+    (c2b as unknown as { neq: unknown }).neq = vi.fn(() => c2b);
+    (c2b as unknown as { limit: unknown }).limit = vi.fn(() => c2b);
+    expect(await isWabaClaimedByOtherBusiness("waba-9", BIZ, makeDb(c2b))).toBe(false);
+
+    const c3 = chain({ data: null, error: { message: "waba claim down" } });
+    (c3 as unknown as { neq: unknown }).neq = vi.fn(() => c3);
+    (c3 as unknown as { limit: unknown }).limit = vi.fn(() => c3);
+    await expect(isWabaClaimedByOtherBusiness("waba-9", BIZ, makeDb(c3))).rejects.toThrow(
+      /waba claim down/
+    );
   });
 
   it("getWhatsAppPhoneNumberClaim returns the holder / null / throws", async () => {
@@ -264,6 +292,8 @@ describe("default service client", () => {
     );
     await setWhatsAppConnectionActive(BIZ, true);
     await updateWhatsAppTemplates(BIZ, {});
+    (c as unknown as { neq: unknown }).neq = vi.fn(() => c);
+    expect(await isWabaClaimedByOtherBusiness("waba-9", BIZ)).toBe(false);
     await deleteWhatsAppConnection(BIZ);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
