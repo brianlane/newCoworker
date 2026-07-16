@@ -14,6 +14,7 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  countBusinessDocuments,
   deleteBusinessDocument,
   getBusinessDocument,
   listDocumentSignatureRequests,
@@ -23,10 +24,13 @@ import {
 } from "@/lib/documents/db";
 import {
   BUSINESS_DOCS_BUCKET,
+  CONTACT_DOCUMENT_RECORDS_LIMIT,
   DOCUMENT_CONTENT_MD_MAX_CHARS,
   DOCUMENT_SUMMARY_MAX_CHARS,
+  documentLimitForTier,
   parseExpirationInput
 } from "@/lib/documents/core";
+import { getBusiness } from "@/lib/db/businesses";
 import { getTeamMember } from "@/lib/db/employees";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
@@ -116,6 +120,32 @@ export async function PATCH(request: Request, context: RouteContext) {
       patch.renewal_due_notified_at = null;
     }
     if (body.data.contactId !== undefined) {
+      // Linking/unlinking moves the document BETWEEN cap pools (per-tier
+      // knowledge-library cap vs the flat contact-records cap), so the
+      // destination pool is checked exactly like POST upload / CSV import —
+      // otherwise PATCH would be a cap bypass.
+      const movingToLinked = body.data.contactId !== null && existing.contact_id === null;
+      const movingToUnlinked = body.data.contactId === null && existing.contact_id !== null;
+      if (movingToLinked) {
+        const linkedCount = await countBusinessDocuments(body.data.businessId, "contact_records");
+        if (linkedCount >= CONTACT_DOCUMENT_RECORDS_LIMIT) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            `Contact document limit reached (${CONTACT_DOCUMENT_RECORDS_LIMIT}).`
+          );
+        }
+      } else if (movingToUnlinked) {
+        const business = await getBusiness(body.data.businessId);
+        if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
+        const limit = documentLimitForTier(business.tier);
+        const libraryCount = await countBusinessDocuments(body.data.businessId, "library");
+        if (libraryCount >= limit) {
+          return errorResponse(
+            "VALIDATION_ERROR",
+            `Document limit reached for your plan (${limit}). Unlinking would exceed it — delete a library document first.`
+          );
+        }
+      }
       if (body.data.contactId === null) {
         patch.contact_id = null;
       } else {
