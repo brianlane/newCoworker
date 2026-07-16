@@ -60,6 +60,15 @@ describe("buildLeadSourceOverview", () => {
     ]);
   });
 
+  it("a contact repeating a tag (any casing) counts once in that tag's bucket", () => {
+    const overview = buildLeadSourceOverview(
+      [row({ tags: ["VIP", "vip", "VIP "] }), row({ tags: ["vip"] })],
+      { windowDays: 30, clipped: false }
+    );
+    expect(overview.tags).toEqual([{ label: "VIP", newContacts: 2, engaged: 2, claimed: 0 }]);
+    expect(overview.totalNewContacts).toBe(2);
+  });
+
   it("counts a contact with no channel and no tags as untracked", () => {
     const overview = buildLeadSourceOverview(
       [

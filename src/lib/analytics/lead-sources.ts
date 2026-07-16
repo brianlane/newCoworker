@@ -80,12 +80,17 @@ export function buildLeadSourceOverview(
 
   for (const row of rows) {
     const channel = (row.last_channel ?? "").trim();
-    const rowTags = (Array.isArray(row.tags) ? row.tags : [])
-      .map((t) => t.trim())
-      .filter(Boolean);
+    // Case-insensitive dedupe PER CONTACT: a row carrying "VIP" and "vip"
+    // is one contact in that tag's bucket, never two — otherwise a tag's
+    // counts could exceed the window total.
+    const rowTags = new Map<string, string>();
+    for (const raw of Array.isArray(row.tags) ? row.tags : []) {
+      const tag = raw.trim();
+      if (tag && !rowTags.has(tag.toLowerCase())) rowTags.set(tag.toLowerCase(), tag);
+    }
     if (channel) bump(channels, channel, row);
-    for (const tag of rowTags) bump(tags, tag, row);
-    if (!channel && rowTags.length === 0) untracked += 1;
+    for (const tag of rowTags.values()) bump(tags, tag, row);
+    if (!channel && rowTags.size === 0) untracked += 1;
   }
 
   const byVolume = (a: Bucket, b: Bucket) =>
