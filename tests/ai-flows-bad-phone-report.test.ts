@@ -105,6 +105,22 @@ describe("buildBadPhoneSteps", () => {
     expect(JSON.stringify(def)).toBe(after);
   });
 
+  it("upgrades stale bp_ steps in place (replaced, never duplicated)", () => {
+    const cfg = FLOW_CONFIGS[0];
+    const def = fixtureFor(cfg);
+    const baseCount = (def.steps ?? []).length;
+    // A previously-applied older version of the patch.
+    def.steps = [
+      ...(def.steps ?? []),
+      { id: "bp_wait", type: "wait_for_reply", phoneVar: "claimed_agent_phone" }
+    ];
+    expect(addBadPhoneAgentReport(def, cfg)).toBe(true);
+    const ids = (def.steps ?? []).map((s) => s.id);
+    expect(ids.filter((i) => i === "bp_wait")).toHaveLength(1);
+    expect((def.steps ?? []).length).toBe(baseCount + 4);
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+
   it("waits on the claimer with the ETA + 60 window and gates everything off no_reply", () => {
     const steps = buildBadPhoneSteps(FLOW_CONFIGS[0]);
     const [math, wait, classify, branch] = steps as Array<Record<string, any>>;
@@ -149,15 +165,24 @@ describe("buildBadPhoneSteps", () => {
     });
   });
 
-  it("bad-phone arm: Amy always gets the report; the lead email sends from Amy's mailbox", () => {
+  /** The nested email branch inside the bad-phone arm for one config. */
+  function emailBranchOf(cfg: FlowConfig): Record<string, any> {
+    const branch = buildBadPhoneSteps(cfg)[3] as Record<string, any>;
+    return branch.branches[0].steps[0] as Record<string, any>;
+  }
+
+  it("bad-phone arm splits on lead_email: with an address Amy's report says the lead WAS emailed", () => {
     for (const cfg of FLOW_CONFIGS) {
-      const steps = buildBadPhoneSteps(cfg);
-      const branch = steps[3] as Record<string, any>;
-      const arm = branch.branches[0].steps as Array<Record<string, any>>;
-      const [amyEmail, ...leadEmails] = arm;
+      const emailBranch = emailBranchOf(cfg);
+      expect(emailBranch.type).toBe("branch");
+      expect(emailBranch.branches[0].condition).toEqual({ var: "lead_email", contains: "@" });
+      const [amyEmail, ...leadEmails] = emailBranch.branches[0].steps as Array<
+        Record<string, any>
+      >;
       expect(amyEmail).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
       expect(amyEmail.body).toContain("{{vars.agent_report}}");
       expect(amyEmail.body).toContain("{{vars.claimed_agent}}");
+      expect(amyEmail.body).toContain("HAS been emailed");
       expect(amyEmail.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
       expect(leadEmails.length).toBeGreaterThan(0);
       for (const e of leadEmails) {
@@ -171,12 +196,27 @@ describe("buildBadPhoneSteps", () => {
     }
     // ReferralExchange sends the lead-type-matched intro copy.
     const re = FLOW_CONFIGS.find((c) => c.flowName === "ReferralExchange Lead")!;
-    const arm = (buildBadPhoneSteps(re)[3] as Record<string, any>).branches[0]
-      .steps as Array<Record<string, any>>;
-    expect(arm.slice(1).map((e) => e.when)).toEqual([
+    const reLeadEmails = emailBranchOf(re).branches[0].steps.slice(1) as Array<
+      Record<string, any>
+    >;
+    expect(reLeadEmails.map((e) => e.when)).toEqual([
       { var: "lead_type", equals: "buyer" },
       { var: "lead_type", equals: "seller" },
       { var: "lead_type", equals: "both" }
     ]);
+  });
+
+  it("no email on file: Amy's report explicitly says NO follow-up email was sent", () => {
+    for (const cfg of FLOW_CONFIGS) {
+      const noEmailArm = emailBranchOf(cfg).else as Array<Record<string, any>>;
+      expect(noEmailArm).toHaveLength(1);
+      const report = noEmailArm[0];
+      expect(report).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
+      expect(report.subject).toContain("NO EMAIL");
+      expect(report.body).toContain("NO follow-up email was sent");
+      expect(report.body).toContain("{{vars.agent_report}}");
+      // No lead-facing email in this arm — there is no address to send to.
+      expect(noEmailArm.some((s) => s.to === "{{vars.lead_email}}")).toBe(false);
+    }
   });
 });
