@@ -593,6 +593,79 @@ describe("flow options: stopOnResponse / allowReentry", () => {
   });
 });
 
+describe("doc_extract step", () => {
+  const docFlow = (step: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "tenant_email", conditions: [] },
+    steps: [step, { id: "s2", type: "notify_owner", message: "read {{vars.renewal_date}}" }]
+  });
+
+  it("parses with defaulted source and registers its fields for later steps", () => {
+    const def = parseAiFlowDefinition(
+      docFlow({
+        id: "d1",
+        type: "doc_extract",
+        fields: [{ name: "renewal_date", description: "the renewal date" }]
+      })
+    );
+    const step = def.steps[0];
+    expect(step.type === "doc_extract" && step.fields[0].name).toBe("renewal_date");
+  });
+
+  it("accepts an explicit source template + fileAs, and validates their scopes", () => {
+    const def = parseAiFlowDefinition(
+      docFlow({
+        id: "d1",
+        type: "doc_extract",
+        sourceTemplate: "{{trigger.document}}",
+        fields: [{ name: "renewal_date" }],
+        fileAs: { titleTemplate: "Renewal — {{trigger.document_name}}", audience: "staff" }
+      })
+    );
+    expect(def.steps[0].type).toBe("doc_extract");
+
+    // A sourceTemplate referencing an unproduced var fails scope validation.
+    expect(() =>
+      parseAiFlowDefinition(
+        docFlow({
+          id: "d1",
+          type: "doc_extract",
+          sourceTemplate: "{{vars.never_produced}}",
+          fields: [{ name: "renewal_date" }]
+        })
+      )
+    ).toThrow(AiFlowValidationError);
+
+    // Same for the filing title template.
+    expect(() =>
+      parseAiFlowDefinition(
+        docFlow({
+          id: "d1",
+          type: "doc_extract",
+          fields: [{ name: "renewal_date" }],
+          fileAs: { titleTemplate: "{{vars.never_produced}}" }
+        })
+      )
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects an empty field list at the shape layer", () => {
+    expect(() =>
+      parseAiFlowDefinition(docFlow({ id: "d1", type: "doc_extract", fields: [] }))
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("is rejected inside voice flows like every other batch step", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice", fromE164: "+16025550111" },
+        steps: [{ id: "d1", type: "doc_extract", fields: [{ name: "x" }] }]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+});
+
 describe("upsert_customer step", () => {
   const withUpsert = (phoneVar: string, nameVar?: string, emailVar?: string) => ({
     version: 1,

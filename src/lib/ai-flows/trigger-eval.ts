@@ -175,6 +175,14 @@ export function tenantEmailTriggerScope(
      * step's inputImageTemplate can edit the photo the sender attached.
      */
     imageRef?: string;
+    /**
+     * First DOCUMENT attachment (pdf/txt/md/csv) on the mail, as an
+     * `email-attachments:<path>` ref. Exposed as {{trigger.document}} — the
+     * doc_extract step's default source. `documentName` is its display
+     * filename ({{trigger.document_name}}).
+     */
+    documentRef?: string;
+    documentName?: string;
   }
 ): TriggerScope {
   const windowText = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
@@ -187,7 +195,9 @@ export function tenantEmailTriggerScope(
     message_id: msg.id,
     ...(msg.toEmail ? { to: msg.toEmail } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {}),
-    image: msg.imageRef ?? ""
+    image: msg.imageRef ?? "",
+    document: msg.documentRef ?? "",
+    document_name: (msg.documentName ?? "").slice(0, 255)
   };
 }
 

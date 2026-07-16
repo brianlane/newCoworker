@@ -234,6 +234,22 @@ export type StepAction =
       fillOnlyEmpty: boolean;
     }
   | {
+      // Document field extraction. The planner resolves the source ref
+      // (rendered sourceTemplate, default {{trigger.document}}) and the
+      // filing title; the worker proxies the read + Gemini extraction (+
+      // optional Business Documents filing) to the platform. A trigger with
+      // no document plans a skip (skipReason) — all-text emails must not
+      // fail the flow.
+      kind: "doc_extract";
+      /** Rendered document ref (an email-attachments:<path> value); "" = skip. */
+      sourceRef: string;
+      fields: ExtractField[];
+      /** Rendered filing title; absent = don't file. */
+      fileTitle?: string;
+      fileAudience?: "clients" | "staff" | "both";
+      skipReason?: string;
+    }
+  | {
       kind: "send_sms";
       /** Primary recipient (used for logging / opt-out; recipients[0] for a group). */
       to: string;
@@ -575,6 +591,43 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         return { ok: false, error: "extract_text: no message text to read" };
       }
       return { ok: true, action: { kind: "extract_text", text, fields: step.fields } };
+    }
+    case "doc_extract": {
+      // Default source: the triggering email's document attachment. A blank
+      // ref (no attachment on this trigger, or an upstream var that never
+      // filled) plans a SKIP, not a failure — an all-text email arriving on
+      // a doc-intake flow is normal traffic.
+      const sourceRef = renderTemplate(step.sourceTemplate ?? "{{trigger.document}}", scope).trim();
+      if (!sourceRef) {
+        return {
+          ok: true,
+          action: {
+            kind: "doc_extract",
+            sourceRef: "",
+            fields: step.fields,
+            skipReason: "no document on this trigger to read"
+          }
+        };
+      }
+      const fileTitle = step.fileAs
+        ? renderTemplate(step.fileAs.titleTemplate, scope).trim()
+        : "";
+      return {
+        ok: true,
+        action: {
+          kind: "doc_extract",
+          sourceRef,
+          fields: step.fields,
+          // A filing title that rendered blank falls back to the ref's file
+          // name at the platform side; keep filing intent by sending a title.
+          ...(step.fileAs
+            ? {
+                fileTitle: fileTitle || "Filed document",
+                fileAudience: step.fileAs.audience ?? "staff"
+              }
+            : {})
+        }
+      };
     }
     case "email_extract": {
       // The body-match terms narrow the inbox read to THIS lead's email; render

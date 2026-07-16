@@ -1188,6 +1188,8 @@ async function runStep(
       return extractTextStep(supabase, run, scope, action);
     case "email_extract":
       return emailExtractStep(supabase, run, scope, action);
+    case "doc_extract":
+      return docExtractStep(supabase, run, scope, action);
     case "send_sms":
       return sendSmsStep(supabase, run, index, scope, action);
     case "send_email":
@@ -2362,6 +2364,84 @@ async function emailExtractStep(
   const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "email_extract");
   Object.assign(scope.vars, out);
   return { kind: "ok", result: { found: true, vars: out } };
+}
+
+/**
+ * doc_extract: read typed fields out of a document (the triggering email's
+ * PDF/text attachment) and optionally file it into Business Documents. The
+ * worker can't run Gemini's document pipeline or touch the documents store,
+ * so the whole read+extract+file round-trips through the gateway-guarded
+ * platform adapter (/api/internal/aiflow-doc-extract) — same proxy pattern
+ * as email_extract's mailbox read. A planner skip (no document on the
+ * trigger) records a skipped step; ok:false on 2xx is a permanent input
+ * error (unsupported type, oversized, unreadable) → fail without retrying;
+ * 5xx / transport throws so the run retries.
+ */
+async function docExtractStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "doc_extract" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    // Stamp every field empty so later when-guards/templates read cleanly.
+    for (const f of action.fields) scope.vars[f.name] = "";
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!base || !token) {
+    return { kind: "fail", error: "doc_extract: platform proxy not configured" };
+  }
+  let res: Response;
+  try {
+    res = await fetch(`${base}/api/internal/aiflow-doc-extract`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        businessId: run.business_id,
+        sourceRef: action.sourceRef,
+        fields: action.fields,
+        ...(action.fileTitle
+          ? { fileAs: { title: action.fileTitle, audience: action.fileAudience ?? "staff" } }
+          : {})
+      })
+    });
+  } catch (e) {
+    throw new Error(
+      `doc_extract: platform request failed: ${e instanceof Error ? e.message : String(e)}`
+    );
+  }
+  if (res.status >= 500) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`doc_extract: platform ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const payload = (await res.json().catch(() => null)) as
+    | {
+        ok?: boolean;
+        detail?: string;
+        data?: {
+          vars?: Record<string, string>;
+          filed?: { documentId: string; title: string } | null;
+          fileError?: string;
+        };
+      }
+    | null;
+  if (!payload || payload.ok !== true) {
+    return { kind: "fail", error: `doc_extract: ${payload?.detail ?? "document read rejected"}` };
+  }
+  const raw: Record<string, string> = {};
+  for (const f of action.fields) raw[f.name] = payload.data?.vars?.[f.name] ?? "";
+  const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "doc_extract");
+  Object.assign(scope.vars, out);
+  return {
+    kind: "ok",
+    result: {
+      vars: out,
+      ...(payload.data?.filed ? { filed: payload.data.filed } : {}),
+      ...(payload.data?.fileError ? { file_error: payload.data.fileError } : {})
+    }
+  };
 }
 
 /**

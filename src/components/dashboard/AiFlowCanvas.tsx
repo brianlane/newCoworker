@@ -82,6 +82,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   browse_extract: "read",
   extract_text: "read",
   email_extract: "read",
+  doc_extract: "read",
   send_sms: "comm",
   send_email: "comm",
   approval_gate: "wait",
@@ -122,6 +123,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   browse_extract: <Globe className="h-4 w-4" />,
   extract_text: <Search className="h-4 w-4" />,
   email_extract: <Mail className="h-4 w-4" />,
+  doc_extract: <FileText className="h-4 w-4" />,
   send_sms: <MessageSquare className="h-4 w-4" />,
   send_email: <Send className="h-4 w-4" />,
   approval_gate: <ShieldCheck className="h-4 w-4" />,
@@ -201,6 +203,7 @@ function stepSubtitle(step: FlowStep): string {
       return `saves {{vars.${step.saveAs}}}`;
     case "extract_text":
     case "email_extract":
+    case "doc_extract":
       return step.fields.map((f) => f.name).join(", ");
     case "browse_extract":
       return [...(step.fields ?? []), ...(step.extractLinks ?? [])].map((f) => f.name).join(", ");

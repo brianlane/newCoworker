@@ -29,6 +29,11 @@ export const FLOW_STEP_TYPES = [
   "browse_extract",
   "extract_text",
   "email_extract",
+  // Read typed fields out of a DOCUMENT (the triggering email's PDF/text
+  // attachment) via Gemini's native PDF understanding, optionally filing it
+  // into Business Documents — the back-office primitive (renewal review,
+  // doc intake) built on the existing documents store.
+  "doc_extract",
   "send_sms",
   "send_email",
   "approval_gate",
@@ -158,7 +163,13 @@ export const TRIGGER_SCOPE_KEYS = [
   // (Telnyx media URL) or an inbound tenant-mailbox email attachment
   // (`email-attachments:<path>` ref). "" on every other channel — used by
   // generate_image's inputImageTemplate to edit the sender's photo.
-  "image"
+  "image",
+  // First DOCUMENT attachment (PDF / txt / markdown / csv) on an inbound
+  // tenant-mailbox email, as an `email-attachments:<path>` ref ("" on every
+  // other channel) — the default source of a doc_extract step. document_name
+  // is its display filename for templates/notifications.
+  "document",
+  "document_name"
 ] as const;
 
 /**
@@ -671,6 +682,33 @@ const nonBranchStepMembers = [
     lookbackMinutes: z.number().int().min(1).max(1440).optional(),
     fields: z.array(extractFieldSchema).min(1).max(15),
     fillOnlyEmpty: z.boolean().optional(),
+    when: whenSchema.optional()
+  }),
+  // Read typed fields out of a DOCUMENT — the triggering email's PDF/text
+  // attachment ({{trigger.document}}, the plan-time default when
+  // sourceTemplate is omitted) — via Gemini's native PDF understanding.
+  // Produces {{vars.<field>}} like extract_text; a trigger with no document
+  // SKIPS the step gracefully (all-text emails must not fail the flow).
+  // `fileAs` additionally files the source into Business Documents (condensed
+  // through the same ingest pipeline as dashboard uploads) so it becomes
+  // retrievable via business_knowledge_lookup and shareable via
+  // share_document. This is the insurance back-office primitive: "when the
+  // renewal notice arrives, read premium/deductible off the PDF and file it".
+  z.object({
+    id: stepId,
+    type: z.literal("doc_extract"),
+    // Template resolving to a document ref (an `email-attachments:<path>`
+    // value). Omitted = {{trigger.document}}.
+    sourceTemplate: z.string().min(1).max(300).optional(),
+    fields: z.array(extractFieldSchema).min(1).max(15),
+    fileAs: z
+      .object({
+        titleTemplate: z.string().min(1).max(200),
+        // Who the filed document is retrievable by (default staff — filed
+        // back-office paperwork must not leak into customer-facing answers).
+        audience: z.enum(["clients", "staff", "both"]).optional()
+      })
+      .optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -1300,6 +1338,10 @@ function templateStringsForStep(step: FlowStep): string[] {
       return step.actions.map((a) => a.valueTemplate ?? "");
     case "email_extract":
       return step.matchTemplates ?? [];
+    // The document source and the filing title are ordinary templates (the
+    // source usually references {{trigger.document}}).
+    case "doc_extract":
+      return [step.sourceTemplate ?? "", step.fileAs?.titleTemplate ?? ""];
     // math operands and sleep's date templates reference vars/trigger fields,
     // so they get the same scope checking as any other template.
     case "math":
@@ -2025,6 +2067,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     } else if (step.type === "extract_text") {
       for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "email_extract") {
+      for (const f of step.fields) vars.add(f.name);
+    } else if (step.type === "doc_extract") {
       for (const f of step.fields) vars.add(f.name);
     } else if (step.type === "browse_action") {
       // Same-pass extraction registers its produced vars for LATER steps, just

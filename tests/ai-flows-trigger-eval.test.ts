@@ -247,7 +247,9 @@ describe("tenantEmailTriggerScope", () => {
       message_id: "m1",
       to: "amy@newcoworker.com",
       received_at: "2026-06-09T15:00:00Z",
-      image: ""
+      image: "",
+      document: "",
+      document_name: ""
     });
   });
   it("omits to and received_at when unknown", () => {
@@ -269,6 +271,18 @@ describe("tenantEmailTriggerScope", () => {
       imageRef: "email-attachments:inbound/m3/face.jpg"
     });
     expect(scope.image).toBe("email-attachments:inbound/m3/face.jpg");
+  });
+  it("carries the first document attachment as {{trigger.document}} + its filename", () => {
+    const scope = tenantEmailTriggerScope({
+      id: "m4",
+      fromEmail: "a@b.c",
+      subject: "renewal",
+      bodyText: "see attached",
+      documentRef: "email-attachments:inbound/m4/0-renewal.pdf",
+      documentName: "renewal.pdf"
+    });
+    expect(scope.document).toBe("email-attachments:inbound/m4/0-renewal.pdf");
+    expect(scope.document_name).toBe("renewal.pdf");
   });
 });
 

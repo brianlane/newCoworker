@@ -19,7 +19,7 @@ import {
   tenantEmailTriggerScope
 } from "@/lib/ai-flows/trigger-eval";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
-import { recordTenantMailboxInbound } from "@/lib/db/email-log";
+import { linkTenantMailboxInboundRun, recordTenantMailboxInbound } from "@/lib/db/email-log";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import {
   findCustomerByEmail,
@@ -143,13 +143,63 @@ export async function processInboundTenantEmail(
   const firstImage = ownAttachments.find((a) =>
     ["image/jpeg", "image/png", "image/webp"].includes(a.mimeType.trim().toLowerCase())
   );
+  // First DOCUMENT attachment (pdf/text) → {{trigger.document}} — the
+  // doc_extract step's default source. Gated on the STORED PATH's extension
+  // (which the email worker derives from the filename), because that suffix
+  // is exactly what docExtract classifies the type from — a MIME-only match
+  // whose path lacks the extension would hand the step a ref it can only
+  // fail on. Covers octet-stream PDFs (extension present) by construction;
+  // an extensionless attachment simply leaves the trigger document-less and
+  // the step skips gracefully.
+  const firstDocument = ownAttachments.find((a) => /\.(pdf|txt|md|csv)$/i.test(a.path));
+
+  // Record the inbound mail on the Emails page BEFORE enqueueing any run:
+  // doc_extract's tenant-ownership gate reads this row's attachment paths,
+  // so a worker that claims a freshly-enqueued run must already find the
+  // row (previously the log write came after the enqueue loop — a run
+  // racing ahead would fail its document read). The flow/run linkage is
+  // backfilled below once the first run exists. Always written, matched or
+  // not — the owner should see what their AI mailbox received.
+  const attachments = ownAttachments.map((a) => ({
+    filename: a.filename,
+    mime_type: a.mimeType,
+    size_bytes: a.size,
+    storage_path: a.path
+  }));
+  const emailLogId = await recordTenantMailboxInbound(
+    {
+      businessId,
+      toEmail: payload.to,
+      fromEmail,
+      subject: payload.subject,
+      bodyText: payload.text,
+      bodyHtml: payload.html ?? null,
+      attachments,
+      flowId: null,
+      runId: null,
+      providerMessageId: payload.messageId
+    },
+    db
+  );
+
   const scope = tenantEmailTriggerScope({
     id: payload.messageId,
     fromEmail,
     subject: payload.subject,
     bodyText: payload.text,
     toEmail: payload.to,
-    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {})
+    ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {}),
+    // {{trigger.document}} is only exposed when the log row LANDED — the
+    // ownership gate trusts email_log.attachments alone, so a ref without
+    // its row could only fail permanently. A (rare, best-effort) log
+    // failure degrades to a document-less trigger and a graceful step skip;
+    // the owner can re-run via the email replay once the row exists.
+    ...(firstDocument && emailLogId
+      ? {
+          documentRef: `email-attachments:${firstDocument.path}`,
+          documentName: firstDocument.filename
+        }
+      : {})
   });
 
   const flows = await loadTenantEmailFlows(db, businessId);
@@ -203,29 +253,16 @@ export async function processInboundTenantEmail(
     });
   }
 
-  // Always surface the inbound mail on the Emails page, even when nothing
-  // matched — the owner should see what their AI mailbox received.
-  const attachments = ownAttachments.map((a) => ({
-    filename: a.filename,
-    mime_type: a.mimeType,
-    size_bytes: a.size,
-    storage_path: a.path
-  }));
-  await recordTenantMailboxInbound(
-    {
+  // Backfill the flow/run linkage now that runs exist (the row itself was
+  // written before the enqueue loop — see above). Best-effort.
+  if (emailLogId && firstFlowId && firstRunId) {
+    await linkTenantMailboxInboundRun(
       businessId,
-      toEmail: payload.to,
-      fromEmail,
-      subject: payload.subject,
-      bodyText: payload.text,
-      bodyHtml: payload.html ?? null,
-      attachments,
-      flowId: firstFlowId,
-      runId: firstRunId,
-      providerMessageId: payload.messageId
-    },
-    db
-  );
+      emailLogId,
+      { flowId: firstFlowId, runId: firstRunId },
+      db
+    );
+  }
 
   // Cross-channel rollup: if the sender's address is linked to a customer
   // profile, record an `email` interaction so the customer list reflects it
