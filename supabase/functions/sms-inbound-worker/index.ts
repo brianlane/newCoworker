@@ -1103,9 +1103,13 @@ serve(async (req: Request) => {
           // branch below): a Telnyx-send retry must re-deliver the CACHED
           // reply, never re-invoke the operator turn — that turn may have
           // committed tools (send_sms, run_aiflow) that a re-run would
-          // duplicate. A failed cache write aborts (→ retry) rather than
-          // sending uncached; rare DB-write errors accept the wasted re-run
-          // exactly like the Rowboat path documents.
+          // duplicate. Unlike the Rowboat branch, a failed cache write here
+          // must NOT throw-and-retry (the retry would re-run those committed
+          // tools) and must NOT fall back to Rowboat (a different engine's
+          // reply could contradict actions that really happened) — the job
+          // dead-letters with a loud log instead. The owner's next text gets
+          // honest context regardless: committed sends are in the outbound
+          // log, which the operator turn's transcript replays.
           const { error: opCacheErr } = await supabase
             .from("sms_inbound_jobs")
             .update({
@@ -1116,7 +1120,24 @@ serve(async (req: Request) => {
             .eq("id", job.id);
           if (opCacheErr) {
             console.error("owner operator reply cache", opCacheErr);
-            throw new Error(`rowboat_reply_cache_failed: ${opCacheErr.message}`);
+            await supabase.rpc("complete_sms_inbound_job", {
+              p_job_id: job.id,
+              p_status: "dead_letter",
+              p_telnyx_outbound_message_id: null,
+              p_rowboat_conversation_id: thread?.rowboat_conversation_id?.trim() || null,
+              p_last_error: "owner_operator_cache_failed"
+            });
+            await systemLog(supabase, {
+              businessId: job.business_id,
+              source: "sms_worker",
+              level: "error",
+              event: "sms_owner_operator_cache_failed",
+              message:
+                "Owner-operator turn completed (tools may have committed) but the reply cache write failed — job dead-lettered instead of retrying, so committed actions are never re-run. The owner got no reply this turn.",
+              payload: { job_id: job.id }
+            });
+            processed += 1;
+            continue;
           }
           reply = operatorReply;
           // No Rowboat call this turn — keep any existing thread binding
