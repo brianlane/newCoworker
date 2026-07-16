@@ -18,7 +18,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { listCustomerMemories, DEFAULT_LIST_LIMIT } from "@/lib/customer-memory/db";
+import { listCustomerMemories, MAX_LIST_LIMIT } from "@/lib/customer-memory/db";
 import { findDuplicateContactPairs } from "@/lib/customer-memory/dedup";
 import { listTeamMembers } from "@/lib/db/employees";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
@@ -78,7 +78,11 @@ export default async function DashboardCustomersPage() {
   // One unified list: every contact (customers + manual contacts) lives on the
   // contacts table now, so a single query is the whole directory — no separate
   // "other contacts" list and no cross-dedupe needed.
-  const contacts = await listCustomerMemories(business.id, { limit: DEFAULT_LIST_LIMIT });
+  // The full directory (up to the cap) so Smart List chip counts evaluate
+  // over every contact, not just the recently active — an overdue/never-
+  // contacted list is exactly the rows a recency-ordered page would drop.
+  const contacts = await listCustomerMemories(business.id, { limit: MAX_LIST_LIMIT });
+  const directoryClipped = contacts.length >= MAX_LIST_LIMIT;
   // Same-email duplicate suggestions (owner-confirmed merges). Best-effort:
   // a detection failure must never take down the directory page.
   const duplicatePairs = await findDuplicateContactPairs(business.id).catch(() => []);
@@ -146,6 +150,7 @@ export default async function DashboardCustomersPage() {
         segments={segments}
         owners={teamMembers.map((m) => ({ id: m.id, name: m.name }))}
         canManageSegments={canManageSegments}
+        clipped={directoryClipped}
       />
     </div>
   );

@@ -116,13 +116,16 @@ export function CustomersList({
   businessId,
   segments: initialSegments = [],
   owners = [],
-  canManageSegments = false
+  canManageSegments = false,
+  clipped = false
 }: {
   rows: CustomerListRow[];
   businessId?: string;
   segments?: ContactSegment[];
   owners?: Array<{ id: string; name: string }>;
   canManageSegments?: boolean;
+  /** True when the directory scan hit its cap — counts are partial. */
+  clipped?: boolean;
 }) {
   const [sort, setSort] = usePersistentSort(
     "dashboard.contacts.sort",
@@ -220,19 +223,6 @@ export function CustomersList({
     new Set(rows.map((r) => r.ownerName).filter((n): n is string => Boolean(n)))
   ).sort((a, b) => a.localeCompare(b));
 
-  if (rows.length === 0) {
-    return (
-      <Card>
-        <div className="text-center py-8">
-          <p className="text-parchment/60">No contacts yet.</p>
-          <p className="text-xs text-parchment/40 mt-2">
-            Once someone texts or calls (or you add a contact), they&apos;ll appear here.
-          </p>
-        </div>
-      </Card>
-    );
-  }
-
   const selectedSegment = segments.find((s) => s.id === selectedSegmentId) ?? null;
   const nowMs = Date.now();
   const segmentCount = (s: ContactSegment) =>
@@ -303,6 +293,12 @@ export function CustomersList({
         </div>
       )}
       {segmentError && <p className="text-xs text-rose-300/90">{segmentError}</p>}
+      {clipped && (
+        <p className="text-[11px] text-amber-300/80">
+          Large directory — the list and Smart List counts cover the {rows.length.toLocaleString()}{" "}
+          most recently active contacts.
+        </p>
+      )}
       {showCreate && canManageSegments && (
         <Card padding="sm">
           <div className="flex flex-wrap items-end gap-3 text-xs text-parchment/70">
@@ -416,6 +412,17 @@ export function CustomersList({
           </div>
         </Card>
       )}
+      {rows.length === 0 ? (
+        <Card>
+          <div className="text-center py-8">
+            <p className="text-parchment/60">No contacts yet.</p>
+            <p className="text-xs text-parchment/40 mt-2">
+              Once someone texts or calls (or you add a contact), they&apos;ll appear here.
+            </p>
+          </div>
+        </Card>
+      ) : (
+        <>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <SearchControl
           value={query}
@@ -548,6 +555,8 @@ export function CustomersList({
         </ul>
         </ConversationScroll>
       </Card>
+        </>
+      )}
     </div>
   );
 }
