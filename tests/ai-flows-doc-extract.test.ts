@@ -18,7 +18,9 @@ vi.mock("@/lib/billing/ai-spend-meter", () => ({
 vi.mock("@/lib/documents/db", () => ({
   countBusinessDocuments: vi.fn(async () => 0),
   insertBusinessDocument: vi.fn(async () => ({})),
-  patchBusinessDocument: vi.fn(async () => undefined)
+  patchBusinessDocument: vi.fn(async () => undefined),
+  // doc-source resolves business-docs refs through this (tenant-scoped gate).
+  getBusinessDocument: vi.fn(async () => null)
 }));
 vi.mock("@/lib/documents/ingest", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/lib/documents/ingest")>();
@@ -32,6 +34,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import {
   countBusinessDocuments,
+  getBusinessDocument,
   insertBusinessDocument,
   patchBusinessDocument
 } from "@/lib/documents/db";
@@ -55,11 +58,15 @@ function makeDb(opts: {
   ownerLookupError?: { message: string } | null;
   removeError?: { message: string } | null;
   businessRow?: { tier?: string | null; name?: string | null } | null;
+  /** contacts lookup row (null = no contact with that number). */
+  contactRow?: { id: string } | null;
+  contactLookupError?: { message: string } | null;
 }) {
   const uploads: Array<{ bucket: string; path: string }> = [];
   const removes: Array<{ bucket: string; paths: string[] }> = [];
   const storageCalls: string[] = [];
   const ownershipCalls: Array<{ name: string; args: unknown[] }> = [];
+  const contactCalls: Array<{ name: string; args: unknown[] }> = [];
   const db = {
     storage: {
       from: (bucket: string) => ({
@@ -79,9 +86,10 @@ function makeDb(opts: {
     },
     from: (table: string) => {
       const builder: Record<string, unknown> = {};
-      for (const m of ["select", "eq", "contains", "limit"]) {
+      for (const m of ["select", "eq", "contains", "limit", "or"]) {
         builder[m] = (...args: unknown[]) => {
           if (table === "email_log") ownershipCalls.push({ name: m, args });
+          if (table === "contacts") contactCalls.push({ name: m, args });
           return builder;
         };
       }
@@ -90,6 +98,13 @@ function makeDb(opts: {
           return {
             data: opts.ownerLookupError ? null : opts.ownerRow === undefined ? { id: "log-1" } : opts.ownerRow,
             error: opts.ownerLookupError ?? null
+          };
+        }
+        if (table === "contacts") {
+          return {
+            data:
+              opts.contactLookupError ? null : opts.contactRow === undefined ? { id: "contact-1" } : opts.contactRow,
+            error: opts.contactLookupError ?? null
           };
         }
         return {
@@ -103,7 +118,7 @@ function makeDb(opts: {
       return builder;
     }
   };
-  return { db, uploads, removes, storageCalls, ownershipCalls };
+  return { db, uploads, removes, storageCalls, ownershipCalls, contactCalls };
 }
 
 const okGenerate = vi.fn(async (_params: Record<string, unknown>) => ({
@@ -269,7 +284,7 @@ describe("docExtract", () => {
     const { db } = makeDb({ ownerLookupError: { message: "db down" } });
     await expect(
       docExtract(input, { client: db as never, generate: okGenerate as never })
-    ).rejects.toThrow("doc-extract ownership lookup: db down");
+    ).rejects.toThrow("doc-source ownership lookup: db down");
   });
 
   it("no API key → extractor_unavailable", async () => {
@@ -457,5 +472,285 @@ describe("docExtract", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     const result = await docExtract(input, { generate: okGenerate as never });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("docExtract — business-docs source refs", () => {
+  const DOC_ID = "44444444-4444-4444-8444-444444444444";
+  const input = { businessId: BIZ, sourceRef: `business-docs:${DOC_ID}`, fields: FIELDS };
+
+  it("extracts from a library document (tenant-scoped lookup, no email_log gate)", async () => {
+    vi.mocked(getBusinessDocument).mockResolvedValueOnce({
+      id: DOC_ID,
+      status: "ready",
+      mime_type: "application/pdf",
+      storage_path: `${BIZ}/${DOC_ID}/quote.pdf`,
+      title: "Carrier quote"
+    } as never);
+    const { db, storageCalls, ownershipCalls } = makeDb({});
+    const result = await docExtract(input, { client: db as never, generate: okGenerate as never });
+    expect(result).toMatchObject({ ok: true, vars: { renewal_date: "2026-09-01" } });
+    expect(storageCalls).toEqual([`download:business-docs/${BIZ}/${DOC_ID}/quote.pdf`]);
+    expect(ownershipCalls).toEqual([]);
+  });
+
+  it("another tenant's / missing document id reads as not_found", async () => {
+    vi.mocked(getBusinessDocument).mockResolvedValueOnce(null);
+    const { db } = makeDb({});
+    expect(await docExtract(input, { client: db as never })).toMatchObject({
+      ok: false,
+      error: "not_found"
+    });
+  });
+});
+
+describe("docExtract — record sinks (fileAs extras)", () => {
+  const input = { businessId: BIZ, sourceRef: PDF_REF, fields: FIELDS };
+  const baseFile = { title: "Quote — Acme", audience: "staff" as const };
+
+  it("links the filed record to the contact by resolved phone (records cap pool)", async () => {
+    const { db, contactCalls } = makeDb({});
+    const result = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "+16025551234" } },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result.ok && result.filed).toBeTruthy();
+    expect(result.ok && result.fileNotes).toBeUndefined();
+    // Primary number OR merged-away alias.
+    expect(
+      contactCalls.some(
+        (c) =>
+          c.name === "or" &&
+          String(c.args[0]).includes("customer_e164.eq.+16025551234") &&
+          String(c.args[0]).includes("alias_e164s.cs.{+16025551234}")
+      )
+    ).toBe(true);
+    expect(insertBusinessDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ contact_id: "contact-1" }),
+      expect.anything()
+    );
+    // Linked records count against the flat records pool, not the tier cap.
+    expect(countBusinessDocuments).toHaveBeenCalledWith(BIZ, "contact_records", expect.anything());
+  });
+
+  it("files unlinked with a note when the phone is missing / invalid / unknown", async () => {
+    const noValue = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "  " } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(noValue.ok && noValue.filed).toBeTruthy();
+    expect(noValue.ok && noValue.fileNotes).toEqual(["contact link skipped: no phone value"]);
+
+    const invalid = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "not-a-phone" } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(invalid.ok && invalid.fileNotes?.[0]).toContain("contact link skipped:");
+
+    const unknown = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "+16025551234" } },
+      { client: makeDb({ contactRow: null }).db as never, generate: okGenerate as never }
+    );
+    expect(unknown.ok && unknown.filed).toBeTruthy();
+    expect(unknown.ok && unknown.fileNotes?.[0]).toContain("no contact with number");
+    expect(insertBusinessDocument).toHaveBeenCalledWith(
+      expect.not.objectContaining({ contact_id: expect.anything() }),
+      expect.anything()
+    );
+  });
+
+  it("resolves the contact phone from THIS extraction's field (contactPhoneField)", async () => {
+    const phoneGenerate = vi.fn(async () => ({
+      text: '{"renewal_date": "2026-09-01", "premium": "$1,200", "customer_phone": "+16025551234"}',
+      usage: { inputTokens: 1, outputTokens: 1 }
+    }));
+    const fields = [...FIELDS, { name: "customer_phone" }];
+    const { db } = makeDb({});
+    const result = await docExtract(
+      { ...input, fields, fileAs: { ...baseFile, contactPhoneField: "customer_phone" } },
+      { client: db as never, generate: phoneGenerate as never }
+    );
+    expect(result.ok && result.filed).toBeTruthy();
+    expect(insertBusinessDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ contact_id: "contact-1" }),
+      expect.anything()
+    );
+  });
+
+  it("a transient contact lookup fault degrades to an unfiled fileError (filing is best-effort)", async () => {
+    const { db } = makeDb({ contactLookupError: { message: "contacts down" } });
+    const result = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "+16025551234" } },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result).toMatchObject({ ok: true, filed: null, fileError: "contacts down" });
+  });
+
+  it("stamps extracted fields onto record_fields (and notes when nothing extracted)", async () => {
+    const { db } = makeDb({});
+    const result = await docExtract(
+      { ...input, fileAs: { ...baseFile, recordFieldsFromExtraction: true } },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result.ok && result.filed).toBeTruthy();
+    expect(insertBusinessDocument).toHaveBeenCalledWith(
+      expect.objectContaining({
+        record_fields: { renewal_date: "2026-09-01", premium: "$1,200" }
+      }),
+      expect.anything()
+    );
+
+    const emptyGenerate = vi.fn(async () => ({
+      text: '{"renewal_date": "", "premium": ""}',
+      usage: { inputTokens: 1, outputTokens: 1 }
+    }));
+    const nothing = await docExtract(
+      { ...input, fileAs: { ...baseFile, recordFieldsFromExtraction: true } },
+      { client: makeDb({}).db as never, generate: emptyGenerate as never }
+    );
+    expect(nothing.ok && nothing.fileNotes).toEqual(["record fields skipped: nothing extracted"]);
+  });
+
+  it("sets renewal_date from the named extracted field (notes when unparseable/empty)", async () => {
+    const { db } = makeDb({});
+    const result = await docExtract(
+      { ...input, fileAs: { ...baseFile, renewalDateField: "renewal_date" } },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result.ok && result.filed).toBeTruthy();
+    expect(insertBusinessDocument).toHaveBeenCalledWith(
+      expect.objectContaining({ renewal_date: "2026-09-01T23:59:59.999Z" }),
+      expect.anything()
+    );
+
+    const junkGenerate = vi.fn(async () => ({
+      text: '{"renewal_date": "whenever suits", "premium": "$1"}',
+      usage: { inputTokens: 1, outputTokens: 1 }
+    }));
+    const junk = await docExtract(
+      { ...input, fileAs: { ...baseFile, renewalDateField: "renewal_date" } },
+      { client: makeDb({}).db as never, generate: junkGenerate as never }
+    );
+    expect(junk.ok && junk.fileNotes?.[0]).toContain("is not a date");
+
+    const blankGenerate = vi.fn(async () => ({
+      text: '{"renewal_date": "", "premium": "$1"}',
+      usage: { inputTokens: 1, outputTokens: 1 }
+    }));
+    const blank = await docExtract(
+      { ...input, fileAs: { ...baseFile, renewalDateField: "renewal_date" } },
+      { client: makeDb({}).db as never, generate: blankGenerate as never }
+    );
+    expect(blank.ok && blank.fileNotes).toEqual(["renewal date skipped: field was empty"]);
+
+    // A field name the extraction never produced (possible via the raw
+    // route API) reads as empty, not a crash.
+    const unknownField = await docExtract(
+      { ...input, fileAs: { ...baseFile, renewalDateField: "nonexistent" } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(unknownField.ok && unknownField.fileNotes).toEqual([
+      "renewal date skipped: field was empty"
+    ]);
+  });
+
+  it("covers every notes/no-notes cap combination and filename fallbacks", async () => {
+    // contact_records cap with NO notes.
+    vi.mocked(countBusinessDocuments).mockResolvedValueOnce(2000);
+    const cleanCap = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "+16025551234" } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(cleanCap).toMatchObject({ ok: true, filed: null, fileError: "contact record limit reached" });
+    expect(cleanCap.ok && cleanCap.fileNotes).toBeUndefined();
+
+    // library cap WITH a note riding along.
+    vi.mocked(countBusinessDocuments).mockResolvedValueOnce(999);
+    const notedCap = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "  " } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(notedCap).toMatchObject({
+      ok: true,
+      filed: null,
+      fileError: "document limit reached for your plan",
+      fileNotes: ["contact link skipped: no phone value"]
+    });
+
+    // A contactPhoneField that the extraction never produced → "no phone value".
+    const missingField = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhoneField: "nonexistent" } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(missingField.ok && missingField.fileNotes).toEqual([
+      "contact link skipped: no phone value"
+    ]);
+
+    // A degenerate resolved filename falls back to "document".
+    vi.mocked(getBusinessDocument).mockResolvedValueOnce({
+      id: "44444444-4444-4444-8444-444444444444",
+      status: "ready",
+      mime_type: "application/pdf",
+      storage_path: "",
+      title: ""
+    } as never);
+    const weird = makeDb({});
+    const fallback = await docExtract(
+      {
+        ...input,
+        sourceRef: "business-docs:44444444-4444-4444-8444-444444444444",
+        fileAs: baseFile
+      },
+      { client: weird.db as never, generate: okGenerate as never }
+    );
+    expect(fallback.ok && fallback.filed).toBeTruthy();
+    expect(weird.uploads[0].path).toMatch(/\/document$/);
+
+    // An insert throw with notes present: the outer catch carries them.
+    vi.mocked(insertBusinessDocument).mockRejectedValueOnce(new Error("insert down"));
+    const thrownWithNotes = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "not-a-phone" } },
+      { client: makeDb({}).db as never, generate: okGenerate as never }
+    );
+    expect(thrownWithNotes).toMatchObject({ ok: true, filed: null, fileError: "insert down" });
+    expect(thrownWithNotes.ok && thrownWithNotes.fileNotes?.[0]).toContain("contact link skipped:");
+  });
+
+  it("refuses at the contact-records cap when linking (notes ride along)", async () => {
+    vi.mocked(countBusinessDocuments).mockResolvedValueOnce(2000);
+    const { db } = makeDb({});
+    const result = await docExtract(
+      {
+        ...input,
+        fileAs: { ...baseFile, contactPhone: "+16025551234", renewalDateField: "premium" }
+      },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result).toMatchObject({
+      ok: true,
+      filed: null,
+      fileError: "contact record limit reached"
+    });
+    // The unparseable "premium" renewal note still reports.
+    expect(result.ok && result.fileNotes?.[0]).toContain("is not a date");
+  });
+
+  it("notes ride along on every filing outcome (upload failure, condense failure)", async () => {
+    const badCopy = makeDb({ uploadError: { message: "bucket down" }, contactRow: null });
+    const copyFail = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "+16025551234" } },
+      { client: badCopy.db as never, generate: okGenerate as never }
+    );
+    expect(copyFail.ok && copyFail.filed).toBeNull();
+    expect(copyFail.ok && copyFail.fileNotes?.[0]).toContain("no contact with number");
+
+    vi.mocked(ingestDocument).mockRejectedValueOnce(new Error("condense down"));
+    const condenseFail = await docExtract(
+      { ...input, fileAs: { ...baseFile, contactPhone: "+16025551234" } },
+      { client: makeDb({ contactRow: null }).db as never, generate: okGenerate as never }
+    );
+    expect(condenseFail.ok && condenseFail.filed).toBeTruthy();
+    expect(condenseFail.ok && condenseFail.fileError).toBe("condense down");
+    expect(condenseFail.ok && condenseFail.fileNotes?.[0]).toContain("no contact with number");
   });
 });

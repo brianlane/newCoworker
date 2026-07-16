@@ -540,7 +540,18 @@ export type FlowStep =
       /** Template resolving to a document ref. Omitted = {{trigger.document}}. */
       sourceTemplate?: string;
       fields: ExtractField[];
-      fileAs?: { titleTemplate: string; audience?: "clients" | "staff" | "both" };
+      /**
+       * Filing options. The record sinks (contactPhoneVar /
+       * recordFieldsFromExtraction / renewalDateField) turn the filed copy
+       * into a structured contact record — see the schema comments.
+       */
+      fileAs?: {
+        titleTemplate: string;
+        audience?: "clients" | "staff" | "both";
+        contactPhoneVar?: string;
+        recordFieldsFromExtraction?: boolean;
+        renewalDateField?: string;
+      };
       when?: StepCondition;
     }
   | {

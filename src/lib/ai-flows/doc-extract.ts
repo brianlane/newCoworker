@@ -28,18 +28,30 @@ import {
   type GeminiGenerateTextResult
 } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
-import { BUSINESS_DOCS_BUCKET, documentLimitForTier } from "@/lib/documents/core";
+import {
+  BUSINESS_DOCS_BUCKET,
+  CONTACT_DOCUMENT_RECORDS_LIMIT,
+  documentLimitForTier,
+  parseExpirationInput,
+  sanitizeRecordFields
+} from "@/lib/documents/core";
 import { countBusinessDocuments, insertBusinessDocument, patchBusinessDocument } from "@/lib/documents/db";
 import { ingestDocument } from "@/lib/documents/ingest";
+import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
+import { resolveFlowDocumentSource } from "./doc-source";
+
+// The ref-parsing primitives moved to doc-source (the shared resolver);
+// re-exported here so existing importers keep working.
+export {
+  DOC_EXTRACT_MAX_BYTES,
+  EMAIL_ATTACHMENTS_BUCKET,
+  documentMimeForPath,
+  parseDocumentRef
+} from "./doc-source";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 type GeminiCall = (params: GeminiGenerateTextParams) => Promise<GeminiGenerateTextResult>;
-
-/** Bucket the tenant-mailbox email worker stores inbound attachments in. */
-export const EMAIL_ATTACHMENTS_BUCKET = "email-attachments";
-/** Inline-data ceiling (Gemini's request cap is ~20 MB; leave headroom). */
-export const DOC_EXTRACT_MAX_BYTES = 15 * 1024 * 1024;
 
 const DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview";
 
@@ -47,11 +59,33 @@ export type DocExtractField = { name: string; description?: string };
 
 export type DocExtractInput = {
   businessId: string;
-  /** `email-attachments:<path>` ref (the trigger.document value). */
+  /**
+   * Document ref: `email-attachments:<path>` (the trigger.document value)
+   * or `business-docs:<documentId>` (a document already in the library —
+   * including agent artifacts).
+   */
   sourceRef: string;
   fields: DocExtractField[];
   /** File the document into Business Documents after extraction. */
-  fileAs?: { title: string; audience: "clients" | "staff" | "both" };
+  fileAs?: {
+    title: string;
+    audience: "clients" | "staff" | "both";
+    /**
+     * Link the filed document to the contact with this phone (record
+     * layer). A literal already-resolved number; a lookup miss files
+     * unlinked and reports a note.
+     */
+    contactPhone?: string;
+    /**
+     * Resolve the contact phone from THIS extraction's named field instead
+     * (the document itself carries the customer's number).
+     */
+    contactPhoneField?: string;
+    /** Stamp the extracted fields onto the record (record_fields jsonb). */
+    recordFieldsFromExtraction?: boolean;
+    /** Parse this extracted field as the record's renewal_date. */
+    renewalDateField?: string;
+  };
   businessName?: string;
 };
 
@@ -61,6 +95,8 @@ export type DocExtractResult =
       vars: Record<string, string>;
       filed: { documentId: string; title: string } | null;
       fileError?: string;
+      /** Non-fatal filing observations (contact miss, unparseable renewal). */
+      fileNotes?: string[];
     }
   | {
       ok: false;
@@ -80,33 +116,6 @@ export type DocExtractDeps = {
   /** Injectable Gemini call (tests). */
   generate?: GeminiCall;
 };
-
-/**
- * Parse and sanitize a document ref. Only the email-attachments bucket is
- * addressable, and only sane relative paths within it — the ref came through
- * a template render, so treat it as untrusted.
- */
-export function parseDocumentRef(ref: string): { bucket: string; path: string } | null {
-  const match = /^email-attachments:(.+)$/.exec(ref.trim());
-  if (!match) return null;
-  const path = match[1];
-  if (path.length === 0 || path.length > 500) return null;
-  if (path.startsWith("/") || path.includes("..") || path.includes("\\")) return null;
-  return { bucket: EMAIL_ATTACHMENTS_BUCKET, path };
-}
-
-const TEXT_EXTENSIONS: Record<string, string> = {
-  txt: "text/plain",
-  md: "text/markdown",
-  csv: "text/csv"
-};
-
-/** Infer the document MIME from the stored filename ("" = unsupported). */
-export function documentMimeForPath(path: string): string {
-  const ext = (/\.([a-z0-9]+)$/i.exec(path)?.[1] ?? "").toLowerCase();
-  if (ext === "pdf") return "application/pdf";
-  return TEXT_EXTENSIONS[ext] ?? "";
-}
 
 /** Prompt: return EXACTLY one JSON object with the requested fields. */
 export function buildDocExtractionPrompt(fields: DocExtractField[]): string {
@@ -146,14 +155,6 @@ export function parseDocExtractionReply(
   }
 }
 
-/** The stored filename part of a ref path (for default filing titles). */
-function fileNameOfPath(path: string): string {
-  const parts = path.split("/");
-  const last = parts[parts.length - 1];
-  // The email worker prefixes attachment files with their index ("0-name.pdf").
-  return last.replace(/^\d+-/, "");
-}
-
 /**
  * Download → extract → (optionally) file. See the module doc for the
  * failure taxonomy.
@@ -166,54 +167,21 @@ export async function docExtract(
   /* c8 ignore next -- production default; tests inject generate */
   const generate = deps.generate ?? geminiGenerateTextDetailed;
 
-  const ref = parseDocumentRef(input.sourceRef);
-  if (!ref) return { ok: false, error: "unsupported_ref", detail: "unrecognized document ref" };
-  const mimeType = documentMimeForPath(ref.path);
-  if (!mimeType) {
-    return { ok: false, error: "unsupported_type", detail: "only pdf/txt/md/csv documents" };
-  }
-
-  // Tenant-ownership gate: the ref came through a template render, so it is
-  // untrusted — only paths recorded on THIS business's own inbound mail
-  // (email_log.attachments) may be read. Fails CLOSED on "no such row"
-  // (another tenant's path reads exactly like a missing document) and
-  // THROWS on a lookup fault (transient → the worker retries; a fail-open
-  // here would be a cross-tenant read). Residency note: dual-mode tenants
-  // keep central email_log copies, so this central check holds; a future
-  // vps-read-mode purge would need the box-side lookup (readMovedRows) —
-  // same caveat as the rest of the central flow engine.
-  const { data: ownerRow, error: ownErr } = await db
-    .from("email_log")
-    .select("id")
-    .eq("business_id", input.businessId)
-    // jsonb containment: attachments @> [{"storage_path": <path>}]
-    .contains("attachments", [{ storage_path: ref.path }])
-    .limit(1)
-    .maybeSingle();
-  if (ownErr) throw new Error(`doc-extract ownership lookup: ${ownErr.message}`);
-  if (!ownerRow) {
-    return { ok: false, error: "not_found", detail: "document not on this business's mailbox" };
-  }
-
-  const { data: blob, error: downloadError } = await db.storage
-    .from(ref.bucket)
-    .download(ref.path);
-  if (downloadError || !blob) {
-    // Storage 404s are permanent (a pruned/retention-deleted attachment will
-    // never come back); other failures could be transient, but the client
-    // does not distinguish them — treat the read as permanent and let the
-    // owner re-send the document rather than retry-looping the run.
+  // Ref resolution + tenant-ownership gating live in the shared resolver
+  // (doc-source): email-attachments refs pass the email_log containment
+  // gate (fails closed; a transient lookup fault THROWS so the worker
+  // retries); business-docs refs are gated by the tenant-scoped row lookup.
+  const resolved = await resolveFlowDocumentSource(input.businessId, input.sourceRef, {
+    client: db
+  });
+  if (!resolved.ok) {
     return {
       ok: false,
-      error: "not_found",
-      detail: downloadError?.message ?? "document missing from storage"
+      error: resolved.error,
+      ...(resolved.detail ? { detail: resolved.detail } : {})
     };
   }
-  const bytes = Buffer.from(await blob.arrayBuffer());
-  if (bytes.byteLength === 0) return { ok: false, error: "empty_document" };
-  if (bytes.byteLength > DOC_EXTRACT_MAX_BYTES) {
-    return { ok: false, error: "too_large", detail: `${bytes.byteLength} bytes` };
-  }
+  const { bytes, mimeType, filename } = resolved.source;
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "extractor_unavailable" };
@@ -275,6 +243,7 @@ export async function docExtract(
   if (!input.fileAs) return { ok: true, vars, filed: null };
 
   // ── Filing (non-fatal) ────────────────────────────────────────────────────
+  const fileNotes: string[] = [];
   try {
     const { data: bizRow } = await db
       .from("businesses")
@@ -282,23 +251,105 @@ export async function docExtract(
       .eq("id", input.businessId)
       .maybeSingle();
     const tier = (bizRow as { tier?: string | null } | null)?.tier ?? null;
-    // Filed flow documents live in the LIBRARY scope (no contact linkage),
-    // so the library cap is the one that applies.
-    const count = await countBusinessDocuments(input.businessId, "library", db);
-    if (count >= documentLimitForTier(tier)) {
-      return { ok: true, vars, filed: null, fileError: "document limit reached for your plan" };
+
+    // ── Record sinks: resolve the structured extras BEFORE the insert so a
+    // filed document lands complete (contact link, fields, renewal date).
+    // Every sink is best-effort: a miss files the document anyway and
+    // reports a note — the extraction the flow branches on already
+    // succeeded, and an unlinked filed copy beats no copy.
+    let contactId: string | null = null;
+    const phoneRaw = (
+      input.fileAs.contactPhoneField
+        ? vars[input.fileAs.contactPhoneField] ?? ""
+        : input.fileAs.contactPhone ?? ""
+    ).trim();
+    if (input.fileAs.contactPhone !== undefined || input.fileAs.contactPhoneField !== undefined) {
+      if (!phoneRaw) {
+        fileNotes.push("contact link skipped: no phone value");
+      } else {
+        const normalized = normalizeContactNumber(phoneRaw);
+        if (!normalized.ok) {
+          fileNotes.push(`contact link skipped: ${normalized.reason}`);
+        } else {
+          // Primary number OR merged-away alias — same match the records
+          // CSV importer uses.
+          const { data: contact, error: contactErr } = await db
+            .from("contacts")
+            .select("id")
+            .eq("business_id", input.businessId)
+            .or(`customer_e164.eq.${normalized.value},alias_e164s.cs.{${normalized.value}}`)
+            .maybeSingle();
+          if (contactErr) throw new Error(contactErr.message);
+          if (!contact) {
+            fileNotes.push(`contact link skipped: no contact with number ${normalized.value}`);
+          } else {
+            contactId = (contact as { id: string }).id;
+          }
+        }
+      }
+    }
+
+    let recordFields: Record<string, string> | null = null;
+    if (input.fileAs.recordFieldsFromExtraction) {
+      recordFields = sanitizeRecordFields(vars);
+      if (!recordFields) fileNotes.push("record fields skipped: nothing extracted");
+    }
+
+    let renewalDate: string | null = null;
+    if (input.fileAs.renewalDateField) {
+      const rawDate = (vars[input.fileAs.renewalDateField] ?? "").trim();
+      renewalDate = rawDate ? parseExpirationInput(rawDate) : null;
+      if (!renewalDate) {
+        fileNotes.push(
+          rawDate
+            ? `renewal date skipped: "${rawDate.slice(0, 60)}" is not a date`
+            : "renewal date skipped: field was empty"
+        );
+      }
+    }
+
+    // Contact-linked records count against the flat records cap (same pool
+    // as the CSV book-of-business importer); unlinked filings stay under
+    // the tier's library cap.
+    if (contactId) {
+      const count = await countBusinessDocuments(input.businessId, "contact_records", db);
+      if (count >= CONTACT_DOCUMENT_RECORDS_LIMIT) {
+        return {
+          ok: true,
+          vars,
+          filed: null,
+          fileError: "contact record limit reached",
+          ...(fileNotes.length > 0 ? { fileNotes } : {})
+        };
+      }
+    } else {
+      const count = await countBusinessDocuments(input.businessId, "library", db);
+      if (count >= documentLimitForTier(tier)) {
+        return {
+          ok: true,
+          vars,
+          filed: null,
+          fileError: "document limit reached for your plan",
+          ...(fileNotes.length > 0 ? { fileNotes } : {})
+        };
+      }
     }
 
     const documentId = crypto.randomUUID();
-    // The mime gate above guarantees an extension-bearing filename, so the
-    // sanitized name can never be empty here.
-    const safeName = fileNameOfPath(ref.path).replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
+    const safeName =
+      filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200) || "document";
     const storagePath = `${input.businessId}/${documentId}/${safeName}`;
     const { error: uploadError } = await db.storage
       .from(BUSINESS_DOCS_BUCKET)
       .upload(storagePath, bytes, { contentType: mimeType });
     if (uploadError) {
-      return { ok: true, vars, filed: null, fileError: `storage copy failed: ${uploadError.message}` };
+      return {
+        ok: true,
+        vars,
+        filed: null,
+        fileError: `storage copy failed: ${uploadError.message}`,
+        ...(fileNotes.length > 0 ? { fileNotes } : {})
+      };
     }
 
     const title = input.fileAs.title.slice(0, 200);
@@ -312,7 +363,10 @@ export async function docExtract(
           audience: input.fileAs.audience,
           storage_path: storagePath,
           mime_type: mimeType,
-          byte_size: bytes.byteLength
+          byte_size: bytes.byteLength,
+          ...(contactId ? { contact_id: contactId } : {}),
+          ...(renewalDate ? { renewal_date: renewalDate } : {}),
+          ...(recordFields ? { record_fields: recordFields } : {})
         },
         db
       );
@@ -362,7 +416,12 @@ export async function docExtract(
           db
         );
       }
-      return { ok: true, vars, filed: { documentId, title } };
+      return {
+        ok: true,
+        vars,
+        filed: { documentId, title },
+        ...(fileNotes.length > 0 ? { fileNotes } : {})
+      };
     } catch (postInsertErr) {
       const detail = postInsertErr instanceof Error ? postInsertErr.message : String(postInsertErr);
       logger.warn("aiflows/doc-extract: post-filing condense failed", {
@@ -370,11 +429,23 @@ export async function docExtract(
         documentId,
         error: detail
       });
-      return { ok: true, vars, filed: { documentId, title }, fileError: detail };
+      return {
+        ok: true,
+        vars,
+        filed: { documentId, title },
+        fileError: detail,
+        ...(fileNotes.length > 0 ? { fileNotes } : {})
+      };
     }
   } catch (err) {
     const detail = err instanceof Error ? err.message : String(err);
     logger.warn("aiflows/doc-extract: filing failed", { businessId: input.businessId, error: detail });
-    return { ok: true, vars, filed: null, fileError: detail };
+    return {
+      ok: true,
+      vars,
+      filed: null,
+      fileError: detail,
+      ...(fileNotes.length > 0 ? { fileNotes } : {})
+    };
   }
 }

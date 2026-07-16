@@ -125,7 +125,17 @@ export function simulateTestAction(
         simulated: "doc_extract",
         source: action.sourceRef,
         saved,
-        ...(action.fileTitle ? { would_file_as: action.fileTitle } : {})
+        ...(action.fileTitle ? { would_file_as: action.fileTitle } : {}),
+        // Record sinks are platform-side writes — report intent only.
+        ...(action.fileContactPhone !== undefined || action.fileContactField
+          ? {
+              would_link_contact: action.fileContactField
+                ? `from extracted field "${action.fileContactField}"`
+                : action.fileContactPhone || "(no phone value)"
+            }
+          : {}),
+        ...(action.fileRecordFields ? { would_stamp_record_fields: true } : {}),
+        ...(action.fileRenewalField ? { would_set_renewal_from: action.fileRenewalField } : {})
       };
     }
     case "notify_owner":

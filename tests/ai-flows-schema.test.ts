@@ -664,6 +664,73 @@ describe("doc_extract step", () => {
       })
     ).toThrow(AiFlowValidationError);
   });
+
+  it("record sinks: contactPhoneVar accepts earlier vars AND this step's own fields", () => {
+    // Own extracted field (the document carries the customer's number).
+    const ownField = parseAiFlowDefinition(
+      docFlow({
+        id: "d1",
+        type: "doc_extract",
+        fields: [{ name: "renewal_date" }, { name: "customer_phone" }],
+        fileAs: {
+          titleTemplate: "Quote",
+          contactPhoneVar: "customer_phone",
+          recordFieldsFromExtraction: true,
+          renewalDateField: "renewal_date"
+        }
+      })
+    );
+    expect(ownField.steps[0].type).toBe("doc_extract");
+
+    // An earlier step's var works too.
+    const earlierVar = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "tenant_email", conditions: [] },
+      steps: [
+        {
+          id: "e1",
+          type: "extract_text",
+          fields: [{ name: "lead_phone" }]
+        },
+        {
+          id: "d1",
+          type: "doc_extract",
+          fields: [{ name: "renewal_date" }],
+          fileAs: { titleTemplate: "Quote", contactPhoneVar: "lead_phone" }
+        }
+      ]
+    });
+    expect(earlierVar.steps[1].type).toBe("doc_extract");
+
+    // An unproduced var is a scope error.
+    const badVar = aiFlowDefinitionSchema.parse(
+      docFlow({
+        id: "d1",
+        type: "doc_extract",
+        fields: [{ name: "renewal_date" }],
+        fileAs: { titleTemplate: "Quote", contactPhoneVar: "never_produced" }
+      })
+    );
+    expect(
+      validateDefinitionSemantics(badVar).some((i) => i.includes("links the filed document"))
+    ).toBe(true);
+  });
+
+  it("record sinks: renewalDateField must be one of the step's own fields", () => {
+    const bad = aiFlowDefinitionSchema.parse(
+      docFlow({
+        id: "d1",
+        type: "doc_extract",
+        fields: [{ name: "renewal_date" }],
+        fileAs: { titleTemplate: "Quote", renewalDateField: "premium" }
+      })
+    );
+    expect(
+      validateDefinitionSemantics(bad).some((i) =>
+        i.includes("not one of the step's extracted fields")
+      )
+    ).toBe(true);
+  });
 });
 
 describe("upsert_customer step", () => {

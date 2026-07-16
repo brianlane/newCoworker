@@ -22,13 +22,40 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime } from "@/lib/documents/ingest";
-import {
-  DOC_EXTRACT_MAX_BYTES,
-  documentMimeForPath,
-  parseDocumentRef
-} from "./doc-extract";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/** Bucket the tenant-mailbox email worker stores inbound attachments in. */
+export const EMAIL_ATTACHMENTS_BUCKET = "email-attachments";
+/** Inline-data ceiling (Gemini's request cap is ~20 MB; leave headroom). */
+export const DOC_EXTRACT_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Parse and sanitize an email-attachment document ref. Only sane relative
+ * paths within the email-attachments bucket — the ref came through a
+ * template render, so treat it as untrusted.
+ */
+export function parseDocumentRef(ref: string): { bucket: string; path: string } | null {
+  const match = /^email-attachments:(.+)$/.exec(ref.trim());
+  if (!match) return null;
+  const path = match[1];
+  if (path.length === 0 || path.length > 500) return null;
+  if (path.startsWith("/") || path.includes("..") || path.includes("\\")) return null;
+  return { bucket: EMAIL_ATTACHMENTS_BUCKET, path };
+}
+
+const TEXT_EXTENSIONS: Record<string, string> = {
+  txt: "text/plain",
+  md: "text/markdown",
+  csv: "text/csv"
+};
+
+/** Infer the document MIME from the stored filename ("" = unsupported). */
+export function documentMimeForPath(path: string): string {
+  const ext = (/\.([a-z0-9]+)$/i.exec(path)?.[1] ?? "").toLowerCase();
+  if (ext === "pdf") return "application/pdf";
+  return TEXT_EXTENSIONS[ext] ?? "";
+}
 
 const BUSINESS_DOC_REF_RE =
   /^business-docs:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i;

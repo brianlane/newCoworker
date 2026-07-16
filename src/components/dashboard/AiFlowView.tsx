@@ -344,6 +344,19 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               value={`${step.fileAs.titleTemplate} (${step.fileAs.audience ?? "staff"})`}
             />
           )}
+          {step.fileAs?.contactPhoneVar && (
+            <Row
+              label="Links to the contact from"
+              value={`{{vars.${step.fileAs.contactPhoneVar}}}`}
+              mono
+            />
+          )}
+          {step.fileAs?.recordFieldsFromExtraction && (
+            <Row label="Record fields" value="Stamped from the extracted fields" />
+          )}
+          {step.fileAs?.renewalDateField && (
+            <Row label="Renewal date from" value={step.fileAs.renewalDateField} mono />
+          )}
           <div className="text-xs font-medium text-parchment/50">
             Fields read from the document
           </div>

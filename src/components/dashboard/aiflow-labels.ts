@@ -62,7 +62,7 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   email_extract:
     "Reads details from a recent email in a connected mailbox - used to backfill lead info (like a phone or address) from an alert email when a web page was slow or empty.",
   doc_extract:
-    "Reads the details you ask for (like a premium, a renewal date, or a policy number) out of the document attached to the triggering email - PDFs included. Optionally files the document into your Documents so your coworker can answer from it and share it later. If the email has no document, the step is skipped. Uses your monthly AI budget.",
+    "Reads the details you ask for (like a premium, a renewal date, or a policy number) out of the document attached to the triggering email - PDFs included. Optionally files the document into your Documents - and can file it as a record ON the customer's contact, with the extracted fields and renewal date attached, so renewal reminders fire automatically. If the email has no document, the step is skipped. Uses your monthly AI budget.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",

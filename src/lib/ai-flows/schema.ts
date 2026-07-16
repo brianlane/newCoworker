@@ -713,7 +713,7 @@ const nonBranchStepMembers = [
     id: stepId,
     type: z.literal("doc_extract"),
     // Template resolving to a document ref (an `email-attachments:<path>`
-    // value). Omitted = {{trigger.document}}.
+    // or `business-docs:<documentId>` value). Omitted = {{trigger.document}}.
     sourceTemplate: z.string().min(1).max(300).optional(),
     fields: z.array(extractFieldSchema).min(1).max(15),
     fileAs: z
@@ -721,7 +721,21 @@ const nonBranchStepMembers = [
         titleTemplate: z.string().min(1).max(200),
         // Who the filed document is retrievable by (default staff — filed
         // back-office paperwork must not leak into customer-facing answers).
-        audience: z.enum(["clients", "staff", "both"]).optional()
+        audience: z.enum(["clients", "staff", "both"]).optional(),
+        // ── Record sinks (all optional): make the filed copy a structured
+        // contact RECORD, not just a library document. ──
+        // Link to the contact whose phone this var holds — an earlier
+        // step's var OR one of THIS step's own extracted fields (the
+        // document itself often carries the customer's number). Scope rule
+        // enforced in validateDefinitionSemantics.
+        contactPhoneVar: varName.optional(),
+        // Stamp the extracted fields onto record_fields (carrier, premium,
+        // deductible, ... — whatever the step extracts).
+        recordFieldsFromExtraction: z.boolean().optional(),
+        // Parse this extracted field (must be one of the step's own field
+        // names) as the record's renewal_date, feeding the renewal sweep +
+        // escalation ladder.
+        renewalDateField: varName.optional()
       })
       .optional(),
     when: whenSchema.optional()
@@ -2028,6 +2042,29 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       } else if (step.input && step.documentTemplate) {
         issues.push(
           `Step "${step.id}" sets both "input" and "documentTemplate"; use only one.`
+        );
+      }
+    }
+
+    // doc_extract record sinks: the contact phone may come from an earlier
+    // step's var OR from one of THIS step's own extracted fields (the
+    // document often carries the customer's number — extraction precedes
+    // filing at runtime). The renewal date is extraction-only.
+    if (step.type === "doc_extract" && step.fileAs) {
+      const ownFields = new Set(step.fields.map((f) => f.name));
+      if (
+        step.fileAs.contactPhoneVar &&
+        !vars.has(step.fileAs.contactPhoneVar) &&
+        !ENGINE_VARS.has(step.fileAs.contactPhoneVar) &&
+        !ownFields.has(step.fileAs.contactPhoneVar)
+      ) {
+        issues.push(
+          `Step "${step.id}" links the filed document to {{vars.${step.fileAs.contactPhoneVar}}}, which no earlier step or extracted field produces.`
+        );
+      }
+      if (step.fileAs.renewalDateField && !ownFields.has(step.fileAs.renewalDateField)) {
+        issues.push(
+          `Step "${step.id}" reads the renewal date from "${step.fileAs.renewalDateField}", which is not one of the step's extracted fields.`
         );
       }
     }

@@ -30,6 +30,7 @@ type DocumentItem = {
   contact_id: string | null;
   renewal_date: string | null;
   assigned_employee_id: string | null;
+  record_fields: Record<string, string> | null;
   created_at: string;
 };
 
@@ -648,6 +649,23 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                               </option>
                             ))}
                           </select>
+                        </div>
+                      )}
+                      {doc.record_fields && Object.keys(doc.record_fields).length > 0 && (
+                        <div>
+                          <label className={labelClass}>
+                            Record fields (captured by your workflows)
+                          </label>
+                          <div className="flex flex-wrap gap-1.5">
+                            {Object.entries(doc.record_fields).map(([key, value]) => (
+                              <span
+                                key={key}
+                                className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/60"
+                              >
+                                <span className="text-parchment/40">{key}:</span> {value}
+                              </span>
+                            ))}
+                          </div>
                         </div>
                       )}
                       {members.length > 0 && (

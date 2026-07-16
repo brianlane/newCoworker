@@ -43,7 +43,13 @@ const bodySchema = z.object({
   fileAs: z
     .object({
       title: z.string().min(1).max(200),
-      audience: z.enum(["clients", "staff", "both"])
+      audience: z.enum(["clients", "staff", "both"]),
+      /** Resolved contact phone to link the filed record to. */
+      contactPhone: z.string().max(30).optional(),
+      /** Extracted field name carrying the contact phone. */
+      contactPhoneField: z.string().min(1).max(60).optional(),
+      recordFieldsFromExtraction: z.boolean().optional(),
+      renewalDateField: z.string().min(1).max(60).optional()
     })
     .optional()
 });
@@ -78,7 +84,8 @@ export async function POST(request: Request) {
       data: {
         vars: result.vars,
         filed: result.filed,
-        ...(result.fileError ? { fileError: result.fileError } : {})
+        ...(result.fileError ? { fileError: result.fileError } : {}),
+        ...(result.fileNotes ? { fileNotes: result.fileNotes } : {})
       }
     });
   } catch (err) {

@@ -72,6 +72,52 @@ describe("simulateTestAction", () => {
     expect(skipped.vars.renewal_date).toBe("");
   });
 
+  it("doc_extract record sinks report intent (link / stamp / renewal)", () => {
+    const withPhone = simulateTestAction(
+      {
+        kind: "doc_extract",
+        sourceRef: "email-attachments:inbound/m/0-quote.pdf",
+        fields: [{ name: "renewal_date" }],
+        fileTitle: "Quote",
+        fileContactPhone: "+16025551234",
+        fileRecordFields: true,
+        fileRenewalField: "renewal_date"
+      } as StepAction,
+      scope()
+    );
+    expect(withPhone).toMatchObject({
+      would_link_contact: "+16025551234",
+      would_stamp_record_fields: true,
+      would_set_renewal_from: "renewal_date"
+    });
+
+    const emptyPhone = simulateTestAction(
+      {
+        kind: "doc_extract",
+        sourceRef: "email-attachments:inbound/m/0-quote.pdf",
+        fields: [{ name: "x" }],
+        fileTitle: "Quote",
+        fileContactPhone: ""
+      } as StepAction,
+      scope()
+    );
+    expect(emptyPhone).toMatchObject({ would_link_contact: "(no phone value)" });
+
+    const fromField = simulateTestAction(
+      {
+        kind: "doc_extract",
+        sourceRef: "email-attachments:inbound/m/0-quote.pdf",
+        fields: [{ name: "customer_phone" }],
+        fileTitle: "Quote",
+        fileContactField: "customer_phone"
+      } as StepAction,
+      scope()
+    );
+    expect(fromField).toMatchObject({
+      would_link_contact: 'from extracted field "customer_phone"'
+    });
+  });
+
   it("simulates every send with its fully-rendered content", () => {
     expect(
       simulateTestAction(

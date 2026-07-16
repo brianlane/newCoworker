@@ -112,6 +112,7 @@ describe("exportDocumentsCsv", () => {
     renewal_date: "2027-03-01T23:59:59.999Z",
     expires_at: null,
     assigned_employee_id: "m-1",
+    record_fields: { carrier: "Acme Mutual", premium: "$1,240/yr" },
     created_at: "2026-07-01T00:00:00Z"
   };
 
@@ -132,7 +133,8 @@ describe("exportDocumentsCsv", () => {
       renewal_date: "2027-03-01",
       expires_at: "",
       assigned_employee_phone: "+16025559876",
-      notes: "Premium $1,240/yr"
+      notes: "Premium $1,240/yr",
+      record_fields: "carrier: Acme Mutual | premium: $1,240/yr"
     });
     expect(log[0].table).toBe("business_documents");
     expect(log[0].calls.find((c) => c.name === "not")?.args).toEqual(["contact_id", "is", null]);
@@ -141,7 +143,15 @@ describe("exportDocumentsCsv", () => {
   it("tolerates unresolvable ids and null data, and uses the default client", async () => {
     const { db } = makeDb([
       {
-        data: [{ ...docRow, contact_id: "c-gone", assigned_employee_id: "m-gone", expires_at: "2027-06-01T00:00:00Z" }],
+        data: [
+          {
+            ...docRow,
+            contact_id: "c-gone",
+            assigned_employee_id: "m-gone",
+            expires_at: "2027-06-01T00:00:00Z",
+            record_fields: null
+          }
+        ],
         error: null
       },
       { data: null, error: null },
@@ -155,7 +165,9 @@ describe("exportDocumentsCsv", () => {
       contact_phone: "",
       contact_name: "",
       assigned_employee_phone: "",
-      expires_at: "2027-06-01"
+      expires_at: "2027-06-01",
+      // Rows predating record_fields (or with none captured) export blank.
+      record_fields: ""
     });
   });
 
