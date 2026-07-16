@@ -1,6 +1,6 @@
 -- ---------------------------------------------------------------------------
 -- Version stamp note: the production ledger is ahead of real time (stamps
--- run through 20260811054047), and `supabase db push` refuses local files
+-- run through 20260811063723), and `supabase db push` refuses local files
 -- that sort before the remote max — so a real `date -u` stamp (2026-07-16)
 -- cannot deploy. This continues the ledger's sequence immediately after the
 -- current max, same convention as the pipelines migration before it.
