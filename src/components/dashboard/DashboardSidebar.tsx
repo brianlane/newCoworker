@@ -25,6 +25,7 @@ import {
   Globe,
   MessageCircleMore,
   MessagesSquare,
+  Megaphone,
   type LucideIcon
 } from "lucide-react";
 
@@ -47,6 +48,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   customers: Users,
   employees: UserCog,
   memory: Brain,
+  marketing: Megaphone,
   "import-export": ArrowDownUp,
   integrations: Plug,
   aiflows: Workflow,

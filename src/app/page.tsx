@@ -218,6 +218,30 @@ export default function HomePage() {
         ]}
       />
 
+      {/* Live demo line */}
+      <section className="mx-auto max-w-6xl px-6 pb-24">
+        <div className="rounded-2xl border border-claw-green/25 bg-claw-green/[0.05] p-8 text-center sm:p-10">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">
+            Try it right now
+          </p>
+          <h2 className="text-2xl font-bold text-parchment sm:text-3xl">
+            Don&apos;t take our word for it — call our AI coworker
+          </h2>
+          <p className="mx-auto mt-4 max-w-xl text-parchment/55">
+            Our own coworker answers this line 24/7. Ask it anything about New Coworker: what it
+            can do, pricing, how setup works. It can even text you a follow-up.
+          </p>
+          <a
+            href="tel:+16023131823"
+            className="mt-7 inline-flex items-center gap-3 rounded-lg bg-claw-green px-8 py-3.5 text-lg font-bold text-deep-ink transition-colors hover:bg-opacity-90"
+          >
+            <Phone className="h-5 w-5" aria-hidden />
+            +1 (602) 313-1823
+          </a>
+          <p className="mt-4 text-xs text-parchment/40">Demo calls are capped at 5 minutes.</p>
+        </div>
+      </section>
+
       {/* Features */}
       <section className="mx-auto max-w-6xl px-6 pb-24">
         <SectionHeading

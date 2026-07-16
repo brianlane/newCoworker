@@ -59,6 +59,13 @@
 #                               GEMINI_LIVE_ENABLED: when unset the deploy
 #                               keeps whatever is in /opt/voice-bridge/.env,
 #                               defaulting to "false" (off for staged rollout).
+#   GEMINI_LIVE_SESSION_MAX_MS — optional per-box Gemini Live session cap in
+#                               milliseconds (e.g. 300000 = the HQ demo line's
+#                               5-minute cap). Same preserve-existing-value
+#                               pattern as GEMINI_LIVE_ENABLED: when unset the
+#                               deploy keeps whatever is in the box's existing
+#                               /opt/voice-bridge/.env; blank means the
+#                               bridge's in-code default (14 minutes).
 #   VOICE_BRIDGE_SRC         — optional; path on VPS to copy bridge source from
 #                               (default: /opt/newcoworker-repo/vps/voice-bridge).
 #                               Operator is responsible for syncing the repo to
@@ -1777,6 +1784,22 @@ if [[ -f "${VOICE_BRIDGE_DEST}/docker-compose.yml" ]]; then
     # operator shell has no per-tenant origin.
     effective_bridge_media_wss_origin="${BRIDGE_MEDIA_WSS_ORIGIN:-${prev_bridge_media_wss_origin:-}}"
 
+    # Per-box Gemini Live session cap override (ms). Same preserve-existing
+    # ladder as GEMINI_LIVE_ENABLED: a box configured with a shorter cap (e.g.
+    # the HQ demo line's 5-minute cap) must keep it across fleet redeploys,
+    # which always rewrite this .env. Blank = the bridge's in-code default
+    # (14 minutes, vps/voice-bridge/src/index.ts).
+    prev_gemini_live_session_max_ms=""
+    if [[ -f "${VOICE_BRIDGE_DEST}/.env" ]]; then
+      prev_gemini_live_session_max_ms=$(
+        grep -E '^GEMINI_LIVE_SESSION_MAX_MS=' "${VOICE_BRIDGE_DEST}/.env" 2>/dev/null \
+          | tail -n 1 \
+          | cut -d= -f2- \
+          | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
+      ) || true
+    fi
+    effective_gemini_live_session_max_ms="${GEMINI_LIVE_SESSION_MAX_MS:-${prev_gemini_live_session_max_ms:-}}"
+
     cat > .env <<VBENV_EOF
 STREAM_URL_SIGNING_SECRET=${STREAM_URL_SIGNING_SECRET:-}
 SUPABASE_URL=${SUPABASE_URL:-}
@@ -1790,6 +1813,9 @@ GEMINI_LIVE_MODEL=${GEMINI_LIVE_MODEL:-gemini-3.1-flash-live-preview}
 VOICE_NAME=${VOICE_NAME:-}
 GEMINI_LIVE_ENABLED=${effective_gemini_live_enabled}
 VOICE_TRANSCRIPTION_ENABLED=${effective_voice_transcription_enabled}
+# Optional per-box session cap override (ms); blank = bridge default (14 min).
+# Preserved across redeploys — see the precedence ladder above.
+GEMINI_LIVE_SESSION_MAX_MS=${effective_gemini_live_session_max_ms}
 # TELNYX_API_KEY powers the bridge's Telnyx Call Control actions: the `end_call`
 # hangup tool, the `transfer_to_owner` warm transfer, and the missed-call SMS
 # fallback (see vps/voice-bridge/src/index.ts). Without it the bridge silently
