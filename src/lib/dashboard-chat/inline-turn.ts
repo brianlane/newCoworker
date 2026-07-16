@@ -212,6 +212,20 @@ export type InlineTurnDeps = {
   runActionTool?: typeof executeActionTool;
 };
 
+/**
+ * Action tools whose execution commits an IRREVERSIBLE side effect (a text
+ * leaves, a calendar mutates, a link is minted). find_slots is a pure read.
+ * Once one of these has RUN, a later model-step failure must never bounce
+ * the turn to the worker fallback — the worker would re-answer the same
+ * owner message and could re-send/re-book (Bugbot High on PR #668).
+ */
+const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
+  "send_sms",
+  "calendar_book_appointment",
+  "calendar_reschedule_appointment",
+  "calendar_cancel_appointment"
+]);
+
 /** Execute one requested tool call; returns the functionResponse payload. */
 async function executeToolCall(
   businessId: string,
@@ -220,7 +234,8 @@ async function executeToolCall(
   compileFlow: NonNullable<InlineTurnDeps["compileFlow"]>,
   lookupKnowledge: NonNullable<InlineTurnDeps["lookupKnowledge"]>,
   runActionTool: NonNullable<InlineTurnDeps["runActionTool"]>,
-  declaredActionTools: ReadonlySet<string>
+  declaredActionTools: ReadonlySet<string>,
+  sideEffects: { happened: boolean }
 ): Promise<unknown> {
   // Action tools (send_sms + calendar lifecycle): only dispatch names that
   // were actually DECLARED this turn — a Settings-disabled tool the model
@@ -229,6 +244,9 @@ async function executeToolCall(
     if (!declaredActionTools.has(call.name)) {
       return { ok: false, message: `unknown tool: ${call.name}` };
     }
+    // Marked BEFORE dispatch: even a failed send may have left the process
+    // (e.g. a timeout after Telnyx accepted), so err on the safe side.
+    if (SIDE_EFFECT_TOOLS.has(call.name)) sideEffects.happened = true;
     return runActionTool(businessId, { name: call.name, args: call.args });
   }
   if (call.name === "business_knowledge_lookup") {
@@ -371,6 +389,10 @@ export async function runInlineChatTurn(
 
   const drafts: InlineChatDraft[] = [];
   const texts: string[] = [];
+  // Set the moment a SIDE_EFFECT_TOOLS call is dispatched — from then on
+  // this turn must never resolve ok:false (the worker fallback would rerun
+  // the owner's message and duplicate the send/booking).
+  const sideEffects = { happened: false };
   const inputCharsEstimate = args.systemInstruction.length + args.userMessage.length;
 
   for (let step = 0; step < MAX_TOOL_STEPS; step++) {
@@ -416,10 +438,11 @@ export async function runInlineChatTurn(
       });
       // A wrap-up step that fails AFTER a tool already produced drafts must
       // not discard them — the compile spend is real and the draft is the
-      // deliverable. Degrade to the stock hand-off line instead of failing
-      // the turn (which would drop the cards and, on text turns, bounce the
-      // whole turn to the worker).
-      if (drafts.length > 0) break;
+      // deliverable. Same for a turn that already COMMITTED a side effect
+      // (a text sent, an appointment mutated): failing it would bounce the
+      // turn to the worker, which re-answers the same owner message and
+      // could re-send/re-book. Degrade to an honest stored line instead.
+      if (drafts.length > 0 || sideEffects.happened) break;
       return { ok: false, error: "model_failed", detail };
     } finally {
       clearTimeout(timer);
@@ -454,7 +477,8 @@ export async function runInlineChatTurn(
           compileFlow,
           lookupKnowledge,
           runActionTool,
-          declaredActionTools
+          declaredActionTools,
+          sideEffects
         )
       });
     }
@@ -465,15 +489,19 @@ export async function runInlineChatTurn(
   }
 
   const content = texts.join("\n\n").trim();
-  if (!content && drafts.length === 0) {
+  if (!content && drafts.length === 0 && !sideEffects.happened) {
     return { ok: false, error: "empty" };
   }
   return {
     ok: true,
-    // A tool-created draft with a silent final step still deserves a line.
+    // A tool-created draft (or committed side effect) with a silent final
+    // step still deserves an honest line — and must not fail the turn,
+    // which would re-run it on the worker.
     content:
       content ||
-      "Done — I've prepared a draft for you. Open it from the card below to review and save.",
+      (drafts.length > 0
+        ? "Done — I've prepared a draft for you. Open it from the card below to review and save."
+        : "Done — the requested action went through, but I hit a hiccup writing my summary. Check the Texts page or your calendar to confirm the details."),
     drafts
   };
 }

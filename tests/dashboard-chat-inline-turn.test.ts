@@ -572,6 +572,57 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     expect(fr.functionResponse.response.result.messageId).toBe("msg-9");
   });
 
+  it("never bounces to the worker after a side-effecting tool ran — wrap-up FAILURE degrades to an honest line", async () => {
+    // Bugbot High (PR #668): an inline failure after send_sms already ran
+    // would re-enqueue the turn on the worker, which re-answers the same
+    // owner message and could text/book AGAIN.
+    const runActionTool = vi.fn(async () => ({ ok: true, messageId: "msg-1" }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.content).toContain("Check the Texts page");
+  });
+
+  it("never bounces to the worker after a side-effecting tool ran — an EMPTY wrap-up degrades too", async () => {
+    const runActionTool = vi.fn(async () => ({ ok: true }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("calendar_cancel_appointment", { attendeePhone: "+15145188192" })
+      )
+      .mockResolvedValueOnce({ text: null, functionCalls: [], modelContent: null, usage: null });
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.content).toContain("requested action went through");
+  });
+
+  it("a pure READ tool (calendar_find_slots) does NOT suppress the worker fallback", async () => {
+    const runActionTool = vi.fn(async () => ({ ok: true, data: { slots: [] } }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("calendar_find_slots", {}))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    // Nothing irreversible happened — the worker fallback stays available.
+    expect(res).toEqual({
+      ok: false,
+      error: "model_failed",
+      detail: "gemini_http_500:wrap-up died"
+    });
+  });
+
   it("fails CLOSED on an action tool the model calls but that was not declared", async () => {
     const runActionTool = vi.fn();
     const chatStep = vi
