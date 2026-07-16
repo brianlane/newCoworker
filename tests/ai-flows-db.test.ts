@@ -560,11 +560,24 @@ describe("enqueueAiFlowRun re-entry gate", () => {
         select: () => ({ single: async () => ({ data: RUN_ROW, error: null }) })
       };
     };
+    // The re-entry gate's contact identity expansion: no matching contacts,
+    // so the caller's key passes through unchanged.
+    const contactsBuilder: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "or", "limit"]) {
+      contactsBuilder[m] = vi.fn(() => contactsBuilder);
+    }
+    contactsBuilder.then = (resolve: (v: unknown) => unknown) =>
+      Promise.resolve({ data: [], error: null }).then(resolve);
     return {
       inserts,
       calls,
       db: {
-        from: (table: string) => (table === "ai_flows" ? flowsBuilder : runsBuilder)
+        from: (table: string) =>
+          table === "ai_flows"
+            ? flowsBuilder
+            : table === "contacts"
+              ? contactsBuilder
+              : runsBuilder
       }
     };
   }

@@ -283,7 +283,7 @@ async function evaluateAndEnqueueAiFlows(
       // Re-entry gate: a flow with allowReentry=false never re-enrolls a
       // sender who already has a (non-test) run. Suppression is NOT granted
       // by a blocked enqueue — no run was queued to own the reply.
-      if (await reentryBlocked(supabase, m.id, m.def, ctx.from)) continue;
+      if (await reentryBlocked(supabase, businessId, m.id, m.def, ctx.from ?? "")) continue;
       const { error: runErr } = await supabase.from("ai_flow_runs").insert({
         flow_id: m.id,
         business_id: businessId,

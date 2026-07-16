@@ -318,10 +318,14 @@ export async function enqueueAiFlowRun(
 
   // Re-entry gate (options.allowReentry === false): a contact who already
   // has a (non-test) run of this flow is not enrolled again. Test runs
-  // bypass the gate entirely — testing must always work.
+  // bypass the gate entirely — testing must always work. The trigger sender
+  // (phone OR email, depending on channel) is the identity key; the gate
+  // expands it through the contact records for cross-channel matching.
   if (!isTestModeTrigger(input.trigger) && definition) {
     const from = typeof input.trigger.from === "string" ? input.trigger.from : "";
-    if (await reentryBlocked(db, input.flowId, definition, from)) return null;
+    if (await reentryBlocked(db, input.businessId, input.flowId, definition, from)) {
+      return null;
+    }
   }
 
   // Drip pacing (definition.drip): stagger this run intervalMinutes after

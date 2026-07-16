@@ -319,9 +319,11 @@ describe("enqueueContactEventRuns", () => {
         options: { allowReentry: false }
       }
     };
-    // Prior (non-test) run exists → no insert.
+    // Prior (non-test) run exists → no insert. (The gate first expands the
+    // contact's identities through the contacts table, then scans runs.)
     const blocked = makeDb([
       { data: [gatedFlow], error: null },
+      { data: [], error: null }, // contact identity expansion
       { data: [{ id: "r0", context: { trigger: { from: "+16025550111" } } }], error: null }
     ]);
     expect(await enqueueContactEventRuns(blocked.db, BIZ, input())).toBe(0);
@@ -330,14 +332,16 @@ describe("enqueueContactEventRuns", () => {
     // No prior run → enrolls normally.
     const first = makeDb([
       { data: [gatedFlow], error: null },
+      { data: [], error: null }, // contact identity expansion
       { data: [], error: null }, // prior-run lookup
       { data: null, error: null } // insert
     ]);
     expect(await enqueueContactEventRuns(first.db, BIZ, input())).toBe(1);
 
-    // A prior TEST run doesn't count.
+    // A residual prior TEST run doesn't count.
     const tested = makeDb([
       { data: [gatedFlow], error: null },
+      { data: [], error: null }, // contact identity expansion
       {
         data: [{ id: "r0", context: { trigger: { from: "+16025550111", test_mode: true } } }],
         error: null
