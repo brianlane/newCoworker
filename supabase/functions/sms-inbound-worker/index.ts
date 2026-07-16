@@ -1099,6 +1099,25 @@ serve(async (req: Request) => {
           text: userText
         });
         if (operatorReply) {
+          // Cache BEFORE the send path can run (same contract as the Rowboat
+          // branch below): a Telnyx-send retry must re-deliver the CACHED
+          // reply, never re-invoke the operator turn — that turn may have
+          // committed tools (send_sms, run_aiflow) that a re-run would
+          // duplicate. A failed cache write aborts (→ retry) rather than
+          // sending uncached; rare DB-write errors accept the wasted re-run
+          // exactly like the Rowboat path documents.
+          const { error: opCacheErr } = await supabase
+            .from("sms_inbound_jobs")
+            .update({
+              rowboat_reply_cached: operatorReply,
+              customer_e164: fromE164,
+              updated_at: new Date().toISOString()
+            })
+            .eq("id", job.id);
+          if (opCacheErr) {
+            console.error("owner operator reply cache", opCacheErr);
+            throw new Error(`rowboat_reply_cache_failed: ${opCacheErr.message}`);
+          }
           reply = operatorReply;
           // No Rowboat call this turn — keep any existing thread binding
           // untouched for the customer-path turns that still use it.
