@@ -907,7 +907,17 @@ async function defaultGeminiSummarize(
         systemInstruction: WEBSITE_INGEST_SUMMARY_SYSTEM_PROMPT,
         userText: prompt,
         temperature: 0.2,
+        // Gemini 3.x hidden thinking counts against maxOutputTokens. At this
+        // 1500 cap with default (dynamic-high) thinking, gemini-3.5-flash —
+        // reachable here via GEMINI_ROWBOAT_MODEL, which resolveWebsiteSummary
+        // GeminiModel passes through (only 1.x/3.1-era ids are coerced) —
+        // spent 1126 tokens thinking and truncated the summary at MAX_TOKENS
+        // (probed 2026-07-16). `minimal` hands the whole budget to the
+        // summary (probe: STOP, 0 thought tokens, fuller output, fastest) —
+        // a structured summarization needs no chain-of-thought. Same guard
+        // pattern as knowledge-tools (#658); 2.5-era models reject the field.
         maxOutputTokens: 1500,
+        ...(/^gemini-3/i.test(model) ? { thinkingLevel: "minimal" as const } : {}),
         signal: controller.signal
       });
       if (meterBusinessId) {
