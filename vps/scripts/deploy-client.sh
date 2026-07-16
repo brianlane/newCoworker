@@ -250,7 +250,10 @@ fi
 # container serve both the SMS dispatcher agent (Ollama) and the voice_task
 # agent (Gemini).
 LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
-GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.1-flash"
+# gemini-3.5-flash: verified live on the Gemini API (2026-07-15). The old
+# default "gemini-3.1-flash" does NOT exist on the API (404 on both
+# :generateContent and the OpenAI-compat route the llm-router uses).
+GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.5-flash"
 
 # Owner-dashboard chat model (OwnerCoworker agent only — SMS's Coworker agent
 # stays on the local Ollama model for $0 marginal cost). The owner surface

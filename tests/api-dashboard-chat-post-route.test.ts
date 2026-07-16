@@ -695,6 +695,22 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
     expect(inlineArgs.systemInstruction).toContain("OWNER MODE");
     expect(inlineArgs.userMessage).toBe("[Dashboard] hi");
+    // Knowledge-tool gate: read from Settings (mocked disabled here) and
+    // forwarded so the inline turn only declares the tool when allowed.
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(
+      BIZ,
+      "dashboard",
+      "business_knowledge_lookup"
+    );
+    expect(inlineArgs.knowledgeToolEnabled).toBe(false);
+  });
+
+  it("forwards an enabled knowledge-tool toggle to the inline turn", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "what's our renewal process?" }));
+    expect(res.status).toBe(200);
+    const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(inlineArgs.knowledgeToolEnabled).toBe(true);
   });
 
   it("returns creation drafts from the inline turn to the client", async () => {
