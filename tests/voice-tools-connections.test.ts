@@ -80,6 +80,25 @@ describe("resolveVoiceConnection", () => {
     expect(res?.providerConfigKey).toBe("outlook");
   });
 
+  it("resolveEmailConnection accepts the broad google workspace connection", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("outlook"),
+      fakeRow("google")
+    ]);
+    const res = await resolveEmailConnection(businessId);
+    expect(res?.provider).toBe("google");
+    expect(res?.providerConfigKey).toBe("google");
+  });
+
+  it("resolveEmailConnection prefers a dedicated gmail connection over the broad google one", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google"),
+      fakeRow("gmail")
+    ]);
+    const res = await resolveEmailConnection(businessId);
+    expect(res?.providerConfigKey).toBe("gmail");
+  });
+
   it("resolveCalendarConnection accepts google-calendar", async () => {
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
     const res = await resolveCalendarConnection(businessId);
@@ -213,6 +232,7 @@ describe("isEmailProviderConfigKey / providerFromKey", () => {
   it("recognizes exactly the sendable mailbox keys", () => {
     expect(isEmailProviderConfigKey("google-mail")).toBe(true);
     expect(isEmailProviderConfigKey("gmail")).toBe(true);
+    expect(isEmailProviderConfigKey("google")).toBe(true);
     expect(isEmailProviderConfigKey("outlook")).toBe(true);
     expect(isEmailProviderConfigKey("google-calendar")).toBe(false);
     expect(isEmailProviderConfigKey("slack")).toBe(false);
@@ -220,6 +240,7 @@ describe("isEmailProviderConfigKey / providerFromKey", () => {
   it("maps keys to providers", () => {
     expect(providerFromKey("google-mail")).toBe("google");
     expect(providerFromKey("gmail")).toBe("google");
+    expect(providerFromKey("google")).toBe("google");
     expect(providerFromKey("outlook")).toBe("microsoft");
   });
 });

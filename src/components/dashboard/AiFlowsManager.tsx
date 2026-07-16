@@ -74,7 +74,7 @@ function aiFlowSortValue(row: AiFlowRow, field: string): string | number | null 
 // Mirrors EMAIL_PROVIDER_CONFIG_KEYS in src/lib/voice-tools/connections.ts —
 // that module is server-only (it pulls in the service-role Supabase client),
 // so the client bundle keeps its own copy of these three string keys.
-const EMAIL_CONNECTION_KEYS = ["google-mail", "gmail", "outlook"];
+const EMAIL_CONNECTION_KEYS = ["google-mail", "gmail", "google", "outlook"];
 
 /** A connected owner mailbox the editor can offer as an email "From". */
 export type EmailConnectionOption = { id: string; label: string };
