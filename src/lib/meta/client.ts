@@ -499,6 +499,15 @@ export async function sendWhatsAppMessage(
 }
 
 /**
+ * Cloud API constraint on template body parameters: no runs of
+ * whitespace/newlines, 1024 chars max. Exported so the deliver helper can
+ * store EXACTLY what the recipient read in the transcript.
+ */
+export function sanitizeWhatsAppTemplateParam(text: string): string {
+  return text.replace(/\s+/g, " ").trim().slice(0, 1024);
+}
+
+/**
  * Send an approved template message (the out-of-window path). Variables
  * map positionally onto the template's {{1}}, {{2}}, ... body slots.
  */
@@ -528,7 +537,7 @@ export async function sendWhatsAppTemplate(
               parameters: template.bodyParams.map((text) => ({
                 type: "text",
                 // Cloud API rejects params with newlines/tabs or >1024 chars.
-                text: text.replace(/\s+/g, " ").trim().slice(0, 1024)
+                text: sanitizeWhatsAppTemplateParam(text)
               }))
             }
           ]

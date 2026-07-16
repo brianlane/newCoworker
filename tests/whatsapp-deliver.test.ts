@@ -92,6 +92,18 @@ describe("toWaId", () => {
   it("returns E.164 digits without the plus, null for garbage", () => {
     expect(toWaId("(555) 123-4567")).toBe("15551234567");
     expect(toWaId("12")).toBeNull();
+    expect(toWaId("   ")).toBeNull();
+  });
+
+  it("accepts international digits with or without the plus (inbound wa_id round-trip)", () => {
+    // Meta's stored psid is plus-less international digits — sending back
+    // to it must work as-is.
+    expect(toWaId("447911123456")).toBe("447911123456");
+    expect(toWaId("+44 7911 123456")).toBe("447911123456");
+    expect(toWaId("+15551234567")).toBe("15551234567");
+    // E.164 never starts with 0; over-long runs are rejected.
+    expect(toWaId("07911123456")).toBeNull();
+    expect(toWaId("1234567890123456")).toBeNull();
   });
 });
 
@@ -312,6 +324,37 @@ describe("deliverWhatsApp", () => {
     });
     await deliverWhatsApp(INPUT, blankLang);
     expect(vi.mocked(blankLang.sendTemplate).mock.calls[0][3].language).toBe("en_US");
+  });
+
+  it("re-checks the window before committing to the template path (first-message race)", async () => {
+    // First read: stale. Second read (right before the send): the
+    // customer's first message just landed — the window is open, so the
+    // send flips to free-form text instead of a billed template.
+    const deps = makeDeps({
+      getConversation: vi
+        .fn()
+        .mockResolvedValueOnce(conversation({ last_user_message_at: "2026-07-10T00:00:00Z" }))
+        .mockResolvedValueOnce(conversation())
+    });
+    const result = await deliverWhatsApp(INPUT, deps);
+    expect(result).toMatchObject({ ok: true, via: "text" });
+    expect(deps.getConversation).toHaveBeenCalledTimes(2);
+    expect(deps.sendTemplate).not.toHaveBeenCalled();
+  });
+
+  it("stores the sanitized template copy in the transcript (what the recipient actually read)", async () => {
+    const deps = makeDeps({
+      getConversation: vi.fn(async () => null),
+      fetchBusinessName: vi.fn(async () => "Acme  \n Plumbing")
+    });
+    await deliverWhatsApp(
+      { ...INPUT, text: "line one\nline two\t\ttabbed" },
+      deps
+    );
+    const appended = vi.mocked(deps.appendMessage).mock.calls[0][0];
+    expect(appended.content).toContain("Acme Plumbing");
+    expect(appended.content).toContain("line one line two tabbed");
+    expect(appended.content).not.toContain("\n");
   });
 
   it("treats a conversation read failure as a closed window (template path)", async () => {

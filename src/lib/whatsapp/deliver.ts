@@ -25,6 +25,7 @@ import {
   type WhatsAppConnectionRow
 } from "@/lib/db/whatsapp-connections";
 import {
+  sanitizeWhatsAppTemplateParam,
   sendWhatsAppMessage,
   sendWhatsAppTemplate,
   WHATSAPP_STOCK_TEMPLATES
@@ -36,7 +37,6 @@ import {
   messengerWindowOpen
 } from "@/lib/messenger/db";
 import { getBusiness } from "@/lib/db/businesses";
-import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import { logger } from "@/lib/logger";
 
 export type DeliverWhatsAppAudience = "owner" | "contact";
@@ -58,10 +58,24 @@ const AUDIENCE_TEMPLATE: Record<DeliverWhatsAppAudience, string> = {
   contact: "nc_contact_followup"
 };
 
-/** wa_id form Cloud API expects: E.164 digits without the plus. */
+/**
+ * wa_id form the Cloud API expects: E.164 digits without the plus.
+ *
+ * NOT NANP-only: inbound webhooks store the customer's wa_id as full
+ * international digits (often plus-less), and AiFlow vars/MCP callers
+ * pass those digits straight back. Any 8-15 digit non-zero-leading run
+ * is accepted as an international number; a bare 10-digit NANP number
+ * keeps the +1 convenience prepend.
+ */
 export function toWaId(phone: string): string | null {
-  const e164 = coerceOwnerPhoneToE164(phone);
-  return e164 ? e164.replace(/^\+/, "") : null;
+  const trimmed = phone.trim();
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits || digits.startsWith("0")) return null;
+  // Bare 10 digits without an explicit country code reads as US/Canada
+  // (matches the SMS surfaces' NANP coercion).
+  if (digits.length === 10 && !trimmed.startsWith("+")) return `1${digits}`;
+  if (digits.length >= 8 && digits.length <= 15) return digits;
+  return null;
 }
 
 export type DeliverWhatsAppDeps = {
@@ -132,19 +146,29 @@ export async function deliverWhatsApp(
   // Window check: an existing conversation whose last inbound message is
   // under 24h old permits free-form text. No conversation (or a stale
   // one) means the template path.
-  let conversation = await getConversation(
-    input.businessId,
-    connection.phone_number_id,
-    "whatsapp",
-    waId
-  ).catch((err) => {
-    logger.warn("deliverWhatsApp: conversation read failed; assuming closed window", {
-      businessId: input.businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return null;
-  });
-  const windowOpen = conversation ? messengerWindowOpen(conversation, now()) : false;
+  const readConversation = () =>
+    getConversation(input.businessId, connection.phone_number_id, "whatsapp", waId).catch(
+      (err) => {
+        logger.warn("deliverWhatsApp: conversation read failed; assuming closed window", {
+          businessId: input.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return null;
+      }
+    );
+  let conversation = await readConversation();
+  let windowOpen = conversation ? messengerWindowOpen(conversation, now()) : false;
+  if (!windowOpen) {
+    // Narrow the read→send race: a customer's first inbound message can
+    // open the window between the read above and the send below — a
+    // second read right before committing to the billed template path
+    // flips those sends back to free (and unbilled) text.
+    const fresh = await readConversation();
+    if (fresh) {
+      conversation = fresh;
+      windowOpen = messengerWindowOpen(fresh, now());
+    }
+  }
 
   let via: "text" | "template";
   let messageId: string | null;
@@ -179,10 +203,12 @@ export async function deliverWhatsApp(
     }
     const businessName = (await fetchBusinessName(input.businessId)) ?? "your business";
     via = "template";
-    // The transcript stores what the recipient actually read.
+    // The transcript stores what the recipient ACTUALLY read: the same
+    // whitespace-collapse + length cap the Cloud API client applies to
+    // the body parameters.
     transcriptText = stock.bodyText
-      .replace("{{1}}", businessName)
-      .replace("{{2}}", text);
+      .replace("{{1}}", sanitizeWhatsAppTemplateParam(businessName))
+      .replace("{{2}}", sanitizeWhatsAppTemplateParam(text));
     try {
       const sent = await sendTemplate(connection.phone_number_id, connection.accessToken, waId, {
         name: templateName,
