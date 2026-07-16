@@ -181,12 +181,34 @@ export async function GET(request: Request) {
     var lastMsgId = 0;
     var polling = false;
     var pendingJob = null;
+    var meta = null;        // loader-collected visitor context (host page)
+    var currentPage = null; // the page the visitor is on right now
 
     try { session = JSON.parse(sessionStorage.getItem(storeKey) || "null"); } catch (e) { session = null; }
 
     document.getElementById("closeBtn").addEventListener("click", function () {
       if (window.parent !== window) window.parent.postMessage({ type: "ncw:close" }, "*");
     });
+
+    // Visitor context arrives from the LOADER on the host page (the only
+    // place that can see the page URL / referrer / campaign params). Only
+    // the direct parent is trusted as a sender; the payload is validated
+    // server-side regardless. Later ncw:meta payloads REPLACE the stored
+    // one — the loader re-sends on every open, so a session started on the
+    // visitor's second page carries that page, not a frozen first snapshot.
+    window.addEventListener("message", function (ev) {
+      if (ev.source !== window.parent) return;
+      var d = ev.data;
+      if (!d) return;
+      if (d.type === "ncw:meta" && d.meta && typeof d.meta === "object") {
+        meta = d.meta;
+        if (typeof d.meta.page === "string") currentPage = d.meta.page;
+      }
+      if (d.type === "ncw:page" && typeof d.page === "string") {
+        currentPage = d.page;
+      }
+    });
+    if (window.parent !== window) window.parent.postMessage({ type: "ncw:ready" }, "*");
 
     function el(role, text) {
       var d = document.createElement("div");
@@ -224,7 +246,7 @@ export async function GET(request: Request) {
     function startSession(contact) {
       return api("/api/widget/session", {
         method: "POST",
-        body: JSON.stringify({ key: cfg.key, contact: contact })
+        body: JSON.stringify({ key: cfg.key, contact: contact, meta: meta || undefined })
       }).then(function (r) {
         if (r.status === 200 && r.json && r.json.ok && r.json.data.status === "ok") {
           session = { token: r.json.data.sessionToken, sessionId: r.json.data.sessionId };
@@ -343,7 +365,7 @@ export async function GET(request: Request) {
         }
         api("/api/widget/message", {
           method: "POST",
-          body: JSON.stringify({ key: cfg.key, message: text, clientMessageId: clientMessageId })
+          body: JSON.stringify({ key: cfg.key, message: text, clientMessageId: clientMessageId, page: currentPage || undefined })
         }).then(function (r) {
           if (r.status === 401) {
             clearSession();

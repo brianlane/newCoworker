@@ -19,6 +19,7 @@ import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { mintWebchatSessionToken } from "@/lib/webchat/keys";
 import { createWebchatSession } from "@/lib/webchat/db";
 import { resolveWidgetContext } from "@/lib/webchat/service";
+import { buildVisitorMeta, webchatClientMetaSchema } from "@/lib/webchat/visitor-meta";
 
 export const dynamic = "force-dynamic";
 
@@ -34,7 +35,11 @@ const bodySchema = z.object({
       email: z.string().trim().email().max(320).optional(),
       phone: z.string().trim().max(32).optional()
     })
-    .optional()
+    .optional(),
+  // Passive context the loader collected on the host page (page, referrer,
+  // UTM, language, screen, timezone, returning, time-on-page). Untrusted;
+  // a malformed blob must not block the chat, so it parses best-effort.
+  meta: z.unknown().optional()
 });
 
 export async function POST(request: Request) {
@@ -69,12 +74,26 @@ export async function POST(request: Request) {
       }
     }
 
-    const token = mintWebchatSessionToken();
-    const session = await createWebchatSession(ctx.business.id, token.hash, {
-      name: contact.name ?? null,
-      email: contact.email ?? null,
-      phone: contact.phone ?? null
+    // Passive visitor metadata: IP-derived coarse geo + device summary
+    // (the IP itself is never stored) plus whatever valid client meta the
+    // loader sent. Best-effort by design.
+    const clientMeta = webchatClientMetaSchema.safeParse(body.meta ?? {});
+    const visitorMeta = buildVisitorMeta({
+      headers: request.headers,
+      clientMeta: clientMeta.success ? clientMeta.data : null
     });
+
+    const token = mintWebchatSessionToken();
+    const session = await createWebchatSession(
+      ctx.business.id,
+      token.hash,
+      {
+        name: contact.name ?? null,
+        email: contact.email ?? null,
+        phone: contact.phone ?? null
+      },
+      visitorMeta
+    );
 
     return successResponse({
       status: "ok",

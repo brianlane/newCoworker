@@ -44,6 +44,28 @@ import {
   WEBCHAT_MAX_MESSAGE_CHARS,
   WEBCHAT_RESEND_TAIL_MESSAGES
 } from "@/lib/webchat/prompt";
+import { appendVisitorPage, parseVisitorMeta } from "@/lib/webchat/visitor-meta";
+import { updateWebchatSessionMeta, type WebchatSessionRow } from "@/lib/webchat/db";
+
+/**
+ * Best-effort page-trail append — runs on normal sends AND idempotent
+ * replays (a retry whose original POST died before the trail write must
+ * still record the page). Never throws: the turn is already safe.
+ */
+async function recordVisitorPage(
+  session: Pick<WebchatSessionRow, "id" | "visitor_meta">,
+  page: string | undefined
+): Promise<void> {
+  if (!page) return;
+  const next = appendVisitorPage(parseVisitorMeta(session.visitor_meta ?? null), page);
+  if (!next) return;
+  await updateWebchatSessionMeta(session.id, next).catch((err) => {
+    logger.warn("widget/message: visitor page-trail update failed", {
+      sessionId: session.id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+}
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
@@ -62,7 +84,10 @@ const bodySchema = z.object({
   // and RETRIES a network-failed POST with the same value, so a turn that
   // actually persisted server-side is replayed (original message + job)
   // instead of duplicated.
-  clientMessageId: z.string().uuid().optional()
+  clientMessageId: z.string().uuid().optional(),
+  // The page the visitor is on when sending — appended to the session's
+  // visitor_meta page trail (deduped/capped). Best-effort, never blocking.
+  page: z.string().trim().max(2000).optional()
 });
 
 export async function POST(request: Request) {
@@ -115,6 +140,7 @@ export async function POST(request: Request) {
       if (existing) {
         const existingJob = await getWebchatJobForUserMessage(existing.id);
         const history = await listWebchatMessages(session.id);
+        await recordVisitorPage(session, body.page);
         return successResponse({
           jobId: existingJob?.id ?? null,
           userMessageId: existing.id,
@@ -190,6 +216,7 @@ export async function POST(request: Request) {
         if (winner) {
           const winnerJob = await getWebchatJobForUserMessage(winner.id);
           const history = await listWebchatMessages(session.id);
+          await recordVisitorPage(session, body.page);
           return successResponse({
             jobId: winnerJob?.id ?? null,
             userMessageId: winner.id,
@@ -226,6 +253,9 @@ export async function POST(request: Request) {
     }
 
     await touchWebchatSession(session.id);
+
+    // Page-trail append — best-effort, after the turn is safely enqueued.
+    await recordVisitorPage(session, body.page);
 
     return successResponse({
       jobId: job.id,
