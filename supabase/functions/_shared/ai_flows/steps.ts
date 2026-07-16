@@ -1099,10 +1099,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           action: { kind: "set_vars", vars: { [saveAs]: NO_REPLY_SENTINEL, [marker]: "1" } }
         };
       }
-      const timeoutMinutes = Math.min(
-        Math.max(1, Math.round(step.timeoutMinutes ?? 1440)),
-        MAX_WAIT_MINUTES
-      );
+      // Dynamic timeout wins when it renders to a positive number; an empty
+      // or unparseable render (e.g. a math step's "not_a_number" sentinel)
+      // falls back to the static timeoutMinutes / the 1440 default.
+      let timeoutRaw = step.timeoutMinutes ?? 1440;
+      if (step.timeoutMinutesTemplate) {
+        const rendered = renderTemplate(step.timeoutMinutesTemplate, scope).trim();
+        const parsed = rendered ? Number(rendered) : NaN;
+        if (Number.isFinite(parsed) && parsed > 0) timeoutRaw = parsed;
+      }
+      const timeoutMinutes = Math.min(Math.max(1, Math.round(timeoutRaw)), MAX_WAIT_MINUTES);
       return {
         ok: true,
         action: { kind: "wait_for_reply", from: e164, saveAs, marker, timeoutMinutes }

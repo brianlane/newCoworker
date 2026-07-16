@@ -1009,6 +1009,13 @@ export type FlowStep =
       saveAs?: string;
       /** How long to wait before the no-reply branch. Default 1440 (24h), max 43200 (30 days). */
       timeoutMinutes?: number;
+      /**
+       * Dynamic timeout: a template rendering to whole minutes (e.g.
+       * "{{vars.report_wait_minutes}}" from a math step). A positive render
+       * wins; anything else (empty, "not_a_number") falls back to
+       * timeoutMinutes. Clamped to 1..43200 like the static field.
+       */
+      timeoutMinutesTemplate?: string;
       when?: StepCondition;
     }
   | {

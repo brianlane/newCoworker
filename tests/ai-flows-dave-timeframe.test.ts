@@ -7,7 +7,9 @@ import {
 import { parseAiFlowDefinition } from "../src/lib/ai-flows/schema";
 import {
   parseClaimWithTimeframe,
-  MAX_CLAIM_TIMEFRAME_LEN
+  parseEtaMinutes,
+  MAX_CLAIM_TIMEFRAME_LEN,
+  MAX_ETA_MINUTES
 } from "../supabase/functions/_shared/ai_flows/claim_timeframe";
 
 describe("parseClaimWithTimeframe", () => {
@@ -33,6 +35,40 @@ describe("parseClaimWithTimeframe", () => {
     const long = `5, ${"x".repeat(500)}`;
     const parsed = parseClaimWithTimeframe(long);
     expect(parsed?.timeframe.length).toBe(MAX_CLAIM_TIMEFRAME_LEN);
+  });
+});
+
+describe("parseEtaMinutes", () => {
+  it("parses minute durations", () => {
+    expect(parseEtaMinutes("20 min")).toBe(20);
+    expect(parseEtaMinutes("20min")).toBe(20);
+    expect(parseEtaMinutes("15 mins")).toBe(15);
+    expect(parseEtaMinutes("30 minutes")).toBe(30);
+    expect(parseEtaMinutes("10m")).toBe(10);
+  });
+  it("parses hour durations to minutes", () => {
+    expect(parseEtaMinutes("1 hour")).toBe(60);
+    expect(parseEtaMinutes("2 hours")).toBe(120);
+    expect(parseEtaMinutes("1hr")).toBe(60);
+    expect(parseEtaMinutes("1.5 hrs")).toBe(90);
+    expect(parseEtaMinutes("2h")).toBe(120);
+  });
+  it("sums combined durations", () => {
+    expect(parseEtaMinutes("1 hr 30 min")).toBe(90);
+  });
+  it("treats a bare number as minutes", () => {
+    expect(parseEtaMinutes("45")).toBe(45);
+    expect(parseEtaMinutes(" 45 ")).toBe(45);
+  });
+  it("returns 0 for vague or empty timeframes (the consuming wait keeps its base window)", () => {
+    expect(parseEtaMinutes("")).toBe(0);
+    expect(parseEtaMinutes("tonight")).toBe(0);
+    expect(parseEtaMinutes("after work")).toBe(0);
+    expect(parseEtaMinutes("asap")).toBe(0);
+  });
+  it("never exceeds the 30-day ceiling", () => {
+    expect(parseEtaMinutes("999999")).toBe(MAX_ETA_MINUTES);
+    expect(parseEtaMinutes("9999 hours")).toBe(MAX_ETA_MINUTES);
   });
 });
 
