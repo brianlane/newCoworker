@@ -731,6 +731,54 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     });
   });
 
+  it("a successful run_aiflow is side-effect pinned — wrap-up failure keeps ok:true with the flow note", async () => {
+    // Bugbot High (PR #687): an enqueued automation run is committed; a
+    // fallback rerun would enqueue the same flow twice.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      runId: "run-9",
+      flowName: "Proposal send + follow-up"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("run_aiflow", { flow: "Proposal" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain('Automation run started ("Proposal send + follow-up")');
+    }
+
+    // Nameless result (defensive arm): the note still lands, without quotes.
+    const namelessTool = vi.fn(async () => ({ ok: true, runId: "run-10" }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("run_aiflow", { flow: "Proposal" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: namelessTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) expect(res2.content).toContain("Automation run started — it can be watched");
+  });
+
+  it("omits the creation tools when includeCreationTools is false (no builder UI on the surface)", async () => {
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(
+      baseArgs({ actionToolGates: ALL_ON, includeCreationTools: false }),
+      { chatStep }
+    );
+    const declared = chatStep.mock.calls[0][0].tools.map((t) => t.name);
+    expect(declared).not.toContain("create_aiflow");
+    expect(declared).not.toContain("create_agent");
+    expect(declared).toContain("business_knowledge_lookup");
+    expect(declared).toContain("send_sms");
+  });
+
   it("a FAILED side-effect tool (ok:false) does NOT suppress the worker fallback either", async () => {
     // Bugbot Medium (2nd round): a cleanly-refused send (opt-out, quota,
     // validation) committed nothing — pinning the turn would suppress a

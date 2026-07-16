@@ -122,8 +122,18 @@ export async function POST(request: Request) {
       const messages = await listMessagesForCustomer(body.businessId, body.ownerE164, {
         limit: OWNER_SMS_TAIL_MESSAGES
       });
-      transcript = messages
-        .slice(-OWNER_SMS_TAIL_MESSAGES)
+      // The in-flight inbound job is usually already stored, so the current
+      // message would otherwise appear twice (transcript + user turn) —
+      // drop trailing inbound copies of it.
+      const tail = messages.slice(-OWNER_SMS_TAIL_MESSAGES);
+      while (
+        tail.length > 0 &&
+        tail[tail.length - 1].direction === "inbound" &&
+        tail[tail.length - 1].content.trim() === body.text.trim()
+      ) {
+        tail.pop();
+      }
+      transcript = tail
         .map(
           (m) => `[${m.direction === "inbound" ? "Owner" : "Coworker"}]: ${m.content.slice(0, 500)}`
         )
@@ -155,6 +165,10 @@ export async function POST(request: Request) {
       systemInstruction,
       userMessage: `[SMS from owner] ${body.text}`,
       knowledgeToolEnabled,
+      // No builder UI on SMS to hand a draft card to — creation tools off,
+      // so compile work can't succeed into a void (the model points the
+      // owner to dashboard chat / /dashboard/aiflows for authoring instead).
+      includeCreationTools: false,
       actionToolGates: {
         send_sms: smsToolEnabled,
         calendar_find_slots: calFindEnabled,

@@ -511,6 +511,29 @@ describe("list_aiflows / run_aiflow", () => {
     }
   });
 
+  it("refuses to run a VOICE flow (real-time call path; the async worker can't execute it)", async () => {
+    const voiceFlows = [
+      {
+        id: "77777777-aaaa-4aaa-8aaa-777777777777",
+        name: "Inbound call qualifier",
+        enabled: true,
+        definition: { trigger: { channel: "voice" } }
+      }
+    ] as never[];
+    const enqueueFlowRun = vi.fn();
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => voiceFlows) as never,
+      enqueueFlowRun: enqueueFlowRun as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "run_aiflow", args: { flow: "Inbound call qualifier" } },
+      deps
+    );
+    expect(res).toMatchObject({ ok: false, message: expect.stringContaining("voice flow") });
+    expect(enqueueFlowRun).not.toHaveBeenCalled();
+  });
+
   it("refuses to run a DISABLED flow, with the review pointer", async () => {
     const enqueueFlowRun = vi.fn();
     const deps = happyDeps({

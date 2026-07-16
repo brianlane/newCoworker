@@ -540,6 +540,15 @@ export async function executeActionTool(
             message: `"${flow.name}" is DISABLED, so it cannot be run. Tell the owner it's awaiting their review — they can enable it at /dashboard/aiflows, then ask again.`
           };
         }
+        // Voice flows run on the real-time call path, not the async worker —
+        // same refusal as the dashboard "Run now" endpoint (an enqueued run
+        // would only fail while the model tells the owner it started).
+        if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {
+          return {
+            ok: false,
+            message: `"${flow.name}" is a voice flow — it runs when a call comes in and cannot be started manually. Tell the owner to place a call from the trigger number to test it.`
+          };
+        }
         const run = await enqueueFlowRun({
           businessId,
           flowId: flow.id,

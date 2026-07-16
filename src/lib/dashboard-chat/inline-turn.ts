@@ -224,7 +224,10 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "send_sms",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
-  "calendar_cancel_appointment"
+  "calendar_cancel_appointment",
+  // A run_aiflow enqueue is committed the moment it lands in the queue —
+  // a fallback rerun would enqueue the same automation twice.
+  "run_aiflow"
 ]);
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
@@ -256,6 +259,10 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
     return typeof r.data?.rescheduleLink === "string"
       ? `Reschedule link created (the appointment is NOT moved until the attendee picks the new time): ${r.data.rescheduleLink}`
       : "The appointment was rescheduled.";
+  }
+  if (name === "run_aiflow") {
+    const flowName = (r as { flowName?: unknown }).flowName;
+    return `Automation run started${typeof flowName === "string" ? ` ("${flowName}")` : ""} — it can be watched at /dashboard/aiflows.`;
   }
   return "The appointment was canceled.";
 }
@@ -401,6 +408,12 @@ export async function runInlineChatTurn(
      * (e.g. older callers/tests) ⇒ no action tools declared.
      */
     actionToolGates?: ActionToolGates | null;
+    /**
+     * Declare the create_aiflow / create_agent draft tools (default true).
+     * Surfaces with no builder UI to hand a draft card to — owner-over-SMS —
+     * pass false so compile work can't succeed into a void.
+     */
+    includeCreationTools?: boolean;
   },
   deps: InlineTurnDeps = {}
 ): Promise<InlineTurnResult> {
@@ -419,8 +432,10 @@ export async function runInlineChatTurn(
   const declaredActionTools: ReadonlySet<string> = new Set(
     actionDeclarations.map((d) => d.name)
   );
+  const creationTools = args.includeCreationTools === false ? [] : CREATION_TOOLS;
   const tools = [
-    ...(args.knowledgeToolEnabled === false ? CREATION_TOOLS : [...CREATION_TOOLS, KNOWLEDGE_TOOL]),
+    ...creationTools,
+    ...(args.knowledgeToolEnabled === false ? [] : [KNOWLEDGE_TOOL]),
     ...actionDeclarations
   ];
 
