@@ -110,11 +110,12 @@ describe("injectThoughtSignatures", () => {
   it("injects the cached signature by tool-call id", () => {
     const cache = createSignatureCache();
     cache.set("tc-1", "sig-real");
+    const assistantMsg = { role: "assistant", content: null, tool_calls: [toolCall("tc-1")] };
     const body = {
       model: "gemini-3.5-flash",
       messages: [
         { role: "user", content: "weather?" },
-        { role: "assistant", content: null, tool_calls: [toolCall("tc-1")] },
+        assistantMsg,
         { role: "tool", tool_call_id: "tc-1", content: "{}" }
       ]
     };
@@ -125,7 +126,7 @@ describe("injectThoughtSignatures", () => {
       "sig-real"
     );
     // Original body untouched (copy-on-write).
-    expect(body.messages[1].tool_calls[0].extra_content).toBeUndefined();
+    expect(assistantMsg.tool_calls[0]?.extra_content).toBeUndefined();
   });
 
   it("falls back to the placeholder when the cache has nothing", () => {
