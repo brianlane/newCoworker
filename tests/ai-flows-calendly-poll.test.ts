@@ -342,6 +342,55 @@ describe("fetchCalendlyCandidateEvents", () => {
         { request: refuseListing.fn }
       )
     ).rejects.toThrow("calendar_not_connected");
+
+    // Non-Error window failures are wrapped into a real Error on rethrow.
+    const throwString = requestStub({
+      events: () => {
+        throw "calendly string blast";
+      }
+    });
+    await expect(
+      fetchCalendlyCandidateEvents(
+        {
+          businessId: BIZ,
+          conn: CONN,
+          nowMs: NOW,
+          windows: { createdScan: true, startHorizonMinutes: null, endBackMinutes: null, canceledScan: false },
+          dueFilter: () => true
+        },
+        { request: throwString.fn }
+      )
+    ).rejects.toThrow("calendly string blast");
+  });
+
+  it("keeps earlier windows' events when a later window listing fails (per-window isolation)", async () => {
+    // Bugbot Medium: a canceled-window refusal must not throw away the due
+    // start-window events already collected this tick.
+    let call = 0;
+    const { fn } = requestStub({
+      events: () => {
+        call += 1;
+        if (call === 1) return { collection: [START_DUE] };
+        return null; // second window refused
+      },
+      invitees: () => ({ collection: [] })
+    });
+    const res = await fetchCalendlyCandidateEvents(
+      {
+        businessId: BIZ,
+        conn: CONN,
+        nowMs: NOW,
+        windows: {
+          createdScan: false,
+          startHorizonMinutes: 120,
+          endBackMinutes: null,
+          canceledScan: true
+        },
+        dueFilter: () => true
+      },
+      { request: fn }
+    );
+    expect(res.events.map((e) => e.id)).toEqual(["DUE1"]);
   });
 
   it("flags overflow on a full page and tolerates malformed rows / missing collections", async () => {

@@ -290,15 +290,34 @@ export async function fetchCalendlyCandidateEvents(
     }
   };
 
+  // Per-window isolation (workspace-path parity): one window's failure must
+  // not drop the events earlier windows already collected — log and keep
+  // going; dedupe keys make the retry on the next tick benign. Only when
+  // EVERY window failed and nothing was collected does the not-connected
+  // contract fire, so the poller's business-level log still says why.
+  let windowFailure: unknown = null;
+  const listSafely = async (label: string, params: Record<string, string>): Promise<void> => {
+    try {
+      await list(params);
+    } catch (err) {
+      windowFailure = err;
+      logger.warn("calendly poll: window listing failed", {
+        businessId,
+        window: label,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
+
   if (windows.createdScan) {
-    await list({
+    await listSafely("created", {
       status: "active",
       min_start_time: iso(nowMs),
       max_start_time: iso(nowMs + CALENDLY_CREATED_SCAN_DAYS * dayMs)
     });
   }
   if (windows.startHorizonMinutes !== null) {
-    await list({
+    await listSafely("start", {
       status: "active",
       min_start_time: iso(nowMs),
       max_start_time: iso(nowMs + windows.startHorizonMinutes * minuteMs)
@@ -307,7 +326,7 @@ export async function fetchCalendlyCandidateEvents(
   if (windows.endBackMinutes !== null) {
     // The listing filters on START time; reach back far enough that a long
     // event whose END is only now due is still listed.
-    await list({
+    await listSafely("end", {
       status: "active",
       min_start_time: iso(
         nowMs - (windows.endBackMinutes + CALENDLY_END_MAX_EVENT_MINUTES) * minuteMs
@@ -316,11 +335,14 @@ export async function fetchCalendlyCandidateEvents(
     });
   }
   if (windows.canceledScan) {
-    await list({
+    await listSafely("canceled", {
       status: "canceled",
       min_start_time: iso(nowMs - CALENDLY_CANCELED_SCAN_BACK_DAYS * dayMs),
       max_start_time: iso(nowMs + CALENDLY_CANCELED_SCAN_FORWARD_DAYS * dayMs)
     });
+  }
+  if (collected.length === 0 && windowFailure !== null) {
+    throw windowFailure instanceof Error ? windowFailure : new Error(String(windowFailure));
   }
 
   const due = collected.filter(args.dueFilter);
