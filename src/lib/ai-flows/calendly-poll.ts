@@ -104,6 +104,13 @@ type RawInvitee = {
   text_reminder_number?: string;
   reschedule_url?: string;
   cancel_url?: string;
+  /**
+   * Set (an object with uri/created_at) when the HOST marked this invitee a
+   * no-show in Calendly; null/absent otherwise. Surfaced as an
+   * "invitee no-show: yes" context line so an event_end flow can gate a
+   * recovery text on it ("sorry we missed each other…" — KYP Ads' brief).
+   */
+  no_show?: { uri?: string; created_at?: string } | null;
   questions_and_answers?: Array<{ question?: string; answer?: string }>;
 };
 
@@ -204,6 +211,14 @@ export function applyInviteeContext(ev: CalendarEventInput, invitees: RawInvitee
     }
     if (typeof invitee.cancel_url === "string" && invitee.cancel_url) {
       lines.push(`cancel link: ${invitee.cancel_url}`);
+    }
+    // Host-marked no-show (Calendly sets `no_show` to an object when marked).
+    // The line only appears when marked, so a `contains "invitee no-show: yes"`
+    // trigger condition cleanly gates no-show recovery flows; note the
+    // event_end due window means the host must mark the no-show within
+    // roughly followMinutes (+ the poll lookback) of the event's end.
+    if (invitee.no_show !== null && invitee.no_show !== undefined) {
+      lines.push("invitee no-show: yes");
     }
     for (const qa of invitee.questions_and_answers ?? []) {
       const q = typeof qa?.question === "string" ? qa.question.trim() : "";
