@@ -35,6 +35,7 @@ import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
 import { PrivacyPanel } from "@/components/admin/PrivacyPanel";
 import { DeletedItemsPanel } from "@/components/admin/DeletedItemsPanel";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
+import { NotificationMutesPanel } from "@/components/admin/NotificationMutesPanel";
 import { AiFlowRunsCard } from "@/components/admin/AiFlowRunsCard";
 import { HardwareSizePanel } from "@/components/admin/HardwareSizePanel";
 import { ReleaseVpsPoolButton } from "@/components/admin/ReleaseVpsPoolButton";
@@ -653,6 +654,7 @@ export default async function BusinessDetailPage({
           forwardToE164={telnyxSettings?.forward_to_e164 ?? null}
           transferEnabled={telnyxSettings?.transfer_enabled ?? true}
           smsFallbackEnabled={telnyxSettings?.sms_fallback_enabled ?? true}
+          bridgeStaleAlertMuted={telnyxSettings?.bridge_stale_alert_muted ?? false}
           defaultAreaCode={process.env.TELNYX_DEFAULT_AREA_CODE ?? "602"}
           defaultState={process.env.TELNYX_DEFAULT_STATE ?? "AZ"}
         />
@@ -671,6 +673,20 @@ export default async function BusinessDetailPage({
           />
         </Card>
       )}
+
+      {/* Admin dashboard mutes — fleet-feed noise control for this tenant */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Admin notification mutes
+        </h2>
+        <NotificationMutesPanel
+          key={`${businessId}:${business.admin_mute_activity ?? false}:${business.admin_mute_errors ?? false}:${business.admin_mute_alerts ?? false}`}
+          businessId={businessId}
+          initialMuteActivity={business.admin_mute_activity ?? false}
+          initialMuteErrors={business.admin_mute_errors ?? false}
+          initialMuteAlerts={business.admin_mute_alerts ?? false}
+        />
+      </Card>
 
       {/* Unified system logs: rowboat / ollama / gemini / telnyx / aiflow / workers */}
       <Card>

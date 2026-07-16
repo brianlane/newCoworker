@@ -48,6 +48,8 @@ export type BusinessTelnyxSettingsRow = {
   forward_to_e164: string | null;
   transfer_enabled: boolean;
   sms_fallback_enabled: boolean;
+  /** When true, the voice-bridge health cron skips the stale-heartbeat alert (intentional no-bridge tenants). */
+  bridge_stale_alert_muted: boolean;
   /** When true, owner/team texts get an internal-assistant reply (staff mode). */
   staff_sms_assistant_reply_enabled: boolean;
   /** When true, also relay owner/team texts to the owner cell. */
@@ -165,6 +167,7 @@ export type UpsertBusinessTelnyxSettingsInput = {
   forwardToE164?: string | null;
   transferEnabled?: boolean;
   smsFallbackEnabled?: boolean;
+  bridgeStaleAlertMuted?: boolean;
 };
 
 export async function upsertBusinessTelnyxSettings(
@@ -184,7 +187,8 @@ export async function upsertBusinessTelnyxSettings(
     ["bridgeMediaPath", "bridge_media_path"],
     ["forwardToE164", "forward_to_e164"],
     ["transferEnabled", "transfer_enabled"],
-    ["smsFallbackEnabled", "sms_fallback_enabled"]
+    ["smsFallbackEnabled", "sms_fallback_enabled"],
+    ["bridgeStaleAlertMuted", "bridge_stale_alert_muted"]
   ];
   const row: Record<string, unknown> = {
     business_id: input.businessId,

@@ -2,6 +2,7 @@ import { listBusinesses } from "@/lib/db/businesses";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
+import { getAdminMutedBusinessIds } from "@/lib/db/admin-mutes";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { getFleetCalendarMonthUsageTotals } from "@/lib/db/usage";
@@ -35,12 +36,16 @@ function timeAgo(dateStr: string): string {
 }
 
 export default async function AdminDashboardPage() {
+  // Per-business admin mutes (flipped on each business's admin page) filter
+  // the fleet-wide feeds below — fetched first so a muted tenant can't eat
+  // the feed row limits.
+  const muted = await getAdminMutedBusinessIds();
   const [businesses, alerts, recentLogs, systemErrors, vpsInventory, enterpriseDeals, monthUsage, aiSpendMicros] =
     await Promise.all([
       listBusinesses(),
-      getRecentAlertsAll(10),
-      getRecentLogsAll(8),
-      listSystemLogErrorsAll(15),
+      getRecentAlertsAll(10, undefined, { excludeBusinessIds: muted.alerts }),
+      getRecentLogsAll(8, undefined, { excludeBusinessIds: muted.activity }),
+      listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
       listVpsInventory(),
       listActiveEnterpriseDeals(),
       // Best effort, like the AI spend read: a transient usage-read failure

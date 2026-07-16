@@ -134,13 +134,27 @@ export type SystemLogWithBusiness = SystemLogRow & {
 /** Fleet-wide newest-first error feed (admin dashboard). */
 export async function listSystemLogErrorsAll(
   limit = 30,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  options?: {
+    /**
+     * Businesses hidden from the feed (admin notification mutes — see
+     * src/lib/db/admin-mutes.ts). Platform rows (business_id null) always
+     * stay: a bare NOT IN would drop them because `NULL NOT IN (...)` is
+     * never true in SQL, hence the explicit is-null arm.
+     */
+    excludeBusinessIds?: string[];
+  }
 ): Promise<SystemLogWithBusiness[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
+  let q = db
     .from("system_logs")
     .select(`${LOG_COLS},businesses(name)`)
-    .eq("level", "error")
+    .eq("level", "error");
+  const excluded = options?.excludeBusinessIds ?? [];
+  if (excluded.length > 0) {
+    q = q.or(`business_id.is.null,business_id.not.in.(${excluded.join(",")})`);
+  }
+  const { data, error } = await q
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(Math.max(1, Math.min(limit, 200)));
