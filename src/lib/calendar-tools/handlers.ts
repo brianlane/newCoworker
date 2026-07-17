@@ -476,7 +476,14 @@ export async function bookCalendarAppointment(
     return {
       ok: true,
       detail: "already_booked",
-      data: { eventId: claim.eventId, deduplicated: true }
+      data: {
+        eventId: claim.eventId,
+        deduplicated: true,
+        // The prompts key invite language off inviteEmail, and a timeout
+        // retry lands here — the original create ran the same email merge
+        // on the same args, so the merged email IS what rode the event.
+        inviteEmail: args.attendeeEmail?.trim() || null
+      }
     };
   }
   if (claim?.kind === "in_flight") {

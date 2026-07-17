@@ -1034,13 +1034,37 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     expect(result).toEqual({
       ok: true,
       detail: "already_booked",
-      data: { eventId: "evt-prior", deduplicated: true }
+      data: { eventId: "evt-prior", deduplicated: true, inviteEmail: null }
     });
     expect(vi.mocked(resolveCalendarConnection)).not.toHaveBeenCalled();
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
     expect(vi.mocked(confirmBookingDedupe)).not.toHaveBeenCalled();
     expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
+  });
+
+  it("a duplicate claim carries the merged inviteEmail (a timeout retry must keep invite language honest)", async () => {
+    // Bugbot Medium (PR #705): the already_booked short-circuit omitted
+    // inviteEmail, so a retry-after-timeout confirmed the slot while the
+    // prompts (which key invite talk off inviteEmail) withheld the invite.
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "duplicate", eventId: "evt-prior" });
+
+    // Explicit model-supplied email.
+    const explicit = await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "spoken@x.co" },
+      "+15551230000"
+    );
+    expect(explicit.data).toMatchObject({ inviteEmail: "spoken@x.co" });
+
+    // Backfilled from the stored contact — the same merge the original
+    // create ran, so it reflects what actually rode the event.
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: "Joe",
+      email: "stored@x.co"
+    } as never);
+    const backfilled = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(backfilled.data).toMatchObject({ inviteEmail: "stored@x.co" });
   });
 
   it("an in-flight claim refuses without touching the provider", async () => {
