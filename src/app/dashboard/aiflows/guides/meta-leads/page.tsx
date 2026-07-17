@@ -30,7 +30,7 @@ export default async function MetaLeadsGuidePage() {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const ctx = await resolveActiveBusinessContext(user, db);
+  const ctx = await resolveActiveBusinessContext(user);
   const activeBusinessId =
     ctx.businessId && ctx.role && can(ctx.role, "manage_aiflows") ? ctx.businessId : null;
   // API keys are a manage_billing (owner) capability — managers get the

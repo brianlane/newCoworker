@@ -20,6 +20,7 @@
  * newest membership business. Null when the login can access nothing.
  */
 
+import { cache } from "react";
 import { cookies } from "next/headers";
 import type { AuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -133,11 +134,7 @@ export type ActiveBusinessContext = {
   accessible: AccessibleBusiness[];
 };
 
-/**
- * Resolve which business the dashboard should show for this login.
- * See the module docblock for the precedence rules.
- */
-export async function resolveActiveBusinessContext(
+async function resolveActiveBusinessContextUncached(
   user: AuthUser,
   client?: SupabaseClient
 ): Promise<ActiveBusinessContext> {
@@ -155,6 +152,39 @@ export async function resolveActiveBusinessContext(
   const fromCookie = cookieId ? accessible.find((b) => b.businessId === cookieId) : undefined;
   const chosen = fromCookie ?? accessible[0];
   return { businessId: chosen.businessId, role: chosen.role, accessible };
+}
+
+/**
+ * Per-request memo of the clientless resolution. The dashboard layout AND
+ * the page it wraps both resolve the active business on every navigation
+ * (the layout for the switcher/sidebar, the page for its own queries), which
+ * previously cost 2 identical DB round-trips (businesses + business_members)
+ * per render pass. React `cache()` keys on the `user` object, and every
+ * caller gets the SAME object within a request because `getAuthUser` is
+ * itself `cache()`d — so layout + page + nested components share one
+ * resolution. Outside a request scope (unit tests) `cache` is a pass-through
+ * and does not memoize, same as `getAuthUser`.
+ */
+const resolveActiveBusinessContextCached = cache(
+  async (user: AuthUser): Promise<ActiveBusinessContext> =>
+    resolveActiveBusinessContextUncached(user)
+);
+
+/**
+ * Resolve which business the dashboard should show for this login.
+ * See the module docblock for the precedence rules.
+ *
+ * Calls WITHOUT an explicit client are memoized per request (see
+ * `resolveActiveBusinessContextCached`); passing a client (tests, callers
+ * with their own transaction/client discipline) bypasses the memo because
+ * the injected client may legitimately change the result.
+ */
+export async function resolveActiveBusinessContext(
+  user: AuthUser,
+  client?: SupabaseClient
+): Promise<ActiveBusinessContext> {
+  if (client) return resolveActiveBusinessContextUncached(user, client);
+  return resolveActiveBusinessContextCached(user);
 }
 
 /**

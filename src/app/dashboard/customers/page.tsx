@@ -41,7 +41,7 @@ export default async function DashboardCustomersPage() {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const ctx = await resolveActiveBusinessContext(user, db);
+  const ctx = await resolveActiveBusinessContext(user);
   const activeBusinessId = ctx.businessId;
   const { data: businesses } = await db
     .from("businesses")
@@ -75,25 +75,30 @@ export default async function DashboardCustomersPage() {
     );
   }
 
-  // One unified list: every contact (customers + manual contacts) lives on the
-  // contacts table now, so a single query is the whole directory — no separate
-  // "other contacts" list and no cross-dedupe needed.
-  // The full directory (up to the cap) so Smart List chip counts evaluate
-  // over every contact, not just the recently active — an overdue/never-
-  // contacted list is exactly the rows a recency-ordered page would drop.
-  const contacts = await listCustomerMemories(business.id, { limit: MAX_LIST_LIMIT });
+  // Four independent reads, one round-trip wall-clock (previously
+  // sequential):
+  // - contacts: one unified list — every contact (customers + manual
+  //   contacts) lives on the contacts table now, so a single query is the
+  //   whole directory. The full directory (up to the cap) so Smart List
+  //   chip counts evaluate over every contact, not just the recently
+  //   active — an overdue/never-contacted list is exactly the rows a
+  //   recency-ordered page would drop.
+  // - duplicatePairs: same-email duplicate suggestions (owner-confirmed
+  //   merges). Best-effort: a detection failure must never take down the
+  //   directory page.
+  // - segments: saved Smart Lists (one-click segments). Best-effort: the
+  //   directory page must render even if the segments read fails.
+  // - teamMembers: owner badges + the "owned by" filter show the roster
+  //   member's NAME; one roster read covers every row (id → name).
+  const [contacts, duplicatePairs, segments, teamMembers] = await Promise.all([
+    listCustomerMemories(business.id, { limit: MAX_LIST_LIMIT }),
+    findDuplicateContactPairs(business.id).catch(() => []),
+    listContactSegments(business.id, db).catch(() => []),
+    listTeamMembers(business.id, db).catch(() => [])
+  ]);
   const directoryClipped = contacts.length >= MAX_LIST_LIMIT;
-  // Same-email duplicate suggestions (owner-confirmed merges). Best-effort:
-  // a detection failure must never take down the directory page.
-  const duplicatePairs = await findDuplicateContactPairs(business.id).catch(() => []);
-  // Saved Smart Lists (one-click segments). Best-effort: the directory page
-  // must render even if the segments read fails.
-  const segments = await listContactSegments(business.id, db).catch(() => []);
   // Smart List administration is manager+, same bar as the pipeline boards.
   const canManageSegments = ctx.role === "owner" || ctx.role === "manager";
-  // Owner badges + the "owned by" filter show the roster member's NAME; one
-  // roster read covers every row (id → name).
-  const teamMembers = await listTeamMembers(business.id, db).catch(() => []);
   const memberNameById = new Map(teamMembers.map((m) => [m.id, m.name]));
   // Owner/employee/manual-label names win over the stored display_name, so the
   // owner's own number reads "Brian Lane (owner)" instead of a bare number, and

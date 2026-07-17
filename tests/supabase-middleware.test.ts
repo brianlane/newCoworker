@@ -279,6 +279,30 @@ describe("proxy", () => {
     expect(res.status).toBe(200);
   });
 
+  it("skips Supabase entirely on public marketing pages (no client, no getClaims)", async () => {
+    mockSupabaseWithUser(null);
+    for (const path of ["/", "/pricing", "/features", "/faq", "/onboard"]) {
+      const req = makeRequest(path);
+      const res = await proxy(req);
+      expect(res.status).toBe(200);
+    }
+    expect(createServerClient).not.toHaveBeenCalled();
+  });
+
+  it("still runs the Supabase session refresh on session-consuming routes", async () => {
+    // /oauth/consent and /contact read the session in their server
+    // components (read-only cookies there), so the middleware must keep
+    // refreshing for them — otherwise rotated refresh tokens are lost.
+    for (const path of ["/dashboard", "/api/business/status", "/oauth/consent", "/contact"]) {
+      vi.mocked(createServerClient).mockClear();
+      const client = mockSupabaseWithUser({ id: "u-1", email: "user@test.com" });
+      const req = makeRequest(path);
+      await proxy(req);
+      expect(createServerClient).toHaveBeenCalledTimes(1);
+      expect(client.auth.getClaims).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("returns response when env vars missing (no supabase)", async () => {
     delete process.env.NEXT_PUBLIC_SUPABASE_URL;
     const req = makeRequest("/about");

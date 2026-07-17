@@ -31,7 +31,7 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   if (!user?.email) redirect("/login?redirectTo=/dashboard/tasks");
 
   const db = await createSupabaseServiceClient();
-  const ctx = await resolveActiveBusinessContext(user, db);
+  const ctx = await resolveActiveBusinessContext(user);
 
   if (!ctx.businessId) {
     return (

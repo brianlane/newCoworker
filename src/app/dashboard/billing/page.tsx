@@ -93,8 +93,37 @@ export default async function BillingPage(props: {
     .limit(1);
 
   const business = businesses?.[0] ?? null;
-  const subscription = business ? await getSubscription(business.id) : null;
-  const snapshot = business ? await getVoiceBillingSnapshotForBusiness(business.id) : null;
+
+  // Everything below keys only on the business id, so it all runs as ONE
+  // parallel batch instead of the previous sequential awaits (subscription →
+  // snapshot → … → offers was 4+ serial round-trips). The SMS + Gemini usage
+  // meters are read-only display (enforcement lives in the workers / RPCs)
+  // and are individually non-fatal for the page.
+  const [subscription, snapshot, smsMonthUsed, smsBonusRemaining, chatSpend, allCustomOffers] =
+    business
+      ? await Promise.all([
+          getSubscription(business.id),
+          getVoiceBillingSnapshotForBusiness(business.id),
+          getCalendarMonthUsageTotals(business.id, db)
+            .then((t) => t.sms_sent)
+            .catch(() => null),
+          getSmsBonusTextsRemaining(business.id, db),
+          getChatSpendSnapshotForBusiness(
+            business.id,
+            db,
+            (business.tier ?? null) as PlanTier | null
+          ).catch(() => null),
+          // Custom admin-authored offers (bespoke price, single business).
+          listWhiteGloveOffers(business.id, db)
+        ])
+      : [
+          null,
+          null,
+          null,
+          0,
+          null,
+          [] as Awaited<ReturnType<typeof listWhiteGloveOffers>>
+        ];
 
   // Prefer `business.customer_profile_id` over `subscription.customer_profile_id`
   // when the subscription is in a terminal state (canceled or wiped),
@@ -131,24 +160,6 @@ export default async function BillingPage(props: {
   const smsPacks = listSmsBonusPacks();
   const chatPacks = listChatCreditPacks();
 
-  // SMS + Gemini usage meters (read-only display; enforcement lives in the
-  // workers / RPCs). Each read is independent and non-fatal for the page.
-  let smsMonthUsed: number | null = null;
-  let smsBonusRemaining = 0;
-  let chatSpend: Awaited<ReturnType<typeof getChatSpendSnapshotForBusiness>> | null = null;
-  if (business) {
-    [smsMonthUsed, smsBonusRemaining, chatSpend] = await Promise.all([
-      getCalendarMonthUsageTotals(business.id, db)
-        .then((t) => t.sms_sent)
-        .catch(() => null),
-      getSmsBonusTextsRemaining(business.id, db),
-      getChatSpendSnapshotForBusiness(
-        business.id,
-        db,
-        (business.tier ?? null) as PlanTier | null
-      ).catch(() => null)
-    ]);
-  }
   const smsMonthlyCap = business?.tier
     ? getTierLimits(
         business.tier as PlanTier,
@@ -211,9 +222,8 @@ export default async function BillingPage(props: {
     prioritySupportUntilIso
   );
   const bookingUrl = getWhiteGloveBookingUrl();
-  // Custom admin-authored offers (bespoke price, single business). Only OPEN
-  // ones are payable; paid/revoked rows never render here.
-  const allCustomOffers = business ? await listWhiteGloveOffers(business.id, db) : [];
+  // Only OPEN custom offers are payable; paid/revoked rows never render here
+  // (fetched in the parallel batch above).
   const customWhiteGloveOffers = allCustomOffers.filter((o) => o.status === "open");
   // A business that has ALREADY received white-glove service — any fixed
   // package, or a paid custom offer — never sees the package upsell again
