@@ -33,6 +33,7 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   // Staff Task Center: every lead in motion (active workflow + lead state +
   // goals + collected info + response reasoning). Staff-visible.
   { key: "tasks", label: "Tasks", href: "/dashboard/tasks" },
+  { key: "analytics", label: "Analytics", href: "/dashboard/analytics" },
   { key: "chat", label: "Chat", href: "/dashboard/chat" },
   { key: "calls", label: "Calls", href: "/dashboard/calls" },
   { key: "messages", label: "Texts", href: "/dashboard/messages" },
@@ -54,9 +55,8 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "emails", label: "Emails", href: "/dashboard/emails" },
   { key: "customers", label: "Contacts", href: "/dashboard/customers" },
   { key: "employees", label: "Employees", href: "/dashboard/employees" },
-  { key: "analytics", label: "Analytics", href: "/dashboard/analytics" },
-  { key: "marketing", label: "Marketing", href: "/dashboard/marketing" },
   { key: "memory", label: "Memory", href: "/dashboard/memory" },
+  { key: "marketing", label: "Marketing", href: "/dashboard/marketing" },
   { key: "import-export", label: "Import / Export", href: "/dashboard/import-export" },
   { key: "integrations", label: "Integrations", href: "/dashboard/integrations" },
   { key: "billing", label: "Billing", href: "/dashboard/billing" },

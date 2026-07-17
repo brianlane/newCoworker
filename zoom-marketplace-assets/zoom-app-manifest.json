@@ -1,0 +1,149 @@
+{
+  "display_information" : {
+    "display_name" : "New Coworker OAuth",
+    "description" : "Get appointment updates, booking confirmations & customer support from New Coworker.",
+    "long_description" : "<p>New Coworker is an AI coworker for small businesses: it answers your phone, replies to SMS and email, and books appointments for your customers around the clock. Connecting Zoom lets your Coworker schedule Zoom meetings directly on your account. When a customer asks for a video appointment, your Coworker finds an open slot, creates the Zoom meeting, and sends the customer the invite link automatically. It can also update or cancel meetings when plans change. Requires a New Coworker subscription (newcoworker.com).</p>",
+    "company_name" : "Newcoworker LLC",
+    "discover_type" : "LISTED",
+    "install_type" : "APP_DIRECTORY",
+    "marketplace_categories" : [
+      "scheduling_calendar"
+    ],
+    "industry_vertical" : "other",
+    "privacy_url" : "https://newcoworker.com/privacy",
+    "terms_url" : "https://newcoworker.com/terms",
+    "support_url" : "https://newcoworker.com/contact",
+    "doc_url" : "https://newcoworker.com/integrations/zoom",
+    "config_url" : "https://newcoworker.com/dashboard/integrations"
+  },
+  "oauth_information" : {
+    "usage" : "USER_OPERATION",
+    "development_redirect_uri" : "https://www.newcoworker.com/api/integrations/zoom/callback",
+    "production_redirect_uri" : "https://www.newcoworker.com/api/integrations/zoom/callback",
+    "oauth_allow_list" : [
+      "https://www.newcoworker.com/api/integrations/zoom/callback",
+      "https://www.newcoworker.com/oauth-callback",
+      "https://api.nango.dev/oauth/callback"
+    ],
+    "strict_mode" : false,
+    "subdomain_strict_mode" : false,
+    "scopes" : [
+      {
+        "scope" : "meeting:write:meeting",
+        "optional" : false
+      },
+      {
+        "scope" : "user:read:user",
+        "optional" : false
+      },
+      {
+        "scope" : "meeting:update:meeting",
+        "optional" : false
+      },
+      {
+        "scope" : "meeting:read:list_meetings",
+        "optional" : false
+      },
+      {
+        "scope" : "meeting:read:meeting",
+        "optional" : false
+      },
+      {
+        "scope" : "meeting:delete:meeting",
+        "optional" : false
+      },
+      {
+        "scope" : "meeting:write:invite_links",
+        "optional" : false
+      }
+    ],
+    "scope_description" : "New Coworker is an AI assistant for small businesses. It uses these meeting scopes to schedule, update, and cancel Zoom meetings on behalf of the connected business owner (e.g. booking customer appointments captured by phone, SMS, or email) and to create invite links it can send to customers. The user scope is used to identify the connected account. Meeting data is used only to fulfill the owner’s scheduling requests; any stored data is kept in an RLS-protected, encrypted database and is deleted on request."
+  },
+  "developer_information" : {
+    "contact_details" : [
+      {
+        "contact_name" : "Brian Lane",
+        "contact_email" : "team@newcoworker.com",
+        "role" : "Developer"
+      }
+    ]
+  },
+  "features" : {
+    "products" : [ ],
+    "development_home_uri" : "",
+    "production_home_uri" : "",
+    "in_client_feature" : {
+      "zoom_app_api" : {
+        "enable" : false,
+        "zoom_app_apis" : [ ]
+      },
+      "guest_mode" : {
+        "enable" : false,
+        "enable_test_guest_mode" : false
+      },
+      "in_client_oauth" : {
+        "enable" : false
+      },
+      "collaborate_mode" : {
+        "enable" : false,
+        "enable_screen_sharing" : false,
+        "enable_play_together" : false,
+        "enable_start_immediately" : false,
+        "enable_join_immediately" : false
+      },
+      "team_chat_tab" : {
+        "enable_home_tab" : false,
+        "enable_channel_tab" : false
+      }
+    },
+    "zoom_client_support" : {
+      "mobile" : {
+        "enable" : false
+      },
+      "zoom_room" : {
+        "enable" : false,
+        "enable_personal_zoom_room" : false,
+        "enable_shared_zoom_room" : false,
+        "enable_digital_signage" : false,
+        "enable_zoom_rooms_controller" : false
+      },
+      "pwa_client" : {
+        "enable" : false
+      }
+    },
+    "embed" : {
+      "meeting_sdk" : {
+        "enable" : false,
+        "enable_device" : false,
+        "devices" : [ ]
+      },
+      "contact_center_sdk" : {
+        "enable" : false
+      },
+      "phone_sdk" : {
+        "enable" : false
+      }
+    },
+    "team_chat_subscription" : {
+      "enable" : false,
+      "enable_support_channel" : false,
+      "shortcuts" : [ ]
+    },
+    "event_subscription" : {
+      "enable" : false,
+      "events" : [ ]
+    },
+    "custom_form" : {
+      "enable" : false
+    },
+    "marketplace_actions" : {
+      "enable" : false
+    },
+    "marketplace_triggers" : {
+      "enable" : false
+    },
+    "plugin_sdk" : {
+      "enable" : false
+    }
+  }
+}
