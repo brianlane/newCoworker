@@ -188,14 +188,21 @@ describe("buildBadPhoneSteps", () => {
       }
       // Bounce check: 20-minute grace, then read Amy's mailbox (the SAME
       // connection the send used — her Gmail/Outlook, which Resend can't
-      // see) for a delivery-failure notice naming the lead's address.
+      // see) for a delivery-failure notice. Pinned to THIS send: the notice
+      // must name the lead's address AND quote the follow-up's subject, and
+      // the 30-min lookback barely predates the send — so a stale NDR for
+      // the same address can't masquerade as this one (Bugbot on PR #701).
       const [wait, check] = armSteps.slice(leadEmails.length);
       expect(wait).toMatchObject({ type: "sleep", minutes: 20 });
       expect(check).toMatchObject({
         type: "email_extract",
         connectionId: "9ddd5344-14f2-46df-a89d-dddc2d50e944",
-        matchTemplates: ["{{vars.lead_email}}"]
+        matchTemplates: ["{{vars.lead_email}}", cfg.leadEmails[0].subject],
+        lookbackMinutes: 30
       });
+      // Every flow's lead-email variants share ONE subject, so the subject
+      // match never depends on which variant sent.
+      expect(new Set(cfg.leadEmails.map((e) => e.subject)).size).toBe(1);
       expect(check.fields[0].name).toBe("lead_email_bounced");
       // Amy's reports come LAST so {{vars.actions_taken}} already records
       // whether each lead email actually sent or was skipped (Bugbot Medium

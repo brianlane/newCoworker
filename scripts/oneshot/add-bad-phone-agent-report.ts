@@ -280,17 +280,23 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
   // "Undeliverable" from postmaster/Microsoft Outlook; Gmail:
   // mailer-daemon) back in HER inbox within minutes. After a 20-minute
   // grace, an email_extract reads her mailbox (same connection the send
-  // used) for the most recent message naming the lead's address — an NDR
-  // always quotes the failed address — and classifies whether it is a
-  // delivery failure. No sender filter: bounce senders differ per provider,
-  // and a non-bounce match (e.g. the lead replying) classifies as "none".
+  // used) and classifies whether a delivery failure came back. Tying the
+  // match to THIS send, not just this address: the notice must name the
+  // lead's address AND quote the follow-up's subject (both Gmail and
+  // Outlook NDRs include the original subject), and the lookback (30 min)
+  // barely predates the send (sleep 20 + worker-tick slack) — so a stale
+  // NDR for the same address can't masquerade as this send's bounce. No
+  // sender filter: bounce senders differ per provider, and a non-bounce
+  // match (e.g. the lead replying) classifies as "none".
   const bounceWait: Step = { id: "bp_bounce_wait", type: "sleep", minutes: 20 };
   const bounceCheck: Step = {
     id: "bp_bounce_check",
     type: "email_extract",
     connectionId: AMY_CONNECTION_ID,
-    matchTemplates: ["{{vars.lead_email}}"],
-    lookbackMinutes: 60,
+    // Every flow's lead follow-ups share one subject (RE's three variants
+    // included), so the subject pins the NDR to this flow's send.
+    matchTemplates: ["{{vars.lead_email}}", cfg.leadEmails[0].subject],
+    lookbackMinutes: 30,
     fields: [
       {
         name: "lead_email_bounced",
