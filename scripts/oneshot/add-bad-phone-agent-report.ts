@@ -274,22 +274,71 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     'Their exact words: "{{vars.agent_report}}"\n\n' +
     `Lead info:\n${cfg.leadInfoLines}\n` +
     `Lead source: ${cfg.sourceLabel}\n\n`;
-  // Runs AFTER the lead email steps in its arm, so actions_taken already
-  // records whether each send actually went out ("emailed x@y" vs "skipped
-  // email ... (no valid address)") — the report never overstates outreach
-  // that a stricter send-time validation or an unmatched lead_type skipped.
+  // Bounce check: the lead follow-up sends through Amy's connected mailbox
+  // (that's what makes it come from amy@amylaidlaw.com), so Resend never
+  // sees it — but a hard bounce puts a delivery-failure notice (Outlook:
+  // "Undeliverable" from postmaster/Microsoft Outlook; Gmail:
+  // mailer-daemon) back in HER inbox within minutes. After a 20-minute
+  // grace, an email_extract reads her mailbox (same connection the send
+  // used) for the most recent message naming the lead's address — an NDR
+  // always quotes the failed address — and classifies whether it is a
+  // delivery failure. No sender filter: bounce senders differ per provider,
+  // and a non-bounce match (e.g. the lead replying) classifies as "none".
+  const bounceWait: Step = { id: "bp_bounce_wait", type: "sleep", minutes: 20 };
+  const bounceCheck: Step = {
+    id: "bp_bounce_check",
+    type: "email_extract",
+    connectionId: AMY_CONNECTION_ID,
+    matchTemplates: ["{{vars.lead_email}}"],
+    lookbackMinutes: 60,
+    fields: [
+      {
+        name: "lead_email_bounced",
+        description:
+          "Answer exactly one lowercase word: bounced - if this email is a delivery " +
+          "failure / undeliverable / returned-mail notice (e.g. from a postmaster or " +
+          "mail delivery subsystem: address not found, mailbox unavailable or full, " +
+          "message could not be delivered); otherwise: none"
+      }
+    ]
+  };
+  // Two final reports, split on the bounce check (complementary when-guards
+  // on the same var — a clean miss leaves lead_email_bounced unset, which
+  // reads as not-bounced). Both run AFTER the lead email steps, so
+  // actions_taken already records whether each send actually went out
+  // ("emailed x@y" vs "skipped email ... (no valid address)") — the report
+  // never overstates outreach that a stricter send-time validation or an
+  // unmatched lead_type skipped.
+  const amyEmailBounced: Step = {
+    id: "bp_email_amy_bounced",
+    type: "send_email",
+    to: AMY_EMAIL,
+    when: { var: "lead_email_bounced", equals: "bounced" },
+    subject: `BAD PHONE NUMBER + EMAIL BOUNCED — ${cfg.leadLabel}, ${cfg.flowName}`,
+    body:
+      amyReportIntro +
+      "The follow-up email asking for their best phone number BOUNCED — a " +
+      "delivery-failure notice for {{vars.lead_email}} came back to " +
+      `${AMY_EMAIL}, so the EMAIL on file is bad too. There is currently no ` +
+      "working way to reach this lead; if they resurface through any channel, " +
+      "please capture their best phone number and email.\n\n" +
+      "Everything this flow did: {{vars.actions_taken}}"
+  };
   const amyEmailEmailed: Step = {
     id: "bp_email_amy",
     type: "send_email",
     to: AMY_EMAIL,
+    when: { var: "lead_email_bounced", notEquals: "bounced" },
     subject: `BAD PHONE NUMBER — ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
       amyReportIntro +
       "The lead has an email on file, so a follow-up asking for their best " +
-      `phone number was attempted from ${AMY_EMAIL}. The outcome line below ` +
-      'shows exactly what went out — look for "emailed ..." (sent) vs ' +
-      '"skipped email ..." (unusable address; nothing was sent, so please ' +
-      "get their best number if they reach out another way).\n\n" +
+      `phone number was attempted from ${AMY_EMAIL}, and no delivery-failure ` +
+      "(bounce) notice came back within 20 minutes — the email address looks " +
+      "deliverable. The outcome line below shows exactly what went out — look " +
+      'for "emailed ..." (sent) vs "skipped email ..." (unusable address; ' +
+      "nothing was sent, so please get their best number if they reach out " +
+      "another way).\n\n" +
       "Everything this flow did: {{vars.actions_taken}}"
   };
   const amyEmailNoEmail: Step = {
@@ -372,9 +421,17 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
                 {
                   id: "bp_has_email",
                   label: "Lead has an email",
-                  // Lead emails FIRST, Amy's report LAST — see amyEmailEmailed.
+                  // Lead emails FIRST, then the bounce check, then Amy's
+                  // report — so the report can state both what went out AND
+                  // whether it bounced.
                   condition: { var: "lead_email", contains: "@" },
-                  steps: [...leadEmails, amyEmailEmailed]
+                  steps: [
+                    ...leadEmails,
+                    bounceWait,
+                    bounceCheck,
+                    amyEmailBounced,
+                    amyEmailEmailed
+                  ]
                 }
               ],
               else: [amyEmailNoEmail]
