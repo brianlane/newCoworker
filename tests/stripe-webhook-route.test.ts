@@ -104,7 +104,8 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
 
 vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn(),
-  recordWhiteGlovePurchase: vi.fn()
+  recordWhiteGlovePurchase: vi.fn(),
+  updateBusinessOwnerEmailIfPending: vi.fn().mockResolvedValue(true)
 }));
 
 vi.mock("@/lib/db/white-glove-offers", () => ({
@@ -196,7 +197,7 @@ import {
   getSubscriptionByStripeSubscriptionId,
   updateSubscription
 } from "@/lib/db/subscriptions";
-import { getBusiness, recordWhiteGlovePurchase } from "@/lib/db/businesses";
+import { getBusiness, recordWhiteGlovePurchase, updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import {
   getWhiteGloveOffer,
   markWhiteGloveOfferPaid,
@@ -257,7 +258,8 @@ describe("stripe webhook route", () => {
             billingPeriod: "annual"
           },
           customer: "cus_1",
-          subscription: "sub_1"
+          subscription: "sub_1",
+          customer_details: { email: "owner@example.com" }
         }
       }
     } as never);
@@ -276,6 +278,10 @@ describe("stripe webhook route", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(updateBusinessOwnerEmailIfPending).toHaveBeenCalledWith(
+      "biz_1",
+      "owner@example.com"
+    );
     expect(updateSubscription).toHaveBeenCalledWith(
       "local_sub_1",
       expect.objectContaining({
@@ -301,7 +307,8 @@ describe("stripe webhook route", () => {
       tier: "starter",
       vpsSize: null,
       // Term-aware purchase: the annual contract funds a 1-year Hostinger box.
-      billingPeriod: "annual"
+      billingPeriod: "annual",
+      notifyOpsNewSignup: true
     });
   });
 
@@ -2927,7 +2934,8 @@ describe("stripe webhook route", () => {
       businessId: "biz_4",
       tier: "standard",
       vpsSize: null,
-      billingPeriod: "biennial"
+      billingPeriod: "biennial",
+      notifyOpsNewSignup: true
     });
   });
 });

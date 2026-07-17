@@ -15,11 +15,12 @@ vi.mock("@/lib/provisioning/progress", () => ({
     task_type: "provisioning",
     status: "thinking",
     log_payload: {}
-  })
+  }),
+  hasPriorOpsNewSignupAlert: vi.fn().mockResolvedValue(false)
 }));
 
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
-import { recordProvisioningProgress } from "@/lib/provisioning/progress";
+import { recordProvisioningProgress, hasPriorOpsNewSignupAlert } from "@/lib/provisioning/progress";
 import * as fs from "fs";
 import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
 import type { SshExecResult } from "@/lib/hostinger/ssh";
@@ -27,7 +28,11 @@ import type { SshExecResult } from "@/lib/hostinger/ssh";
 vi.mock("@/lib/db/businesses", () => ({
   updateBusinessStatus: vi.fn().mockResolvedValue(undefined),
   updateBusinessVpsSize: vi.fn().mockResolvedValue(undefined),
-  getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
+  getBusiness: vi.fn().mockResolvedValue({
+    business_type: "real_estate",
+    status: "offline",
+    hostinger_vps_id: null
+  })
 }));
 
 // Per-tenant gateway token now resolves from the DB during provisioning: read
@@ -75,6 +80,14 @@ vi.mock("@/lib/supabase/server", () => ({
 
 vi.mock("@/lib/email/client", () => ({
   sendOwnerEmail: vi.fn().mockResolvedValue({ id: "email-mock" })
+}));
+
+vi.mock("@/lib/email/ops-notify", () => ({
+  sendOpsNewSignupEmail: vi.fn().mockResolvedValue(true)
+}));
+
+vi.mock("@/lib/db/subscriptions", () => ({
+  getSubscription: vi.fn().mockResolvedValue(null)
 }));
 
 vi.mock("@/lib/email/tenant-mailbox", () => ({
@@ -265,6 +278,13 @@ describe("provisioning/orchestrate", () => {
     // would leave the empty-fallback branch uncovered.
     delete process.env.GEMINI_LIVE_SESSION_MAX_MS;
     vi.clearAllMocks();
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null
+    } as never);
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue(null);
+    vi.mocked(hasPriorOpsNewSignupAlert).mockResolvedValue(false);
   });
 
   afterEach(() => {
@@ -758,8 +778,8 @@ describe("provisioning/orchestrate", () => {
     }
   });
 
-  it("skips email notification when neither ownerEmail nor ADMIN_EMAIL is set", async () => {
-    delete process.env.ADMIN_EMAIL;
+  it("skips owner email when no reachable address is on file (never ADMIN_EMAIL)", async () => {
+    process.env.ADMIN_EMAIL = "admin@example.com";
     const { sendOwnerEmail } = await import("@/lib/email/client");
     vi.mocked(sendOwnerEmail).mockClear();
     const result = await orchestrateProvisioning(
@@ -771,6 +791,407 @@ describe("provisioning/orchestrate", () => {
     );
     expect(result.vpsId).toBe("42");
     expect(sendOwnerEmail).not.toHaveBeenCalled();
+  });
+
+  it("sends the live owner email from the business row when input ownerEmail is omitted", async () => {
+    process.env.ADMIN_EMAIL = "admin@example.com";
+    const { getBusiness } = await import("@/lib/db/businesses");
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      owner_email: "scar@example.com",
+      name: "Scar Fairy"
+    } as never);
+    const { sendOwnerEmail } = await import("@/lib/email/client");
+    vi.mocked(sendOwnerEmail).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-webhook-path", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOwnerEmail).toHaveBeenCalledWith(
+      expect.any(String),
+      "scar@example.com",
+      expect.stringContaining("live"),
+      expect.any(Object)
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("skips owner email when owner_email is still the pending onboarding sentinel", async () => {
+    process.env.ADMIN_EMAIL = "admin@example.com";
+    const { getBusiness } = await import("@/lib/db/businesses");
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      owner_email: "pending+biz-webhook-path@onboarding.local"
+    } as never);
+    const { sendOwnerEmail } = await import("@/lib/email/client");
+    vi.mocked(sendOwnerEmail).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-webhook-path", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("does not fail provisioning when recording ops alert sent throws", async () => {
+    vi.mocked(recordProvisioningProgress).mockImplementation(async (params) => {
+      if (params.phase === "ops_new_signup_alert_sent") {
+        throw new Error("log insert down");
+      }
+      return {
+        id: "00000000-0000-4000-8000-000000000099",
+        business_id: params.businessId,
+        task_type: "provisioning",
+        status: "thinking",
+        log_payload: {}
+      } as never;
+    });
+    await expect(
+      orchestrateProvisioning(
+        {
+          businessId: "biz-ops-log-fail",
+          tier: "starter",
+          ownerEmail: "owner@test.com",
+          notifyOpsNewSignup: true
+        },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      )
+    ).resolves.toMatchObject({ vpsId: "42" });
+  });
+
+  it("does not fail provisioning when recording ops alert sent rejects non-Error", async () => {
+    vi.mocked(recordProvisioningProgress).mockImplementation(async (params) => {
+      if (params.phase === "ops_new_signup_alert_sent") {
+        throw "log weird";
+      }
+      return {
+        id: "00000000-0000-4000-8000-000000000099",
+        business_id: params.businessId,
+        task_type: "provisioning",
+        status: "thinking",
+        log_payload: {}
+      } as never;
+    });
+    await expect(
+      orchestrateProvisioning(
+        {
+          businessId: "biz-ops-log-weird",
+          tier: "starter",
+          ownerEmail: "owner@test.com",
+          notifyOpsNewSignup: true
+        },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      )
+    ).resolves.toMatchObject({ vpsId: "42" });
+  });
+
+  it("retries recording ops alert sent after a transient log failure", async () => {
+    let opsLogAttempts = 0;
+    vi.mocked(recordProvisioningProgress).mockImplementation(async (params) => {
+      if (params.phase === "ops_new_signup_alert_sent") {
+        opsLogAttempts += 1;
+        if (opsLogAttempts === 1) {
+          throw new Error("transient log insert");
+        }
+      }
+      return {
+        id: "00000000-0000-4000-8000-000000000099",
+        business_id: params.businessId,
+        task_type: "provisioning",
+        status: "thinking",
+        log_payload: {}
+      } as never;
+    });
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-ops-log-retry",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(opsLogAttempts).toBe(2);
+  });
+
+  it("does not send ops new-signup email unless notifyOpsNewSignup is set", async () => {
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-plan-change", tier: "standard", ownerEmail: "owner@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("100")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not record ops alert sent when the email send fails", async () => {
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockResolvedValueOnce(false);
+    vi.mocked(recordProvisioningProgress).mockClear();
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-ops-send-fail",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(recordProvisioningProgress).not.toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "ops_new_signup_alert_sent" })
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalled();
+  });
+
+  it("sends ops new-signup email on first provision but not on reprovision", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(hasPriorOpsNewSignupAlert).mockResolvedValue(false);
+
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-first",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-first", ownerEmail: "owner@test.com" })
+    );
+    expect(recordProvisioningProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-first", phase: "ops_new_signup_alert_sent" })
+    );
+
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(hasPriorOpsNewSignupAlert).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "online",
+      hostinger_vps_id: "42",
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-first",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("43")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).not.toHaveBeenCalled();
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("sends ops new-signup email when a retry succeeds after a prior failed deploy", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(hasPriorOpsNewSignupAlert).mockResolvedValue(false);
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "online",
+      hostinger_vps_id: "42",
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-retry",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-retry", ownerEmail: "owner@test.com" })
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("does not send ops new-signup email when deploy fails", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-deploy-fail",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn(async (args: { command?: string }): Promise<SshExecResult> =>
+          String(args?.command ?? "").includes("/opt/deploy-client.sh")
+            ? { exitCode: 1, signal: null, stdout: "", stderr: "boom" }
+            : okExec()
+        )
+      }
+    );
+    expect(sendOpsNewSignupEmail).not.toHaveBeenCalled();
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("ops new-signup email omits pending owner sentinel from ownerEmail field", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "pending+abc@onboarding.local",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      { businessId: "biz-pending", tier: "starter", notifyOpsNewSignup: true },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-pending", ownerEmail: null })
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("still sends ops new-signup email when hasPriorOpsNewSignupAlert lookup fails", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(hasPriorOpsNewSignupAlert).mockRejectedValueOnce(new Error("logs db down"));
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-prior-lookup-fail",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-prior-lookup-fail" })
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("still sends ops new-signup email when hasPriorOpsNewSignupAlert rejects non-Error", async () => {
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(hasPriorOpsNewSignupAlert).mockRejectedValueOnce("weird");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-prior-lookup-weird",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-prior-lookup-weird" })
+    );
+  });
+
+  it("still sends ops new-signup email when route/subscription lookups fail", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { getSubscription } = await import("@/lib/db/subscriptions");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockRejectedValueOnce(new Error("route db down"));
+    vi.mocked(getSubscription).mockRejectedValueOnce(new Error("sub db down"));
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-lookup-fail",
+        tier: "starter",
+        ownerEmail: "owner@test.com",
+        notifyOpsNewSignup: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-lookup-fail", didE164: null, billingPeriod: null })
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue(null);
+    vi.mocked(getSubscription).mockResolvedValue(null);
   });
 
   it("does not abort the deploy when AI-mailbox reservation fails (Error and non-Error)", async () => {
@@ -2181,18 +2602,19 @@ describe("provisioning/orchestrate", () => {
 
     it("skips when didProvisioner is explicitly null regardless of env flag", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
-      // If null disabled the step, getTelnyxVoiceRouteForBusiness should NOT
-      // be called with this businessId.
       vi.mocked(getTelnyxVoiceRouteForBusiness).mockClear();
       await orchestrateProvisioning(
-        { businessId: "biz-did-null", tier: "starter" },
+        { businessId: "biz-did-null", tier: "starter", notifyOpsNewSignup: true },
         {
           vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
           remoteExec: vi.fn().mockResolvedValue(okExec()),
           didProvisioner: null
         }
       );
-      expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).not.toHaveBeenCalled();
+      // DID auto-order is skipped, but signup provisioning still reads the
+      // assigned route once at the end for the ops new-signup email.
+      expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).toHaveBeenCalledTimes(1);
+      expect(vi.mocked(getTelnyxVoiceRouteForBusiness)).toHaveBeenCalledWith("biz-did-null");
     });
 
     it("refuses to call didProvisioner when TELNYX_CONNECTION_ID is missing — root cause of the May 2026 unwired-DID outage", async () => {

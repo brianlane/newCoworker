@@ -3,6 +3,8 @@ import {
   recordProvisioningProgress,
   getLatestProvisioningStatus,
   getProvisioningLogs,
+  hasPriorOpsNewSignupAlert,
+  hasPriorSuccessfulProvision,
   shouldShowProvisioningProgress,
   shouldMountProvisioningWidget,
   isBusinessRunningStatus
@@ -454,5 +456,91 @@ describe("provisioning/progress", () => {
     await expect(getProvisioningLogs("00000000-0000-4000-8000-000000000001")).rejects.toThrow(
       "getProvisioningLogs"
     );
+  });
+
+  it("hasPriorOpsNewSignupAlert is true when the alert-sent row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "log-1" }, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(true);
+    expect(db.filter).toHaveBeenCalledWith(
+      "log_payload->>phase",
+      "eq",
+      "ops_new_signup_alert_sent"
+    );
+  });
+
+  it("hasPriorOpsNewSignupAlert is false when no alert-sent row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(false);
+  });
+
+  it("hasPriorOpsNewSignupAlert throws on db error", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
+    ).rejects.toThrow("hasPriorOpsNewSignupAlert");
+  });
+
+  it("hasPriorSuccessfulProvision is true when a complete success row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "log-complete" }, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(true);
+    expect(db.filter).toHaveBeenCalledWith("log_payload->>phase", "eq", "complete");
+  });
+
+  it("hasPriorSuccessfulProvision throws on db error", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+    ).rejects.toThrow("hasPriorSuccessfulProvision");
   });
 });

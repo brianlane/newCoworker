@@ -45,7 +45,10 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
+import { sendOpsNewSignupEmail } from "@/lib/email/ops-notify";
+import { getSubscription } from "@/lib/db/subscriptions";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
+import { resolveOwnerNotifyEmail } from "@/lib/provisioning/notify-recipient";
 import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
 import {
   getActiveGatewayTokenForBusiness,
@@ -66,7 +69,10 @@ import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { recordProvisioningProgress } from "@/lib/provisioning/progress";
+import {
+  recordProvisioningProgress,
+  hasPriorOpsNewSignupAlert
+} from "@/lib/provisioning/progress";
 import {
   cloudflareTunnelProvisionerFromEnv,
   type CloudflareTunnelProvisioner
@@ -109,6 +115,8 @@ type ProvisioningInput = {
   skipPoolAdopt?: boolean;
   ownerEmail?: string;
   ownerPhone?: string;
+  /** When true, send the ops "[ops] New signup live" alert after first successful deploy. */
+  notifyOpsNewSignup?: boolean;
 };
 
 export type ProvisioningResult = {
@@ -574,7 +582,8 @@ export async function orchestrateProvisioning(
         tier: narrowTier,
         vpsSize,
         billingPeriod,
-        skipPoolAdopt: input.skipPoolAdopt
+        skipPoolAdopt: input.skipPoolAdopt,
+        notifyOpsNewSignup: input.notifyOpsNewSignup
       },
       deps
     );
@@ -960,6 +969,17 @@ async function runOrchestrator(
   // enterprise-only; the gate reads the REAL tier from the row (narrowTier
   // collapses enterprise onto the standard box profile).
   const businessRow = await getBusiness(businessId);
+  let priorOpsNewSignupAlert = false;
+  try {
+    priorOpsNewSignupAlert = await hasPriorOpsNewSignupAlert(businessId);
+  } catch (err) {
+    logger.warn("hasPriorOpsNewSignupAlert lookup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  const shouldSendOpsNewSignupAlert =
+    input.notifyOpsNewSignup === true && !priorOpsNewSignupAlert;
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
@@ -1723,7 +1743,8 @@ async function runOrchestrator(
   }
   logger.info("Business provisioned and online", { businessId, vpsId });
 
-  const notifyEmail = ownerEmail ?? process.env.ADMIN_EMAIL;
+  const freshBusiness = await getBusiness(businessId);
+  const notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
   // Recipient: the OWNER's phone — the explicit caller override first, then
   // the phone the owner gave at onboarding (coerced: it's free-form input,
   // e.g. "5145188192"), then the platform ops phone as the last-resort
@@ -1747,6 +1768,58 @@ async function runOrchestrator(
       logger.warn("Failed to send provisioning email", {
         error: err instanceof Error ? err.message : String(err)
       });
+    }
+  } else {
+    logger.warn("Skipping provisioning owner email: no reachable owner email on file", {
+      businessId
+    });
+  }
+
+  if (shouldSendOpsNewSignupAlert && deploySucceeded) {
+    let didRoute = null;
+    try {
+      didRoute = await getTelnyxVoiceRouteForBusiness(businessId);
+    } catch {
+      // Ops email is best-effort; a route lookup hiccup must not affect provisioning.
+    }
+    let subscription = null;
+    try {
+      subscription = await getSubscription(businessId);
+    } catch {
+      // Same best-effort posture as the DID lookup above.
+    }
+    const sent = await sendOpsNewSignupEmail({
+      businessId,
+      businessName: freshBusiness?.name ?? businessRow?.name ?? "",
+      ownerName: freshBusiness?.owner_name ?? businessRow?.owner_name ?? null,
+      ownerEmail: notifyEmail,
+      ownerPhone: freshBusiness?.phone ?? businessRow?.phone ?? null,
+      tier: freshBusiness?.tier ?? businessRow?.tier ?? narrowTier,
+      billingPeriod: subscription?.billing_period ?? input.billingPeriod ?? null,
+      virtualMachineId: vpsId,
+      didE164: didRoute?.to_e164 ?? null
+    });
+    if (sent) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await recordProvisioningProgress({
+            businessId,
+            phase: "ops_new_signup_alert_sent",
+            percent: 100,
+            message: "Ops new-signup alert sent",
+            source: "orchestrator",
+            status: "success"
+          });
+          break;
+        } catch (err) {
+          if (attempt === 2) {
+            logger.warn("Failed to record ops new-signup alert sent after retries", {
+              businessId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+        }
+      }
     }
   }
 

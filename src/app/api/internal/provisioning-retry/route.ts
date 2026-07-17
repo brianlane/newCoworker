@@ -43,7 +43,8 @@ export async function POST(request: Request): Promise<Response> {
           businessId: input.businessId,
           tier: input.tier,
           vpsSize: input.vpsSize,
-          billingPeriod: input.billingPeriod
+          billingPeriod: input.billingPeriod,
+          notifyOpsNewSignup: true
         });
         // Same post-success persistence the webhook's inline runner does —
         // without it a watchdog-recovered signup would be missing the
