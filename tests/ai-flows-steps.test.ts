@@ -191,6 +191,58 @@ describe("planStep: doc_extract", () => {
       fileAudience: "both"
     });
   });
+
+  it("record sinks: resolves contactPhoneVar from scope (empty value still rides along)", () => {
+    const step = {
+      ...base,
+      fileAs: {
+        titleTemplate: "Quote",
+        contactPhoneVar: "lead_phone",
+        recordFieldsFromExtraction: true,
+        renewalDateField: "renewal_date"
+      }
+    } as FlowStep;
+    const plan = planStep(step, {
+      ...scopeWithDoc,
+      vars: { lead_phone: " +16025551234 " }
+    });
+    expect(plan.ok && plan.action.kind === "doc_extract" ? plan.action : null).toMatchObject({
+      fileContactPhone: "+16025551234",
+      fileRecordFields: true,
+      fileRenewalField: "renewal_date"
+    });
+
+    // An unfilled var passes "" through so the platform reports the note
+    // instead of silently unlinking.
+    const empty = planStep(step, scopeWithDoc);
+    expect(empty.ok && empty.action.kind === "doc_extract" ? empty.action : null).toMatchObject({
+      fileContactPhone: ""
+    });
+  });
+
+  it("record sinks: a contactPhoneVar naming one of THIS step's fields passes the field name", () => {
+    const step = {
+      ...base,
+      fields: [...FIELDS, { name: "customer_phone" }],
+      fileAs: { titleTemplate: "Quote", contactPhoneVar: "customer_phone" }
+    } as FlowStep;
+    const plan = planStep(step, scopeWithDoc);
+    const action = plan.ok && plan.action.kind === "doc_extract" ? plan.action : null;
+    expect(action).toMatchObject({ fileContactField: "customer_phone" });
+    expect(action && "fileContactPhone" in action).toBe(false);
+  });
+
+  it("record sinks: no sinks configured plans the original compact action", () => {
+    const plan = planStep(
+      { ...base, fileAs: { titleTemplate: "Quote" } } as FlowStep,
+      scopeWithDoc
+    );
+    const action = plan.ok && plan.action.kind === "doc_extract" ? plan.action : null;
+    expect(action && "fileContactPhone" in action).toBe(false);
+    expect(action && "fileContactField" in action).toBe(false);
+    expect(action && "fileRecordFields" in action).toBe(false);
+    expect(action && "fileRenewalField" in action).toBe(false);
+  });
 });
 
 describe("planStep: share_document", () => {

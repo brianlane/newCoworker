@@ -2,12 +2,14 @@
  * Agents — run executor.
  *
  * One agent run = one Gemini transformation: the agent's saved instructions
- * applied to an attachment (decoded text for txt/md/csv, native inlineData
- * for PDFs — same split as documents/ingest.ts). Caller-agnostic by design:
- * the dashboard run route and a future run_agent AiFlow step both call
- * `executeAgentRun` with either `{ text }` or `{ bytes, mime }` input.
- * Every call (including billed-but-empty replies) is metered into the
- * shared AI budget under the `agent_run` surface.
+ * applied to one or MORE attachments (decoded text for txt/md/csv, native
+ * inlineData for PDFs — same split as documents/ingest.ts). Multi-file runs
+ * exist for side-by-side work ("compare these carrier quotes"): every text
+ * file becomes a labeled prompt section and every PDF an inlineData part,
+ * all in one model call. Caller-agnostic by design: the dashboard run route
+ * and the run_agent AiFlow step both call `executeAgentRun`. Every call
+ * (including billed-but-empty replies) is metered into the shared AI budget
+ * under the `agent_run` surface.
  */
 
 import {
@@ -21,12 +23,14 @@ import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 import {
   AGENT_INPUT_MAX_TEXT_CHARS,
+  AGENT_RUN_MAX_FILES,
   AGENT_RUN_SYSTEM_PROMPT,
   buildAgentRunPrompt,
   buildOutputFilename,
   normalizeAgentOutput,
   resolveOutputTarget,
-  type AgentOutputFormat
+  type AgentOutputFormat,
+  type AgentPromptTextSection
 } from "./core";
 import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 
@@ -55,17 +59,30 @@ export type AgentRunDeps = {
   generate?: GeminiCall;
 };
 
+/** One additional attachment for a multi-file run. */
+export type AgentRunExtraFile = {
+  filename: string;
+  mime: string;
+  data: Buffer;
+};
+
 export type AgentRunInput = {
   businessId: string;
   agent: {
     instructions: string;
     output_format: AgentOutputFormat;
   };
-  /** Original filename, used for prompts + the artifact filename. */
+  /** First (primary) filename — drives prompts + the artifact filename. */
   inputFilename: string;
   inputMime: string;
   /** Raw attachment bytes (text formats are decoded; PDFs attach inline). */
   data: Buffer;
+  /**
+   * Additional attachments transformed in the SAME model call ("compare
+   * these quotes"). The primary file stays first; output format/filename
+   * still follow it.
+   */
+  extraFiles?: AgentRunExtraFile[];
 };
 
 export type AgentRunResult =
@@ -78,7 +95,12 @@ export type AgentRunResult =
     }
   | {
       ok: false;
-      error: "unsupported_type" | "empty_content" | "model_unavailable" | "model_failed";
+      error:
+        | "unsupported_type"
+        | "empty_content"
+        | "too_many_files"
+        | "model_unavailable"
+        | "model_failed";
       detail?: string;
     };
 
@@ -93,35 +115,63 @@ export async function executeAgentRun(
   /* c8 ignore next -- production default; tests inject generate */
   const generate = deps.generate ?? geminiGenerateTextDetailed;
 
-  const mime = input.inputMime.trim().toLowerCase();
-  const isText = (AGENT_TEXT_MIME_TYPES as readonly string[]).includes(mime);
-  const isPdf = mime === AGENT_PDF_MIME_TYPE;
-  if (!isText && !isPdf) return { ok: false, error: "unsupported_type" };
-
-  const target = resolveOutputTarget(input.agent.output_format, mime);
-  let prompt: string;
-  let inlineParts: GeminiGenerateTextParams["inlineParts"];
-  if (isText) {
-    const decoded = input.data.toString("utf8").replace(/\u0000/g, "");
-    const asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
-    const rawText = asText.trim().slice(0, AGENT_INPUT_MAX_TEXT_CHARS);
-    if (rawText.length === 0) return { ok: false, error: "empty_content" };
-    prompt = buildAgentRunPrompt({
-      instructions: input.agent.instructions,
-      inputFilename: input.inputFilename,
-      formatWord: target.formatWord,
-      inputText: rawText
-    });
-    inlineParts = undefined;
-  } else {
-    if (input.data.byteLength === 0) return { ok: false, error: "empty_content" };
-    prompt = buildAgentRunPrompt({
-      instructions: input.agent.instructions,
-      inputFilename: input.inputFilename,
-      formatWord: target.formatWord
-    });
-    inlineParts = [{ mimeType: AGENT_PDF_MIME_TYPE, dataBase64: input.data.toString("base64") }];
+  const files: AgentRunExtraFile[] = [
+    { filename: input.inputFilename, mime: input.inputMime, data: input.data },
+    ...(input.extraFiles ?? [])
+  ];
+  if (files.length > AGENT_RUN_MAX_FILES) {
+    return { ok: false, error: "too_many_files", detail: `${files.length} files` };
   }
+
+  // Classify + decode every attachment before any model work: one bad file
+  // fails the run up front (predictable — same contract as single-file).
+  const textSections: AgentPromptTextSection[] = [];
+  const pdfParts: NonNullable<GeminiGenerateTextParams["inlineParts"]> = [];
+  const pdfNames: string[] = [];
+  // Shared text budget across the run so a 5-file compare stays bounded the
+  // same way one big file does.
+  let remainingTextChars = AGENT_INPUT_MAX_TEXT_CHARS;
+  for (const file of files) {
+    const mime = file.mime.trim().toLowerCase();
+    const isText = (AGENT_TEXT_MIME_TYPES as readonly string[]).includes(mime);
+    const isPdf = mime === AGENT_PDF_MIME_TYPE;
+    if (!isText && !isPdf) {
+      return { ok: false, error: "unsupported_type", detail: file.filename };
+    }
+    if (isPdf) {
+      if (file.data.byteLength === 0) {
+        return { ok: false, error: "empty_content", detail: file.filename };
+      }
+      pdfParts.push({ mimeType: AGENT_PDF_MIME_TYPE, dataBase64: file.data.toString("base64") });
+      pdfNames.push(file.filename);
+      continue;
+    }
+    const decoded = file.data.toString("utf8").replace(/\u0000/g, "");
+    const asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    const rawText = asText.trim();
+    if (rawText.length === 0) {
+      return { ok: false, error: "empty_content", detail: file.filename };
+    }
+    // Emptiness was checked on the FULL text; clipping to an exhausted
+    // budget just drops the tail sections from the prompt.
+    const clipped = rawText.slice(0, Math.max(0, remainingTextChars));
+    remainingTextChars -= clipped.length;
+    if (clipped.length > 0) textSections.push({ filename: file.filename, text: clipped });
+  }
+
+  // Output format/filename follow the PRIMARY (first) file, matching the
+  // single-file behavior.
+  const target = resolveOutputTarget(
+    input.agent.output_format,
+    input.inputMime.trim().toLowerCase()
+  );
+  const prompt = buildAgentRunPrompt({
+    instructions: input.agent.instructions,
+    formatWord: target.formatWord,
+    textSections,
+    attachedFilenames: pdfNames
+  });
+  const inlineParts = pdfParts.length > 0 ? pdfParts : undefined;
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
   if (!apiKey) return { ok: false, error: "model_unavailable" };

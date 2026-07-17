@@ -216,19 +216,32 @@ describe("getAgentRun", () => {
 });
 
 describe("listAgentRunInputPaths", () => {
-  it("returns non-empty paths only (explicit client)", async () => {
+  it("merges scalar and input_files paths, de-duped, empties dropped (explicit client)", async () => {
     const c = chain({
       data: [
-        { input_storage_path: "b/agent-inputs/r1/a.txt" },
-        { input_storage_path: null },
-        { input_storage_path: "" }
+        {
+          // Multi-file run: the scalar mirrors the first file — the merged
+          // result must not duplicate it.
+          input_storage_path: "b/agent-inputs/r1/0-a.txt",
+          input_files: [
+            { filename: "a.txt", mime_type: "text/plain", document_id: null, storage_path: "b/agent-inputs/r1/0-a.txt" },
+            { filename: "b.txt", mime_type: "text/plain", document_id: null, storage_path: "b/agent-inputs/r1/1-b.txt" },
+            { filename: "doc.pdf", mime_type: "application/pdf", document_id: "d1", storage_path: null }
+          ]
+        },
+        // Pre-multi-file row (input_files null) and a document-input row.
+        { input_storage_path: "b/agent-inputs/r2/a.txt", input_files: null },
+        { input_storage_path: null, input_files: null },
+        { input_storage_path: "", input_files: null }
       ],
       error: null
     });
     expect(await listAgentRunInputPaths(BIZ, AGENT, makeDb(c))).toEqual([
-      "b/agent-inputs/r1/a.txt"
+      "b/agent-inputs/r1/0-a.txt",
+      "b/agent-inputs/r1/1-b.txt",
+      "b/agent-inputs/r2/a.txt"
     ]);
-    expect(c.not).toHaveBeenCalledWith("input_storage_path", "is", null);
+    expect(c.select).toHaveBeenCalledWith("input_storage_path, input_files");
   });
 
   it("returns [] for a null payload (default client)", async () => {

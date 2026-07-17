@@ -18,6 +18,10 @@ export const AGENT_NAME_MAX_CHARS = 120;
 export const AGENT_INPUT_MAX_TEXT_CHARS = 40_000;
 /** Hard cap on the produced artifact text. */
 export const AGENT_OUTPUT_MAX_CHARS = 60_000;
+/** Max attachments per run (compare-N-quotes without unbounded prompts). */
+export const AGENT_RUN_MAX_FILES = 5;
+/** Combined byte ceiling across a run's attachments (Gemini request headroom). */
+export const AGENT_RUN_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 
 export type AgentOutputFormat = "markdown" | "same_as_input";
 
@@ -84,16 +88,23 @@ export function buildOutputFilename(inputFilename: string, target: AgentOutputTa
 export const AGENT_RUN_SYSTEM_PROMPT =
   "You are a small business's document assistant. Apply the owner's saved instructions to the attached material exactly. Preserve every concrete fact — prices, names, dates, contact info — unless the instructions say to change it. Never invent facts. Reply with ONLY the finished result: no preamble, no commentary, no code fences around the whole reply.";
 
+/** One decoded text attachment for the run prompt. */
+export type AgentPromptTextSection = { filename: string; text: string };
+
 /**
- * The user turn for a run: the agent's saved instructions + the attachment
- * (inline text for text formats; PDFs ride along as an inlineData part, so
- * `inputText` is omitted and the prompt says the file is attached).
+ * The user turn for a run: the agent's saved instructions + every
+ * attachment — inline sections for text formats; PDFs ride along as
+ * inlineData parts, so the prompt only names them as attached. A run can
+ * carry several files (e.g. one quote PDF per carrier); each text section
+ * is labeled with its filename so the model can attribute facts.
  */
 export function buildAgentRunPrompt(args: {
   instructions: string;
-  inputFilename: string;
   formatWord: string;
-  inputText?: string;
+  /** Decoded text attachments, in run order (may be empty). */
+  textSections: AgentPromptTextSection[];
+  /** Filenames of PDF attachments riding as inlineData (may be empty). */
+  attachedFilenames: string[];
 }): string {
   const lines = [
     "Saved instructions (apply these to the attached material):",
@@ -103,16 +114,22 @@ export function buildAgentRunPrompt(args: {
     "",
     `Produce the result as ${args.formatWord}.`
   ];
-  if (args.inputText !== undefined) {
+  for (const section of args.textSections) {
     lines.push(
       "",
-      `Attached material (from "${args.inputFilename}", may be truncated):`,
+      `Attached material (from "${section.filename}", may be truncated):`,
       "---",
-      args.inputText,
+      section.text,
       "---"
     );
-  } else {
-    lines.push("", `The file "${args.inputFilename}" is attached.`);
+  }
+  if (args.attachedFilenames.length === 1) {
+    lines.push("", `The file "${args.attachedFilenames[0]}" is attached.`);
+  } else if (args.attachedFilenames.length > 1) {
+    lines.push(
+      "",
+      `The files ${args.attachedFilenames.map((f) => `"${f}"`).join(", ")} are attached.`
+    );
   }
   return lines.join("\n");
 }

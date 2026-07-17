@@ -63,7 +63,7 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   email_extract:
     "Reads details from a recent email in a connected mailbox - used to backfill lead info (like a phone or address) from an alert email when a web page was slow or empty.",
   doc_extract:
-    "Reads the details you ask for (like a premium, a renewal date, or a policy number) out of the document attached to the triggering email - PDFs included. Optionally files the document into your Documents so your coworker can answer from it and share it later. If the email has no document, the step is skipped. Uses your monthly AI budget.",
+    "Reads the details you ask for (like a premium, a renewal date, or a policy number) out of the document attached to the triggering email - PDFs included. Optionally files the document into your Documents - and can file it as a record ON the customer's contact, with the extracted fields and renewal date attached, so renewal reminders fire automatically. If the email has no document, the step is skipped. Uses your monthly AI budget.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_whatsapp:
     "Sends a WhatsApp message from your connected WhatsApp Business number. If the person hasn't messaged you in the last 24 hours, an approved template carries the message (Meta bills per template message).",
@@ -98,7 +98,7 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   share_document:
     "Texts or emails the person an expiring link to one of your uploaded documents (price sheet, policy, contract). Only client-facing, unexpired documents can be shared - an expired document fails the step and notifies you instead of sending a stale copy.",
   run_agent:
-    "Runs one of your saved Agents (from the Agents page) on text from this workflow - e.g. turn an inbound email into a clean summary - and saves the result for later steps to send or reference. Uses your monthly AI budget.",
+    "Runs one of your saved Agents (from the Agents page) on text from this workflow or on the document attached to the triggering email (PDFs included) - e.g. compare the quotes in an emailed PDF - and saves the result for later steps to send or reference. Can also file the result into your Documents. Uses your monthly AI budget.",
   ring_handoff:
     "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
   voice_ai_intake:

@@ -540,7 +540,18 @@ export type FlowStep =
       /** Template resolving to a document ref. Omitted = {{trigger.document}}. */
       sourceTemplate?: string;
       fields: ExtractField[];
-      fileAs?: { titleTemplate: string; audience?: "clients" | "staff" | "both" };
+      /**
+       * Filing options. The record sinks (contactPhoneVar /
+       * recordFieldsFromExtraction / renewalDateField) turn the filed copy
+       * into a structured contact record — see the schema comments.
+       */
+      fileAs?: {
+        titleTemplate: string;
+        audience?: "clients" | "staff" | "both";
+        contactPhoneVar?: string;
+        recordFieldsFromExtraction?: boolean;
+        renewalDateField?: string;
+      };
       when?: StepCondition;
     }
   | {
@@ -656,19 +667,28 @@ export type FlowStep =
       id: string;
       /**
        * Run a saved Agent (business_agents — a reusable AI instruction set
-       * the owner authored on /dashboard/agents) against flow content: the
-       * rendered `input` template is transformed per the agent's
-       * instructions on central Gemini (via the platform's gateway-guarded
-       * run-agent endpoint) and the artifact lands in {{vars.<saveAs>}}.
-       * The endpoint re-checks the agent exists + is enabled at execution.
+       * the owner authored on /dashboard/agents) against flow content:
+       * either the rendered `input` template (text) or a DOCUMENT
+       * (`documentTemplate` — an email-attachments:<path> / business-docs:
+       * <id> ref, usually {{trigger.document}}) is transformed per the
+       * agent's instructions on central Gemini (via the platform's
+       * gateway-guarded run-agent endpoint) and the artifact lands in
+       * {{vars.<saveAs>}}. Exactly one of input/documentTemplate.
+       * `saveDocument` files the artifact into Business Documents
+       * (staff-only). The endpoint re-checks the agent exists + is enabled
+       * at execution.
        */
       type: "run_agent";
       /** business_agents row id. */
       agentId: string;
       /** Editor display hint captured when the agent was picked. */
       agentName?: string;
-      /** Template rendered into the agent's input. */
-      input: string;
+      /** Template rendered into the agent's input (text mode). */
+      input?: string;
+      /** Template resolving to a document ref (document mode). */
+      documentTemplate?: string;
+      /** File the artifact into Business Documents (title template). */
+      saveDocument?: { titleTemplate: string };
       /** The artifact lands in {{vars.<saveAs>}}. */
       saveAs: string;
       when?: StepCondition;

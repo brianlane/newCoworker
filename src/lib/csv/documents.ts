@@ -58,6 +58,7 @@ export const DOCUMENTS_EXPORT_HEADERS = [
   "assigned_employee_phone",
   "audience",
   "notes",
+  "record_fields",
   "status",
   "created_at"
 ] as const;
@@ -77,8 +78,17 @@ type ExportDocRow = Pick<
   | "renewal_date"
   | "expires_at"
   | "assigned_employee_id"
+  | "record_fields"
   | "created_at"
 >;
+
+/** record_fields as a readable one-cell rendering ("carrier: Acme | premium: $1,240"). */
+function renderRecordFieldsCell(fields: Record<string, string> | null): string {
+  if (!fields) return "";
+  return Object.entries(fields)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(" | ");
+}
 
 /** Every contact-linked record as CSV text (paginated read, no row cap). */
 export async function exportDocumentsCsv(
@@ -91,7 +101,7 @@ export async function exportDocumentsCsv(
     const { data, error } = await db
       .from("business_documents")
       .select(
-        "title,category,audience,content_md,status,contact_id,renewal_date,expires_at,assigned_employee_id,created_at"
+        "title,category,audience,content_md,status,contact_id,renewal_date,expires_at,assigned_employee_id,record_fields,created_at"
       )
       .eq("business_id", businessId)
       .not("contact_id", "is", null)
@@ -148,6 +158,7 @@ export async function exportDocumentsCsv(
         r.assigned_employee_id ? employees.get(r.assigned_employee_id) ?? "" : "",
         r.audience,
         r.content_md,
+        renderRecordFieldsCell(r.record_fields),
         r.status,
         r.created_at
       ];

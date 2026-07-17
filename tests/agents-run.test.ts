@@ -133,7 +133,7 @@ describe("executeAgentRun (text)", () => {
   it("rejects an empty text attachment without calling Gemini", async () => {
     const generate = generateOk("x");
     const res = await executeAgentRun(textInput({ data: Buffer.from("   ") }), { generate });
-    expect(res).toEqual({ ok: false, error: "empty_content" });
+    expect(res).toEqual({ ok: false, error: "empty_content", detail: "intake.txt" });
     expect(generate).not.toHaveBeenCalled();
   });
 
@@ -171,7 +171,123 @@ describe("executeAgentRun (pdf)", () => {
       textInput({ inputMime: "application/pdf", data: Buffer.alloc(0) }),
       { generate }
     );
-    expect(res).toEqual({ ok: false, error: "empty_content" });
+    expect(res).toEqual({ ok: false, error: "empty_content", detail: "intake.txt" });
+    expect(generate).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAgentRun (multi-file)", () => {
+  it("inlines every text file as its own labeled section in ONE call", async () => {
+    const generate = generateOk("# Comparison");
+    const res = await executeAgentRun(
+      textInput({
+        inputFilename: "carrier-a.txt",
+        data: Buffer.from("Premium: $1,200"),
+        extraFiles: [
+          { filename: "carrier-b.txt", mime: "text/plain", data: Buffer.from("Premium: $1,350") }
+        ]
+      }),
+      { generate }
+    );
+    expect(res).toMatchObject({ ok: true, outputFilename: "carrier-a.md" });
+    expect(generate).toHaveBeenCalledTimes(1);
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain('Attached material (from "carrier-a.txt", may be truncated):');
+    expect(call.userText).toContain('Attached material (from "carrier-b.txt", may be truncated):');
+    expect(call.userText).toContain("Premium: $1,200");
+    expect(call.userText).toContain("Premium: $1,350");
+  });
+
+  it("attaches every PDF as inlineData and names them all", async () => {
+    const generate = generateOk("# Comparison");
+    const res = await executeAgentRun(
+      textInput({
+        inputFilename: "a.pdf",
+        inputMime: "application/pdf",
+        data: Buffer.from("%PDF-a"),
+        extraFiles: [
+          { filename: "b.pdf", mime: "application/pdf", data: Buffer.from("%PDF-b") }
+        ]
+      }),
+      { generate }
+    );
+    expect(res.ok).toBe(true);
+    const call = generate.mock.calls[0][0];
+    expect(call.inlineParts).toEqual([
+      { mimeType: "application/pdf", dataBase64: Buffer.from("%PDF-a").toString("base64") },
+      { mimeType: "application/pdf", dataBase64: Buffer.from("%PDF-b").toString("base64") }
+    ]);
+    expect(call.userText).toContain('The files "a.pdf", "b.pdf" are attached.');
+  });
+
+  it("mixes text and PDF files (text sections + inline parts)", async () => {
+    const generate = generateOk("# Comparison");
+    const res = await executeAgentRun(
+      textInput({
+        inputFilename: "notes.txt",
+        data: Buffer.from("Prefers low deductible"),
+        extraFiles: [
+          { filename: "quote.pdf", mime: "application/pdf", data: Buffer.from("%PDF-q") }
+        ]
+      }),
+      { generate }
+    );
+    // Output format still follows the PRIMARY (first) file.
+    expect(res).toMatchObject({ ok: true, outputFilename: "notes.md" });
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain("Prefers low deductible");
+    expect(call.userText).toContain('The file "quote.pdf" is attached.');
+    expect(call.inlineParts).toHaveLength(1);
+  });
+
+  it("shares the text budget across files (tail sections drop when exhausted)", async () => {
+    const generate = generateOk("done");
+    const res = await executeAgentRun(
+      textInput({
+        data: Buffer.from("z".repeat(AGENT_INPUT_MAX_TEXT_CHARS)),
+        extraFiles: [
+          { filename: "late.txt", mime: "text/plain", data: Buffer.from("never fits") }
+        ]
+      }),
+      { generate }
+    );
+    expect(res.ok).toBe(true);
+    const call = generate.mock.calls[0][0];
+    // The second file's content was clipped away, not treated as an error.
+    expect(call.userText).not.toContain("never fits");
+    expect(call.userText).not.toContain('from "late.txt"');
+  });
+
+  it("fails the whole run on one unsupported / empty extra file, naming it", async () => {
+    const generate = generateOk("x");
+    expect(
+      await executeAgentRun(
+        textInput({
+          extraFiles: [{ filename: "photo.jpg", mime: "image/jpeg", data: Buffer.from("x") }]
+        }),
+        { generate }
+      )
+    ).toEqual({ ok: false, error: "unsupported_type", detail: "photo.jpg" });
+    expect(
+      await executeAgentRun(
+        textInput({
+          extraFiles: [{ filename: "blank.txt", mime: "text/plain", data: Buffer.from("  ") }]
+        }),
+        { generate }
+      )
+    ).toEqual({ ok: false, error: "empty_content", detail: "blank.txt" });
+    expect(generate).not.toHaveBeenCalled();
+  });
+
+  it("refuses more than the per-run file cap", async () => {
+    const generate = generateOk("x");
+    const extras = Array.from({ length: 5 }, (_, i) => ({
+      filename: `f${i}.txt`,
+      mime: "text/plain",
+      data: Buffer.from("content")
+    }));
+    const res = await executeAgentRun(textInput({ extraFiles: extras }), { generate });
+    expect(res).toEqual({ ok: false, error: "too_many_files", detail: "6 files" });
     expect(generate).not.toHaveBeenCalled();
   });
 });
@@ -181,7 +297,7 @@ describe("executeAgentRun (failure modes)", () => {
     const res = await executeAgentRun(textInput({ inputMime: "image/png" }), {
       generate: generateOk("x")
     });
-    expect(res).toEqual({ ok: false, error: "unsupported_type" });
+    expect(res).toEqual({ ok: false, error: "unsupported_type", detail: "intake.txt" });
   });
 
   it("reports model_unavailable without an API key", async () => {

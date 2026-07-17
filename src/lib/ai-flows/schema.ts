@@ -714,7 +714,7 @@ const nonBranchStepMembers = [
     id: stepId,
     type: z.literal("doc_extract"),
     // Template resolving to a document ref (an `email-attachments:<path>`
-    // value). Omitted = {{trigger.document}}.
+    // or `business-docs:<documentId>` value). Omitted = {{trigger.document}}.
     sourceTemplate: z.string().min(1).max(300).optional(),
     fields: z.array(extractFieldSchema).min(1).max(15),
     fileAs: z
@@ -722,7 +722,21 @@ const nonBranchStepMembers = [
         titleTemplate: z.string().min(1).max(200),
         // Who the filed document is retrievable by (default staff — filed
         // back-office paperwork must not leak into customer-facing answers).
-        audience: z.enum(["clients", "staff", "both"]).optional()
+        audience: z.enum(["clients", "staff", "both"]).optional(),
+        // ── Record sinks (all optional): make the filed copy a structured
+        // contact RECORD, not just a library document. ──
+        // Link to the contact whose phone this var holds — an earlier
+        // step's var OR one of THIS step's own extracted fields (the
+        // document itself often carries the customer's number). Scope rule
+        // enforced in validateDefinitionSemantics.
+        contactPhoneVar: varName.optional(),
+        // Stamp the extracted fields onto record_fields (carrier, premium,
+        // deductible, ... — whatever the step extracts).
+        recordFieldsFromExtraction: z.boolean().optional(),
+        // Parse this extracted field (must be one of the step's own field
+        // names) as the record's renewal_date, feeding the renewal sweep +
+        // escalation ladder.
+        renewalDateField: varName.optional()
       })
       .optional(),
     when: whenSchema.optional()
@@ -1070,12 +1084,18 @@ const nonBranchStepMembers = [
     when: whenSchema.optional()
   }),
   // Run a saved Agent (a reusable instruction set from /dashboard/agents)
-  // against flow content: the rendered `input` template is handed to the
+  // against flow content: either the rendered `input` template (text) or a
+  // DOCUMENT (`documentTemplate`, an email-attachments:<path> /
+  // business-docs:<id> ref — default {{trigger.document}}) is handed to the
   // agent's instructions on central Gemini and the produced artifact lands
   // in {{vars.<saveAs>}} for later steps (send_email body, notify_owner,
-  // extract_text, ...). Metered into the shared AI budget. The write-time
-  // validator (validateRunAgentSteps) checks the agent exists and is
-  // enabled; the runtime re-checks at execution.
+  // extract_text, ...). Exactly one of input/documentTemplate (enforced in
+  // validateDefinitionSemantics). `saveDocument` additionally files the
+  // artifact into Business Documents (staff-only audience — an automated
+  // run must never widen output to customer channels). Metered into the
+  // shared AI budget. The write-time validator (validateRunAgentSteps)
+  // checks the agent exists and is enabled; the runtime re-checks at
+  // execution.
   z.object({
     id: stepId,
     type: z.literal("run_agent"),
@@ -1084,7 +1104,19 @@ const nonBranchStepMembers = [
     /** Editor display hint captured when the agent was picked. */
     agentName: z.string().min(1).max(120).optional(),
     /** Template rendered into the agent's input (e.g. "{{trigger.windowText}}"). */
-    input: z.string().min(1).max(8000),
+    input: z.string().min(1).max(8000).optional(),
+    /**
+     * Template resolving to a document ref the agent runs on instead of
+     * text — usually {{trigger.document}} (the triggering email's PDF/text
+     * attachment); a trigger with no document SKIPS the step gracefully.
+     */
+    documentTemplate: z.string().min(1).max(300).optional(),
+    /** File the artifact into Business Documents (title template). */
+    saveDocument: z
+      .object({
+        titleTemplate: z.string().min(1).max(200)
+      })
+      .optional(),
     /** The artifact lands in {{vars.<saveAs>}}. */
     saveAs: varName,
     when: whenSchema.optional()
@@ -1391,7 +1423,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "generate_image":
       return [step.promptTemplate, step.inputImageTemplate ?? ""];
     case "run_agent":
-      return [step.input];
+      return [step.input ?? "", step.documentTemplate ?? "", step.saveDocument?.titleTemplate ?? ""];
     // The call script, known-details note, and transfer pre-alert all render
     // against run vars.
     case "place_ai_call":
@@ -2034,6 +2066,44 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
+    // A run_agent needs EXACTLY ONE input source: rendered text (`input`)
+    // or a document ref (`documentTemplate`). Enforced here because a
+    // discriminatedUnion member can't hold a refine.
+    if (step.type === "run_agent") {
+      if (!step.input && !step.documentTemplate) {
+        issues.push(
+          `Step "${step.id}" runs an agent but has nothing to run it on; set "input" (text) or "documentTemplate" (a document).`
+        );
+      } else if (step.input && step.documentTemplate) {
+        issues.push(
+          `Step "${step.id}" sets both "input" and "documentTemplate"; use only one.`
+        );
+      }
+    }
+
+    // doc_extract record sinks: the contact phone may come from an earlier
+    // step's var OR from one of THIS step's own extracted fields (the
+    // document often carries the customer's number — extraction precedes
+    // filing at runtime). The renewal date is extraction-only.
+    if (step.type === "doc_extract" && step.fileAs) {
+      const ownFields = new Set(step.fields.map((f) => f.name));
+      if (
+        step.fileAs.contactPhoneVar &&
+        !vars.has(step.fileAs.contactPhoneVar) &&
+        !ENGINE_VARS.has(step.fileAs.contactPhoneVar) &&
+        !ownFields.has(step.fileAs.contactPhoneVar)
+      ) {
+        issues.push(
+          `Step "${step.id}" links the filed document to {{vars.${step.fileAs.contactPhoneVar}}}, which no earlier step or extracted field produces.`
+        );
+      }
+      if (step.fileAs.renewalDateField && !ownFields.has(step.fileAs.renewalDateField)) {
+        issues.push(
+          `Step "${step.id}" reads the renewal date from "${step.fileAs.renewalDateField}", which is not one of the step's extracted fields.`
+        );
+      }
+    }
+
     // The MMS attachment reads the image URL from a var an EARLIER
     // generate_image step must have produced (same scope rule as urlVar).
     if (
@@ -2154,6 +2224,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs);
     } else if (step.type === "run_agent") {
       vars.add(step.saveAs);
+      // Filing exposes the filed document's id/title to later templates.
+      if (step.saveDocument) {
+        vars.add(`${step.saveAs}_document_id`);
+        vars.add(`${step.saveAs}_document_title`);
+      }
     }
   };
 

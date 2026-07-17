@@ -350,6 +350,13 @@ export default async function CustomerDetailPage({ params }: Props) {
                       Expired
                     </span>
                   )}
+                  {doc.record_fields && Object.keys(doc.record_fields).length > 0 && (
+                    <span className="w-full text-[11px] text-parchment/50">
+                      {Object.entries(doc.record_fields)
+                        .map(([key, value]) => `${key}: ${value}`)
+                        .join(" · ")}
+                    </span>
+                  )}
                 </li>
               );
             })}
