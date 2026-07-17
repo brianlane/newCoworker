@@ -17,7 +17,9 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-const BUSINESS_ID = process.argv[2] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+// Default: New Coworker (HQ, internal) — the real SMS this sends meters
+// against our own tenant's cap, never a customer's.
+const BUSINESS_ID = process.argv[2] ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const PHONE = process.argv[3] ?? "+16026866672";
 const MESSAGE = process.argv[4] ?? "NewCoworker smoke test - dashboard SMS tool is live.";
 const ASK = `Text ${PHONE} with this message: ${MESSAGE}`;

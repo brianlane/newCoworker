@@ -20,7 +20,9 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-const BUSINESS_ID = process.argv[2] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+// Default: New Coworker (HQ, internal) — smokes write test rules into
+// memory_md, so they must land on our own tenant, never a customer's.
+const BUSINESS_ID = process.argv[2] ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const STAMP = new Date().toISOString().replace(/[^0-9]/g, "").slice(8, 14); // HHMMSS
 const RULE = `Never reveal customer wait-time estimates over SMS (smoke ${STAMP}).`;
 

@@ -27,6 +27,26 @@ shared, reusable bits they depend on live in tested modules:
 
 Run from the repo root, e.g. `tsx debug/<script>.ts`.
 
+## Internal test tenant: New Coworker (HQ, internal)
+
+All smoke/e2e-style scripts default to the **New Coworker (HQ, internal)**
+tenant (`8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d`, srv1806097, DID
++1 602 313 1823) — our own dogfood tenant that also serves the homepage demo
+voice line and the site webchat. There is deliberately **no separate smoke
+tenant or box anymore**: the old "NCW Flow Test" tenant (no DID, no box) and
+the KVM1 smoke clone were retired when HQ was onboarded
+(`scripts/oneshot/onboard-hq-tenant.ts`, Jul 16 2026).
+
+Consequences to keep in mind:
+
+- Smokes that write (memory rules, SMS sends, LLM turns) land on HQ's own
+  budget/history by default — never a customer's. Pass an explicit
+  `businessId` only when debugging a specific tenant.
+- HQ is **long-lived**: don't bulk-delete its rows. `flow-test-reset.ts` is
+  scoped to the test flow's runs for exactly this reason.
+- The flow harness (`flow-test-setup/kickoff/reset`) layers on top of HQ and
+  never creates the business or buys a DID.
+
 ## Security rules (agents & operators)
 
 Non-negotiable rules for anyone — human or AI agent — running or writing
@@ -97,6 +117,9 @@ production secrets, root SSH, and tenant PII all meet.
 | `smoke-aiflow-screenshot.ts` | **Contained smoke test** of the screenshot pipeline: render-service capture over VPS localhost, `aiflow-screenshots` bucket upload → signed-URL round-trip → delete, and ai-flow-worker liveness (401 without cron auth). Sends no SMS/MMS/email. |
 | `smoke-owner-email.ts` | **End-to-end smoke** of the AiFlow owner-mailbox email path: POSTs production `/api/aiflows/send-owner-email` exactly like the ai-flow-worker (bearer gateway token, **no Origin header**), so it also catches CSRF-exemption regressions on that route. **Important** — this is the only test shaped like the real worker call; a browser-shaped curl can pass while every worker send 403s. ⚠️ Sends a real email from the owner's connected mailbox. |
 | `smoke-dashboard-sms.ts` | **End-to-end smoke** of the dashboard chat `send_sms` tool: enqueues a real `dashboard_chat_jobs` row asking the coworker to text a number, waits for worker → Rowboat (→ Gemini) → Telnyx, prints the reply. **Important** — exercises the full production SMS tool-call pipeline in one shot. ⚠️ Sends a real text (spend-cap gated). |
+| `flow-test-setup.ts` | **AiFlow e2e harness (setup).** Lays the real-phone flow harness on the HQ tenant: staff-contact protection off, tester roster row, staff-assistant replies off, and a fresh TEST COPY of Truly's live Privyr flow (quiet hours widened). Never creates a business or buys a DID — asserts the HQ tenant + demo DID exist. Dry-run by default; `--apply` to write. |
+| `flow-test-kickoff.ts` | **AiFlow e2e harness (run).** Enqueues one run of the HQ tenant's TEST COPY flow, simulating the Privyr "New Lead" alert email for the tester: `tsx debug/flow-test-kickoff.ts [scenarioLabel]`. One scenario at a time (parked runs share the tester's number). ⚠️ Texts the tester's real phone. |
+| `flow-test-reset.ts` | **AiFlow e2e harness (reset).** Deletes the TEST COPY flow's finished runs (scoped by flow id — HQ is long-lived, so never business-wide) so the duplicate-lead guard treats the tester as fresh. `--all` includes parked/queued runs. |
 | `roll-rowboat.ts` | **Rowboat-fork rollout** for one tenant: fetch + detached-checkout a SHA/branch in `/opt/rowboat/src`, rebuild + recreate the container, HTTP health check. **Important** — `deploy-client.sh` only builds Rowboat at first provision and the worker-rollout scripts never touch it, so this is the only way a fork fix reaches existing tenants short of a re-provision. ⚠️ Restarts the live Rowboat container. |
 | `rowboat-logs.ts` | Tail a tenant's Rowboat container logs filtered by pattern (`tool\|webhook\|send_sms` by default): `tsx debug/rowboat-logs.ts [businessId] [pattern] [--since=15m] [--tail=40] [--raw]`. The Rowboat-side complement to `logs.ts`. **Important** — `--raw` dumps the last ~200KB of the window unfiltered, the go-to when you don't yet know which string to grep for (an unexplained failure whose log line matches no known keyword). Read-only. |
 | `vps-exec.ts` | Run an arbitrary shell command on a tenant VPS over SSH: `tsx debug/vps-exec.ts <businessId> "<command>" [--timeout=120]`. The swiss-army knife behind ad-hoc fleet debugging (container status, env audits, fork-source inspection). ⚠️ Runs as root on a live box. |
@@ -107,7 +130,7 @@ production secrets, root SSH, and tenant PII all meet.
 | `requeue-sms-deadletters.ts` | **Recovery.** Lists dead-lettered `sms_inbound_jobs` (age, attempts, sender, text preview, last_error) and resets them to `pending` with a fresh retry budget so the worker cron re-drains them — used after fixing an outage's root cause (e.g. the June 19 stale-gateway-token incident). Skips permanently-invalid rows unless targeted with `--error`. Filters: `--business <id>`, `--since <iso>`, `--error <substr>`. Dry-run by default; ⚠️ `--apply` makes the coworker send late replies to real customers. |
 | `bench-local.ts` | **On-box local-model benchmark.** SSHes into a tenant VPS and replays reconstructed `/dashboard/chat` prompts against the box's own Ollama (native `/api/chat`, so prefill vs decode timing is split out). Defaults to the standard-tier config (`qwen3:4b-instruct`, `num_ctx=16384`); pass `--model llama3.2:3b --num-ctx 4096` to bench a starter/KVM2 box with its real tier config (model-suffixed output file so the qwen baseline isn't clobbered). Writes `.bench-results-local*.json`. Read-only. |
 | `pull-cost-data.ts` | **Read-only cost/usage pull feeding the tier-economics canvas.** For one business (default Amy): the full Hostinger VPS catalog (every KVM SKU × term length), Supabase usage rollups (`daily_usage`, voice settlements, SMS both directions, Gemini spend-fuse rows, active subscription), and Telnyx invoice actuals via `/v2/detail_records` (last 90 days, per record type) so margin math uses invoice rates instead of list rates. Writes `.cost-data-<businessId>.json`. Flags: `--business <uuid>`, `--telnyx-days <n>`. Strictly read-only. |
-| `smoke-voice-concurrency.ts` | **Voice-bridge concurrency smoke.** Opens N simultaneous fake-Telnyx media streams (default 3 — the standard tier's `maxConcurrentCalls`) against a tenant VPS's voice-bridge, each spinning up a REAL Gemini Live session, streaming 20 ms L16 frames at real-time cadence and counting two-way audio. Mints + signs real v2 stream URLs (nonce insert included), so it exercises the exact `telnyx-voice-inbound` handshake. Used to prove the KVM2 box sustains 3 concurrent calls. `--business <uuid>` (default: the KVM2 smoke clone), `--calls N`, `--duration-s N`. ⚠️ Small Gemini Live spend + transcript/telemetry rows on the target business — point it at a scratch clone. |
+| `smoke-voice-concurrency.ts` | **Voice-bridge concurrency smoke.** Opens N simultaneous fake-Telnyx media streams (default 3 — the standard tier's `maxConcurrentCalls`) against a tenant VPS's voice-bridge, each spinning up a REAL Gemini Live session, streaming 20 ms L16 frames at real-time cadence and counting two-way audio. Mints + signs real v2 stream URLs (nonce insert included), so it exercises the exact `telnyx-voice-inbound` handshake. Used to prove the KVM2 box sustains 3 concurrent calls. `--business <uuid>` (default: New Coworker HQ), `--calls N`, `--duration-s N`. ⚠️ Small Gemini Live spend + transcript/telemetry rows on the target business — keep it on the HQ tenant. |
 | `bench-kvm2-local.ts` | **KVM2-profile benchmark, no VPS needed.** Replays the same reconstructed `/dashboard/chat` prompts as `bench-local.ts` (Amy's owner instructions + memory from `.bench-context.json`) against the `docker-compose.kvm2.yml` Ollama (2 CPU / 8 GB caps, `llama3.2:3b`, `num_ctx=4096` to match a real starter box). Prereq `npm run integration:up-kvm2`; `KVM2_BENCH_QUICK=1` runs just the cold+warm base cell (full matrix takes hours on laptop Docker). Writes `.bench-results-kvm2-local.json`. Read-only / local-only. |
 
 `_shared.ts` holds the common helpers (`loadEnv`, `makeHostingerClient`,

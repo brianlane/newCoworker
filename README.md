@@ -161,6 +161,17 @@ tsx debug/logs.ts        [businessId]   # tail worker memory/job logs
 tsx debug/check-ollama.ts [businessId]  # verify Ollama reachable + JSON extraction
 ```
 
+**Internal smoke/e2e target: the New Coworker (HQ, internal) tenant**
+(`8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d`, srv1806097, +1 602 313 1823 — also
+the homepage demo voice line and the site webchat). Every smoke/e2e-style
+`debug/` script defaults to it, so test writes (memory rules, SMS sends, LLM
+turns, Gemini Live sessions) burn our own budget on our own box — never a
+customer's. There is no separate smoke tenant or box: the old "NCW Flow Test"
+tenant and the KVM1/KVM2 smoke clones were retired when HQ was onboarded
+(`scripts/oneshot/onboard-hq-tenant.ts`). The hermetic `tests/e2e/*` suite
+(CI "E2E (live AI + AiFlows)") is fixture-based and targets no live tenant.
+See [debug/README.md](debug/README.md#internal-test-tenant-new-coworker-hq-internal).
+
 > ⚠️ These touch production (service-role key + decryptable VPS SSH keys via
 > `SECRETS_ENCRYPTION_KEY`, and they recreate live containers). Before running
 > or writing anything here, read the **Security rules (agents & operators)**

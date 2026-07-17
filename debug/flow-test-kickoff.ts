@@ -1,6 +1,8 @@
 /**
- * Enqueue one run of the NCW Flow Test tenant's copy of Truly's Privyr
- * flow, simulating the Privyr "New Lead" alert email for the tester. Each
+ * Enqueue one run of the New Coworker (HQ, internal) tenant's copy of
+ * Truly's Privyr flow, simulating the Privyr "New Lead" alert email for the
+ * tester (run flow-test-setup.ts first to lay the harness on the HQ tenant).
+ * Each
  * invocation gets a unique dedupe key so scenarios can repeat — but run
  * flow-test-reset.ts first, or the duplicate-lead guard will (correctly)
  * suppress the intro for a lead with a recent finished run.
@@ -15,7 +17,8 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-const TEST_BUSINESS_ID = "f1047e50-0000-4000-8000-000000000001";
+/** New Coworker (HQ, internal) — the single internal smoke/e2e tenant. */
+const TEST_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const FLOW_NAME = "Lead intake & follow-up (Privyr) (TEST COPY of Truly)";
 const TESTER_NAME = "Brian";
 const TESTER_E164 = "+16026866672";
@@ -41,7 +44,7 @@ if (error || !flow) throw new Error(`flow lookup: ${error?.message ?? "not found
 const stamp = Date.now();
 const windowText = [
   `New Lead: ${TESTER_NAME}`,
-  `Congrats! You have a new lead from NCW Flow Test: ${TESTER_NAME}. Lead via Privyr ` +
+  `Congrats! You have a new lead from New Coworker HQ: ${TESTER_NAME}. Lead via Privyr ` +
     `Lead Forms - Auto Lead Name: ${TESTER_NAME} Phone: ${TESTER_E164} Email: Comments: ` +
     "Form Name: Auto Lead Lead Form Url: https://www.privyr.com/form/testtest " +
     "Source: Privyr Lead Forms - Auto Lead View this lead in Privyr to easily " +

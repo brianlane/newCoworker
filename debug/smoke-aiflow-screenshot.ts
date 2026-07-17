@@ -30,7 +30,9 @@ import {
   resolveTenantVpsPublicIp
 } from "../scripts/lib/redeploy-tenant-vps.ts";
 
-const BUSINESS_ID = process.env.SMOKE_BUSINESS_ID ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+// Default: New Coworker (HQ, internal) — its box runs the render sidecar
+// (standard tier), so the smoke exercises our own hardware by default.
+const BUSINESS_ID = process.env.SMOKE_BUSINESS_ID ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const BUCKET = "aiflow-screenshots";
 
 // Runs on the VPS. The bearer is read from /opt/aiflow-render/.env in-place and
