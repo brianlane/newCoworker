@@ -238,7 +238,6 @@ export default function HomePage() {
             <Phone className="h-5 w-5" aria-hidden />
             +1 (602) 313-1823
           </a>
-          <p className="mt-4 text-xs text-parchment/40">Demo calls are capped at 5 minutes.</p>
         </div>
       </section>
 
