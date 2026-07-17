@@ -140,6 +140,7 @@ export default async function CustomerDetailPage({ params }: Props) {
         .then((row) => tenantMailboxAddress(row.local_part))
         .catch(() => null),
       listSmsLinksForContact(business.id, memory.customer_e164, {
+        aliases: memory.alias_e164s ?? [],
         includeClicks: true,
         client: db
       }).catch(() => [])

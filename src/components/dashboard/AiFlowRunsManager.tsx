@@ -294,9 +294,10 @@ export function AiFlowRunsManager({
     };
     if (json.ok && json.data) {
       setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
-      if (json.data.links) {
-        setRunLinks((s) => ({ ...s, [runId]: json.data!.links! }));
-      }
+      // Always seed the cache (default []) so the loaded-guard above holds
+      // even when the response carries no links — otherwise every expand
+      // would re-fetch the run detail endpoint.
+      setRunLinks((s) => ({ ...s, [runId]: json.data!.links ?? [] }));
     }
   };
 

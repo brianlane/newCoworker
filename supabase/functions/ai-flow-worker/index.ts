@@ -4475,8 +4475,11 @@ async function sendGroupSmsStep(
     // Log one outbound row per recipient AND record a customer interaction for
     // each, mirroring the 1:1 path so every texted number shows up in Text
     // history and on the Customers page.
+    // sms_outbound_log_id is a single FK, so the shared group links pair with
+    // the FIRST recipient's log row — enough for thread stats/deep links.
+    let groupOutboundLogId: string | null = null;
     for (const to of recipients) {
-      await logOutboundSms(supabase, run, {
+      const outboundLogId = await logOutboundSms(supabase, run, {
         to,
         from: cfg.from || null,
         body: text,
@@ -4484,8 +4487,14 @@ async function sendGroupSmsStep(
         telnyxMessageId: messageId,
         channel: sendChannel
       });
+      groupOutboundLogId ??= outboundLogId;
       await recordLeadCustomerProfile(supabase, run, scope, to);
     }
+    await linkSmsLinksToOutboundLog(
+      supabase,
+      groupShortened.links.map((l) => l.shortCode),
+      groupOutboundLogId
+    );
     return { kind: "ok", result: { to: recipients, group: true, messageId } };
   } catch (e) {
     await release();

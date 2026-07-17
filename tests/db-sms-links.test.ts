@@ -128,6 +128,16 @@ describe("listSmsLinksForContact", () => {
       await listSmsLinksForContact("biz-1", "+100", { client: db as never })
     ).toEqual([]);
   });
+
+  it("spans merged alias numbers in the recipient filter", async () => {
+    const links = builder({ data: [linkRow], error: null });
+    const db = makeDb({ sms_links: [links], ai_flows: [builder(flowRows)] });
+    await listSmsLinksForContact("biz-1", "+16478879033", {
+      client: db as never,
+      aliases: ["+16025550111", "+16478879033", ""]
+    });
+    expect(links.in).toHaveBeenCalledWith("to_e164", ["+16478879033", "+16025550111"]);
+  });
 });
 
 describe("link enrichment", () => {
@@ -200,6 +210,24 @@ describe("link enrichment", () => {
         includeClicks: true
       })
     ).rejects.toThrow("fetchClickEvents: clicks down");
+  });
+
+  it("only queries click timelines for links that have clicks", async () => {
+    const unclicked = { ...linkRow, id: "link-2", click_count: 0 };
+    const clicks = builder(clickRows);
+    const db = makeDb({
+      sms_links: [builder({ data: [linkRow, unclicked], error: null })],
+      ai_flows: [builder(flowRows)],
+      sms_link_clicks: [clicks]
+    });
+    const rows = await listSmsLinksForContact("biz-1", "+16478879033", {
+      client: db as never,
+      includeClicks: true
+    });
+    // One per-link query for the clicked link; the unclicked one is skipped.
+    expect(clicks.eq).toHaveBeenCalledTimes(1);
+    expect(clicks.eq).toHaveBeenCalledWith("link_id", "link-1");
+    expect(rows.find((r) => r.id === "link-2")?.clicks).toEqual([]);
   });
 
   it("caps the per-link click timeline at the limit", async () => {

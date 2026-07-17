@@ -47,6 +47,14 @@ export type SmsLinkView = SmsLinkRow & {
 
 export const DEFAULT_LINK_CLICKS_LIMIT = 20;
 
+/**
+ * Ceiling on how many links get an inline click TIMELINE per enrichment
+ * call. Aggregates (click_count / first / last) always render; past the cap
+ * the expandable per-click list is simply absent — this bounds the per-link
+ * query fan-out on very large views (analytics can load 500 links).
+ */
+export const MAX_CLICK_TIMELINE_LINKS = 100;
+
 function appBaseUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/+$/, "");
 }
@@ -75,25 +83,30 @@ async function fetchFlowNames(
   return out;
 }
 
-// Only called from enrichLinks with a non-empty id list.
+/**
+ * Newest clicks per link, one bounded query PER link (clicked links only).
+ * A single globally-ordered batch would let a few links with the newest
+ * clicks consume the whole scan and starve the others' timelines.
+ */
 async function fetchClickEvents(
-  linkIds: string[],
+  links: readonly Pick<SmsLinkRow, "id" | "click_count">[],
   client: SupabaseClient,
   limit = DEFAULT_LINK_CLICKS_LIMIT
 ): Promise<Map<string, SmsLinkClickRow[]>> {
   const out = new Map<string, SmsLinkClickRow[]>();
-  const { data, error } = await client
-    .from("sms_link_clicks")
-    .select("id, link_id, clicked_at")
-    .in("link_id", linkIds)
-    .order("clicked_at", { ascending: false })
-    .limit(linkIds.length * limit);
-  if (error) throw new Error(`fetchClickEvents: ${error.message}`);
-  for (const row of (data as SmsLinkClickRow[] | null) ?? []) {
-    const list = out.get(row.link_id) ?? [];
-    if (list.length < limit) list.push(row);
-    out.set(row.link_id, list);
-  }
+  const clicked = links.filter((l) => l.click_count > 0).slice(0, MAX_CLICK_TIMELINE_LINKS);
+  await Promise.all(
+    clicked.map(async (link) => {
+      const { data, error } = await client
+        .from("sms_link_clicks")
+        .select("id, link_id, clicked_at")
+        .eq("link_id", link.id)
+        .order("clicked_at", { ascending: false })
+        .limit(limit);
+      if (error) throw new Error(`fetchClickEvents: ${error.message}`);
+      out.set(link.id, ((data as SmsLinkClickRow[] | null) ?? []).slice(0, limit));
+    })
+  );
   return out;
 }
 
@@ -116,10 +129,7 @@ async function enrichLinks(
       ? await resolveContactNames(businessId, numbers, client).catch(() => new Map())
       : new Map();
   const clicksByLink = opts.includeClicks
-    ? await fetchClickEvents(
-        rows.map((r) => r.id),
-        client
-      )
+    ? await fetchClickEvents(rows, client)
     : new Map<string, SmsLinkClickRow[]>();
 
   return rows.map((row) => ({
@@ -168,19 +178,26 @@ export async function listSmsLinksByOutboundLogIds(
 export async function listSmsLinksForContact(
   businessId: string,
   toE164: string,
-  opts: { days?: number; includeClicks?: boolean; client?: SupabaseClient; now?: Date } = {}
+  opts: {
+    days?: number;
+    includeClicks?: boolean;
+    client?: SupabaseClient;
+    now?: Date;
+    /** Merged alias numbers — links stored under any of them still belong to this contact. */
+    aliases?: string[];
+  } = {}
 ): Promise<SmsLinkView[]> {
   const db = opts.client ?? (await createSupabaseServiceClient());
   const days = opts.days ?? 90;
-  let query = db
+  const numbers = [...new Set([toE164, ...(opts.aliases ?? [])].filter(Boolean))];
+  const { data, error } = await db
     .from("sms_links")
     .select(SMS_LINK_SELECT)
     .eq("business_id", businessId)
-    .eq("to_e164", toE164)
+    .in("to_e164", numbers)
     .gte("created_at", daysCutoff(days, opts.now))
     .order("created_at", { ascending: false })
     .limit(100);
-  const { data, error } = await query;
   if (error) throw new Error(`listSmsLinksForContact: ${error.message}`);
   return enrichLinks(businessId, (data as SmsLinkRow[] | null) ?? [], db, opts);
 }

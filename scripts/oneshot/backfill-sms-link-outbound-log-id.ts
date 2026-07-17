@@ -104,13 +104,21 @@ async function main() {
   }
 
   let matched = 0;
+  // One outbound row pairs at most one link: without this, two links from
+  // separate texts in the same run to the same number could both claim the
+  // same log row and misalign thread pairing.
+  const consumed = new Set<string>();
   for (const link of rows) {
     if (!link.run_id || !link.to_e164) continue;
     const candidates = (byRun.get(link.run_id) ?? []).filter(
-      (o) => o.business_id === link.business_id && o.to_e164 === link.to_e164
+      (o) =>
+        o.business_id === link.business_id &&
+        o.to_e164 === link.to_e164 &&
+        !consumed.has(o.id)
     );
     const hit = closestOutbound(link, candidates);
     if (!hit) continue;
+    consumed.add(hit.id);
     matched += 1;
     console.log(`${apply ? "APPLY" : "DRY"} ${link.short_code} → outbound ${hit.id}`);
     if (apply) {
