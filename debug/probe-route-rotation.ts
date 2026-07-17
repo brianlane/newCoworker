@@ -32,7 +32,10 @@ import { loadEnv } from "./_shared.ts";
 import { callRowboatChatOnce } from "../supabase/functions/_shared/sms_rowboat.ts";
 import { parseRoutedAgent } from "../supabase/functions/_shared/ai_flows/engine.ts";
 
-const BUSINESS_ID = process.env.SMOKE_BUSINESS_ID ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+// Default: New Coworker (HQ, internal) — each probe costs an LLM turn on the
+// tenant box, so it burns our own budget by default (roster = the tester,
+// seeded by flow-test-setup.ts).
+const BUSINESS_ID = process.env.SMOKE_BUSINESS_ID ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const TIMEOUT_MS = 60_000;
 // Mirrors ROUTE_MAX_LOOKUPS in the worker: hard stop for the escalation chain.
 const MAX_CHAIN = 8;

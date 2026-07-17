@@ -19,7 +19,9 @@ import { loadEnv } from "./_shared.ts";
 
 loadEnv();
 
-const BUSINESS_ID = process.argv[2] ?? "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+// Default: New Coworker (HQ, internal) — smoke turns burn the tenant's AI
+// budget, so they run against our own tenant unless told otherwise.
+const BUSINESS_ID = process.argv[2] ?? "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const QUESTION = process.argv[3] ?? "Quick check: what is Gabby's phone number?";
 const POLL_TIMEOUT_MS = 5 * 60 * 1000;
 const POLL_INTERVAL_MS = 1500;

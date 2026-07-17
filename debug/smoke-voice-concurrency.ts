@@ -34,7 +34,9 @@ import { signStreamUrlPayload, newStreamNonce } from "../src/lib/telnyx/stream-u
 
 loadEnv();
 
-const DEFAULT_BUSINESS = "94f22a22-c7fe-46fb-a8ef-a3583e5ffe19"; // KVM2 smoke clone
+// New Coworker (HQ, internal) — the smoke tenants/clones are retired; the
+// spend + transcript rows this writes land on our own tenant by default.
+const DEFAULT_BUSINESS = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
