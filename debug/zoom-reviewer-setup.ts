@@ -46,11 +46,16 @@ if (!APPLY) {
 //    Minted at runtime — there is no hardcoded value here.
 const minted = ["Zr", randomBytes(12).toString("base64url")].join("-");
 {
-  const { data: list, error: listErr } = await db.auth.admin.listUsers({ perPage: 1000 });
-  if (listErr) throw new Error(`list users: ${listErr.message}`);
-  const existing = list.users.find(
-    (u) => (u.email ?? "").toLowerCase() === REVIEWER_EMAIL.toLowerCase()
-  );
+  // Paginate the whole user list so idempotency survives >1000 auth users.
+  let existing: { id: string } | undefined;
+  for (let page = 1; ; page++) {
+    const { data: list, error: listErr } = await db.auth.admin.listUsers({ page, perPage: 1000 });
+    if (listErr) throw new Error(`list users: ${listErr.message}`);
+    existing = list.users.find(
+      (u) => (u.email ?? "").toLowerCase() === REVIEWER_EMAIL.toLowerCase()
+    );
+    if (existing || list.users.length < 1000) break;
+  }
   if (existing) {
     const { error } = await db.auth.admin.updateUserById(existing.id, { password: minted });
     if (error) throw new Error(`update user: ${error.message}`);
