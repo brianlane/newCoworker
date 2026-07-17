@@ -77,24 +77,60 @@ describe("buildAgentRunPrompt", () => {
   it("inlines text attachments with the filename and format word", () => {
     const prompt = buildAgentRunPrompt({
       instructions: "  Summarize the intake form.  ",
-      inputFilename: "intake.txt",
       formatWord: "markdown",
-      inputText: "Name: Pat"
+      textSections: [{ filename: "intake.txt", text: "Name: Pat" }],
+      attachedFilenames: []
     });
     expect(prompt).toContain("Summarize the intake form.");
     expect(prompt).toContain('Attached material (from "intake.txt", may be truncated):');
     expect(prompt).toContain("Name: Pat");
     expect(prompt).toContain("Produce the result as markdown.");
+    expect(prompt).not.toContain("is attached");
   });
 
-  it("announces an attached file when no text is inlined (PDF path)", () => {
+  it("labels every text section in a multi-file run", () => {
     const prompt = buildAgentRunPrompt({
-      instructions: "Extract the totals.",
-      inputFilename: "invoice.pdf",
-      formatWord: "markdown"
+      instructions: "Compare the quotes.",
+      formatWord: "markdown",
+      textSections: [
+        { filename: "carrier-a.txt", text: "Premium: $1,200" },
+        { filename: "carrier-b.txt", text: "Premium: $1,350" }
+      ],
+      attachedFilenames: []
     });
-    expect(prompt).toContain('The file "invoice.pdf" is attached.');
-    expect(prompt).not.toContain("Attached material");
+    expect(prompt).toContain('Attached material (from "carrier-a.txt", may be truncated):');
+    expect(prompt).toContain('Attached material (from "carrier-b.txt", may be truncated):');
+    expect(prompt.indexOf("carrier-a.txt")).toBeLessThan(prompt.indexOf("carrier-b.txt"));
+  });
+
+  it("announces attached files when no text is inlined (PDF path)", () => {
+    const one = buildAgentRunPrompt({
+      instructions: "Extract the totals.",
+      formatWord: "markdown",
+      textSections: [],
+      attachedFilenames: ["invoice.pdf"]
+    });
+    expect(one).toContain('The file "invoice.pdf" is attached.');
+    expect(one).not.toContain("Attached material");
+
+    const many = buildAgentRunPrompt({
+      instructions: "Compare the quotes.",
+      formatWord: "markdown",
+      textSections: [],
+      attachedFilenames: ["carrier-a.pdf", "carrier-b.pdf"]
+    });
+    expect(many).toContain('The files "carrier-a.pdf", "carrier-b.pdf" are attached.');
+  });
+
+  it("mixes text sections and attached files in one prompt", () => {
+    const prompt = buildAgentRunPrompt({
+      instructions: "Compare.",
+      formatWord: "markdown",
+      textSections: [{ filename: "notes.txt", text: "Prefers a low deductible" }],
+      attachedFilenames: ["quote.pdf"]
+    });
+    expect(prompt).toContain('Attached material (from "notes.txt", may be truncated):');
+    expect(prompt).toContain('The file "quote.pdf" is attached.');
   });
 });
 

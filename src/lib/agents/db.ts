@@ -27,6 +27,14 @@ export type BusinessAgentRow = {
 export type AgentRunStatus = "running" | "succeeded" | "failed";
 export type AgentRunSource = "manual" | "flow";
 
+/** One attachment of a (possibly multi-file) run, as stored on the row. */
+export type AgentRunInputFileMeta = {
+  filename: string;
+  mime_type: string;
+  document_id: string | null;
+  storage_path: string | null;
+};
+
 export type AgentRunRow = {
   id: string;
   agent_id: string;
@@ -38,6 +46,12 @@ export type AgentRunRow = {
   input_filename: string;
   input_mime_type: string;
   input_storage_path: string | null;
+  /**
+   * Every attachment of the run, in order (the scalar input_* columns
+   * mirror the first). NULL on pre-multi-file rows — readers treat that as
+   * a single-file run described by the scalars.
+   */
+  input_files: AgentRunInputFileMeta[] | null;
   output_md: string;
   output_filename: string;
   output_mime_type: string;
@@ -149,6 +163,7 @@ export async function insertAgentRun(
         | "input_filename"
         | "input_mime_type"
         | "input_storage_path"
+        | "input_files"
       >
     >,
   client?: SupabaseClient
@@ -211,6 +226,8 @@ export async function getAgentRun(
 /**
  * Storage paths of every archived run input for an agent — collected before
  * an agent delete so the cascade doesn't orphan objects in the bucket.
+ * Multi-file runs archive one object per fresh upload (input_files), while
+ * the scalar column carries only the first — read both and de-dup.
  */
 export async function listAgentRunInputPaths(
   businessId: string,
@@ -220,14 +237,21 @@ export async function listAgentRunInputPaths(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("agent_runs")
-    .select("input_storage_path")
+    .select("input_storage_path, input_files")
     .eq("business_id", businessId)
-    .eq("agent_id", agentId)
-    .not("input_storage_path", "is", null);
+    .eq("agent_id", agentId);
   if (error) throw new Error(`listAgentRunInputPaths: ${error.message}`);
-  return ((data ?? []) as Array<{ input_storage_path: string | null }>)
-    .map((r) => r.input_storage_path)
-    .filter((p): p is string => typeof p === "string" && p.length > 0);
+  const paths = new Set<string>();
+  for (const row of (data ?? []) as Array<{
+    input_storage_path: string | null;
+    input_files: AgentRunInputFileMeta[] | null;
+  }>) {
+    if (row.input_storage_path) paths.add(row.input_storage_path);
+    for (const file of row.input_files ?? []) {
+      if (file.storage_path) paths.add(file.storage_path);
+    }
+  }
+  return [...paths];
 }
 
 export async function listAgentRuns(
