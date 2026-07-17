@@ -74,7 +74,6 @@ export function formatVoiceContactTimeline(events: ContactTimelineEvent[]): stri
 }
 
 // Minimal structural client, mirroring the shared module's shape.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyClient = any;
 
 type InboundJobRow = {

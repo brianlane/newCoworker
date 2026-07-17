@@ -3,6 +3,7 @@ import {
   getTierPricing,
   getPeriodPricing,
   getCommitmentMonths,
+  renewalDateAfterMonths,
   isPaidTier,
   calculateSavingsPercentage,
   type BillingPeriod,
@@ -104,6 +105,32 @@ describe("tier pricing", () => {
 
     it("monthly is 1 month", () => {
       expect(getCommitmentMonths("monthly")).toBe(1);
+    });
+  });
+
+  describe("renewalDateAfterMonths", () => {
+    it("preserves day-of-month for a monthly commitment", () => {
+      const now = new Date(2026, 6, 17, 12, 0, 0);
+      const renewal = renewalDateAfterMonths(now, 1);
+      expect(renewal.getDate()).toBe(17);
+      expect(renewal.getMonth()).toBe(7);
+      expect(renewal.getFullYear()).toBe(2026);
+    });
+
+    it("preserves day-of-month for an annual commitment", () => {
+      const now = new Date(2026, 6, 17, 12, 0, 0);
+      const renewal = renewalDateAfterMonths(now, 12);
+      expect(renewal.getDate()).toBe(17);
+      expect(renewal.getMonth()).toBe(6);
+      expect(renewal.getFullYear()).toBe(2027);
+    });
+
+    it("clamps day-of-month when the target month is shorter", () => {
+      const now = new Date(2026, 0, 31, 12, 0, 0);
+      const renewal = renewalDateAfterMonths(now, 1);
+      expect(renewal.getDate()).toBe(28);
+      expect(renewal.getMonth()).toBe(1);
+      expect(renewal.getFullYear()).toBe(2026);
     });
   });
 

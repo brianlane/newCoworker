@@ -67,6 +67,17 @@ export function getCommitmentMonths(period: BillingPeriod): number {
   return months[period];
 }
 
+/** Commitment end date: now + N months, preserving day-of-month (clamped). */
+export function renewalDateAfterMonths(now: Date, commitmentMonths: number): Date {
+  const originalDay = now.getDate();
+  const renewalAt = new Date(now);
+  renewalAt.setDate(1);
+  renewalAt.setMonth(renewalAt.getMonth() + commitmentMonths);
+  const daysInTargetMonth = new Date(renewalAt.getFullYear(), renewalAt.getMonth() + 1, 0).getDate();
+  renewalAt.setDate(Math.min(originalDay, daysInTargetMonth));
+  return renewalAt;
+}
+
 export function isPaidTier(tier: PlanTier): boolean {
   return tier !== "enterprise";
 }
