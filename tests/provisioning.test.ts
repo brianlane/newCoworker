@@ -281,7 +281,7 @@ describe("provisioning/orchestrate", () => {
       business_type: "real_estate",
       status: "offline",
       hostinger_vps_id: null
-    });
+    } as never);
     vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue(null);
   });
 
