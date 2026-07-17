@@ -69,7 +69,11 @@ import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { recordProvisioningProgress, hasPriorOpsNewSignupAlert } from "@/lib/provisioning/progress";
+import {
+  recordProvisioningProgress,
+  hasPriorOpsNewSignupAlert,
+  hasPriorSuccessfulProvision
+} from "@/lib/provisioning/progress";
 import {
   cloudflareTunnelProvisionerFromEnv,
   type CloudflareTunnelProvisioner
@@ -964,20 +968,24 @@ async function runOrchestrator(
   // collapses enterprise onto the standard box profile).
   const businessRow = await getBusiness(businessId);
   let priorOpsNewSignupAlert = false;
+  let priorSuccessfulProvision = false;
   try {
     priorOpsNewSignupAlert = await hasPriorOpsNewSignupAlert(businessId);
+    priorSuccessfulProvision = await hasPriorSuccessfulProvision(businessId);
   } catch (err) {
-    logger.warn("hasPriorOpsNewSignupAlert lookup failed", {
+    logger.warn("Ops new-signup alert dedupe lookup failed", {
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });
   }
   // Ops alert: first successful signup completion only. Skip reprovision /
-  // recovery (high_load, wiped) and any tenant that already got the alert.
+  // recovery (high_load, wiped), plan-change/resubscribe reprovisions of
+  // already-live tenants, and any tenant that already got the alert.
   const shouldSendOpsNewSignupAlert =
     !priorOpsNewSignupAlert &&
     businessRow?.status !== "high_load" &&
-    businessRow?.status !== "wiped";
+    businessRow?.status !== "wiped" &&
+    !(businessRow?.status === "online" && priorSuccessfulProvision);
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
@@ -1786,7 +1794,22 @@ async function runOrchestrator(
     } catch {
       // Same best-effort posture as the DID lookup above.
     }
-    const sent = await sendOpsNewSignupEmail({
+    try {
+      await recordProvisioningProgress({
+        businessId,
+        phase: "ops_new_signup_alert_sent",
+        percent: 100,
+        message: "Ops new-signup alert sent",
+        source: "orchestrator",
+        status: "success"
+      });
+    } catch (err) {
+      logger.warn("Failed to record ops new-signup alert sent", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    await sendOpsNewSignupEmail({
       businessId,
       businessName: freshBusiness?.name ?? businessRow?.name ?? "",
       ownerName: freshBusiness?.owner_name ?? businessRow?.owner_name ?? null,
@@ -1797,23 +1820,6 @@ async function runOrchestrator(
       virtualMachineId: vpsId,
       didE164: didRoute?.to_e164 ?? null
     });
-    if (sent) {
-      try {
-        await recordProvisioningProgress({
-          businessId,
-          phase: "ops_new_signup_alert_sent",
-          percent: 100,
-          message: "Ops new-signup alert sent",
-          source: "orchestrator",
-          status: "success"
-        });
-      } catch (err) {
-        logger.warn("Failed to record ops new-signup alert sent", {
-          businessId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
   }
 
   if (notifyPhone) {
