@@ -197,6 +197,7 @@ function Screenshot({
         <img
           src={url}
           alt={`${label}, step ${stepIndex + 1}`}
+          loading="lazy"
           className={`max-h-64 w-auto rounded-md border object-contain object-top transition hover:opacity-90 ${
             failed ? "border-red-500/40" : "border-parchment/15"
           }`}

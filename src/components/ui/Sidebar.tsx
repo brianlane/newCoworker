@@ -136,6 +136,7 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
               alt={brand.productName ?? "Logo"}
               width={32}
               height={32}
+              loading="lazy"
               className="h-8 w-8 rounded-full object-cover"
             />
           ) : (

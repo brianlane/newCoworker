@@ -353,6 +353,8 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|logo.png|.*\\.svg).*)",
+    // logo-\d+.png are the sized favicon/app-icon variants (logo-32 etc.) —
+    // static assets the middleware must skip just like logo.png itself.
+    "/((?!_next/static|_next/image|favicon.ico|logo.png|logo-\\d+.png|.*\\.svg).*)",
   ],
 };

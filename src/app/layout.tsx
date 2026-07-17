@@ -52,14 +52,18 @@ export const metadata: Metadata = {
     "business automation",
     "virtual assistant for business"
   ],
+  // Right-sized icon files (633 B – 25 KB, palette PNGs) instead of the
+  // 309 KB full-resolution logo.png every page previously shipped as its
+  // favicon/app icons. logo.png itself stays for content usages (nav,
+  // emails, OG image).
   icons: {
     icon: [
-      { url: "/logo.png", type: "image/png", sizes: "32x32" },
-      { url: "/logo.png", type: "image/png", sizes: "192x192" },
-      { url: "/logo.png", type: "image/png", sizes: "512x512" }
+      { url: "/logo-32.png", type: "image/png", sizes: "32x32" },
+      { url: "/logo-192.png", type: "image/png", sizes: "192x192" },
+      { url: "/logo-512.png", type: "image/png", sizes: "512x512" }
     ],
-    shortcut: ["/logo.png"],
-    apple: [{ url: "/logo.png", type: "image/png", sizes: "180x180" }]
+    shortcut: ["/logo-32.png"],
+    apple: [{ url: "/logo-180.png", type: "image/png", sizes: "180x180" }]
   },
   openGraph: {
     type: "website",
