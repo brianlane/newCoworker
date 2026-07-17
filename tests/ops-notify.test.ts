@@ -19,6 +19,10 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
+vi.mock("@/lib/db/businesses", () => ({
+  getBusiness: vi.fn().mockResolvedValue({ tier: "starter" })
+}));
+
 import {
   sendOpsVpsDeletionEmail,
   sendOpsPlanChangeEmail,
@@ -29,6 +33,7 @@ import {
   sendOpsMarginAlertEmail,
   sendOpsNewSignupEmail
 } from "@/lib/email/ops-notify";
+import { getBusiness } from "@/lib/db/businesses";
 
 const input = {
   businessId: "biz-1",
@@ -646,6 +651,36 @@ describe("sendOpsNewSignupEmail", () => {
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops new-signup email skipped: RESEND_API_KEY missing",
       expect.objectContaining({ businessId: "biz-1" })
+    );
+  });
+
+  it("never throws when the send fails", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops new-signup email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops new-signup email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+
+  it("tags enterprise tenants and falls back to localhost when app URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    vi.mocked(getBusiness).mockResolvedValueOnce({ tier: "enterprise" } as never);
+    await sendOpsNewSignupEmail(signupInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("[ENTERPRISE]"),
+      expect.objectContaining({
+        html: expect.stringContaining("http://localhost:3000")
+      })
     );
   });
 });

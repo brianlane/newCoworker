@@ -1760,8 +1760,18 @@ async function runOrchestrator(
   }
 
   if (isFirstProvision) {
-    const didRoute = await getTelnyxVoiceRouteForBusiness(businessId).catch(() => null);
-    const subscription = await getSubscription(businessId).catch(() => null);
+    let didRoute = null;
+    try {
+      didRoute = await getTelnyxVoiceRouteForBusiness(businessId);
+    } catch {
+      // Ops email is best-effort; a route lookup hiccup must not affect provisioning.
+    }
+    let subscription = null;
+    try {
+      subscription = await getSubscription(businessId);
+    } catch {
+      // Same best-effort posture as the DID lookup above.
+    }
     void sendOpsNewSignupEmail({
       businessId,
       businessName: freshBusiness?.name ?? businessRow?.name ?? "",

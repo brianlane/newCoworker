@@ -869,6 +869,34 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
   });
 
+  it("still sends ops new-signup email when route/subscription lookups fail", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { getSubscription } = await import("@/lib/db/subscriptions");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockRejectedValueOnce(new Error("route db down"));
+    vi.mocked(getSubscription).mockRejectedValueOnce(new Error("sub db down"));
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    await orchestrateProvisioning(
+      { businessId: "biz-lookup-fail", tier: "starter", ownerEmail: "owner@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-lookup-fail", didE164: null, billingPeriod: null })
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue(null);
+    vi.mocked(getSubscription).mockResolvedValue(null);
+  });
+
   it("does not abort the deploy when AI-mailbox reservation fails (Error and non-Error)", async () => {
     vi.mocked(ensureTenantMailbox).mockRejectedValueOnce(new Error("mailbox db down"));
     const result = await orchestrateProvisioning(
