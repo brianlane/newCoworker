@@ -171,38 +171,67 @@ describe("buildBadPhoneSteps", () => {
     return branch.branches[0].steps[0] as Record<string, any>;
   }
 
-  it("bad-phone arm splits on lead_email: lead emails first, then Amy's report cites the actual outcome", () => {
+  it("bad-phone arm: lead emails, then the bounce check, then Amy's report citing the actual outcome", () => {
     for (const cfg of FLOW_CONFIGS) {
       const emailBranch = emailBranchOf(cfg);
       expect(emailBranch.type).toBe("branch");
       expect(emailBranch.branches[0].condition).toEqual({ var: "lead_email", contains: "@" });
       const armSteps = emailBranch.branches[0].steps as Array<Record<string, any>>;
-      // Amy's report is LAST so {{vars.actions_taken}} already records
-      // whether each lead email actually sent or was skipped — the report
-      // can never overstate outreach (Bugbot Medium on PR #697).
-      const amyEmail = armSteps[armSteps.length - 1];
-      const leadEmails = armSteps.slice(0, -1);
-      expect(amyEmail).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
-      expect(amyEmail.body).toContain("{{vars.agent_report}}");
-      expect(amyEmail.body).toContain("{{vars.claimed_agent}}");
-      expect(amyEmail.body).toContain("{{vars.actions_taken}}");
-      expect(amyEmail.body).toContain("was attempted");
-      expect(amyEmail.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
+      const leadEmails = armSteps.filter((s) => s.to === "{{vars.lead_email}}");
       expect(leadEmails.length).toBeGreaterThan(0);
       for (const e of leadEmails) {
         expect(e).toMatchObject({
           type: "send_email",
-          to: "{{vars.lead_email}}",
           fromConnectionId: "9ddd5344-14f2-46df-a89d-dddc2d50e944"
         });
         expect(e.body).toContain("best phone number");
       }
+      // Order (Bugbot Mediums on PR #697/#701): lead emails → Amy's PRIMARY
+      // report (immediate; actions_taken already records sent-vs-skipped and
+      // a later mailbox-read failure can never block it) → sleep → bounce
+      // check → additive EMAIL BOUNCED alert.
+      const [sent, wait, check, bounced] = armSteps.slice(leadEmails.length);
+      expect(sent).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
+      expect(sent.when).toBeUndefined(); // unconditional — never blocked
+      expect(sent.body).toContain("{{vars.agent_report}}");
+      expect(sent.body).toContain("{{vars.claimed_agent}}");
+      expect(sent.body).toContain("{{vars.actions_taken}}");
+      expect(sent.body).toContain("was attempted");
+      // Deliverability is never asserted up front: sent-vs-skipped comes from
+      // the outcome line, and bounces arrive as a separate later alert.
+      expect(sent.body).toContain('"emailed ..." means it was SENT');
+      expect(sent.body).toContain("NOTHING was sent");
+      expect(sent.body).toContain("separate EMAIL BOUNCED alert");
+      expect(sent.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
+      // Bounce check: 20-minute grace, then read Amy's mailbox (the SAME
+      // connection the send used — her Gmail/Outlook, which Resend can't
+      // see). Pinned to THIS flow's send: the notice must name the lead's
+      // address AND quote the follow-up's subject; the 4h lookback absorbs
+      // delayed worker resumes.
+      expect(wait).toMatchObject({ type: "sleep", minutes: 20 });
+      expect(check).toMatchObject({
+        type: "email_extract",
+        connectionId: "9ddd5344-14f2-46df-a89d-dddc2d50e944",
+        matchTemplates: ["{{vars.lead_email}}", cfg.leadEmails[0].subject],
+        lookbackMinutes: 240
+      });
+      // Every flow's lead-email variants share ONE subject, so the subject
+      // match never depends on which variant sent.
+      expect(new Set(cfg.leadEmails.map((e) => e.subject)).size).toBe(1);
+      expect(check.fields[0].name).toBe("lead_email_bounced");
+      expect(bounced).toMatchObject({
+        type: "send_email",
+        to: "amy@amylaidlaw.com",
+        when: { var: "lead_email_bounced", equals: "bounced" }
+      });
+      expect(bounced.subject).toContain("EMAIL BOUNCED");
+      expect(bounced.body).toContain("the EMAIL on file is bad too");
+      expect(bounced.fromConnectionId).toBeUndefined();
     }
     // ReferralExchange sends the lead-type-matched intro copy.
     const re = FLOW_CONFIGS.find((c) => c.flowName === "ReferralExchange Lead")!;
-    const reLeadEmails = emailBranchOf(re).branches[0].steps.slice(0, -1) as Array<
-      Record<string, any>
-    >;
+    const reLeadEmails = (emailBranchOf(re).branches[0].steps as Array<Record<string, any>>)
+      .filter((s) => s.to === "{{vars.lead_email}}");
     expect(reLeadEmails.map((e) => e.when)).toEqual([
       { var: "lead_type", equals: "buyer" },
       { var: "lead_type", equals: "seller" },
