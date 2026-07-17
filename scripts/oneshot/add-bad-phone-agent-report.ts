@@ -274,6 +274,10 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     'Their exact words: "{{vars.agent_report}}"\n\n' +
     `Lead info:\n${cfg.leadInfoLines}\n` +
     `Lead source: ${cfg.sourceLabel}\n\n`;
+  // Runs AFTER the lead email steps in its arm, so actions_taken already
+  // records whether each send actually went out ("emailed x@y" vs "skipped
+  // email ... (no valid address)") — the report never overstates outreach
+  // that a stricter send-time validation or an unmatched lead_type skipped.
   const amyEmailEmailed: Step = {
     id: "bp_email_amy",
     type: "send_email",
@@ -281,8 +285,12 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     subject: `BAD PHONE NUMBER — ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
       amyReportIntro +
-      `The lead HAS been emailed from ${AMY_EMAIL} asking for their best ` +
-      "phone number."
+      "The lead has an email on file, so a follow-up asking for their best " +
+      `phone number was attempted from ${AMY_EMAIL}. The outcome line below ` +
+      'shows exactly what went out — look for "emailed ..." (sent) vs ' +
+      '"skipped email ..." (unusable address; nothing was sent, so please ' +
+      "get their best number if they reach out another way).\n\n" +
+      "Everything this flow did: {{vars.actions_taken}}"
   };
   const amyEmailNoEmail: Step = {
     id: "bp_email_amy_no_email",
@@ -364,8 +372,9 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
                 {
                   id: "bp_has_email",
                   label: "Lead has an email",
+                  // Lead emails FIRST, Amy's report LAST — see amyEmailEmailed.
                   condition: { var: "lead_email", contains: "@" },
-                  steps: [amyEmailEmailed, ...leadEmails]
+                  steps: [...leadEmails, amyEmailEmailed]
                 }
               ],
               else: [amyEmailNoEmail]

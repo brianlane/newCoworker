@@ -171,18 +171,22 @@ describe("buildBadPhoneSteps", () => {
     return branch.branches[0].steps[0] as Record<string, any>;
   }
 
-  it("bad-phone arm splits on lead_email: with an address Amy's report says the lead WAS emailed", () => {
+  it("bad-phone arm splits on lead_email: lead emails first, then Amy's report cites the actual outcome", () => {
     for (const cfg of FLOW_CONFIGS) {
       const emailBranch = emailBranchOf(cfg);
       expect(emailBranch.type).toBe("branch");
       expect(emailBranch.branches[0].condition).toEqual({ var: "lead_email", contains: "@" });
-      const [amyEmail, ...leadEmails] = emailBranch.branches[0].steps as Array<
-        Record<string, any>
-      >;
+      const armSteps = emailBranch.branches[0].steps as Array<Record<string, any>>;
+      // Amy's report is LAST so {{vars.actions_taken}} already records
+      // whether each lead email actually sent or was skipped — the report
+      // can never overstate outreach (Bugbot Medium on PR #697).
+      const amyEmail = armSteps[armSteps.length - 1];
+      const leadEmails = armSteps.slice(0, -1);
       expect(amyEmail).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
       expect(amyEmail.body).toContain("{{vars.agent_report}}");
       expect(amyEmail.body).toContain("{{vars.claimed_agent}}");
-      expect(amyEmail.body).toContain("HAS been emailed");
+      expect(amyEmail.body).toContain("{{vars.actions_taken}}");
+      expect(amyEmail.body).toContain("was attempted");
       expect(amyEmail.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
       expect(leadEmails.length).toBeGreaterThan(0);
       for (const e of leadEmails) {
@@ -196,7 +200,7 @@ describe("buildBadPhoneSteps", () => {
     }
     // ReferralExchange sends the lead-type-matched intro copy.
     const re = FLOW_CONFIGS.find((c) => c.flowName === "ReferralExchange Lead")!;
-    const reLeadEmails = emailBranchOf(re).branches[0].steps.slice(1) as Array<
+    const reLeadEmails = emailBranchOf(re).branches[0].steps.slice(0, -1) as Array<
       Record<string, any>
     >;
     expect(reLeadEmails.map((e) => e.when)).toEqual([
