@@ -1023,7 +1023,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "generate_image",
-      description: "Create an AI-generated image and text it to the customer as a picture message (MMS). Can also EDIT a photo the customer sent: when your context notes include an image reference for a photo they attached, pass it as inputImageRef and describe the edit in the prompt. ONLY use this when the customer explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Expensive: limited to 3 images per conversation; when the tool refuses with image_limit_reached, tell the customer plainly.",
+      description: "Create an AI-generated image and text it to the customer as a picture message (MMS). Can also EDIT a photo the customer sent: when your context notes include an image reference for a photo they attached, pass it as inputImageRef and describe the edit in the prompt. ONLY use this when the customer explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the customer plainly.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1237,7 +1237,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_generate_image",
-      description: "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited to 3 images per conversation; when the tool refuses with image_limit_reached, tell the owner plainly.",
+      description: "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the owner plainly.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",

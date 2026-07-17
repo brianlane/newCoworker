@@ -241,13 +241,16 @@ function buildSections(): FaqSection[] {
         },
         {
           question: "What happens if I hit my monthly usage caps?",
-          plainAnswer: `Included usage resets monthly: for example, Standard includes ${standardVoice} and ${TIER_LIMITS.standard.smsPerMonth} SMS per month. You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next cycle or an upgrade. Compliance messages are never blocked.`,
+          plainAnswer: `Included usage resets monthly: for example, Standard includes ${standardVoice} and ${TIER_LIMITS.standard.smsPerMonth} SMS per month. You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next cycle or an upgrade. You can also buy one-time voice minute or SMS top-up packs from Dashboard → Billing without upgrading — bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later. Compliance messages are never blocked.`,
           answer: (
             <>
               Included usage resets monthly: for example, Standard includes {standardVoice} and{" "}
               {TIER_LIMITS.standard.smsPerMonth} SMS per month. You&apos;re alerted before you run
               out; at the cap, metered voice calls and customer texts pause until the next cycle or
-              an upgrade. Compliance messages are never blocked.
+              an upgrade. You can also buy one-time voice minute or SMS top-up packs from{" "}
+              Dashboard → Billing without upgrading — bonus usage is consumed after your included
+              monthly allowance and lasts until the end of your billing period or 30 days from
+              purchase, whichever is later. Compliance messages are never blocked.
             </>
           )
         },

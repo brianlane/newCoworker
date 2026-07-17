@@ -227,7 +227,7 @@ const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
 const GENERATE_IMAGE_DECLARATION: GeminiFunctionDeclaration = {
   name: "generate_image",
   description:
-    "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited to 3 images per conversation; when the tool refuses with image_limit_reached, tell the owner plainly.",
+    "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the owner plainly.",
   parameters: {
     type: "object",
     properties: {

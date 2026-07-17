@@ -5,7 +5,7 @@ import {
   getPeriodPricing
 } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
-import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { concurrentCallsLine, imageGenerationLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import {
   formatPriceCents,
@@ -68,7 +68,7 @@ export const STARTER_FEATURES: string[] = [
   "Phone number and email address dedicated to your coworker",
   "Chat access to your coworker",
   "$5/mo AI budget for agentic tasks",
-  "AI image generation (3 per conversation)",
+  `AI image generation (${imageGenerationLine("starter")})`,
   "Browser can read public web pages",
   "3rd party integrations",
   "Lossless memory and expansive knowledge base",
@@ -94,9 +94,10 @@ export const STANDARD_FEATURES: string[] = [
   "Alerts when callers are turned away (missed-call spikes)",
   "Warm handoff call transfers",
   "$10/mo AI budget for agentic tasks, before free model fallback",
+  `AI image generation (${imageGenerationLine("standard")})`,
   "Configuration and training updates",
   "Priority email support & maintenance",
-  "Full browser skills: operates websites like a person (logins, forms, portals)"
+  "Full browser skills: operates websites like a person"
 ];
 
 /**

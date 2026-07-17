@@ -17,6 +17,8 @@ export type TierLimits = {
   maxConcurrentCalls: number;
   smsThrottled: boolean;
   memoryType: "lossless";
+  /** Hard cap on AI image generations per conversation (dashboard thread / texter). */
+  imageGenerationsPerSession: number;
 };
 
 export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
@@ -27,7 +29,8 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     smsPerMonth: SMS_MONTHLY_CAP_STARTER,
     maxConcurrentCalls: VOICE_RES_LIMITS.starter.maxConcurrentCalls,
     smsThrottled: true,
-    memoryType: "lossless"
+    memoryType: "lossless",
+    imageGenerationsPerSession: 3
   },
   standard: {
     voiceMinutesPerDay: Infinity,
@@ -35,7 +38,8 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     smsPerMonth: SMS_MONTHLY_CAP_STANDARD,
     maxConcurrentCalls: VOICE_RES_LIMITS.standard.maxConcurrentCalls,
     smsThrottled: false,
-    memoryType: "lossless"
+    memoryType: "lossless",
+    imageGenerationsPerSession: 10
   },
   enterprise: {
     voiceMinutesPerDay: Infinity,
@@ -43,11 +47,21 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     smsPerMonth: Infinity,
     maxConcurrentCalls: VOICE_RES_LIMITS.enterprise.maxConcurrentCalls,
     smsThrottled: false,
-    memoryType: "lossless"
+    memoryType: "lossless",
+    imageGenerationsPerSession: 10
   }
 };
 
 export function getTierLimits(tier: PlanTier, enterpriseLimitsOverride?: unknown): TierLimits {
   if (tier !== "enterprise") return TIER_LIMITS[tier];
   return applyEnterpriseLimitsPatch(TIER_LIMITS.enterprise, enterpriseLimitsOverride);
+}
+
+/** Per-conversation image generation cap for a tier (Starter = 3, Standard+ = 10). */
+export function imageGenerationsPerSessionForTier(
+  tier: PlanTier | null | undefined,
+  enterpriseLimitsOverride?: unknown
+): number {
+  const resolved = tier ?? "starter";
+  return getTierLimits(resolved, enterpriseLimitsOverride).imageGenerationsPerSession;
 }

@@ -80,7 +80,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "generate_image",
         label: "Generate images",
         description:
-          "Create an AI-generated image — or edit a photo you attach — in chat when you explicitly ask for one (limit 3 per conversation; uses your AI budget).",
+          "Create an AI-generated image — or edit a photo you attach — in chat when you explicitly ask for one (limited per conversation; Standard allows more; uses your AI budget).",
         defaultEnabled: true,
         configurable: true
       },
@@ -338,7 +338,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "generate_image",
         label: "Generate images",
         description:
-          "Text an AI-generated image (MMS) — or edit a photo the texter sends — when they explicitly ask for one (limit 3 per conversation; uses your AI budget).",
+          "Text an AI-generated image (MMS) — or edit a photo the texter sends — when they explicitly ask for one (limited per conversation; Standard allows more; uses your AI budget).",
         defaultEnabled: true,
         configurable: true
       },

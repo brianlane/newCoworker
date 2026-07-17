@@ -69,7 +69,7 @@ const rows: CompareRow[] = [
   },
   {
     label: "AI included in the price",
-    us: "Yes — conversation AI, voice AI, summaries, and workflows are the product",
+    us: "All included conversation AI, voice AI, summaries, and workflows are the product",
     them: "Extra: AI Employee is $97/mo per location (or metered per message/minute) on top of the plan",
     verdict: "us"
   },
@@ -87,7 +87,7 @@ const rows: CompareRow[] = [
   },
   {
     label: "Funnels, websites & courses",
-    us: "Not our product — we integrate with what you already use",
+    us: "Not our product. We integrate with what you already use",
     them: "Full builder suite included; genuinely strong here",
     verdict: "them"
   },
@@ -122,7 +122,7 @@ export default function CompareGoHighLevelPage() {
         <>
           The $97 Starter plan is the entry ticket, not the running cost. To match what New
           Coworker does out of the box you&apos;d add the AI Employee plan ($97/mo per location per
-          HighLevel&apos;s published pricing), plus metered SMS, email, and voice usage — and your
+          HighLevel&apos;s published pricing), plus metered SMS, email, and voice usage. Plus your
           own hours configuring and maintaining it. New Coworker Standard is {standardMonthly} with
           the AI, the phone number, and generous usage quotas included, working on day one.
         </>
@@ -136,7 +136,7 @@ export default function CompareGoHighLevelPage() {
           from then on every lead is texted back within seconds, filed with full context, routed to
           your team if you want, and followed up automatically. The difference is what happens after
           capture: GoHighLevel stores the lead and runs the workflows you built; your coworker
-          handles the actual conversation.
+          does this then handles the actual conversation too.
         </>
       )
     },
@@ -146,7 +146,7 @@ export default function CompareGoHighLevelPage() {
         <>
           If you&apos;re an agency reselling software to clients, or you want to build funnels,
           websites, and courses inside one platform and have the time to run it, GoHighLevel is a
-          strong product — that&apos;s what it was built for. New Coworker is built for the business
+          strong product, that&apos;s what it was built for. New Coworker is built for the business
           owner who wants the phone answered and the leads worked without operating software.
         </>
       )
@@ -157,7 +157,7 @@ export default function CompareGoHighLevelPage() {
         <>
           Yes. Plenty of businesses keep their existing CRM and let New Coworker do the answering
           and follow-up. Zapier, webhooks, and our API push every call, text, and lead into
-          whatever system you run — including GoHighLevel.
+          whatever system you run including GoHighLevel.
         </>
       )
     },
@@ -185,7 +185,7 @@ export default function CompareGoHighLevelPage() {
             One sells you software. <span className="text-claw-green">We show up to work.</span>
           </>
         }
-        subtitle="GoHighLevel is a powerful toolbox — if you have the time to learn it, build in it, and run it. New Coworker is an AI employee that answers your calls, texts your ad leads back in seconds, and follows up on its own, starting the day you sign up."
+        subtitle="GoHighLevel is a powerful toolbox if you have the time to learn it, build in it, and run it. New Coworker is an AI employee that answers your calls, texts your ad leads back in seconds, and follows up on its own, starting the day you sign up."
       />
 
       <StatBand
@@ -251,7 +251,7 @@ export default function CompareGoHighLevelPage() {
             <h3 className="text-lg font-bold text-parchment">With GoHighLevel, a Meta lead means…</h3>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-parchment/55">
               <li>The lead lands in your CRM pipeline.</li>
-              <li>The workflows you built (and maintain) fire — if you built them.</li>
+              <li>The workflows you built (and maintain) fire, if you built them.</li>
               <li>Replies come back to your unified inbox, waiting for a human.</li>
               <li>You (or staff you pay) work the conversation to a booking.</li>
             </ul>
@@ -267,7 +267,7 @@ export default function CompareGoHighLevelPage() {
           </div>
         </div>
         <p className="mx-auto mt-8 max-w-3xl text-center text-sm leading-relaxed text-parchment/45">
-          Independent reviews consistently describe GoHighLevel as powerful but dense — built for
+          Independent reviews consistently describe GoHighLevel as powerful but dense. Built for
           agencies, with a learning curve owners should plan weeks for. That&apos;s not a knock;
           it&apos;s a different product. If you want to <em>run</em> a marketing platform, buy the
           platform. If you want your phone answered and your leads worked,{" "}

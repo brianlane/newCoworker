@@ -12,7 +12,7 @@ import {
 import { PlanCards } from "@/components/pricing/PlanCards";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { getPeriodPricing } from "@/lib/plans/tier";
-import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { concurrentCallsLine, imageGenerationLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
@@ -67,8 +67,8 @@ const comparisonRows: ComparisonRow[] = [
   },
   {
     label: "AI image generation",
-    starter: "3 per conversation",
-    standard: "3 per conversation",
+    starter: imageGenerationLine("starter"),
+    standard: imageGenerationLine("standard"),
     enterprise: "Custom"
   },
   { label: "Dedicated phone number & email", starter: CHECK, standard: CHECK, enterprise: CHECK },
@@ -185,7 +185,10 @@ function buildPricingFaq(): FaqItem[] {
         <>
           Your coworker stops placing metered voice calls or sending customer texts once the
           monthly cap is reached, and you get an alert well before that happens. Caps reset
-          every month, and you can upgrade your plan at any time from the dashboard.
+          every month, and you can upgrade your plan at any time from the dashboard. You can
+          also buy one-time voice minute or SMS top-up packs from Dashboard → Billing without
+          upgrading — bonus usage is consumed after your included monthly allowance and lasts
+          until the end of your billing period or 30 days from purchase, whichever is later.
         </>
       )
     },
