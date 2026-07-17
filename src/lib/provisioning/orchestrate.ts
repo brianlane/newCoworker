@@ -1798,14 +1798,21 @@ async function runOrchestrator(
       didE164: didRoute?.to_e164 ?? null
     });
     if (sent) {
-      await recordProvisioningProgress({
-        businessId,
-        phase: "ops_new_signup_alert_sent",
-        percent: 100,
-        message: "Ops new-signup alert sent",
-        source: "orchestrator",
-        status: "success"
-      });
+      try {
+        await recordProvisioningProgress({
+          businessId,
+          phase: "ops_new_signup_alert_sent",
+          percent: 100,
+          message: "Ops new-signup alert sent",
+          source: "orchestrator",
+          status: "success"
+        });
+      } catch (err) {
+        logger.warn("Failed to record ops new-signup alert sent", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
   }
 

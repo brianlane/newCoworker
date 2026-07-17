@@ -841,6 +841,54 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
   });
 
+  it("does not fail provisioning when recording ops alert sent throws", async () => {
+    vi.mocked(recordProvisioningProgress).mockImplementation(async (params) => {
+      if (params.phase === "ops_new_signup_alert_sent") {
+        throw new Error("log insert down");
+      }
+      return {
+        id: "00000000-0000-4000-8000-000000000099",
+        business_id: params.businessId,
+        task_type: "provisioning",
+        status: "thinking",
+        log_payload: {}
+      } as never;
+    });
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-ops-log-fail", tier: "starter", ownerEmail: "owner@test.com" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      )
+    ).resolves.toMatchObject({ vpsId: "42" });
+  });
+
+  it("does not fail provisioning when recording ops alert sent rejects non-Error", async () => {
+    vi.mocked(recordProvisioningProgress).mockImplementation(async (params) => {
+      if (params.phase === "ops_new_signup_alert_sent") {
+        throw "log weird";
+      }
+      return {
+        id: "00000000-0000-4000-8000-000000000099",
+        business_id: params.businessId,
+        task_type: "provisioning",
+        status: "thinking",
+        log_payload: {}
+      } as never;
+    });
+    await expect(
+      orchestrateProvisioning(
+        { businessId: "biz-ops-log-weird", tier: "starter", ownerEmail: "owner@test.com" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec())
+        }
+      )
+    ).resolves.toMatchObject({ vpsId: "42" });
+  });
+
   it("does not record ops alert sent when the email send fails", async () => {
     const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
     vi.mocked(sendOpsNewSignupEmail).mockResolvedValueOnce(false);
