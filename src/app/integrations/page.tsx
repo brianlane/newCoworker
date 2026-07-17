@@ -17,7 +17,7 @@ import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
   CtaBanner,
-  FeatureGrid,
+  FeatureCard,
   PageHero,
   SectionHeading,
   StatBand,
@@ -44,13 +44,14 @@ const zapierTriggers = [
   { label: "Email activity", description: "Your coworker sends or receives email", Icon: Mail }
 ];
 
+const claudeConnector: Feature = {
+  title: "Claude connector",
+  description:
+    "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows all authenticated as you through OAuth, with permissions matching your dashboard role.",
+  Icon: Bot
+};
+
 const nativeIntegrations: Feature[] = [
-  {
-    title: "Claude connector",
-    description:
-      "Let Claude work with your coworker — look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows — authenticated as you through OAuth, with permissions matching your dashboard role. Available after signup under Dashboard → Integrations; add as a custom connector in Claude (Settings → Connectors).",
-    Icon: Bot
-  },
   {
     title: "Google Workspace",
     description:
@@ -232,7 +233,14 @@ export default function IntegrationsPage() {
           eyebrow="Native & platform"
           title="Built-in connections, plus an API for everything else"
         />
-        <FeatureGrid features={nativeIntegrations} columns={2} />
+        <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+          {nativeIntegrations.map((f) => (
+            <FeatureCard key={f.title} feature={f} />
+          ))}
+          <div className="sm:col-span-2">
+            <FeatureCard feature={claudeConnector} />
+          </div>
+        </div>
       </section>
 
       {/* Developer note */}
