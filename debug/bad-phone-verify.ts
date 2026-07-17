@@ -49,6 +49,24 @@ const db = createClient(
 
 const cmd = process.argv[2] ?? "status";
 
+/**
+ * Positional args after the subcommand, with flags AND their values removed —
+ * `report bad number --run <uuid>` must never leak the UUID into the text.
+ */
+function positionalArgs(): string[] {
+  const VALUE_FLAGS = new Set(["--business", "--tester", "--owner-email", "--run"]);
+  const out: string[] = [];
+  for (let i = 3; i < process.argv.length; i++) {
+    const a = process.argv[i];
+    if (VALUE_FLAGS.has(a)) {
+      i++; // skip the flag's value
+    } else if (!a.startsWith("--")) {
+      out.push(a);
+    }
+  }
+  return out;
+}
+
 function testDefinition(): Record<string, unknown> {
   const def = {
     version: 1,
@@ -248,7 +266,7 @@ if (cmd === "setup") {
   console.log(`target it explicitly on later commands: --run ${(data as { id: string }).id}`);
 } else if (cmd === "claim") {
   // MIRROR of telnyx-sms-inbound's live-claim resume (webhook is signature-gated).
-  const timeframe = process.argv[3] && !process.argv[3].startsWith("--") ? process.argv[3] : "";
+  const timeframe = positionalArgs()[0] ?? "";
   const run = await latestRun();
   if (!run || !["awaiting_agent", "queued"].includes(run.status)) {
     throw new Error(`no claimable run (status: ${run?.status ?? "none"})`);
@@ -285,7 +303,7 @@ if (cmd === "setup") {
   console.log(`claimed run ${run.id}${timeframe ? ` (ETA ${timeframe})` : ""}`);
 } else if (cmd === "report") {
   // MIRROR of resumeAwaitingReplyRun (the staff wait-resume exception).
-  const text = process.argv.slice(3).filter((a) => !a.startsWith("--")).join(" ");
+  const text = positionalArgs().join(" ");
   if (!text) throw new Error("usage: report <text>");
   const run = await latestRun();
   if (!run || run.status !== "awaiting_reply") {
