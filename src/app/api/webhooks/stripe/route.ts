@@ -1276,7 +1276,8 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
           businessId: input.businessId,
           tier: input.tier,
           vpsSize: input.vpsSize,
-          billingPeriod: input.billingPeriod
+          billingPeriod: input.billingPeriod,
+          notifyOpsNewSignup: true
         })
     }
   )

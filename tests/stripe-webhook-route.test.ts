@@ -307,7 +307,8 @@ describe("stripe webhook route", () => {
       tier: "starter",
       vpsSize: null,
       // Term-aware purchase: the annual contract funds a 1-year Hostinger box.
-      billingPeriod: "annual"
+      billingPeriod: "annual",
+      notifyOpsNewSignup: true
     });
   });
 
@@ -2933,7 +2934,8 @@ describe("stripe webhook route", () => {
       businessId: "biz_4",
       tier: "standard",
       vpsSize: null,
-      billingPeriod: "biennial"
+      billingPeriod: "biennial",
+      notifyOpsNewSignup: true
     });
   });
 });

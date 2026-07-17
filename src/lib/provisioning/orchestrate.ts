@@ -71,8 +71,7 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   recordProvisioningProgress,
-  hasPriorOpsNewSignupAlert,
-  hasPriorSuccessfulProvision
+  hasPriorOpsNewSignupAlert
 } from "@/lib/provisioning/progress";
 import {
   cloudflareTunnelProvisionerFromEnv,
@@ -116,6 +115,8 @@ type ProvisioningInput = {
   skipPoolAdopt?: boolean;
   ownerEmail?: string;
   ownerPhone?: string;
+  /** When true, send the ops "[ops] New signup live" alert after first successful deploy. */
+  notifyOpsNewSignup?: boolean;
 };
 
 export type ProvisioningResult = {
@@ -581,7 +582,8 @@ export async function orchestrateProvisioning(
         tier: narrowTier,
         vpsSize,
         billingPeriod,
-        skipPoolAdopt: input.skipPoolAdopt
+        skipPoolAdopt: input.skipPoolAdopt,
+        notifyOpsNewSignup: input.notifyOpsNewSignup
       },
       deps
     );
@@ -968,24 +970,16 @@ async function runOrchestrator(
   // collapses enterprise onto the standard box profile).
   const businessRow = await getBusiness(businessId);
   let priorOpsNewSignupAlert = false;
-  let priorSuccessfulProvision = false;
   try {
     priorOpsNewSignupAlert = await hasPriorOpsNewSignupAlert(businessId);
-    priorSuccessfulProvision = await hasPriorSuccessfulProvision(businessId);
   } catch (err) {
-    logger.warn("Ops new-signup alert dedupe lookup failed", {
+    logger.warn("hasPriorOpsNewSignupAlert lookup failed", {
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });
   }
-  // Ops alert: first successful signup completion only. Skip reprovision /
-  // recovery (high_load, wiped), plan-change/resubscribe reprovisions of
-  // already-live tenants, and any tenant that already got the alert.
   const shouldSendOpsNewSignupAlert =
-    !priorOpsNewSignupAlert &&
-    businessRow?.status !== "high_load" &&
-    businessRow?.status !== "wiped" &&
-    !(businessRow?.status === "online" && priorSuccessfulProvision);
+    input.notifyOpsNewSignup === true && !priorOpsNewSignupAlert;
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
@@ -1794,22 +1788,7 @@ async function runOrchestrator(
     } catch {
       // Same best-effort posture as the DID lookup above.
     }
-    try {
-      await recordProvisioningProgress({
-        businessId,
-        phase: "ops_new_signup_alert_sent",
-        percent: 100,
-        message: "Ops new-signup alert sent",
-        source: "orchestrator",
-        status: "success"
-      });
-    } catch (err) {
-      logger.warn("Failed to record ops new-signup alert sent", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-    await sendOpsNewSignupEmail({
+    const sent = await sendOpsNewSignupEmail({
       businessId,
       businessName: freshBusiness?.name ?? businessRow?.name ?? "",
       ownerName: freshBusiness?.owner_name ?? businessRow?.owner_name ?? null,
@@ -1820,6 +1799,28 @@ async function runOrchestrator(
       virtualMachineId: vpsId,
       didE164: didRoute?.to_e164 ?? null
     });
+    if (sent) {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await recordProvisioningProgress({
+            businessId,
+            phase: "ops_new_signup_alert_sent",
+            percent: 100,
+            message: "Ops new-signup alert sent",
+            source: "orchestrator",
+            status: "success"
+          });
+          break;
+        } catch (err) {
+          if (attempt === 2) {
+            logger.warn("Failed to record ops new-signup alert sent after retries", {
+              businessId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+        }
+      }
+    }
   }
 
   if (notifyPhone) {
