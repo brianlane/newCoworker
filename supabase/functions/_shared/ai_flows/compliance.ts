@@ -26,6 +26,11 @@ export interface ComplianceRpcClient {
 }
 
 export const STOP_SUFFIX = "Reply STOP to opt out.";
+export const STOP_SUFFIX_ES = "Responde ALTO para cancelar.";
+
+export function stopSuffixForLocale(locale?: string | null): string {
+  return locale === "es" ? STOP_SUFFIX_ES : STOP_SUFFIX;
+}
 
 /**
  * Guarantee an opt-out instruction in a cold-outbound body. Idempotent: if the
@@ -33,7 +38,7 @@ export const STOP_SUFFIX = "Reply STOP to opt out.";
  * just the suffix.
  */
 export function ensureStopLanguage(body: string, suffix: string = STOP_SUFFIX): string {
-  if (/\bstop\b/i.test(body)) return body;
+  if (/\b(stop|alto)\b/i.test(body)) return body;
   const trimmed = body.trim();
   return trimmed.length > 0 ? `${trimmed} ${suffix}` : suffix;
 }

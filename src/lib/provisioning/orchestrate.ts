@@ -45,6 +45,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOpsNewSignupEmail } from "@/lib/email/ops-notify";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
@@ -1758,10 +1759,12 @@ async function runOrchestrator(
 
   if (notifyEmail) {
     try {
+      const ownerLocale = await resolveOwnerUiLocaleForEmail(notifyEmail);
       const { subject, text, html } = buildProvisioningLiveEmail({
         dashboardUrl,
         siteUrl,
-        recipientEmail: notifyEmail
+        recipientEmail: notifyEmail,
+        locale: ownerLocale
       });
       await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", notifyEmail, subject, { text, html });
     } catch (err) {

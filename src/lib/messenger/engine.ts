@@ -28,6 +28,7 @@ import {
   type GeminiChatStepResult
 } from "@/lib/gemini-chat";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { customerLanguageLine } from "@/lib/i18n/customer-language";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import {
   getChatSpendSnapshotForBusiness,
@@ -253,8 +254,11 @@ export async function runMessengerGeminiTurn(
   );
   const systemInstruction = [
     instructions,
+    customerLanguageLine({ defaultLang: "en" }),
     buildMessengerPreamble(args.conversation, now())
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   const model = messengerEngineModel(env);
 

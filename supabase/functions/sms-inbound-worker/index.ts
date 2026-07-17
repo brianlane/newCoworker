@@ -53,6 +53,11 @@ import {
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE
 } from "../_shared/sms_prompt_lines.ts";
+import {
+  customerLanguageLine,
+  detectCustomerLanguage,
+  type CustomerLanguage
+} from "../_shared/customer_language.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 // Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
 // against the tenant pool like all traffic but never refused (Jul 14 2026).
@@ -991,11 +996,38 @@ serve(async (req: Request) => {
         .from("contacts")
         .select(
           "customer_e164, display_name, summary_md, pinned_md, " +
-            "total_interaction_count, last_channel, last_interaction_at"
+            "total_interaction_count, last_channel, last_interaction_at, " +
+            "preferred_language, language_source"
         )
         .eq("business_id", job.business_id)
         .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
         .maybeSingle();
+      const contactLang = (memoryRow as { preferred_language?: CustomerLanguage | null; language_source?: string | null } | null)
+        ?.preferred_language;
+      const contactLangSource = (memoryRow as { language_source?: string | null } | null)?.language_source;
+      const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
+      const inboundPayload = envelope?.data?.payload ?? {};
+      const inboundText = inboundPayloadText(inboundPayload);
+      const detected = detectCustomerLanguage({
+        text: inboundText,
+        establishedLanguage: contactLang ?? undefined,
+        defaultLanguage: "en"
+      });
+      if (detected.persist && contactLangSource !== "owner_set") {
+        await supabase
+          .from("contacts")
+          .update({
+            preferred_language: detected.language,
+            language_source: "detected"
+          })
+          .eq("business_id", job.business_id)
+          .eq("customer_e164", fromE164);
+      }
+      const languageLine = customerLanguageLine({
+        detected: detected.language,
+        established: contactLangSource === "owner_set" ? contactLang : detected.language,
+        defaultLang: "en"
+      });
       const memoryPreamble =
         memoryRow == null
           ? null
@@ -1048,7 +1080,9 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${conversationQualityLine}\n\n${dateLine}\n\n${phoneLine}`;
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, dateLine, phoneLine, languageLine]
+        .filter(Boolean)
+        .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, contactTimeline, flowContext]
         .filter((part): part is string => Boolean(part))
         .join("\n\n");

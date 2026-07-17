@@ -27,6 +27,8 @@ import { getContactActivity, type ActivityItem } from "@/lib/db/activity";
 import { Badge } from "@/components/ui/Badge";
 import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
 import { CustomerProfileEditor } from "@/components/dashboard/CustomerProfileEditor";
+import { ContactLanguageEditor } from "@/components/dashboard/ContactLanguageEditor";
+import { getContactLanguage } from "@/lib/db/contact-language";
 import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
 import { CustomerEmailComposer } from "@/components/dashboard/CustomerEmailComposer";
 import { CustomerMergeAction } from "@/components/dashboard/CustomerMergeAction";
@@ -77,6 +79,8 @@ export default async function CustomerDetailPage({ params }: Props) {
 
   const memory = await getCustomerMemory(business.id, customerE164);
   if (!memory) notFound();
+
+  const contactLanguage = await getContactLanguage(business.id, memory.customer_e164);
 
   // Phase 4 + 4b: pull SMS + voice in parallel so the page hydrates in
   // one round-trip group rather than serial. Voice list is capped at
@@ -211,6 +215,12 @@ export default async function CustomerDetailPage({ params }: Props) {
           ))}
         </div>
       </div>
+
+      <ContactLanguageEditor
+        customerE164={memory.customer_e164}
+        initialLanguage={contactLanguage.preferred_language}
+        initialSource={contactLanguage.language_source}
+      />
 
       <CustomerProfileEditor
         businessId={business.id}

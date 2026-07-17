@@ -18,6 +18,7 @@ import {
   type MessengerGeminiTurnDeps
 } from "@/lib/messenger/engine";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { customerLanguageLine } from "@/lib/i18n/customer-language";
 import { WEBCHAT_TOOL_DECLARATIONS } from "@/lib/webchat/engine-tools";
 import type { GeminiChatStepResult } from "@/lib/gemini-chat";
 import type {
@@ -252,8 +253,11 @@ describe("runMessengerGeminiTurn", () => {
     expect(step.systemInstruction).toBe(
       [
         expectedInstructions,
+        customerLanguageLine({ defaultLang: "en" }),
         buildMessengerPreamble(CONVERSATION, new Date("2026-07-15T20:05:00Z"))
-      ].join("\n\n")
+      ]
+        .filter(Boolean)
+        .join("\n\n")
     );
     expect(step.contents).toEqual([
       { role: "user", parts: [{ text: "Hi! How much is the Standard plan?" }] }

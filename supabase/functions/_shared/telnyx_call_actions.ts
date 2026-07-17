@@ -89,7 +89,8 @@ export async function telnyxSpeak(
   callControlId: string,
   text: string,
   voice = "female",
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  language = "en-US"
 ): Promise<Response> {
   const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/speak`;
   return fetchImpl(url, {
@@ -101,7 +102,7 @@ export async function telnyxSpeak(
     body: JSON.stringify({
       payload: text,
       voice,
-      language: "en-US"
+      language
     })
   });
 }

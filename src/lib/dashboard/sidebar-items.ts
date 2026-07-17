@@ -1,5 +1,5 @@
 /**
- * Canonical owner-dashboard nav catalog (keys, labels, hrefs) shared by the
+ * Canonical owner-dashboard nav catalog (keys, labelKeys, hrefs) shared by the
  * sidebar component (which adds icons client-side), the per-user
  * customization prefs (src/lib/dashboard/sidebar-prefs.ts), and the Settings
  * editor. Keys are the stable identifiers stored in `user_sidebar_items` —
@@ -8,69 +8,48 @@
 
 export type SidebarItemDef = {
   key: string;
-  label: string;
+  /** i18n key under dashboard.nav */
+  labelKey: string;
   href: string;
-  /**
-   * Locked items can't be hidden or moved below the fold accidentally —
-   * Settings must always be reachable (it hosts the customizer itself) and
-   * Notifications carries the unread badge.
-   */
   locked?: boolean;
-  /**
-   * Conditional items only render for businesses with an ACTIVE Meta
-   * (Facebook) connection — the dashboard layout computes the flag per
-   * request and filters via filterSidebarItemsForBusiness. Saved layouts
-   * are additive-keyed, so the item slotting in later (after the owner
-   * connects Facebook) never breaks an existing customization.
-   */
   requiresMetaConnection?: boolean;
-  /** Same conditional mechanism, gated on an ACTIVE WhatsApp connection. */
   requiresWhatsAppConnection?: boolean;
 };
 
 export const SIDEBAR_ITEMS: SidebarItemDef[] = [
-  { key: "dashboard", label: "Dashboard", href: "/dashboard" },
-  // Staff Task Center: every lead in motion (active workflow + lead state +
-  // goals + collected info + response reasoning). Staff-visible.
-  { key: "tasks", label: "Tasks", href: "/dashboard/tasks" },
-  { key: "analytics", label: "Analytics", href: "/dashboard/analytics" },
-  { key: "chat", label: "Chat", href: "/dashboard/chat" },
-  { key: "calls", label: "Calls", href: "/dashboard/calls" },
-  { key: "messages", label: "Texts", href: "/dashboard/messages" },
+  { key: "dashboard", labelKey: "dashboard", href: "/dashboard" },
+  { key: "tasks", labelKey: "tasks", href: "/dashboard/tasks" },
+  { key: "analytics", labelKey: "analytics", href: "/dashboard/analytics" },
+  { key: "chat", labelKey: "chat", href: "/dashboard/chat" },
+  { key: "calls", labelKey: "calls", href: "/dashboard/calls" },
+  { key: "messages", labelKey: "messages", href: "/dashboard/messages" },
   {
     key: "messenger",
-    label: "Messenger",
+    labelKey: "messenger",
     href: "/dashboard/messenger",
     requiresMetaConnection: true
   },
   {
     key: "whatsapp",
-    label: "WhatsApp",
+    labelKey: "whatsapp",
     href: "/dashboard/whatsapp",
     requiresWhatsAppConnection: true
   },
-  { key: "aiflows", label: "AiFlows", href: "/dashboard/aiflows" },
-  { key: "agents", label: "Agents", href: "/dashboard/agents" },
-  { key: "webchat", label: "Web chat", href: "/dashboard/webchat" },
-  { key: "emails", label: "Emails", href: "/dashboard/emails" },
-  { key: "customers", label: "Contacts", href: "/dashboard/customers" },
-  { key: "employees", label: "Employees", href: "/dashboard/employees" },
-  { key: "memory", label: "Memory", href: "/dashboard/memory" },
-  { key: "marketing", label: "Marketing", href: "/dashboard/marketing" },
-  { key: "import-export", label: "Import / Export", href: "/dashboard/import-export" },
-  { key: "integrations", label: "Integrations", href: "/dashboard/integrations" },
-  { key: "billing", label: "Billing", href: "/dashboard/billing" },
-  { key: "settings", label: "Settings", href: "/dashboard/settings", locked: true },
-  { key: "notifications", label: "Notifications", href: "/dashboard/notifications", locked: true }
+  { key: "aiflows", labelKey: "aiflows", href: "/dashboard/aiflows" },
+  { key: "agents", labelKey: "agents", href: "/dashboard/agents" },
+  { key: "webchat", labelKey: "webchat", href: "/dashboard/webchat" },
+  { key: "emails", labelKey: "emails", href: "/dashboard/emails" },
+  { key: "customers", labelKey: "customers", href: "/dashboard/customers" },
+  { key: "employees", labelKey: "employees", href: "/dashboard/employees" },
+  { key: "memory", labelKey: "memory", href: "/dashboard/memory" },
+  { key: "marketing", labelKey: "marketing", href: "/dashboard/marketing" },
+  { key: "import-export", labelKey: "importExport", href: "/dashboard/import-export" },
+  { key: "integrations", labelKey: "integrations", href: "/dashboard/integrations" },
+  { key: "billing", labelKey: "billing", href: "/dashboard/billing" },
+  { key: "settings", labelKey: "settings", href: "/dashboard/settings", locked: true },
+  { key: "notifications", labelKey: "notifications", href: "/dashboard/notifications", locked: true }
 ];
 
-/**
- * Drop conditional items the business hasn't unlocked (the Messenger inbox,
- * gated on an active Meta connection; the WhatsApp inbox, gated on an
- * active WhatsApp connection). Applied by the dashboard layout (nav render)
- * AND the Settings sidebar customizer, so a not-yet-connected business
- * never sees the item anywhere.
- */
 export function filterSidebarItemsForBusiness<T extends SidebarItemDef>(
   items: T[],
   flags: { metaConnected: boolean; whatsappConnected?: boolean }

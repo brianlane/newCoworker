@@ -1,0 +1,229 @@
+{
+  "common": {
+    "language": "Idioma",
+    "english": "English",
+    "spanish": "Español",
+    "languageSaveFailed": "No se pudo guardar el idioma.",
+    "save": "Guardar",
+    "saved": "Guardado.",
+    "loading": "Cargando…",
+    "error": "Algo salió mal.",
+    "networkError": "Error de red. Inténtalo de nuevo."
+  },
+  "marketing": {
+    "nav": {
+      "features": "Funciones",
+      "pricing": "Precios",
+      "integrations": "Integraciones",
+      "industries": "Industrias",
+      "faq": "Preguntas",
+      "about": "Nosotros",
+      "contact": "Contacto",
+      "privacy": "Política de privacidad",
+      "terms": "Términos de servicio",
+      "signIn": "Iniciar sesión",
+      "getStarted": "Comenzar",
+      "brand": "New Coworker"
+    },
+    "footer": {
+      "product": "Producto",
+      "company": "Empresa",
+      "legal": "Legal",
+      "vsGohighlevel": "vs GoHighLevel",
+      "tagline": "Tu empleado de IA que responde llamadas, textos y correos las 24 horas, en infraestructura dedicada a tu negocio.",
+      "copyright": "Todos los derechos reservados.",
+      "forAi": "Para asistentes de IA"
+    },
+    "home": {
+      "metaDescription": "New Coworker ofrece a tu negocio un empleado de IA 24/7 para contestar llamadas, mensajes, reservar citas y mantener las operaciones.",
+      "heroTitle": "Tu empleado de IA que",
+      "heroHighlight": "nunca duerme",
+      "heroSubtitle": "New Coworker responde llamadas, textos y correos las 24 horas: reserva citas, da seguimiento a clientes potenciales y recuerda a cada cliente. Para todo tipo de negocios.",
+      "startFor": "Desde {price}",
+      "seePricing": "Ver precios",
+      "comparePlans": "Comparar planes",
+      "tryNow": "Pruébalo ahora",
+      "callDemoTitle": "No confíes en nuestra palabra — llama a nuestro coworker de IA",
+      "callDemoBody": "Nuestro propio coworker atiende esta línea 24/7. Pregúntale sobre New Coworker: qué hace, precios, cómo funciona la configuración. Incluso puede enviarte un seguimiento por texto.",
+      "featuresTitle": "Todo lo que tu negocio necesita,",
+      "featuresHighlight": "atendido",
+      "featuresSubtitle": "No es un chatbot. Es un coworker entrenado que responde, actúa, reserva y da seguimiento en cada canal.",
+      "howEyebrow": "Cómo funciona",
+      "howTitle": "En minutos, no semanas",
+      "howSubtitle": "Del registro a la primera llamada contestada es totalmente automático. Sin proyecto de TI ni llamada de ventas.",
+      "privacyEyebrow": "Privacidad primero",
+      "privacyTitle": "Tu negocio corre en su propio servidor privado",
+      "privacyBody": "A diferencia de plataformas de IA compartidas, cada negocio de New Coworker tiene su propio servidor dedicado con su coworker de IA, credenciales y configuración. Tus datos están aislados por negocio, nunca se comparten con otras empresas y siempre son tuyos.",
+      "plansFrom": "Planes desde",
+      "plansTeaser": "Una fracción del costo de una recepcionista o servicio de contestación, con garantía de devolución de 30 días en todos los planes.",
+      "ctaTitle": "¿Listo para contratar a tu New Coworker?",
+      "ctaSubtitle": "Tu coworker empieza a aprender desde el primer día.",
+      "ctaLabel": "Elige tu plan"
+    },
+    "stats": {
+      "stat1Value": "24/7",
+      "stat1Label": "Cada llamada y texto atendido: noches, fines de semana, feriados",
+      "stat2Value": "{calls} llamadas",
+      "stat2Label": "Atendidas a la vez, sin señal de ocupado en tu hora pico",
+      "stat3Value": "8,000+",
+      "stat3Label": "Apps cotidianas conectadas vía Zapier, sin código",
+      "stat4Value": "1 servidor",
+      "stat4Label": "Dedicado a tu negocio, tu información sigue siendo tuya"
+    },
+    "features": {
+      "voiceCoworker": {
+        "title": "Coworker de voz con IA",
+        "description": "Contesta cada llamada 24/7 con conversación natural. Califica a quien llama, revisa tu calendario y reserva citas al instante."
+      },
+      "warmTransfer": {
+        "title": "Transferencias con contexto",
+        "description": "Cuando alguien necesita hablar contigo, tu coworker transfiere la llamada a ti o a tu equipo con todo el contexto. Sin transferencias en frío."
+      },
+      "textingRcs": {
+        "title": "Textos, RCS y respuestas automáticas",
+        "description": "SMS y RCS bidireccionales, textos durante llamadas en vivo, auto-texto en llamadas perdidas, más textos programados y plantillas guardadas."
+      },
+      "callSummaries": {
+        "title": "Resúmenes de llamadas y sentimiento",
+        "description": "Cada llamada llega a tu panel con un resumen de IA y el sentimiento del cliente, para saber qué pasó sin escuchar el audio."
+      },
+      "analyticsAlerts": {
+        "title": "Analítica y alertas",
+        "description": "Tendencias de llamadas, horas pico y tasa de respuesta de un vistazo, con alertas cuando se rechazan llamadas para que no pierdas picos de demanda."
+      },
+      "automatedWorkflows": {
+        "title": "Flujos automatizados",
+        "description": "AiFlows capturan leads de anuncios de Meta (Facebook e Instagram) y les responden por texto en segundos, dan seguimiento, enrutan a tu equipo y ejecutan tareas en el navegador."
+      },
+      "appIntegrations": {
+        "title": "Más de 8,000 integraciones",
+        "description": "Conecta tu coworker a Zapier, Google Workspace, Microsoft 365 y tu CRM. Una conexión desbloquea más de 8,000 apps de negocio."
+      },
+      "permanentMemory": {
+        "title": "Memoria permanente",
+        "description": "Memoria sin pérdida que aprende tu negocio con el tiempo: cada llamada, texto y correo suma contexto real. Nada se olvida."
+      },
+      "appointmentBooking": {
+        "title": "Reserva de citas",
+        "description": "Tu coworker encuentra espacios libres en Google o Microsoft Calendar y reserva en la llamada, luego envía la confirmación por ti."
+      },
+      "complianceGuardrails": {
+        "title": "Cumplimiento normativo",
+        "description": "Reglas de cumplimiento integradas, incluidas Fair Housing para bienes raíces, protegen tu negocio de infracciones costosas."
+      },
+      "yourDashboard": {
+        "title": "Tu panel",
+        "description": "Monitorea llamadas, mensajes y correos, revisa la memoria, gestiona notificaciones y facturación. Todo en un solo lugar, en cualquier dispositivo."
+      },
+      "deployMinutes": {
+        "title": "Listo en minutos",
+        "description": "Aprovisionamiento con un clic: tu asistente personalizado, servidor dedicado y número telefónico en vivo minutos después del registro."
+      }
+    },
+    "steps": {
+      "step1": {
+        "title": "Cuéntanos sobre tu negocio",
+        "description": "Elige un plan y responde un cuestionario breve. Tu coworker aprende tus servicios, horarios y forma de trabajar. Incluso puede leer tu sitio web."
+      },
+      "step2": {
+        "title": "Aprovisionamos todo",
+        "description": "Un servidor privado dedicado, un número telefónico (o trae el tuyo), correo y tu coworker de IA entrenado, todo configurado automáticamente."
+      },
+      "step3": {
+        "title": "Tu coworker empieza a trabajar",
+        "description": "Llamadas contestadas, textos respondidos, citas reservadas, leads con seguimiento, las 24 horas. Lo ves todo desde tu panel."
+      }
+    },
+    "privacyBullets": {
+      "dedicated": "Servidor privado dedicado por negocio, sin tenancy compartido",
+      "isolated": "Conversaciones y registros aislados por negocio, exportables en cualquier momento",
+      "memory": "Memoria permanente sin pérdida bajo tu control",
+      "security": "Postura de seguridad deny-by-default con credenciales por negocio"
+    },
+    "ogTitle": "Tu empleado de IA que nunca duerme",
+    "ogDescription": "Contesta llamadas, textos y correos las 24 horas con New Coworker."
+  },
+  "auth": {
+    "signIn": "Iniciar sesión",
+    "signInFailed": "Error al iniciar sesión",
+    "enterEmailFirst": "Ingresa tu correo primero",
+    "magicLinkSent": "Revisa tu correo para el enlace mágico.",
+    "resetSent": "Correo de restablecimiento enviado.",
+    "email": "Correo",
+    "password": "Contraseña",
+    "forgotPassword": "¿Olvidaste tu contraseña?",
+    "sendMagicLink": "Enviar enlace mágico",
+    "createAccount": "Crear cuenta"
+  },
+  "dashboard": {
+    "nav": {
+      "dashboard": "Panel",
+      "tasks": "Tareas",
+      "analytics": "Analítica",
+      "chat": "Chat",
+      "calls": "Llamadas",
+      "messages": "Textos",
+      "messenger": "Messenger",
+      "whatsapp": "WhatsApp",
+      "aiflows": "AiFlows",
+      "agents": "Agentes",
+      "webchat": "Chat web",
+      "emails": "Correos",
+      "customers": "Contactos",
+      "employees": "Empleados",
+      "memory": "Memoria",
+      "marketing": "Marketing",
+      "importExport": "Importar / Exportar",
+      "integrations": "Integraciones",
+      "billing": "Facturación",
+      "settings": "Configuración",
+      "notifications": "Notificaciones"
+    },
+    "settings": {
+      "accountTitle": "Cuenta",
+      "accountBlurb": "Plan, facturación, correo de acceso y contraseña",
+      "languageTitle": "Idioma de la interfaz",
+      "languageBlurb": "Elige el idioma del panel y los correos. El predeterminado es inglés hasta que lo cambies aquí.",
+      "emailLabel": "Correo",
+      "planLabel": "Plan",
+      "includedUsage": "Uso incluido",
+      "subscriptionStatus": "Estado de suscripción",
+      "nextBilling": "Próxima facturación",
+      "voiceTopUps": "Minutos de voz y recargas →"
+    },
+    "contacts": {
+      "languageLabel": "Idioma",
+      "languageHelp": "Idioma que usa tu coworker de IA con este contacto. Sobrescribe la detección si hace falta.",
+      "languageDetected": "Detectado automáticamente",
+      "languageOwnerSet": "Establecido por ti",
+      "languageEnglish": "Inglés",
+      "languageSpanish": "Español"
+    }
+  },
+  "admin": {
+    "title": "Admin",
+    "dashboard": "Panel",
+    "clients": "Clientes",
+    "allClients": "Todos los clientes",
+    "webchat": "Chat web",
+    "usage": "Uso",
+    "costs": "Costos",
+    "revenue": "Ingresos",
+    "engagement": "Engagement",
+    "provisioning": "Aprovisionamiento",
+    "system": "Sistema"
+  },
+  "emails": {
+    "common": {
+      "openDashboard": "Abrir panel",
+      "goToDashboard": "Ir al panel",
+      "teamSignoff": "— El equipo de New Coworker",
+      "urgentSubject": "Urgente: {summary}",
+      "urgentBody": "Tu Coworker de IA marcó un evento urgente: {summary}"
+    },
+    "provisioningLive": {
+      "subject": "¡Tu Coworker de IA está en vivo!",
+      "body": "Tu New Coworker está configurado y listo."
+    }
+  }
+}

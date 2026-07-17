@@ -34,6 +34,7 @@ import {
   type GeminiChatStepResult
 } from "@/lib/gemini-chat";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { customerLanguageLine } from "@/lib/i18n/customer-language";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getChatSpendSnapshotForBusiness, type ChatSpendSnapshot } from "@/lib/db/chat-usage";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
@@ -235,7 +236,11 @@ export async function runWebchatGeminiTurn(
     },
     documentsMd
   );
-  const systemInstruction = [instructions, ...systemBlocks].join("\n\n");
+  const languageLine = customerLanguageLine({
+    detected: undefined,
+    defaultLang: "en"
+  });
+  const systemInstruction = [instructions, languageLine, ...systemBlocks].filter(Boolean).join("\n\n");
 
   const contents: GeminiChatContent[] = [
     { role: "user", parts: [{ text: userTurn }] }

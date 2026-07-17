@@ -42,6 +42,8 @@ import {
 } from "@/lib/notifications/categories";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { logger } from "@/lib/logger";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
+import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
 
 export type NotificationKind = "urgent_alert" | "voice_capture" | "digest" | string;
 
@@ -287,23 +289,26 @@ export async function dispatchUrgentNotification(
       )
     );
   } else {
+    const ownerLocale = await resolveOwnerUiLocaleForEmail(targets.email);
+    const emailCopy = emailMessagesForLocale(ownerLocale);
     // Build off the app origin (not dashboardUrl, which has /dashboard appended)
     // so the link resolves to /api/notifications/unsubscribe — the route the
     // unsubscribe handler is mounted at.
     const unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(
       input.businessId
     )}`;
-    const subject = input.emailSubject ?? `Urgent: ${summary}`;
+    const subject =
+      input.emailSubject ?? emailCopy.common.urgentSubject.replace("{summary}", summary);
     const body =
       input.emailBody ??
-      `Your AI Coworker flagged an urgent event: ${summary}\n\nView details: ${dashboardUrl}`;
+      `${emailCopy.common.urgentBody.replace("{summary}", summary)}\n\nView details: ${dashboardUrl}`;
     const bodyParagraphs = body.split(/\n\n+/).filter(Boolean);
     const html = buildBrandedEmailHtml({
       siteUrl: appUrl,
       documentTitle: subject,
       heading: subject,
       bodyBlocks: bodyParagraphs.map((t) => ({ kind: "text" as const, text: t })),
-      cta: { label: "Open dashboard", href: dashboardUrl },
+      cta: { label: emailCopy.common.openDashboard, href: dashboardUrl },
       unsubscribeUrl,
       recipientEmail: targets.email
     });

@@ -1326,12 +1326,12 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   });
 }
 
-const HELP_REPLY_TEXT =
-  "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.";
+import { edgeMessage } from "../_shared/edge_messages.ts";
+
+const HELP_REPLY_TEXT = edgeMessage("SMS_HELP_REPLY");
 const STOP_REPLY_TEXT =
   "You're opted out of New Coworker marketing SMS for this number. You may still get transactional messages.";
-const START_REPLY_TEXT =
-  "You're subscribed to New Coworker SMS for this number. Reply STOP to opt out. Msg&data rates may apply.";
+const START_REPLY_TEXT = edgeMessage("SMS_START_REPLY");
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {

@@ -1,5 +1,6 @@
 "use client";
 
+import { useTranslations } from "next-intl";
 import { Sidebar } from "@/components/ui/Sidebar";
 import {
   LayoutDashboard,
@@ -14,17 +15,23 @@ import {
 } from "lucide-react";
 
 const adminNavItems = [
-  { label: "Dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
-  { label: "All Clients", href: "/admin/clients", icon: Users },
-  { label: "Web chat", href: "/admin/webchat", icon: MessageSquare },
-  { label: "Revenue", href: "/admin/revenue", icon: DollarSign },
-  { label: "Costs", href: "/admin/costs", icon: Receipt },
-  { label: "Usage", href: "/admin/usage", icon: Gauge },
-  { label: "Engagement", href: "/admin/engagement", icon: Activity },
-  { label: "Provisioning", href: "/admin/provision", icon: Server },
-  { label: "System", href: "/admin/system", icon: Settings }
-];
+  { labelKey: "dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
+  { labelKey: "allClients", href: "/admin/clients", icon: Users },
+  { labelKey: "webchat", href: "/admin/webchat", icon: MessageSquare },
+  { labelKey: "revenue", href: "/admin/revenue", icon: DollarSign },
+  { labelKey: "costs", href: "/admin/costs", icon: Receipt },
+  { labelKey: "usage", href: "/admin/usage", icon: Gauge },
+  { labelKey: "engagement", href: "/admin/engagement", icon: Activity },
+  { labelKey: "provisioning", href: "/admin/provision", icon: Server },
+  { labelKey: "system", href: "/admin/system", icon: Settings }
+] as const;
 
 export function AdminSidebar({ userEmail }: { userEmail?: string | null }) {
-  return <Sidebar items={adminNavItems} userEmail={userEmail} />;
+  const t = useTranslations("admin");
+  const items = adminNavItems.map(({ labelKey, href, icon }) => ({
+    label: t(labelKey),
+    href,
+    icon
+  }));
+  return <Sidebar items={items} userEmail={userEmail} />;
 }

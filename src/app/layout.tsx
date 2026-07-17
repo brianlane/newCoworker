@@ -1,12 +1,12 @@
 import type { Metadata, Viewport } from "next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
+import { NextIntlClientProvider } from "next-intl";
+import { getLocale, getMessages } from "next-intl/server";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import "./globals.css";
 
 const SITE_URL = "https://newcoworker.com";
 
-// Sitewide schema.org identity: helps search engines and AI answer engines
-// attribute pages to the company and find the contact channel.
 const ORGANIZATION_JSON_LD = {
   "@context": "https://schema.org",
   "@type": "Organization",
@@ -52,10 +52,6 @@ export const metadata: Metadata = {
     "business automation",
     "virtual assistant for business"
   ],
-  // Right-sized icon files (633 B – 25 KB, palette PNGs) instead of the
-  // 309 KB full-resolution logo.png every page previously shipped as its
-  // favicon/app icons. logo.png itself stays for content usages (nav,
-  // emails, OG image).
   icons: {
     icon: [
       { url: "/logo-32.png", type: "image/png", sizes: "32x32" },
@@ -91,15 +87,20 @@ export const metadata: Metadata = {
   }
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children
 }: Readonly<{ children: React.ReactNode }>) {
+  const locale = await getLocale();
+  const messages = await getMessages();
+
   return (
-    <html lang="en">
+    <html lang={locale}>
       <body>
-        <JsonLd data={ORGANIZATION_JSON_LD} />
-        <JsonLd data={WEBSITE_JSON_LD} />
-        {children}
+        <NextIntlClientProvider locale={locale} messages={messages}>
+          <JsonLd data={ORGANIZATION_JSON_LD} />
+          <JsonLd data={WEBSITE_JSON_LD} />
+          {children}
+        </NextIntlClientProvider>
         <SpeedInsights />
       </body>
     </html>

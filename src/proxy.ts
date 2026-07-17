@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { rateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/rate-limit";
+import { LOCALE_COOKIE } from "@/i18n/routing";
+import { isSpanishMarketingPath, stripSpanishPrefix } from "@/lib/i18n/es-routes";
 
 type AuthUser = {
   id: string;
@@ -85,6 +87,21 @@ function sourceMatchesRequestOrigin(request: NextRequest, source: string): boole
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const method = request.method;
+
+  // --- /es/... SEO mirrors for public marketing pages ---
+  // Rewrite to the canonical unprefixed route and pin the locale cookie to
+  // Spanish. English URLs are untouched; the UI never sniffs Accept-Language.
+  if (isSpanishMarketingPath(pathname)) {
+    const rewriteUrl = request.nextUrl.clone();
+    rewriteUrl.pathname = stripSpanishPrefix(pathname);
+    const rewrite = NextResponse.rewrite(rewriteUrl);
+    rewrite.cookies.set(LOCALE_COOKIE, "es", {
+      path: "/",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 365
+    });
+    return rewrite;
+  }
 
   // --- CSRF protection for state-changing API requests (skip webhooks) ---
   if (
