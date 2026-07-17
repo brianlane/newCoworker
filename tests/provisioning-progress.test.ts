@@ -3,7 +3,7 @@ import {
   recordProvisioningProgress,
   getLatestProvisioningStatus,
   getProvisioningLogs,
-  hasPriorSuccessfulProvision,
+  hasPriorOpsNewSignupAlert,
   shouldShowProvisioningProgress,
   shouldMountProvisioningWidget,
   isBusinessRunningStatus
@@ -457,7 +457,7 @@ describe("provisioning/progress", () => {
     );
   });
 
-  it("hasPriorSuccessfulProvision is true when a complete success row exists", async () => {
+  it("hasPriorOpsNewSignupAlert is true when the alert-sent row exists", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
@@ -466,11 +466,16 @@ describe("provisioning/progress", () => {
       limit: vi.fn().mockResolvedValue({
         data: [
           {
-            log_payload: { phase: "deploy_failed", percent: 95, message: "x", source: "orchestrator" },
-            status: "error"
+            log_payload: { phase: "complete", percent: 100, message: "done", source: "orchestrator" },
+            status: "success"
           },
           {
-            log_payload: { phase: "complete", percent: 100, message: "done", source: "orchestrator" },
+            log_payload: {
+              phase: "ops_new_signup_alert_sent",
+              percent: 100,
+              message: "sent",
+              source: "orchestrator"
+            },
             status: "success"
           }
         ],
@@ -480,29 +485,29 @@ describe("provisioning/progress", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(
-      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
     ).resolves.toBe(true);
   });
 
-  it("hasPriorSuccessfulProvision is false when no complete success row exists", async () => {
+  it("hasPriorOpsNewSignupAlert is false when no alert-sent row exists", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockResolvedValue({
-        data: [{ log_payload: { phase: "remote_deploy_starting", percent: 40 }, status: "thinking" }],
+        data: [{ log_payload: { phase: "complete", percent: 100 }, status: "success" }],
         error: null
       })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(
-      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
     ).resolves.toBe(false);
   });
 
-  it("hasPriorSuccessfulProvision is false when data is null without error", async () => {
+  it("hasPriorOpsNewSignupAlert is false when data is null without error", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
@@ -513,11 +518,11 @@ describe("provisioning/progress", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(
-      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
     ).resolves.toBe(false);
   });
 
-  it("hasPriorSuccessfulProvision throws on db error", async () => {
+  it("hasPriorOpsNewSignupAlert throws on db error", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
@@ -528,7 +533,7 @@ describe("provisioning/progress", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(
-      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
-    ).rejects.toThrow("hasPriorSuccessfulProvision");
+      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
+    ).rejects.toThrow("hasPriorOpsNewSignupAlert");
   });
 });

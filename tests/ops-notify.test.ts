@@ -629,7 +629,7 @@ describe("sendOpsNewSignupEmail", () => {
   });
 
   it("sends the new-signup alert to the ops inbox", async () => {
-    await sendOpsNewSignupEmail(signupInput);
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBe(true);
     expect(sendOwnerEmailMock).toHaveBeenCalledWith(
       "resend_test",
       "team@newcoworker.com",
@@ -646,7 +646,7 @@ describe("sendOpsNewSignupEmail", () => {
 
   it("skips with a warning when RESEND_API_KEY is missing", async () => {
     delete process.env.RESEND_API_KEY;
-    await sendOpsNewSignupEmail(signupInput);
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBe(false);
     expect(sendOwnerEmailMock).not.toHaveBeenCalled();
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops new-signup email skipped: RESEND_API_KEY missing",
@@ -656,14 +656,14 @@ describe("sendOpsNewSignupEmail", () => {
 
   it("never throws when the send fails", async () => {
     sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
-    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBeUndefined();
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBe(false);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops new-signup email failed",
       expect.objectContaining({ error: "smtp down" })
     );
 
     sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
-    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBeUndefined();
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBe(false);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops new-signup email failed",
       expect.objectContaining({ error: "smtp string failure" })
@@ -673,7 +673,7 @@ describe("sendOpsNewSignupEmail", () => {
   it("tags enterprise tenants and falls back to localhost when app URL is unset", async () => {
     delete process.env.NEXT_PUBLIC_APP_URL;
     vi.mocked(getBusiness).mockResolvedValueOnce({ tier: "enterprise" } as never);
-    await sendOpsNewSignupEmail(signupInput);
+    await expect(sendOpsNewSignupEmail(signupInput)).resolves.toBe(true);
     expect(sendOwnerEmailMock).toHaveBeenCalledWith(
       "resend_test",
       "team@newcoworker.com",

@@ -154,22 +154,21 @@ export async function getLatestProvisioningStatus(
   };
 }
 
-/** True when this business already finished a successful first-time provision. */
-export async function hasPriorSuccessfulProvision(businessId: string): Promise<boolean> {
+/** True when the ops new-signup alert was already sent for this business. */
+export async function hasPriorOpsNewSignupAlert(businessId: string): Promise<boolean> {
   const db = await createSupabaseServiceClient();
   const { data, error } = await db
     .from("coworker_logs")
     .select("log_payload, status")
     .eq("business_id", businessId)
     .eq("task_type", "provisioning")
-    .eq("status", "success")
     .order("created_at", { ascending: false })
-    .limit(5);
+    .limit(10);
 
-  if (error) throw new Error(`hasPriorSuccessfulProvision: ${error.message}`);
+  if (error) throw new Error(`hasPriorOpsNewSignupAlert: ${error.message}`);
   return (data ?? []).some((row) => {
     const p = row.log_payload as ProvisioningLogPayload | null;
-    return p?.phase === "complete";
+    return p?.phase === "ops_new_signup_alert_sent";
   });
 }
 

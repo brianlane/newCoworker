@@ -259,17 +259,17 @@ export async function sendOpsHardwareMigrationEmail(
   }
 }
 
-/** Fire-and-forget new-signup-live ops alert; never throws. */
+/** Fire-and-forget new-signup-live ops alert; never throws. Returns true when sent. */
 export async function sendOpsNewSignupEmail(
   input: Omit<OpsNewSignupInput, "siteUrl">
-): Promise<void> {
+): Promise<boolean> {
   try {
     const apiKey = process.env.RESEND_API_KEY;
     if (!apiKey) {
       logger.warn("ops new-signup email skipped: RESEND_API_KEY missing", {
         businessId: input.businessId
       });
-      return;
+      return false;
     }
     const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
     const toEmail = opsNotificationEmail();
@@ -282,11 +282,13 @@ export async function sendOpsNewSignupEmail(
       businessId: input.businessId,
       toEmail
     });
+    return true;
   } catch (err) {
     logger.warn("ops new-signup email failed", {
       businessId: input.businessId,
       error: err instanceof Error ? err.message : String(err)
     });
+    return false;
   }
 }
 
