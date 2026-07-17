@@ -84,6 +84,24 @@ export async function POST(request: Request) {
               "call notify_team with their preferred day/time and tell the caller a team " +
               "member will confirm the appointment."
           }
-        : result;
+        : !result.ok && result.detail === "booking_in_progress"
+          ? {
+              ...result,
+              message:
+                "Your earlier booking attempt for this exact time is STILL COMPLETING — it " +
+                "has not failed. Do NOT tell the caller the time is unavailable and do NOT " +
+                "offer other times. Say you're just confirming, wait a moment, then call " +
+                "calendar_book_appointment once more with the SAME arguments to get the " +
+                "confirmation."
+            }
+          : result.ok && result.detail === "already_booked"
+            ? {
+                ...result,
+                message:
+                  "This exact appointment was ALREADY booked successfully (an earlier attempt " +
+                  "completed after a slow response). Treat it as confirmed — never book it " +
+                  "again and never tell the caller the time was unavailable."
+              }
+            : result;
   return voiceToolResponse(enriched, result.detail === "calendar_book_failed" ? 500 : 200);
 }

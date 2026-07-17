@@ -405,21 +405,28 @@ export async function findCalendarSlots(
  *   no caller context and pass nothing).
  */
 /**
- * Stored contact display name for the attendee phone (alias-aware). Best
- * effort: null on no contact, no name, or any lookup failure — the booking
- * proceeds with the model-supplied name.
+ * Stored contact identity (display name + email) for the attendee phone,
+ * alias-aware. Best effort: nulls on no contact, blank fields, or any
+ * lookup failure — the booking proceeds with the model-supplied values.
  */
-async function storedAttendeeName(businessId: string, phone: string): Promise<string | null> {
+async function storedAttendeeContact(
+  businessId: string,
+  phone: string
+): Promise<{ name: string | null; email: string | null }> {
   try {
     const row = await getCustomerMemory(businessId, phone);
     const name = row?.display_name?.trim();
-    return name && name.length > 0 ? name : null;
+    const email = row?.email?.trim();
+    return {
+      name: name && name.length > 0 ? name : null,
+      email: email && email.length > 0 ? email : null
+    };
   } catch (err) {
-    logger.warn("calendar-tools/book: stored-name lookup failed", {
+    logger.warn("calendar-tools/book: stored-contact lookup failed", {
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });
-    return null;
+    return { name: null, email: null };
   }
 }
 
@@ -436,11 +443,21 @@ export async function bookCalendarAppointment(
   // display name wins over whatever name the model carried in from a lead
   // form or the conversation — invites stop flip-flopping between "Juhu"
   // and "Muhammad Fahad Juhu" for the same person.
+  //
+  // Email backfill (Truly, Jul 15 2026): the voice model rarely collects an
+  // email mid-call, so bookings shipped with no attendee — the provider
+  // sent NO calendar invite while the assistant promised one. When the
+  // stored contact already has an email (lead form, SMS follow-up), use it
+  // so the invite is real. The model's explicit attendeeEmail still wins.
   const attendeePhone = (rawArgs.attendeePhone ?? fallbackPhone ?? "").trim();
-  const preferredName = attendeePhone ? await storedAttendeeName(businessId, attendeePhone) : null;
-  const args: BookAppointmentArgs = preferredName
-    ? { ...rawArgs, attendeeName: preferredName }
-    : rawArgs;
+  const stored = attendeePhone
+    ? await storedAttendeeContact(businessId, attendeePhone)
+    : { name: null, email: null };
+  const args: BookAppointmentArgs = {
+    ...rawArgs,
+    ...(stored.name ? { attendeeName: stored.name } : {}),
+    ...(!rawArgs.attendeeEmail?.trim() && stored.email ? { attendeeEmail: stored.email } : {})
+  };
 
   // Idempotency guard (2026-07-13 incident): a worker-retried model turn
   // re-runs its tool calls, and provider create APIs are not idempotent —
@@ -459,7 +476,14 @@ export async function bookCalendarAppointment(
     return {
       ok: true,
       detail: "already_booked",
-      data: { eventId: claim.eventId, deduplicated: true }
+      data: {
+        eventId: claim.eventId,
+        deduplicated: true,
+        // The prompts key invite language off inviteEmail, and a timeout
+        // retry lands here — the original create ran the same email merge
+        // on the same args, so the merged email IS what rode the event.
+        inviteEmail: args.attendeeEmail?.trim() || null
+      }
     };
   }
   if (claim?.kind === "in_flight") {
@@ -576,7 +600,10 @@ async function bookOnProvider(
         });
         return {
           ...caldavResult,
-          data: { ...(caldavResult.data as Record<string, unknown>), ...zoomData }
+          // CalDAV events carry the attendee in the description only — the
+          // server emails nobody. Explicit null so the model never promises
+          // an invite on this provider.
+          data: { ...(caldavResult.data as Record<string, unknown>), inviteEmail: null, ...zoomData }
         };
       }
       if (zoomMeeting) {
@@ -716,6 +743,10 @@ async function bookOnProvider(
         htmlLink,
         provider: conn.provider,
         calendar: shared ? "shared" : "primary",
+        // Ground truth for "will a calendar invite go out": the provider
+        // emails an invitation ONLY when the event has an attendee. The
+        // model must not promise an invite when this is null.
+        inviteEmail: eventId ? args.attendeeEmail?.trim() || null : null,
         ...(eventId ? zoomData : {})
       }
     };

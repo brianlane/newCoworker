@@ -37,6 +37,7 @@ import {
 } from "@/lib/calendar-tools/reschedule";
 import { listAiFlows, enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { manualTriggerScope } from "@/lib/ai-flows/trigger-eval";
+import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { logger } from "@/lib/logger";
 
@@ -49,7 +50,8 @@ export const ACTION_TOOL_NAMES = [
   "calendar_reschedule_appointment",
   "calendar_cancel_appointment",
   "list_aiflows",
-  "run_aiflow"
+  "run_aiflow",
+  "generate_image"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -74,6 +76,15 @@ export type ActionToolGates = {
   calendar_cancel_appointment: boolean;
   list_aiflows: boolean;
   run_aiflow: boolean;
+  /**
+   * The dashboard `generate_image` Settings toggle. The Rowboat
+   * OwnerCoworker has had `dashboard_generate_image` since the tool
+   * shipped, but the INLINE primary path never declared it — so a healthy
+   * inline path told owners "I don't have an image creation tool" (Truly
+   * Insurance, Jul 16 2026) while only worker-fallback turns could
+   * generate. Same parity gap this module exists to close for send_sms.
+   */
+  generate_image: boolean;
 };
 
 const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
@@ -213,6 +224,32 @@ const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const GENERATE_IMAGE_DECLARATION: GeminiFunctionDeclaration = {
+  name: "generate_image",
+  description:
+    "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited to 3 images per conversation; when the tool refuses with image_limit_reached, tell the owner plainly.",
+  parameters: {
+    type: "object",
+    properties: {
+      prompt: {
+        type: "string",
+        description:
+          "A detailed description of the image to generate, or the edit to apply to inputImageUrl, at most 2000 characters."
+      },
+      aspectRatio: {
+        type: "string",
+        description: "Optional aspect ratio like 1:1, 3:2, 4:3, 16:9, 9:16. Defaults to 1:1."
+      },
+      inputImageUrl: {
+        type: "string",
+        description:
+          "Optional source image to edit: an /api/dashboard/images/... URL the owner attached or that you generated earlier in this conversation. Omit to create a new image from scratch."
+      }
+    },
+    required: ["prompt"]
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
@@ -221,7 +258,8 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   calendar_reschedule_appointment: RESCHEDULE_DECLARATION,
   calendar_cancel_appointment: CANCEL_DECLARATION,
   list_aiflows: LIST_AIFLOWS_DECLARATION,
-  run_aiflow: RUN_AIFLOW_DECLARATION
+  run_aiflow: RUN_AIFLOW_DECLARATION,
+  generate_image: GENERATE_IMAGE_DECLARATION
 };
 
 /** The declarations for every gate that is ON, in stable order. */
@@ -284,6 +322,13 @@ const runAiflowArgsSchema = z.object({
   flow: z.string().min(1).max(200),
   // Same bound as the dashboard "Run now" endpoint.
   input: z.string().max(4000).optional()
+});
+
+// Same caps as the Rowboat dispatch's dashboardGenerateImageArgsSchema.
+const generateImageArgsSchema = z.object({
+  prompt: z.string().min(1).max(2000),
+  aspectRatio: z.string().max(10).optional(),
+  inputImageUrl: z.string().max(300).optional()
 });
 
 // ---------------------------------------------------------------------
@@ -351,6 +396,7 @@ export type ActionToolDeps = {
   createDb?: typeof createSupabaseServiceClient;
   listFlows?: typeof listAiFlows;
   enqueueFlowRun?: typeof enqueueAiFlowRun;
+  generateImage?: typeof generateImageForDashboard;
 };
 
 /** Cap on flows returned to the model (a business rarely has more). */
@@ -386,6 +432,7 @@ export async function executeActionTool(
   const createDb = deps.createDb ?? createSupabaseServiceClient;
   const listFlows = deps.listFlows ?? listAiFlows;
   const enqueueFlowRun = deps.enqueueFlowRun ?? enqueueAiFlowRun;
+  const generateImage = deps.generateImage ?? generateImageForDashboard;
   /* c8 ignore stop */
 
   try {
@@ -644,6 +691,20 @@ export async function executeActionTool(
           flowName: flow.name,
           note: `Run enqueued — it starts within about a minute. Tell the owner "${flow.name}" is running and they can watch it at /dashboard/aiflows.`
         };
+      }
+      case "generate_image": {
+        const parsed = generateImageArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // Same core the Rowboat dashboard_generate_image dispatch calls:
+        // budget gate → 3-per-thread limit → generate → store → meter. The
+        // result's markdown is what the model must embed so the chat UI
+        // renders the image inline.
+        return await generateImage(businessId, parsed.data.prompt, {
+          aspectRatio: normalizeAspectRatio(parsed.data.aspectRatio),
+          ...(parsed.data.inputImageUrl ? { inputImageRef: parsed.data.inputImageUrl } : {})
+        });
       }
     }
   } catch (err) {

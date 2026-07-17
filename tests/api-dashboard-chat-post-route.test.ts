@@ -797,6 +797,23 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     expect(inlineArgs.knowledgeToolEnabled).toBe(true);
   });
 
+  it("reads the generate_image Settings gate and forwards it in the action-tool gates", async () => {
+    // Truly Insurance (Jul 16 2026): the inline PRIMARY path never declared
+    // the image tool, so a healthy inline turn answered "I don't have an
+    // image creation tool" while only worker-fallback turns could generate.
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    await POST(jsonRequest({ businessId: BIZ, message: "create an image" }));
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenCalledWith(BIZ, "dashboard", "generate_image");
+    const inlineArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(inlineArgs.actionToolGates).toMatchObject({ generate_image: true });
+
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    await POST(jsonRequest({ businessId: BIZ, message: "create an image" }));
+    const disabledArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(disabledArgs.actionToolGates).toMatchObject({ generate_image: false });
+  });
+
   it("returns creation drafts from the inline turn to the client", async () => {
     vi.mocked(runInlineChatTurn).mockResolvedValueOnce({
       ok: true,

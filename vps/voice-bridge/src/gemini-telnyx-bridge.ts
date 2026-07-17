@@ -81,6 +81,45 @@ const DOWNLINK_BACKPRESSURE_HIGH_WATERMARK_BYTES = 256 * 1024;
  */
 const TOOL_CALL_TIMEOUT_MS = 3500;
 
+/**
+ * Per-tool overrides for tools whose app-side work is legitimately slower
+ * than the default budget — aborting them early is worse than the wait:
+ *
+ *  - `calendar_book_appointment` COMMITS a provider write. A cold booking
+ *    (shared-calendar ensure + Nango proxy to Google/Microsoft) can take
+ *    5–10s, and the bridge's abort is client-side only — the app keeps
+ *    going and the event gets created anyway. On a real Truly Insurance
+ *    call (2026-07-15) the 3.5s abort made the model tell the caller their
+ *    chosen time was "no longer available" while the booking silently
+ *    succeeded, then book a SECOND slot — a double booking. The model can
+ *    narrate ("one moment while I confirm that") so the extra silence is
+ *    acceptable for a commit.
+ *  - `calendar_find_slots` fans out over provider free/busy reads and was
+ *    observed at 2.3–2.8s warm — too close to 3.5s for a cold call.
+ */
+const TOOL_CALL_TIMEOUT_OVERRIDES_MS: Record<string, number> = {
+  calendar_book_appointment: 15_000,
+  calendar_find_slots: 8_000
+};
+
+/**
+ * Model-facing guidance when a tool call hits the bridge timeout. Booking
+ * gets explicit recovery steps because a timed-out booking may have
+ * SUCCEEDED app-side (the abort does not cancel the server's work): the
+ * idempotency ledger makes an identical retry safe — it returns the
+ * already-created event (`already_booked`) instead of double-booking.
+ */
+const TOOL_TIMEOUT_MESSAGES: Record<string, string> = {
+  calendar_book_appointment:
+    "The booking system was slow to respond — the booking may still have completed. Do NOT " +
+    "tell the caller the time is unavailable and do NOT pick a different time. Tell the " +
+    "caller you're just confirming, then call calendar_book_appointment ONCE more with " +
+    "exactly the same arguments: if the first attempt went through you'll get " +
+    "already_booked (treat as confirmed), otherwise the retry books it. If the retry also " +
+    "times out, call notify_team with the caller's chosen time and say a team member will " +
+    "confirm."
+};
+
 export type TransferCapability = {
   /** E.164 destination (owner/staff cell). */
   toE164: string;
@@ -352,7 +391,7 @@ function sendPcmToTelnyx(
 // Voice tool adapters — HTTP calls into the platform Next.js app.
 // ---------------------------------------------------------------------------
 
-type ToolResult = { ok: boolean; detail?: string; data?: unknown };
+type ToolResult = { ok: boolean; detail?: string; data?: unknown; message?: string };
 
 function voiceToolPath(name: string): string {
   switch (name) {
@@ -400,7 +439,8 @@ async function callVoiceTool(
 
   const url = `${cfg.appBaseUrl.replace(/\/+$/, "")}${path}`;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), TOOL_CALL_TIMEOUT_MS);
+  const timeoutMs = TOOL_CALL_TIMEOUT_OVERRIDES_MS[toolName] ?? TOOL_CALL_TIMEOUT_MS;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
       method: "POST",
@@ -433,13 +473,22 @@ async function callVoiceTool(
       };
     }
     if (parsed && typeof parsed === "object" && "ok" in parsed) {
-      const typed = parsed as { ok: boolean; detail?: string; data?: unknown };
-      return { ok: Boolean(typed.ok), detail: typed.detail, data: typed.data };
+      const typed = parsed as { ok: boolean; detail?: string; data?: unknown; message?: string };
+      return {
+        ok: Boolean(typed.ok),
+        detail: typed.detail,
+        data: typed.data,
+        // Model-facing guidance the app routes attach on notable outcomes
+        // (booking failed / already_booked / in-progress). Dropping it here
+        // left Gemini with a bare detail code and no recovery steps.
+        ...(typeof typed.message === "string" ? { message: typed.message } : {})
+      };
     }
     return { ok: true, data: parsed ?? undefined };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      return { ok: false, detail: "timeout" };
+      const message = TOOL_TIMEOUT_MESSAGES[toolName];
+      return { ok: false, detail: "timeout", ...(message ? { message } : {}) };
     }
     return {
       ok: false,
@@ -497,7 +546,7 @@ function buildVoiceToolDeclarations() {
     {
       name: "calendar_book_appointment",
       description:
-        "Book an appointment on the business calendar. Only call after `calendar_find_slots` confirmed a slot and the caller agreed to it. If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet — text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
+        "Book an appointment on the business calendar. Only call AFTER `calendar_find_slots` confirmed a slot AND the caller has said yes to that ONE specific time out loud — never book while they are still choosing between options, and never book more than one slot per caller. On success, mention a calendar invite ONLY if the result's `inviteEmail` is set; when it is null the caller gets NO invite — do not promise one (offer a text confirmation via `send_follow_up_sms` instead). If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet — text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -1388,6 +1437,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             response: {
               ok: response.ok,
               detail: response.detail ?? (response.ok ? "ok" : "error"),
+              ...(typeof response.message === "string" ? { message: response.message } : {}),
               ...(response.data !== undefined ? { data: response.data } : {})
             }
           }

@@ -234,7 +234,11 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "calendar_cancel_appointment",
   // A run_aiflow enqueue is committed the moment it lands in the queue —
   // a fallback rerun would enqueue the same automation twice.
-  "run_aiflow"
+  "run_aiflow",
+  // A generated image is stored, metered against the AI budget, and burns
+  // one of the 3 per-conversation slots the moment the core returns ok —
+  // a worker-fallback rerun would bill and consume a slot all over again.
+  "generate_image"
 ]);
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
@@ -250,7 +254,7 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   const r = result as {
     toE164?: unknown;
     sentBody?: unknown;
-    data?: { bookingLink?: unknown; rescheduleLink?: unknown };
+    data?: { bookingLink?: unknown; rescheduleLink?: unknown; markdown?: unknown };
   };
   if (name === "send_sms") {
     const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
@@ -275,6 +279,13 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   if (name === "run_aiflow") {
     const flowName = (r as { flowName?: unknown }).flowName;
     return `Automation run started${typeof flowName === "string" ? ` ("${flowName}")` : ""} — it can be watched at /dashboard/aiflows.`;
+  }
+  if (name === "generate_image") {
+    // The markdown IS the deliverable: without it a degraded wrap-up
+    // would charge the owner for an image nobody can see.
+    return typeof r.data?.markdown === "string"
+      ? `The image was generated:\n\n${r.data.markdown}`
+      : "The image was generated — it's saved with this conversation.";
   }
   return "The appointment was canceled.";
 }
