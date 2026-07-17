@@ -741,7 +741,18 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
       return (
         <>
           <Row label="Agent" value={step.agentName ?? step.agentId} />
-          <Row label="Runs on" value={step.input} mono />
+          <Row
+            label="Runs on"
+            value={
+              step.documentTemplate !== undefined || step.input === undefined
+                ? step.documentTemplate ?? "{{trigger.document}}"
+                : step.input
+            }
+            mono
+          />
+          {step.saveDocument && (
+            <Row label="Files the result as" value={step.saveDocument.titleTemplate} />
+          )}
           <Row label="Saves the result as" value={step.saveAs} mono />
         </>
       );

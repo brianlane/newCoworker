@@ -4541,11 +4541,14 @@ async function deliverFlowEmail(
 }
 
 /**
- * run_agent: hand the rendered input to the platform's gateway-guarded
- * run-agent endpoint, which re-checks the agent exists + is enabled,
+ * run_agent: hand the rendered input (text or a document ref) to the
+ * platform's gateway-guarded run-agent endpoint, which re-checks the agent
+ * exists + is enabled, resolves the document when a ref rode along,
  * executes the transformation on central Gemini, meters the spend into the
  * shared AI budget, records the agent_runs history row (source='flow'),
- * and returns the artifact — stamped here into {{vars.<saveAs>}}.
+ * optionally files the artifact into Business Documents, and returns the
+ * artifact — stamped here into {{vars.<saveAs>}} (plus
+ * {{vars.<saveAs>_document_id}} / _document_title when filed).
  */
 async function runAgentStep(
   scope: Scope,
@@ -4557,6 +4560,8 @@ async function runAgentStep(
   // to transform — skip (var lands ""), don't fail the flow.
   if (action.skipReason) {
     scope.vars[action.saveAs] = "";
+    scope.vars[`${action.saveAs}_document_id`] = "";
+    scope.vars[`${action.saveAs}_document_title`] = "";
     appendActionTaken(scope, `skipped ${label} run (${action.skipReason})`);
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
@@ -4571,7 +4576,10 @@ async function runAgentStep(
     body: JSON.stringify({
       businessId: run.business_id,
       agentId: action.agentId,
-      input: action.input,
+      ...(action.documentRef
+        ? { documentRef: action.documentRef }
+        : { input: action.input }),
+      ...(action.saveTitle ? { saveDocument: { title: action.saveTitle } } : {}),
       flowRunId: run.id
     })
   });
@@ -4583,7 +4591,16 @@ async function runAgentStep(
     const body = await res.text().catch(() => "");
     throw new Error(`run_agent: platform call ${res.status}: ${body.slice(0, 200)}`);
   }
-  let parsed: { ok?: boolean; detail?: string; data?: { output?: string; runId?: string } };
+  let parsed: {
+    ok?: boolean;
+    detail?: string;
+    data?: {
+      output?: string;
+      runId?: string;
+      filed?: { documentId: string; title: string } | null;
+      fileError?: string;
+    };
+  };
   try {
     parsed = (await res.json()) as typeof parsed;
   } catch {
@@ -4596,7 +4613,14 @@ async function runAgentStep(
     };
   }
   scope.vars[action.saveAs] = parsed.data.output;
+  // Filed-artifact linkage for later steps (share_document pickers can't
+  // reference these, but notify_owner/send_email templates can).
+  scope.vars[`${action.saveAs}_document_id`] = parsed.data.filed?.documentId ?? "";
+  scope.vars[`${action.saveAs}_document_title`] = parsed.data.filed?.title ?? "";
   appendActionTaken(scope, `ran ${label} (${parsed.data.output.length} chars → {{vars.${action.saveAs}}})`);
+  if (parsed.data.filed) {
+    appendActionTaken(scope, `filed ${label} output as "${parsed.data.filed.title}"`);
+  }
   return {
     kind: "ok",
     result: {
@@ -4604,7 +4628,10 @@ async function runAgentStep(
       ...(action.agentName ? { agentName: action.agentName } : {}),
       agent_run_id: parsed.data.runId ?? null,
       output_chars: parsed.data.output.length,
-      saved_as: action.saveAs
+      saved_as: action.saveAs,
+      ...(action.documentRef ? { document: action.documentRef } : {}),
+      ...(parsed.data.filed ? { filed: parsed.data.filed } : {}),
+      ...(parsed.data.fileError ? { file_error: parsed.data.fileError } : {})
     }
   };
 }

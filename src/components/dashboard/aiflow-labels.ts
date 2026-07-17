@@ -95,7 +95,7 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   share_document:
     "Texts or emails the person an expiring link to one of your uploaded documents (price sheet, policy, contract). Only client-facing, unexpired documents can be shared - an expired document fails the step and notifies you instead of sending a stale copy.",
   run_agent:
-    "Runs one of your saved Agents (from the Agents page) on text from this workflow - e.g. turn an inbound email into a clean summary - and saves the result for later steps to send or reference. Uses your monthly AI budget.",
+    "Runs one of your saved Agents (from the Agents page) on text from this workflow or on the document attached to the triggering email (PDFs included) - e.g. compare the quotes in an emailed PDF - and saves the result for later steps to send or reference. Can also file the result into your Documents. Uses your monthly AI budget.",
   ring_handoff:
     "Warm-transfers the live caller to a person and rings them. If they don't answer, the next ring step (or AI takeover) runs.",
   voice_ai_intake:

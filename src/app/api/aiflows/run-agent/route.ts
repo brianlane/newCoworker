@@ -1,15 +1,25 @@
 /**
  * Internal AiFlow adapter: run a saved Agent (business_agents) against
- * flow-rendered text and return the artifact.
+ * flow-rendered text OR a document and return the artifact.
  *
  * Called by the ai-flow-worker when a `run_agent` step executes — this is
  * where agents become event-triggerable: any flow trigger (SMS, email,
- * webhook, schedule, ...) can feed an agent. The endpoint re-checks the
- * agent exists and is enabled (write-time validation can go stale), runs
- * the same executor as manual dashboard runs (metered into the shared AI
- * budget under `agent_run`), and records an `agent_runs` history row with
- * source='flow' + the flow run id so both the flow run detail and the
- * agent's own history show the linkage.
+ * webhook, schedule, ...) can feed an agent. Two input modes:
+ *   - `input` — rendered flow text (the original mode);
+ *   - `documentRef` — an `email-attachments:<path>` ({{trigger.document}})
+ *     or `business-docs:<id>` ref, resolved through the same tenant-gated
+ *     source resolver as doc_extract, so a carrier's emailed PDF can feed a
+ *     quote-comparison agent directly.
+ * `saveDocument` additionally files the artifact into Business Documents
+ * (staff audience — an automated run must never widen output to customer
+ * channels); a filing failure is non-fatal (`fileError`) because the
+ * artifact the flow branches on already exists.
+ *
+ * The endpoint re-checks the agent exists and is enabled (write-time
+ * validation can go stale), runs the same executor as manual dashboard runs
+ * (metered into the shared AI budget under `agent_run`), and records an
+ * `agent_runs` history row with source='flow' + the flow run id so both the
+ * flow run detail and the agent's own history show the linkage.
  *
  * Auth is gateway-only (ROWBOAT_GATEWAY_TOKEN / per-tenant token), like the
  * other worker adapters (send-owner-email). Response contract mirrors them:
@@ -26,21 +36,31 @@ import {
 } from "@/lib/voice-tools/common";
 import { getBusinessAgent, insertAgentRun, patchAgentRun } from "@/lib/agents/db";
 import { executeAgentRun } from "@/lib/agents/run";
+import { saveAgentRunArtifact } from "@/lib/agents/save-artifact";
+import { resolveFlowDocumentSource } from "@/lib/ai-flows/doc-source";
 import { logger } from "@/lib/logger";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
 // The agent transformation is bounded at 90s inside executeAgentRun; leave
-// headroom for the DB writes around it.
+// headroom for the document download + DB writes around it.
 export const maxDuration = 120;
 
-const bodySchema = z.object({
-  businessId: z.string().uuid(),
-  agentId: z.string().uuid(),
-  /** Rendered flow content the agent transforms. */
-  input: z.string().min(1).max(40_000),
-  /** ai_flow_runs id, recorded on the history row. */
-  flowRunId: z.string().uuid().optional()
-});
+const bodySchema = z
+  .object({
+    businessId: z.string().uuid(),
+    agentId: z.string().uuid(),
+    /** Rendered flow content the agent transforms (text mode). */
+    input: z.string().min(1).max(40_000).optional(),
+    /** Rendered document ref the agent runs on (document mode). */
+    documentRef: z.string().min(1).max(600).optional(),
+    /** File the artifact into Business Documents after the run. */
+    saveDocument: z.object({ title: z.string().min(1).max(200) }).optional(),
+    /** ai_flow_runs id, recorded on the history row. */
+    flowRunId: z.string().uuid().optional()
+  })
+  .refine((b) => Boolean(b.input) !== Boolean(b.documentRef), {
+    message: "provide exactly one of input / documentRef"
+  });
 
 export async function POST(request: Request) {
   let body: z.infer<typeof bodySchema>;
@@ -60,6 +80,30 @@ export async function POST(request: Request) {
     if (!agent) return voiceToolResponse({ ok: false, detail: "agent_not_found" });
     if (!agent.enabled) return voiceToolResponse({ ok: false, detail: "agent_disabled" });
 
+    // Resolve the run input: document refs go through the tenant-gated
+    // source resolver (permanent problems → ok:false 200, the worker fails
+    // the step without retrying; a transient ownership-lookup fault throws
+    // → 500 → retry).
+    let inputFilename = "flow-input.txt";
+    let inputMime = "text/plain";
+    let inputData: Buffer;
+    let inputDocumentId: string | null = null;
+    if (body.documentRef) {
+      const resolved = await resolveFlowDocumentSource(body.businessId, body.documentRef);
+      if (!resolved.ok) {
+        return voiceToolResponse({
+          ok: false,
+          detail: `${resolved.error}${resolved.detail ? `: ${resolved.detail}` : ""}`
+        });
+      }
+      inputFilename = resolved.source.filename;
+      inputMime = resolved.source.mimeType;
+      inputData = resolved.source.bytes;
+      inputDocumentId = resolved.source.documentId;
+    } else {
+      inputData = Buffer.from(body.input ?? "", "utf8");
+    }
+
     const runId = randomUUID();
     await insertAgentRun({
       id: runId,
@@ -67,8 +111,9 @@ export async function POST(request: Request) {
       business_id: body.businessId,
       source: "flow",
       flow_run_id: body.flowRunId ?? null,
-      input_filename: "flow-input.txt",
-      input_mime_type: "text/plain"
+      input_document_id: inputDocumentId,
+      input_filename: inputFilename,
+      input_mime_type: inputMime
     });
 
     // executeAgentRun never throws for expected failures; an UNEXPECTED
@@ -80,9 +125,9 @@ export async function POST(request: Request) {
       result = await executeAgentRun({
         businessId: body.businessId,
         agent: { instructions: agent.instructions, output_format: agent.output_format },
-        inputFilename: "flow-input.txt",
-        inputMime: "text/plain",
-        data: Buffer.from(body.input, "utf8")
+        inputFilename,
+        inputMime,
+        data: inputData
       });
     } catch (execErr) {
       await patchAgentRun(body.businessId, runId, {
@@ -142,9 +187,50 @@ export async function POST(request: Request) {
       return voiceToolResponse({ ok: false, detail: result.error });
     }
 
+    // ── Filing (non-fatal) ──────────────────────────────────────────────
+    // The artifact the flow branches on already exists; a filing failure is
+    // reported (`fileError`) rather than failing the step. Audience is
+    // hard-pinned to 'staff' — an automated run must never widen an
+    // artifact to customer channels.
+    let filed: { documentId: string; title: string } | null = null;
+    let fileError: string | undefined;
+    if (body.saveDocument) {
+      try {
+        const saved = await saveAgentRunArtifact({
+          businessId: body.businessId,
+          run: {
+            output_md: result.outputMd,
+            output_filename: result.outputFilename,
+            output_mime_type: result.outputMime,
+            input_filename: inputFilename
+          },
+          agentName: agent.name,
+          title: body.saveDocument.title,
+          audience: "staff"
+        });
+        if (saved.ok) {
+          filed = { documentId: saved.document.id, title: saved.document.title };
+        } else {
+          fileError = saved.detail;
+        }
+      } catch (saveErr) {
+        fileError = saveErr instanceof Error ? saveErr.message : String(saveErr);
+        logger.warn("aiflows/run-agent: artifact filing failed", {
+          businessId: body.businessId,
+          runId,
+          error: fileError
+        });
+      }
+    }
+
     return voiceToolResponse({
       ok: true,
-      data: { output: result.outputMd, runId }
+      data: {
+        output: result.outputMd,
+        runId,
+        filed,
+        ...(fileError ? { fileError } : {})
+      }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
