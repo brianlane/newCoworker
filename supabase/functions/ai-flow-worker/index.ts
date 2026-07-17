@@ -85,7 +85,11 @@ import {
 } from "../_shared/ai_flows/approval_options.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import { sendAiflowFailureAlert } from "../_shared/aiflow_failure_alert.ts";
-import { deleteShortLinks, shortenSmsBodyUrls } from "../_shared/sms_short_links.ts";
+import {
+  deleteShortLinks,
+  linkSmsLinksToOutboundLog,
+  shortenSmsBodyUrls
+} from "../_shared/sms_short_links.ts";
 import {
   formatInTimeZone,
   nextTimeOfDayMs,
@@ -1330,19 +1334,27 @@ async function logOutboundSms(
     /** Delivery channel ('sms' default keeps owner/offer sends untagged-as-sms). */
     channel?: "sms" | "rcs";
   }
-): Promise<void> {
-  const { error } = await supabase.from("sms_outbound_log").insert({
-    business_id: run.business_id,
-    to_e164: args.to,
-    from_e164: args.from,
-    body: args.body,
-    source: args.source,
-    run_id: run.id,
-    flow_id: run.flow_id,
-    telnyx_message_id: args.telnyxMessageId ?? null,
-    channel: args.channel ?? "sms"
-  });
-  if (error) console.error("sms_outbound_log insert", error);
+): Promise<string | null> {
+  const { data, error } = await supabase
+    .from("sms_outbound_log")
+    .insert({
+      business_id: run.business_id,
+      to_e164: args.to,
+      from_e164: args.from,
+      body: args.body,
+      source: args.source,
+      run_id: run.id,
+      flow_id: run.flow_id,
+      telnyx_message_id: args.telnyxMessageId ?? null,
+      channel: args.channel ?? "sms"
+    })
+    .select("id")
+    .single();
+  if (error) {
+    console.error("sms_outbound_log insert", error);
+    return null;
+  }
+  return (data as { id: string }).id;
 }
 
 /**
@@ -4297,7 +4309,7 @@ async function sendSmsStep(
       messageId = null;
     }
     appendActionTaken(scope, `texted ${recipientLabel} at ${toE164}`);
-    await logOutboundSms(supabase, run, {
+    const outboundLogId = await logOutboundSms(supabase, run, {
       to: toE164,
       from: cfg.from || null,
       body: text,
@@ -4305,6 +4317,11 @@ async function sendSmsStep(
       telnyxMessageId: messageId,
       channel: send.channel
     });
+    await linkSmsLinksToOutboundLog(
+      supabase,
+      shortenedLinks.map((l) => l.shortCode),
+      outboundLogId
+    );
     // An agent recipient is a teammate, not a lead — don't file them as a lead
     // customer profile. A contact ref is still a lead-side recipient.
     if (!internalAgentSend) {

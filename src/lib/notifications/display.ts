@@ -28,6 +28,13 @@ export function notificationLink(n: NotificationLike): NotificationLink | null {
   if (n.kind === "voice_capture" || taskType.includes("call") || taskType.includes("voice")) {
     return { href: "/dashboard/calls", label: "Open Calls" };
   }
+  if (n.kind === "link_click") {
+    const href =
+      typeof n.payload?.thread_href === "string" && n.payload.thread_href.startsWith("/")
+        ? n.payload.thread_href
+        : "/dashboard/messages";
+    return { href, label: "Open thread" };
+  }
   if (n.kind === "urgent_alert") {
     return { href: "/dashboard", label: "Open Dashboard" };
   }

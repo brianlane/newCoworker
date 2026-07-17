@@ -14,6 +14,8 @@ import {
 } from "@/lib/ai-flows/run-stats";
 import { STEP_TYPE_LABELS } from "@/components/dashboard/aiflow-labels";
 import type { AiFlowRunRow, AiFlowRunStepRow, ApprovalDecision } from "@/lib/ai-flows/db";
+import type { SmsLinkView } from "@/lib/db/sms-links";
+import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 import {
   APPROVAL_OPTION_DECISIONS,
   APPROVAL_OPTION_INSTRUCTIONS,
@@ -247,6 +249,7 @@ export function AiFlowRunsManager({
   // page opens as a compact list of flows with their run counts.
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [steps, setSteps] = useState<Record<string, AiFlowRunStepRow[]>>({});
+  const [runLinks, setRunLinks] = useState<Record<string, SmsLinkView[]>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -280,13 +283,21 @@ export function AiFlowRunsManager({
   };
 
   const loadSteps = async (runId: string) => {
-    if (steps[runId]) return;
+    if (steps[runId] !== undefined && runLinks[runId] !== undefined) return;
     const res = await fetch(
       `/api/aiflows/runs/${runId}?businessId=${encodeURIComponent(businessId)}`,
       { cache: "no-store" }
     );
-    const json = (await res.json()) as { ok: boolean; data?: { steps: AiFlowRunStepRow[] } };
-    if (json.ok && json.data) setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
+    const json = (await res.json()) as {
+      ok: boolean;
+      data?: { steps: AiFlowRunStepRow[]; links?: SmsLinkView[] };
+    };
+    if (json.ok && json.data) {
+      setSteps((s) => ({ ...s, [runId]: json.data!.steps }));
+      if (json.data.links) {
+        setRunLinks((s) => ({ ...s, [runId]: json.data!.links! }));
+      }
+    }
   };
 
   /** Owner "Stop this run": nothing further sends; no resume path revives it. */
@@ -750,6 +761,16 @@ export function AiFlowRunsManager({
                           )}
                         </div>
                       ))}
+                      {(runLinks[r.id]?.length ?? 0) > 0 && (
+                        <div className="space-y-2 border-t border-parchment/10 pt-2">
+                          <p className="text-xs font-semibold text-parchment/70">Tracked links</p>
+                          <TrackedLinksPanel
+                            businessId={businessId}
+                            links={runLinks[r.id]!}
+                            mode="full"
+                          />
+                        </div>
+                      )}
                       {(steps[r.id] ?? []).length === 0 && (
                         <p className="text-xs text-parchment/40">No steps recorded.</p>
                       )}

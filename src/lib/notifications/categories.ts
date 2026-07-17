@@ -14,6 +14,7 @@ export type NotificationCategory = "leads" | "team" | "system" | "general";
 export function resolveNotificationCategory(kind: string): NotificationCategory {
   switch (kind) {
     case "voice_capture":
+    case "link_click":
       return "leads";
     case "voice_team_notify":
     case "sms_team_notify":

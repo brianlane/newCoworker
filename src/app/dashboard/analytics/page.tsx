@@ -58,6 +58,7 @@ import {
   type SnapshotSeriesPoint
 } from "@/lib/analytics/snapshots";
 import { getFlowFunnels } from "@/lib/analytics/flow-funnels";
+import { getSmsLinkStats } from "@/lib/analytics/sms-link-stats";
 import {
   AnswerRateCard,
   DailyVolumeCard,
@@ -65,6 +66,7 @@ import {
   EmployeePerformanceCard,
   EngagementCard,
   FlowFunnelCard,
+  SmsLinkStatsCard,
   LeadSourcesCard,
   PeakHoursCard,
   SegmentDetailCard,
@@ -109,7 +111,7 @@ function hourRangeLabel(hour: number): string {
 }
 
 export default async function DashboardAnalyticsPage(props: {
-  searchParams?: Promise<{ day?: string; sentiment?: string; hour?: string }>;
+  searchParams?: Promise<{ day?: string; sentiment?: string; hour?: string; flowId?: string }>;
 }) {
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/analytics");
@@ -212,6 +214,8 @@ export default async function DashboardAnalyticsPage(props: {
     Number(params.hour) <= 23
       ? Number(params.hour)
       : null;
+  const selectedFlowId =
+    params.flowId && /^[0-9a-f-]{36}$/i.test(params.flowId) ? params.flowId : null;
 
   // Lookup blips degrade a single card rather than 500-ing the whole page.
   // Every fetcher shares the page's `now` so the cards, the drill-down
@@ -227,6 +231,7 @@ export default async function DashboardAnalyticsPage(props: {
     leadSources,
     teamPerformance,
     flowFunnels,
+    linkStats,
     renewalPipeline,
     responseTimes,
     retention,
@@ -256,6 +261,9 @@ export default async function DashboardAnalyticsPage(props: {
         : Promise.resolve(null),
       // Per-flow funnel; a blip hides the card.
       getFlowFunnels(business.id, { client: db, now }).catch(() => null),
+      getSmsLinkStats(business.id, { client: db, now, flowId: selectedFlowId ?? undefined }).catch(
+        () => null
+      ),
       // Reporting suite (renewal pipeline / response times / retention /
       // monthly rollup) — each degrades to a hidden card on a blip.
       getRenewalPipeline(business.id, { client: db, now }).catch(() => null),
@@ -471,6 +479,19 @@ export default async function DashboardAnalyticsPage(props: {
         <FlowFunnelCard rows={flowFunnels.rows} clipped={flowFunnels.clipped} />
       )}
 
+      {linkStats && linkStats.links.length > 0 && (
+        <SmsLinkStatsCard
+          businessId={business.id}
+          links={linkStats.links}
+          clipped={linkStats.clipped}
+          flowFilterName={
+            selectedFlowId
+              ? flowFunnels?.rows.find((r) => r.flowId === selectedFlowId)?.flowName ?? selectedFlowId
+              : null
+          }
+        />
+      )}
+
       <p className="text-xs text-parchment/40">
         Export CSV:{" "}
         <a
@@ -485,6 +506,20 @@ export default async function DashboardAnalyticsPage(props: {
           className="text-signal-teal hover:underline"
         >
           flow performance
+        </a>
+        {" · "}
+        <a
+          href={`/api/dashboard/analytics/export?businessId=${business.id}&kind=links${selectedFlowId ? `&flowId=${selectedFlowId}` : ""}`}
+          className="text-signal-teal hover:underline"
+        >
+          tracked links
+        </a>
+        {" · "}
+        <a
+          href={`/api/dashboard/analytics/export?businessId=${business.id}&kind=link_clicks${selectedFlowId ? `&flowId=${selectedFlowId}` : ""}`}
+          className="text-signal-teal hover:underline"
+        >
+          link clicks
         </a>
       </p>
 

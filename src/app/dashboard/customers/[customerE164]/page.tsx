@@ -35,6 +35,8 @@ import { listTeamMembers } from "@/lib/db/employees";
 import { listBusinessDocumentsForContact } from "@/lib/documents/db";
 import { RequestDocumentsAction } from "@/components/dashboard/RequestDocumentsAction";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
+import { listSmsLinksForContact } from "@/lib/db/sms-links";
+import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -89,7 +91,7 @@ export default async function CustomerDetailPage({ params }: Props) {
   // as ONE parallel group. This matters doubly for residency (vps-mode)
   // tenants, where each read is a tunnel round-trip to their box —
   // serially these were ~5 RTTs, now the page pays one.
-  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments, mailboxAddress] =
+  const [smsHistory, voiceTranscripts, allCustomers, emailHistory, contactNames, teamMembers, activityItems, contactDocuments, mailboxAddress, trackedLinks] =
     await Promise.all([
       listSmsHistoryForCustomer(business.id, memory.customer_e164, {
         limit: 50,
@@ -136,7 +138,11 @@ export default async function CustomerDetailPage({ params }: Props) {
       // a mailbox-table error just hides the action.
       ensureTenantMailbox(business.id, db)
         .then((row) => tenantMailboxAddress(row.local_part))
-        .catch(() => null)
+        .catch(() => null),
+      listSmsLinksForContact(business.id, memory.customer_e164, {
+        includeClicks: true,
+        client: db
+      }).catch(() => [])
     ]);
   // Merge is "same person, two numbers" — only ever fold a customer into another
   // customer. Exclude self and any non-customer directory row (company short
@@ -435,6 +441,16 @@ export default async function CustomerDetailPage({ params }: Props) {
             ))}
           </ul>
         )}
+      </Card>
+
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-parchment">Link engagement</h2>
+          <span className="text-xs text-parchment/50">
+            {trackedLinks.length} tracked link{trackedLinks.length === 1 ? "" : "s"}
+          </span>
+        </div>
+        <TrackedLinksPanel businessId={business.id} links={trackedLinks} mode="full" />
       </Card>
 
       {memory.email && (

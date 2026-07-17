@@ -15,6 +15,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
+import { mapSmsLinksByOutboundLogIds } from "@/lib/db/sms-links";
+import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 import { rcsChannelActiveForBusiness } from "@/lib/telnyx/messaging";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
@@ -88,6 +90,16 @@ export default async function SmsThreadPage({
     )
   ]);
   if (messages.length === 0) notFound();
+  const outboundLogIds = messages
+    .map((m) => m.outboundLogId)
+    .filter((id): id is string => Boolean(id));
+  const linksByOutboundLog =
+    outboundLogIds.length > 0
+      ? await mapSmsLinksByOutboundLogIds(business.id, outboundLogIds, {
+          includeClicks: true,
+          client: db
+        }).catch(() => new Map())
+      : new Map();
   const contact = contactMap.get(customerE164);
   const inboundLabel = contact
     ? contact.kind === "employee"
@@ -221,6 +233,13 @@ export default async function SmsThreadPage({
                     ) : null}
                   </div>
                   <ChatMarkdown text={m.content} />
+                  {!isInbound && m.outboundLogId && (linksByOutboundLog.get(m.outboundLogId)?.length ?? 0) > 0 && (
+                    <TrackedLinksPanel
+                      businessId={business.id}
+                      mode="compact"
+                      links={linksByOutboundLog.get(m.outboundLogId)!}
+                    />
+                  )}
                   {m.lastError ? (
                     <p className="mt-1 text-[10px] text-amber-200/80">
                       Last error: {m.lastError}

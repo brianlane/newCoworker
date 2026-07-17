@@ -34,6 +34,9 @@ export interface ShortLinkSupabase {
   // the interface structurally.
   from(table: string): {
     insert(row: Record<string, unknown>): PromiseLike<{ error: DbError }>;
+    update(row: Record<string, unknown>): {
+      in(column: string, values: string[]): PromiseLike<{ error: DbError }>;
+    };
     delete(): {
       in(column: string, values: string[]): PromiseLike<{ error: DbError }>;
     };
@@ -230,4 +233,31 @@ export async function shortenSmsBodyUrls(
     links.push({ shortCode: code, originalUrl });
   }
   return { text, links };
+}
+
+/**
+ * Pair tracked short links with the outbound log row for the SMS that carried
+ * them. Runs after a successful send + logOutboundSms insert. Best-effort:
+ * never throws, never blocks the caller.
+ */
+export async function linkSmsLinksToOutboundLog(
+  db: ShortLinkSupabase,
+  shortCodes: readonly string[],
+  outboundLogId: string | null | undefined
+): Promise<void> {
+  if (!outboundLogId || shortCodes.length === 0) return;
+  try {
+    const { error } = await db
+      .from("sms_links")
+      .update({ sms_outbound_log_id: outboundLogId })
+      .in("short_code", [...shortCodes]);
+    if (error) {
+      console.warn("sms_short_links: outbound log pairing failed", error.message);
+    }
+  } catch (err) {
+    console.warn(
+      "sms_short_links: outbound log pairing threw",
+      err instanceof Error ? err.message : String(err)
+    );
+  }
 }
