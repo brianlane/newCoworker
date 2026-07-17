@@ -1,6 +1,6 @@
 /**
  * Service-role data access for per-tenant WhatsApp Business connections
- * (whatsapp_connections — migration 20260811180000_whatsapp_channel.sql).
+ * (whatsapp_connections — migration 20260811210000_whatsapp_channel.sql).
  *
  * The Embedded Signup business token is AES-256-GCM encrypted at rest via
  * src/lib/integrations/secrets.ts (calendly/meta pattern). RLS is on with

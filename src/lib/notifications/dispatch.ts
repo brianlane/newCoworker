@@ -134,7 +134,7 @@ export async function resolveNotificationTargets(
       });
     }
     smsUrgent = prefs.sms_urgent;
-    // ?? true: rows read before the 20260811180000 migration keep the
+    // ?? true: rows read before the 20260811210000 migration keep the
     // channel on (delivery still requires a connected integration).
     whatsappUrgent = prefs.whatsapp_urgent ?? true;
     emailUrgent = prefs.email_urgent;
