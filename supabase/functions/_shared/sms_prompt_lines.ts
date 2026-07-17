@@ -59,10 +59,9 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "send the texter that link and ask them to complete the booking " +
   "there; never describe it as confirmed. " +
   "send_email sends a plain text email — it is NOT a calendar invite, so " +
-  "never call it one. A real calendar invite goes out ONLY when the " +
-  "successful booking result shows an inviteEmail — when it is null the " +
-  "texter receives NO invite, so never promise one; if they want an " +
-  "invite, ask for their email before booking; otherwise don't " +
+  "never call it one. A real calendar invite only goes out when the " +
+  "booking succeeded WITH the texter's email address on it — if they " +
+  "want an invite, ask for their email before booking; otherwise don't " +
   "mention invites. Never invent or guess email addresses, phone " +
   "numbers, times, or confirmation details — if you need one, ask for " +
   "it. If a booking fails, tell the texter that time is no longer " +
