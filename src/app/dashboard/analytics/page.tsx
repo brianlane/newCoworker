@@ -482,7 +482,7 @@ export default async function DashboardAnalyticsPage(props: {
         <FlowFunnelCard rows={flowFunnels.rows} clipped={flowFunnels.clipped} />
       )}
 
-      {linkStats && linkStats.links.length > 0 && (
+      {linkStats && (linkStats.links.length > 0 || selectedFlowId) && (
         <SmsLinkStatsCard
           businessId={business.id}
           links={linkStats.links}

@@ -867,7 +867,9 @@ export function SmsLinkStatsCard({
   businessId: string;
   flowFilterName?: string | null;
 }) {
-  if (links.length === 0) return null;
+  // A flow drill-down must always land somewhere: with a filter active the
+  // card renders even when empty (anchor + clear-filter affordance intact).
+  if (links.length === 0 && !flowFilterName) return null;
   return (
     <Card id="link-clicks">
       <div className="flex flex-wrap items-baseline justify-between gap-3">
@@ -884,11 +886,19 @@ export function SmsLinkStatsCard({
         )}
       </div>
       <div className="mt-3">
-        <TrackedLinksPanel businessId={businessId} links={links} mode="full" />
+        {links.length === 0 ? (
+          <p className="text-sm text-parchment/50">
+            No tracked links for this flow in the last 30 days.
+          </p>
+        ) : (
+          <TrackedLinksPanel businessId={businessId} links={links} mode="full" />
+        )}
       </div>
       <p className="text-[10px] text-parchment/35 mt-3">
         Each row is a tracked short link embedded in an outbound text.
-        {clipped ? " High volume this window — list covers the most recent links only." : ""}
+        {clipped
+          ? " High volume this window — this list covers the most recent links only; the flow performance totals above count all activity."
+          : ""}
       </p>
     </Card>
   );
