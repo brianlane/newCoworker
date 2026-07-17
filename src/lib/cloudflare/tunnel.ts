@@ -302,13 +302,15 @@ export function createCloudflareTunnelProvisioner(
    * Enable Cloudflare Total TLS on a zone (idempotent).
    *
    * IMPORTANT: this is an OPTIONAL paid-plan opt-in, not a default
-   * dependency. Our hostname pattern is `<businessId>.<zoneName>` —
-   * ONE level under the zone — which Universal SSL covers automatically
-   * on every plan including Free. Total TLS is only required if an
-   * operator chooses to nest tunnel hostnames deeper (e.g. by setting
+   * dependency, and is ONLY invoked when the operator nests tunnel
+   * hostnames deeper than one level under the zone (i.e.
+   * `hostnameSuffix !== zoneName`, via
    * `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX=tunnel.newcoworker.com`, which
    * produces `<biz>.tunnel.<root>` — two levels deep — and would hit
-   * `sslv3 alert handshake failure` without per-hostname certs).
+   * `sslv3 alert handshake failure` without per-hostname certs). The
+   * default `<businessId>.<zoneName>` pattern is ONE level under the
+   * zone, which free Universal SSL covers automatically on every plan,
+   * so the provisioner skips this call entirely there.
    *
    * Total TLS itself ships as part of Advanced Certificate Manager
    * ($10/mo/zone on Pro+) and lazily issues a Let's Encrypt cert per
@@ -477,14 +479,20 @@ export function createCloudflareTunnelProvisioner(
       });
     }
 
-    // 5. Best-effort Total TLS opt-in. With our default one-wildcard-level
-    //    hostname pattern (`<biz>.<zone>`), free Universal SSL already
-    //    covers both freshly-CNAMEd hostnames, so this is a no-op on Free.
-    //    Operators who deliberately nest hostnames deeper via
-    //    `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX` need this to succeed (paid
-    //    plan + ACM required). Idempotent + non-fatal — see
-    //    `ensureZoneTotalTls` for why we swallow API errors here.
-    await ensureZoneTotalTls(zoneId, businessId);
+    // 5. Best-effort Total TLS opt-in — ONLY when hostnames are nested
+    //    deeper than one level under the zone (operator set
+    //    `CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX` to something other than the
+    //    zone itself). With the default one-wildcard-level pattern
+    //    (`<biz>.<zone>`), free Universal SSL already covers every
+    //    freshly-CNAMEd hostname, Total TLS buys nothing, and the PATCH
+    //    just spams a `10405 Method not allowed` warning on every
+    //    provision/redeploy when the token lacks Zone:SSL:Edit — so we
+    //    skip the call entirely. Deep-nested setups need it to succeed
+    //    (paid plan + ACM required). Idempotent + non-fatal — see
+    //    `ensureZoneTotalTls` for why we swallow API errors there.
+    if (hostnameSuffix !== zoneName) {
+      await ensureZoneTotalTls(zoneId, businessId);
+    }
 
     return { tunnelId, token, hostname, voiceHostname, renderHostname, dataHostname };
   };

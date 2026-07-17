@@ -891,8 +891,9 @@ describe("cloudflareTunnelProvisioner", () => {
     await expect(provisioner({ businessId: "biz-empty-err" })).rejects.toThrow("unknown error");
   });
 
-  it("PATCHes Total TLS on the zone after CNAMEs are wired (cert auto-issuance)", async () => {
-    // Pin the contract: every successful provision MUST issue a single
+  it("PATCHes Total TLS on the zone after CNAMEs are wired (deep-nested hostnames)", async () => {
+    // Pin the contract: a provision with hostnames nested DEEPER than one
+    // level under the zone (hostnameSuffix !== zoneName) MUST issue a single
     // PATCH /zones/<id>/acm/total_tls with `{ enabled: true,
     // certificate_authority: "lets_encrypt" }`. Without this, multi-level
     // tunnel hostnames (e.g. <biz>.tunnel.newcoworker.com inside the
@@ -930,7 +931,10 @@ describe("cloudflareTunnelProvisioner", () => {
         body: ok({ enabled: true, certificate_authority: "lets_encrypt" })
       }
     ]);
-    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const provisioner = createCloudflareTunnelProvisioner({
+      ...baseConfig(fetchImpl),
+      hostnameSuffix: `deep.${ZONE}`
+    });
     await provisioner({ businessId: "biz-tls" });
     const totalTlsCall = calls.find(
       (c) => c.method === "PATCH" && c.url === `${BASE}/zones/zone-tls/acm/total_tls`
@@ -999,6 +1003,7 @@ describe("cloudflareTunnelProvisioner", () => {
     ]);
     const provisioner = createCloudflareTunnelProvisioner({
       ...baseConfig(fetchImpl),
+      hostnameSuffix: `deep.${ZONE}`,
       sslApiToken: SSL_TOKEN
     });
     await provisioner({ businessId: "biz-tls-split" });
@@ -1050,10 +1055,51 @@ describe("cloudflareTunnelProvisioner", () => {
       },
       totalTlsHandler()
     ]);
-    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const provisioner = createCloudflareTunnelProvisioner({
+      ...baseConfig(fetchImpl),
+      hostnameSuffix: `deep.${ZONE}`
+    });
     await provisioner({ businessId: "biz-tls-fallback" });
     const totalTlsCall = calls.find((c) => c.url.endsWith("/acm/total_tls"));
     expect(totalTlsCall?.auth).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("skips the Total TLS PATCH entirely on the default one-level hostname pattern", async () => {
+    // With hostnameSuffix unset (defaults to the zone itself), hostnames are
+    // `<biz>.<zone>` — one wildcard level, fully covered by free Universal
+    // SSL. Total TLS buys nothing there, and PATCHing it with a token that
+    // lacks Zone:SSL:Edit just emits a `10405 Method not allowed` warning on
+    // every provision/redeploy. The provisioner must not issue the call.
+    const { fetchImpl, calls } = makeFetch([
+      {
+        match: (u) => u.startsWith(`${BASE}/accounts/${ACCOUNT}/cfd_tunnel?name=nc-biz-tls-skip`),
+        body: ok([])
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/accounts/${ACCOUNT}/cfd_tunnel`,
+        body: ok({ id: "tun-tls-skip" })
+      },
+      { match: (u) => u.endsWith("/cfd_tunnel/tun-tls-skip/token"), body: ok("T") },
+      { match: (u, i) => i?.method === "PUT" && u.endsWith("/configurations"), body: ok({}) },
+      {
+        match: (u) => u === `${BASE}/zones?name=${encodeURIComponent(ZONE)}`,
+        body: ok([{ id: "zone-tls-skip", name: ZONE }])
+      },
+      {
+        match: (u) => u.startsWith(`${BASE}/zones/zone-tls-skip/dns_records?type=CNAME&name=`),
+        body: ok([]),
+        reuse: true
+      },
+      {
+        match: (u, i) => i?.method === "POST" && u === `${BASE}/zones/zone-tls-skip/dns_records`,
+        body: ok({ id: "rec" }),
+        reuse: true
+      }
+    ]);
+    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const result = await provisioner({ businessId: "biz-tls-skip" });
+    expect(result.tunnelId).toBe("tun-tls-skip");
+    expect(calls.some((c) => c.url.endsWith("/acm/total_tls"))).toBe(false);
   });
 
   it("does NOT abort provisioning when Total TLS PATCH fails (cert is best-effort)", async () => {
@@ -1096,12 +1142,15 @@ describe("cloudflareTunnelProvisioner", () => {
         status: 403
       }
     ]);
-    const provisioner = createCloudflareTunnelProvisioner(baseConfig(fetchImpl));
+    const provisioner = createCloudflareTunnelProvisioner({
+      ...baseConfig(fetchImpl),
+      hostnameSuffix: `deep.${ZONE}`
+    });
     const result = await provisioner({ businessId: "biz-tlsfail" });
     // Provisioning still returns a usable token + hostnames; only the
     // edge cert is delayed.
     expect(result.tunnelId).toBe("tun-tlsfail");
-    expect(result.hostname).toBe(`biz-tlsfail.${ZONE}`);
+    expect(result.hostname).toBe(`biz-tlsfail.deep.${ZONE}`);
   });
 
   it("honors voiceServiceUrl + voiceHostnamePrefix overrides end-to-end", async () => {
@@ -1239,6 +1288,9 @@ describe("cloudflareTunnelProvisionerFromEnv", () => {
         CLOUDFLARE_SSL_API_TOKEN: SSL_TOKEN,
         CLOUDFLARE_ACCOUNT_ID: "acct-env",
         CLOUDFLARE_TUNNEL_ZONE: "tunnel.example.com",
+        // Deep-nested suffix: the Total TLS PATCH only fires when hostnames
+        // go deeper than one level under the zone.
+        CLOUDFLARE_TUNNEL_HOSTNAME_SUFFIX: "deep.tunnel.example.com",
         CLOUDFLARE_ZONE_ID: "zone-env"
       });
       expect(provisioner).not.toBeNull();
