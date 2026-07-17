@@ -101,7 +101,21 @@ business page (Data residency card) or `POST /api/admin/data-residency`:
   ([src/lib/residency/read.ts](src/lib/residency/read.ts)), with **no silent
   fallback**: a down box is a visible error, never stale central data.
 
+> ⚠️ **The `edge-residency-replay` cron is intentionally UNSCHEDULED while
+> zero tenants use residency** (migration
+> `20260812000200_unschedule_residency_replay.sql`): with no dual/vps
+> tenant it burned ~1,440 no-op Edge invocations/day. The Edge function,
+> internal route, journal table, and triggers all remain deployed. **Step 0
+> of the runbook below re-schedules it** — `dual` mode does NOT replicate
+> without this cron, so never flip a tenant to `dual` before completing
+> step 0.
+
 Per-tenant enablement runbook (one deal at a time, no fleet rollout):
+0. **re-schedule the replay cron** — run the `cron.schedule(
+   'edge-residency-replay', '* * * * *', …)` block from
+   `supabase/migrations/20260804000000_residency_write_journal.sql`
+   (SQL editor or a new migration), then verify:
+   `select jobname, schedule, active from cron.job where jobname = 'edge-residency-replay';`
 1. flip `dual` → `npx tsx debug/residency-backfill.ts --business <id> --drain`
 2. gate: `npx tsx debug/residency-parity.ts --business <id>` must PASS
 3. flip `vps` (reads now from the box; redeploy publishes the tunnel hostname
