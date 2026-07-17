@@ -16,12 +16,21 @@ loadEnv();
 const HQ_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const TESTER_E164 = "+16026866672";
 
-const businessId = process.argv.slice(2).find((a) => !a.startsWith("--")) ?? HQ_BUSINESS_ID;
-const phoneIdx = process.argv.indexOf("--phone");
-const LEAD =
-  (phoneIdx >= 0
-    ? process.argv[phoneIdx + 1]
-    : process.argv.find((a) => a.startsWith("--phone="))?.slice(8)) ?? TESTER_E164;
+// Positional businessId = the first token that is neither a flag nor a
+// flag's value (so `flow-poll.ts --phone +1…` keeps the HQ default).
+const argv = process.argv.slice(2);
+let businessId = HQ_BUSINESS_ID;
+let LEAD = TESTER_E164;
+for (let i = 0; i < argv.length; i++) {
+  const a = argv[i];
+  if (a === "--phone") {
+    if (argv[i + 1]) LEAD = argv[++i];
+  } else if (a.startsWith("--phone=")) {
+    LEAD = a.slice(8);
+  } else if (!a.startsWith("--")) {
+    businessId = a;
+  }
+}
 
 const { createClient } = await import("@supabase/supabase-js");
 const db = createClient(
