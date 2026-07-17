@@ -45,7 +45,10 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { ensureTenantMailbox } from "@/lib/email/tenant-mailbox";
 import { buildProvisioningLiveEmail } from "@/lib/email/templates/provisioning-live";
+import { sendOpsNewSignupEmail } from "@/lib/email/ops-notify";
+import { getSubscription } from "@/lib/db/subscriptions";
 import { updateBusinessStatus, updateBusinessVpsSize, getBusiness } from "@/lib/db/businesses";
+import { resolveOwnerNotifyEmail } from "@/lib/provisioning/notify-recipient";
 import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
 import {
   getActiveGatewayTokenForBusiness,
@@ -960,6 +963,7 @@ async function runOrchestrator(
   // enterprise-only; the gate reads the REAL tier from the row (narrowTier
   // collapses enterprise onto the standard box profile).
   const businessRow = await getBusiness(businessId);
+  const isFirstProvision = businessRow?.status !== "online";
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
@@ -1723,7 +1727,8 @@ async function runOrchestrator(
   }
   logger.info("Business provisioned and online", { businessId, vpsId });
 
-  const notifyEmail = ownerEmail ?? process.env.ADMIN_EMAIL;
+  const freshBusiness = await getBusiness(businessId);
+  const notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
   // Recipient: the OWNER's phone — the explicit caller override first, then
   // the phone the owner gave at onboarding (coerced: it's free-form input,
   // e.g. "5145188192"), then the platform ops phone as the last-resort
@@ -1748,6 +1753,26 @@ async function runOrchestrator(
         error: err instanceof Error ? err.message : String(err)
       });
     }
+  } else {
+    logger.warn("Skipping provisioning owner email: no reachable owner email on file", {
+      businessId
+    });
+  }
+
+  if (isFirstProvision) {
+    const didRoute = await getTelnyxVoiceRouteForBusiness(businessId).catch(() => null);
+    const subscription = await getSubscription(businessId).catch(() => null);
+    void sendOpsNewSignupEmail({
+      businessId,
+      businessName: freshBusiness?.name ?? businessRow?.name ?? "",
+      ownerName: freshBusiness?.owner_name ?? businessRow?.owner_name ?? null,
+      ownerEmail: notifyEmail ?? freshBusiness?.owner_email ?? businessRow?.owner_email ?? null,
+      ownerPhone: freshBusiness?.phone ?? businessRow?.phone ?? null,
+      tier: freshBusiness?.tier ?? businessRow?.tier ?? narrowTier,
+      billingPeriod: subscription?.billing_period ?? input.billingPeriod ?? null,
+      virtualMachineId: vpsId,
+      didE164: didRoute?.to_e164 ?? null
+    });
   }
 
   if (notifyPhone) {

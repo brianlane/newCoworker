@@ -23,7 +23,7 @@ import {
   markFirstPaidIfUnset,
   upsertCustomerProfile
 } from "@/lib/db/customer-profiles";
-import { getBusiness, recordWhiteGlovePurchase, setBusinessCustomerProfile } from "@/lib/db/businesses";
+import { getBusiness, recordWhiteGlovePurchase, setBusinessCustomerProfile, updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import {
   getWhiteGloveOffer,
   markWhiteGloveOfferPaid,
@@ -967,6 +967,19 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     session.metadata?.customerProfileId ?? existing?.customer_profile_id ?? null;
   const sessionCustomerEmail =
     session.customer_details?.email ?? session.customer_email ?? null;
+
+  if (businessId && sessionCustomerEmail) {
+    try {
+      await updateBusinessOwnerEmailIfPending(businessId, sessionCustomerEmail);
+    } catch (err) {
+      logger.warn("checkout activation: owner email lift failed (non-fatal)", {
+        businessId,
+        eventId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   if (sessionCustomerEmail) {
     try {
       customerProfileId = await upsertCustomerProfile({
