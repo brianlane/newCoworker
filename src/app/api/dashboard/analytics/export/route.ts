@@ -90,7 +90,11 @@ export async function GET(request: Request) {
       );
       filename = flowId ? `tracked-links-30d-flow-${flowId.slice(0, 8)}.csv` : "tracked-links-30d.csv";
     } else if (kind === "link_clicks") {
-      const events = await listLinkClickEventsForBusiness(businessId, { client: db, now, flowId });
+      const { events, clipped } = await listLinkClickEventsForBusiness(businessId, {
+        client: db,
+        now,
+        flowId
+      });
       csv = smsLinkClicksCsv(
         events.map((e) => ({
           clickedAt: e.clicked_at,
@@ -100,7 +104,7 @@ export async function GET(request: Request) {
           flowId: e.flow_id,
           runId: e.run_id
         })),
-        events.length >= 5000
+        clipped
       );
       filename = flowId ? `link-clicks-30d-flow-${flowId.slice(0, 8)}.csv` : "link-clicks-30d.csv";
     } else {

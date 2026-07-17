@@ -485,7 +485,8 @@ describe("listLinkClickEventsForBusiness", () => {
     });
     defaultClientSpy.mockResolvedValue(db);
 
-    const events = await listLinkClickEventsForBusiness("biz-1");
+    const { events, clipped } = await listLinkClickEventsForBusiness("biz-1");
+    expect(clipped).toBe(false);
     expect(events[0].short_code).toBe("36q72wrm");
     expect(events[0].run_id).toBe("run-1");
     // A click whose link fell out of the window degrades to empty metadata.
@@ -505,19 +506,50 @@ describe("listLinkClickEventsForBusiness", () => {
         builder({ data: null, error: null })
       ]
     });
-    const events = await listLinkClickEventsForBusiness("biz-1", { client: db as never });
-    expect(events).toEqual([]);
+    const res = await listLinkClickEventsForBusiness("biz-1", { client: db as never });
+    expect(res).toEqual({ events: [], clipped: false });
   });
 
-  it("returns [] when no links exist in the window", async () => {
+  it("returns no events when no links exist in the window", async () => {
     const db = makeDb({
       sms_links: [
         builder({ data: [], error: null }),
         builder({ data: [], error: null })
       ]
     });
-    const events = await listLinkClickEventsForBusiness("biz-1", { client: db as never });
-    expect(events).toEqual([]);
+    const res = await listLinkClickEventsForBusiness("biz-1", { client: db as never });
+    expect(res).toEqual({ events: [], clipped: false });
+  });
+
+  it("marks clipped when the link scan hit its cap (even with no events)", async () => {
+    const db = makeDb({
+      sms_links: [
+        builder({
+          data: Array.from({ length: 501 }, (_, i) => ({ id: `id-${i}` })),
+          error: null
+        }),
+        builder({ data: [], error: null })
+      ]
+    });
+    const res = await listLinkClickEventsForBusiness("biz-1", { client: db as never });
+    expect(res).toEqual({ events: [], clipped: true });
+  });
+
+  it("marks clipped when the click scan fills its limit", async () => {
+    const db = makeDb({
+      sms_links: [
+        builder({ data: [{ id: "link-1" }], error: null }),
+        builder({ data: [linkRow], error: null })
+      ],
+      ai_flows: [builder(flowRows)],
+      sms_link_clicks: [builder({ data: [], error: null }), builder(clickRows)]
+    });
+    const { events, clipped } = await listLinkClickEventsForBusiness("biz-1", {
+      client: db as never,
+      limit: 1
+    });
+    expect(events).toHaveLength(1);
+    expect(clipped).toBe(true);
   });
 
   it("honors explicit options and throws on a clicks error", async () => {

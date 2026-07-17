@@ -54,6 +54,20 @@ export async function getSmsLinkStats(
   return { links, clipped };
 }
 
+export type LinkClickEventRow = SmsLinkClickRow & {
+  short_code: string;
+  original_url: string;
+  to_e164: string | null;
+  flow_id: string | null;
+  run_id: string | null;
+};
+
+export type LinkClickEvents = {
+  events: LinkClickEventRow[];
+  /** True when either the link scan or the click scan hit its cap. */
+  clipped: boolean;
+};
+
 export async function listLinkClickEventsForBusiness(
   businessId: string,
   opts: {
@@ -63,24 +77,21 @@ export async function listLinkClickEventsForBusiness(
     flowId?: string;
     limit?: number;
   } = {}
-): Promise<
-  Array<
-    SmsLinkClickRow & {
-      short_code: string;
-      original_url: string;
-      to_e164: string | null;
-      flow_id: string | null;
-      run_id: string | null;
-    }
-  >
-> {
+): Promise<LinkClickEvents> {
   const db = opts.client ?? (await createSupabaseServiceClient());
   const days = opts.days ?? 30;
   const limit = opts.limit ?? 5000;
   const cutoffIso = analyticsWindowStart(opts.now ?? new Date(), days).toISOString();
-  const { links } = await getSmsLinkStats(businessId, { client: db, now: opts.now, days, flowId: opts.flowId });
+  // Clicks are scoped to the same capped link set as the links export, so a
+  // clipped LINK scan also means click rows are missing from this export.
+  const { links, clipped: linksClipped } = await getSmsLinkStats(businessId, {
+    client: db,
+    now: opts.now,
+    days,
+    flowId: opts.flowId
+  });
   const linkIds = links.map((l) => l.id);
-  if (linkIds.length === 0) return [];
+  if (linkIds.length === 0) return { events: [], clipped: linksClipped };
   const { data, error } = await db
     .from("sms_link_clicks")
     .select("id, link_id, clicked_at")
@@ -91,7 +102,7 @@ export async function listLinkClickEventsForBusiness(
     .limit(limit);
   if (error) throw new Error(`listLinkClickEventsForBusiness: ${error.message}`);
   const byId = new Map(links.map((l) => [l.id, l]));
-  return ((data as SmsLinkClickRow[] | null) ?? []).map((click) => {
+  const events = ((data as SmsLinkClickRow[] | null) ?? []).map((click) => {
     const link = byId.get(click.link_id);
     return {
       ...click,
@@ -102,4 +113,5 @@ export async function listLinkClickEventsForBusiness(
       run_id: link?.run_id ?? null
     };
   });
+  return { events, clipped: linksClipped || events.length >= limit };
 }
