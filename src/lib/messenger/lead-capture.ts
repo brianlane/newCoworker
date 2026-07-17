@@ -43,12 +43,20 @@ export type CaptureMessengerLeadResult =
   | { ok: true; data: { logId: string } }
   | { ok: false; detail: string };
 
+/**
+ * Cross-channel rollup attribution: WhatsApp conversations tag contacts
+ * `whatsapp`; Messenger and Instagram DMs tag `messenger`.
+ */
+export type MessengerCaptureChannel = "messenger" | "whatsapp";
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export async function captureMessengerLead(
   businessId: string,
-  args: CaptureMessengerLeadArgs
+  args: CaptureMessengerLeadArgs,
+  opts: { channel?: MessengerCaptureChannel } = {}
 ): Promise<CaptureMessengerLeadResult> {
+  const channel: MessengerCaptureChannel = opts.channel ?? "messenger";
   const name = args.name?.trim() || null;
   const phone = args.phone?.trim() || null;
   const email = args.email?.trim() || null;
@@ -114,7 +122,7 @@ export async function captureMessengerLead(
   const e164 = coerceOwnerPhoneToE164(phone);
   if (e164) {
     try {
-      await recordInteractionAndIncrement(businessId, e164, "messenger", {
+      await recordInteractionAndIncrement(businessId, e164, channel, {
         displayName: name
       });
     } catch (err) {
