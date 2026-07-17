@@ -228,6 +228,7 @@ export type InlineTurnDeps = {
  */
 const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "send_sms",
+  "send_whatsapp",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
   "calendar_cancel_appointment",
@@ -255,6 +256,11 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
     const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
     const body = typeof r.sentBody === "string" ? ` — "${r.sentBody}"` : "";
     return `Text sent to ${to}${body}.`;
+  }
+  if (name === "send_whatsapp") {
+    const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
+    const body = typeof r.sentBody === "string" ? ` — "${r.sentBody}"` : "";
+    return `WhatsApp message sent to ${to}${body}.`;
   }
   if (name === "calendar_book_appointment") {
     return typeof r.data?.bookingLink === "string"

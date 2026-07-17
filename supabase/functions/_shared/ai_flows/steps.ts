@@ -294,6 +294,22 @@ export type StepAction =
     }
   | {
       /**
+       * WhatsApp outbound to a contact or teammate. The worker delegates
+       * delivery to the platform's internal whatsapp-send endpoint, which
+       * picks free-form text (24h window open) vs the approved utility
+       * template (window closed; Meta bills the tenant per message).
+       * Recipient semantics mirror send_sms minus group replies + MMS.
+       */
+      kind: "send_whatsapp";
+      to: string;
+      toAgentName?: string;
+      toRef?: ContactRef;
+      body: string;
+      /** Templated recipient resolved to nothing usable → skip, not fail. */
+      skipReason?: string;
+    }
+  | {
+      /**
        * Share a business document: the WORKER validates the doc (ready,
        * client-audience, not expired), mints a business_document_shares
        * link, substitutes it for the `{{share_url}}` token in `message`
@@ -831,6 +847,81 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(mediaUrl ? { mediaUrl } : {})
         }
       };
+    }
+    case "send_whatsapp": {
+      // Same recipient semantics as send_sms (minus group replies and MMS):
+      // named roster member / saved contact ref pass through UNRENDERED for
+      // the worker to resolve; a templated `to` renders here with the same
+      // lead-data-gap skip rules.
+      if (step.toAgentName) {
+        return {
+          ok: true,
+          action: {
+            kind: "send_whatsapp",
+            to: "",
+            body: step.body,
+            toAgentName: step.toAgentName.trim()
+          }
+        };
+      }
+      if (step.toRef) {
+        return {
+          ok: true,
+          action: { kind: "send_whatsapp", to: "", body: step.body, toRef: step.toRef }
+        };
+      }
+      const waBody = renderTemplate(step.body, scope, { collapseEmpty: true }).trim();
+      if (!waBody) {
+        return { ok: false, error: "send_whatsapp: body is empty after templating" };
+      }
+      const waToRaw = renderTemplate(step.to ?? "", scope).trim();
+      const waFromTemplateVar = (step.to ?? "").includes("{{");
+      const waEmptyish =
+        !waToRaw || ["none", "n/a", "na", "null", "unknown"].includes(waToRaw.toLowerCase());
+      if (waEmptyish) {
+        if (waFromTemplateVar) {
+          return {
+            ok: true,
+            action: {
+              kind: "send_whatsapp",
+              to: "",
+              body: waBody,
+              skipReason: "no_recipient_phone"
+            }
+          };
+        }
+        return { ok: false, error: "send_whatsapp: recipient is empty after templating" };
+      }
+      // Unlike SMS (Telnyx, NANP-biased), WhatsApp recipients are wa_ids:
+      // plus-less INTERNATIONAL digit runs round-trip straight from
+      // inbound webhooks and lead vars (e.g. UK "447911123456"). Accept
+      // E.164, NANP shapes, and any 8-15 digit non-zero-leading run —
+      // mirroring the deliver helper's toWaId.
+      const waDigits = waToRaw.replace(/\D/g, "");
+      const waTo = isE164(waToRaw)
+        ? waToRaw
+        : (normalizeNanpToE164(waToRaw) ??
+          (waDigits.length >= 8 && waDigits.length <= 15 && !waDigits.startsWith("0")
+            ? `+${waDigits}`
+            : null));
+      if (!waTo) {
+        if (waFromTemplateVar) {
+          return {
+            ok: true,
+            action: {
+              kind: "send_whatsapp",
+              to: "",
+              body: waBody,
+              skipReason: "unparseable_recipient_phone"
+            }
+          };
+        }
+        return {
+          ok: false,
+          error: `send_whatsapp: recipient "${waToRaw}" is not a valid phone number`
+        };
+      }
+      return { ok: true, action: { kind: "send_whatsapp", to: waTo, body: waBody } };
     }
     case "share_document": {
       const via = step.via ?? "sms";

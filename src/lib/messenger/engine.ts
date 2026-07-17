@@ -83,7 +83,8 @@ export const MESSENGER_ENGINE_HISTORY_LIMIT = 20;
 
 const PLATFORM_LABELS: Record<MessengerConversationRow["platform"], string> = {
   messenger: "Facebook Messenger",
-  instagram: "Instagram Direct Messages"
+  instagram: "Instagram Direct Messages",
+  whatsapp: "WhatsApp"
 };
 
 /**
@@ -198,7 +199,12 @@ export async function runMessengerGeminiTurn(
     deps.executeTool ??
     ((businessId: string, name: string, toolArgs: unknown) =>
       executeWebchatEngineTool(businessId, name, toolArgs, {
-        captureLead: captureMessengerLead
+        // Rollup attribution follows the conversation's platform:
+        // whatsapp leads tag contacts 'whatsapp', Messenger/IG 'messenger'.
+        captureLead: (bid, captureArgs) =>
+          captureMessengerLead(bid, captureArgs, {
+            channel: args.conversation.platform === "whatsapp" ? "whatsapp" : "messenger"
+          })
       }));
   const meter = deps.meter ?? meterGeminiSpendForBusiness;
   const env = deps.env ?? process.env;

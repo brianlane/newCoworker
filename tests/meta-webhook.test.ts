@@ -25,6 +25,12 @@ vi.mock("@/lib/db/meta-connections", () => ({
     getActiveMetaConnectionByInstagramIdMock(igId)
 }));
 
+const getActiveWhatsAppConnectionByPhoneNumberIdMock = vi.fn();
+vi.mock("@/lib/db/whatsapp-connections", () => ({
+  getActiveWhatsAppConnectionByPhoneNumberId: (id: string) =>
+    getActiveWhatsAppConnectionByPhoneNumberIdMock(id)
+}));
+
 const fetchLeadMock = vi.fn();
 vi.mock("@/lib/meta/client", () => ({
   fetchLead: (leadgenId: string, pageToken: string) =>
@@ -63,6 +69,7 @@ beforeEach(() => {
   rateLimitMock.mockReset().mockReturnValue({ success: true });
   getActiveMetaConnectionByPageIdMock.mockReset();
   getActiveMetaConnectionByInstagramIdMock.mockReset();
+  getActiveWhatsAppConnectionByPhoneNumberIdMock.mockReset();
   fetchLeadMock.mockReset();
   upsertMessengerConversationMock.mockReset();
   appendMessengerMessageMock.mockReset();
@@ -162,6 +169,90 @@ describe("parseMetaWebhookBody", () => {
       },
       { platform: "messenger", accountId: "page-1", senderId: "psid-4", mid: "m6", text: "Get started" },
       { platform: "messenger", accountId: "page-1", senderId: "psid-5", mid: "m7", text: "START" }
+    ]);
+  });
+
+  it("parses whatsapp_business_account deliveries: texts, buttons, placeholders, receipts", () => {
+    const parsed = parseMetaWebhookBody({
+      object: "whatsapp_business_account",
+      entry: [
+        {
+          id: "waba-9",
+          changes: [
+            {
+              field: "messages",
+              value: {
+                metadata: { phone_number_id: "pn-9" },
+                contacts: [
+                  { wa_id: "15551234567", profile: { name: "Jane Doe" } },
+                  { profile: { name: "no-wa-id" } }
+                ],
+                messages: [
+                  { id: "wamid-1", from: "15551234567", type: "text", text: { body: " Hi! " } },
+                  // Quick-reply button tap reads as the customer's turn.
+                  { id: "wamid-2", from: 15550001111, type: "button", button: { text: "Yes please" } },
+                  // Button with payload only.
+                  { id: "wamid-2b", from: "15550002222", type: "button", button: { payload: "YES" } },
+                  // Image → placeholder.
+                  { id: "wamid-3", from: "15550003333", type: "image" },
+                  // Reaction/unsupported noise → skipped.
+                  { id: "wamid-4", from: "15550004444", type: "reaction" },
+                  { id: "wamid-5", from: "15550005555", type: "unsupported" },
+                  // No type + no text: nothing usable → skipped.
+                  { id: "wamid-5b", from: "15550006666" },
+                  // Missing id / missing from → skipped.
+                  { from: "15550007777", type: "text", text: { body: "no id" } },
+                  { id: "wamid-6", type: "text", text: { body: "no sender" } }
+                ]
+              }
+            },
+            // Receipts-only change (statuses) and non-messages fields: ignored.
+            { field: "messages", value: { metadata: { phone_number_id: "pn-9" }, statuses: [{}] } },
+            { field: "message_template_status_update", value: {} },
+            // Missing phone_number_id: unroutable, skipped.
+            { field: "messages", value: { messages: [{ id: "wamid-7", from: "1555" }] } },
+            // Malformed value shape: skipped by the inner safeParse.
+            { field: "messages", value: { messages: "not-an-array" } }
+          ]
+        },
+        // Entry with no changes array at all: skipped.
+        { id: "waba-quiet" }
+      ]
+    });
+    expect(parsed?.leadgen).toEqual([]);
+    expect(parsed?.messages).toEqual([
+      {
+        platform: "whatsapp",
+        accountId: "pn-9",
+        senderId: "15551234567",
+        mid: "wamid-1",
+        text: "Hi!",
+        displayName: "Jane Doe"
+      },
+      {
+        platform: "whatsapp",
+        accountId: "pn-9",
+        senderId: "15550001111",
+        mid: "wamid-2",
+        text: "Yes please",
+        displayName: null
+      },
+      {
+        platform: "whatsapp",
+        accountId: "pn-9",
+        senderId: "15550002222",
+        mid: "wamid-2b",
+        text: "YES",
+        displayName: null
+      },
+      {
+        platform: "whatsapp",
+        accountId: "pn-9",
+        senderId: "15550003333",
+        mid: "wamid-3",
+        text: MESSENGER_ATTACHMENT_PLACEHOLDER,
+        displayName: null
+      }
     ]);
   });
 
@@ -308,7 +399,8 @@ describe("processMetaMessageEvent", () => {
       businessId: BIZ,
       pageId: "p1",
       platform: "messenger",
-      psid: "psid-1"
+      psid: "psid-1",
+      displayName: null
     });
     expect(appendMessengerMessageMock).toHaveBeenCalledWith({
       conversationId: CONVERSATION.id,
@@ -392,6 +484,64 @@ describe("processMetaMessageEvent", () => {
       { source: string }
     ];
     expect(flowEvent.source).toBe("instagram_dm");
+  });
+
+  it("resolves whatsapp events through the phone-number-id lookup with source whatsapp", async () => {
+    getActiveWhatsAppConnectionByPhoneNumberIdMock.mockResolvedValue({
+      business_id: BIZ,
+      accessToken: "biz-tok",
+      phone_number_id: "pn-9"
+    });
+    upsertMessengerConversationMock.mockResolvedValue({
+      conversation: {
+        ...CONVERSATION,
+        platform: "whatsapp",
+        page_id: "pn-9",
+        psid: "15551234567",
+        display_name: "Jane Doe"
+      },
+      isNew: true
+    });
+    appendMessengerMessageMock.mockResolvedValue({ id: 4 });
+    insertMessengerJobMock.mockResolvedValue({ id: "job-4" });
+    processWebhookFlowEventMock.mockResolvedValue({ enqueued: 1, flowsMatched: 1 });
+
+    const event: MetaMessageEvent = {
+      platform: "whatsapp",
+      accountId: "pn-9",
+      senderId: "15551234567",
+      mid: "wamid-1",
+      text: "Hi!",
+      displayName: "Jane Doe"
+    };
+    expect(await processMetaMessageEvent(event)).toBe(true);
+    expect(getActiveWhatsAppConnectionByPhoneNumberIdMock).toHaveBeenCalledWith("pn-9");
+    expect(getActiveMetaConnectionByPageIdMock).not.toHaveBeenCalled();
+    // The delivery's inline profile name rides into the conversation upsert.
+    expect(upsertMessengerConversationMock).toHaveBeenCalledWith({
+      businessId: BIZ,
+      pageId: "pn-9",
+      platform: "whatsapp",
+      psid: "15551234567",
+      displayName: "Jane Doe"
+    });
+    const [, flowEvent] = processWebhookFlowEventMock.mock.calls[0] as [
+      string,
+      { source: string }
+    ];
+    expect(flowEvent.source).toBe("whatsapp");
+
+    // Unconnected phone number id: acknowledged, not errored.
+    getActiveWhatsAppConnectionByPhoneNumberIdMock.mockResolvedValue(null);
+    expect(await processMetaMessageEvent(event)).toBe(false);
+
+    // Connection without a token is unusable.
+    getActiveWhatsAppConnectionByPhoneNumberIdMock.mockResolvedValue({
+      business_id: BIZ,
+      accessToken: null,
+      phone_number_id: "pn-9"
+    });
+    expect(await processMetaMessageEvent(event)).toBe(false);
   });
 
   it("skips duplicate redeliveries (mid dedupe returned null)", async () => {

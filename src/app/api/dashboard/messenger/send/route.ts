@@ -19,13 +19,21 @@ import {
   messengerWindowOpen
 } from "@/lib/messenger/db";
 import { getActiveMetaConnectionByPageId } from "@/lib/db/meta-connections";
-import { sendMessengerMessage, MESSENGER_MAX_TEXT_LENGTH } from "@/lib/meta/client";
+import { getActiveWhatsAppConnectionByPhoneNumberId } from "@/lib/db/whatsapp-connections";
+import {
+  sendMessengerMessage,
+  sendWhatsAppMessage,
+  MESSENGER_MAX_TEXT_LENGTH,
+  WHATSAPP_MAX_TEXT_LENGTH
+} from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
 
+// Validated at WhatsApp's higher ceiling (4096); the Messenger/IG limit
+// (2000) is enforced per-platform once the conversation is loaded.
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   conversationId: z.string().uuid(),
-  text: z.string().min(1).max(MESSENGER_MAX_TEXT_LENGTH)
+  text: z.string().min(1).max(WHATSAPP_MAX_TEXT_LENGTH)
 });
 
 export async function POST(request: Request) {
@@ -42,6 +50,14 @@ export async function POST(request: Request) {
       return errorResponse("NOT_FOUND", "Conversation not found");
     }
 
+    // Per-platform length ceiling: WhatsApp allows 4096, Messenger/IG 2000.
+    if (conversation.platform !== "whatsapp" && body.text.length > MESSENGER_MAX_TEXT_LENGTH) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        `Messenger replies are limited to ${MESSENGER_MAX_TEXT_LENGTH} characters`
+      );
+    }
+
     if (!messengerWindowOpen(conversation)) {
       return errorResponse(
         "VALIDATION_ERROR",
@@ -49,9 +65,24 @@ export async function POST(request: Request) {
       );
     }
 
-    const connection = await getActiveMetaConnectionByPageId(conversation.page_id);
-    if (!connection?.pageToken) {
-      return errorResponse("VALIDATION_ERROR", "Facebook is no longer connected");
+    // Platform-normalized send credentials: page token (messenger/IG) or
+    // the Cloud API business token (whatsapp), both keyed by the
+    // conversation's stored account key.
+    let sendToken: string;
+    if (conversation.platform === "whatsapp") {
+      const connection = await getActiveWhatsAppConnectionByPhoneNumberId(
+        conversation.page_id
+      );
+      if (!connection?.accessToken) {
+        return errorResponse("VALIDATION_ERROR", "WhatsApp is no longer connected");
+      }
+      sendToken = connection.accessToken;
+    } else {
+      const connection = await getActiveMetaConnectionByPageId(conversation.page_id);
+      if (!connection?.pageToken) {
+        return errorResponse("VALIDATION_ERROR", "Facebook is no longer connected");
+      }
+      sendToken = connection.pageToken;
     }
 
     // Transcript row FIRST, then the external send: if the Send API fails,
@@ -67,12 +98,21 @@ export async function POST(request: Request) {
     });
 
     try {
-      await sendMessengerMessage(
-        conversation.page_id,
-        connection.pageToken,
-        conversation.psid,
-        body.text
-      );
+      if (conversation.platform === "whatsapp") {
+        await sendWhatsAppMessage(
+          conversation.page_id,
+          sendToken,
+          conversation.psid,
+          body.text
+        );
+      } else {
+        await sendMessengerMessage(
+          conversation.page_id,
+          sendToken,
+          conversation.psid,
+          body.text
+        );
+      }
     } catch (sendErr) {
       if (message) {
         try {

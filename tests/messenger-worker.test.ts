@@ -95,7 +95,7 @@ function makeDeps(
     claimJob: vi.fn().mockResolvedValueOnce(job()).mockResolvedValue(null),
     getConversation: vi.fn(async () => CONVERSATION),
     listMessages: vi.fn(async () => HISTORY),
-    getConnection: vi.fn(async () => CONNECTION),
+    resolveSendAccount: vi.fn(async () => ({ token: "page-tok" })),
     fetchTier: vi.fn(async () => "standard" as const),
     fetchProfileName: vi.fn(async () => ({ name: "Jane Profile" })),
     updateContact: vi.fn(async () => undefined),
@@ -130,7 +130,13 @@ describe("processMessengerJobs", () => {
       history: HISTORY,
       tier: "standard"
     });
-    expect(deps.send).toHaveBeenCalledWith("p1", "page-tok", "psid-1", "Happy to help!");
+    expect(deps.send).toHaveBeenCalledWith(
+      "messenger",
+      "p1",
+      "page-tok",
+      "psid-1",
+      "Happy to help!"
+    );
     // Send happens BEFORE commit; commit covers the newest history row (9).
     expect(vi.mocked(deps.send).mock.invocationCallOrder[0]).toBeLessThan(
       vi.mocked(deps.complete).mock.invocationCallOrder[0]
@@ -138,6 +144,31 @@ describe("processMessengerJobs", () => {
     expect(deps.complete).toHaveBeenCalledWith("job-1", "Happy to help!", 9);
     // Known display name → no profile lookup.
     expect(deps.fetchProfileName).not.toHaveBeenCalled();
+  });
+
+  it("routes whatsapp conversations through the platform branch (no profile lookup)", async () => {
+    const deps = makeDeps({
+      getConversation: vi.fn(async () => ({
+        ...CONVERSATION,
+        platform: "whatsapp" as const,
+        page_id: "pn-9",
+        psid: "15551234567",
+        display_name: null
+      })),
+      resolveSendAccount: vi.fn(async () => ({ token: "biz-tok" }))
+    });
+    const summary = await processMessengerJobs({}, deps);
+    expect(summary.replied).toBe(1);
+    expect(deps.resolveSendAccount).toHaveBeenCalledWith("whatsapp", "pn-9");
+    // WhatsApp display names arrive with the webhook — never a Graph lookup.
+    expect(deps.fetchProfileName).not.toHaveBeenCalled();
+    expect(deps.send).toHaveBeenCalledWith(
+      "whatsapp",
+      "pn-9",
+      "biz-tok",
+      "15551234567",
+      "Happy to help!"
+    );
   });
 
   it("drains until the claim returns null, bounded by the batch limit", async () => {
@@ -206,7 +237,7 @@ describe("processMessengerJobs", () => {
     );
     expect(stale.send).not.toHaveBeenCalled();
 
-    const disconnected = makeDeps({ getConnection: vi.fn(async () => null) });
+    const disconnected = makeDeps({ resolveSendAccount: vi.fn(async () => null) });
     await processMessengerJobs({}, disconnected);
     expect(disconnected.fail).toHaveBeenCalledWith(
       "job-1",

@@ -15,9 +15,18 @@ import { Card } from "@/components/ui/Card";
 type Props = {
   businessId: string;
   conversationId: string;
+  /** Platform send ceiling: 2000 for Messenger/IG, 4096 for WhatsApp. */
+  maxLength?: number;
+  /** Drives the helper copy under the box (channel-accurate wording). */
+  platform?: "messenger" | "instagram" | "whatsapp";
 };
 
-export function MessengerReplyForm({ businessId, conversationId }: Props) {
+export function MessengerReplyForm({
+  businessId,
+  conversationId,
+  maxLength = 2000,
+  platform = "messenger"
+}: Props) {
   const router = useRouter();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -61,7 +70,7 @@ export function MessengerReplyForm({ businessId, conversationId }: Props) {
         <textarea
           className="w-full rounded-md bg-ink-black/40 border border-parchment/15 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:outline-none focus:border-signal-teal/60"
           rows={3}
-          maxLength={2000}
+          maxLength={maxLength}
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Type a reply…"
@@ -69,8 +78,12 @@ export function MessengerReplyForm({ businessId, conversationId }: Props) {
         {error ? <p className="text-xs text-spark-orange">{error}</p> : null}
         <div className="flex items-center justify-between">
           <p className="text-[11px] text-parchment/40">
-            Sends on Messenger as your Page. Your coworker keeps handling later
-            messages automatically.
+            {platform === "whatsapp"
+              ? "Sends on WhatsApp from your business number."
+              : platform === "instagram"
+                ? "Sends as an Instagram DM from your account."
+                : "Sends on Messenger as your Page."}{" "}
+            Your coworker keeps handling later messages automatically.
           </p>
           <Button type="submit" variant="secondary" size="sm" loading={sending} disabled={!text.trim()}>
             Send

@@ -2071,6 +2071,58 @@ describe("Clever engine: send_sms toAgentName", () => {
     );
   });
 
+  it("send_whatsapp: accepts each recipient source, rejects zero and multiple", () => {
+    const ok = baseDef();
+    ok.steps = [
+      { id: "w1", type: "send_whatsapp", to: "+15551234567", body: "hi" },
+      { id: "w2", type: "send_whatsapp", toAgentName: "Dave", body: "hi {{agent.name}}" },
+      {
+        id: "w3",
+        type: "send_whatsapp",
+        toRef: { source: "employee", id: "22222222-2222-4222-8222-222222222222", label: "Dave" },
+        body: "hi {{agent.name}}"
+      }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(ok)).toEqual([]);
+
+    const none = baseDef();
+    none.steps = [
+      { id: "w", type: "send_whatsapp", body: "hi" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(none)).toContain(
+      'Step "w" sends a WhatsApp message but has no recipient; set "to", "toAgentName", or "toRef".'
+    );
+
+    const multiple = baseDef();
+    multiple.steps = [
+      { id: "w", type: "send_whatsapp", to: "{{vars.x}}", toAgentName: "Dave", body: "hi" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(multiple)).toContain(
+      'Step "w" sets more than one recipient; use only one of "to", "toAgentName", or "toRef".'
+    );
+  });
+
+  it("send_whatsapp: {{agent.*}} requires an agent-bearing recipient; {{vars.*}} scope-checked", () => {
+    const bad = baseDef();
+    bad.steps = [
+      { id: "w", type: "send_whatsapp", to: "{{vars.x}}", body: "hi {{agent.name}}" }
+    ] as AiFlowDefinition["steps"];
+    expect(
+      validateDefinitionSemantics(bad).some((i) => i.includes("{{agent.name}}"))
+    ).toBe(true);
+
+    // The `to` template string participates in the vars scope check.
+    const unknownVar = baseDef();
+    unknownVar.steps = [
+      { id: "w", type: "send_whatsapp", to: "{{vars.never_produced}}", body: "hi" }
+    ] as AiFlowDefinition["steps"];
+    expect(
+      validateDefinitionSemantics(unknownVar).some((i) =>
+        i.includes("{{vars.never_produced}}")
+      )
+    ).toBe(true);
+  });
+
   it("rejects {{agent.*}} in a send_sms body without toAgentName", () => {
     const def = baseDef();
     def.steps = [

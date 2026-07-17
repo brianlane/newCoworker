@@ -61,6 +61,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "send_whatsapp",
+        label: "Send WhatsApp message",
+        description:
+          "Message any number from your connected WhatsApp Business account when you ask for it in chat (requires the WhatsApp integration).",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "memory_capture",
         label: "Business memory capture",
         description:

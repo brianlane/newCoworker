@@ -102,6 +102,7 @@ import {
   DASHBOARD_PREAMBLE_MAX_CUSTOMERS
 } from "@/lib/customer-memory/dashboard-preamble";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { resolveChatTurnRoute } from "@/lib/dashboard-chat/routing";
@@ -723,6 +724,7 @@ export async function POST(request: Request) {
     // tool-call route). Each read resolves errors to the registry default.
     const [
       smsToolEnabled,
+      whatsappToolEnabled,
       calFindEnabled,
       calBookEnabled,
       calRescheduleEnabled,
@@ -730,6 +732,7 @@ export async function POST(request: Request) {
       runAiflowEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
+      isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
@@ -738,6 +741,12 @@ export async function POST(request: Request) {
     ]);
     const actionToolGates = {
       send_sms: smsToolEnabled,
+      // Declared only when a WhatsApp integration is actually connected —
+      // the toggle alone shouldn't dangle a tool that can only fail.
+      send_whatsapp:
+        whatsappToolEnabled &&
+        (await getPublicWhatsAppConnection(body.businessId).catch(() => null))?.is_active ===
+          true,
       calendar_find_slots: calFindEnabled,
       calendar_book_appointment: calBookEnabled,
       calendar_reschedule_appointment: calRescheduleEnabled,

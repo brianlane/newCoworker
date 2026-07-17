@@ -70,7 +70,11 @@ export default async function MessengerConversationPage({
         </Link>
         <h1 className="text-2xl font-bold text-parchment mt-2">{who}</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          {conversation.platform === "instagram" ? "Instagram" : "Messenger"}
+          {conversation.platform === "instagram"
+            ? "Instagram"
+            : conversation.platform === "whatsapp"
+              ? "WhatsApp"
+              : "Messenger"}
           {conversation.contact_phone ? ` · ${conversation.contact_phone}` : ""}
           {" · started "}
           <LocalDateTime iso={conversation.created_at} style="list" />
@@ -112,6 +116,8 @@ export default async function MessengerConversationPage({
         <MessengerReplyForm
           businessId={conversation.business_id}
           conversationId={conversation.id}
+          maxLength={conversation.platform === "whatsapp" ? 4096 : 2000}
+          platform={conversation.platform}
         />
       ) : (
         <Card>

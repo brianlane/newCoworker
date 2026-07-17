@@ -24,6 +24,8 @@ export type SidebarItemDef = {
    * connects Facebook) never breaks an existing customization.
    */
   requiresMetaConnection?: boolean;
+  /** Same conditional mechanism, gated on an ACTIVE WhatsApp connection. */
+  requiresWhatsAppConnection?: boolean;
 };
 
 export const SIDEBAR_ITEMS: SidebarItemDef[] = [
@@ -41,6 +43,12 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
     href: "/dashboard/messenger",
     requiresMetaConnection: true
   },
+  {
+    key: "whatsapp",
+    label: "WhatsApp",
+    href: "/dashboard/whatsapp",
+    requiresWhatsAppConnection: true
+  },
   { key: "aiflows", label: "AiFlows", href: "/dashboard/aiflows" },
   { key: "agents", label: "Agents", href: "/dashboard/agents" },
   { key: "webchat", label: "Web chat", href: "/dashboard/webchat" },
@@ -57,16 +65,19 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
 ];
 
 /**
- * Drop conditional items the business hasn't unlocked (currently just the
- * Messenger inbox, gated on an active Meta connection). Applied by the
- * dashboard layout (nav render) AND the Settings sidebar customizer, so a
- * not-yet-connected business never sees the item anywhere.
+ * Drop conditional items the business hasn't unlocked (the Messenger inbox,
+ * gated on an active Meta connection; the WhatsApp inbox, gated on an
+ * active WhatsApp connection). Applied by the dashboard layout (nav render)
+ * AND the Settings sidebar customizer, so a not-yet-connected business
+ * never sees the item anywhere.
  */
 export function filterSidebarItemsForBusiness<T extends SidebarItemDef>(
   items: T[],
-  flags: { metaConnected: boolean }
+  flags: { metaConnected: boolean; whatsappConnected?: boolean }
 ): T[] {
   return items.filter(
-    (item) => !item.requiresMetaConnection || flags.metaConnected
+    (item) =>
+      (!item.requiresMetaConnection || flags.metaConnected) &&
+      (!item.requiresWhatsAppConnection || flags.whatsappConnected === true)
   );
 }

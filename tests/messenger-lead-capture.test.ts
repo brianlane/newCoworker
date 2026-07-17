@@ -143,6 +143,23 @@ describe("captureMessengerLead", () => {
     expect(res2.ok).toBe(true);
   });
 
+  it("tags the rollup channel per platform (whatsapp vs messenger default)", async () => {
+    await captureMessengerLead(
+      BIZ,
+      { name: "Jane", phone: "5551234567" },
+      { channel: "whatsapp" }
+    );
+    expect(recordInteractionMock).toHaveBeenCalledWith(BIZ, "+15551234567", "whatsapp", {
+      displayName: "Jane"
+    });
+
+    recordInteractionMock.mockClear();
+    await captureMessengerLead(BIZ, { name: "Jane", phone: "5551234567" });
+    expect(recordInteractionMock).toHaveBeenCalledWith(BIZ, "+15551234567", "messenger", {
+      displayName: "Jane"
+    });
+  });
+
   it("skips the rollup for uncoercible phones and the email link when absent", async () => {
     const res = await captureMessengerLead(BIZ, { name: "Jane", phone: "12" });
     expect(res.ok).toBe(true);

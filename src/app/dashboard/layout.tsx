@@ -15,6 +15,7 @@ import {
 import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
 import { filterSidebarItemsForBusiness } from "@/lib/dashboard/sidebar-items";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { logger } from "@/lib/logger";
 import { can } from "@/lib/authz/policy";
 import { effectiveBranding, type Branding } from "@/lib/plans/branding";
@@ -132,6 +133,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Conditional items (Messenger inbox) only render for businesses with an
   // ACTIVE Meta connection — a read hiccup hides rather than breaks nav.
   let metaConnected = false;
+  let whatsappConnected = false;
   if (businessId) {
     try {
       const metaConnection = await getPublicMetaConnection(businessId);
@@ -144,10 +146,19 @@ export default async function DashboardLayout({ children }: { children: React.Re
         error: err instanceof Error ? err.message : String(err)
       });
     }
+    try {
+      const whatsappConnection = await getPublicWhatsAppConnection(businessId);
+      whatsappConnected = whatsappConnection?.is_active === true;
+    } catch (err) {
+      logger.warn("dashboard layout: whatsapp connection read failed; hiding WhatsApp nav", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
   const sidebarLayout = filterSidebarItemsForBusiness(
     await getSidebarLayout(user.userId),
-    { metaConnected }
+    { metaConnected, whatsappConnected }
   );
 
   return (

@@ -19,6 +19,7 @@ import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
@@ -34,6 +35,7 @@ export type IntegrationsContext = {
   calendlyConnection: Awaited<ReturnType<typeof getPublicCalendlyConnection>>;
   caldavConnection: Awaited<ReturnType<typeof getPublicCaldavConnection>>;
   metaConnection: Awaited<ReturnType<typeof getPublicMetaConnection>>;
+  whatsappConnection: Awaited<ReturnType<typeof getPublicWhatsAppConnection>>;
   zoomConnection: Awaited<ReturnType<typeof getPublicZoomConnection>>;
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
@@ -74,6 +76,7 @@ export async function loadIntegrationsContext(
     calendlyConnection: businessId ? await getPublicCalendlyConnection(businessId) : null,
     caldavConnection: businessId ? await getPublicCaldavConnection(businessId) : null,
     metaConnection: businessId ? await getPublicMetaConnection(businessId) : null,
+    whatsappConnection: businessId ? await getPublicWhatsAppConnection(businessId) : null,
     zoomConnection: businessId ? await getPublicZoomConnection(businessId) : null,
     // Never load key metadata for non-owners — the key routes refuse
     // managers, so don't server-render it into their HTML either.
@@ -101,6 +104,12 @@ export function computeIntegrationStatuses(
       ? connected
       : { state: "attention", label: "Needs reconnect" };
 
+  const whatsappStatus: IntegrationStatus = !ctx.whatsappConnection
+    ? disconnected
+    : ctx.whatsappConnection.is_active
+      ? connected
+      : { state: "attention", label: "Paused" };
+
   const customCount = ctx.customIntegrations.length;
   const keyCount = ctx.apiKeys.length;
 
@@ -119,6 +128,7 @@ export function computeIntegrationStatuses(
     calendly: ctx.calendlyConnection ? connected : disconnected,
     caldav: ctx.caldavConnection ? connected : disconnected,
     meta: metaStatus,
+    whatsapp: whatsappStatus,
     zoom: zoomStatus,
     custom:
       customCount > 0

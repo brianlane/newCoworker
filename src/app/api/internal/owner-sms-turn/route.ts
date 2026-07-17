@@ -29,6 +29,7 @@ import { NextResponse } from "next/server";
 import { gatewayBusinessGuard } from "@/lib/voice-tools/common";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
@@ -99,6 +100,7 @@ export async function POST(request: Request) {
     const [
       knowledgeToolEnabled,
       smsToolEnabled,
+      whatsappToolEnabled,
       calFindEnabled,
       calBookEnabled,
       calRescheduleEnabled,
@@ -109,6 +111,7 @@ export async function POST(request: Request) {
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "business_knowledge_lookup"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
+      isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_find_slots"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
@@ -180,6 +183,12 @@ export async function POST(request: Request) {
       budgetMs: 70_000,
       actionToolGates: {
         send_sms: smsToolEnabled,
+        // Same connection-aware gating as dashboard chat: never declare a
+        // tool that can only fail.
+        send_whatsapp:
+          whatsappToolEnabled &&
+          (await getPublicWhatsAppConnection(body.businessId).catch(() => null))
+            ?.is_active === true,
         calendar_find_slots: calFindEnabled,
         calendar_book_appointment: calBookEnabled,
         calendar_reschedule_appointment: calRescheduleEnabled,

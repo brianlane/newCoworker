@@ -177,6 +177,9 @@ export function scrubDefinition(
           if (typeof step.toAgentName === "string") step.toAgentName = EMPLOYEE_NAME_PLACEHOLDER;
           break;
         }
+        case "send_whatsapp":
+          if (typeof step.toAgentName === "string") step.toAgentName = EMPLOYEE_NAME_PLACEHOLDER;
+          break;
         case "route_to_team":
           // Pinning to one named agent is tenant-specific; default to roster
           // rotation by dropping the pin.

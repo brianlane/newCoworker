@@ -9,6 +9,7 @@ import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationC
 import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
 import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
+import { WhatsAppIntegrationCard } from "@/components/dashboard/WhatsAppIntegrationCard";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { ClaudeConnectorCard } from "@/components/dashboard/ClaudeConnectorCard";
@@ -71,6 +72,15 @@ function IntegrationBody({
     case "meta":
       return (
         <MetaIntegrationCard businessId={businessId} initialConnection={ctx.metaConnection} />
+      );
+    case "whatsapp":
+      return (
+        <WhatsAppIntegrationCard
+          businessId={businessId}
+          initialConnection={ctx.whatsappConnection}
+          metaAppId={process.env.META_APP_ID ?? null}
+          configId={process.env.META_WHATSAPP_CONFIG_ID ?? null}
+        />
       );
     case "zoom":
       return (

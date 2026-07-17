@@ -23,6 +23,7 @@ import {
   ArrowDownUp,
   BarChart3,
   Globe,
+  MessageCircleMore,
   MessagesSquare,
   Megaphone,
   type LucideIcon
@@ -41,6 +42,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   calls: Phone,
   messages: MessageCircle,
   messenger: MessagesSquare,
+  whatsapp: MessageCircleMore,
   webchat: Globe,
   emails: Mail,
   customers: Users,

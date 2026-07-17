@@ -42,6 +42,7 @@ function ToggleRow({
 
 export function NotificationPreferences({ businessId, initial }: Props) {
   const [smsUrgent, setSmsUrgent] = useState(initial.sms_urgent);
+  const [whatsappUrgent, setWhatsappUrgent] = useState(initial.whatsapp_urgent ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
   const [emailUrgent, setEmailUrgent] = useState(initial.email_urgent);
@@ -66,6 +67,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
 
   useEffect(() => {
     setSmsUrgent(initial.sms_urgent);
+    setWhatsappUrgent(initial.whatsapp_urgent ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
     setEmailUrgent(initial.email_urgent);
@@ -85,6 +87,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
 
   function applyResponse(prefs: NotificationPreferencesRow) {
     setSmsUrgent(prefs.sms_urgent);
+    setWhatsappUrgent(prefs.whatsapp_urgent ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
     setEmailUrgent(prefs.email_urgent);
@@ -112,6 +115,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
         body: JSON.stringify({
           businessId,
           sms_urgent: smsUrgent,
+          whatsapp_urgent: whatsappUrgent,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
           email_urgent: emailUrgent,
@@ -153,6 +157,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
         body: JSON.stringify({
           businessId,
           sms_urgent: false,
+          whatsapp_urgent: false,
           email_digest: false,
           email_digest_weekly: false,
           email_urgent: false,
@@ -197,6 +202,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Text when your coworker flags something critical."
           checked={smsUrgent}
           onChange={setSmsUrgent}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="WhatsApp: urgent alerts"
+          description="Also deliver urgent alerts on WhatsApp (requires the WhatsApp integration under Integrations)."
+          checked={whatsappUrgent}
+          onChange={setWhatsappUrgent}
           disabled={loading || unsubscribing}
         />
         <ToggleRow

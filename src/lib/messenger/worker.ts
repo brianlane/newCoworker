@@ -34,11 +34,13 @@ import {
   type MessengerGeminiTurnResult,
   type RunMessengerGeminiTurnArgs
 } from "@/lib/messenger/engine";
+import { getActiveMetaConnectionByPageId } from "@/lib/db/meta-connections";
+import { getActiveWhatsAppConnectionByPhoneNumberId } from "@/lib/db/whatsapp-connections";
 import {
-  getActiveMetaConnectionByPageId,
-  type MetaConnectionRow
-} from "@/lib/db/meta-connections";
-import { getMessengerProfile, sendMessengerMessage } from "@/lib/meta/client";
+  getMessengerProfile,
+  sendMessengerMessage,
+  sendWhatsAppMessage
+} from "@/lib/meta/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
 import { logger } from "@/lib/logger";
@@ -47,6 +49,40 @@ export const MESSENGER_WORKER_ID = "platform-messenger-worker";
 
 /** Jobs per invocation — sized against the route's wall-clock budget. */
 export const MESSENGER_WORKER_BATCH_LIMIT = 8;
+
+/**
+ * Platform-normalized send credentials for a conversation: the Page token
+ * (messenger/instagram) or the Cloud API business token (whatsapp), both
+ * keyed by the conversation's stored account key (page_id column).
+ */
+export type ResolvedSendAccount = { token: string };
+
+/* c8 ignore start -- thin resolution over tested db modules; covered via injected deps */
+async function resolveSendAccountDefault(
+  platform: MessengerConversationRow["platform"],
+  accountKey: string
+): Promise<ResolvedSendAccount | null> {
+  if (platform === "whatsapp") {
+    const connection = await getActiveWhatsAppConnectionByPhoneNumberId(accountKey);
+    return connection?.accessToken ? { token: connection.accessToken } : null;
+  }
+  const connection = await getActiveMetaConnectionByPageId(accountKey);
+  return connection?.pageToken ? { token: connection.pageToken } : null;
+}
+
+async function sendDefault(
+  platform: MessengerConversationRow["platform"],
+  accountKey: string,
+  token: string,
+  recipientId: string,
+  text: string
+): Promise<{ messageId: string | null }> {
+  if (platform === "whatsapp") {
+    return sendWhatsAppMessage(accountKey, token, recipientId, text);
+  }
+  return sendMessengerMessage(accountKey, token, recipientId, text);
+}
+/* c8 ignore stop */
 
 /* c8 ignore start -- thin service-client read; covered via injected deps */
 async function fetchBusinessTier(businessId: string): Promise<PlanTier | null> {
@@ -65,7 +101,10 @@ export type MessengerWorkerDeps = {
   claimJob?: (workerId: string) => Promise<MessengerJobRow | null>;
   getConversation?: (id: string) => Promise<MessengerConversationRow | null>;
   listMessages?: (conversationId: string) => Promise<MessengerMessageRow[]>;
-  getConnection?: (pageId: string) => Promise<MetaConnectionRow | null>;
+  resolveSendAccount?: (
+    platform: MessengerConversationRow["platform"],
+    accountKey: string
+  ) => Promise<ResolvedSendAccount | null>;
   fetchTier?: (businessId: string) => Promise<PlanTier | null>;
   fetchProfileName?: (
     pageToken: string,
@@ -74,7 +113,13 @@ export type MessengerWorkerDeps = {
   ) => Promise<{ name: string | null }>;
   updateContact?: typeof updateMessengerConversationContact;
   runTurn?: (args: RunMessengerGeminiTurnArgs) => Promise<MessengerGeminiTurnResult>;
-  send?: typeof sendMessengerMessage;
+  send?: (
+    platform: MessengerConversationRow["platform"],
+    accountKey: string,
+    token: string,
+    recipientId: string,
+    text: string
+  ) => Promise<{ messageId: string | null }>;
   complete?: typeof completeMessengerJob;
   fail?: typeof failMessengerJob;
   requeue?: typeof requeueMessengerJob;
@@ -100,12 +145,12 @@ export async function processMessengerJobs(
   const getConversation = deps.getConversation ?? getMessengerConversationById;
   const listMessages =
     deps.listMessages ?? ((id: string) => listMessengerMessages(id));
-  const getConnection = deps.getConnection ?? getActiveMetaConnectionByPageId;
+  const resolveSendAccount = deps.resolveSendAccount ?? resolveSendAccountDefault;
   const fetchTier = deps.fetchTier ?? fetchBusinessTier;
   const fetchProfileName = deps.fetchProfileName ?? getMessengerProfile;
   const updateContact = deps.updateContact ?? updateMessengerConversationContact;
   const runTurn = deps.runTurn ?? runMessengerGeminiTurn;
-  const send = deps.send ?? sendMessengerMessage;
+  const send = deps.send ?? sendDefault;
   const complete = deps.complete ?? completeMessengerJob;
   const fail = deps.fail ?? failMessengerJob;
   const requeue = deps.requeue ?? requeueMessengerJob;
@@ -169,18 +214,19 @@ export async function processMessengerJobs(
         continue;
       }
 
-      const connection = await getConnection(conversation.page_id);
-      if (!connection?.pageToken || !connection.page_id) {
+      const account = await resolveSendAccount(conversation.platform, conversation.page_id);
+      if (!account) {
         await failJob("not_connected", conversation.page_id);
         continue;
       }
 
       // Best-effort display name backfill on first touch — the preamble
-      // and inbox both read better with a real name.
+      // and inbox both read better with a real name. WhatsApp skips this:
+      // the sender's profile name arrived with the webhook delivery.
       let conversationForTurn = conversation;
-      if (!conversation.display_name) {
+      if (!conversation.display_name && conversation.platform !== "whatsapp") {
         const profile = await fetchProfileName(
-          connection.pageToken,
+          account.token,
           conversation.psid,
           conversation.platform
         );
@@ -211,7 +257,13 @@ export async function processMessengerJobs(
         tier
       });
 
-      await send(connection.page_id, connection.pageToken, conversation.psid, turn.reply);
+      await send(
+        conversation.platform,
+        conversation.page_id,
+        account.token,
+        conversation.psid,
+        turn.reply
+      );
 
       try {
         await complete(job.id, turn.reply, historyMaxMessageId);

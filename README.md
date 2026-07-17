@@ -616,6 +616,35 @@ Messenger inbox lives at `/dashboard/messenger` (with manual replies through
 the same window-gated send path); its sidebar item only renders for
 businesses with an active Meta connection.
 
+### WhatsApp channel (conversations + outbound)
+
+Tenants connect a WhatsApp Business Account via Meta's **Embedded Signup**
+(`WhatsAppIntegrationCard` → `/api/integrations/whatsapp`: one-time code →
+business token, WABA webhook subscribe, stock utility templates
+auto-registered; stored encrypted in `whatsapp_connections`). Inbound
+messages arrive on the same `/api/webhooks/meta` callback as
+`object: "whatsapp_business_account"` and ride the messenger pipeline with
+`platform='whatsapp'` (`page_id` holds the `phone_number_id`, `psid` the
+customer's `wa_id`; wamid dedupes redeliveries) — same Gemini engine, 24h
+window gate, first-contact flow trigger (`source: "whatsapp"`), and inbox
+(`/dashboard/whatsapp`, threads shared with `/dashboard/messenger`; both
+sidebar items are connection-gated).
+
+Outbound is everywhere SMS is, through ONE policy helper
+(`src/lib/whatsapp/deliver.ts`): free-form text when the recipient's 24h
+service window is open, otherwise the pre-approved **utility template**
+(`nc_owner_alert` / `nc_contact_followup` — Meta bills the tenant per
+template message; templates still in review skip with an honest note).
+Surfaces: the AiFlow `send_whatsapp` step (planner in
+`_shared/ai_flows/steps.ts`, executor bridges to
+`/api/internal/whatsapp-send` with the cron bearer), owner urgent alerts
+(4th delivery channel in `notifications/dispatch.ts` + the Deno mirror,
+toggle `whatsapp_urgent`), the dashboard coworker `send_whatsapp` tool
+(inline + Rowboat + MCP connector), and manual inbox replies. Every
+outbound send is appended to the conversation transcript so replies thread
+into the inbox. Meta app config steps live in
+`PRDs/whatsapp-meta-app-config.md`.
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”

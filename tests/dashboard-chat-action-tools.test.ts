@@ -24,6 +24,7 @@ const BIZ = "11111111-1111-4111-8111-111111111111";
 
 const ALL_ON: ActionToolGates = {
   send_sms: true,
+  send_whatsapp: true,
   calendar_find_slots: true,
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,
@@ -57,6 +58,90 @@ function happyDeps(overrides: Partial<ActionToolDeps> = {}): ActionToolDeps {
   };
 }
 
+describe("send_whatsapp", () => {
+  it("delivers via the central helper and reports the delivery path", async () => {
+    const sendWhatsApp = vi.fn(async () => ({
+      ok: true as const,
+      via: "text" as const,
+      messageId: "wamid-1"
+    }));
+    const result = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567", body: "Hello!" } },
+      { sendWhatsApp }
+    )) as { ok: boolean; via?: string; toE164?: string };
+    expect(result.ok).toBe(true);
+    expect(result.via).toBe("text");
+    expect(sendWhatsApp).toHaveBeenCalledWith({
+      businessId: BIZ,
+      to: "+15551234567",
+      text: "Hello!",
+      audience: "contact"
+    });
+
+    const template = vi.fn(async () => ({
+      ok: true as const,
+      via: "template" as const,
+      messageId: "wamid-2"
+    }));
+    const tmplResult = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567", body: "Hi" } },
+      { sendWhatsApp: template }
+    )) as { note?: string };
+    expect(tmplResult.note).toContain("approved template");
+  });
+
+  it("rejects invalid args and destinations", async () => {
+    const sendWhatsApp = vi.fn();
+    const bad = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567" } },
+      { sendWhatsApp }
+    )) as { ok: boolean; message?: string };
+    expect(bad.ok).toBe(false);
+    expect(bad.message).toContain("invalid_args");
+
+    const garbage = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "not-a-phone", body: "x" } },
+      { sendWhatsApp }
+    )) as { ok: boolean; message?: string };
+    expect(garbage.ok).toBe(false);
+    expect(garbage.message).toBe("invalid_destination");
+    expect(sendWhatsApp).not.toHaveBeenCalled();
+  });
+
+  it("maps policy skips and failures to owner-facing guidance", async () => {
+    const notConnected = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567", body: "x" } },
+      { sendWhatsApp: vi.fn(async () => ({ ok: false as const, reason: "not_connected" as const })) }
+    )) as { ok: boolean; message?: string };
+    expect(notConnected.ok).toBe(false);
+    expect(notConnected.message).toContain("whatsapp_not_connected");
+
+    const windowClosed = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567", body: "x" } },
+      {
+        sendWhatsApp: vi.fn(async () => ({
+          ok: false as const,
+          reason: "template_not_approved" as const
+        }))
+      }
+    )) as { message?: string };
+    expect(windowClosed.message).toContain("whatsapp_window_closed");
+
+    const failed = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567", body: "x" } },
+      { sendWhatsApp: vi.fn(async () => ({ ok: false as const, reason: "send_failed" as const })) }
+    )) as { message?: string };
+    expect(failed.message).toContain("whatsapp_send_failed");
+  });
+});
+
 describe("declarations & naming", () => {
   it("filters declarations to the gates that are ON, in stable order", () => {
     const all = actionToolDeclarations(ALL_ON);
@@ -65,6 +150,7 @@ describe("declarations & naming", () => {
     const some = actionToolDeclarations({
       ...ALL_ON,
       send_sms: false,
+      send_whatsapp: false,
       calendar_cancel_appointment: false,
       list_aiflows: false,
       run_aiflow: false

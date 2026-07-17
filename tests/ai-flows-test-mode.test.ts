@@ -22,6 +22,43 @@ describe("isTestModeTrigger", () => {
   });
 });
 
+describe("simulateTestAction: send_whatsapp", () => {
+  it("simulates sends (recipient precedence) and honors planner skips", () => {
+    expect(
+      simulateTestAction(
+        { kind: "send_whatsapp", to: "+16025550111", body: "Hi Joe!" } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "send_whatsapp", to: "+16025550111", body: "Hi Joe!" });
+
+    expect(
+      simulateTestAction(
+        { kind: "send_whatsapp", to: "", toAgentName: "Dave", body: "x" } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "send_whatsapp", to: "Dave", body: "x" });
+
+    expect(
+      simulateTestAction(
+        {
+          kind: "send_whatsapp",
+          to: "",
+          toRef: { source: "contact", id: "id", label: "Joe" },
+          body: "x"
+        } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "send_whatsapp", to: "Joe", body: "x" });
+
+    expect(
+      simulateTestAction(
+        { kind: "send_whatsapp", to: "", body: "x", skipReason: "no_recipient_phone" } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "send_whatsapp", skipped: "no_recipient_phone" });
+  });
+});
+
 describe("simulateTestAction", () => {
   const scope = () => ({ vars: {} as Record<string, unknown> });
 

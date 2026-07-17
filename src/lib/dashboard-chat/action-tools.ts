@@ -28,6 +28,7 @@ import { z } from "zod";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
+import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import {
@@ -42,6 +43,7 @@ import { logger } from "@/lib/logger";
 /** Tool names as declared to the inline Gemini call (base keys, no prefix). */
 export const ACTION_TOOL_NAMES = [
   "send_sms",
+  "send_whatsapp",
   "calendar_find_slots",
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
@@ -65,6 +67,7 @@ export function isActionToolName(name: string): name is ActionToolName {
  */
 export type ActionToolGates = {
   send_sms: boolean;
+  send_whatsapp: boolean;
   calendar_find_slots: boolean;
   calendar_book_appointment: boolean;
   calendar_reschedule_appointment: boolean;
@@ -77,6 +80,26 @@ const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
   name: "send_sms",
   description:
     "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a text to be sent. Never invent recipients or bodies — send exactly what the owner asked for, and when re-sending after a delivery complaint, send the SAME intended message again (never your own previous chat reply). After the tool returns, tell the owner the exact body that was sent.",
+  parameters: {
+    type: "object",
+    properties: {
+      toE164: {
+        type: "string",
+        description: "Recipient phone in E.164, e.g. +15551234567."
+      },
+      body: {
+        type: "string",
+        description: "Plain-text message body, at most 1600 characters."
+      }
+    },
+    required: ["toE164", "body"]
+  }
+};
+
+const SEND_WHATSAPP_DECLARATION: GeminiFunctionDeclaration = {
+  name: "send_whatsapp",
+  description:
+    "Send a WhatsApp message from the business's connected WhatsApp number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a WHATSAPP message (texting is send_sms). Never invent recipients or bodies. If the recipient hasn't messaged the business on WhatsApp in the last 24 hours, the message is delivered through an approved template; the tool result says which. After the tool returns, tell the owner the exact body that was sent.",
   parameters: {
     type: "object",
     properties: {
@@ -192,6 +215,7 @@ const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
 
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
+  send_whatsapp: SEND_WHATSAPP_DECLARATION,
   calendar_find_slots: FIND_SLOTS_DECLARATION,
   calendar_book_appointment: BOOK_DECLARATION,
   calendar_reschedule_appointment: RESCHEDULE_DECLARATION,
@@ -211,6 +235,11 @@ export function actionToolDeclarations(gates: ActionToolGates): GeminiFunctionDe
 // ---------------------------------------------------------------------
 
 const sendSmsArgsSchema = z.object({
+  toE164: z.string().min(5).max(32),
+  body: z.string().min(1).max(1600)
+});
+
+const sendWhatsAppArgsSchema = z.object({
   toE164: z.string().min(5).max(32),
   body: z.string().min(1).max(1600)
 });
@@ -313,6 +342,7 @@ export type ActionToolDeps = {
   /** Injectable cores (tests). */
   getMessagingConfig?: typeof getTelnyxMessagingForBusiness;
   sendSms?: typeof sendTelnyxSms;
+  sendWhatsApp?: typeof deliverWhatsApp;
   checkOptOut?: typeof checkSmsOptOut;
   findSlots?: typeof findCalendarSlots;
   book?: typeof bookCalendarAppointment;
@@ -347,6 +377,7 @@ export async function executeActionTool(
   /* c8 ignore start -- production defaults; tests inject */
   const getMessagingConfig = deps.getMessagingConfig ?? getTelnyxMessagingForBusiness;
   const sendSms = deps.sendSms ?? sendTelnyxSms;
+  const sendWhatsApp = deps.sendWhatsApp ?? deliverWhatsApp;
   const checkOptOut = deps.checkOptOut ?? checkSmsOptOut;
   const findSlots = deps.findSlots ?? findCalendarSlots;
   const book = deps.book ?? bookCalendarAppointment;
@@ -436,6 +467,53 @@ export async function executeActionTool(
           toE164: toPhone,
           sentBody: parsed.data.body,
           note: "Tell the owner the exact message body that was texted."
+        };
+      }
+      case "send_whatsapp": {
+        const parsed = sendWhatsAppArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        const normalized = normalizeContactNumber(parsed.data.toE164);
+        if (!normalized.ok) {
+          return { ok: false, message: "invalid_destination" };
+        }
+        const delivered = await sendWhatsApp({
+          businessId,
+          to: normalized.value,
+          text: parsed.data.body,
+          audience: "contact"
+        });
+        if (!delivered.ok) {
+          if (delivered.reason === "not_connected") {
+            return {
+              ok: false,
+              message:
+                "whatsapp_not_connected — WhatsApp isn't connected. Point the owner to /dashboard/integrations/whatsapp."
+            };
+          }
+          if (delivered.reason === "template_not_approved") {
+            return {
+              ok: false,
+              message:
+                "whatsapp_window_closed — the recipient hasn't messaged on WhatsApp in 24 hours and the message template is still in Meta review. Suggest texting them with send_sms instead."
+            };
+          }
+          return {
+            ok: false,
+            message: "whatsapp_send_failed — the message did NOT go out. Tell the owner honestly."
+          };
+        }
+        return {
+          ok: true,
+          messageId: delivered.messageId,
+          toE164: normalized.value,
+          sentBody: parsed.data.body,
+          via: delivered.via,
+          note:
+            delivered.via === "template"
+              ? "Delivered through the approved template (the recipient was outside the 24-hour window). Tell the owner the exact message body that was sent."
+              : "Tell the owner the exact message body that was sent."
         };
       }
       case "calendar_find_slots": {

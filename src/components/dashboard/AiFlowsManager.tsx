@@ -460,6 +460,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       };
     case "send_sms":
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
+    case "send_whatsapp":
+      return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
     case "send_email":
       return { id, type, to: "", subject: "", body: "" };
     case "approval_gate":
@@ -806,6 +808,9 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
     return { ...step, to: undefined, toAgentName: undefined, toRef: undefined };
   }
   if (step.type === "send_sms" && step.toRef) {
+    return { ...step, to: undefined, toAgentName: undefined };
+  }
+  if (step.type === "send_whatsapp" && step.toRef) {
     return { ...step, to: undefined, toAgentName: undefined };
   }
   if (step.type === "route_to_team" && step.agentRef) {
@@ -3547,6 +3552,64 @@ function StepFields({
             </div>
           )}
         </div>
+      </div>
+    );
+  }
+  if (step.type === "send_whatsapp") {
+    return (
+      <div className="space-y-2">
+        {step.toRef ? (
+          <ContactRefPicker
+            label="Recipient (saved contact: live number)"
+            textValue=""
+            refValue={step.toRef}
+            people={people}
+            onChangeText={() => patchStep(index, { toRef: undefined })}
+            onChangeRef={(ref) =>
+              patchStep(index, { toRef: ref, to: undefined, toAgentName: undefined })
+            }
+          />
+        ) : (
+          <>
+            {(!step.toAgentName || Boolean(step.to)) && (
+              <Field
+                label="Recipient (phone or {{vars.x}})"
+                value={step.to ?? ""}
+                onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
+              />
+            )}
+            {(!step.to || Boolean(step.toAgentName)) && (
+              <Field
+                label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
+                value={step.toAgentName ?? ""}
+                onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
+              />
+            )}
+            {!step.to && !step.toAgentName && people.length > 0 && (
+              <button
+                type="button"
+                onClick={() => {
+                  const first = people[0];
+                  patchStep(index, {
+                    toRef: { source: first.source, id: first.id, label: first.name },
+                    to: undefined,
+                    toAgentName: undefined
+                  });
+                }}
+                className="text-[11px] text-signal-teal hover:underline"
+              >
+                Or pick a saved contact (live number)
+              </button>
+            )}
+          </>
+        )}
+        <Field label="Message" value={step.body} onChange={(v) => patchStep(index, { body: v })} textarea />
+        <p className="text-[11px] text-parchment/40">
+          Sends from your connected WhatsApp Business number. If the person hasn&apos;t
+          messaged you within 24 hours, the message goes out through an approved
+          template (Meta bills per template message); if the template is still in
+          review, the step is skipped with a note.
+        </p>
       </div>
     );
   }

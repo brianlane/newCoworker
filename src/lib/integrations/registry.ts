@@ -18,6 +18,7 @@ import {
   Inbox,
   KeyRound,
   Megaphone,
+  MessageCircle,
   Video
 } from "lucide-react";
 
@@ -27,6 +28,7 @@ export type IntegrationSlug =
   | "calendly"
   | "caldav"
   | "meta"
+  | "whatsapp"
   | "zoom"
   | "custom"
   | "zapier-api"
@@ -93,6 +95,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     benefit:
       "Connect your Facebook Page and every new ad lead starts your webhook AiFlows within seconds — no Zapier or Make account needed.",
     icon: Megaphone
+  },
+  {
+    slug: "whatsapp",
+    name: "WhatsApp Business",
+    category: "Lead sources",
+    benefit:
+      "Chat with leads on WhatsApp — your coworker answers automatically, and AiFlows and owner alerts can message contacts there too.",
+    icon: MessageCircle
   },
   {
     slug: "zoom",

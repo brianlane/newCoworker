@@ -48,13 +48,14 @@ interface WebhookPayload {
   };
 }
 
-type DeliveryChannel = "sms" | "email" | "dashboard";
+type DeliveryChannel = "sms" | "email" | "dashboard" | "whatsapp";
 type DeliveryStatus = "queued" | "sent" | "failed" | "skipped";
 
 type ResolvedTargets = {
   email: string | null;
   phone: string | null;
   smsUrgent: boolean;
+  whatsappUrgent: boolean;
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
@@ -116,6 +117,7 @@ async function resolveTargets(supa: SupaClient, businessId: string): Promise<Res
   let prefsEmail: string | null = null;
   let prefsPhone: string | null = null;
   let smsUrgent = true;
+  let whatsappUrgent = true;
   let emailUrgent = true;
   let dashboardAlerts = true;
   let unsubscribed = false;
@@ -124,7 +126,7 @@ async function resolveTargets(supa: SupaClient, businessId: string): Promise<Res
   const { data: prefs } = await supa
     .from("notification_preferences")
     .select(
-      "alert_email, phone_number, sms_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
+      "alert_email, phone_number, sms_urgent, whatsapp_urgent, email_urgent, dashboard_alerts, unsubscribed_at"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -137,6 +139,9 @@ async function resolveTargets(supa: SupaClient, businessId: string): Promise<Res
     // 40310. An uncoercible value degrades to null → honest `no_phone` skip.
     prefsPhone = normalizeE164(((prefs.phone_number as string | null) ?? "").trim());
     smsUrgent = Boolean(prefs.sms_urgent);
+    // ?? true: rows read before the whatsapp_urgent column existed keep the
+    // channel on (delivery still requires a connected WhatsApp integration).
+    whatsappUrgent = Boolean(prefs.whatsapp_urgent ?? true);
     emailUrgent = Boolean(prefs.email_urgent);
     dashboardAlerts = Boolean(prefs.dashboard_alerts);
     unsubscribed = Boolean(prefs.unsubscribed_at);
@@ -155,6 +160,7 @@ async function resolveTargets(supa: SupaClient, businessId: string): Promise<Res
     email: prefsEmail ?? ownerEmail ?? fallbackEmail,
     phone: prefsPhone ?? fallbackPhone,
     smsUrgent,
+    whatsappUrgent,
     emailUrgent,
     dashboardAlerts,
     unsubscribed
@@ -538,6 +544,118 @@ serve(async (req: Request) => {
       kind,
       { ...basePayload, recipient: targets.email },
       "resend_unconfigured"
+    );
+  }
+
+  // 4) WhatsApp channel — delegated to the Next.js internal deliver
+  // endpoint (Cloud API client, tenant token decryption, 24h-window +
+  // template routing live there). Fully additive: no connected WhatsApp
+  // integration comes back as a structured not_connected skip.
+  const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
+  if (!targets.phone) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "whatsapp",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "no_phone"
+    );
+  } else if (!targets.whatsappUrgent || targets.unsubscribed) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "whatsapp",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      targets.unsubscribed ? "unsubscribed" : "whatsapp_urgent_disabled"
+    );
+  } else if (cronSecret && appUrl) {
+    try {
+      const waRes = await fetch(`${appUrl}/api/internal/whatsapp-send`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${cronSecret}`,
+          // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs
+          // only when Origin matches NEXT_PUBLIC_APP_URL.
+          Origin: appUrl
+        },
+        body: JSON.stringify({
+          businessId: record.business_id,
+          to: targets.phone,
+          text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+          audience: "owner"
+        })
+      });
+      const waJson = waRes.ok
+        ? ((await waRes.json().catch(() => null)) as {
+            data?: { ok?: boolean; via?: string; reason?: string };
+          } | null)
+        : null;
+      if (waJson?.data?.ok) {
+        await recordRow(
+          supa,
+          record.business_id,
+          "whatsapp",
+          "sent",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.phone, via: waJson.data.via ?? "text" }
+        );
+      } else if (waRes.ok) {
+        // Structured policy skip (not connected / template in review).
+        await recordRow(
+          supa,
+          record.business_id,
+          "whatsapp",
+          waJson?.data?.reason === "send_failed" ? "failed" : "skipped",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.phone },
+          waJson?.data?.reason ?? "send_failed"
+        );
+      } else {
+        errors.push(`WhatsApp failed: ${waRes.status}`);
+        await recordRow(
+          supa,
+          record.business_id,
+          "whatsapp",
+          "failed",
+          summary,
+          kind,
+          { ...basePayload, recipient: targets.phone },
+          `whatsapp_bridge_${waRes.status}`
+        );
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      errors.push(`WhatsApp error: ${msg}`);
+      await recordRow(
+        supa,
+        record.business_id,
+        "whatsapp",
+        "failed",
+        summary,
+        kind,
+        { ...basePayload, recipient: targets.phone },
+        msg
+      );
+    }
+  } else {
+    await recordRow(
+      supa,
+      record.business_id,
+      "whatsapp",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      "whatsapp_bridge_unconfigured"
     );
   }
 

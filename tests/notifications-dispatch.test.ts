@@ -16,6 +16,10 @@ vi.mock("@/lib/email/client", () => ({
   sendOwnerEmail: vi.fn()
 }));
 
+vi.mock("@/lib/whatsapp/deliver", () => ({
+  deliverWhatsApp: vi.fn()
+}));
+
 vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn(),
   getTelnyxMessagingForBusiness: vi.fn(async () => ({
@@ -33,6 +37,7 @@ import { getOrCreateNotificationPreferences } from "@/lib/db/notification-prefer
 import { insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -63,6 +68,11 @@ describe("notifications/dispatch", () => {
     };
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue(PREFS_ON as never);
     vi.mocked(getBusiness).mockResolvedValue(BUSINESS as never);
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: true,
+      via: "text",
+      messageId: "wamid-1"
+    } as never);
   });
   afterEach(() => {
     process.env = original;
@@ -430,14 +440,19 @@ describe("notifications/dispatch", () => {
     expect(sendOwnerEmail).not.toHaveBeenCalled();
     expect(sendTelnyxSms).not.toHaveBeenCalled();
     const rows = vi.mocked(insertNotification).mock.calls.map((c) => c[0] as Record<string, unknown>);
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(4);
     expect(rows.every((r) => r.status === "skipped")).toBe(true);
     expect(
       rows.every(
         (r) => (r.payload as Record<string, unknown>).reason === "category_leads_disabled"
       )
     ).toBe(true);
-    expect(result.results.map((r) => r.channel).sort()).toEqual(["dashboard", "email", "sms"]);
+    expect(result.results.map((r) => r.channel).sort()).toEqual([
+      "dashboard",
+      "email",
+      "sms",
+      "whatsapp"
+    ]);
   });
 
   it("delivers category-gated kinds normally when the category is on", async () => {
@@ -511,5 +526,132 @@ describe("notifications/dispatch", () => {
     const html = (call[3] as { text: string; html: string }).html;
     expect(body).toContain("http://localhost:3000/dashboard");
     expect(html).toContain("http://localhost:3000/dashboard");
+  });
+
+  describe("whatsapp channel", () => {
+    it("delivers through the central helper and records the via", async () => {
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: true,
+        via: "template",
+        messageId: "wamid-t"
+      } as never);
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Lead needs a callback",
+        kind: "urgent_alert"
+      });
+      const wa = result.results.find((r) => r.channel === "whatsapp");
+      expect(wa?.status).toBe("sent");
+      expect(deliverWhatsApp).toHaveBeenCalledWith({
+        businessId: BIZ,
+        to: "+15555550100",
+        text: expect.stringContaining("Lead needs a callback"),
+        audience: "owner"
+      });
+    });
+
+    it("honors the smsBody override for the whatsapp copy", async () => {
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Alert",
+        kind: "urgent_alert",
+        smsBody: "Custom short copy"
+      });
+      expect(vi.mocked(deliverWhatsApp).mock.calls[0][0].text).toBe("Custom short copy");
+    });
+
+    it("skips when the toggle is off, unsubscribed, or no phone resolves", async () => {
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_urgent: false
+      } as never);
+      let result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "skipped",
+        reason: "whatsapp_urgent_disabled"
+      });
+      expect(deliverWhatsApp).not.toHaveBeenCalled();
+
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        unsubscribed_at: "2026-07-01T00:00:00Z"
+      } as never);
+      result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "skipped",
+        reason: "unsubscribed"
+      });
+
+      process.env.TELNYX_OWNER_PHONE = "";
+      result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "skipped",
+        reason: "no_phone"
+      });
+    });
+
+    it("records policy skips as skipped and hard failures as failed", async () => {
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: false,
+        reason: "template_not_approved"
+      } as never);
+      let result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "skipped",
+        reason: "template_not_approved"
+      });
+
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: false,
+        reason: "send_failed"
+      } as never);
+      result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "failed",
+        reason: "send_failed"
+      });
+
+      vi.mocked(deliverWhatsApp).mockRejectedValue(new Error("helper exploded"));
+      result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "failed",
+        reason: "helper exploded"
+      });
+
+      vi.mocked(deliverWhatsApp).mockRejectedValue("plain string failure");
+      result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "failed",
+        reason: "send_failed"
+      });
+    });
   });
 });

@@ -28,6 +28,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   email_extract: "Read details from an email",
   doc_extract: "Read details from a document (PDF)",
   send_sms: "Send a text",
+  send_whatsapp: "Send a WhatsApp message",
   send_email: "Send an email",
   approval_gate: "Ask me to approve first",
   notify_owner: "Notify me",
@@ -64,6 +65,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   doc_extract:
     "Reads the details you ask for (like a premium, a renewal date, or a policy number) out of the document attached to the triggering email - PDFs included. Optionally files the document into your Documents - and can file it as a record ON the customer's contact, with the extracted fields and renewal date attached, so renewal reminders fire automatically. If the email has no document, the step is skipped. Uses your monthly AI budget.",
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
+  send_whatsapp:
+    "Sends a WhatsApp message from your connected WhatsApp Business number. If the person hasn't messaged you in the last 24 hours, an approved template carries the message (Meta bills per template message).",
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",
   notify_owner: "Sends you a quick update without pausing the workflow.",

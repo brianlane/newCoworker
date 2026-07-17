@@ -46,13 +46,17 @@ describe("filterSidebarItemsForBusiness", () => {
       metaConnected: false
     });
     expect(without.some((i) => i.key === "messenger")).toBe(false);
-    // Nothing else is affected.
-    expect(without).toHaveLength(SIDEBAR_ITEMS.length - 1);
+    // The WhatsApp item is likewise conditional (dropped when its flag is
+    // absent/false); nothing else is affected.
+    expect(without.some((i) => i.key === "whatsapp")).toBe(false);
+    expect(without).toHaveLength(SIDEBAR_ITEMS.length - 2);
 
     const withMeta = filterSidebarItemsForBusiness(SIDEBAR_ITEMS, {
-      metaConnected: true
+      metaConnected: true,
+      whatsappConnected: true
     });
     expect(withMeta.some((i) => i.key === "messenger")).toBe(true);
+    expect(withMeta.some((i) => i.key === "whatsapp")).toBe(true);
     expect(withMeta).toHaveLength(SIDEBAR_ITEMS.length);
   });
 
