@@ -280,14 +280,17 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
   // "Undeliverable" from postmaster/Microsoft Outlook; Gmail:
   // mailer-daemon) back in HER inbox within minutes. After a 20-minute
   // grace, an email_extract reads her mailbox (same connection the send
-  // used) and classifies whether a delivery failure came back. Tying the
-  // match to THIS send, not just this address: the notice must name the
-  // lead's address AND quote the follow-up's subject (both Gmail and
-  // Outlook NDRs include the original subject), and the lookback (30 min)
-  // barely predates the send (sleep 20 + worker-tick slack) — so a stale
-  // NDR for the same address can't masquerade as this send's bounce. No
-  // sender filter: bounce senders differ per provider, and a non-bounce
-  // match (e.g. the lead replying) classifies as "none".
+  // used) and classifies whether a delivery failure came back. The match is
+  // tied to THIS flow's send, not just this address: the notice must name
+  // the lead's address AND quote the follow-up's subject (both Gmail and
+  // Outlook NDRs include the original subject). The 4h lookback absorbs
+  // delayed worker resumes (quiet-hours/window deferrals) without much
+  // staleness risk — an older same-address, same-subject NDR still means
+  // this address bounces this flow's mail.
+  //
+  // ORDER MATTERS: Amy's primary report goes out BEFORE this check, so a
+  // mailbox read failure here can only ever lose the bounce ADDENDUM —
+  // never her bad-phone report.
   const bounceWait: Step = { id: "bp_bounce_wait", type: "sleep", minutes: 20 };
   const bounceCheck: Step = {
     id: "bp_bounce_check",
@@ -296,7 +299,7 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     // Every flow's lead follow-ups share one subject (RE's three variants
     // included), so the subject pins the NDR to this flow's send.
     matchTemplates: ["{{vars.lead_email}}", cfg.leadEmails[0].subject],
-    lookbackMinutes: 30,
+    lookbackMinutes: 240,
     fields: [
       {
         name: "lead_email_bounced",
@@ -308,43 +311,45 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
       }
     ]
   };
-  // Two final reports, split on the bounce check (complementary when-guards
-  // on the same var — a clean miss leaves lead_email_bounced unset, which
-  // reads as not-bounced). Both run AFTER the lead email steps, so
-  // actions_taken already records whether each send actually went out
-  // ("emailed x@y" vs "skipped email ... (no valid address)") — the report
-  // never overstates outreach that a stricter send-time validation or an
-  // unmatched lead_type skipped.
-  const amyEmailBounced: Step = {
-    id: "bp_email_amy_bounced",
-    type: "send_email",
-    to: AMY_EMAIL,
-    when: { var: "lead_email_bounced", equals: "bounced" },
-    subject: `BAD PHONE NUMBER + EMAIL BOUNCED — ${cfg.leadLabel}, ${cfg.flowName}`,
-    body:
-      amyReportIntro +
-      "The follow-up email asking for their best phone number BOUNCED — a " +
-      "delivery-failure notice for {{vars.lead_email}} came back to " +
-      `${AMY_EMAIL}, so the EMAIL on file is bad too. There is currently no ` +
-      "working way to reach this lead; if they resurface through any channel, " +
-      "please capture their best phone number and email.\n\n" +
-      "Everything this flow did: {{vars.actions_taken}}"
-  };
+  // Primary report: runs immediately AFTER the lead email steps (so
+  // actions_taken already records whether each send actually went out —
+  // "emailed x@y" vs "skipped email ... (no valid address)" — and the
+  // report never overstates outreach), and BEFORE the bounce check so a
+  // mailbox-read failure can never block it.
   const amyEmailEmailed: Step = {
     id: "bp_email_amy",
     type: "send_email",
     to: AMY_EMAIL,
-    when: { var: "lead_email_bounced", notEquals: "bounced" },
     subject: `BAD PHONE NUMBER — ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
       amyReportIntro +
       "The lead has an email on file, so a follow-up asking for their best " +
       `phone number was attempted from ${AMY_EMAIL}. The outcome line below ` +
-      'shows exactly what went out: "emailed ..." means it was SENT and no ' +
-      "delivery-failure (bounce) notice came back within 20 minutes, so the " +
-      'address looks deliverable; "skipped email ..." (or no "emailed" line ' +
-      "at all) means NOTHING was sent — the address was unusable, so please " +
-      "get their best number if they reach out another way.\n\n" +
+      'shows exactly what went out: "emailed ..." means it was SENT; ' +
+      '"skipped email ..." (or no "emailed" line at all) means NOTHING was ' +
+      "sent — the address was unusable, so please get their best number if " +
+      "they reach out another way.\n\n" +
+      "I'm also watching for a bounce: if a delivery-failure notice comes " +
+      "back for this follow-up, you'll get a separate EMAIL BOUNCED alert " +
+      "within about half an hour. No alert = no bounce seen.\n\n" +
+      "Everything this flow did: {{vars.actions_taken}}"
+  };
+  // Additive bounce alert: only when the check classified a delivery
+  // failure (a clean miss leaves lead_email_bounced unset → no alert).
+  const amyEmailBounced: Step = {
+    id: "bp_email_amy_bounced",
+    type: "send_email",
+    to: AMY_EMAIL,
+    when: { var: "lead_email_bounced", equals: "bounced" },
+    subject: `EMAIL BOUNCED TOO — ${cfg.leadLabel}, ${cfg.flowName}`,
+    body:
+      amyReportIntro +
+      "UPDATE to the bad-phone report you just received: the follow-up email " +
+      "asking for their best phone number BOUNCED — a delivery-failure notice " +
+      `for {{vars.lead_email}} came back to ${AMY_EMAIL}, so the EMAIL on ` +
+      "file is bad too. There is currently no working way to reach this lead; " +
+      "if they resurface through any channel, please capture their best phone " +
+      "number and email.\n\n" +
       "Everything this flow did: {{vars.actions_taken}}"
   };
   const amyEmailNoEmail: Step = {
@@ -427,16 +432,16 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
                 {
                   id: "bp_has_email",
                   label: "Lead has an email",
-                  // Lead emails FIRST, then the bounce check, then Amy's
-                  // report — so the report can state both what went out AND
-                  // whether it bounced.
+                  // Lead emails, then Amy's primary report (immediate, never
+                  // blocked by the bounce machinery), then the bounce check
+                  // with its additive EMAIL BOUNCED alert.
                   condition: { var: "lead_email", contains: "@" },
                   steps: [
                     ...leadEmails,
+                    amyEmailEmailed,
                     bounceWait,
                     bounceCheck,
-                    amyEmailBounced,
-                    amyEmailEmailed
+                    amyEmailBounced
                   ]
                 }
               ],

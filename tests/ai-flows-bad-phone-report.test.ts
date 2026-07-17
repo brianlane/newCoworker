@@ -186,28 +186,39 @@ describe("buildBadPhoneSteps", () => {
         });
         expect(e.body).toContain("best phone number");
       }
+      // Order (Bugbot Mediums on PR #697/#701): lead emails → Amy's PRIMARY
+      // report (immediate; actions_taken already records sent-vs-skipped and
+      // a later mailbox-read failure can never block it) → sleep → bounce
+      // check → additive EMAIL BOUNCED alert.
+      const [sent, wait, check, bounced] = armSteps.slice(leadEmails.length);
+      expect(sent).toMatchObject({ type: "send_email", to: "amy@amylaidlaw.com" });
+      expect(sent.when).toBeUndefined(); // unconditional — never blocked
+      expect(sent.body).toContain("{{vars.agent_report}}");
+      expect(sent.body).toContain("{{vars.claimed_agent}}");
+      expect(sent.body).toContain("{{vars.actions_taken}}");
+      expect(sent.body).toContain("was attempted");
+      // Deliverability is never asserted up front: sent-vs-skipped comes from
+      // the outcome line, and bounces arrive as a separate later alert.
+      expect(sent.body).toContain('"emailed ..." means it was SENT');
+      expect(sent.body).toContain("NOTHING was sent");
+      expect(sent.body).toContain("separate EMAIL BOUNCED alert");
+      expect(sent.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
       // Bounce check: 20-minute grace, then read Amy's mailbox (the SAME
       // connection the send used — her Gmail/Outlook, which Resend can't
-      // see) for a delivery-failure notice. Pinned to THIS send: the notice
-      // must name the lead's address AND quote the follow-up's subject, and
-      // the 30-min lookback barely predates the send — so a stale NDR for
-      // the same address can't masquerade as this one (Bugbot on PR #701).
-      const [wait, check] = armSteps.slice(leadEmails.length);
+      // see). Pinned to THIS flow's send: the notice must name the lead's
+      // address AND quote the follow-up's subject; the 4h lookback absorbs
+      // delayed worker resumes.
       expect(wait).toMatchObject({ type: "sleep", minutes: 20 });
       expect(check).toMatchObject({
         type: "email_extract",
         connectionId: "9ddd5344-14f2-46df-a89d-dddc2d50e944",
         matchTemplates: ["{{vars.lead_email}}", cfg.leadEmails[0].subject],
-        lookbackMinutes: 30
+        lookbackMinutes: 240
       });
       // Every flow's lead-email variants share ONE subject, so the subject
       // match never depends on which variant sent.
       expect(new Set(cfg.leadEmails.map((e) => e.subject)).size).toBe(1);
       expect(check.fields[0].name).toBe("lead_email_bounced");
-      // Amy's reports come LAST so {{vars.actions_taken}} already records
-      // whether each lead email actually sent or was skipped (Bugbot Medium
-      // on PR #697), split on the bounce result with complementary guards.
-      const [bounced, sent] = armSteps.slice(-2);
       expect(bounced).toMatchObject({
         type: "send_email",
         to: "amy@amylaidlaw.com",
@@ -215,21 +226,6 @@ describe("buildBadPhoneSteps", () => {
       });
       expect(bounced.subject).toContain("EMAIL BOUNCED");
       expect(bounced.body).toContain("the EMAIL on file is bad too");
-      expect(sent).toMatchObject({
-        type: "send_email",
-        to: "amy@amylaidlaw.com",
-        when: { var: "lead_email_bounced", notEquals: "bounced" }
-      });
-      expect(sent.body).toContain("{{vars.agent_report}}");
-      expect(sent.body).toContain("{{vars.claimed_agent}}");
-      expect(sent.body).toContain("{{vars.actions_taken}}");
-      expect(sent.body).toContain("was attempted");
-      // Deliverability is claimed only for an actual "emailed ..." outcome —
-      // a skipped/unmatched send must not read as "address looks deliverable"
-      // (Bugbot Medium on PR #701).
-      expect(sent.body).toContain('"emailed ..." means it was SENT');
-      expect(sent.body).toContain("NOTHING was sent");
-      expect(sent.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
       expect(bounced.fromConnectionId).toBeUndefined();
     }
     // ReferralExchange sends the lead-type-matched intro copy.
