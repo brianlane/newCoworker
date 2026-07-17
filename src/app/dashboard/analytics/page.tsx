@@ -119,7 +119,7 @@ export default async function DashboardAnalyticsPage(props: {
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
 
   const db = await createSupabaseServiceClient();
-  const ctx = await resolveActiveBusinessContext(user, db);
+  const ctx = await resolveActiveBusinessContext(user);
   const activeBusinessId = ctx.businessId;
   // Team performance is an OWNER read (per-teammate stats are personnel
   // data); manage_billing is the owner-only capability marker.

@@ -75,27 +75,6 @@ export default async function DashboardMessagesPage() {
     );
   }
 
-  const conversations = await listConversationsForBusiness(business.id, { limit: 50 });
-  const contactNames = await resolveContactNames(
-    business.id,
-    conversations.map((c) => c.customerE164)
-  ).catch(() => new Map<string, ContactName>());
-  // RCS-first tenants (Standard+, approved agent, concrete from-number for
-  // the SMS fallback — the same precondition sendTelnyxSms checks) get a
-  // softened emoji hint in the composer: the rich message delivers as typed,
-  // only the SMS fallback copy is capped.
-  const rcsEnabled = await rcsChannelActiveForBusiness(db, business.id);
-
-  // Replay targets ("Replay missed texts"): enabled SMS-triggered flows that
-  // file the lead before any outreach — the same gate as the replay route,
-  // mirroring the Emails page. Best-effort: no flows just hides the panel.
-  const replayFlows = (await listAiFlows(business.id).catch(() => []))
-    .filter(
-      (f) =>
-        f.enabled && flowHasSmsTrigger(f.definition) && flowUpsertsBeforeOutreach(f.definition)
-    )
-    .map((f) => ({ id: f.id, name: f.name }));
-
   // Scheduled + template SMS (Standard+ perk): fetch the composer picker data
   // and the tools panel contents for entitled tenants. Pending scheduled rows
   // are ALWAYS fetched — after a tier downgrade an owner must still see and
@@ -104,55 +83,88 @@ export default async function DashboardMessagesPage() {
   const smsToolsEnabled = smsToolsAllowedForTier(
     (business as { tier?: string | null }).tier
   );
-  let templates: SmsTemplateOption[] = [];
-  let scheduled: ScheduledSmsItem[] = [];
-  {
-    // Pending rows soonest-first (so an owner with a deep queue always sees —
-    // and can cancel — what dispatches next), plus a short tail of recent
-    // dispatched/canceled rows for context (entitled tenants only).
-    const [{ data: templateRows }, { data: pendingRows }, { data: historyRows }] =
-      await Promise.all([
-        smsToolsEnabled
-          ? db
-              .from("sms_templates")
-              .select("id, name, body")
-              .eq("business_id", business.id)
-              .order("name", { ascending: true })
-          : Promise.resolve({ data: [] }),
-        db
+
+  // Every read below keys only on the business id, so one parallel batch
+  // replaces what used to be ~5 sequential round-trips:
+  // - conversations: the thread list itself.
+  // - rcsEnabled: RCS-first tenants (Standard+, approved agent, concrete
+  //   from-number for the SMS fallback — the same precondition sendTelnyxSms
+  //   checks) get a softened emoji hint in the composer: the rich message
+  //   delivers as typed, only the SMS fallback copy is capped.
+  // - rawFlows: replay targets ("Replay missed texts") — best-effort: no
+  //   flows just hides the panel.
+  // - templates / pending / history: pending rows soonest-first (so an owner
+  //   with a deep queue always sees — and can cancel — what dispatches
+  //   next), plus a short tail of recent dispatched/canceled rows for
+  //   context (entitled tenants only).
+  const [
+    conversations,
+    rcsEnabled,
+    rawFlows,
+    { data: templateRows },
+    { data: pendingRows },
+    { data: historyRows }
+  ] = await Promise.all([
+    listConversationsForBusiness(business.id, { limit: 50 }),
+    rcsChannelActiveForBusiness(db, business.id),
+    listAiFlows(business.id).catch(() => []),
+    smsToolsEnabled
+      ? db
+          .from("sms_templates")
+          .select("id, name, body")
+          .eq("business_id", business.id)
+          .order("name", { ascending: true })
+      : Promise.resolve({ data: [] }),
+    db
+      .from("scheduled_sms")
+      .select("id, to_e164, body, send_at, status, error")
+      .eq("business_id", business.id)
+      .eq("status", "pending")
+      .order("send_at", { ascending: true })
+      .limit(50),
+    smsToolsEnabled
+      ? db
           .from("scheduled_sms")
           .select("id, to_e164, body, send_at, status, error")
           .eq("business_id", business.id)
-          .eq("status", "pending")
-          .order("send_at", { ascending: true })
-          .limit(50),
-        smsToolsEnabled
-          ? db
-              .from("scheduled_sms")
-              .select("id, to_e164, body, send_at, status, error")
-              .eq("business_id", business.id)
-              .neq("status", "pending")
-              .order("send_at", { ascending: false })
-              .limit(5)
-          : Promise.resolve({ data: [] })
-      ]);
-    templates = (templateRows ?? []) as SmsTemplateOption[];
-    scheduled = ([...(pendingRows ?? []), ...(historyRows ?? [])] as Array<{
+          .neq("status", "pending")
+          .order("send_at", { ascending: false })
+          .limit(5)
+      : Promise.resolve({ data: [] })
+  ]);
+
+  const contactNames = await resolveContactNames(
+    business.id,
+    conversations.map((c) => c.customerE164)
+  ).catch(() => new Map<string, ContactName>());
+
+  // Enabled SMS-triggered flows that file the lead before any outreach — the
+  // same gate as the replay route, mirroring the Emails page.
+  const replayFlows = rawFlows
+    .filter(
+      (f) =>
+        f.enabled && flowHasSmsTrigger(f.definition) && flowUpsertsBeforeOutreach(f.definition)
+    )
+    .map((f) => ({ id: f.id, name: f.name }));
+
+  const templates = (templateRows ?? []) as SmsTemplateOption[];
+  const scheduled: ScheduledSmsItem[] = (
+    [...(pendingRows ?? []), ...(historyRows ?? [])] as Array<{
       id: string;
       to_e164: string;
       body: string;
       send_at: string;
       status: string;
       error: string | null;
-    }>).map((s) => ({
-      id: s.id,
-      toE164: s.to_e164,
-      body: s.body,
-      sendAt: s.send_at,
-      status: s.status,
-      error: s.error
-    }));
-  }
+    }>
+  ).map((s) => ({
+    id: s.id,
+    toE164: s.to_e164,
+    body: s.body,
+    sendAt: s.send_at,
+    status: s.status,
+    error: s.error
+  }));
 
   const rows: MessageListRow[] = conversations.map((c) => {
     const contact = contactNames.get(c.customerE164);

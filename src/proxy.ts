@@ -232,11 +232,33 @@ export async function proxy(request: NextRequest) {
   response.headers.set("X-RateLimit-Remaining", String(rlResult.remaining));
   response.headers.set("X-RateLimit-Reset", String(rlResult.reset));
 
+  // Only routes that actually consume the session need the Supabase work
+  // below (client construction + getClaims + cookie refresh). Public
+  // marketing pages (/, /pricing, /features, /faq, …) never read the
+  // session server-side, so paying the auth cost there on EVERY anonymous
+  // page view was pure TTFB overhead. The refresh must stay on:
+  //   - /dashboard, /admin: the auth gates below consume `user`.
+  //   - /api: cookie-authed route handlers rely on the middleware having
+  //     refreshed a near-expiry session (the canonical @supabase/ssr shape).
+  //   - /oauth (consent) and /contact: server components that call
+  //     getAuthUser() themselves. An RSC cannot persist a rotated refresh
+  //     token (cookies are read-only there), so skipping the middleware
+  //     refresh on these would burn refresh-token rotations and eventually
+  //     trip reuse detection, logging the user out.
+  // Login/signup/onboard pages authenticate via the browser client (which
+  // manages its own cookies) and need nothing from the middleware.
+  const consumesSession =
+    pathname.startsWith("/dashboard") ||
+    pathname.startsWith("/admin") ||
+    pathname.startsWith("/api") ||
+    pathname.startsWith("/oauth") ||
+    pathname.startsWith("/contact");
+
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
   const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.trim();
   let user: AuthUser | null = null;
 
-  if (supabaseUrl && supabaseAnonKey) {
+  if (consumesSession && supabaseUrl && supabaseAnonKey) {
     const supabase = createServerClient(supabaseUrl, supabaseAnonKey, {
       cookies: {
         getAll() {
