@@ -333,12 +333,12 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
     body:
       amyReportIntro +
       "The lead has an email on file, so a follow-up asking for their best " +
-      `phone number was attempted from ${AMY_EMAIL}, and no delivery-failure ` +
-      "(bounce) notice came back within 20 minutes — the email address looks " +
-      "deliverable. The outcome line below shows exactly what went out — look " +
-      'for "emailed ..." (sent) vs "skipped email ..." (unusable address; ' +
-      "nothing was sent, so please get their best number if they reach out " +
-      "another way).\n\n" +
+      `phone number was attempted from ${AMY_EMAIL}. The outcome line below ` +
+      'shows exactly what went out: "emailed ..." means it was SENT and no ' +
+      "delivery-failure (bounce) notice came back within 20 minutes, so the " +
+      'address looks deliverable; "skipped email ..." (or no "emailed" line ' +
+      "at all) means NOTHING was sent — the address was unusable, so please " +
+      "get their best number if they reach out another way.\n\n" +
       "Everything this flow did: {{vars.actions_taken}}"
   };
   const amyEmailNoEmail: Step = {

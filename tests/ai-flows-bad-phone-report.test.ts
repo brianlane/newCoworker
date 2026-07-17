@@ -217,7 +217,11 @@ describe("buildBadPhoneSteps", () => {
       expect(sent.body).toContain("{{vars.claimed_agent}}");
       expect(sent.body).toContain("{{vars.actions_taken}}");
       expect(sent.body).toContain("was attempted");
-      expect(sent.body).toContain("no delivery-failure");
+      // Deliverability is claimed only for an actual "emailed ..." outcome —
+      // a skipped/unmatched send must not read as "address looks deliverable"
+      // (Bugbot Medium on PR #701).
+      expect(sent.body).toContain('"emailed ..." means it was SENT');
+      expect(sent.body).toContain("NOTHING was sent");
       expect(sent.fromConnectionId).toBeUndefined(); // coworker mailbox, like the flows' other Amy notices
       expect(bounced.fromConnectionId).toBeUndefined();
     }
