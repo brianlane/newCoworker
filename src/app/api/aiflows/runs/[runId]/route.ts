@@ -30,7 +30,9 @@ export async function GET(request: Request, { params }: Ctx) {
     if (!run) return errorResponse("NOT_FOUND", "Run not found");
     const [steps, links] = await Promise.all([
       listAiFlowRunSteps(businessId, runId),
-      listSmsLinksForRun(businessId, runId, { includeClicks: true })
+      // Tracked links are supplementary: a links/clicks read error must not
+      // take down the step timeline the page is actually for.
+      listSmsLinksForRun(businessId, runId, { includeClicks: true }).catch(() => [])
     ]);
     return successResponse({ run, steps, links });
   } catch (err) {
