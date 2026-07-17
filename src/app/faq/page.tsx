@@ -14,6 +14,7 @@ import { concurrentCallsLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
+import { JsonLd } from "@/components/marketing/JsonLd";
 
 export const metadata: Metadata = {
   title: "FAQ",
@@ -285,10 +286,7 @@ export default function FaqPage() {
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <JsonLd data={jsonLd} />
       <MarketingNav />
 
       <PageHero

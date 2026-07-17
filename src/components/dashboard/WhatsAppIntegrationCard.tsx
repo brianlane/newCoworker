@@ -183,7 +183,7 @@ export function WhatsAppIntegrationCard({
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
-  }, [configured, connection, finishConnect]);
+  }, [configured, connection, finishConnect, clearConnectTimeout]);
 
   function launchSignup() {
     if (!window.FB) return;

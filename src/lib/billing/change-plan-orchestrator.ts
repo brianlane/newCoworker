@@ -89,7 +89,7 @@ import {
   type CancelReason
 } from "@/lib/db/subscriptions";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
-import { getCommitmentMonths, type BillingPeriod } from "@/lib/plans/tier";
+import { getCommitmentMonths, renewalDateAfterMonths, type BillingPeriod } from "@/lib/plans/tier";
 import {
   decrementLifetimeSubscriptionCount,
   incrementLifetimeSubscriptionCount,
@@ -598,9 +598,7 @@ export async function runChangePlanFromCheckout(
   // ── Step 5: mark NEW Stripe sub active + wire commitment schedule.
   const now = new Date();
   const commitmentMonths = getCommitmentMonths(billingPeriod);
-  const renewalAt = new Date(now);
-  renewalAt.setDate(1);
-  renewalAt.setMonth(renewalAt.getMonth() + commitmentMonths);
+  const renewalAt = renewalDateAfterMonths(now, commitmentMonths);
 
   let newStripeSub: Stripe.Subscription | null = null;
   if (stripeSubscriptionId) {
@@ -1091,9 +1089,7 @@ export async function runResubscribeFromCheckout(
 
   const now = new Date();
   const commitmentMonths = getCommitmentMonths(billingPeriod);
-  const renewalAt = new Date(now);
-  renewalAt.setDate(1);
-  renewalAt.setMonth(renewalAt.getMonth() + commitmentMonths);
+  const renewalAt = renewalDateAfterMonths(now, commitmentMonths);
 
   let newStripeSub: Stripe.Subscription | null = null;
   if (stripeSubscriptionId) {

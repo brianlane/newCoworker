@@ -17,6 +17,7 @@ import {
   createZoomMeetingForBooking,
   deleteZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
+import { graphTimeIso } from "@/lib/ai-flows/calendar-poll";
 import { logger } from "@/lib/logger";
 
 /**
@@ -347,7 +348,10 @@ export async function findCalendarSlots(
       const items = data?.value?.[0]?.scheduleItems ?? [];
       busy = items
         .filter((i) => i.start?.dateTime && i.end?.dateTime)
-        .map((i) => ({ start: new Date(i.start!.dateTime), end: new Date(i.end!.dateTime) }));
+        .map((i) => ({
+          start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
+          end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
+        }));
 
       // getSchedule only covers the default calendar; pull the shared
       // NewCoworker calendar's events separately and merge them in.
@@ -371,7 +375,10 @@ export async function findCalendarSlots(
         busy = busy.concat(
           viewItems
             .filter((i) => i.start?.dateTime && i.end?.dateTime)
-            .map((i) => ({ start: new Date(i.start!.dateTime), end: new Date(i.end!.dateTime) }))
+            .map((i) => ({
+              start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
+              end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
+            }))
         );
       }
     }

@@ -232,8 +232,8 @@ export async function deliverWhatsApp(
     // whitespace-collapse + length cap the Cloud API client applies to
     // the body parameters.
     transcriptText = stock.bodyText
-      .replace("{{1}}", sanitizeWhatsAppTemplateParam(businessName))
-      .replace("{{2}}", sanitizeWhatsAppTemplateParam(text));
+      .replace("{{1}}", () => sanitizeWhatsAppTemplateParam(businessName))
+      .replace("{{2}}", () => sanitizeWhatsAppTemplateParam(text));
     try {
       const sent = await sendTemplate(connection.phone_number_id, connection.accessToken, waId, {
         name: templateName,

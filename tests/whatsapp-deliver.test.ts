@@ -200,6 +200,19 @@ describe("deliverWhatsApp", () => {
     expect(appended.content).toContain("Following up on your quote.");
   });
 
+  it("does not interpret $ sequences in template transcript interpolation", async () => {
+    const deps = makeDeps({
+      fetchBusinessName: vi.fn(async () => "Tom & Jerry"),
+      getConversation: vi.fn(async () =>
+        conversation({ last_user_message_at: "2026-07-10T00:00:00Z" })
+      )
+    });
+    await deliverWhatsApp({ ...INPUT, text: "Price is $& today" }, deps);
+    const appended = vi.mocked(deps.appendMessage).mock.calls[0][0];
+    expect(appended.content).toContain("Tom & Jerry");
+    expect(appended.content).toContain("Price is $& today");
+  });
+
   it("uses the owner-alert template for the owner audience (no conversation at all)", async () => {
     const deps = makeDeps({
       getConversation: vi.fn(async () => null)

@@ -18,7 +18,7 @@ import {
 import { logger } from "@/lib/logger";
 import { z } from "zod";
 import { randomUUID } from "crypto";
-import { getCommitmentMonths } from "@/lib/plans/tier";
+import { getCommitmentMonths, renewalDateAfterMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import {
   CANADA_MESSAGING_FEE_MONTHLY_CENTS,
@@ -307,12 +307,7 @@ export async function POST(request: Request) {
       timezone: feeBusiness?.timezone ?? body.timezone ?? null
     });
     const now = new Date();
-    const originalDay = now.getDate();
-    const renewalAt = new Date(now);
-    renewalAt.setDate(1);
-    renewalAt.setMonth(renewalAt.getMonth() + commitmentMonths);
-    const daysInTargetMonth = new Date(renewalAt.getFullYear(), renewalAt.getMonth() + 1, 0).getDate();
-    renewalAt.setDate(Math.min(originalDay, daysInTargetMonth));
+    const renewalAt = renewalDateAfterMonths(now, commitmentMonths);
 
     await createSubscription({
       id: randomUUID(),
