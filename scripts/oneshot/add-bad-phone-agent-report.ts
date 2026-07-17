@@ -11,9 +11,10 @@
  *
  *   - bad_phone_number → email Amy the full lead info + the report, and email
  *     the lead (Amy's existing intro copy, from her connected mailbox) asking
- *     for their best phone number. A lead whose email extracted as "none" is
- *     skipped by the send_email invalid-recipient guard — Amy's email still
- *     sends.
+ *     for their best phone number. A nested branch on lead_email splits Amy's
+ *     report: with an address on file it says the lead HAS been emailed; a
+ *     lead with no email ("none"/empty) gets no outreach and Amy's report
+ *     explicitly says NO follow-up email was sent.
  *   - anything else (incl. the "unclear" fallback) → forward the teammate's
  *     note to Amy via notify_owner, so no report disappears silently.
  *
@@ -27,7 +28,8 @@
  * preserved, and re-validates each modified definition through the SAME
  * parseAiFlowDefinition the dashboard uses before writing. Dry-run by
  * default; prints the before/after definition of each changed flow for
- * rollback. Idempotent (skips flows that already have bp_* steps).
+ * rollback. Idempotent, and re-running after a copy change UPGRADES the
+ * bp_* steps in place (they are rebuilt, never duplicated).
  *
  * Usage:
  *   set -a && source .env && set +a
@@ -260,20 +262,46 @@ export const FLOW_CONFIGS: FlowConfig[] = [
  * are themselves gated off no_reply, so nothing fires for those runs.
  */
 export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
-  const amyEmail: Step = {
+  // Two report variants for Amy, split by a nested branch on whether the
+  // lead actually has an email (contains "@" — extractions store the literal
+  // "none", or "", when there is no address): the has-email arm states the
+  // lead HAS been emailed for a better number; the else arm states NO
+  // follow-up email could be sent, so Amy knows the report email is the only
+  // outreach that happened.
+  const amyReportIntro =
+    `{{vars.claimed_agent}} tried calling the ${cfg.flowName} lead and reported the ` +
+    "phone number we have is bad.\n" +
+    'Their exact words: "{{vars.agent_report}}"\n\n' +
+    `Lead info:\n${cfg.leadInfoLines}\n` +
+    `Lead source: ${cfg.sourceLabel}\n\n`;
+  // Runs AFTER the lead email steps in its arm, so actions_taken already
+  // records whether each send actually went out ("emailed x@y" vs "skipped
+  // email ... (no valid address)") — the report never overstates outreach
+  // that a stricter send-time validation or an unmatched lead_type skipped.
+  const amyEmailEmailed: Step = {
     id: "bp_email_amy",
     type: "send_email",
     to: AMY_EMAIL,
     subject: `BAD PHONE NUMBER — ${cfg.leadLabel}, ${cfg.flowName}`,
     body:
-      `{{vars.claimed_agent}} tried calling the ${cfg.flowName} lead and reported the ` +
-      "phone number we have is bad.\n" +
-      'Their exact words: "{{vars.agent_report}}"\n\n' +
-      `Lead info:\n${cfg.leadInfoLines}\n` +
-      `Lead source: ${cfg.sourceLabel}\n\n` +
-      "If the lead has an email on file, they've been emailed from " +
-      `${AMY_EMAIL} asking for their best phone number — please ask the seller ` +
-      "for their best phone number if they reach out another way."
+      amyReportIntro +
+      "The lead has an email on file, so a follow-up asking for their best " +
+      `phone number was attempted from ${AMY_EMAIL}. The outcome line below ` +
+      'shows exactly what went out — look for "emailed ..." (sent) vs ' +
+      '"skipped email ..." (unusable address; nothing was sent, so please ' +
+      "get their best number if they reach out another way).\n\n" +
+      "Everything this flow did: {{vars.actions_taken}}"
+  };
+  const amyEmailNoEmail: Step = {
+    id: "bp_email_amy_no_email",
+    type: "send_email",
+    to: AMY_EMAIL,
+    subject: `BAD PHONE NUMBER, NO EMAIL — ${cfg.leadLabel}, ${cfg.flowName}`,
+    body:
+      amyReportIntro +
+      "This lead has NO email on file, so NO follow-up email was sent asking " +
+      "for a better number — this report is the only outreach. If the seller " +
+      "reaches out another way, please ask them for their best phone number."
   };
   const leadEmails: Step[] = cfg.leadEmails.map((e) => ({
     id: e.id,
@@ -335,7 +363,23 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
           id: "bp_bad_phone",
           label: "Bad phone number reported",
           condition: { var: "agent_report_class", equals: "bad_phone_number" },
-          steps: [amyEmail, ...leadEmails]
+          steps: [
+            {
+              id: "bp_email_branch",
+              type: "branch",
+              question: "Does this lead have an email on file?",
+              branches: [
+                {
+                  id: "bp_has_email",
+                  label: "Lead has an email",
+                  // Lead emails FIRST, Amy's report LAST — see amyEmailEmailed.
+                  condition: { var: "lead_email", contains: "@" },
+                  steps: [...leadEmails, amyEmailEmailed]
+                }
+              ],
+              else: [amyEmailNoEmail]
+            }
+          ]
         }
       ],
       // other_update AND the classifier's "unclear" fallback: forward the
@@ -357,13 +401,17 @@ export function buildBadPhoneSteps(cfg: FlowConfig): Step[] {
 }
 
 /**
- * Append the bad-phone-report steps to a definition. Idempotent: returns
- * false (no change) when any bp_* step already exists.
+ * Install (or upgrade in place) the bad-phone-report steps on a definition:
+ * any existing bp_* steps from an earlier version of this script are
+ * replaced with the current build, so copy fixes re-apply without a manual
+ * strip. Idempotent: returns false when the definition already matches.
  */
 export function addBadPhoneAgentReport(def: Definition, cfg: FlowConfig): boolean {
   const steps = def.steps ?? [];
-  if (steps.some((s) => typeof s.id === "string" && s.id.startsWith("bp_"))) return false;
-  def.steps = [...steps, ...buildBadPhoneSteps(cfg)];
+  const kept = steps.filter((s) => !(typeof s.id === "string" && s.id.startsWith("bp_")));
+  const next = [...kept, ...buildBadPhoneSteps(cfg)];
+  if (JSON.stringify(steps) === JSON.stringify(next)) return false;
+  def.steps = next;
   return true;
 }
 
