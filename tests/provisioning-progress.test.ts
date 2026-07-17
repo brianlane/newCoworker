@@ -3,6 +3,7 @@ import {
   recordProvisioningProgress,
   getLatestProvisioningStatus,
   getProvisioningLogs,
+  hasPriorSuccessfulProvision,
   shouldShowProvisioningProgress,
   shouldMountProvisioningWidget,
   isBusinessRunningStatus
@@ -454,5 +455,80 @@ describe("provisioning/progress", () => {
     await expect(getProvisioningLogs("00000000-0000-4000-8000-000000000001")).rejects.toThrow(
       "getProvisioningLogs"
     );
+  });
+
+  it("hasPriorSuccessfulProvision is true when a complete success row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({
+        data: [
+          {
+            log_payload: { phase: "deploy_failed", percent: 95, message: "x", source: "orchestrator" },
+            status: "error"
+          },
+          {
+            log_payload: { phase: "complete", percent: 100, message: "done", source: "orchestrator" },
+            status: "success"
+          }
+        ],
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(true);
+  });
+
+  it("hasPriorSuccessfulProvision is false when no complete success row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({
+        data: [{ log_payload: { phase: "remote_deploy_starting", percent: 40 }, status: "thinking" }],
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(false);
+  });
+
+  it("hasPriorSuccessfulProvision is false when data is null without error", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(false);
+  });
+
+  it("hasPriorSuccessfulProvision throws on db error", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorSuccessfulProvision("00000000-0000-4000-8000-000000000001")
+    ).rejects.toThrow("hasPriorSuccessfulProvision");
   });
 });

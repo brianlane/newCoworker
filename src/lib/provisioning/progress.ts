@@ -154,6 +154,25 @@ export async function getLatestProvisioningStatus(
   };
 }
 
+/** True when this business already finished a successful first-time provision. */
+export async function hasPriorSuccessfulProvision(businessId: string): Promise<boolean> {
+  const db = await createSupabaseServiceClient();
+  const { data, error } = await db
+    .from("coworker_logs")
+    .select("log_payload, status")
+    .eq("business_id", businessId)
+    .eq("task_type", "provisioning")
+    .eq("status", "success")
+    .order("created_at", { ascending: false })
+    .limit(5);
+
+  if (error) throw new Error(`hasPriorSuccessfulProvision: ${error.message}`);
+  return (data ?? []).some((row) => {
+    const p = row.log_payload as ProvisioningLogPayload | null;
+    return p?.phase === "complete";
+  });
+}
+
 /** Admin: recent provisioning/deploy log rows (newest first). */
 export async function getProvisioningLogs(businessId: string, limit = 50): Promise<LogRow[]> {
   const db = await createSupabaseServiceClient();

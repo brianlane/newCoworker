@@ -69,7 +69,7 @@ import { upsertBusinessConfig, getBusinessConfig } from "@/lib/db/configs";
 import { logger } from "@/lib/logger";
 import { readFileSync } from "fs";
 import { join } from "path";
-import { recordProvisioningProgress } from "@/lib/provisioning/progress";
+import { recordProvisioningProgress, hasPriorSuccessfulProvision } from "@/lib/provisioning/progress";
 import {
   cloudflareTunnelProvisionerFromEnv,
   type CloudflareTunnelProvisioner
@@ -963,11 +963,21 @@ async function runOrchestrator(
   // enterprise-only; the gate reads the REAL tier from the row (narrowTier
   // collapses enterprise onto the standard box profile).
   const businessRow = await getBusiness(businessId);
-  // First-time signup only: brand-new row still offline with no VM assigned yet.
-  // Reprovision/recovery runs (high_load, wiped, or offline with an existing
-  // hostinger_vps_id) must not fire duplicate "new signup live" ops alerts.
-  const isFirstProvision =
-    businessRow?.status === "offline" && businessRow?.hostinger_vps_id == null;
+  let priorSuccessfulProvision = false;
+  try {
+    priorSuccessfulProvision = await hasPriorSuccessfulProvision(businessId);
+  } catch (err) {
+    logger.warn("hasPriorSuccessfulProvision lookup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  // Ops alert: first successful signup completion only. Skip reprovision /
+  // recovery (high_load, wiped) and any tenant that already logged complete.
+  const shouldSendOpsNewSignupAlert =
+    !priorSuccessfulProvision &&
+    businessRow?.status !== "high_load" &&
+    businessRow?.status !== "wiped";
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
@@ -1763,7 +1773,7 @@ async function runOrchestrator(
     });
   }
 
-  if (isFirstProvision && deploySucceeded) {
+  if (shouldSendOpsNewSignupAlert && deploySucceeded) {
     let didRoute = null;
     try {
       didRoute = await getTelnyxVoiceRouteForBusiness(businessId);
