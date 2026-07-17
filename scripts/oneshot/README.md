@@ -19,8 +19,9 @@ and is **not** part of any automated path.
 
 ## Inventory
 
-_(Empty — every previous one-shot has either been folded into a
-production code path or deleted as fix-then-discard.)_
+| Script | What it does |
+| --- | --- |
+| `patch-kyp-offer-branch.ts` | Rewrites KYP Ads' "Lead follow-up (white-glove build)" flow to route by Facebook lead form: form name containing "Simple form setup 5/7/26" or "100/week" → the $100/week greeting/Calendly link, everything else → $200/week. Deterministic branch (no LLM classify); idempotent — re-running `--apply` resets the flow to this known-good shape. `--business <uuid>` (or `KYP_BUSINESS_ID`). Applied 2026-07-17 (ledger-recorded). |
 
 ## Removed
 
