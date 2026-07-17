@@ -159,17 +159,15 @@ export async function hasPriorOpsNewSignupAlert(businessId: string): Promise<boo
   const db = await createSupabaseServiceClient();
   const { data, error } = await db
     .from("coworker_logs")
-    .select("log_payload, status")
+    .select("id")
     .eq("business_id", businessId)
     .eq("task_type", "provisioning")
-    .order("created_at", { ascending: false })
-    .limit(10);
+    .filter("log_payload->>phase", "eq", "ops_new_signup_alert_sent")
+    .limit(1)
+    .maybeSingle();
 
   if (error) throw new Error(`hasPriorOpsNewSignupAlert: ${error.message}`);
-  return (data ?? []).some((row) => {
-    const p = row.log_payload as ProvisioningLogPayload | null;
-    return p?.phase === "ops_new_signup_alert_sent";
-  });
+  return data != null;
 }
 
 /** Admin: recent provisioning/deploy log rows (newest first). */

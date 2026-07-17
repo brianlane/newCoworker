@@ -462,31 +462,20 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue({
-        data: [
-          {
-            log_payload: { phase: "complete", percent: 100, message: "done", source: "orchestrator" },
-            status: "success"
-          },
-          {
-            log_payload: {
-              phase: "ops_new_signup_alert_sent",
-              percent: 100,
-              message: "sent",
-              source: "orchestrator"
-            },
-            status: "success"
-          }
-        ],
-        error: null
-      })
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "log-1" }, error: null })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(
       hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
     ).resolves.toBe(true);
+    expect(db.filter).toHaveBeenCalledWith(
+      "log_payload->>phase",
+      "eq",
+      "ops_new_signup_alert_sent"
+    );
   });
 
   it("hasPriorOpsNewSignupAlert is false when no alert-sent row exists", async () => {
@@ -494,26 +483,9 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue({
-        data: [{ log_payload: { phase: "complete", percent: 100 }, status: "success" }],
-        error: null
-      })
-    };
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-
-    await expect(
-      hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
-    ).resolves.toBe(false);
-  });
-
-  it("hasPriorOpsNewSignupAlert is false when data is null without error", async () => {
-    const db = {
-      from: vi.fn().mockReturnThis(),
-      select: vi.fn().mockReturnThis(),
-      eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue({ data: null, error: null })
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
@@ -527,8 +499,9 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
-      order: vi.fn().mockReturnThis(),
-      limit: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
     };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
