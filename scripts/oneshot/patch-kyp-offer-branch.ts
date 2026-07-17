@@ -6,6 +6,14 @@
  *   - Any form_name mentioning 100/week
  * Everything else → $200/week (default Meta lead-gen path).
  *
+ * ASSUMPTION: leads arrive via the Zapier bridge ("Send Lead to Coworker"),
+ * whose Lead Fields include the Facebook form_name — that's what
+ * lead_form_name extracts from. The DIRECT Meta connection enqueues form_id
+ * (no form title), so name-based routing would fall through to the $200
+ * else-arm there. KYP has no meta_connections row (bridge-only tenant); if
+ * they ever switch to the direct connection, revisit this routing (match on
+ * form_id, or map ids → offers).
+ *
  * Usage (business id from --business or KYP_BUSINESS_ID — never hard-coded,
  * per scripts/oneshot/README.md):
  *   set -a && source .env && set +a
