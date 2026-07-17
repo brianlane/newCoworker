@@ -576,6 +576,19 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
   **Authentication → OAuth Server** with dynamic client registration, and set
   the authorization path to `/oauth/consent` (local config in
   `supabase/config.toml` `[auth.oauth_server]`).
+- **Cloudflare must not bot-block Anthropic's backend.** The OAuth steps run
+  in the user's browser, but the authenticated `initialize`/tool-call POSTs
+  come from Anthropic's servers (egress `160.79.104.0/21`, UA `Claude-User`)
+  and look like bot traffic to the edge. The `newcoworker.com` zone carries a
+  WAF custom rule ("MCP connector allowlist", created 2026-07-17) that
+  **skips** Super Bot Fight Mode + managed rules + Browser Integrity Check /
+  UA blocks for that IP range on `/api/mcp` and `/.well-known/*`; the zone's
+  "Block AI bots" setting must also stay off for these paths. Symptoms when
+  this regresses: Claude shows "Couldn't connect" (unauthenticated probe
+  blocked) or "Authorization with the MCP server failed, ofid_…" (OAuth
+  succeeds, verification POST 403s at the edge with zero origin trace) —
+  check Cloudflare Security → Events before suspecting the app. Free-plan
+  Bot Fight Mode ignores WAF skip rules entirely and must stay OFF.
 - Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
   (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
 
