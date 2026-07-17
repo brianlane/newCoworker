@@ -115,9 +115,9 @@ describe("deliverWhatsApp", () => {
       reason: "invalid_recipient",
       detail: "12"
     });
-    expect(await deliverWhatsApp({ ...INPUT, text: "   " }, deps)).toMatchObject({
+    expect(await deliverWhatsApp({ ...INPUT, text: "   " }, deps)).toEqual({
       ok: false,
-      reason: "invalid_recipient"
+      reason: "empty_text"
     });
     expect(deps.getConnection).not.toHaveBeenCalled();
   });
@@ -134,6 +134,8 @@ describe("deliverWhatsApp", () => {
       reason: "not_connected"
     });
 
+    // Transient infra failures are RETRYABLE send failures, never a
+    // misleading "not connected" (Bugbot round 8).
     const broken = makeDeps({
       getConnection: vi.fn(async () => {
         throw new Error("db down");
@@ -141,7 +143,8 @@ describe("deliverWhatsApp", () => {
     });
     expect(await deliverWhatsApp(INPUT, broken)).toEqual({
       ok: false,
-      reason: "not_connected"
+      reason: "send_failed",
+      detail: "connection_read_failed"
     });
 
     const stringy = makeDeps({
@@ -151,7 +154,8 @@ describe("deliverWhatsApp", () => {
     });
     expect(await deliverWhatsApp(INPUT, stringy)).toEqual({
       ok: false,
-      reason: "not_connected"
+      reason: "send_failed",
+      detail: "connection_read_failed"
     });
   });
 
@@ -357,21 +361,53 @@ describe("deliverWhatsApp", () => {
     expect(appended.content).not.toContain("\n");
   });
 
-  it("treats a conversation read failure as a closed window (template path)", async () => {
+  it("fails retryable (never bills a template) when the window read keeps failing", async () => {
     const deps = makeDeps({
       getConversation: vi.fn(async () => {
         throw new Error("conv read down");
       })
     });
-    const result = await deliverWhatsApp(INPUT, deps);
-    expect(result).toMatchObject({ ok: true, via: "template" });
+    expect(await deliverWhatsApp(INPUT, deps)).toEqual({
+      ok: false,
+      reason: "send_failed",
+      detail: "conversation_read_failed"
+    });
+    expect(deps.sendTemplate).not.toHaveBeenCalled();
+    expect(deps.sendText).not.toHaveBeenCalled();
 
     const stringy = makeDeps({
       getConversation: vi.fn(async () => {
         throw "conv read string failure";
       })
     });
-    expect(await deliverWhatsApp(INPUT, stringy)).toMatchObject({ ok: true, via: "template" });
+    expect(await deliverWhatsApp(INPUT, stringy)).toMatchObject({
+      ok: false,
+      reason: "send_failed"
+    });
+  });
+
+  it("retries a single failed window read and keeps the first good verdict on a failing re-read", async () => {
+    // First read fails, retry succeeds with an open window → free text.
+    const retried = makeDeps({
+      getConversation: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("blip"))
+        .mockResolvedValueOnce(conversation())
+    });
+    expect(await deliverWhatsApp(INPUT, retried)).toMatchObject({ ok: true, via: "text" });
+
+    // Good first read (closed window), failing race re-read: the first
+    // verdict stands and the template path proceeds.
+    const raceReadFails = makeDeps({
+      getConversation: vi
+        .fn()
+        .mockResolvedValueOnce(conversation({ last_user_message_at: "2026-07-10T00:00:00Z" }))
+        .mockRejectedValueOnce(new Error("blip"))
+    });
+    expect(await deliverWhatsApp(INPUT, raceReadFails)).toMatchObject({
+      ok: true,
+      via: "template"
+    });
   });
 
   it("degrades silently when transcript threading fails (send already delivered)", async () => {

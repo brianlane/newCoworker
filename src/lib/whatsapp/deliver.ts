@@ -34,7 +34,8 @@ import {
   appendMessengerMessage,
   getMessengerConversationByIdentityPublic,
   insertOutboundMessengerConversation,
-  messengerWindowOpen
+  messengerWindowOpen,
+  type MessengerConversationRow
 } from "@/lib/messenger/db";
 import { getBusiness } from "@/lib/db/businesses";
 import { logger } from "@/lib/logger";
@@ -45,9 +46,16 @@ export type DeliverWhatsAppResult =
   | { ok: true; via: "text" | "template"; messageId: string | null }
   | {
       ok: false;
+      /**
+       * `not_connected` strictly means "no active WhatsApp integration"
+       * (callers steer owners to the Integrations page on it); transient
+       * infrastructure failures — connection/conversation reads throwing —
+       * surface as `send_failed` so retry paths treat them as retryable.
+       */
       reason:
         | "not_connected"
         | "invalid_recipient"
+        | "empty_text"
         | "template_not_approved"
         | "send_failed";
       detail?: string;
@@ -124,8 +132,11 @@ export async function deliverWhatsApp(
   /* c8 ignore stop */
 
   const text = input.text.trim();
+  if (!text) {
+    return { ok: false, reason: "empty_text" };
+  }
   const waId = toWaId(input.to);
-  if (!waId || !text) {
+  if (!waId) {
     return { ok: false, reason: "invalid_recipient", detail: input.to };
   }
 
@@ -133,38 +144,52 @@ export async function deliverWhatsApp(
   try {
     connection = await getConnection(input.businessId);
   } catch (err) {
+    // A throwing read is an infrastructure blip, not "the owner never
+    // connected WhatsApp" — report it retryable so AiFlows/alerts don't
+    // log a misleading not-connected skip.
     logger.warn("deliverWhatsApp: connection read failed", {
       businessId: input.businessId,
       error: err instanceof Error ? err.message : String(err)
     });
-    return { ok: false, reason: "not_connected" };
+    return { ok: false, reason: "send_failed", detail: "connection_read_failed" };
   }
   if (!connection?.accessToken || !connection.is_active) {
     return { ok: false, reason: "not_connected" };
   }
 
   // Window check: an existing conversation whose last inbound message is
-  // under 24h old permits free-form text. No conversation (or a stale
-  // one) means the template path.
-  const readConversation = () =>
+  // under 24h old permits free-form text; absent/stale means the template
+  // path. A FAILING read must not silently pick the billed template path
+  // (the recipient may be in an open, free window) — it fails retryable.
+  const readConversation = (): Promise<MessengerConversationRow | null | "read_failed"> =>
     getConversation(input.businessId, connection.phone_number_id, "whatsapp", waId).catch(
       (err) => {
-        logger.warn("deliverWhatsApp: conversation read failed; assuming closed window", {
+        logger.warn("deliverWhatsApp: conversation read failed", {
           businessId: input.businessId,
           error: err instanceof Error ? err.message : String(err)
         });
-        return null;
+        return "read_failed" as const;
       }
     );
-  let conversation = await readConversation();
+  let firstRead = await readConversation();
+  if (firstRead === "read_failed") {
+    // One immediate retry before giving up (the second read exists for
+    // the race-narrowing below anyway).
+    firstRead = await readConversation();
+    if (firstRead === "read_failed") {
+      return { ok: false, reason: "send_failed", detail: "conversation_read_failed" };
+    }
+  }
+  let conversation: MessengerConversationRow | null = firstRead;
   let windowOpen = conversation ? messengerWindowOpen(conversation, now()) : false;
   if (!windowOpen) {
     // Narrow the read→send race: a customer's first inbound message can
     // open the window between the read above and the send below — a
     // second read right before committing to the billed template path
-    // flips those sends back to free (and unbilled) text.
+    // flips those sends back to free (and unbilled) text. A failing
+    // re-read keeps the first read's verdict (already a good read).
     const fresh = await readConversation();
-    if (fresh) {
+    if (fresh && fresh !== "read_failed") {
       conversation = fresh;
       windowOpen = messengerWindowOpen(fresh, now());
     }
