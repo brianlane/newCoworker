@@ -86,6 +86,32 @@ export function isRenewalDueWithin(
  * which would expire the document the prior evening in US timezones. A full
  * datetime is taken literally. Returns null when unparseable.
  */
+/** Bounds for record_fields — a flat { field: value } metadata object. */
+export const RECORD_FIELDS_MAX_KEYS = 20;
+export const RECORD_FIELD_VALUE_MAX_CHARS = 500;
+
+/**
+ * Normalize a record-fields object for storage: trimmed string values only,
+ * blanks dropped, values clipped, key count capped (insertion order wins).
+ * Returns null when nothing usable remains, so callers can store NULL
+ * instead of an empty object.
+ */
+export function sanitizeRecordFields(
+  input: Record<string, string>
+): Record<string, string> | null {
+  const out: Record<string, string> = {};
+  let keys = 0;
+  for (const [key, value] of Object.entries(input)) {
+    const k = key.trim().slice(0, 60);
+    const v = (typeof value === "string" ? value : "").trim().slice(0, RECORD_FIELD_VALUE_MAX_CHARS);
+    if (!k || !v) continue;
+    if (keys >= RECORD_FIELDS_MAX_KEYS) break;
+    out[k] = v;
+    keys += 1;
+  }
+  return keys > 0 ? out : null;
+}
+
 export function parseExpirationInput(raw: string): string | null {
   const trimmed = raw.trim();
   if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {

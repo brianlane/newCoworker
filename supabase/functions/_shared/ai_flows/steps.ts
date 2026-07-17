@@ -241,12 +241,20 @@ export type StepAction =
       // no document plans a skip (skipReason) — all-text emails must not
       // fail the flow.
       kind: "doc_extract";
-      /** Rendered document ref (an email-attachments:<path> value); "" = skip. */
+      /** Rendered document ref (email-attachments:<path> / business-docs:<id>); "" = skip. */
       sourceRef: string;
       fields: ExtractField[];
       /** Rendered filing title; absent = don't file. */
       fileTitle?: string;
       fileAudience?: "clients" | "staff" | "both";
+      /** Resolved contact phone to link the filed record to (earlier var). */
+      fileContactPhone?: string;
+      /** THIS step's extracted field carrying the contact phone (platform resolves post-extraction). */
+      fileContactField?: string;
+      /** Stamp the extracted fields onto the filed record (record_fields). */
+      fileRecordFields?: boolean;
+      /** Extracted field parsed as the record's renewal_date. */
+      fileRenewalField?: string;
       skipReason?: string;
     }
   | {
@@ -617,6 +625,18 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const fileTitle = step.fileAs
         ? renderTemplate(step.fileAs.titleTemplate, scope).trim()
         : "";
+      // Contact-link source: when contactPhoneVar names one of THIS step's
+      // extracted fields, only the platform can resolve it (extraction
+      // happens there) — pass the field NAME. Otherwise resolve the var
+      // from scope now; an empty value still rides along so the platform
+      // reports the "no phone value" note instead of silently unlinking.
+      const contactVar = step.fileAs?.contactPhoneVar;
+      const contactFromOwnField =
+        contactVar !== undefined && step.fields.some((f) => f.name === contactVar);
+      const contactPhone =
+        contactVar !== undefined && !contactFromOwnField
+          ? String(scope.vars?.[contactVar] ?? "").trim()
+          : "";
       return {
         ok: true,
         action: {
@@ -628,7 +648,15 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.fileAs
             ? {
                 fileTitle: fileTitle || "Filed document",
-                fileAudience: step.fileAs.audience ?? "staff"
+                fileAudience: step.fileAs.audience ?? "staff",
+                ...(contactFromOwnField ? { fileContactField: contactVar } : {}),
+                ...(contactVar !== undefined && !contactFromOwnField
+                  ? { fileContactPhone: contactPhone }
+                  : {}),
+                ...(step.fileAs.recordFieldsFromExtraction ? { fileRecordFields: true } : {}),
+                ...(step.fileAs.renewalDateField
+                  ? { fileRenewalField: step.fileAs.renewalDateField }
+                  : {})
               }
             : {})
         }

@@ -47,6 +47,8 @@ export type BusinessDocumentRow = {
   renewal_overdue_notified_at: string | null;
   /** When this renewal fired its document_renewal outreach flow event; reset when renewal_date changes. */
   renewal_outreach_enqueued_at: string | null;
+  /** Structured record metadata ({ carrier, premium, ... }); null = none captured. */
+  record_fields: Record<string, string> | null;
   created_at: string;
   updated_at: string;
 };
@@ -150,6 +152,7 @@ export async function insertBusinessDocument(
         | "contact_id"
         | "renewal_date"
         | "assigned_employee_id"
+        | "record_fields"
       >
     >,
   client?: SupabaseClient
@@ -184,6 +187,7 @@ export type BusinessDocumentPatch = Partial<
     | "renewal_final_notified_at"
     | "renewal_overdue_notified_at"
     | "renewal_outreach_enqueued_at"
+    | "record_fields"
   >
 >;
 

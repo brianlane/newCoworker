@@ -2414,7 +2414,22 @@ async function docExtractStep(
         sourceRef: action.sourceRef,
         fields: action.fields,
         ...(action.fileTitle
-          ? { fileAs: { title: action.fileTitle, audience: action.fileAudience ?? "staff" } }
+          ? {
+              fileAs: {
+                title: action.fileTitle,
+                audience: action.fileAudience ?? "staff",
+                // Record sinks: contact link (resolved phone or this-step
+                // field name), extracted-field stamping, renewal date.
+                ...(action.fileContactPhone !== undefined
+                  ? { contactPhone: action.fileContactPhone }
+                  : {}),
+                ...(action.fileContactField
+                  ? { contactPhoneField: action.fileContactField }
+                  : {}),
+                ...(action.fileRecordFields ? { recordFieldsFromExtraction: true } : {}),
+                ...(action.fileRenewalField ? { renewalDateField: action.fileRenewalField } : {})
+              }
+            }
           : {})
       })
     });
@@ -2435,6 +2450,7 @@ async function docExtractStep(
           vars?: Record<string, string>;
           filed?: { documentId: string; title: string } | null;
           fileError?: string;
+          fileNotes?: string[];
         };
       }
     | null;
@@ -2450,7 +2466,10 @@ async function docExtractStep(
     result: {
       vars: out,
       ...(payload.data?.filed ? { filed: payload.data.filed } : {}),
-      ...(payload.data?.fileError ? { file_error: payload.data.fileError } : {})
+      ...(payload.data?.fileError ? { file_error: payload.data.fileError } : {}),
+      ...(payload.data?.fileNotes && payload.data.fileNotes.length > 0
+        ? { file_notes: payload.data.fileNotes }
+        : {})
     }
   };
 }

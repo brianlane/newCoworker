@@ -95,6 +95,7 @@ const READY_DOC = {
   renewal_final_notified_at: null,
   renewal_overdue_notified_at: null,
   renewal_outreach_enqueued_at: null,
+  record_fields: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z"
 };

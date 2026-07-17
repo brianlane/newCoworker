@@ -3253,6 +3253,59 @@ function StepFields({
                 <option value="both">Clients and staff</option>
               </select>
             </div>
+            <Field
+              label="Link to the contact whose phone is in (optional)"
+              value={step.fileAs.contactPhoneVar ?? ""}
+              onChange={(v) =>
+                patchStep(index, {
+                  fileAs: { ...step.fileAs, contactPhoneVar: v.trim() ? v.trim() : undefined }
+                })
+              }
+              help="A variable name — from an earlier step (e.g. lead_phone) or one of this step's own fields. The filed document becomes a record on that contact."
+            />
+            <label className="flex items-center gap-2 text-xs text-parchment/70">
+              <input
+                type="checkbox"
+                checked={step.fileAs.recordFieldsFromExtraction === true}
+                onChange={(ev) =>
+                  patchStep(index, {
+                    fileAs: {
+                      ...step.fileAs,
+                      recordFieldsFromExtraction: ev.target.checked ? true : undefined
+                    }
+                  })
+                }
+              />
+              Save the extracted fields onto the record (carrier, premium, …)
+            </label>
+            <div>
+              <label className={labelClass}>Renewal date from field (optional)</label>
+              <select
+                className={inputClass}
+                value={step.fileAs.renewalDateField ?? ""}
+                onChange={(ev) =>
+                  patchStep(index, {
+                    fileAs: {
+                      ...step.fileAs,
+                      renewalDateField: ev.target.value ? ev.target.value : undefined
+                    }
+                  })
+                }
+              >
+                <option value="">— don&apos;t set a renewal date —</option>
+                {step.fields
+                  .filter((f) => f.name.trim())
+                  .map((f) => (
+                    <option key={f.name} value={f.name}>
+                      {f.name}
+                    </option>
+                  ))}
+              </select>
+              <p className="mt-1 text-[11px] text-parchment/40">
+                Sets the record&apos;s renewal date from that extracted field, so your renewal
+                reminders fire ahead of it.
+              </p>
+            </div>
           </div>
         )}
       </div>

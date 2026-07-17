@@ -15,7 +15,10 @@ import {
   isDocumentExpired,
   isRenewalDueWithin,
   parseExpirationInput,
+  RECORD_FIELDS_MAX_KEYS,
+  RECORD_FIELD_VALUE_MAX_CHARS,
   renderDocumentsContext,
+  sanitizeRecordFields,
   resolveDocumentReference,
   scoreDocumentRelevance,
   selectDocumentsForQuestion
@@ -48,6 +51,7 @@ function doc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumentRow 
     renewal_final_notified_at: null,
     renewal_overdue_notified_at: null,
     renewal_outreach_enqueued_at: null,
+    record_fields: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -122,6 +126,40 @@ describe("parseExpirationInput", () => {
   it("returns null for unparseable input (including invalid calendar dates)", () => {
     expect(parseExpirationInput("next Tuesday-ish")).toBeNull();
     expect(parseExpirationInput("2026-99-99")).toBeNull();
+  });
+});
+
+describe("sanitizeRecordFields", () => {
+  it("trims keys/values, drops blanks, and clips long values", () => {
+    expect(
+      sanitizeRecordFields({
+        " carrier ": " Acme Mutual ",
+        premium: "$1,240/yr",
+        empty: "   ",
+        "": "orphan value",
+        long: "x".repeat(RECORD_FIELD_VALUE_MAX_CHARS + 50)
+      })
+    ).toEqual({
+      carrier: "Acme Mutual",
+      premium: "$1,240/yr",
+      long: "x".repeat(RECORD_FIELD_VALUE_MAX_CHARS)
+    });
+  });
+
+  it("caps the key count (insertion order wins) and tolerates non-string values", () => {
+    const input: Record<string, string> = {};
+    for (let i = 0; i < RECORD_FIELDS_MAX_KEYS + 5; i++) input[`k${i}`] = `v${i}`;
+    const out = sanitizeRecordFields(input);
+    expect(out && Object.keys(out)).toHaveLength(RECORD_FIELDS_MAX_KEYS);
+    expect(out?.k0).toBe("v0");
+    expect(out && `k${RECORD_FIELDS_MAX_KEYS}` in out).toBe(false);
+
+    expect(sanitizeRecordFields({ n: 42 as unknown as string, ok: "yes" })).toEqual({ ok: "yes" });
+  });
+
+  it("returns null when nothing usable remains", () => {
+    expect(sanitizeRecordFields({})).toBeNull();
+    expect(sanitizeRecordFields({ a: "", b: "  " })).toBeNull();
   });
 });
 
