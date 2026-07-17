@@ -6,29 +6,35 @@ dashboard steps that unlock the WhatsApp channel shipped in
 
 ## App dashboard steps (developers.facebook.com → New Coworker app)
 
-1. **Add the WhatsApp product** to the existing New Coworker Meta app.
-2. **Create the Embedded Signup configuration** (Facebook Login for
-   Business → Configurations → Create → WhatsApp Embedded Signup). Copy the
-   resulting `config_id` into the Vercel env as `META_WHATSAPP_CONFIG_ID`
-   (and `.env` locally). The integration card hides "Connect WhatsApp"
-   until this is set.
-3. **Subscribe the webhook**: Webhooks panel → object **WhatsApp Business
-   Account** → callback `https://www.newcoworker.com/api/webhooks/meta`,
-   verify token = `META_WEBHOOK_VERIFY_TOKEN` (same values as the Page /
-   Instagram objects) → subscribe the **`messages`** field at v25.0.
-4. **Pilot with the test number**: WhatsApp → API Setup provides a free
-   Meta test number + temporary token usable in dev mode — message a
-   personal WhatsApp from it to smoke the inbound webhook → engine →
-   Cloud API reply loop end to end (KYP as the pilot tester).
+1. ~~**Add the WhatsApp product**~~ DONE — the "Connect with customers
+   through WhatsApp" use case is on the app.
+2. ~~**Create the Embedded Signup configuration**~~ DONE (Jul 16) —
+   "NewCoworker WhatsApp Signup", `config_id 2170825997107136`, created
+   from the official "WhatsApp Embedded Signup" template. Set as
+   `META_WHATSAPP_CONFIG_ID` in `.env` and on Vercel (production +
+   preview); production redeployed to pick it up.
+   **Caveat:** the template locks token type to a system-user token with
+   **60-day expiration** (the "Never" option is disabled by the template).
+   Tenant connections will need a reconnect ~every 60 days unless we add a
+   token-refresh job later.
+3. ~~**Subscribe the webhook**~~ DONE (Jul 16) — WhatsApp Business Account
+   object verified against `https://www.newcoworker.com/api/webhooks/meta`
+   with the shared verify token; **`messages`** field subscribed at v25.0.
+4. **Pilot with the test number** (REMAINING, needs a real phone):
+   WhatsApp → API Setup provides a free Meta test number + temporary token
+   usable in dev mode — message a personal WhatsApp from it to smoke the
+   inbound webhook → engine → Cloud API reply loop end to end (KYP as the
+   pilot tester).
 
 ## Review / availability chain
 
-- `whatsapp_business_messaging` + `whatsapp_business_management` join the
-  SAME pending App Review submission as the Messenger/lead permissions.
-  They work in dev mode for app role-holders/testers today.
-- Real-tenant **Embedded Signup unlocks when Tech Provider (Access)
-  Verification clears** — the form submitted Jul 16 (SaaS Platform,
-  newcoworker.com). Until then, only tester accounts can complete signup.
+- **Tech Provider (Access) Verification: APPROVED Jul 16, 2026.**
+- `whatsapp_business_messaging` + `whatsapp_business_management` show
+  "Ready for testing" (0 outstanding requirements) but the App Review
+  submission is still **Not submitted** — the whole request bundle
+  (WhatsApp + Messenger/lead permissions) needs to be submitted for
+  Advanced Access before arbitrary (non-role-holder) tenants can connect.
+  They work today for app role-holders/testers.
 - Template review: the two stock utility templates (`nc_owner_alert`,
   `nc_contact_followup`) are auto-registered per tenant WABA at connect
   and typically clear Meta review in minutes; out-of-window sends are
