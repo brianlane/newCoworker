@@ -30,7 +30,8 @@ const ALL_ON: ActionToolGates = {
   calendar_reschedule_appointment: true,
   calendar_cancel_appointment: true,
   list_aiflows: true,
-  run_aiflow: true
+  run_aiflow: true,
+  generate_image: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -153,7 +154,8 @@ describe("declarations & naming", () => {
       send_whatsapp: false,
       calendar_cancel_appointment: false,
       list_aiflows: false,
-      run_aiflow: false
+      run_aiflow: false,
+      generate_image: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -656,6 +658,69 @@ describe("list_aiflows / run_aiflow", () => {
     expect(
       await executeActionTool(BIZ, { name: "run_aiflow", args: { flow: "Proposal" } }, nullEnqueue)
     ).toMatchObject({ ok: false, message: expect.stringContaining("could not be enqueued") });
+  });
+});
+
+describe("generate_image", () => {
+  it("passes prompt + normalized aspect ratio + input image ref to the dashboard core", async () => {
+    const generateImage = vi.fn(async () => ({
+      ok: true,
+      data: {
+        imageUrl: "/api/dashboard/images/b/i.png",
+        markdown: "![Generated image](/api/dashboard/images/b/i.png)"
+      }
+    }));
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "generate_image",
+        args: {
+          prompt: "A blue heron logo",
+          aspectRatio: "16:9",
+          inputImageUrl: "/api/dashboard/images/b/prev.png"
+        }
+      },
+      happyDeps({ generateImage: generateImage as never })
+    );
+    expect(res).toMatchObject({ ok: true, data: expect.objectContaining({ markdown: expect.any(String) }) });
+    expect(generateImage).toHaveBeenCalledWith(BIZ, "A blue heron logo", {
+      aspectRatio: "16:9",
+      inputImageRef: "/api/dashboard/images/b/prev.png"
+    });
+  });
+
+  it("drops an unsupported aspect ratio and omits the input ref when absent", async () => {
+    const generateImage = vi.fn(async () => ({ ok: true, data: { imageUrl: "u", markdown: "m" } }));
+    await executeActionTool(
+      BIZ,
+      { name: "generate_image", args: { prompt: "p", aspectRatio: "banana" } },
+      happyDeps({ generateImage: generateImage as never })
+    );
+    expect(generateImage).toHaveBeenCalledWith(BIZ, "p", { aspectRatio: undefined });
+  });
+
+  it("returns the core's refusal untouched (limit / budget) and rejects invalid args", async () => {
+    const refused = await executeActionTool(
+      BIZ,
+      { name: "generate_image", args: { prompt: "p" } },
+      happyDeps({
+        generateImage: vi.fn(async () => ({
+          ok: false,
+          detail: "image_limit_reached",
+          message: "The image limit (3 per conversation) has been reached."
+        })) as never
+      })
+    );
+    expect(refused).toMatchObject({ ok: false, detail: "image_limit_reached" });
+
+    const generateImage = vi.fn();
+    const bad = await executeActionTool(
+      BIZ,
+      { name: "generate_image", args: {} },
+      happyDeps({ generateImage: generateImage as never })
+    );
+    expect(bad).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
+    expect(generateImage).not.toHaveBeenCalled();
   });
 });
 

@@ -194,7 +194,11 @@ export async function POST(request: Request) {
         calendar_reschedule_appointment: calRescheduleEnabled,
         calendar_cancel_appointment: calCancelEnabled,
         list_aiflows: runAiflowEnabled,
-        run_aiflow: runAiflowEnabled
+        run_aiflow: runAiflowEnabled,
+        // The dashboard image tool returns an inline /api/dashboard/images
+        // URL + markdown — there is nowhere to render that over SMS (the
+        // texting coworker's MMS path is a different tool). Off by design.
+        generate_image: false
       }
     });
 

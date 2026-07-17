@@ -526,7 +526,8 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     calendar_reschedule_appointment: true,
     calendar_cancel_appointment: true,
     list_aiflows: true,
-    run_aiflow: true
+    run_aiflow: true,
+    generate_image: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -543,7 +544,8 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       "calendar_reschedule_appointment",
       "calendar_cancel_appointment",
       "list_aiflows",
-      "run_aiflow"
+      "run_aiflow",
+      "generate_image"
     ]);
   });
 
@@ -749,6 +751,46 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.content).toContain('WhatsApp message sent to +15145188192 — "hola"');
+    }
+  });
+
+  it("a successful generate_image is side-effect pinned — the degraded wrap-up keeps the markdown", async () => {
+    // The image is stored, metered, and burned a per-conversation slot the
+    // moment the core returned ok — a worker rerun would bill again, and a
+    // wrap-up without the markdown charges the owner for an invisible image.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      data: {
+        imageUrl: "/api/dashboard/images/b/i.png",
+        markdown: "![Generated image](/api/dashboard/images/b/i.png)"
+      }
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("generate_image", { prompt: "a heron logo" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("![Generated image](/api/dashboard/images/b/i.png)");
+    }
+
+    // Markdown-less result (defensive arm): still an honest line.
+    const bare = vi.fn(async () => ({ ok: true }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("generate_image", { prompt: "p" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: bare
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) {
+      expect(res2.content).toContain("The image was generated — it's saved with this conversation.");
     }
   });
 

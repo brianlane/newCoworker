@@ -729,7 +729,8 @@ export async function POST(request: Request) {
       calBookEnabled,
       calRescheduleEnabled,
       calCancelEnabled,
-      runAiflowEnabled
+      runAiflowEnabled,
+      generateImageEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
@@ -737,7 +738,8 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
-      isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow")
+      isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
+      isAgentToolEnabled(body.businessId, "dashboard", "generate_image")
     ]);
     const actionToolGates = {
       send_sms: smsToolEnabled,
@@ -753,7 +755,8 @@ export async function POST(request: Request) {
       calendar_cancel_appointment: calCancelEnabled,
       // One Settings toggle gates the pair: listing exists to serve running.
       list_aiflows: runAiflowEnabled,
-      run_aiflow: runAiflowEnabled
+      run_aiflow: runAiflowEnabled,
+      generate_image: generateImageEnabled
     };
 
     // Two message arrays:

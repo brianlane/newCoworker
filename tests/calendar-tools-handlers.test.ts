@@ -661,8 +661,12 @@ describe("bookCalendarAppointment", () => {
       "+15551230000"
     );
     // Deep equality, not identity: the success path re-wraps the result so a
-    // Zoom join link can be merged into the data when one exists.
-    expect(result).toStrictEqual(delegated);
+    // Zoom join link can be merged into the data when one exists. CalDAV
+    // events email nobody, so inviteEmail is pinned null.
+    expect(result).toStrictEqual({
+      ok: true,
+      data: { eventId: "newcoworker-1", provider: "caldav", inviteEmail: null }
+    });
     expect(vi.mocked(bookCaldavAppointment)).toHaveBeenCalledWith(BIZ, {
       startIso: ARGS.startIso,
       endIso: ARGS.endIso,
@@ -772,7 +776,13 @@ describe("bookCalendarAppointment", () => {
     );
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ev-1", htmlLink: "https://cal/ev-1", provider: "google", calendar: "primary" }
+      data: {
+        eventId: "ev-1",
+        htmlLink: "https://cal/ev-1",
+        provider: "google",
+        calendar: "primary",
+        inviteEmail: "joe@example.com"
+      }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       endpoint: string;
@@ -809,7 +819,7 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: null, htmlLink: null, provider: "google", calendar: "primary" }
+      data: { eventId: null, htmlLink: null, provider: "google", calendar: "primary", inviteEmail: null }
     });
     // No confirmed event id → no appointment_booked goal event.
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
@@ -891,7 +901,13 @@ describe("bookCalendarAppointment", () => {
     });
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ms-1", htmlLink: "https://outlook/ms-1", provider: "microsoft", calendar: "primary" }
+      data: {
+        eventId: "ms-1",
+        htmlLink: "https://outlook/ms-1",
+        provider: "microsoft",
+        calendar: "primary",
+        inviteEmail: "joe@example.com"
+      }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       endpoint: string;
@@ -912,7 +928,7 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: null, htmlLink: null, provider: "microsoft", calendar: "primary" }
+      data: { eventId: null, htmlLink: null, provider: "microsoft", calendar: "primary", inviteEmail: null }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
       data: { attendees?: unknown };
@@ -950,7 +966,7 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ev-s", htmlLink: null, provider: "google", calendar: "shared" }
+      data: { eventId: "ev-s", htmlLink: null, provider: "google", calendar: "shared", inviteEmail: null }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
     expect(payload.endpoint).toBe("/calendar/v3/calendars/shared-cal/events");
@@ -966,7 +982,7 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ms-s", htmlLink: null, provider: "microsoft", calendar: "shared" }
+      data: { eventId: "ms-s", htmlLink: null, provider: "microsoft", calendar: "shared", inviteEmail: null }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
     expect(payload.endpoint).toBe("/v1.0/me/calendars/shared-ms/events");
@@ -1275,5 +1291,89 @@ describe("bookCalendarAppointment — stored display name wins (Truly Issue 6)",
 
     vi.mocked(getCustomerMemory).mockRejectedValue("raw failure");
     expect((await bookCalendarAppointment(BIZ, ARGS, "+15485773546")).ok).toBe(true);
+  });
+});
+
+describe("bookCalendarAppointment — stored contact EMAIL backfill (Truly, Jul 15 2026)", () => {
+  // The voice model rarely collects an email mid-call, so bookings shipped
+  // with no attendee: the provider sent NO invite while the assistant told
+  // the caller "a calendar invite will be sent to you shortly".
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate",
+    attendeeName: "Aurangzeb Khan"
+  };
+
+  it("backfills the attendee email from the stored contact so a REAL invite goes out", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: "Aurangzeb Khan",
+      email: "azkhan15@hotmail.com"
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+16138540807");
+
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { description: string; attendees: Array<{ email: string }> };
+    };
+    expect(payload.data.attendees).toEqual([
+      { email: "azkhan15@hotmail.com", displayName: "Aurangzeb Khan" }
+    ]);
+    expect(payload.data.description).toContain("Email: azkhan15@hotmail.com");
+    expect(result.data).toMatchObject({ inviteEmail: "azkhan15@hotmail.com" });
+  });
+
+  it("the model's explicit attendeeEmail wins over the stored contact email", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: "Aurangzeb Khan",
+      email: "stored@x.co"
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "spoken@x.co" },
+      "+16138540807"
+    );
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { attendees: Array<{ email: string }> };
+    };
+    expect(payload.data.attendees[0].email).toBe("spoken@x.co");
+    expect(result.data).toMatchObject({ inviteEmail: "spoken@x.co" });
+  });
+
+  it("a blank model email is treated as absent (stored email backfills)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: null,
+      email: "stored@x.co"
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "   " },
+      "+16138540807"
+    );
+    expect(result.data).toMatchObject({ inviteEmail: "stored@x.co" });
+  });
+
+  it("no stored email and none supplied → no attendees, inviteEmail null (no invite promised)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: "Aurangzeb Khan",
+      email: "   "
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+16138540807");
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { attendees?: unknown };
+    };
+    expect(payload.data.attendees).toBeUndefined();
+    expect(result.data).toMatchObject({ inviteEmail: null });
   });
 });
