@@ -261,9 +261,12 @@ export default async function DashboardAnalyticsPage(props: {
         : Promise.resolve(null),
       // Per-flow funnel; a blip hides the card.
       getFlowFunnels(business.id, { client: db, now }).catch(() => null),
-      getSmsLinkStats(business.id, { client: db, now, flowId: selectedFlowId ?? undefined }).catch(
-        () => null
-      ),
+      getSmsLinkStats(business.id, {
+        client: db,
+        now,
+        flowId: selectedFlowId ?? undefined,
+        includeClicks: true
+      }).catch(() => null),
       // Reporting suite (renewal pipeline / response times / retention /
       // monthly rollup) — each degrades to a hidden card on a blip.
       getRenewalPipeline(business.id, { client: db, now }).catch(() => null),

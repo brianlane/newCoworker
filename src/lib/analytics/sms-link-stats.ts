@@ -27,6 +27,12 @@ export async function getSmsLinkStats(
     now?: Date;
     days?: number;
     flowId?: string;
+    /**
+     * Load per-link click TIMELINES (one bounded query per clicked link).
+     * The analytics page wants them; the CSV exports only need aggregates
+     * (or their own bulk click query), so they leave this off.
+     */
+    includeClicks?: boolean;
   } = {}
 ): Promise<SmsLinkStatsOverview> {
   const db = opts.client ?? (await createSupabaseServiceClient());
@@ -49,7 +55,7 @@ export async function getSmsLinkStats(
     days,
     flowId: opts.flowId,
     limit: SMS_LINK_STATS_SCAN_LIMIT,
-    includeClicks: true
+    includeClicks: opts.includeClicks ?? false
   });
   return { links, clipped };
 }

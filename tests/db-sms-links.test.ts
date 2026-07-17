@@ -416,36 +416,43 @@ describe("listSmsLinksForBusiness", () => {
 });
 
 describe("getSmsLinkStats", () => {
-  it("marks clipped when the scan exceeds the cap", async () => {
+  it("marks clipped when the scan exceeds the cap; skips click timelines by default", async () => {
     const scan = builder({
       data: Array.from({ length: 501 }, (_, i) => ({ id: `id-${i}` })),
       error: null
     });
+    const clicks = builder(clickRows);
     const db = makeDb({
       sms_links: [scan, builder({ data: [linkRow], error: null })],
       ai_flows: [builder(flowRows)],
-      sms_link_clicks: [builder({ data: [], error: null })]
+      sms_link_clicks: [clicks]
     });
     const stats = await getSmsLinkStats("biz-1", { client: db as never });
     expect(stats.clipped).toBe(true);
     expect(stats.links).toHaveLength(1);
+    // Exports only need aggregates — no per-link click query without opt-in.
+    expect(clicks.eq).not.toHaveBeenCalled();
+    expect(stats.links[0].clicks).toEqual([]);
   });
 
-  it("uses the default client and filters by flowId", async () => {
+  it("uses the default client, filters by flowId, and loads timelines when opted in", async () => {
     const scan = builder({ data: [{ id: "link-1" }], error: null });
+    const clicks = builder(clickRows);
     const db = makeDb({
       sms_links: [scan, builder({ data: [linkRow], error: null })],
       ai_flows: [builder(flowRows)],
-      sms_link_clicks: [builder({ data: [], error: null })]
+      sms_link_clicks: [clicks]
     });
     defaultClientSpy.mockResolvedValue(db);
     const stats = await getSmsLinkStats("biz-1", {
       flowId: "flow-1",
       days: 7,
-      now: new Date("2026-07-17T00:00:00Z")
+      now: new Date("2026-07-17T00:00:00Z"),
+      includeClicks: true
     });
     expect(stats.clipped).toBe(false);
     expect(scan.eq).toHaveBeenCalledWith("flow_id", "flow-1");
+    expect(stats.links[0].clicks).toHaveLength(1);
   });
 
   it("treats a null scan payload as unclipped", async () => {
@@ -479,7 +486,6 @@ describe("listLinkClickEventsForBusiness", () => {
       ],
       ai_flows: [builder(flowRows)],
       sms_link_clicks: [
-        builder({ data: [], error: null }),
         builder({ data: [...(clickRows.data as unknown[]), straggler], error: null })
       ]
     });
@@ -501,10 +507,7 @@ describe("listLinkClickEventsForBusiness", () => {
         builder({ data: [linkRow], error: null })
       ],
       ai_flows: [builder(flowRows)],
-      sms_link_clicks: [
-        builder({ data: [], error: null }),
-        builder({ data: null, error: null })
-      ]
+      sms_link_clicks: [builder({ data: null, error: null })]
     });
     const res = await listLinkClickEventsForBusiness("biz-1", { client: db as never });
     expect(res).toEqual({ events: [], clipped: false });
@@ -542,7 +545,7 @@ describe("listLinkClickEventsForBusiness", () => {
         builder({ data: [linkRow], error: null })
       ],
       ai_flows: [builder(flowRows)],
-      sms_link_clicks: [builder({ data: [], error: null }), builder(clickRows)]
+      sms_link_clicks: [builder(clickRows)]
     });
     const { events, clipped } = await listLinkClickEventsForBusiness("biz-1", {
       client: db as never,
@@ -560,7 +563,7 @@ describe("listLinkClickEventsForBusiness", () => {
         builder({ data: [linkRow], error: null })
       ],
       ai_flows: [builder(flowRows)],
-      sms_link_clicks: [builder({ data: [], error: null }), clicks]
+      sms_link_clicks: [clicks]
     });
     await expect(
       listLinkClickEventsForBusiness("biz-1", {
