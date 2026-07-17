@@ -161,7 +161,7 @@ export default function IntegrationsPage() {
           </div>
         </div>
         <div className="mt-6 rounded-xl border border-claw-green/20 bg-claw-green/[0.05] p-4 text-sm text-parchment/60">
-          The same webhook trigger works for any lead source — Google lead forms, your website,
+          The same webhook trigger works for any lead source. Google lead forms, your website,
           TikTok, or anything that can send a webhook not just Meta.
         </div>
       </section>
