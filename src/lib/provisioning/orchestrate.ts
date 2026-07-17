@@ -963,7 +963,11 @@ async function runOrchestrator(
   // enterprise-only; the gate reads the REAL tier from the row (narrowTier
   // collapses enterprise onto the standard box profile).
   const businessRow = await getBusiness(businessId);
-  const isFirstProvision = businessRow?.status !== "online";
+  // First-time signup only: brand-new row still offline with no VM assigned yet.
+  // Reprovision/recovery runs (high_load, wiped, or offline with an existing
+  // hostinger_vps_id) must not fire duplicate "new signup live" ops alerts.
+  const isFirstProvision =
+    businessRow?.status === "offline" && businessRow?.hostinger_vps_id == null;
   const vpsProvider = resolveVpsProvider(businessRow?.vps_provider);
   assertVpsProviderAllowed(vpsProvider, businessRow?.tier);
   // Compliance gate: a BYOS/Canada placement whose residency mode is still
@@ -1759,7 +1763,7 @@ async function runOrchestrator(
     });
   }
 
-  if (isFirstProvision) {
+  if (isFirstProvision && deploySucceeded) {
     let didRoute = null;
     try {
       didRoute = await getTelnyxVoiceRouteForBusiness(businessId);
@@ -1776,7 +1780,7 @@ async function runOrchestrator(
       businessId,
       businessName: freshBusiness?.name ?? businessRow?.name ?? "",
       ownerName: freshBusiness?.owner_name ?? businessRow?.owner_name ?? null,
-      ownerEmail: notifyEmail ?? freshBusiness?.owner_email ?? businessRow?.owner_email ?? null,
+      ownerEmail: notifyEmail,
       ownerPhone: freshBusiness?.phone ?? businessRow?.phone ?? null,
       tier: freshBusiness?.tier ?? businessRow?.tier ?? narrowTier,
       billingPeriod: subscription?.billing_period ?? input.billingPeriod ?? null,

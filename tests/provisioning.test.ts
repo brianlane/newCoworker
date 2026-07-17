@@ -27,7 +27,11 @@ import type { SshExecResult } from "@/lib/hostinger/ssh";
 vi.mock("@/lib/db/businesses", () => ({
   updateBusinessStatus: vi.fn().mockResolvedValue(undefined),
   updateBusinessVpsSize: vi.fn().mockResolvedValue(undefined),
-  getBusiness: vi.fn().mockResolvedValue({ business_type: "real_estate" })
+  getBusiness: vi.fn().mockResolvedValue({
+    business_type: "real_estate",
+    status: "offline",
+    hostinger_vps_id: null
+  })
 }));
 
 // Per-tenant gateway token now resolves from the DB during provisioning: read
@@ -273,6 +277,12 @@ describe("provisioning/orchestrate", () => {
     // would leave the empty-fallback branch uncovered.
     delete process.env.GEMINI_LIVE_SESSION_MAX_MS;
     vi.clearAllMocks();
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null
+    });
+    vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -837,6 +847,7 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getBusiness).mockResolvedValue({
       business_type: "real_estate",
       status: "offline",
+      hostinger_vps_id: null,
       owner_email: "owner@test.com",
       name: "Acme"
     } as never);
@@ -855,6 +866,7 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getBusiness).mockResolvedValue({
       business_type: "real_estate",
       status: "online",
+      hostinger_vps_id: "42",
       owner_email: "owner@test.com",
       name: "Acme"
     } as never);
@@ -869,6 +881,74 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
   });
 
+  it("does not send ops new-signup email when deploy fails or status is not first-time offline", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      { businessId: "biz-deploy-fail", tier: "starter", ownerEmail: "owner@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn(async (args: { command?: string }): Promise<SshExecResult> =>
+          String(args?.command ?? "").includes("/opt/deploy-client.sh")
+            ? { exitCode: 1, signal: null, stdout: "", stderr: "boom" }
+            : okExec()
+        )
+      }
+    );
+    expect(sendOpsNewSignupEmail).not.toHaveBeenCalled();
+
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "high_load",
+      hostinger_vps_id: "99",
+      owner_email: "owner@test.com",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      { businessId: "biz-high-load", tier: "starter", ownerEmail: "owner@test.com" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("100")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).not.toHaveBeenCalled();
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
+  it("ops new-signup email omits pending owner sentinel from ownerEmail field", async () => {
+    const { getBusiness } = await import("@/lib/db/businesses");
+    const { sendOpsNewSignupEmail } = await import("@/lib/email/ops-notify");
+    vi.mocked(sendOpsNewSignupEmail).mockClear();
+    vi.mocked(getBusiness).mockResolvedValue({
+      business_type: "real_estate",
+      status: "offline",
+      hostinger_vps_id: null,
+      owner_email: "pending+abc@onboarding.local",
+      name: "Acme"
+    } as never);
+    await orchestrateProvisioning(
+      { businessId: "biz-pending", tier: "starter" },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendOpsNewSignupEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-pending", ownerEmail: null })
+    );
+    vi.mocked(getBusiness).mockResolvedValue({ business_type: "real_estate" } as never);
+  });
+
   it("still sends ops new-signup email when route/subscription lookups fail", async () => {
     const { getBusiness } = await import("@/lib/db/businesses");
     const { getSubscription } = await import("@/lib/db/subscriptions");
@@ -876,6 +956,7 @@ describe("provisioning/orchestrate", () => {
     vi.mocked(getBusiness).mockResolvedValue({
       business_type: "real_estate",
       status: "offline",
+      hostinger_vps_id: null,
       owner_email: "owner@test.com",
       name: "Acme"
     } as never);
