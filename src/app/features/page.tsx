@@ -125,7 +125,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Missed-Call Auto-Text",
         description:
-          "If a call can't be answered, the caller instantly gets a text so the lead never goes cold.",
+          "If you fail to answer a warm transfer, the caller instantly gets a text so the lead never goes cold.",
         Icon: PhoneForwarded
       },
       {
@@ -139,12 +139,6 @@ const groups: FeatureGroup[] = [
         description:
           "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too.",
         Icon: Mail
-      },
-      {
-        title: "Website Chat Widget",
-        description:
-          "Embed your coworker on your own website with one snippet. Visitors get instant answers about your business, and every conversation captures a lead. Standard and Enterprise plans.",
-        Icon: Globe
       }
     ]
   },
@@ -257,7 +251,7 @@ const groups: FeatureGroup[] = [
       {
         title: "Compliance Guardrails",
         description:
-          "Industry guardrails, including Fair Housing rules for real estate, are enforced in every conversation.",
+          "Industry guardrails, such as Fair Housing rules for real estate is just one example, are enforced in every conversation.",
         Icon: ShieldCheck
       },
       {

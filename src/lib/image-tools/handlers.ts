@@ -33,6 +33,7 @@ import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import type { PlanTier } from "@/lib/plans/tier";
+import { imageGenerationsPerSessionForTier } from "@/lib/plans/limits";
 import { rateLimitDurable } from "@/lib/rate-limit";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
@@ -60,7 +61,7 @@ export const IMAGE_COST_MICROS: Record<string, number> = {
 };
 export const DEFAULT_IMAGE_COST_MICROS = 134_000;
 
-/** Hard per-session cap on generations (per asking entity; AiFlows exempt). */
+/** Starter-tier default per-session cap (Standard+ uses tier limits). */
 export const IMAGE_SESSION_LIMIT = 3;
 /** Session window for the durable limiter (rolling 24h). */
 export const IMAGE_SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
@@ -161,6 +162,7 @@ export async function recordImageLimitReached(
   businessId: string,
   surface: "dashboard" | "sms",
   sessionKey: string,
+  sessionLimit: number,
   db: SupabaseClient
 ): Promise<void> {
   try {
@@ -172,7 +174,7 @@ export async function recordImageLimitReached(
         status: "urgent_alert",
         log_payload: {
           source: "image_generation",
-          reason: `Image generation limit reached (${IMAGE_SESSION_LIMIT} per conversation)`,
+          reason: `Image generation limit reached (${sessionLimit} per conversation)`,
           surface,
           sessionKey
         }
@@ -207,7 +209,7 @@ export async function recordImageLimitReached(
     await dispatchUrgentNotification({
       businessId,
       kind: "image_limit",
-      summary: `Your coworker hit its image generation limit (${IMAGE_SESSION_LIMIT} per conversation)`,
+      summary: `Your coworker hit its image generation limit (${sessionLimit} per conversation)`,
       payload: { surface, sessionKey }
     });
   } catch (err) {
@@ -303,6 +305,7 @@ export async function generateBusinessImage(
     .eq("id", businessId)
     .maybeSingle();
   const tier = (bizRow as { tier?: PlanTier | null } | null)?.tier ?? null;
+  const sessionLimit = imageGenerationsPerSessionForTier(tier);
   const snapshot = await getChatSpendSnapshotForBusiness(businessId, db, tier);
   if (snapshot.spendMicros + imageCostMicrosForModel(model) > snapshot.effectiveCapMicros) {
     return {
@@ -321,19 +324,25 @@ export async function generateBusinessImage(
     const limiterKey = `imggen:${businessId}:${opts.session.surface}:${opts.session.key}`;
     const limit = await rateLimitDurable(limiterKey, {
       interval: IMAGE_SESSION_WINDOW_MS,
-      maxRequests: IMAGE_SESSION_LIMIT
+      maxRequests: sessionLimit
     });
     if (!limit.success) {
       return {
         ok: false,
         detail: "image_limit_reached",
-        message: `The image limit (${IMAGE_SESSION_LIMIT} per conversation) has been reached. Tell the user plainly instead of retrying.`
+        message: `The image limit (${sessionLimit} per conversation) has been reached. Tell the user plainly instead of retrying.`
       };
     }
     if (limit.remaining === 0) {
       // This call consumes the FINAL slot — alert now (once per session key;
       // later calls fail the limiter above and never reach here).
-      await recordImageLimitReached(businessId, opts.session.surface, opts.session.key, db);
+      await recordImageLimitReached(
+        businessId,
+        opts.session.surface,
+        opts.session.key,
+        sessionLimit,
+        db
+      );
     }
   }
 

@@ -265,7 +265,7 @@ describe("image-tools handlers", () => {
   describe("recordImageLimitReached", () => {
     it("writes the activity-log alert and dispatches the owner notification (pref default ON)", async () => {
       const db = stubDb();
-      await recordImageLimitReached(BIZ, "dashboard", "thread-1", db as never);
+      await recordImageLimitReached(BIZ, "dashboard", "thread-1", IMAGE_SESSION_LIMIT, db as never);
       expect(mockInsertLog).toHaveBeenCalledWith(
         expect.objectContaining({
           business_id: BIZ,
@@ -283,7 +283,7 @@ describe("image-tools handlers", () => {
     it("skips the owner notification when the preference is off (alert log still written)", async () => {
       mockGetPrefs.mockResolvedValue({ image_limit_alerts: false });
       const db = stubDb();
-      await recordImageLimitReached(BIZ, "sms", "+15550001111", db as never);
+      await recordImageLimitReached(BIZ, "sms", "+15550001111", IMAGE_SESSION_LIMIT, db as never);
       expect(mockInsertLog).toHaveBeenCalled();
       expect(mockDispatch).not.toHaveBeenCalled();
     });
@@ -291,26 +291,26 @@ describe("image-tools handlers", () => {
     it("still dispatches when the preference row exists with the toggle on", async () => {
       mockGetPrefs.mockResolvedValue({ image_limit_alerts: true });
       const db = stubDb();
-      await recordImageLimitReached(BIZ, "sms", "+15550001111", db as never);
+      await recordImageLimitReached(BIZ, "sms", "+15550001111", IMAGE_SESSION_LIMIT, db as never);
       expect(mockDispatch).toHaveBeenCalled();
     });
 
     it("treats a pre-migration row (no image_limit_alerts column) as default ON", async () => {
       mockGetPrefs.mockResolvedValue({ sms_urgent: true }); // no image_limit_alerts field
       const db = stubDb();
-      await recordImageLimitReached(BIZ, "sms", "+15550001111", db as never);
+      await recordImageLimitReached(BIZ, "sms", "+15550001111", IMAGE_SESSION_LIMIT, db as never);
       expect(mockDispatch).toHaveBeenCalled();
     });
 
     it("fails open to alerting when the preferences read throws (Error and non-Error)", async () => {
       mockGetPrefs.mockRejectedValue(new Error("db down"));
       const db = stubDb();
-      await recordImageLimitReached(BIZ, "dashboard", "t", db as never);
+      await recordImageLimitReached(BIZ, "dashboard", "t", IMAGE_SESSION_LIMIT, db as never);
       expect(mockDispatch).toHaveBeenCalled();
 
       mockDispatch.mockClear();
       mockGetPrefs.mockRejectedValue("db down (non-Error)");
-      await recordImageLimitReached(BIZ, "dashboard", "t", db as never);
+      await recordImageLimitReached(BIZ, "dashboard", "t", IMAGE_SESSION_LIMIT, db as never);
       expect(mockDispatch).toHaveBeenCalled();
     });
 
@@ -319,19 +319,42 @@ describe("image-tools handlers", () => {
       mockInsertLog.mockRejectedValue(new Error("insert down"));
       mockDispatch.mockRejectedValue("dispatch down");
       await expect(
-        recordImageLimitReached(BIZ, "dashboard", "t", db as never)
+        recordImageLimitReached(BIZ, "dashboard", "t", IMAGE_SESSION_LIMIT, db as never)
       ).resolves.toBeUndefined();
 
       mockInsertLog.mockRejectedValue("insert down (non-Error)");
       mockDispatch.mockRejectedValue(new Error("dispatch down"));
       await expect(
-        recordImageLimitReached(BIZ, "sms", "t2", db as never)
+        recordImageLimitReached(BIZ, "sms", "t2", IMAGE_SESSION_LIMIT, db as never)
       ).resolves.toBeUndefined();
     });
   });
 
   describe("generateBusinessImage", () => {
-    it("refuses with image_limit_reached when the session limiter is exhausted", async () => {
+    it("refuses with image_limit_reached when the session limiter is exhausted (Standard tier)", async () => {
+      budgetOk();
+      mockRateLimitDurable.mockResolvedValue({
+        success: false,
+        limit: 10,
+        remaining: 0,
+        reset: Date.now()
+      });
+      const db = stubDb({ tier: "standard" });
+      const result = await generateBusinessImage(BIZ, "a cat", {
+        session: { surface: "dashboard", key: "t1" },
+        surface: "test",
+        client: db as never
+      });
+      expect(result.ok).toBe(false);
+      expect(result.detail).toBe("image_limit_reached");
+      expect(mockRateLimitDurable).toHaveBeenCalledWith(
+        `imggen:${BIZ}:dashboard:t1`,
+        expect.objectContaining({ maxRequests: 10 })
+      );
+      expect(mockGenerateImage).not.toHaveBeenCalled();
+    });
+
+    it("uses the Starter per-session cap when tier is starter", async () => {
       budgetOk();
       mockRateLimitDurable.mockResolvedValue({
         success: false,
@@ -339,7 +362,7 @@ describe("image-tools handlers", () => {
         remaining: 0,
         reset: Date.now()
       });
-      const db = stubDb();
+      const db = stubDb({ tier: "starter" });
       const result = await generateBusinessImage(BIZ, "a cat", {
         session: { surface: "dashboard", key: "t1" },
         surface: "test",
@@ -351,7 +374,6 @@ describe("image-tools handlers", () => {
         `imggen:${BIZ}:dashboard:t1`,
         expect.objectContaining({ maxRequests: IMAGE_SESSION_LIMIT })
       );
-      expect(mockGenerateImage).not.toHaveBeenCalled();
     });
 
     it("fires the limit-reached alert exactly when the FINAL slot is consumed", async () => {

@@ -43,3 +43,9 @@ export function concurrentCallsLine(maxConcurrentCalls: number): string {
     ? "1 concurrent call"
     : `Up to ${maxConcurrentCalls} concurrent calls`;
 }
+
+/** Marketing / UI line for per-conversation AI image generation cap. */
+export function imageGenerationLine(tier: PlanTier, enterpriseLimitsOverride?: unknown): string {
+  const limit = getTierLimits(tier, enterpriseLimitsOverride).imageGenerationsPerSession;
+  return `${limit} per conversation`;
+}

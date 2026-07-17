@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   ArrowLeftRight,
+  Bot,
   CalendarCheck,
   Code2,
   FileSpreadsheet,
@@ -26,12 +27,12 @@ import {
 export const metadata: Metadata = {
   title: "Integrations",
   description:
-    "Connect New Coworker to Meta (Facebook & Instagram) lead ads, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
+    "Connect New Coworker to Meta lead ads, Claude, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
   alternates: { canonical: "/integrations" },
   openGraph: {
     title: "Integrations | New Coworker",
     description:
-      "Meta lead ads, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
+      "Meta lead ads, Claude connector, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
     url: "/integrations"
   }
 };
@@ -44,6 +45,12 @@ const zapierTriggers = [
 ];
 
 const nativeIntegrations: Feature[] = [
+  {
+    title: "Claude connector",
+    description:
+      "Let Claude work with your coworker — look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows — authenticated as you through OAuth, with permissions matching your dashboard role. Available after signup under Dashboard → Integrations; add as a custom connector in Claude (Settings → Connectors).",
+    Icon: Bot
+  },
   {
     title: "Google Workspace",
     description:
@@ -123,7 +130,7 @@ export default function IntegrationsPage() {
         <SectionHeading
           eyebrow="Meta Lead Ads"
           title="Facebook & Instagram leads, answered while they're still looking at your ad"
-          subtitle="Most businesses take hours to respond to an ad lead. Your coworker does it in seconds — automatically, every time, day or night."
+          subtitle="Most businesses take hours to respond to an ad lead. Your coworker does it in seconds performed automatically, every time, day or night."
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
@@ -132,7 +139,7 @@ export default function IntegrationsPage() {
             <p className="mt-2 text-sm leading-relaxed text-parchment/50">
               Your Meta lead ads connect to your coworker through a simple bridge (a free Make.com
               account, Zapier, or lead tools like Privyr). A guided in-dashboard setup walks you
-              through it in about 15 minutes — consent language included.
+              through it in about 15 minutes.
             </p>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
@@ -155,7 +162,7 @@ export default function IntegrationsPage() {
         </div>
         <div className="mt-6 rounded-xl border border-claw-green/20 bg-claw-green/[0.05] p-4 text-sm text-parchment/60">
           The same webhook trigger works for any lead source — Google lead forms, your website,
-          TikTok, or anything that can send a webhook — not just Meta.
+          TikTok, or anything that can send a webhook not just Meta.
         </div>
       </section>
 

@@ -81,7 +81,7 @@ export const INDUSTRIES: Industry[] = [
       {
         title: "Instant Text Follow-Up",
         description:
-          "Missed a call during a showing? The caller gets an immediate text and the conversation continues over SMS.",
+          "Missed a warm transfer during a showing? The caller gets an immediate text and the conversation continues over SMS.",
         Icon: MessageSquareText
       },
       {
@@ -111,7 +111,7 @@ export const INDUSTRIES: Industry[] = [
     name: "Home Services",
     Icon: Wrench,
     teaser:
-      "Plumbers, electricians, HVAC: win the job by being the company that actually answers, and let auto-texts rescue every missed call.",
+      "Plumbers, electricians, HVAC: win the job by being the company that actually answers, and let auto-texts rescue every missed warm transfer call.",
     headline: "The company that answers wins the job",
     subheadline:
       "Homeowners call down the list until someone picks up. Your AI coworker answers every call, quotes your availability, books the appointment, and texts confirmations, even while your crew is on a roof.",
@@ -131,7 +131,7 @@ export const INDUSTRIES: Industry[] = [
       {
         title: "Missed-Call Rescue",
         description:
-          "On a ladder with both hands full? The caller instantly gets a text and the job is saved, not lost.",
+          "On a ladder with both hands full? The caller instantly gets a text and the job is saved, not lost from an unanswered forwarded call.",
         Icon: MessageSquareText
       },
       {
@@ -245,7 +245,7 @@ export const INDUSTRIES: Industry[] = [
       {
         title: "Speed-to-Lead Texts",
         description:
-          "Every missed or after-hours caller gets an immediate text, keeping your firm first in mind.",
+          "Every missed or after-hours forwarded caller gets an immediate text, keeping your firm first in mind.",
         Icon: MessageSquareText
       },
       {
@@ -312,7 +312,7 @@ export const INDUSTRIES: Industry[] = [
       {
         title: "Missed-Call Auto-Text",
         description:
-          "Any call that can't be answered gets an instant text, keeping the guest engaged until you're free.",
+          "Any forwarded call that can't be answered gets an instant text, keeping the guest engaged until you're free.",
         Icon: MessageSquareText
       }
     ],
