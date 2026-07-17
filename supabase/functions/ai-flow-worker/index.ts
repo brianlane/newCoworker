@@ -4477,8 +4477,10 @@ async function sendGroupSmsStep(
     // history and on the Customers page.
     // sms_outbound_log_id is a single FK, so the shared group links pair with
     // the FIRST recipient's log row — enough for thread stats/deep links.
+    // Strictly the first recipient: if that insert failed, the links stay
+    // unpaired rather than attach to a different recipient's thread.
     let groupOutboundLogId: string | null = null;
-    for (const to of recipients) {
+    for (const [i, to] of recipients.entries()) {
       const outboundLogId = await logOutboundSms(supabase, run, {
         to,
         from: cfg.from || null,
@@ -4487,7 +4489,7 @@ async function sendGroupSmsStep(
         telnyxMessageId: messageId,
         channel: sendChannel
       });
-      groupOutboundLogId ??= outboundLogId;
+      if (i === 0) groupOutboundLogId = outboundLogId;
       await recordLeadCustomerProfile(supabase, run, scope, to);
     }
     await linkSmsLinksToOutboundLog(
