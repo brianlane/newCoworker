@@ -117,8 +117,8 @@ export default function TermsPage() {
           are limited to the specific offer presented at purchase and may be denied for abuse, fraud, repeated
           refund requests, or material violation of these Terms. Refunds under the money-back guarantee
           exclude the one-time carrier registration fee and deduct, at our cost, usage charges you have
-          already incurred through the service (including SMS messages sent, voice call minutes, and AI
-          usage), which third-party carriers and AI providers bill to us and do not refund. Except as
+          already incurred through the service (including SMS messages sent and received, voice call
+          minutes, and AI usage), which third-party carriers and AI providers bill to us and do not refund. Except as
           required by law or expressly stated in writing, fees are otherwise non-refundable.
         </p>
         <p>

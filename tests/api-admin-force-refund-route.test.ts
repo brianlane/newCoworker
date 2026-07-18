@@ -134,7 +134,7 @@ beforeEach(() => {
     }
   });
   vi.mocked(loadBillableUsageCarveOutCents).mockResolvedValue({
-    usage: { smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 },
+    usage: { smsSent: 0, smsReceived: 0, voiceSeconds: 0, aiSpendMicros: 0 },
     cents: 0
   });
 });
@@ -497,7 +497,7 @@ describe("api/admin/force-refund route", () => {
 
   it("threads the billable-usage carve-out into the final planner context", async () => {
     vi.mocked(loadBillableUsageCarveOutCents).mockResolvedValueOnce({
-      usage: { smsSent: 10, voiceSeconds: 300, aiSpendMicros: 0 },
+      usage: { smsSent: 10, smsReceived: 4, voiceSeconds: 300, aiSpendMicros: 0 },
       cents: 250
     });
     vi.mocked(planLifecycleAction).mockReturnValue({

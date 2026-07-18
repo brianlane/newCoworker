@@ -10,30 +10,34 @@ import {
   loadBillableUsageSince,
   resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
-import {
-  ENTERPRISE_UNIT_COSTS,
-  VOICE_ALL_IN_CENTS_PER_MINUTE
-} from "@/lib/plans/enterprise-pricing";
+import { ENTERPRISE_UNIT_COSTS } from "@/lib/plans/enterprise-pricing";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 describe("computeBillableUsageCents", () => {
-  it("prices SMS, voice, and AI spend at platform cost with a single final round", () => {
+  it("prices SMS both ways, Telnyx-only voice, and AI spend with a single final round", () => {
     const cents = computeBillableUsageCents({
       smsSent: 100,
+      smsReceived: 40,
       voiceSeconds: 50 * 60,
       aiSpendMicros: 1_234_999 // $1.234999
     });
     expect(cents).toBe(
       Math.round(
         100 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
-          50 * VOICE_ALL_IN_CENTS_PER_MINUTE +
+          40 * ENTERPRISE_UNIT_COSTS.smsInboundCentsPerMessage +
+          // Telnyx-only on purpose: the Gemini Live component of a call is
+          // metered into owner_chat_model_spend and arrives via aiSpendMicros
+          // — the all-in rate would double-charge it.
+          50 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
           123.4999
       )
     );
   });
 
   it("returns 0 for a tenant with no usage", () => {
-    expect(computeBillableUsageCents({ smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 })).toBe(0);
+    expect(
+      computeBillableUsageCents({ smsSent: 0, smsReceived: 0, voiceSeconds: 0, aiSpendMicros: 0 })
+    ).toBe(0);
   });
 });
 
@@ -110,11 +114,15 @@ describe("resolveUsageCarveOutWindow", () => {
 /**
  * Fake client where each table returns configurable pages: `pages[table]`
  * is an array of page results (rows arrays) served in order by `.range()`
- * calls; `errors[table]` short-circuits the read with an error.
+ * calls; `errors[table]` short-circuits the read with an error. Count reads
+ * (the inbound-SMS HEAD query) await the builder chain itself, so the chain
+ * is thenable and resolves `{ count: counts[table] ?? null, error }`.
  */
 function makeUsageClient(opts: {
   /** Page value `null` simulates a null `data` payload (no error). */
   pages?: Record<string, Array<Array<Record<string, unknown>> | null>>;
+  /** HEAD-count result per table; missing → null count (loader treats as 0). */
+  counts?: Record<string, number>;
   errors?: Record<string, { message: string }>;
 }) {
   const rangeCalls: Record<string, number> = {};
@@ -137,6 +145,14 @@ function makeUsageClient(opts: {
             ? []
             : pagesForTable[pageIndex];
         return Promise.resolve({ data: page, error: null });
+      }),
+      // Thenable: awaiting the chain (count/HEAD reads) resolves here.
+      then: vi.fn().mockImplementation((resolve: (v: unknown) => unknown) => {
+        const error = opts.errors?.[table];
+        const result = error
+          ? { count: null, error }
+          : { count: opts.counts?.[table] ?? null, error: null };
+        return Promise.resolve(result).then(resolve);
       })
     };
     chains[table] = chain;
@@ -153,22 +169,33 @@ describe("loadBillableUsageSince", () => {
     vi.clearAllMocks();
   });
 
-  it("sums SMS, settled + forwarded voice seconds, and AI spend since the anchor", async () => {
+  it("sums SMS both ways, settled + forwarded voice seconds, and AI spend since the anchor", async () => {
     const { client, chains } = makeUsageClient({
       pages: {
         daily_usage: [[{ sms_sent: 12 }, { sms_sent: 3 }, { sms_sent: null }]],
         voice_settlements: [[{ billable_seconds: 120 }, { billable_seconds: null }]],
         voice_forwarded_call_meter: [[{ billable_seconds: 60 }]],
         owner_chat_model_spend: [[{ spend_micros: 2_000_000 }, { spend_micros: "500000" }]]
-      }
+      },
+      counts: { sms_inbound_jobs: 27 }
     });
 
     const usage = await loadBillableUsageSince("biz-1", WINDOW, client as never);
 
-    expect(usage).toEqual({ smsSent: 15, voiceSeconds: 180, aiSpendMicros: 2_500_000 });
-    // The SMS read filters on the UTC day of the anchor; the timestamp reads
-    // filter on the full instant.
+    expect(usage).toEqual({
+      smsSent: 15,
+      smsReceived: 27,
+      voiceSeconds: 180,
+      aiSpendMicros: 2_500_000
+    });
+    // The SMS reads filter on the UTC day / instant of the anchor; the
+    // timestamp reads filter on the full instant.
     expect(chains.daily_usage.gte).toHaveBeenCalledWith("usage_date", "2026-07-01");
+    expect(chains.sms_inbound_jobs.gte).toHaveBeenCalledWith("created_at", SINCE);
+    expect(chains.sms_inbound_jobs.select).toHaveBeenCalledWith("id", {
+      count: "exact",
+      head: true
+    });
     expect(chains.voice_settlements.gte).toHaveBeenCalledWith("created_at", SINCE);
     expect(chains.voice_forwarded_call_meter.gte).toHaveBeenCalledWith("created_at", SINCE);
     expect(chains.owner_chat_model_spend.gte).toHaveBeenCalledWith("period_start", SINCE);
@@ -202,7 +229,8 @@ describe("loadBillableUsageSince", () => {
       }
     });
     const usage = await loadBillableUsageSince("biz-1", WINDOW, client as never);
-    expect(usage).toEqual({ smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 });
+    // Missing count config → null count from PostgREST → 0 received.
+    expect(usage).toEqual({ smsSent: 0, smsReceived: 0, voiceSeconds: 0, aiSpendMicros: 0 });
   });
 
   it("pages past the 1000-row PostgREST cap on every table", async () => {
@@ -243,6 +271,7 @@ describe("loadBillableUsageSince", () => {
 
   it.each([
     "daily_usage",
+    "sms_inbound_jobs",
     "voice_settlements",
     "voice_forwarded_call_meter",
     "owner_chat_model_spend"
@@ -258,7 +287,7 @@ describe("loadBillableUsageSince", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client as never);
     const usage = await loadBillableUsageSince("biz-1", WINDOW);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
-    expect(usage).toEqual({ smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 });
+    expect(usage).toEqual({ smsSent: 0, smsReceived: 0, voiceSeconds: 0, aiSpendMicros: 0 });
   });
 });
 
@@ -269,18 +298,21 @@ describe("loadBillableUsageCarveOutCents", () => {
         daily_usage: [[{ sms_sent: 100 }]],
         voice_settlements: [[{ billable_seconds: 50 * 60 }]],
         owner_chat_model_spend: [[{ spend_micros: 1_000_000 }]]
-      }
+      },
+      counts: { sms_inbound_jobs: 60 }
     });
     const result = await loadBillableUsageCarveOutCents("biz-1", WINDOW, client as never);
     expect(result.usage).toEqual({
       smsSent: 100,
+      smsReceived: 60,
       voiceSeconds: 3000,
       aiSpendMicros: 1_000_000
     });
     expect(result.cents).toBe(
       Math.round(
         100 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
-          50 * VOICE_ALL_IN_CENTS_PER_MINUTE +
+          60 * ENTERPRISE_UNIT_COSTS.smsInboundCentsPerMessage +
+          50 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
           100
       )
     );
