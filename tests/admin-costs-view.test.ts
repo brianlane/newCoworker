@@ -96,7 +96,6 @@ describe("sumMarginLinesByKey", () => {
       did: 0,
       telnyx_usage: 100,
       gemini_chat: 0,
-      gemini_voice: 0,
       stripe_fees: 0
     });
   });

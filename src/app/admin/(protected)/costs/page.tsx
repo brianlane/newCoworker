@@ -163,7 +163,7 @@ export default async function AdminCostsPage() {
           <p className="text-3xl font-bold text-parchment">{money(totalCostCents)}</p>
           <p className="text-xs text-parchment/30 mt-1">
             {money(lineTotals.hosting)} hosting · {money(lineTotals.telnyx_usage)} Telnyx ·{" "}
-            {money(lineTotals.gemini_chat + lineTotals.gemini_voice)} Gemini
+            {money(lineTotals.gemini_chat)} Gemini
           </p>
         </Card>
         <Card>
@@ -220,8 +220,7 @@ export default async function AdminCostsPage() {
               ["Hosting (Hostinger)", lineTotals.hosting],
               ["Telnyx usage", lineTotals.telnyx_usage],
               ["Phone number rentals", lineTotals.did],
-              ["Gemini chat (metered)", lineTotals.gemini_chat],
-              ["Gemini Live voice (rate est.)", lineTotals.gemini_voice],
+              ["Gemini (metered, incl. Live voice)", lineTotals.gemini_chat],
               ["Stripe fees", lineTotals.stripe_fees],
               ["Idle pool hosting", poolBurnMonthlyCents],
               ["Telnyx unattributed (leak check)", unattributedMonthCents]

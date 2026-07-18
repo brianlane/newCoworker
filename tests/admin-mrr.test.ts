@@ -9,8 +9,7 @@ import {
 import { getPeriodPricing } from "@/lib/plans/tier";
 import {
   ENTERPRISE_UNIT_COSTS,
-  HOSTING_MONTHLY_CENTS_BY_SIZE,
-  VOICE_ALL_IN_CENTS_PER_MINUTE
+  HOSTING_MONTHLY_CENTS_BY_SIZE
 } from "@/lib/plans/enterprise-pricing";
 
 const NOW = new Date("2026-07-10T12:00:00Z");
@@ -309,7 +308,11 @@ describe("estimateMonthlyPlatformCost", () => {
     });
     expect(result.usageCents).toBe(
       Math.round(
-        100 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage + 50 * VOICE_ALL_IN_CENTS_PER_MINUTE
+        100 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
+          // Telnyx-only on purpose: Gemini Live voice settles into
+          // owner_chat_model_spend, so it arrives via aiSpendCents — the
+          // all-in rate would double-count it.
+          50 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute
       )
     );
     expect(result.aiSpendCents).toBe(123);
@@ -340,23 +343,13 @@ describe("estimateMonthlyPlatformCost", () => {
     expect(result.hostingCents).toBe(HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2);
   });
 
-  it("replaces the usage estimate with Telnyx invoice actuals + Gemini voice rate", () => {
+  it("replaces the usage estimate with the Telnyx invoice actual (no Gemini top-up)", () => {
     const result = estimateMonthlyPlatformCost({
       businesses: [],
       monthUsage: { smsSent: 999, voiceMinutes: 999 },
       aiSpendMicros: 0,
-      actuals: { telnyxMonthCostCents: 720.4, geminiVoiceCents: 69.75 }
+      actuals: { telnyxMonthCostCents: 720.4 }
     });
-    expect(result.usageCents).toBe(Math.round(720.4 + 69.75));
-  });
-
-  it("defaults the Gemini voice top-up to zero when only the Telnyx actual is present", () => {
-    const result = estimateMonthlyPlatformCost({
-      businesses: [],
-      monthUsage: { smsSent: 999, voiceMinutes: 999 },
-      aiSpendMicros: 0,
-      actuals: { telnyxMonthCostCents: 720 }
-    });
-    expect(result.usageCents).toBe(720);
+    expect(result.usageCents).toBe(Math.round(720.4));
   });
 });

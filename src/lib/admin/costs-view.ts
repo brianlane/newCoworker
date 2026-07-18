@@ -25,7 +25,6 @@ export function sumMarginLinesByKey(
     did: 0,
     telnyx_usage: 0,
     gemini_chat: 0,
-    gemini_voice: 0,
     stripe_fees: 0
   };
   for (const business of economics) {
