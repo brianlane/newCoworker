@@ -217,6 +217,7 @@
     "common": {
       "openDashboard": "Abrir panel",
       "goToDashboard": "Ir al panel",
+      "visitDashboard": "Visita tu panel:",
       "teamSignoff": "— El equipo de New Coworker",
       "urgentSubject": "Urgente: {summary}",
       "urgentBody": "Tu Coworker de IA marcó un evento urgente: {summary}"

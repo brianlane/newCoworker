@@ -217,6 +217,7 @@
     "common": {
       "openDashboard": "Open dashboard",
       "goToDashboard": "Go to dashboard",
+      "visitDashboard": "Visit your dashboard:",
       "teamSignoff": "— The New Coworker Team",
       "urgentSubject": "Urgent: {summary}",
       "urgentBody": "Your AI Coworker flagged an urgent event: {summary}"

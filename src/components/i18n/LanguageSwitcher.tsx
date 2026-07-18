@@ -35,6 +35,17 @@ export function LanguageSwitcher({ persist = false, className = "" }: Props) {
       }
     } else {
       document.cookie = `${LOCALE_COOKIE}=${next}; path=/; max-age=${60 * 60 * 24 * 365}; samesite=lax`;
+      // Signed-in visitors switching from a marketing page: also persist
+      // best-effort, because the saved account preference wins over the
+      // cookie at resolve time and would otherwise revert the switch on the
+      // next load. Signed-out visitors just get a 401 here — ignored.
+      // keepalive survives the navigation below.
+      void fetch("/api/account/locale", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ locale: next }),
+        keepalive: true
+      }).catch(() => undefined);
       if (next === "es" && isMarketingPath(window.location.pathname)) {
         const prefixed = prefixSpanishPath(window.location.pathname);
         window.location.href = prefixed + window.location.search;

@@ -25,9 +25,11 @@ export function buildProvisioningLiveEmail(input: ProvisioningLiveEmailInput): P
   const copy = emailMessagesForLocale(locale);
   const subject = copy.provisioningLive.subject;
   const body = copy.provisioningLive.body;
-  const text = [body, `Visit your dashboard: ${input.dashboardUrl}`, copy.common.teamSignoff].join(
-    "\n\n"
-  );
+  const text = [
+    body,
+    `${copy.common.visitDashboard} ${input.dashboardUrl}`,
+    copy.common.teamSignoff
+  ].join("\n\n");
 
   const html = buildBrandedEmailHtml({
     siteUrl: input.siteUrl,

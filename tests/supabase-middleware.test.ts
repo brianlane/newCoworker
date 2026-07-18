@@ -85,6 +85,25 @@ describe("proxy", () => {
     expect(res.cookies.get("NEXT_LOCALE")?.value).toBe("es");
   });
 
+  it("rate-limits /es mirrors like their canonical paths (AUTH bucket for /es/login POST)", async () => {
+    mockSupabaseWithUser(null);
+    await proxy(makeRequest("/es/login", { method: "POST" }));
+    expect(rateLimit).toHaveBeenCalledWith(
+      expect.stringContaining("auth"),
+      expect.objectContaining({ maxRequests: 5 })
+    );
+
+    vi.mocked(rateLimit).mockReturnValueOnce({
+      success: false,
+      limit: 60,
+      remaining: 0,
+      reset: Date.now() + 60000
+    });
+    const limited = await proxy(makeRequest("/es/pricing"));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBeTruthy();
+  });
+
   it("does not rewrite non-marketing /es paths or English URLs", async () => {
     mockSupabaseWithUser(null);
     const dashboard = await proxy(makeRequest("/es/dashboard"));
