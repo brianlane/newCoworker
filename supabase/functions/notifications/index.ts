@@ -211,17 +211,24 @@ async function logOwnerAlertSms(
     telnyxMessageId: string | null;
   }
 ): Promise<void> {
-  const { error } = await supa.from("sms_outbound_log").insert({
-    business_id: args.businessId,
-    to_e164: args.to,
-    from_e164: args.from,
-    body: args.body,
-    source: "owner_alert",
-    telnyx_message_id: args.telnyxMessageId,
-    channel: "sms"
-  });
-  if (error) {
-    console.error("owner_alert sms_outbound_log insert", error);
+  // Never throws: this runs inside the SMS-send try block AFTER Telnyx
+  // accepted the alert — a thrown insert (network blip) would otherwise
+  // trip the outer catch and record the delivered send as `failed`.
+  try {
+    const { error } = await supa.from("sms_outbound_log").insert({
+      business_id: args.businessId,
+      to_e164: args.to,
+      from_e164: args.from,
+      body: args.body,
+      source: "owner_alert",
+      telnyx_message_id: args.telnyxMessageId,
+      channel: "sms"
+    });
+    if (error) {
+      console.error("owner_alert sms_outbound_log insert", error);
+    }
+  } catch (e) {
+    console.error("owner_alert sms_outbound_log insert threw", e);
   }
 }
 
