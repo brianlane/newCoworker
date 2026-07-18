@@ -6,7 +6,7 @@ vi.mock("@/lib/db/onboarding-drafts", () => ({
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
-  getBusiness: vi.fn()
+  businessExists: vi.fn()
 }));
 
 vi.mock("@/lib/rate-limit", async () => {
@@ -22,7 +22,7 @@ vi.mock("@/lib/rate-limit", async () => {
 process.env.ONBOARDING_TOKEN_SECRET = "test-onboarding-secret";
 
 import { GET, POST } from "@/app/api/onboard/draft/route";
-import { getBusiness } from "@/lib/db/businesses";
+import { businessExists } from "@/lib/db/businesses";
 import { getOnboardingDraft, upsertOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { createOnboardingToken } from "@/lib/onboarding/token";
 import { rateLimitDurable } from "@/lib/rate-limit";
@@ -55,7 +55,7 @@ describe("api/onboard/draft route", () => {
     vi.clearAllMocks();
     vi.mocked(upsertOnboardingDraft).mockResolvedValue(MOCK_DRAFT as never);
     vi.mocked(getOnboardingDraft).mockResolvedValue(MOCK_DRAFT as never);
-    vi.mocked(getBusiness).mockResolvedValue(null);
+    vi.mocked(businessExists).mockResolvedValue(false);
     vi.mocked(rateLimitDurable).mockResolvedValue({
       success: true,
       limit: 30,
@@ -170,7 +170,7 @@ describe("api/onboard/draft route", () => {
 
   it("allows a first claim when the business row does not exist yet (pre-create save)", async () => {
     vi.mocked(getOnboardingDraft).mockResolvedValue(null);
-    vi.mocked(getBusiness).mockResolvedValue(null);
+    vi.mocked(businessExists).mockResolvedValue(false);
 
     const response = await POST(firstClaimRequest());
     const body = await response.json();
@@ -182,7 +182,7 @@ describe("api/onboard/draft route", () => {
 
   it("rejects a first claim for a persisted business without an onboarding token", async () => {
     vi.mocked(getOnboardingDraft).mockResolvedValue(null);
-    vi.mocked(getBusiness).mockResolvedValue({ id: MOCK_DRAFT.business_id } as never);
+    vi.mocked(businessExists).mockResolvedValue(true);
 
     const response = await POST(firstClaimRequest());
     const body = await response.json();
@@ -194,7 +194,7 @@ describe("api/onboard/draft route", () => {
 
   it("rejects a first claim for a persisted business with a token for another business", async () => {
     vi.mocked(getOnboardingDraft).mockResolvedValue(null);
-    vi.mocked(getBusiness).mockResolvedValue({ id: MOCK_DRAFT.business_id } as never);
+    vi.mocked(businessExists).mockResolvedValue(true);
 
     const response = await POST(
       firstClaimRequest(createOnboardingToken({ businessId: "99999999-9999-4999-8999-999999999999" }))
@@ -208,7 +208,7 @@ describe("api/onboard/draft route", () => {
 
   it("allows a first claim for a persisted business with a valid onboarding token", async () => {
     vi.mocked(getOnboardingDraft).mockResolvedValue(null);
-    vi.mocked(getBusiness).mockResolvedValue({ id: MOCK_DRAFT.business_id } as never);
+    vi.mocked(businessExists).mockResolvedValue(true);
 
     const response = await POST(
       firstClaimRequest(createOnboardingToken({ businessId: MOCK_DRAFT.business_id }))
@@ -224,7 +224,21 @@ describe("api/onboard/draft route", () => {
     const response = await POST(firstClaimRequest());
 
     expect(response.status).toBe(200);
-    expect(getBusiness).not.toHaveBeenCalled();
+    expect(businessExists).not.toHaveBeenCalled();
+  });
+
+  it("fails CLOSED (500, no upsert) when the business existence lookup errors", async () => {
+    // A transient DB failure must not be read as "business does not exist" —
+    // that would skip the token requirement and reopen the pre-claim window.
+    vi.mocked(getOnboardingDraft).mockResolvedValue(null);
+    vi.mocked(businessExists).mockRejectedValue(new Error("businessExists: db down"));
+
+    const response = await POST(firstClaimRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(body.ok).toBe(false);
+    expect(upsertOnboardingDraft).not.toHaveBeenCalled();
   });
 
   // ── Durable rate limit (audit 2026-07, finding M3) ───────────────────────

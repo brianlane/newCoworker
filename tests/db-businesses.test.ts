@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  businessExists,
   createBusiness,
   getBusiness,
   getBusinessTimezone,
@@ -211,6 +212,43 @@ describe("db/businesses", () => {
 
     const result = await getBusiness("uuid-biz-1");
     expect(result?.name).toBe("Sunrise Realty");
+  });
+
+  it("businessExists returns true when a row exists", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "uuid-biz-1" }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(businessExists("uuid-biz-1")).resolves.toBe(true);
+    expect(db.from).toHaveBeenCalledWith("businesses");
+  });
+
+  it("businessExists returns false when no row exists", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(businessExists("uuid-missing")).resolves.toBe(false);
+  });
+
+  it("businessExists THROWS on a query error (security gates must fail closed)", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(businessExists("uuid-biz-1")).rejects.toThrow("businessExists: db down");
+  });
+
+  it("businessExists uses a supplied client without creating a new one", async () => {
+    const db = mockDb({
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "uuid-biz-1" }, error: null })
+    });
+
+    await expect(businessExists("uuid-biz-1", db as never)).resolves.toBe(true);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });
 
   it("listBusinesses returns array", async () => {

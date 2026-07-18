@@ -1,5 +1,5 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { getBusiness } from "@/lib/db/businesses";
+import { businessExists } from "@/lib/db/businesses";
 import { getOnboardingDraft, upsertOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { onboardingAssistantProfileSchema } from "@/lib/onboarding/chat";
 import { verifyOnboardingToken } from "@/lib/onboarding/token";
@@ -83,11 +83,13 @@ export async function POST(request: Request) {
     // exists the id is no longer secret, so claiming a missing draft slot
     // for it requires the HMAC onboardingToken minted by
     // /api/business/create, the same proof of ownership /api/checkout and
-    // /api/business/config already demand.
+    // /api/business/config already demand. `businessExists` THROWS on a
+    // lookup error (surfacing as a 500 via handleRouteError) so a transient
+    // DB failure fails closed instead of skipping the token requirement.
     if (!existing) {
-      const business = await getBusiness(body.businessId);
+      const exists = await businessExists(body.businessId);
       if (
-        business &&
+        exists &&
         !(body.onboardingToken &&
           verifyOnboardingToken(body.onboardingToken, { businessId: body.businessId }))
       ) {
