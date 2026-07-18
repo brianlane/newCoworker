@@ -898,7 +898,7 @@
     },
     "contacts": {
       "languageLabel": "Idioma",
-      "languageHelp": "Idioma que usa tu coworker de IA con este contacto. Sobrescribe la detección si hace falta.",
+      "languageHelp": "Idioma que usa tu coworker de IA con este contacto.",
       "languageDetected": "Detectado automáticamente",
       "languageOwnerSet": "Establecido por ti",
       "languageEnglish": "Inglés",
