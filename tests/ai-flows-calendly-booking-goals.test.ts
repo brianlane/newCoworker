@@ -24,6 +24,7 @@ vi.mock("@/lib/db/contact-emails", () => ({ findContactsByEmails: vi.fn() }));
 
 import {
   BOOKING_GOAL_FLOW_PAGE,
+  BOOKING_GOAL_INVITEE_FETCH_CAP,
   BOOKING_GOAL_RUN_STATUSES,
   bookingCreatedRecently,
   definitionWatchesBookingGoal,
@@ -32,7 +33,7 @@ import {
   type BookingGoalSweepDeps
 } from "@/lib/ai-flows/calendly-booking-goals";
 import { CALENDAR_CREATED_LOOKBACK_MINUTES } from "@/lib/ai-flows/calendar-poll";
-import { CALENDLY_INVITEE_FETCH_CAP } from "@/lib/ai-flows/calendly-poll";
+import { CALENDLY_POLL_PAGE_COUNT } from "@/lib/ai-flows/calendly-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
@@ -356,7 +357,8 @@ describe("sweepCalendlyBookingGoals", () => {
         data: {
           collection: [
             booking("EV-OLD", isoAgoMin(CALENDAR_CREATED_LOOKBACK_MINUTES + 5)),
-            { created_at: isoAgoMin(1) } // no uri → ignored
+            { created_at: isoAgoMin(1) }, // no uri → ignored
+            { uri: "https://api.calendly.com/scheduled_events/EV-X" } // no created_at → ignored
           ]
         }
       };
@@ -473,8 +475,10 @@ describe("sweepCalendlyBookingGoals", () => {
     const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) => {
       if (config.endpoint === "/users/me") return USER_RES;
       if (config.endpoint === "/scheduled_events") {
+        // EV1 listed first but created LATER — the sweep must walk EV2
+        // (closer to aging out of the lookback) first.
         return {
-          data: { collection: [booking("EV1", isoAgoMin(1)), booking("EV2", isoAgoMin(1))] }
+          data: { collection: [booking("EV1", isoAgoMin(1)), booking("EV2", isoAgoMin(5))] }
         };
       }
       if (config.endpoint === "/scheduled_events/EV1/invitees") return null; // refused
@@ -488,18 +492,27 @@ describe("sweepCalendlyBookingGoals", () => {
       "booking goal sweep: invitee fetch refused; retried next tick",
       expect.objectContaining({ businessId: BIZ })
     );
-    // EV2's invitee still fired.
+    // EV2's invitee still fired, and oldest-created went first.
     expect(result).toMatchObject({ bookings: 2, goalsFired: 1 });
+    const inviteeCalls = vi
+      .mocked(request)
+      .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint)
+      .filter((e) => e.endsWith("/invitees"));
+    expect(inviteeCalls).toEqual([
+      "/scheduled_events/EV2/invitees",
+      "/scheduled_events/EV1/invitees"
+    ]);
   });
 
-  it("caps invitee fetches per tick and records the overflow", async () => {
+  it("caps invitee fetches per tick and records overflow (full page + cap)", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1")] }],
       ai_flow_runs: [{ data: [{ id: "run-1" }] }]
     });
-    const fresh = Array.from({ length: CALENDLY_INVITEE_FETCH_CAP + 1 }, (_, i) =>
+    const fresh = Array.from({ length: BOOKING_GOAL_INVITEE_FETCH_CAP + 1 }, (_, i) =>
       booking(`EV${i}`, isoAgoMin(1))
     );
+    expect(fresh.length).toBeGreaterThanOrEqual(CALENDLY_POLL_PAGE_COUNT);
     const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) => {
       if (config.endpoint === "/users/me") return USER_RES;
       if (config.endpoint === "/scheduled_events") return { data: { collection: fresh } };
@@ -507,15 +520,20 @@ describe("sweepCalendlyBookingGoals", () => {
     });
     const d = deps({ request: request as never });
     const result = await sweepCalendlyBookingGoals(db, d);
-    expect(result.bookings).toBe(CALENDLY_INVITEE_FETCH_CAP + 1);
+    expect(result.bookings).toBe(BOOKING_GOAL_INVITEE_FETCH_CAP + 1);
     // users/me + listing + capped invitee fetches.
-    expect(vi.mocked(request).mock.calls).toHaveLength(2 + CALENDLY_INVITEE_FETCH_CAP);
-    expect(recordSystemLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        event: "ai_flow_booking_goal_sweep_overflow"
-      })
-    );
+    expect(vi.mocked(request).mock.calls).toHaveLength(2 + BOOKING_GOAL_INVITEE_FETCH_CAP);
+    // A full listing page AND the fetch cap both surfaced as overflow.
+    const overflows = vi
+      .mocked(recordSystemLog)
+      .mock.calls.filter(
+        (c) => (c[0] as { event: string }).event === "ai_flow_booking_goal_sweep_overflow"
+      );
+    expect(overflows).toHaveLength(2);
+    expect(overflows.map((c) => (c[0] as { message: string }).message)).toEqual([
+      expect.stringContaining("full page"),
+      expect.stringContaining("invitee-fetch cap")
+    ]);
   });
 
   it("degrades the contact-number union to the seed on error or throw", async () => {

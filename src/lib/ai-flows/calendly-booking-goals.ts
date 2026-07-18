@@ -42,7 +42,6 @@ import { calendlyRequest, type CalendlyRequestConfig } from "@/lib/calendar-tool
 import {
   CALENDLY_CREATED_SCAN_BACK_DAYS,
   CALENDLY_CREATED_SCAN_DAYS,
-  CALENDLY_INVITEE_FETCH_CAP,
   CALENDLY_POLL_PAGE_COUNT,
   calendlyEventUuid
 } from "@/lib/ai-flows/calendly-poll";
@@ -64,6 +63,16 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Page size for the goal-flow listing — paged so no flow is silently skipped. */
 export const BOOKING_GOAL_FLOW_PAGE = 100;
+
+/**
+ * Cap on per-tick invitee fetches per business. Set to the listing page size
+ * (not the poller's smaller enrichment cap): a capped booking is only
+ * retried while it is still inside the created lookback, so a sustained
+ * burst bigger than the cap could age bookings out UNFIRED — with the cap
+ * equal to everything one page can list, that requires >100 bookings created
+ * within the lookback for one tenant (and the overflow is logged).
+ */
+export const BOOKING_GOAL_INVITEE_FETCH_CAP = 100;
 
 /**
  * Run statuses a goal jump may touch — MUST mirror JUMPABLE_STATUSES in
@@ -296,23 +305,44 @@ export async function sweepCalendlyBookingGoals(
         }
       });
       if (!listRes) throw new Error("calendar_not_connected");
-      const bookings = ((listRes.data as { collection?: RawBooking[] })?.collection ?? []).filter(
-        (b): b is RawBooking & { uri: string } =>
-          typeof b?.uri === "string" &&
-          b.uri.length > 0 &&
-          bookingCreatedRecently(b.created_at, nowMs)
-      );
+      const listed = (listRes.data as { collection?: RawBooking[] })?.collection ?? [];
+      if (listed.length >= CALENDLY_POLL_PAGE_COUNT) {
+        // The single page may be truncating; fresh bookings could be hidden
+        // behind it (bounded like the poller — surface it, don't page).
+        await recordSystemLog({
+          businessId,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_booking_goal_sweep_overflow",
+          message:
+            "Calendly booking-goal sweep listing filled a full page; some fresh bookings may be deferred",
+          payload: { listed: listed.length }
+        });
+      }
+      // Oldest created first: a booking about to age out of the lookback
+      // must never be starved behind newer ones if the cap ever bites.
+      const bookings = listed
+        .filter(
+          (b): b is RawBooking & { uri: string; created_at: string } =>
+            typeof b?.uri === "string" &&
+            b.uri.length > 0 &&
+            typeof b.created_at === "string" &&
+            bookingCreatedRecently(b.created_at, nowMs)
+        )
+        .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
       result.bookings += bookings.length;
       if (bookings.length === 0) continue;
 
-      // Invitee identities across this business's fresh bookings. Fetches
-      // are capped like the poller's enrichment; a capped/failed booking is
-      // retried next tick while it is still inside the lookback.
+      // Invitee identities across this business's fresh bookings. The cap
+      // equals the listing page size, so every booking listed this tick can
+      // be fetched this tick — a fresh booking cannot be starved past its
+      // lookback by a same-tick burst (Bugbot on PR #742). A capped/refused
+      // booking is retried next tick while it is still inside the lookback.
       const seedNumbers = new Set<string>();
       const seedEmails = new Set<string>();
       let attempted = 0;
       for (const booking of bookings) {
-        if (attempted >= CALENDLY_INVITEE_FETCH_CAP) {
+        if (attempted >= BOOKING_GOAL_INVITEE_FETCH_CAP) {
           await recordSystemLog({
             businessId,
             source: "aiflow",
