@@ -730,6 +730,63 @@ reads. Traffic classes differ only in what happens AT the cap:
   alert must outrun the cap it reports; Safe Mode exists so a paused AI never
   silently eats customer texts. Failed sends release the counted slot.
 
+## Internationalization (i18n) — REQUIRED for every new feature
+
+The product ships in **English and Spanish** (next-intl). Any new user-facing
+surface MUST be wired for both locales — an untranslated string is a defect
+the same way an untested branch is. The `tests/i18n-messages` key-parity test
+fails CI if `messages/en.json` and `messages/es.json` ever diverge.
+
+**Hard rules (zero change for existing users):**
+
+- **English is the hard default.** Locale resolves ONLY from an explicit
+  choice: saved `user_preferences.ui_locale` → `NEXT_LOCALE` cookie → `en`
+  ([src/lib/i18n/resolve-locale.ts](src/lib/i18n/resolve-locale.ts)). **Never
+  read `Accept-Language`** — no browser-based detection, anywhere.
+- When extracting existing strings, the `en` catalog value must equal the
+  string it replaces **character for character**.
+- **Tenant content is never translated** (soul/memory/identity, AiFlow
+  definitions, message bodies, contact names). Platform chrome only.
+
+**Where strings live, by surface:**
+
+- **App UI (pages/components):** keys in `messages/en.json` + `messages/es.json`,
+  rendered via `getTranslations()` (server) / `useTranslations()` (client).
+  Namespaces follow the tree: `marketing.*`, `auth.*`, `dashboard.*`
+  (`dashboard.pages` for page titles/subtitles + shared empty states),
+  `admin.*`, `common.*`. Interpolate with ICU `{var}` — pass pre-formatted
+  strings for numbers that must not gain digit grouping.
+- **Owner transactional emails** ([src/lib/email/templates/](src/lib/email/templates/)):
+  keys under `emails.*`, resolved with `emailMessagesForLocale` + `fmtEmail`
+  ([src/lib/i18n/email-copy.ts](src/lib/i18n/email-copy.ts)). Callers pass
+  `locale: await resolveOwnerUiLocaleForEmail(recipientEmail)`; a new template
+  MUST take an optional `locale?: AppLocale` defaulting to English. The
+  `ops-*` templates (platform ops inbox) deliberately stay English.
+- **Edge functions (voice IVR, SMS compliance):** `messages/edge-en.json` /
+  `edge-es.json` via `edgeMessage` / `voiceMessageForLocale`; TTS language via
+  `telnyxTtsLanguage`.
+- **Plan/pricing copy helpers in `src/lib`** (`usage-copy.ts`, `tier-display.ts`,
+  `white-glove.ts`, `password.ts`): locale-parameterized functions with an
+  `"en"` default so existing callers are byte-identical. New helper copy
+  follows the same pattern — and the 100% coverage gate means every `es`
+  branch needs a test (see `tests/plan-copy-es.test.ts`,
+  `tests/email-templates-es.test.ts`).
+- **Customer-facing AI language** follows the customer, not the owner:
+  detection + persistence via `contacts.preferred_language` /
+  `messenger_conversations.preferred_language`
+  (owner override from the contact Language dropdown is authoritative), and
+  the prompt line via `customerLanguageLine`. WhatsApp out-of-window templates
+  register `en_US` **and** `es_US` variants (state keyed `name` /
+  `name:es_US` — see `whatsappTemplateStateKey`).
+- **Legal pages (`/terms`, `/privacy`)** stay English-only by policy (the
+  binding text), with a localized notice; do not machine-translate contractual
+  language.
+
+**SEO/routing:** Spanish marketing mirrors live at `/es/...` (rewritten in
+[src/proxy.ts](src/proxy.ts), which also pins the `NEXT_LOCALE` cookie);
+English URLs and metadata stay canonical. Metadata is translated via
+`generateMetadata` + catalog keys.
+
 ## All work and code modifications must follow this flow
 
 For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below).
