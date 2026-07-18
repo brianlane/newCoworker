@@ -84,7 +84,7 @@ export type DocumentIngestResult =
     };
 
 const CONDENSE_SYSTEM_PROMPT =
-  "You convert small-business documents into concise, accurate markdown an AI receptionist will answer customer questions from. Preserve every concrete fact: prices, durations, policies, dates, names, contact info. Never invent facts.";
+  "You convert small-business documents into concise, accurate markdown an AI coworker will answer customer questions from. Preserve every concrete fact: prices, durations, policies, dates, names, contact info. Never invent facts.";
 
 function buildCondensePrompt(args: {
   title: string;
