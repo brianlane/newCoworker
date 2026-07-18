@@ -198,7 +198,7 @@ describe("processSocialPostSweep — publish", () => {
       .mockResolvedValueOnce("IN_PROGRESS")
       .mockResolvedValueOnce("FINISHED");
     const result = await processSocialPostSweep(deps());
-    expect(result).toMatchObject({ published: 1, stillPreparing: 0 });
+    expect(result).toMatchObject({ published: 1, unsettled: 0 });
     expect(sleep).toHaveBeenCalledTimes(1);
     expect(sleep).toHaveBeenCalledWith(CONTAINER_READY_DELAY_MS);
     expect(publishMedia).toHaveBeenCalled();
@@ -208,7 +208,7 @@ describe("processSocialPostSweep — publish", () => {
     listDue.mockResolvedValue([post()]);
     containerStatus.mockResolvedValue("IN_PROGRESS");
     const result = await processSocialPostSweep(deps());
-    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0, stillPreparing: 1 });
+    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0, unsettled: 1 });
     expect(containerStatus).toHaveBeenCalledTimes(CONTAINER_READY_ATTEMPTS);
     expect(sleep).toHaveBeenCalledTimes(CONTAINER_READY_ATTEMPTS - 1);
     expect(publishMedia).not.toHaveBeenCalled();
@@ -292,12 +292,34 @@ describe("processSocialPostSweep — publish", () => {
     expect((failedStamp?.[3] as { error_detail: string }).error_detail).toHaveLength(500);
   });
 
-  it("a non-Error Graph throw and a publish-step failure both stamp failed", async () => {
+  it("a non-Error container-creation throw stamps failed (string branch)", async () => {
     listDue.mockResolvedValue([post()]);
-    publishMedia.mockRejectedValue("string-throw");
+    createContainer.mockRejectedValue("string-throw");
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ failed: 1 });
     expect(result.errors[0].message).toBe("string-throw");
+  });
+
+  it("an ambiguous publish-call failure leaves the row unsettled — never stamps failed", async () => {
+    // media_publish threw AFTER the container was ready: Meta may already
+    // have published (Bugbot 220ce8d1). The row must stay `publishing` for
+    // container-status resolution — a failed stamp would invite a duplicate
+    // re-schedule. Both Error and non-Error throws.
+    for (const thrown of [new Error("publish timeout"), "publish string throw"]) {
+      vi.clearAllMocks();
+      listDue.mockResolvedValue([post()]);
+      listInFlight.mockResolvedValue([]);
+      transition.mockResolvedValue(true);
+      patch.mockResolvedValue(undefined);
+      loadConnection.mockResolvedValue(connection());
+      createContainer.mockResolvedValue("container-1");
+      containerStatus.mockResolvedValue("FINISHED");
+      publishMedia.mockRejectedValue(thrown);
+      const result = await processSocialPostSweep(deps());
+      expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0, unsettled: 1 });
+      // Only the scheduled→publishing claim ran; no outcome stamp.
+      expect(transition).toHaveBeenCalledTimes(1);
+    }
   });
 
   it("isolates a published-stamp crash to its post; the row stays resolvable", async () => {
@@ -370,7 +392,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
   it("waits (not fails) on an unverifiable row still inside the stale window", async () => {
     listInFlight.mockResolvedValue([inFlight({ started_at: STARTED_RESUMABLE })]);
     const result = await processSocialPostSweep(deps());
-    expect(result).toMatchObject({ staled: 0, stillPreparing: 1 });
+    expect(result).toMatchObject({ staled: 0, unsettled: 1 });
     expect(transition).not.toHaveBeenCalled();
   });
 
@@ -419,7 +441,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     ]);
     containerStatus.mockResolvedValue("IN_PROGRESS");
     const waiting = await processSocialPostSweep(deps());
-    expect(waiting).toMatchObject({ staled: 0, published: 0, stillPreparing: 1 });
+    expect(waiting).toMatchObject({ staled: 0, published: 0, unsettled: 1 });
     expect(transition).not.toHaveBeenCalled();
 
     // Past the window: same status → dead-letter with a preparing message.
@@ -430,7 +452,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     loadConnection.mockResolvedValue(connection());
     containerStatus.mockResolvedValue("IN_PROGRESS");
     const failed = await processSocialPostSweep(deps());
-    expect(failed).toMatchObject({ staled: 1, stillPreparing: 0 });
+    expect(failed).toMatchObject({ staled: 1, unsettled: 0 });
     expect(transition).toHaveBeenCalledWith(
       BIZ,
       "p-old",

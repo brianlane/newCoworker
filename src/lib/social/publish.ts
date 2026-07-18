@@ -73,8 +73,11 @@ export type SocialSweepResult = {
   failed: number;
   /** Stuck `publishing` rows dead-lettered this pass. */
   staled: number;
-  /** Containers still preparing at pass end — completed by a later pass. */
-  stillPreparing: number;
+  /**
+   * Rows left `publishing` for a later pass to settle: containers still
+   * preparing, ambiguous publish calls, and unverifiable-but-young rows.
+   */
+  unsettled: number;
   errors: Array<{ postId: string; message: string }>;
 };
 
@@ -102,8 +105,13 @@ type PublishOutcome =
   | { kind: "failed"; detail: string }
   /** A concurrent resolver settled the row first — count nothing. */
   | { kind: "lost" }
-  /** Container still preparing — row stays `publishing` for a later pass. */
-  | { kind: "preparing" };
+  /**
+   * Row stays `publishing` for a later pass: the container is still
+   * preparing, or the publish call's outcome is ambiguous (it threw AFTER
+   * Meta may have published — only the container status can say, and
+   * stamping failed here would invite a duplicate re-schedule).
+   */
+  | { kind: "unsettled" };
 
 /**
  * Stamp a promoted post's outcome, guarded on it still being `publishing`:
@@ -134,7 +142,7 @@ async function publishOne(
 ): Promise<PublishOutcome> {
   let failure = "";
   let igMediaId = "";
-  let preparing = false;
+  let unsettled = false;
   try {
     const connection: MetaConnectionRow | null = await deps.loadConnection(
       post.business_id,
@@ -174,22 +182,38 @@ async function publishOne(
         // PUBLISHED without our publish call would mean another actor beat
         // us to it — either way the post is (about to be) live.
         if (status === "FINISHED") {
-          igMediaId = await deps.publishMedia(
-            connection.instagram_account_id,
-            connection.pageToken,
-            creationId
-          );
+          try {
+            igMediaId = await deps.publishMedia(
+              connection.instagram_account_id,
+              connection.pageToken,
+              creationId
+            );
+          } catch (err) {
+            // AMBIGUOUS: the error may have surfaced after Meta published
+            // (timeout, dropped response). Stamping failed here would invite
+            // a duplicate re-schedule — leave the row `publishing` and let
+            // in-flight resolution read the container's status_code, which
+            // knows the truth.
+            logger.warn(
+              "social-post-sweep: publish call failed after container ready; deferring to container-status resolution",
+              {
+                postId: post.id,
+                error: err instanceof Error ? err.message : String(err)
+              }
+            );
+            unsettled = true;
+          }
         }
       } else {
         // Still IN_PROGRESS after the poll budget: leave the row
-        // `publishing` — the stale pass completes a FINISHED container.
-        preparing = true;
+        // `publishing` — a later pass completes the FINISHED container.
+        unsettled = true;
       }
     }
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err);
   }
-  if (preparing) return { kind: "preparing" };
+  if (unsettled) return { kind: "unsettled" };
 
   if (failure) {
     const won = await stampOutcome(db, post, {
@@ -312,7 +336,7 @@ export async function processSocialPostSweep(
     published: 0,
     failed: 0,
     staled: 0,
-    stillPreparing: 0,
+    unsettled: 0,
     errors: []
   };
 
@@ -338,7 +362,7 @@ export async function processSocialPostSweep(
       );
       if (outcome === "published") result.published += 1;
       else if (outcome === "failed") result.staled += 1;
-      else if (outcome === "waiting") result.stillPreparing += 1;
+      else if (outcome === "waiting") result.unsettled += 1;
       // "lost": a concurrent resolver settled the row — nothing to count.
     } catch (err) {
       result.errors.push({
@@ -369,8 +393,8 @@ export async function processSocialPostSweep(
         result.errors.push({ postId: post.id, message: outcome.detail });
       } else if (outcome.kind === "published") {
         result.published += 1;
-      } else if (outcome.kind === "preparing") {
-        result.stillPreparing += 1;
+      } else if (outcome.kind === "unsettled") {
+        result.unsettled += 1;
       }
       // "lost": a concurrent resolver settled the row — nothing to count.
     } catch (err) {

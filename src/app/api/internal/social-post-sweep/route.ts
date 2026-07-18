@@ -31,7 +31,7 @@ export async function POST(request: Request): Promise<Response> {
       result.published ||
       result.failed ||
       result.staled ||
-      result.stillPreparing ||
+      result.unsettled ||
       result.errors.length
     ) {
       logger.info("social-post-sweep: summary", { ...result, durationMs });
