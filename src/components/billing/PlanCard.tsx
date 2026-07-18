@@ -17,6 +17,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
@@ -79,29 +80,31 @@ function tierLabel(tier: PlanTier | null): string {
   return "Enterprise";
 }
 
-function periodLabel(p: BillingPeriod | null): string {
-  if (!p) return "–";
-  if (p === "monthly") return "Monthly";
-  if (p === "annual") return "12 months";
-  return "24 months";
-}
-
-function statusBadge(
-  status: StatusKind,
-  periodEnd: string | null,
-  graceEndsAt: string | null
-): { variant: "success" | "pending" | "online" | "neutral"; text: string } {
-  if (status === "active") return { variant: "success", text: "Active" };
-  if (status === "active_cancel_at_period_end")
-    return { variant: "pending", text: `Ends ${formatDate(periodEnd)}` };
-  if (status === "canceled_in_grace")
-    return { variant: "pending", text: `Grace · wipes ${formatDate(graceEndsAt)}` };
-  if (status === "pending") return { variant: "pending", text: "Pending" };
-  if (status === "wiped") return { variant: "neutral", text: "Wiped" };
-  return { variant: "neutral", text: "Canceled" };
-}
-
 export function PlanCard(props: PlanCardProps) {
+  const t = useTranslations("dashboard.planCard");
+
+  function periodLabel(p: BillingPeriod | null): string {
+    if (!p) return "–";
+    if (p === "monthly") return t("monthly");
+    if (p === "annual") return t("months12");
+    return t("months24");
+  }
+
+  function statusBadge(
+    status: StatusKind,
+    periodEnd: string | null,
+    graceEndsAt: string | null
+  ): { variant: "success" | "pending" | "online" | "neutral"; text: string } {
+    if (status === "active") return { variant: "success", text: t("active") };
+    if (status === "active_cancel_at_period_end")
+      return { variant: "pending", text: t("endsOn", { date: formatDate(periodEnd) }) };
+    if (status === "canceled_in_grace")
+      return { variant: "pending", text: t("graceWipes", { date: formatDate(graceEndsAt) }) };
+    if (status === "pending") return { variant: "pending", text: t("pending") };
+    if (status === "wiped") return { variant: "neutral", text: t("wiped") };
+    return { variant: "neutral", text: t("canceled") };
+  }
+
   const {
     tier,
     billingPeriod,
@@ -143,7 +146,7 @@ export function PlanCard(props: PlanCardProps) {
   // over.
   const showAutoRenew = isTermPlan && status === "active" && !commitmentElapsed;
   const showRecontract = isTermPlan && status === "active" && commitmentElapsed;
-  const termMonthsLabel = billingPeriod === "annual" ? "12 months" : "24 months";
+  const termMonthsLabel = billingPeriod === "annual" ? t("months12") : t("months24");
   const contractRate = isTermPlan ? getMonthlyRateDisplay(tier, billingPeriod!) : null;
   const contractTotal = isTermPlan ? formatCommitmentTotal(tier, billingPeriod!) : null;
   const rolloverRate = isTermPlan ? getRenewalRateDisplay(tier, billingPeriod!) : null;
@@ -162,15 +165,13 @@ export function PlanCard(props: PlanCardProps) {
         | { ok: false; error: { message: string } }
         | null;
       if (!res.ok || !json || json.ok === false) {
-        setUndoError(
-          json && json.ok === false ? json.error.message : "Could not undo scheduled cancel"
-        );
+        setUndoError(json && json.ok === false ? json.error.message : t("undoFailed"));
         setUndoLoading(false);
         return;
       }
       window.location.reload();
     } catch {
-      setUndoError("Network error");
+      setUndoError(t("networkError"));
       setUndoLoading(false);
     }
   }
@@ -189,15 +190,13 @@ export function PlanCard(props: PlanCardProps) {
         | { ok: false; error: { message: string } }
         | null;
       if (!res.ok || !json || json.ok === false) {
-        setResubError(
-          json && json.ok === false ? json.error.message : "Could not start reactivation"
-        );
+        setResubError(json && json.ok === false ? json.error.message : t("reactivateFailed"));
         setResubLoading(false);
         return;
       }
       window.location.assign(json.data.checkoutUrl);
     } catch {
-      setResubError("Network error");
+      setResubError(t("networkError"));
       setResubLoading(false);
     }
   }
@@ -216,15 +215,13 @@ export function PlanCard(props: PlanCardProps) {
         | { ok: false; error: { message: string } }
         | null;
       if (!res.ok || !json || json.ok === false) {
-        setAutoRenewError(
-          json && json.ok === false ? json.error.message : "Could not update auto-renew"
-        );
+        setAutoRenewError(json && json.ok === false ? json.error.message : t("autoRenewFailed"));
         setAutoRenewLoading(false);
         return;
       }
       window.location.reload();
     } catch {
-      setAutoRenewError("Network error");
+      setAutoRenewError(t("networkError"));
       setAutoRenewLoading(false);
     }
   }
@@ -243,15 +240,13 @@ export function PlanCard(props: PlanCardProps) {
         | { ok: false; error: { message: string } }
         | null;
       if (!res.ok || !json || json.ok === false) {
-        setRecontractError(
-          json && json.ok === false ? json.error.message : "Could not start new contract checkout"
-        );
+        setRecontractError(json && json.ok === false ? json.error.message : t("recontractFailed"));
         setRecontractLoading(false);
         return;
       }
       window.location.assign(json.data.checkoutUrl);
     } catch {
-      setRecontractError("Network error");
+      setRecontractError(t("networkError"));
       setRecontractLoading(false);
     }
   }
@@ -260,7 +255,7 @@ export function PlanCard(props: PlanCardProps) {
     <Card>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-sm font-semibold text-parchment">Your plan</h2>
+          <h2 className="text-sm font-semibold text-parchment">{t("yourPlan")}</h2>
           <p className="text-xs text-parchment/50 mt-1">
             {tierLabel(tier)} · {periodLabel(billingPeriod)}
           </p>
@@ -271,19 +266,19 @@ export function PlanCard(props: PlanCardProps) {
       <dl className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
         {status === "active" && renewalAt && (
           <div>
-            <dt className="text-xs text-parchment/50 uppercase tracking-wider">Next renewal</dt>
+            <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("nextRenewal")}</dt>
             <dd className="mt-1 font-mono text-parchment">{formatDate(renewalAt)}</dd>
           </div>
         )}
         {status === "active_cancel_at_period_end" && (
           <div>
-            <dt className="text-xs text-parchment/50 uppercase tracking-wider">Access ends</dt>
+            <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("accessEnds")}</dt>
             <dd className="mt-1 font-mono text-parchment">{formatDate(periodEnd)}</dd>
           </div>
         )}
         {status === "canceled_in_grace" && (
           <div>
-            <dt className="text-xs text-parchment/50 uppercase tracking-wider">Data wipes on</dt>
+            <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("dataWipesOn")}</dt>
             <dd className="mt-1 font-mono text-spark-orange">{formatDate(graceEndsAt)}</dd>
           </div>
         )}
@@ -292,7 +287,7 @@ export function PlanCard(props: PlanCardProps) {
       <div className="mt-5 flex flex-wrap items-center gap-3">
         {cancelable && (
           <Button size="sm" variant="ghost" onClick={() => setShowCancel(true)}>
-            {alreadyPeriodEnd ? "Manage cancellation" : "Cancel subscription"}
+            {alreadyPeriodEnd ? t("manageCancellation") : t("cancelSubscription")}
           </Button>
         )}
         {alreadyPeriodEnd && (
@@ -302,18 +297,18 @@ export function PlanCard(props: PlanCardProps) {
             loading={undoLoading}
             onClick={undoPeriodEnd}
           >
-            Keep my plan
+            {t("keepMyPlan")}
           </Button>
         )}
         {inGrace && (
           <Button size="sm" variant="primary" loading={resubLoading} onClick={resubscribe}>
-            Reactivate
+            {t("reactivate")}
           </Button>
         )}
         {stripeCustomerId && (
           <form action="/api/billing/portal" method="POST">
             <button type="submit" className="text-xs text-parchment/60 hover:text-parchment underline">
-              Update payment method
+              {t("updatePayment")}
             </button>
           </form>
         )}
@@ -332,7 +327,7 @@ export function PlanCard(props: PlanCardProps) {
       {showAutoRenew && (
         <div className="mt-6 pt-6 border-t border-parchment/10 space-y-2">
           <div className="flex items-center justify-between gap-4">
-            <h3 className="text-sm font-semibold text-parchment">Contract auto-renew</h3>
+            <h3 className="text-sm font-semibold text-parchment">{t("contractAutoRenew")}</h3>
             <button
               type="button"
               role="switch"
@@ -354,20 +349,20 @@ export function PlanCard(props: PlanCardProps) {
             </button>
           </div>
           <p className="text-xs text-parchment/50">
-            {contractAutoRenew ? (
-              <>
-                On {formatDate(renewalAt)} your plan renews for another {termMonthsLabel} at the
-                contract rate of <span className="font-mono">{contractRate}</span>;{" "}
-                <span className="font-mono">{contractTotal}</span> billed upfront.
-              </>
-            ) : (
-              <>
-                After {formatDate(renewalAt)} your plan rolls to month-to-month at{" "}
-                <span className="font-mono">{rolloverRate}</span>. Turn auto-renew on to lock in
-                another {termMonthsLabel} at <span className="font-mono">{contractRate}</span>{" "}
-                (<span className="font-mono">{contractTotal}</span> billed upfront).
-              </>
-            )}
+            {contractAutoRenew
+              ? t.rich("autoRenewOn", {
+                  date: formatDate(renewalAt),
+                  term: termMonthsLabel,
+                  rate: () => <span className="font-mono">{contractRate}</span>,
+                  total: () => <span className="font-mono">{contractTotal}</span>
+                })
+              : t.rich("autoRenewOff", {
+                  date: formatDate(renewalAt),
+                  term: termMonthsLabel,
+                  rollover: () => <span className="font-mono">{rolloverRate}</span>,
+                  rate: () => <span className="font-mono">{contractRate}</span>,
+                  total: () => <span className="font-mono">{contractTotal}</span>
+                })}
           </p>
           {autoRenewError && (
             <p className="text-xs text-spark-orange" role="alert">
@@ -379,12 +374,14 @@ export function PlanCard(props: PlanCardProps) {
 
       {showRecontract && (
         <div className="mt-6 pt-6 border-t border-parchment/10 space-y-2">
-          <h3 className="text-sm font-semibold text-parchment">Start a new contract</h3>
+          <h3 className="text-sm font-semibold text-parchment">{t("startNewContract")}</h3>
           <p className="text-xs text-parchment/50">
-            Your original {termMonthsLabel} term has ended, so you&apos;re billed month-to-month at{" "}
-            <span className="font-mono">{rolloverRate}</span>. Start a new {termMonthsLabel}{" "}
-            contract to get back to <span className="font-mono">{contractRate}</span>;{" "}
-            <span className="font-mono">{contractTotal}</span> billed today.
+            {t.rich("recontractBody", {
+              term: termMonthsLabel,
+              rollover: () => <span className="font-mono">{rolloverRate}</span>,
+              rate: () => <span className="font-mono">{contractRate}</span>,
+              total: () => <span className="font-mono">{contractTotal}</span>
+            })}
           </p>
           <Button
             size="sm"
@@ -392,7 +389,7 @@ export function PlanCard(props: PlanCardProps) {
             loading={recontractLoading}
             onClick={startRecontract}
           >
-            Start a new {termMonthsLabel} contract
+            {t("startNewContractCta", { term: termMonthsLabel })}
           </Button>
           {recontractError && (
             <p className="text-xs text-spark-orange" role="alert">
@@ -404,12 +401,8 @@ export function PlanCard(props: PlanCardProps) {
 
       {tier && tier !== "enterprise" && billingPeriod && cancelable && (
         <div className="mt-6 pt-6 border-t border-parchment/10 space-y-2">
-          <h3 className="text-sm font-semibold text-parchment">Change plan</h3>
-          <p className="text-xs text-parchment/50">
-            Upgrade, downgrade, or switch your billing period. Current plan is canceled
-            immediately with no proration; your workspace data migrates to a new server at the
-            new tier.
-          </p>
+          <h3 className="text-sm font-semibold text-parchment">{t("changePlan")}</h3>
+          <p className="text-xs text-parchment/50">{t("changePlanBody")}</p>
           <ChangePlanSelector
             currentTier={tier as Exclude<PlanTier, "enterprise">}
             currentBillingPeriod={billingPeriod}

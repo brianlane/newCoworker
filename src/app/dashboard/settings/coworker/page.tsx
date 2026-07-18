@@ -1,3 +1,4 @@
+import { getTranslations } from "next-intl/server";
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
 import { FlowSafetySettings } from "@/components/dashboard/FlowSafetySettings";
 import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
@@ -13,6 +14,7 @@ import { loadSettingsContext, SettingsPageShell } from "../_shared";
 export const dynamic = "force-dynamic";
 
 export default async function CoworkerSettingsPage() {
+  const t = await getTranslations("dashboard.settings");
   const { business, viewAs } = await loadSettingsContext();
 
   const agents = business ? await resolveAgentTools(business.id) : null;
@@ -28,8 +30,8 @@ export default async function CoworkerSettingsPage() {
 
   return (
     <SettingsPageShell
-      title="Coworker"
-      blurb="What your coworker can do and how it behaves"
+      title={t("hubCoworkerTitle")}
+      blurb={t("coworkerPageBlurb")}
     >
       {business && mailbox && (
         <MailboxSettings

@@ -17,6 +17,8 @@
 
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
+import type { AppLocale } from "@/i18n/routing";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -73,6 +75,8 @@ function formatMinutes(seconds: number): string {
 export default async function BillingPage(props: {
   searchParams?: Promise<SearchParams>;
 }) {
+  const t = await getTranslations("dashboard.billing");
+  const locale = (await getLocale()) as AppLocale;
   const searchParams = (await props.searchParams) ?? {};
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/billing");
@@ -172,40 +176,29 @@ export default async function BillingPage(props: {
   );
   let disabledReason: string | null = null;
   if (!canPurchase) {
-    disabledReason = business
-      ? "Bonus minutes require an active subscription. Finish setup or reactivate your plan to unlock top-ups."
-      : "No business linked to this account yet.";
+    disabledReason = business ? t("requiresActive") : t("noBusiness");
   }
 
   const bonusBanner =
     searchParams.bonus === "success"
-      ? { kind: "ok" as const, text: "Thanks! Your bonus minutes will appear once Stripe confirms the payment." }
+      ? { kind: "ok" as const, text: t("bonusSuccess") }
       : searchParams.bonus === "cancelled"
-        ? { kind: "warn" as const, text: "Checkout cancelled. No charge was made." }
+        ? { kind: "warn" as const, text: t("checkoutCancelled") }
         : null;
 
   const planChangedBanner =
     searchParams.planChanged === "1"
-      ? {
-          kind: "ok" as const,
-          text: "Plan change submitted. We're migrating your workspace to the new VPS; this can take a few minutes."
-        }
+      ? { kind: "ok" as const, text: t("planChanged") }
       : null;
   const reactivatedBanner =
     searchParams.reactivated === "1"
-      ? {
-          kind: "ok" as const,
-          text: "Reactivation submitted. We're restoring your workspace onto a fresh VPS; this can take a few minutes."
-        }
+      ? { kind: "ok" as const, text: t("reactivated") }
       : null;
   const whiteGloveBanner =
     searchParams.whiteGlove === "success"
-      ? {
-          kind: "ok" as const,
-          text: "Thanks! Your white-glove onboarding is confirmed; check your email for the booking link."
-        }
+      ? { kind: "ok" as const, text: t("whiteGloveSuccess") }
       : searchParams.whiteGlove === "cancelled"
-        ? { kind: "warn" as const, text: "Checkout cancelled. No charge was made." }
+        ? { kind: "warn" as const, text: t("checkoutCancelled") }
         : null;
 
   // ---- White-glove onboarding (Phase C5) --------------------------------
@@ -230,7 +223,7 @@ export default async function BillingPage(props: {
   // (not even the setup → buildout upgrade).
   const hasReceivedWhiteGlove =
     ownedWhiteGlove !== null || allCustomOffers.some((o) => o.status === "paid");
-  const whiteGloveOffers = hasReceivedWhiteGlove ? [] : listWhiteGlovePackages();
+  const whiteGloveOffers = hasReceivedWhiteGlove ? [] : listWhiteGlovePackages(locale);
 
   // ---- Derive PlanCard props from subscription + profile ---------------
   const now = new Date();
@@ -257,11 +250,11 @@ export default async function BillingPage(props: {
     withinRefundWindow &&
     !refundUsed;
   const refundBlockedReason = refundUsed
-    ? "You've already used your one-time lifetime refund."
+    ? t("refundUsed")
     : !profile
-      ? "We couldn't verify your lifetime refund eligibility. Contact support if you believe this is wrong."
+      ? t("refundUnverified")
       : !withinRefundWindow
-      ? "Your 30-day money-back window has passed."
+      ? t("refundWindowPassed")
       : null;
 
   // "Next renewal" is the live Stripe current_period_end for active subs
@@ -277,9 +270,9 @@ export default async function BillingPage(props: {
   const capReached = lifetimeCount >= LIFETIME_SUBSCRIPTION_CAP;
   const canChangePlan = planStatus === "active" && !capReached;
   const changePlanBlockedReason = capReached
-    ? "You've reached the maximum number of subscription lifetimes for this account."
+    ? t("capReached")
     : planStatus !== "active"
-      ? "Plan changes are only available on an active subscription."
+      ? t("changePlanInactive")
       : null;
 
   // Term-contract extras: auto-renew toggle while the commitment is running,
@@ -294,8 +287,8 @@ export default async function BillingPage(props: {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Billing</h1>
-        <p className="text-sm text-parchment/50 mt-1">Plan, voice minutes, and top-up packs</p>
+        <h1 className="text-2xl font-bold text-parchment">{t("title")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("subtitle")}</p>
       </div>
 
       {planChangedBanner && (
@@ -366,58 +359,58 @@ export default async function BillingPage(props: {
 
       {business?.tier && (
         <Card>
-          <h2 className="text-sm font-semibold text-parchment mb-3">Included usage</h2>
+          <h2 className="text-sm font-semibold text-parchment mb-3">{t("includedUsage")}</h2>
           <p className="text-xs text-parchment/60 leading-relaxed">
             {voiceMinutesLine(
               business.tier as PlanTier,
-              business.tier === "enterprise" ? business.enterprise_limits : undefined
+              business.tier === "enterprise" ? business.enterprise_limits : undefined,
+              locale
             )}
             <br />
             {smsMonthlyLine(
               business.tier as PlanTier,
-              business.tier === "enterprise" ? business.enterprise_limits : undefined
+              business.tier === "enterprise" ? business.enterprise_limits : undefined,
+              locale
             )}
           </p>
         </Card>
       )}
 
       <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-4">Voice balance</h2>
+        <h2 className="text-sm font-semibold text-parchment mb-4">{t("voiceBalance")}</h2>
         {snapshot ? (
           <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
             <div>
               <dt className="text-xs text-parchment/50 uppercase tracking-wider">
-                Included left this period
+                {t("includedLeft")}
               </dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {formatMinutes(snapshot.includedHeadroomSeconds)}
               </dd>
               <dd className="text-[11px] text-parchment/40">
-                cap {formatMinutes(snapshot.tierCapSeconds)} · used{" "}
-                {formatMinutes(snapshot.committedIncludedSeconds)}
+                {t("capUsed", {
+                  cap: formatMinutes(snapshot.tierCapSeconds),
+                  used: formatMinutes(snapshot.committedIncludedSeconds)
+                })}
               </dd>
             </div>
             <div>
-              <dt className="text-xs text-parchment/50 uppercase tracking-wider">Bonus balance</dt>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("bonusBalance")}</dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {formatMinutes(snapshot.bonusSecondsAvailable)}
               </dd>
-              <dd className="text-[11px] text-parchment/40">unused top-up minutes</dd>
+              <dd className="text-[11px] text-parchment/40">{t("unusedTopUps")}</dd>
             </div>
             <div>
-              <dt className="text-xs text-parchment/50 uppercase tracking-wider">Top-up rate</dt>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("topUpRate")}</dt>
               <dd className="mt-1 text-lg font-semibold text-parchment font-mono">
-                from ${usdPerMinute.toFixed(2)}/min
+                {t("fromPerMin", { rate: `$${usdPerMinute.toFixed(2)}` })}
               </dd>
-              <dd className="text-[11px] text-parchment/40">
-                best effective rate; see packs below
-              </dd>
+              <dd className="text-[11px] text-parchment/40">{t("bestRate")}</dd>
             </div>
           </dl>
         ) : (
-          <p className="text-xs text-parchment/50">
-            Voice balance will appear here once your subscription period is active.
-          </p>
+          <p className="text-xs text-parchment/50">{t("voiceBalancePending")}</p>
         )}
       </Card>
 
@@ -430,34 +423,32 @@ export default async function BillingPage(props: {
 
       {business && (
         <Card>
-          <h2 className="text-sm font-semibold text-parchment mb-4">Messaging &amp; AI usage</h2>
+          <h2 className="text-sm font-semibold text-parchment mb-4">{t("messagingAiUsage")}</h2>
           <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
             <div>
               <dt className="text-xs text-parchment/50 uppercase tracking-wider">
-                Texts sent this month
+                {t("textsSentThisMonth")}
               </dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {smsMonthUsed === null ? "–" : smsMonthUsed.toLocaleString()}
               </dd>
               <dd className="text-[11px] text-parchment/40">
                 {smsMonthlyCap === null || smsMonthlyCap === Infinity
-                  ? "no monthly cap on your plan"
-                  : `plan cap ${smsMonthlyCap.toLocaleString()}/month`}
+                  ? t("noMonthlyCap")
+                  : t("planCapPerMonth", { cap: smsMonthlyCap.toLocaleString() })}
               </dd>
             </div>
             <div>
               <dt className="text-xs text-parchment/50 uppercase tracking-wider">
-                Bonus texts remaining
+                {t("bonusTextsRemaining")}
               </dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {smsBonusRemaining.toLocaleString()}
               </dd>
-              <dd className="text-[11px] text-parchment/40">
-                used automatically after the plan cap
-              </dd>
+              <dd className="text-[11px] text-parchment/40">{t("usedAfterCap")}</dd>
             </div>
             <div>
-              <dt className="text-xs text-parchment/50 uppercase tracking-wider">AI chat budget</dt>
+              <dt className="text-xs text-parchment/50 uppercase tracking-wider">{t("aiChatBudget")}</dt>
               <dd className="mt-1 text-lg font-semibold text-parchment">
                 {chatSpend
                   ? `$${(chatSpend.spendMicros / 1_000_000).toFixed(2)} / $${(chatSpend.effectiveCapMicros / 1_000_000).toFixed(2)}`
@@ -465,8 +456,10 @@ export default async function BillingPage(props: {
               </dd>
               <dd className="text-[11px] text-parchment/40">
                 {chatSpend && chatSpend.creditMicros > 0
-                  ? `includes $${(chatSpend.creditMicros / 1_000_000).toFixed(2)} purchased credit`
-                  : "shared across all agentic tasks"}
+                  ? t("includesPurchasedCredit", {
+                      credit: `$${(chatSpend.creditMicros / 1_000_000).toFixed(2)}`
+                    })
+                  : t("sharedAcrossTasks")}
               </dd>
             </div>
           </dl>
@@ -474,67 +467,69 @@ export default async function BillingPage(props: {
       )}
 
       <UsagePacks
-        title="Buy more texts"
-        description="Bonus texts kick in after your plan's monthly allowance and expire at the later of your current billing period end or 30 days after purchase."
+        title={t("buyMoreTexts")}
+        description={t("buyMoreTextsBlurb")}
         checkoutPath="/api/billing/sms-bonus/checkout"
         packs={smsPacks.map((p) => ({
           id: p.id,
           label: p.label,
           priceUsd: p.priceUsd,
-          subline: `$${p.effectiveUsdPerText.toFixed(3)}/text`
+          subline: t("perText", { rate: `$${p.effectiveUsdPerText.toFixed(3)}` })
         }))}
         canPurchase={canPurchase}
         disabledReason={disabledReason}
       />
 
       <UsagePacks
-        title="Buy AI chat credit"
-        description="Credit raises this period's shared AI budget, so replies stay on the cloud model instead of falling back to the local model."
+        title={t("buyChatCredit")}
+        description={t("buyChatCreditBlurb")}
         checkoutPath="/api/billing/chat-credit/checkout"
         packs={chatPacks.map((p) => ({
           id: p.id,
           label: p.label,
           priceUsd: p.priceUsd,
-          subline: `adds $${p.creditUsd.toFixed(2)} to this period's budget`
+          subline: t("addsToBudget", { credit: `$${p.creditUsd.toFixed(2)}` })
         }))}
         canPurchase={canPurchase}
         disabledReason={disabledReason}
       />
 
       <Card>
-        <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">Support</h2>
+        <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">{t("support")}</h2>
         {hasReceivedWhiteGlove ? (
           <div className="mt-2 space-y-1">
             <p className="text-xs text-parchment/70">
               {(ownedWhiteGlove?.name ??
                 allCustomOffers.find((o) => o.status === "paid")?.name ??
-                "White-glove service")}{" "}
-              purchased.{" "}
+                t("whiteGloveService"))}{" "}
+              {t("purchased")}{" "}
               {isEnterpriseTier
-                ? "Priority call & video support is always on with your Enterprise plan."
+                ? t("enterprisePriority")
                 : priorityOpen && prioritySupportUntilIso
-                  ? `Priority call & video support is open until ${new Date(prioritySupportUntilIso).toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" })}.`
-                  : "Your priority call & video window has ended; support continues by email."}
+                  ? t("priorityOpenUntil", {
+                      date: new Date(prioritySupportUntilIso).toLocaleDateString(
+                        locale === "es" ? "es-US" : "en-US",
+                        { month: "long", day: "numeric", year: "numeric" }
+                      )
+                    })
+                  : t("priorityEnded")}
             </p>
             {priorityOpen && bookingUrl && (
               <p className="text-xs text-parchment/50">
-                Book a session anytime:{" "}
+                {t("bookSession")}{" "}
                 <a
                   href={bookingUrl}
                   className="text-claw-green underline"
                   target="_blank"
                   rel="noreferrer"
                 >
-                  scheduling link
+                  {t("schedulingLink")}
                 </a>
               </p>
             )}
           </div>
         ) : (
-          <p className="mt-2 text-xs text-parchment/50">
-            Your plan includes email support. Add white-glove onboarding below for live call
-            &amp; video support with a specialist.
-          </p>
+          <p className="mt-2 text-xs text-parchment/50">{t("emailSupportUpsell")}</p>
         )}
       </Card>
 
@@ -544,13 +539,9 @@ export default async function BillingPage(props: {
       {whiteGloveOffers.length > 0 && (
         <Card>
           <h2 className="text-sm font-semibold text-parchment uppercase tracking-wider">
-            White-glove onboarding
+            {t("whiteGloveTitle")}
           </h2>
-          <p className="mt-1 text-xs text-parchment/50">
-            One-time, hands-on onboarding with a specialist. Either package opens a 30-day
-            priority call &amp; video support line. Tell us you&apos;re interested and a
-            specialist will reach out with a quote.
-          </p>
+          <p className="mt-1 text-xs text-parchment/50">{t("whiteGloveBlurb")}</p>
           <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
             {whiteGloveOffers.map((pkg) => (
               <div
@@ -563,7 +554,7 @@ export default async function BillingPage(props: {
                   href="/contact?topic=white-glove"
                   className="mt-auto inline-flex items-center justify-center rounded-md bg-claw-green px-3 py-1.5 text-sm font-semibold text-deep-ink transition-all duration-150 hover:bg-opacity-90"
                 >
-                  Contact us
+                  {t("contactUs")}
                 </Link>
               </div>
             ))}
@@ -573,8 +564,8 @@ export default async function BillingPage(props: {
 
       {customWhiteGloveOffers.length > 0 && (
         <UsagePacks
-          title="Your custom offer"
-          description="Prepared for your business by our team. One-time payment; includes a 30-day priority call & video support line."
+          title={t("customOfferTitle")}
+          description={t("customOfferBlurb")}
           checkoutPath="/api/billing/white-glove/checkout"
           packs={customWhiteGloveOffers.map((o) => ({
             id: o.id,

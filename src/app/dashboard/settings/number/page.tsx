@@ -5,6 +5,7 @@
  */
 
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -17,6 +18,7 @@ import { byonAllowedForTier } from "@/lib/byon/tier-gate";
 export const dynamic = "force-dynamic";
 
 export default async function NumberSettingsPage() {
+  const t = await getTranslations("dashboard.settings");
   const user = await getAuthUser();
   if (!user?.email) redirect("/login?redirectTo=/dashboard/settings/number");
 
@@ -37,17 +39,17 @@ export default async function NumberSettingsPage() {
     return (
       <div className="space-y-6 max-w-3xl">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Phone Number</h1>
-          <p className="text-sm text-parchment/50 mt-1">Bring your existing business number</p>
+          <h1 className="text-2xl font-bold text-parchment">{t("numberTitle")}</h1>
+          <p className="text-sm text-parchment/50 mt-1">{t("numberBlurbBasic")}</p>
         </div>
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("numberNoCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
             >
-              Get Started →
+              {t("numberGetStarted")}
             </a>
           </div>
         </Card>
@@ -65,11 +67,9 @@ export default async function NumberSettingsPage() {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Phone Number</h1>
+        <h1 className="text-2xl font-bold text-parchment">{t("numberTitle")}</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          {wizardEnabled
-            ? "Bring the business number your customers already know. It transfers to your AI coworker in about a week"
-            : "Bring your existing business number"}
+          {wizardEnabled ? t("numberBlurbWizard") : t("numberBlurbBasic")}
         </p>
       </div>
       <ByonNumberPorting

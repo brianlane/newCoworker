@@ -1,3 +1,4 @@
+import { getTranslations } from "next-intl/server";
 import { SidebarCustomizer } from "@/components/dashboard/SidebarCustomizer";
 import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
 import { filterSidebarItemsForBusiness } from "@/lib/dashboard/sidebar-items";
@@ -8,6 +9,7 @@ import { loadSettingsContext, SettingsPageShell } from "../_shared";
 export const dynamic = "force-dynamic";
 
 export default async function SidebarSettingsPage() {
+  const t = await getTranslations("dashboard.settings");
   const { user, business } = await loadSettingsContext();
 
   // Same conditional-item filter as the dashboard layout: a business
@@ -29,8 +31,8 @@ export default async function SidebarSettingsPage() {
 
   return (
     <SettingsPageShell
-      title="Sidebar"
-      blurb="Reorder the navigation and hide pages you don't use"
+      title={t("hubSidebarTitle")}
+      blurb={t("sidebarPageBlurb")}
     >
       <SidebarCustomizer initialLayout={layout} />
     </SettingsPageShell>

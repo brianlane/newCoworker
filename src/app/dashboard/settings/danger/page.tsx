@@ -1,3 +1,4 @@
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { DeleteAccountCard } from "@/components/dashboard/DeleteAccountCard";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
@@ -5,18 +6,17 @@ import { loadSettingsContext, SettingsPageShell } from "../_shared";
 export const dynamic = "force-dynamic";
 
 export default async function DangerZoneSettingsPage() {
+  const t = await getTranslations("dashboard.settings");
   const { isOwner } = await loadSettingsContext();
 
   return (
-    <SettingsPageShell title="Danger Zone" blurb="Irreversible actions — read carefully">
+    <SettingsPageShell title={t("hubDangerTitle")} blurb={t("dangerPageBlurb")}>
       <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-2">Sessions</h2>
-        <p className="text-xs text-parchment/40 mb-4">
-          Signs you out everywhere, including other devices.
-        </p>
+        <h2 className="text-sm font-semibold text-parchment mb-2">{t("dangerSessions")}</h2>
+        <p className="text-xs text-parchment/40 mb-4">{t("dangerSessionsBody")}</p>
         <form action="/api/auth/signout" method="POST">
           <button type="submit" className="text-sm text-spark-orange hover:underline">
-            Sign out of all sessions
+            {t("dangerSignOutAll")}
           </button>
         </form>
       </Card>
