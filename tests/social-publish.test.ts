@@ -44,6 +44,7 @@ const transition = vi.mocked(transitionSocialPost);
 
 const createContainer = vi.fn();
 const publishMedia = vi.fn();
+const containerStatus = vi.fn();
 const loadConnection = vi.fn();
 
 // The sweep only reads client/now from deps; the db mock is never dialed.
@@ -60,6 +61,7 @@ function post(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     publish_at: "2026-07-18T17:00:00Z",
     started_at: null,
     published_at: null,
+    ig_creation_id: null,
     ig_media_id: null,
     error_detail: null,
     created_at: "2026-07-17T00:00:00Z",
@@ -88,7 +90,14 @@ function connection(overrides: Partial<MetaConnectionRow> = {}): MetaConnectionR
 }
 
 function deps() {
-  return { client: db, createContainer, publishMedia, loadConnection, now: () => NOW };
+  return {
+    client: db,
+    createContainer,
+    publishMedia,
+    containerStatus,
+    loadConnection,
+    now: () => NOW
+  };
 }
 
 beforeEach(() => {
@@ -99,6 +108,7 @@ beforeEach(() => {
   transition.mockResolvedValue(true);
   loadConnection.mockResolvedValue(connection());
   createContainer.mockResolvedValue("container-1");
+  containerStatus.mockResolvedValue("");
   publishMedia.mockResolvedValue("media-9");
 });
 
@@ -123,6 +133,12 @@ describe("processSocialPostSweep — publish", () => {
       "page-tok",
       "https://cdn.test/photo.jpg",
       "Spring special!"
+    );
+    // The container id lands on the row BEFORE media_publish, so an
+    // interrupted publish is always resolvable by the stale sweep.
+    expect(patch).toHaveBeenCalledWith(BIZ, "p-1", { ig_creation_id: "container-1" }, db);
+    expect(patch.mock.invocationCallOrder[0]).toBeLessThan(
+      publishMedia.mock.invocationCallOrder[0]
     );
     expect(publishMedia).toHaveBeenCalledWith("ig-1", "page-tok", "container-1");
     expect(patch).toHaveBeenCalledWith(
@@ -196,13 +212,26 @@ describe("processSocialPostSweep — publish", () => {
     expect(result.errors[0].message).toBe("string-throw");
   });
 
-  it("isolates an outcome-stamp crash to its post (collected, sweep continues)", async () => {
+  it("isolates a published-stamp crash to its post; the row stays resolvable", async () => {
     listDue.mockResolvedValue([post(), post({ id: "p-2" })]);
-    // First post's published-stamp write blows up; second post sails through.
-    patch.mockRejectedValueOnce(new Error("db down")).mockResolvedValue(undefined);
+    // Post 1: container persist succeeds, the PUBLISHED stamp blows up —
+    // the row stays `publishing` with its container id, for the stale
+    // sweep's container-status check to settle. Post 2 sails through.
+    patch
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error("db down"))
+      .mockResolvedValue(undefined);
     const result = await processSocialPostSweep(deps());
     expect(result.published).toBe(1);
     expect(result.errors.some((e) => e.postId === "p-1" && /db down/.test(e.message))).toBe(true);
+  });
+
+  it("a failed container-persist write fails the post before any publish call", async () => {
+    listDue.mockResolvedValue([post()]);
+    patch.mockRejectedValueOnce(new Error("persist down")).mockResolvedValue(undefined);
+    const result = await processSocialPostSweep(deps());
+    expect(result.failed).toBe(1);
+    expect(publishMedia).not.toHaveBeenCalled();
   });
 
   it("stringifies a non-Error crash from the claim itself", async () => {
@@ -213,15 +242,16 @@ describe("processSocialPostSweep — publish", () => {
   });
 });
 
-describe("processSocialPostSweep — stale dead-letter", () => {
-  it("marks stuck publishing rows failed with a duplicate-check warning, before promoting", async () => {
+describe("processSocialPostSweep — stale resolution", () => {
+  it("marks a container-less stuck row failed with a duplicate-check warning, before promoting", async () => {
     listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
     const result = await processSocialPostSweep(deps());
-    expect(result).toMatchObject({ staled: 1, promoted: 0 });
+    expect(result).toMatchObject({ staled: 1, promoted: 0, published: 0 });
     expect(listStale).toHaveBeenCalledWith(
       new Date(NOW.getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000).toISOString(),
       db
     );
+    expect(containerStatus).not.toHaveBeenCalled();
     expect(patch).toHaveBeenCalledWith(
       BIZ,
       "p-old",
@@ -233,7 +263,62 @@ describe("processSocialPostSweep — stale dead-letter", () => {
     );
   });
 
-  it("collects a dead-letter stamp failure and keeps going", async () => {
+  it("stamps published when Meta confirms the persisted container went live", async () => {
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("PUBLISHED");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 0, published: 1 });
+    expect(containerStatus).toHaveBeenCalledWith("container-7", "page-tok");
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      "p-old",
+      { status: "published", published_at: NOW.toISOString(), error_detail: null },
+      db
+    );
+  });
+
+  it("fails a stuck row whose container never published, or can't be verified", async () => {
+    // Not-published container status.
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("ERROR");
+    expect((await processSocialPostSweep(deps())).staled).toBe(1);
+
+    // No usable connection to verify with.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    patch.mockResolvedValue(undefined);
+    loadConnection.mockResolvedValue(null);
+    expect((await processSocialPostSweep(deps())).staled).toBe(1);
+
+    // The status check itself throws (Error and non-Error) — warn + failed.
+    for (const thrown of [new Error("graph down"), "graph string throw"]) {
+      vi.clearAllMocks();
+      listDue.mockResolvedValue([]);
+      listStale.mockResolvedValue([
+        post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+      ]);
+      patch.mockResolvedValue(undefined);
+      loadConnection.mockResolvedValue(connection());
+      containerStatus.mockRejectedValue(thrown);
+      const result = await processSocialPostSweep(deps());
+      expect(result.staled).toBe(1);
+      expect(patch).toHaveBeenCalledWith(
+        BIZ,
+        "p-old",
+        expect.objectContaining({ status: "failed" }),
+        db
+      );
+    }
+  });
+
+  it("collects a resolution stamp failure and keeps going", async () => {
     listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
     patch.mockRejectedValueOnce("stamp failed");
     const result = await processSocialPostSweep(deps());
@@ -241,7 +326,7 @@ describe("processSocialPostSweep — stale dead-letter", () => {
     expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp failed" });
   });
 
-  it("keeps an Error-instance dead-letter failure's message", async () => {
+  it("keeps an Error-instance resolution failure's message", async () => {
     listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
     patch.mockRejectedValueOnce(new Error("stamp error"));
     const result = await processSocialPostSweep(deps());

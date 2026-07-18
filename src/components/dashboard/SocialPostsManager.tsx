@@ -73,10 +73,11 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
     }
   }, [businessId]);
 
+  // Always load: drafts/scheduled posts outlive a disconnected IG account,
+  // and the owner must still be able to cancel or delete them here.
   useEffect(() => {
-    if (igConnected) void refresh();
-    else setLoading(false);
-  }, [refresh, igConnected]);
+    void refresh();
+  }, [refresh]);
 
   async function create(asDraft: boolean) {
     if (!mediaUrl.trim()) {
@@ -146,81 +147,85 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
     }
   }
 
-  if (!igConnected) {
-    return (
-      <Card>
-        <h2 className="text-sm font-semibold text-parchment">Instagram posts</h2>
-        <p className="mt-2 text-sm text-parchment/60">
-          Schedule Instagram posts right from your marketing calendar. Connect your Facebook
-          Page (with its linked Instagram professional account) to enable publishing.
-        </p>
-        <Link
-          href="/dashboard/integrations/meta"
-          className="mt-2 inline-block text-sm text-signal-teal hover:underline"
-        >
-          Connect on the Integrations page →
-        </Link>
-      </Card>
-    );
-  }
-
   return (
     <Card>
       <h2 className="text-sm font-semibold text-parchment">
-        Instagram posts{instagramUsername ? ` — @${instagramUsername}` : ""}
+        Instagram posts{igConnected && instagramUsername ? ` — @${instagramUsername}` : ""}
       </h2>
-      <div className="mt-3 space-y-3">
-        <div>
-          <label className={labelClass}>Image URL (public https link — Instagram fetches it)</label>
-          <input
-            className={inputClass}
-            value={mediaUrl}
-            onChange={(e) => setMediaUrl(e.target.value)}
-            placeholder="https://…/photo.jpg"
-            maxLength={2000}
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Caption</label>
-          <textarea
-            className={`${inputClass} min-h-24`}
-            value={caption}
-            onChange={(e) => setCaption(e.target.value)}
-            placeholder="Spring special — book this week and save 20%! #smallbusiness"
-            maxLength={2200}
-          />
-        </div>
-        <div className="grid gap-3 sm:grid-cols-2">
+      {igConnected ? (
+        <div className="mt-3 space-y-3">
           <div>
-            <label className={labelClass}>Publish at</label>
+            <label className={labelClass}>Image URL (public https link — Instagram fetches it)</label>
             <input
-              type="datetime-local"
               className={inputClass}
-              value={publishAt}
-              onChange={(e) => setPublishAt(e.target.value)}
+              value={mediaUrl}
+              onChange={(e) => setMediaUrl(e.target.value)}
+              placeholder="https://…/photo.jpg"
+              maxLength={2000}
             />
           </div>
+          <div>
+            <label className={labelClass}>Caption</label>
+            <textarea
+              className={`${inputClass} min-h-24`}
+              value={caption}
+              onChange={(e) => setCaption(e.target.value)}
+              placeholder="Spring special — book this week and save 20%! #smallbusiness"
+              maxLength={2200}
+            />
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Publish at</label>
+              <input
+                type="datetime-local"
+                className={inputClass}
+                value={publishAt}
+                onChange={(e) => setPublishAt(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="primary" size="sm" loading={saving} onClick={() => void create(false)}>
+              Schedule post
+            </Button>
+            <Button type="button" variant="secondary" size="sm" loading={saving} onClick={() => void create(true)}>
+              Save as draft
+            </Button>
+          </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="primary" size="sm" loading={saving} onClick={() => void create(false)}>
-            Schedule post
-          </Button>
-          <Button type="button" variant="secondary" size="sm" loading={saving} onClick={() => void create(true)}>
-            Save as draft
-          </Button>
-        </div>
-        {error && (
-          <p className="text-xs text-spark-orange" role="alert">
-            {error}
+      ) : (
+        // No composer without a linked IG account — but existing drafts and
+        // scheduled posts stay listed below so they can be cancelled/deleted
+        // (nothing will publish while disconnected; the sweep fails them
+        // with reconnect guidance).
+        <div className="mt-2">
+          <p className="text-sm text-parchment/60">
+            Schedule Instagram posts right from your marketing calendar. Connect your
+            Facebook Page (with its linked Instagram professional account) to enable
+            publishing.
           </p>
-        )}
-      </div>
+          <Link
+            href="/dashboard/integrations/meta"
+            className="mt-2 inline-block text-sm text-signal-teal hover:underline"
+          >
+            Connect on the Integrations page →
+          </Link>
+        </div>
+      )}
+      {error && (
+        <p className="mt-2 text-xs text-spark-orange" role="alert">
+          {error}
+        </p>
+      )}
 
       <div className="mt-5">
         {loading ? (
           <p className="text-sm text-parchment/40">Loading…</p>
         ) : posts.length === 0 ? (
-          <p className="text-sm text-parchment/40">No posts yet — compose one above.</p>
+          igConnected ? (
+            <p className="text-sm text-parchment/40">No posts yet — compose one above.</p>
+          ) : null
         ) : (
           <ul className="divide-y divide-parchment/10">
             {posts.map((p) => {

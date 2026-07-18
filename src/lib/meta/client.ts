@@ -339,6 +339,24 @@ export async function createInstagramMediaContainer(
 }
 
 /**
+ * A media container's publish state (`GET /{creation_id}?fields=status_code`).
+ * PUBLISHED means the post is live even if our publish call's response was
+ * lost — the stale-publish sweep uses this to resolve interrupted publishes
+ * truthfully instead of guessing.
+ */
+export async function getInstagramContainerStatus(
+  creationId: string,
+  pageToken: string
+): Promise<string> {
+  const payload = await graphRequest(`/${creationId}`, {
+    fields: "status_code",
+    access_token: pageToken
+  });
+  const status = (payload as { status_code?: unknown } | null)?.status_code;
+  return typeof status === "string" ? status : "";
+}
+
+/**
  * Step 2: publish a previously created container. Returns the published
  * media id (the permalink handle).
  */

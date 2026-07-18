@@ -10,10 +10,13 @@
  *      container → media_publish) with the tenant's meta_connections page
  *      token and linked IG professional account; stamp `published` +
  *      `ig_media_id`, or `failed` + a human-readable error.
- *   3. Dead-letter posts stuck in `publishing` past the stale window (a
- *      crash between promotion and outcome): marked failed, NOT retried —
- *      Meta may already hold the container, and a duplicate feed post is
- *      worse than the owner re-scheduling by hand.
+ *   3. Resolve posts stuck in `publishing` past the stale window (a crash
+ *      between promotion and outcome). The container id was persisted
+ *      BEFORE the publish call, so the sweep asks Meta for the container's
+ *      status_code: PUBLISHED → the post is live, stamp `published`;
+ *      anything else (or no container/connection) → `failed` with a
+ *      duplicate-check warning. Never blind-retried — a duplicate feed
+ *      post is worse than the owner re-scheduling by hand.
  *
  * A missing/paused Meta connection (or a Page with no linked IG
  * professional account) fails the post with plain-words guidance instead
@@ -24,6 +27,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getMetaConnection, type MetaConnectionRow } from "@/lib/db/meta-connections";
 import {
   createInstagramMediaContainer,
+  getInstagramContainerStatus,
   publishInstagramMedia
 } from "@/lib/meta/client";
 import { logger } from "@/lib/logger";
@@ -54,18 +58,29 @@ export type SocialSweepDeps = {
   /** Injectable Graph calls (tests). */
   createContainer?: typeof createInstagramMediaContainer;
   publishMedia?: typeof publishInstagramMedia;
+  containerStatus?: typeof getInstagramContainerStatus;
   loadConnection?: typeof getMetaConnection;
   now?: () => Date;
 };
 
+type GraphDeps = Required<
+  Pick<
+    SocialSweepDeps,
+    "createContainer" | "publishMedia" | "containerStatus" | "loadConnection"
+  >
+>;
+
 /**
  * Publish one promoted post. Returns the failure detail ("" = published).
- * Never throws — the outcome is stamped on the row either way.
+ * Never throws for Graph/config problems — the outcome is stamped on the
+ * row either way. A DB failure writing the outcome DOES propagate: the row
+ * stays `publishing` with its container id persisted, and the stale sweep
+ * resolves it truthfully next pass via the container's status_code.
  */
 async function publishOne(
   db: SupabaseClient,
   post: SocialPostRow,
-  deps: Required<Pick<SocialSweepDeps, "createContainer" | "publishMedia" | "loadConnection">>,
+  deps: GraphDeps,
   nowIso: string
 ): Promise<string> {
   let failure = "";
@@ -91,6 +106,10 @@ async function publishOne(
         post.media_url,
         post.caption
       );
+      // Persist the container BEFORE publishing: if anything after this
+      // point is interrupted (crash, failed outcome write), the stale sweep
+      // can ask Meta whether the container went live instead of guessing.
+      await patchSocialPost(post.business_id, post.id, { ig_creation_id: creationId }, db);
       igMediaId = await deps.publishMedia(
         connection.instagram_account_id,
         connection.pageToken,
@@ -120,6 +139,55 @@ async function publishOne(
 }
 
 /**
+ * Resolve one stuck `publishing` row. When its container id is on file and
+ * the connection can be reached, Meta's container status_code answers "did
+ * this go live?" — PUBLISHED stamps `published`; anything else (or no
+ * container/credentials) stamps `failed` with a duplicate-check warning.
+ */
+async function resolveStalePost(
+  db: SupabaseClient,
+  post: SocialPostRow,
+  deps: GraphDeps,
+  nowIso: string
+): Promise<"published" | "failed"> {
+  if (post.ig_creation_id) {
+    try {
+      const connection = await deps.loadConnection(post.business_id, db);
+      if (connection?.pageToken) {
+        const status = await deps.containerStatus(post.ig_creation_id, connection.pageToken);
+        if (status === "PUBLISHED") {
+          await patchSocialPost(
+            post.business_id,
+            post.id,
+            { status: "published", published_at: nowIso, error_detail: null },
+            db
+          );
+          return "published";
+        }
+      }
+    } catch (err) {
+      // Fall through to the failed stamp — an unverifiable container is
+      // treated as not-live, with the duplicate-check warning intact.
+      logger.warn("social-post-sweep: stale container check failed", {
+        postId: post.id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  await patchSocialPost(
+    post.business_id,
+    post.id,
+    {
+      status: "failed",
+      error_detail:
+        "Publishing was interrupted — check Instagram for a duplicate before re-scheduling."
+    },
+    db
+  );
+  return "failed";
+}
+
+/**
  * One sweep pass. Per-post errors are collected and the sweep continues;
  * promotion is a guarded transition so overlapping sweeps and owner
  * cancels always lose or win cleanly.
@@ -131,10 +199,11 @@ export async function processSocialPostSweep(
   const db = deps.client ?? (await createSupabaseServiceClient());
   const createContainer = deps.createContainer ?? createInstagramMediaContainer;
   const publishMedia = deps.publishMedia ?? publishInstagramMedia;
+  const containerStatus = deps.containerStatus ?? getInstagramContainerStatus;
   const loadConnection = deps.loadConnection ?? getMetaConnection;
   const now = deps.now ?? (() => new Date());
   /* c8 ignore stop */
-  const graph = { createContainer, publishMedia, loadConnection };
+  const graph: GraphDeps = { createContainer, publishMedia, containerStatus, loadConnection };
 
   const result: SocialSweepResult = {
     promoted: 0,
@@ -146,25 +215,18 @@ export async function processSocialPostSweep(
 
   const nowIso = now().toISOString();
 
-  // Dead-letter first: a crashed sweep's `publishing` rows are stamped
-  // failed before this pass adds new ones, so the stale window is measured
-  // against THEIR promotion time, not ours.
+  // Resolve stuck rows first: a crashed sweep's `publishing` posts are
+  // settled (published when Meta confirms the container went live, failed
+  // otherwise) before this pass adds new ones, so the stale window is
+  // measured against THEIR promotion time, not ours.
   const cutoffIso = new Date(
     now().getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000
   ).toISOString();
   for (const post of await listStalePublishingPosts(cutoffIso, db)) {
     try {
-      await patchSocialPost(
-        post.business_id,
-        post.id,
-        {
-          status: "failed",
-          error_detail:
-            "Publishing was interrupted — check Instagram for a duplicate before re-scheduling."
-        },
-        db
-      );
-      result.staled += 1;
+      const outcome = await resolveStalePost(db, post, graph, nowIso);
+      if (outcome === "published") result.published += 1;
+      else result.staled += 1;
     } catch (err) {
       result.errors.push({
         postId: post.id,

@@ -32,6 +32,11 @@ create table if not exists public.social_posts (
   publish_at timestamptz,
   started_at timestamptz,
   published_at timestamptz,
+  -- The media container (creation) id from publish step 1. Persisted BEFORE
+  -- media_publish so an interrupted publish can be resolved truthfully: the
+  -- stale sweep checks the container's status_code with Meta instead of
+  -- guessing whether the post went live.
+  ig_creation_id text,
   -- The IG media id Meta returns on publish — the permalink handle.
   ig_media_id text,
   error_detail text,

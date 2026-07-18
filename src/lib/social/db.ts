@@ -29,6 +29,8 @@ export type SocialPostRow = {
   publish_at: string | null;
   started_at: string | null;
   published_at: string | null;
+  /** Publish step 1's container id — persisted before media_publish. */
+  ig_creation_id: string | null;
   ig_media_id: string | null;
   error_detail: string | null;
   created_at: string;
@@ -92,6 +94,7 @@ export type SocialPostPatch = Partial<
     | "publish_at"
     | "started_at"
     | "published_at"
+    | "ig_creation_id"
     | "ig_media_id"
     | "error_detail"
   >
@@ -178,9 +181,9 @@ export async function listDueScheduledPosts(
 
 /**
  * Posts stuck mid-publish past the stale window (a sweep crash between the
- * promotion and the outcome stamp). Re-marked failed by the sweep rather
- * than retried: Meta may have already published the container, and a
- * duplicate feed post is worse than a manual retry.
+ * promotion and the outcome stamp). The sweep RESOLVES these — Meta's
+ * container status_code says whether the post actually went live — rather
+ * than blind-retrying: a duplicate feed post is worse than a manual retry.
  */
 export async function listStalePublishingPosts(
   cutoffIso: string,

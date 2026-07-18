@@ -30,6 +30,7 @@ import {
   exchangeForLongLivedToken,
   fetchLead,
   flattenLeadFields,
+  getInstagramContainerStatus,
   getLinkedInstagramAccount,
   getMessengerProfile,
   getMetaAppId,
@@ -353,6 +354,18 @@ describe("Instagram content publishing", () => {
   it("rejects a publish response without an id", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "" }));
     await expect(publishInstagramMedia("ig-1", "page-tok", "c1")).rejects.toThrow(/no id/);
+  });
+
+  it("reads a container's status_code, tolerating absent values", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { status_code: "PUBLISHED" }));
+    expect(await getInstagramContainerStatus("c1", "page-tok")).toBe("PUBLISHED");
+    const [url] = fetchMock.mock.calls[0] as [string];
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/v25.0/c1");
+    expect(parsed.searchParams.get("fields")).toBe("status_code");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await getInstagramContainerStatus("c1", "page-tok")).toBe("");
   });
 });
 
