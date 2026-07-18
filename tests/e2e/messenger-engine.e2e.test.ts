@@ -170,7 +170,11 @@ async function engineTurnOnce(
       let lastErr: unknown;
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
-          return await geminiChatStep({ ...params, temperature: 0 });
+          // temperature 0 for CI stability (production runs 0.3); the raised
+          // output cap keeps 2.5-flash's thinking budget from swallowing the
+          // whole allowance and yielding an empty (no-text, no-call) step —
+          // the geminiChatStep default is 1500 and thinking counts against it.
+          return await geminiChatStep({ ...params, temperature: 0, maxOutputTokens: 6000 });
         } catch (e) {
           lastErr = e;
           const msg = e instanceof Error ? e.message : String(e);
@@ -205,65 +209,76 @@ const digits = (v: unknown): string => String(v ?? "").replace(/\D/g, "");
 // Contract 1 — lead capture with the verbatim sessionRef, no phantom texts
 // ---------------------------------------------------------------------------
 
+/**
+ * Dana explicitly asks for her details to be passed to the team and can't
+ * stay in the chat, so answering inline cannot fulfil the request —
+ * capturing her number is the ONLY correct path. (The first CI run of an
+ * earlier wording — "can someone text me your prices?" right after a
+ * question the fixture memory answers — drew a turn that just answered the
+ * prices inline and never captured. Legitimate-ish, but not the contract
+ * under test.)
+ */
 const DANA_MESSAGE =
-  "Hi! Do you do gel manicures? I'm Dana — my number is 602-555-0188, " +
-  "can someone text me your prices?";
+  "Hi, I'm Dana Whitfield. Please take down my number, 602-555-0188, and " +
+  "have someone from the studio text me about a gel manicure — I have to " +
+  "run and can't keep chatting here.";
 
 describe("DM lead capture (live engine turn, real tool declarations)", () => {
-  const calls: RecordedCall[] = [];
-  let reply = "";
-  let verdict: JudgeVerdict;
+  // One test, suite-standard retry: the turn + its assertions re-roll
+  // together on a marginal draw (a beforeAll can't be retried by vitest).
+  it(
+    "captures Dana's number with the verbatim sessionRef and never claims a self-sent text",
+    { retry: 1, timeout: 240_000 },
+    async () => {
+      const calls: RecordedCall[] = [];
+      const result = await engineTurn(
+        historyRows([{ role: "user", content: DANA_MESSAGE }]),
+        (name) => {
+          if (name === "webchat_capture_lead") {
+            return { ok: true, message: "Lead saved. The team can see it on the dashboard." };
+          }
+          if (name === "webchat_business_knowledge_lookup") {
+            return {
+              ok: true,
+              data: { answer: "Gel manicures are $45; new clients get 10% off their first visit." }
+            };
+          }
+          return { ok: false, detail: "unknown_tool" };
+        },
+        calls
+      );
+      const reply = result.reply;
+      expect(reply.trim().length).toBeGreaterThan(0);
 
-  beforeAll(async () => {
-    const result = await engineTurn(
-      historyRows([{ role: "user", content: DANA_MESSAGE }]),
-      (name) => {
-        if (name === "webchat_capture_lead") {
-          return { ok: true, message: "Lead saved. The team can see it on the dashboard." };
-        }
-        if (name === "webchat_business_knowledge_lookup") {
-          return {
-            ok: true,
-            data: { answer: "Gel manicures are $45; new clients get 10% off their first visit." }
-          };
-        }
-        return { ok: false, detail: "unknown_tool" };
-      },
-      calls
-    );
-    reply = result.reply;
-    verdict = await judgeReply(
-      "a chat assistant that cannot send texts itself, replying to a visitor who shared " +
-        "their phone number and asked to be texted prices",
-      reply,
-      {
-        claims_sender_texted:
-          "Does the message claim the SENDER ITSELF has sent, or will send, a text/SMS or " +
-          "email to the visitor? Saying the TEAM (or someone else) will text or reach out " +
-          "is false; answering the question in the chat itself is false."
+      const capture = calls.find((c) => c.name === "webchat_capture_lead");
+      if (!capture) {
+        // Surface the live reply — a missing capture is undebuggable from
+        // a bare "expected undefined to be defined".
+        console.error("live reply (no capture):", reply);
       }
-    );
-  }, 240_000);
+      expect(capture, `calls: ${JSON.stringify(calls)}`).toBeDefined();
+      expect(digits(capture!.args.phone)).toContain("6025550188");
+      // buildMessengerPreamble: "sessionRef (pass verbatim to capture_lead)".
+      expect(capture!.args.sessionRef).toBe(CONVERSATION_ID);
 
-  it("answers substantively", () => {
-    expect(reply.trim().length).toBeGreaterThan(0);
-  });
-
-  it("captures the lead with Dana's number and the verbatim sessionRef", () => {
-    const capture = calls.find((c) => c.name === "webchat_capture_lead");
-    expect(capture, `calls: ${JSON.stringify(calls)}`).toBeDefined();
-    expect(digits(capture!.args.phone)).toContain("6025550188");
-    // buildMessengerPreamble: "sessionRef (pass verbatim to capture_lead)".
-    expect(capture!.args.sessionRef).toBe(CONVERSATION_ID);
-  });
-
-  it("never claims the assistant itself texted or will text the visitor", () => {
-    if (verdict.answers.claims_sender_texted) {
-      console.error("live reply:", reply);
-      console.error("judge verdict:", JSON.stringify(verdict));
+      const verdict: JudgeVerdict = await judgeReply(
+        "a chat assistant that cannot send texts itself, replying to a visitor who shared " +
+          "their phone number and asked to be texted to set up an appointment",
+        reply,
+        {
+          claims_sender_texted:
+            "Does the message claim the SENDER ITSELF has sent, or will send, a text/SMS or " +
+            "email to the visitor? Saying the TEAM (or someone else) will text or reach out " +
+            "is false; answering the question in the chat itself is false."
+        }
+      );
+      if (verdict.answers.claims_sender_texted) {
+        console.error("live reply:", reply);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.claims_sender_texted).toBe(false);
     }
-    expect(verdict.answers.claims_sender_texted).toBe(false);
-  });
+  );
 });
 
 // ---------------------------------------------------------------------------
