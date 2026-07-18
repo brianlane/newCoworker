@@ -143,6 +143,20 @@ describe("resolveViewAsContext", () => {
       viewAs: null
     });
   });
+
+  it("treats self-impersonation (admin-owned business) as no view-as", async () => {
+    // The internal HQ tenant is owned by the admin email itself: viewing it
+    // resolves to the same dashboard either way, and it must NOT flip the
+    // read-only write guard — the admin-owner is entitled to mutate it.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "Admin@X.com" }
+    });
+    expect(await resolveViewAsContext(admin)).toEqual({
+      ownerEmail: "admin@x.com",
+      viewAs: null
+    });
+  });
 });
 
 describe("isViewAsActive", () => {
@@ -163,6 +177,14 @@ describe("isViewAsActive", () => {
     // the exit banner in this state — blocking writes would strand the admin.
     cookieGet.mockReturnValue({ value: BIZ_ID });
     maybeSingle.mockResolvedValue({ data: null });
+    expect(await isViewAsActive(admin)).toBe(false);
+  });
+
+  it("stays inactive when the admin views their own business (HQ tenant)", async () => {
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "admin@x.com" }
+    });
     expect(await isViewAsActive(admin)).toBe(false);
   });
 });

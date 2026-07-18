@@ -69,6 +69,18 @@ export async function resolveViewAsContext(user: AuthUser): Promise<ViewAsContex
     .maybeSingle();
   if (!data?.owner_email) return { ownerEmail: user.email, viewAs: null };
 
+  // Self-impersonation is a no-op: when the impersonated business's owner IS
+  // the admin (the internal HQ tenant), the dashboard resolves to the same
+  // business either way, and treating it as active view-as would only block
+  // writes the admin-owner is fully entitled to make. Fall back to the
+  // normal owner identity (no banner, writes allowed).
+  if (
+    typeof user.email === "string" &&
+    (data.owner_email as string).toLowerCase() === user.email.toLowerCase()
+  ) {
+    return { ownerEmail: user.email, viewAs: null };
+  }
+
   // Dashboard pages resolve "the" business as the NEWEST row under
   // owner_email, so view-as is effectively "view as this OWNER". When the
   // owner has multiple businesses, mirror the pages' newest-row pick here so
