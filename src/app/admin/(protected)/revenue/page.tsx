@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import { listAllSubscriptions } from "@/lib/db/subscriptions";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { computeDayCurrentMrr } from "@/lib/admin/mrr";
@@ -29,6 +30,7 @@ function formatMoney(cents: number): string {
 }
 
 export default async function AdminRevenuePage() {
+  const t = await getTranslations("admin.pages");
   const [businesses, subscriptions, deals, margins] = await Promise.all([
     listBusinesses(),
     listAllSubscriptions(),
@@ -93,10 +95,8 @@ export default async function AdminRevenuePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Revenue</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Subscription analytics — best-effort operator metrics, nothing bills from these numbers.
-        </p>
+        <h1 className="text-2xl font-bold text-parchment">{t("revenueTitle")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("revenueSubtitle")}</p>
       </div>
 
       {/* KPI row */}

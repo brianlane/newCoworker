@@ -9,6 +9,7 @@
  */
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { notFound } from "next/navigation";
 import { getBusiness } from "@/lib/db/businesses";
 import { Card } from "@/components/ui/Card";
@@ -22,6 +23,7 @@ export default async function AdminWebchatPage({
 }: {
   params: Promise<{ businessId: string }>;
 }) {
+  const t = await getTranslations("admin.pages");
   const { businessId } = await params;
   const business = await getBusiness(businessId);
   if (!business) notFound();
@@ -37,10 +39,8 @@ export default async function AdminWebchatPage({
         >
           ← Back to {business.name || "business"}
         </Link>
-        <h1 className="text-2xl font-bold text-parchment mt-2">Web chat conversations</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Visitor sessions from the chat widget on this business&apos;s website
-        </p>
+        <h1 className="text-2xl font-bold text-parchment mt-2">{t("tenantWebchatTitle")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("tenantWebchatSubtitle")}</p>
       </div>
 
       {sessions.length === 0 ? (

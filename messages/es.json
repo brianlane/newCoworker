@@ -1169,7 +1169,29 @@
     "revenue": "Ingresos",
     "engagement": "Engagement",
     "provisioning": "Aprovisionamiento",
-    "system": "Sistema"
+    "system": "Sistema",
+    "pages": {
+      "dashboardTitle": "Panel",
+      "dashboardSubtitle": "La salud del negocio de un vistazo.",
+      "clientsTitle": "Resumen de administración",
+      "clientsSubtitle": "{active} activos · {total} en total",
+      "provisionTitle": "Aprovisionamiento",
+      "provisionSubtitle": "Administra el despliegue de clientes y la activación de suscripciones.",
+      "costsTitle": "Costos",
+      "costsSubtitle": "Cifras reales de proveedores sincronizadas de Telnyx + Hostinger; Gemini desde nuestra propia medición. Nada se factura con estos números.",
+      "usageTitle": "Uso",
+      "usageSubtitle": "El uso medido de cada tenant contra sus límites — minutos de voz y conteos de llamadas de registros liquidados de Telnyx, concurrencia pico del traslape de transcripciones, SMS de los contadores de medición, IA del fusible de gasto de Gemini, costo de Telnyx de registros de factura sincronizados.",
+      "engagementTitle": "Engagement",
+      "engagementSubtitle": "Actividad de inicio de sesión de cada dueño y miembro del equipo.",
+      "systemTitle": "Sistema",
+      "systemSubtitle": "Configuración del entorno y salud de los servicios.",
+      "revenueTitle": "Ingresos",
+      "revenueSubtitle": "Analítica de suscripciones — métricas de operador de mejor esfuerzo, nada se factura con estos números.",
+      "webchatTitle": "Chat web",
+      "webchatSubtitle": "Conversaciones de visitantes del widget de chat de newcoworker.com",
+      "tenantWebchatTitle": "Conversaciones de chat web",
+      "tenantWebchatSubtitle": "Sesiones de visitantes del widget de chat del sitio web de este negocio"
+    }
   },
   "emails": {
     "common": {

@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import { checkEnv, getEnvDisplayValue } from "@/lib/admin/system";
 import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
 import {
@@ -93,6 +94,7 @@ const ENV_GROUPS: EnvGroup[] = [
 ];
 
 export default async function SystemPage() {
+  const t = await getTranslations("admin.pages");
   const businesses = await listBusinesses();
   // Missing row / legacy shape parse to the defaults, so the card always
   // renders exactly what the cron will actually enforce.
@@ -106,10 +108,8 @@ export default async function SystemPage() {
   return (
     <div className="space-y-6 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">System</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Environment configuration and service health.
-        </p>
+        <h1 className="text-2xl font-bold text-parchment">{t("systemTitle")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("systemSubtitle")}</p>
       </div>
 
       {/* Stats */}

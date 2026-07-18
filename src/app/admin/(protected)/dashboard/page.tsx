@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
 import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
@@ -37,6 +38,7 @@ function timeAgo(dateStr: string): string {
 }
 
 export default async function AdminDashboardPage() {
+  const t = await getTranslations("admin.pages");
   // Per-business admin mutes (flipped on each business's admin page) filter
   // the fleet-wide feeds below — fetched first so a muted tenant can't eat
   // the feed row limits.
@@ -124,8 +126,8 @@ export default async function AdminDashboardPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Dashboard</h1>
-        <p className="text-sm text-parchment/50 mt-1">Business health at a glance.</p>
+        <h1 className="text-2xl font-bold text-parchment">{t("dashboardTitle")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("dashboardSubtitle")}</p>
       </div>
 
       {/* ── KPI row ── */}

@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import { listAllBusinessMembers } from "@/lib/db/business-members";
 import {
   buildUserEngagementRows,
@@ -12,6 +13,7 @@ import { EngagementKpis } from "@/components/admin/EngagementKpis";
 export const dynamic = "force-dynamic";
 
 export default async function AdminEngagementPage() {
+  const t = await getTranslations("admin.pages");
   const [{ users, clipped }, businesses, members] = await Promise.all([
     listPlatformAuthUsers(),
     listBusinesses(),
@@ -30,10 +32,8 @@ export default async function AdminEngagementPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Engagement</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Sign-in activity across every owner and team member.
-        </p>
+        <h1 className="text-2xl font-bold text-parchment">{t("engagementTitle")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("engagementSubtitle")}</p>
       </div>
 
       {clipped && (

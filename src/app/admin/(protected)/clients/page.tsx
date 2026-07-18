@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { listAllBusinessMembers } from "@/lib/db/business-members";
 import {
@@ -22,6 +23,7 @@ import type { BusinessMarginEconomics } from "@/lib/admin/margin";
 export const dynamic = "force-dynamic";
 
 export default async function AdminClientsPage() {
+  const t = await getTranslations("admin.pages");
   const businesses = await listBusinesses();
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
   const prospectOffers = await listProspectWhiteGloveOffers();
@@ -75,9 +77,12 @@ export default async function AdminClientsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Admin Overview</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("clientsTitle")}</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            {activeClientCount} active · {businesses.length} total
+            {t("clientsSubtitle", {
+              active: String(activeClientCount),
+              total: String(businesses.length)
+            })}
           </p>
         </div>
         <CreateClientModal />

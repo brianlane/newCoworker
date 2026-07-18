@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -9,6 +10,7 @@ import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 export const dynamic = "force-dynamic";
 
 export default async function ProvisionPage() {
+  const t = await getTranslations("admin.pages");
   const businesses = await listBusinesses();
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
 
@@ -25,10 +27,8 @@ export default async function ProvisionPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Provisioning</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Manage client deployment and subscription activation.
-        </p>
+        <h1 className="text-2xl font-bold text-parchment">{t("provisionTitle")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("provisionSubtitle")}</p>
       </div>
 
       {/* Needs Action */}
