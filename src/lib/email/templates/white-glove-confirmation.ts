@@ -9,6 +9,9 @@
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
 export type WhiteGloveConfirmationInput = {
   packageName: string;
@@ -19,6 +22,8 @@ export type WhiteGloveConfirmationInput = {
   bookingUrl: string | null;
   /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
   siteUrl: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export type WhiteGloveConfirmationEmail = {
@@ -27,26 +32,31 @@ export type WhiteGloveConfirmationEmail = {
   html: string;
 };
 
-const dateFormat = new Intl.DateTimeFormat("en-US", {
-  month: "long",
-  day: "numeric",
-  year: "numeric",
-  timeZone: "UTC"
-});
+function dateFormat(locale: AppLocale): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat(locale === "es" ? "es-US" : "en-US", {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
 
 export function buildWhiteGloveConfirmationEmail(
   input: WhiteGloveConfirmationInput
 ): WhiteGloveConfirmationEmail {
-  const subject = `Your ${input.packageName} is confirmed`;
-  const untilDate = dateFormat.format(input.prioritySupportUntil);
+  const locale = input.locale ?? defaultLocale;
+  const copy = emailMessagesForLocale(locale);
+  const c = copy.whiteGloveConfirmation;
+  const subject = fmtEmail(c.subject, { packageName: input.packageName });
+  const untilDate = dateFormat(locale).format(input.prioritySupportUntil);
   const bookingLine = input.bookingUrl
-    ? `Book your onboarding session here: ${input.bookingUrl}`
-    : "Reply to this email and we'll schedule your onboarding session.";
+    ? fmtEmail(c.bookingLine, { bookingUrl: input.bookingUrl })
+    : c.replyLine;
   const textLines = [
-    `Thanks for purchasing ${input.packageName} — a specialist will work with you one-on-one to get your AI coworker fully dialed in.`,
+    fmtEmail(c.line1, { packageName: input.packageName }),
     bookingLine,
-    `Your priority call & video support line is open through ${untilDate}.`,
-    "— The NewCoworker Team"
+    fmtEmail(c.priorityLine, { date: untilDate }),
+    copy.ncSignoff
   ];
   const text = textLines.join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
@@ -56,8 +66,8 @@ export function buildWhiteGloveConfirmationEmail(
     heading: subject,
     bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
     cta: input.bookingUrl
-      ? { label: "Book your session", href: input.bookingUrl }
-      : { label: "Open dashboard", href: `${normalizedSite}/dashboard` },
+      ? { label: c.ctaBook, href: input.bookingUrl }
+      : { label: copy.openDashboardCta, href: `${normalizedSite}/dashboard` },
     recipientEmail: input.recipientEmail
   });
 

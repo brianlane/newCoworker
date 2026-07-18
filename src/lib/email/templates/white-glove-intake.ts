@@ -9,6 +9,9 @@
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
 export type WhiteGloveIntakeEmailInput = {
   /** The durable public questionnaire link (/intake/<token>). */
@@ -16,6 +19,8 @@ export type WhiteGloveIntakeEmailInput = {
   recipientEmail: string;
   /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
   siteUrl: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export type WhiteGloveIntakeEmail = {
@@ -27,14 +32,16 @@ export type WhiteGloveIntakeEmail = {
 export function buildWhiteGloveIntakeEmail(
   input: WhiteGloveIntakeEmailInput
 ): WhiteGloveIntakeEmail {
-  const subject = "Your NewCoworker white-glove setup questionnaire";
+  const copy = emailMessagesForLocale(input.locale ?? defaultLocale);
+  const c = copy.whiteGloveIntake;
+  const subject = c.subject;
   const textLines = [
-    "We're getting your white-glove build ready. To set everything up exactly the way you want it, we have a short questionnaire for you — mostly multiple choice, about 5 minutes.",
-    "It covers how your AI assistant should greet new leads, when it follows up, how appointments get booked, and which topics should always go straight to your team.",
-    `Fill it out here: ${input.intakeUrl}`,
-    "Your answers become the build plan our team installs from, so the more accurate they are, the better your assistant will fit your business from day one.",
-    "Questions? Just reply to this email.",
-    "— The NewCoworker Team"
+    c.line1,
+    c.line2,
+    fmtEmail(c.fillOut, { intakeUrl: input.intakeUrl }),
+    c.line4,
+    copy.questionsReply,
+    copy.ncSignoff
   ];
   const text = textLines.join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
@@ -43,7 +50,7 @@ export function buildWhiteGloveIntakeEmail(
     documentTitle: subject,
     heading: subject,
     bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
-    cta: { label: "Start the questionnaire", href: input.intakeUrl },
+    cta: { label: c.cta, href: input.intakeUrl },
     recipientEmail: input.recipientEmail
   });
 

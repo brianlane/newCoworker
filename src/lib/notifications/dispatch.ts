@@ -459,7 +459,9 @@ export async function dispatchUrgentNotification(
         businessId: input.businessId,
         to: targets.phone,
         text,
-        audience: "owner"
+        audience: "owner",
+        // Owner alerts follow the owner's saved UI language.
+        language: targets.email ? await resolveOwnerUiLocaleForEmail(targets.email) : "en"
       });
       if (delivered.ok) {
         results.push(

@@ -530,27 +530,42 @@ describe("WABA subscription", () => {
 });
 
 describe("registerWhatsAppTemplates", () => {
-  it("registers every stock template and reports statuses", async () => {
+  it("registers every stock template (both languages) and reports statuses", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(jsonResponse(200, {}))
       .mockResolvedValueOnce(jsonResponse(200, {}));
     const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
     expect(results).toEqual([
       { name: "nc_owner_alert", language: "en_US", status: "PENDING" },
-      { name: "nc_contact_followup", language: "en_US", status: "PENDING" }
+      { name: "nc_owner_alert", language: "es_US", status: "PENDING" },
+      { name: "nc_contact_followup", language: "en_US", status: "PENDING" },
+      { name: "nc_contact_followup", language: "es_US", status: "PENDING" }
     ]);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as { name: string; category: string };
     expect(body.name).toBe("nc_owner_alert");
     expect(body.category).toBe("UTILITY");
+    // The es_US variant registers with a Spanish body + Spanish example.
+    const [, esInit] = fetchMock.mock.calls[1] as [string, RequestInit];
+    const esBody = JSON.parse(esInit.body as string) as {
+      language: string;
+      components: Array<{ text: string; example: { body_text: string[][] } }>;
+    };
+    expect(esBody.language).toBe("es_US");
+    expect(esBody.components[0].text).toContain("Actualización");
+    expect(esBody.components[0].example.body_text[0][1]).toContain("lead nuevo");
   });
 
   it("maps every registration failure to FAILED (the connect route's live status fetch reconciles reconnects)", async () => {
     fetchMock
       .mockResolvedValueOnce(jsonResponse(400, { error: "name already exists" }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: "name already exists" }))
+      .mockResolvedValueOnce(jsonResponse(500, { error: "boom" }))
       .mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
     const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
-    expect(results.map((r) => r.status)).toEqual(["FAILED", "FAILED"]);
+    expect(results.map((r) => r.status)).toEqual(["FAILED", "FAILED", "FAILED", "FAILED"]);
   });
 });
 

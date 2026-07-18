@@ -446,23 +446,54 @@ export const WHATSAPP_MAX_TEXT_LENGTH = 4096;
  * variable-only bodies); category "utility" keeps them out of marketing
  * review. Sends outside the 24h service window use these; inside it,
  * free-form text goes out instead.
+ *
+ * Each template name is registered in BOTH en_US and es_US so the
+ * out-of-window fallback can follow the recipient's language; Meta treats
+ * language variants of the same name as one template with per-language
+ * review status.
  */
 export const WHATSAPP_STOCK_TEMPLATES = [
   {
     name: "nc_owner_alert",
     language: "en_US",
     category: "UTILITY" as const,
-    bodyText: "Update from your {{1}} assistant: {{2}}"
+    bodyText: "Update from your {{1}} assistant: {{2}}",
+    exampleParams: ["Acme Plumbing", "You have a new lead waiting."]
+  },
+  {
+    name: "nc_owner_alert",
+    language: "es_US",
+    category: "UTILITY" as const,
+    bodyText: "Actualización de tu asistente de {{1}}: {{2}}",
+    exampleParams: ["Acme Plumbing", "Tienes un lead nuevo esperando."]
   },
   {
     name: "nc_contact_followup",
     language: "en_US",
     category: "UTILITY" as const,
-    bodyText: "Hello from {{1}}: {{2}} Reply here and we can pick it up on WhatsApp."
+    bodyText: "Hello from {{1}}: {{2}} Reply here and we can pick it up on WhatsApp.",
+    exampleParams: ["Acme Plumbing", "Just checking in about your appointment."]
+  },
+  {
+    name: "nc_contact_followup",
+    language: "es_US",
+    category: "UTILITY" as const,
+    bodyText: "Hola de parte de {{1}}: {{2}} Responde aquí y seguimos por WhatsApp.",
+    exampleParams: ["Acme Plumbing", "Solo dando seguimiento a tu cita."]
   }
 ] as const;
 
 export type WhatsAppStockTemplateName = (typeof WHATSAPP_STOCK_TEMPLATES)[number]["name"];
+
+/**
+ * Key a template's per-language review state in the connection's
+ * `templates` map. en_US keeps the bare name (backward compatible with
+ * rows written before the Spanish variants existed); other languages are
+ * suffixed.
+ */
+export function whatsappTemplateStateKey(name: string, language: string): string {
+  return language === "en_US" ? name : `${name}:${language}`;
+}
 
 /**
  * Send a free-form text to a WhatsApp user (wa_id / E.164 digits) from
@@ -628,7 +659,7 @@ export async function registerWhatsAppTemplates(
               {
                 type: "BODY",
                 text: template.bodyText,
-                example: { body_text: [["Acme Plumbing", "You have a new lead waiting."]] }
+                example: { body_text: [[...template.exampleParams]] }
               }
             ]
           }

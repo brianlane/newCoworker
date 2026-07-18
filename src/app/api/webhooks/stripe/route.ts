@@ -41,6 +41,7 @@ import {
   markEnterpriseDealCanceledByStripeSubscriptionId
 } from "@/lib/db/enterprise-deals";
 import { buildWhiteGloveConfirmationEmail } from "@/lib/email/templates/white-glove-confirmation";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOwnerEmail } from "@/lib/email/client";
 import {
   cancelStripeSubscriptionSafely,
@@ -1827,7 +1828,8 @@ async function applyWhiteGlovePurchaseFromCheckout(
       recipientEmail: business.owner_email,
       prioritySupportUntil: supportUntil,
       bookingUrl: getWhiteGloveBookingUrl(),
-      siteUrl
+      siteUrl,
+      locale: await resolveOwnerUiLocaleForEmail(business.owner_email)
     });
     await sendOwnerEmail(apiKey, business.owner_email, subject, { text, html });
   } catch (err) {
@@ -1960,7 +1962,8 @@ async function applyCustomWhiteGloveOfferFromCheckout(
       recipientEmail: confirmationEmail,
       prioritySupportUntil: supportUntil,
       bookingUrl: getWhiteGloveBookingUrl(),
-      siteUrl
+      siteUrl,
+      locale: await resolveOwnerUiLocaleForEmail(confirmationEmail)
     });
     await sendOwnerEmail(apiKey, confirmationEmail, subject, { text, html });
   } catch (err) {

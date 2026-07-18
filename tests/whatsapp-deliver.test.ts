@@ -76,6 +76,7 @@ function makeDeps(overrides: Partial<DeliverWhatsAppDeps> = {}): Required<
     sendText: vi.fn(async () => ({ messageId: "wamid-text" })),
     sendTemplate: vi.fn(async () => ({ messageId: "wamid-tmpl" })),
     fetchBusinessName: vi.fn(async () => "Acme Plumbing"),
+    fetchContactLanguage: vi.fn(async () => ({ preferred_language: null })),
     now: () => NOW,
     ...overrides
   };
@@ -198,6 +199,64 @@ describe("deliverWhatsApp", () => {
     const appended = vi.mocked(deps.appendMessage).mock.calls[0][0];
     expect(appended.content).toContain("Acme Plumbing");
     expect(appended.content).toContain("Following up on your quote.");
+  });
+
+  it("uses the approved es_US template variant when the contact prefers Spanish", async () => {
+    const deps = makeDeps({
+      getConnection: vi.fn(async () => ({
+        ...CONNECTION,
+        templates: {
+          ...CONNECTION.templates,
+          "nc_contact_followup:es_US": { status: "APPROVED", language: "es_US" }
+        }
+      })),
+      getConversation: vi.fn(async () =>
+        conversation({ last_user_message_at: "2026-07-10T00:00:00Z" })
+      ),
+      fetchContactLanguage: vi.fn(async () => ({ preferred_language: "es" as const }))
+    });
+    const result = await deliverWhatsApp(INPUT, deps);
+    expect(result).toEqual({ ok: true, via: "template", messageId: "wamid-tmpl" });
+    expect(deps.fetchContactLanguage).toHaveBeenCalledWith(BIZ, "+15551234567");
+    expect(deps.sendTemplate).toHaveBeenCalledWith("pn-9", "business-token", "15551234567", {
+      name: "nc_contact_followup",
+      language: "es_US",
+      bodyParams: ["Acme Plumbing", "Following up on your quote."]
+    });
+    const appended = vi.mocked(deps.appendMessage).mock.calls[0][0];
+    expect(appended.content).toContain("Hola de parte de Acme Plumbing");
+  });
+
+  it("explicit language wins and falls back to en_US when es_US isn't approved", async () => {
+    const closed = vi.fn(async () =>
+      conversation({ last_user_message_at: "2026-07-10T00:00:00Z" })
+    );
+    // es requested but only en approved → English template, no lookup.
+    const deps = makeDeps({ getConversation: closed });
+    const result = await deliverWhatsApp({ ...INPUT, language: "es" }, deps);
+    expect(result).toEqual({ ok: true, via: "template", messageId: "wamid-tmpl" });
+    expect(deps.fetchContactLanguage).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.sendTemplate).mock.calls[0][3].language).toBe("en_US");
+
+    // Explicit en never consults the contact preference.
+    const depsEn = makeDeps({ getConversation: closed });
+    await deliverWhatsApp({ ...INPUT, language: "en" }, depsEn);
+    expect(depsEn.fetchContactLanguage).not.toHaveBeenCalled();
+    expect(vi.mocked(depsEn.sendTemplate).mock.calls[0][3].language).toBe("en_US");
+  });
+
+  it("treats a contact-language lookup failure as English", async () => {
+    const deps = makeDeps({
+      getConversation: vi.fn(async () =>
+        conversation({ last_user_message_at: "2026-07-10T00:00:00Z" })
+      ),
+      fetchContactLanguage: vi.fn(async () => {
+        throw new Error("db down");
+      })
+    });
+    const result = await deliverWhatsApp(INPUT, deps);
+    expect(result).toEqual({ ok: true, via: "template", messageId: "wamid-tmpl" });
+    expect(vi.mocked(deps.sendTemplate).mock.calls[0][3].language).toBe("en_US");
   });
 
   it("does not interpret $ sequences in template transcript interpolation", async () => {

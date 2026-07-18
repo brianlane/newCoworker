@@ -2,6 +2,7 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { requireAuth } from "@/lib/auth";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { createEmailVerificationToken } from "@/lib/email/verification-token";
 import { logger } from "@/lib/logger";
 
@@ -41,7 +42,8 @@ export async function POST() {
     const { subject, text, html } = buildEmailVerificationMessage({
       verificationUrl,
       siteUrl,
-      recipientEmail: user.email
+      recipientEmail: user.email,
+      locale: await resolveOwnerUiLocaleForEmail(user.email)
     });
 
     try {

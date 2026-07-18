@@ -1183,6 +1183,82 @@
     "provisioningLive": {
       "subject": "¡Tu Coworker de IA está en vivo!",
       "body": "Tu New Coworker está configurado y listo."
+    },
+    "ncSignoff": "— El equipo de NewCoworker",
+    "questionsReply": "¿Preguntas? Solo responde a este correo.",
+    "openBilling": "Abrir facturación",
+    "openDashboardCta": "Abrir panel",
+    "cancelConfirmation": {
+      "periodEndSubject": "Tu suscripción de NewCoworker está programada para terminar",
+      "periodEnd1": "Tu cancelación está programada.",
+      "periodEnd2": "Tu suscripción de NewCoworker terminará el {date}.",
+      "periodEnd3": "Puedes deshacer esto en cualquier momento antes de esa fecha desde tu panel de facturación.",
+      "periodEnd4": "Después de la fecha de término, tu espacio entra en una ventana de retención de datos de 30 días durante la cual puedes reactivar sin perder nada.",
+      "paymentSubject": "Tu suscripción de NewCoworker ha sido pausada",
+      "payment1": "No pudimos procesar tu último pago, así que tu suscripción fue cancelada.",
+      "payment2": "Tus datos se conservan hasta el {date} para que no pierdas nada mientras lo resuelves.",
+      "payment3": "Reactiva en cualquier momento desde tu panel de facturación para restaurar el acceso — haremos un nuevo checkout y tu espacio volverá a estar en línea en unos minutos.",
+      "upgradeSubject": "Tu cambio de plan de NewCoworker está en progreso",
+      "upgrade1": "Tu plan anterior de NewCoworker fue cancelado como parte de tu cambio de plan.",
+      "upgrade2": "Estamos migrando tu espacio a un servidor nuevo en el nuevo plan — esto normalmente toma unos minutos.",
+      "upgrade3": "Recibirás una confirmación aparte cuando el nuevo plan esté totalmente en vivo.",
+      "adminLeadIn": "Un administrador de NewCoworker canceló tu suscripción.",
+      "userLeadIn": "Tu suscripción fue cancelada a petición tuya.",
+      "adminSubject": "Tu cuenta de NewCoworker ha sido cerrada",
+      "admin2": "El acceso a tu espacio fue deshabilitado y los datos de la cuenta quedaron programados para borrado inmediato.",
+      "admin3": "Contacta a soporte si crees que fue un error.",
+      "defaultSubject": "Tu suscripción de NewCoworker ha sido cancelada",
+      "default2": "Tus datos se conservan hasta el {date}.",
+      "default3": "Reactiva en cualquier momento desde tu panel de facturación para restaurar el acceso antes de que cierre la ventana de retención de datos.",
+      "thirtyDays": "dentro de 30 días"
+    },
+    "refundIssued": {
+      "subject": "Tu reembolso de NewCoworker está en camino",
+      "line1": "Emitimos un reembolso de {amount} a tu método de pago original.",
+      "line2": "Los reembolsos suelen aparecer en 5–10 días hábiles según tu banco.",
+      "line3": "Tu espacio quedó programado para apagarse y guardamos un respaldo de tus datos por 30 días por si decides volver.",
+      "line4": "Si tienes alguna pregunta, solo responde a este correo."
+    },
+    "emailVerification": {
+      "subject": "Confirma tu correo de NewCoworker",
+      "welcome": "¡Bienvenido a NewCoworker!",
+      "textIntro": "Para terminar de asegurar tu cuenta, confirma tu dirección de correo abriendo el enlace de abajo:",
+      "textExpiry": "Este enlace expira en 7 días. Si no creaste una cuenta de NewCoworker, puedes ignorar este correo con tranquilidad.",
+      "htmlIntro": "Aquí está tu enlace para confirmar tu correo de <strong style=\"color:#1BD96A;\">New Coworker</strong>. Haz clic en el botón de abajo — sin necesidad de contraseña.",
+      "warningLine": "Este enlace expira en 7 días.",
+      "securityNote": "Si no creaste una cuenta de NewCoworker, puedes ignorar este correo con tranquilidad. Tu cuenta está segura.",
+      "cta": "Confirmar correo"
+    },
+    "teamInvite": {
+      "subject": "Te agregaron a {businessName} en NewCoworker",
+      "added": "{invitedBy} te agregó al panel del coworker de IA de {businessName} como {role}.",
+      "roleManager": "Como gerente puedes administrar la configuración, los AiFlows, las integraciones y el equipo.",
+      "roleStaff": "Como personal puedes trabajar el panel: mensajes, llamadas y chat.",
+      "signIn": "Inicia sesión con esta dirección de correo para comenzar: {loginUrl}",
+      "cta": "Abrir el panel"
+    },
+    "whiteGloveOffer": {
+      "subject": "Tu oferta de NewCoworker: {offerName}",
+      "line1": "Preparamos una oferta white-glove personalizada para ti: {offerName} — {price}, pago único.",
+      "payLine": "Paga de forma segura con Stripe aquí: {payUrl}",
+      "afterPay": "Después del pago recibirás una confirmación por correo y un enlace de reserva, y todo sigue a tu cuenta automáticamente.",
+      "cta": "Pagar {price} de forma segura"
+    },
+    "whiteGloveIntake": {
+      "subject": "Tu cuestionario de configuración white-glove de NewCoworker",
+      "line1": "Estamos preparando tu construcción white-glove. Para configurar todo exactamente como lo quieres, tenemos un cuestionario corto para ti — mayormente de opción múltiple, unos 5 minutos.",
+      "line2": "Cubre cómo debe saludar tu asistente de IA a los leads nuevos, cuándo da seguimiento, cómo se reservan las citas y qué temas deben ir siempre directo a tu equipo.",
+      "fillOut": "Llénalo aquí: {intakeUrl}",
+      "line4": "Tus respuestas se convierten en el plan de construcción que nuestro equipo instala, así que mientras más precisas sean, mejor se ajustará tu asistente a tu negocio desde el primer día.",
+      "cta": "Comenzar el cuestionario"
+    },
+    "whiteGloveConfirmation": {
+      "subject": "Tu {packageName} está confirmado",
+      "line1": "Gracias por comprar {packageName} — un especialista trabajará contigo uno a uno para dejar tu coworker de IA totalmente afinado.",
+      "bookingLine": "Reserva tu sesión de onboarding aquí: {bookingUrl}",
+      "replyLine": "Responde a este correo y agendamos tu sesión de onboarding.",
+      "priorityLine": "Tu línea prioritaria de soporte por llamada y video está abierta hasta el {date}.",
+      "ctaBook": "Reservar tu sesión"
     }
   }
 }

@@ -14,11 +14,16 @@
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
 
 export type EmailVerificationMessageInput = {
   verificationUrl: string;
   siteUrl: string;
   recipientEmail: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export type EmailVerificationMessage = {
@@ -30,13 +35,15 @@ export type EmailVerificationMessage = {
 export function buildEmailVerificationMessage(
   input: EmailVerificationMessageInput
 ): EmailVerificationMessage {
-  const subject = "Confirm your NewCoworker email";
+  const copy = emailMessagesForLocale(input.locale ?? defaultLocale);
+  const c = copy.emailVerification;
+  const subject = c.subject;
   const text = [
-    "Welcome to NewCoworker!",
-    "To finish securing your account, please confirm your email address by opening the link below:",
+    c.welcome,
+    c.textIntro,
     input.verificationUrl,
-    "This link expires in 7 days. If you didn't create a NewCoworker account, you can safely ignore this email.",
-    "— The NewCoworker Team"
+    c.textExpiry,
+    copy.ncSignoff
   ].join("\n\n");
 
   const siteUrl = input.siteUrl.replace(/\/$/, "");
@@ -45,17 +52,14 @@ export function buildEmailVerificationMessage(
     documentTitle: subject,
     heading: subject,
     bodyBlocks: [
-      { kind: "text", text: "Welcome to NewCoworker!" },
-      {
-        kind: "html",
-        html: `Here's your link to confirm your email for <strong style="color:#1BD96A;">New Coworker</strong>. Click the button below — no password needed.`
-      }
+      { kind: "text", text: c.welcome },
+      // Catalog-authored markup (bold brand name); not user input.
+      { kind: "html", html: c.htmlIntro }
     ],
-    cta: { label: "Confirm email", href: input.verificationUrl },
+    cta: { label: c.cta, href: input.verificationUrl },
     fallbackHref: input.verificationUrl,
-    warningLine: "This link expires in 7 days.",
-    securityNote:
-      "If you didn't create a NewCoworker account, you can safely ignore this email. Your account is secure.",
+    warningLine: c.warningLine,
+    securityNote: c.securityNote,
     recipientEmail: input.recipientEmail
   });
 

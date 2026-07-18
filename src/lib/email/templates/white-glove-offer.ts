@@ -9,6 +9,9 @@
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
 export type WhiteGloveOfferEmailInput = {
   offerName: string;
@@ -20,6 +23,8 @@ export type WhiteGloveOfferEmailInput = {
   recipientEmail: string;
   /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
   siteUrl: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export type WhiteGloveOfferEmail = {
@@ -38,15 +43,17 @@ const currency = new Intl.NumberFormat("en-US", {
 export function buildWhiteGloveOfferEmail(
   input: WhiteGloveOfferEmailInput
 ): WhiteGloveOfferEmail {
-  const subject = `Your NewCoworker offer: ${input.offerName}`;
+  const copy = emailMessagesForLocale(input.locale ?? defaultLocale);
+  const c = copy.whiteGloveOffer;
+  const subject = fmtEmail(c.subject, { offerName: input.offerName });
   const price = currency.format(input.amountCents / 100);
   const textLines = [
-    `We've prepared a custom white-glove offer for you: ${input.offerName} — ${price}, one-time.`,
+    fmtEmail(c.line1, { offerName: input.offerName, price }),
     ...(input.description.trim() ? [input.description.trim()] : []),
-    `Pay securely through Stripe here: ${input.payUrl}`,
-    "After payment you'll get an email confirmation and a booking link, and everything follows your account automatically.",
-    "Questions? Just reply to this email.",
-    "— The NewCoworker Team"
+    fmtEmail(c.payLine, { payUrl: input.payUrl }),
+    c.afterPay,
+    copy.questionsReply,
+    copy.ncSignoff
   ];
   const text = textLines.join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
@@ -55,7 +62,7 @@ export function buildWhiteGloveOfferEmail(
     documentTitle: subject,
     heading: subject,
     bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
-    cta: { label: `Pay ${price} securely`, href: input.payUrl },
+    cta: { label: fmtEmail(c.cta, { price }), href: input.payUrl },
     recipientEmail: input.recipientEmail
   });
 

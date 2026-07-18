@@ -65,6 +65,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { sendOpsDidReleaseFailedEmail } from "@/lib/email/ops-notify";
 import { buildCancelConfirmationEmail } from "@/lib/email/templates/cancel-confirmation";
 import { buildRefundIssuedEmail } from "@/lib/email/templates/refund-issued";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import {
   buildOpsVpsDeletionEmail,
   opsNotificationEmail
@@ -717,7 +718,8 @@ async function runEmailOp(
         graceEndsAt: op.graceEndsAt,
         recipientEmail: op.toEmail,
         siteUrl,
-        ...(op.timeZone ? { timeZone: op.timeZone } : {})
+        ...(op.timeZone ? { timeZone: op.timeZone } : {}),
+        locale: await resolveOwnerUiLocaleForEmail(op.toEmail)
       });
       await send(apiKey, op.toEmail, subject, { text, html });
       return;
@@ -738,7 +740,8 @@ async function runEmailOp(
       const { subject, text, html } = buildRefundIssuedEmail({
         amountCents,
         recipientEmail: op.toEmail,
-        siteUrl
+        siteUrl,
+        locale: await resolveOwnerUiLocaleForEmail(op.toEmail)
       });
       await send(apiKey, op.toEmail, subject, { text, html });
       return;
