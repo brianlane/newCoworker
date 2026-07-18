@@ -19,6 +19,7 @@
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
+import { sweepCalendlyBookingGoals } from "@/lib/ai-flows/calendly-booking-goals";
 
 // A poll is a few provider list calls per watched calendar; 60s is ample
 // headroom without letting a hung provider pin the function.
@@ -31,7 +32,15 @@ export async function POST(request: Request): Promise<Response> {
   }
   try {
     const result = await pollCalendarTriggers();
-    return successResponse(result);
+    // Calendly booking → appointment_booked goal sweep rides the same tick
+    // (per-business failures already isolate inside; this guard keeps a
+    // sweep-level failure from masking the poll result — bookings stay
+    // fresh for the whole lookback, so the next tick retries).
+    const bookingGoals = await sweepCalendlyBookingGoals().catch((err) => {
+      console.error("aiflow-calendar-poll booking-goal sweep", err);
+      return null;
+    });
+    return successResponse({ ...result, bookingGoals });
   } catch (err) {
     return handleRouteError(err);
   }
