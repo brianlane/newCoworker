@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { ShieldCheck } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
@@ -26,13 +27,17 @@ export const dynamicParams = false;
 export async function generateMetadata({ params }: { params: Promise<Params> }): Promise<Metadata> {
   const industry = getIndustry((await params).slug);
   if (!industry) return {};
+  const t = await getTranslations("marketing.industriesPage");
+  const tIndustries = await getTranslations("marketing.industries");
+  const name = tIndustries(`${industry.i18nKey}.name`);
+  const teaser = tIndustries(`${industry.i18nKey}.teaser`);
   return {
-    title: `${industry.name} | Industries`,
-    description: industry.teaser,
+    title: t("detailMetaTitle", { name }),
+    description: teaser,
     alternates: { canonical: `/industries/${industry.slug}` },
     openGraph: {
-      title: `New Coworker for ${industry.name}`,
-      description: industry.teaser,
+      title: t("detailOgTitle", { name }),
+      description: teaser,
       url: `/industries/${industry.slug}`
     }
   };
@@ -41,6 +46,23 @@ export async function generateMetadata({ params }: { params: Promise<Params> }):
 export default async function IndustryPage({ params }: { params: Promise<Params> }) {
   const industry = getIndustry((await params).slug);
   if (!industry) notFound();
+
+  const t = await getTranslations("marketing.industriesPage");
+  const tIndustries = await getTranslations("marketing.industries");
+  const k = industry.i18nKey;
+  const name = tIndustries(`${k}.name`);
+  const teaser = tIndustries(`${k}.teaser`);
+
+  const useCases = industry.useCaseIcons.map((Icon, index) => ({
+    title: tIndustries(`${k}.u${index + 1}.title`),
+    description: tIndustries(`${k}.u${index + 1}.description`),
+    Icon
+  }));
+
+  const dayInTheLife = industry.dayTimes.map((time, index) => ({
+    time,
+    event: tIndustries(`${k}.day${index + 1}`)
+  }));
 
   const breadcrumbJsonLd = {
     "@context": "https://schema.org",
@@ -51,7 +73,7 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
       {
         "@type": "ListItem",
         position: 3,
-        name: industry.name,
+        name,
         item: `${SITE_URL}/industries/${industry.slug}`
       }
     ]
@@ -60,12 +82,12 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
   const serviceJsonLd = {
     "@context": "https://schema.org",
     "@type": "Service",
-    name: `New Coworker for ${industry.name}`,
+    name: t("detailOgTitle", { name }),
     serviceType: "AI answering and scheduling service",
-    description: industry.teaser,
+    description: teaser,
     url: `${SITE_URL}/industries/${industry.slug}`,
     provider: { "@id": `${SITE_URL}/#organization` },
-    audience: { "@type": "BusinessAudience", name: industry.name }
+    audience: { "@type": "BusinessAudience", name }
   };
 
   return (
@@ -74,25 +96,29 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
       <JsonLd data={serviceJsonLd} />
       <MarketingNav />
 
-      <PageHero eyebrow={industry.name} title={industry.headline} subtitle={industry.subheadline}>
+      <PageHero
+        eyebrow={name}
+        title={tIndustries(`${k}.headline`)}
+        subtitle={tIndustries(`${k}.subheadline`)}
+      >
         <a
           href="/onboard"
           className="inline-block rounded-lg bg-claw-green px-8 py-3.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
         >
-          Get Started
+          {t("detailGetStarted")}
         </a>
       </PageHero>
 
       <section className="mx-auto max-w-6xl px-6 pb-20">
-        <SectionHeading title={`What your coworker handles for ${industry.name.toLowerCase()}`} />
-        <FeatureGrid features={industry.useCases} />
+        <SectionHeading title={t("detailHandlesTitle", { name: name.toLowerCase() })} />
+        <FeatureGrid features={useCases} />
       </section>
 
       {/* Day in the life */}
       <section className="mx-auto max-w-3xl px-6 pb-20">
-        <SectionHeading eyebrow="A day with your coworker" title="While you do the work, it works the phones" />
+        <SectionHeading eyebrow={t("dayEyebrow")} title={t("dayTitle")} />
         <ol className="relative space-y-6 border-l border-parchment/15 pl-6">
-          {industry.dayInTheLife.map((item) => (
+          {dayInTheLife.map((item) => (
             <li key={item.time} className="relative">
               <span className="absolute -left-[1.85rem] top-1.5 h-2.5 w-2.5 rounded-full bg-claw-green" />
               <p className="text-xs font-semibold uppercase tracking-[0.18em] text-signal-teal">{item.time}</p>
@@ -102,19 +128,21 @@ export default async function IndustryPage({ params }: { params: Promise<Params>
         </ol>
       </section>
 
-      {industry.complianceNote && (
+      {industry.hasComplianceNote && (
         <section className="mx-auto max-w-3xl px-6 pb-20">
           <div className="flex items-start gap-4 rounded-2xl border border-signal-teal/20 bg-signal-teal/[0.05] p-6">
             <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-signal-teal" />
-            <p className="text-sm leading-relaxed text-parchment/65">{industry.complianceNote}</p>
+            <p className="text-sm leading-relaxed text-parchment/65">
+              {tIndustries(`${k}.complianceNote`)}
+            </p>
           </div>
         </section>
       )}
 
       <CtaBanner
-        title={`Put a coworker to work in your ${industry.ctaNoun ?? `${industry.name.toLowerCase()} business`}`}
-        subtitle="Live in minutes, with a 30-day money-back guarantee."
-        ctaLabel="Choose your plan"
+        title={t("detailCtaTitle", { noun: tIndustries(`${k}.ctaNoun`) })}
+        subtitle={t("detailCtaSubtitle")}
+        ctaLabel={t("detailCtaLabel")}
         ctaHref="/onboard"
       />
 

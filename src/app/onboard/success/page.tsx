@@ -6,13 +6,15 @@ import Image from "next/image";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
+import { useLocale, useTranslations } from "next-intl";
 import { ONBOARD_STORAGE_KEY, clearOnboardingStorage, type OnboardingData } from "@/lib/onboarding/storage";
 import {
   clearStaleSupabaseAuthCookies,
   getSupabaseBrowserClient,
   resetSupabaseBrowserClientCache
 } from "@/lib/supabase/browser";
-import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
+import type { AppLocale } from "@/i18n/routing";
+import { getPasswordRules, getPasswordValidationError } from "@/lib/password";
 import { CoworkerProvisioningProgress } from "@/components/dashboard/CoworkerProvisioningProgress";
 
 type SuccessStatus =
@@ -32,6 +34,9 @@ export default function OnboardSuccessPage() {
 }
 
 function OnboardSuccessContent() {
+  const t = useTranslations("marketing.onboard");
+  const tAuth = useTranslations("auth");
+  const locale = useLocale() as AppLocale;
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session_id");
   const [status, setStatus] = useState<SuccessStatus>("verifying_payment");
@@ -71,7 +76,7 @@ function OnboardSuccessContent() {
 
         if (!verifyRes.ok) {
           const verifyJson = await verifyRes.json().catch(() => null);
-          throw new Error(verifyJson?.error?.message ?? "Could not verify your payment.");
+          throw new Error(verifyJson?.error?.message ?? t("errVerifyPayment"));
         }
 
         const verifyJson = await verifyRes.json();
@@ -80,7 +85,7 @@ function OnboardSuccessContent() {
         const recoveredOnboardingData = verifyJson.data?.onboardingData as OnboardingData | null | undefined;
         const onboardingDraftRecovered = verifyJson.data?.onboardingDraftRecovered === true;
         if (typeof ownerEmail !== "string" || !ownerEmail) {
-          throw new Error("Could not determine the paid account email.");
+          throw new Error(t("errPaidEmail"));
         }
 
         setSignupEmail(ownerEmail);
@@ -108,11 +113,12 @@ function OnboardSuccessContent() {
         setStatus("needs_password");
       } catch (err) {
         setStatus("error");
-        setError(err instanceof Error ? err.message : "Something went wrong.");
+        setError(err instanceof Error ? err.message : t("errGeneric"));
       }
     }
 
     void resolvePostPaymentState();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `t` is stable per locale; re-running on t identity would refetch payment state
   }, [sessionId]);
 
   useEffect(() => {
@@ -175,18 +181,18 @@ function OnboardSuccessContent() {
     setError(null);
 
     if (!signupEmail.trim()) {
-      setError("Email is required");
+      setError(t("errEmailRequired"));
       return;
     }
 
-    const passwordError = getPasswordValidationError(password);
+    const passwordError = getPasswordValidationError(password, locale);
     if (passwordError) {
       setError(passwordError);
       return;
     }
 
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
+      setError(tAuth("passwordsDoNotMatch"));
       return;
     }
 
@@ -195,7 +201,7 @@ function OnboardSuccessContent() {
       // mint the auth user. Without it, /api/onboard/set-password has no
       // way to bind the password to a paid checkout — refuse rather than
       // silently dropping the request.
-      setError("Your payment session has expired. Please complete checkout again.");
+      setError(t("errSessionExpired"));
       return;
     }
 
@@ -242,7 +248,7 @@ function OnboardSuccessContent() {
       }
 
       if (!setPasswordRes.ok) {
-        throw new Error(setPasswordJson?.error?.message ?? "Could not create your account.");
+        throw new Error(setPasswordJson?.error?.message ?? t("errCreateAccount"));
       }
       const resolvedEmail =
         (typeof setPasswordJson?.data?.ownerEmail === "string" && setPasswordJson.data.ownerEmail) ||
@@ -284,7 +290,7 @@ function OnboardSuccessContent() {
       setStatus("provisioning");
     } catch (err) {
       setStatus("needs_password");
-      setError(err instanceof Error ? err.message : "Could not create your account.");
+      setError(err instanceof Error ? err.message : t("errCreateAccount"));
     } finally {
       setSubmitting(false);
     }
@@ -318,47 +324,44 @@ function OnboardSuccessContent() {
               />
             ))}
           </div>
-          <p className="text-sm text-parchment/50 mt-3">Step 4 of 4</p>
+          <p className="text-sm text-parchment/50 mt-3">{t("step4")}</p>
           <h1 className="text-2xl font-bold text-parchment mt-2">
             {status === "needs_password"
-              ? "Create your password"
+              ? t("titleNeedsPassword")
               : status === "provisioning"
-                  ? "Setting things up…"
+                  ? t("titleProvisioning")
                   : status === "online"
-                    ? "Your Coworker is Live!"
+                    ? t("titleOnline")
                     : status === "awaiting_confirmation"
-                      ? "Sign in to continue"
+                      ? t("titleAwaiting")
                       : status === "error"
-                        ? "We hit a snag"
-                        : "Confirming your payment"}
+                        ? t("titleError")
+                        : t("titleVerifying")}
           </h1>
           <p className="text-sm text-parchment/50 mt-2">
             {status === "needs_password"
-              ? "Payment succeeded. Create your password to finish account setup."
+              ? t("blurbNeedsPassword")
               : status === "provisioning"
-                  ? "We're provisioning your VPS and configuring your AI coworker. This takes 2–5 minutes."
+                  ? t("blurbProvisioning")
                   : status === "online"
-                    ? "Everything is ready. Head to your dashboard."
+                    ? t("blurbOnline")
                       : status === "awaiting_confirmation"
-                      ? "Your account is ready and your VPS is provisioning. Sign in to track progress."
+                      ? t("blurbAwaiting")
                       : status === "error"
-                        ? error ?? "We could not finish account setup after payment."
-                        : "Verifying your Stripe payment before we create your account."}
+                        ? error ?? t("errorFallback")
+                        : t("blurbVerifying")}
           </p>
         </div>
 
         {status === "verifying_payment" && (
           <Card>
-            <p className="text-sm text-parchment/70 text-center">Checking your payment status…</p>
+            <p className="text-sm text-parchment/70 text-center">{t("checkingPayment")}</p>
           </Card>
         )}
 
         {showRecoveryNotice && status === "needs_password" && (
           <Card>
-            <p className="text-xs text-parchment/70 text-center">
-              We couldn&apos;t restore your onboarding details automatically. You can still finish account creation now,
-              then review and re-enter any missing business configuration from your dashboard after login.
-            </p>
+            <p className="text-xs text-parchment/70 text-center">{t("recoveryNotice")}</p>
           </Card>
         )}
 
@@ -366,43 +369,43 @@ function OnboardSuccessContent() {
           <Card>
             <form onSubmit={handleCreatePassword} className="space-y-4">
               <Input
-                label="Email"
+                label={tAuth("email")}
                 type="email"
                 value={signupEmail}
-                placeholder="you@business.com"
+                placeholder={tAuth("emailPlaceholder")}
                 autoComplete="email"
                 readOnly
                 required
               />
               <Input
-                label="Password"
+                label={tAuth("password")}
                 type="password"
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
-                placeholder="8+ chars, 1 uppercase, 1 number"
+                placeholder={tAuth("passwordPlaceholder")}
                 autoComplete="new-password"
                 required
               />
               <Input
-                label="Confirm Password"
+                label={tAuth("confirmPassword")}
                 type="password"
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder="Re-enter your password"
+                placeholder={tAuth("confirmPasswordPlaceholder")}
                 autoComplete="new-password"
                 required
               />
               <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
-                <p className="font-medium text-parchment/75">Password rules</p>
+                <p className="font-medium text-parchment/75">{tAuth("passwordRules")}</p>
                 <ul className="mt-1 list-disc pl-4 space-y-1">
-                  {PASSWORD_RULES.map((rule) => (
+                  {getPasswordRules(locale).map((rule) => (
                     <li key={rule}>{rule}</li>
                   ))}
                 </ul>
               </div>
               {error && <p className="text-xs text-spark-orange">{error}</p>}
               <Button type="submit" loading={submitting} className="w-full">
-                Create Account
+                {t("createAccountCta")}
               </Button>
             </form>
           </Card>
@@ -414,9 +417,7 @@ function OnboardSuccessContent() {
               <CoworkerProvisioningProgress businessId={businessId} />
             ) : (
               <Card>
-                <p className="text-sm text-parchment/70 text-center">
-                  We&apos;re setting things up in the background. This usually takes 2–5 minutes.
-                </p>
+                <p className="text-sm text-parchment/70 text-center">{t("provisioningBackground")}</p>
               </Card>
             )}
             {/*
@@ -435,11 +436,9 @@ function OnboardSuccessContent() {
                 onClick={clearOnboardingStorage}
                 className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
               >
-                Go to Dashboard →
+                {t("goToDashboard")}
               </a>
-              <p className="text-xs text-parchment/45 mt-2">
-                Provisioning continues in the background. You can monitor progress from your dashboard.
-              </p>
+              <p className="text-xs text-parchment/45 mt-2">{t("provisioningMonitor")}</p>
             </div>
           </div>
         )}
@@ -450,32 +449,27 @@ function OnboardSuccessContent() {
               href="/dashboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-8 py-3 font-semibold hover:bg-opacity-90 transition-colors"
             >
-              Go to Dashboard →
+              {t("goToDashboard")}
             </a>
           </div>
         )}
 
         {status === "awaiting_confirmation" && (
           <Card className="space-y-3 text-center">
-            <p className="text-xs text-parchment/60">
-              Your account is ready and we&apos;re still provisioning your VPS in the background.
-              Sign in to pick up where you left off.
-            </p>
+            <p className="text-xs text-parchment/60">{t("awaitingBody")}</p>
             <a
               href="/login"
               onClick={clearOnboardingStorage}
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
             >
-              Sign in
+              {tAuth("signIn")}
             </a>
           </Card>
         )}
 
         {status === "error" && (
           <Card>
-            <p className="text-xs text-spark-orange text-center">
-              Try again from this page, or sign in if your account already exists.
-            </p>
+            <p className="text-xs text-spark-orange text-center">{t("errorRetry")}</p>
           </Card>
         )}
       </div>

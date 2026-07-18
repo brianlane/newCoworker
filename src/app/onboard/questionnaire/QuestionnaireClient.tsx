@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useEffectEvent, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { useSearchParams } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { RichSelect } from "@/components/ui/RichSelect";
@@ -130,6 +131,7 @@ export default function QuestionnairePage() {
 }
 
 function QuestionnaireForm() {
+  const t = useTranslations("marketing.questionnaire");
   const searchParams = useSearchParams();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
   const period = (searchParams.get("period") ?? "biennial") as "monthly" | "annual" | "biennial";
@@ -328,7 +330,7 @@ function QuestionnaireForm() {
 
       const json = await response.json();
       if (!response.ok || !json.ok) {
-        throw new Error(json.error?.message ?? "Failed to collect onboarding details");
+        throw new Error(json.error?.message ?? t("errChatFailed"));
       }
 
       const assistantMessage: OnboardingChatMessage = {
@@ -347,7 +349,7 @@ function QuestionnaireForm() {
       });
       return true;
     } catch (err) {
-      setChatError(err instanceof Error ? err.message : "Could not continue the onboarding chat");
+      setChatError(err instanceof Error ? err.message : t("errChatContinue"));
       return false;
     } finally {
       setChatLoading(false);
@@ -496,7 +498,7 @@ function QuestionnaireForm() {
 
     const json = await response.json().catch(() => null);
     if (!response.ok) {
-      throw new Error(json?.error?.message ?? "Could not save onboarding draft");
+      throw new Error(json?.error?.message ?? t("errDraftSave"));
     }
 
     localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
@@ -519,7 +521,7 @@ function QuestionnaireForm() {
 
     setError(null);
     if (!signupEmail.trim()) {
-      setError("Email is required");
+      setError(t("errEmailRequired"));
       return;
     }
 
@@ -528,7 +530,7 @@ function QuestionnaireForm() {
       let onboardingData = await persistOnboardingDraft();
       const businessId = onboardingData.businessId;
       if (!businessId) {
-        throw new Error("Missing business id for checkout");
+        throw new Error(t("errMissingBusinessId"));
       }
 
       // Skip /api/business/create when the draft already persisted the
@@ -566,7 +568,7 @@ function QuestionnaireForm() {
         });
         const createJson = await createRes.json().catch(() => null);
         if (!createRes.ok) {
-          throw new Error(createJson?.error?.message ?? "Failed to create business");
+          throw new Error(createJson?.error?.message ?? t("errCreateBusiness"));
         }
         onboardingData = {
           ...onboardingData,
@@ -644,7 +646,7 @@ function QuestionnaireForm() {
             memoryMd: drafts.memoryMd
           })
         });
-        if (!configRes.ok) throw new Error("Failed to save assistant profile");
+        if (!configRes.ok) throw new Error(t("errSaveProfile"));
       }
 
       // Re-sync the draft now that we may have a fresh `onboardingToken`
@@ -663,7 +665,7 @@ function QuestionnaireForm() {
         });
         const draftJson = await draftRes.json().catch(() => null);
         if (!draftRes.ok) {
-          throw new Error(draftJson?.error?.message ?? "Failed to sync onboarding draft");
+          throw new Error(draftJson?.error?.message ?? t("errSyncDraft"));
         }
       }
 
@@ -686,18 +688,18 @@ function QuestionnaireForm() {
       });
       const checkoutJson = await checkoutRes.json().catch(() => null);
       if (!checkoutRes.ok) {
-        throw new Error(checkoutJson?.error?.message ?? "Checkout failed");
+        throw new Error(checkoutJson?.error?.message ?? t("errCheckout"));
       }
 
       const checkoutUrl = checkoutJson?.data?.checkoutUrl;
       if (typeof checkoutUrl !== "string" || !checkoutUrl) {
-        throw new Error("Invalid checkout response");
+        throw new Error(t("errCheckoutResponse"));
       }
 
       localStorage.setItem(ONBOARD_STORAGE_KEY, JSON.stringify(onboardingData));
       window.location.href = checkoutUrl;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not continue to checkout");
+      setError(err instanceof Error ? err.message : t("errCheckoutContinue"));
     } finally {
       setSignupLoading(false);
     }
@@ -706,11 +708,11 @@ function QuestionnaireForm() {
   async function handleAdvanceStep() {
     if (step === 1) {
       if (!signupEmail.trim()) {
-        setError("Email is required");
+        setError(t("errEmailRequired"));
         return;
       }
       if (!isValidEmailAddress(signupEmail)) {
-        setError("Please enter a valid email address");
+        setError(t("errEmailInvalid"));
         return;
       }
       // Phone is optional, but a PROVIDED value must coerce to E.164 — the
@@ -722,9 +724,7 @@ function QuestionnaireForm() {
       if (form.phone.trim()) {
         const coercedPhone = coerceOwnerPhoneToE164(form.phone);
         if (!coercedPhone) {
-          setError(
-            "Please enter your full phone number including area code, e.g. +1 (555) 123-4567."
-          );
+          setError(t("errPhoneInvalid"));
           return;
         }
         // Normalize in place so the draft, the Canada-fee preview, and
@@ -752,9 +752,7 @@ function QuestionnaireForm() {
         if (checkRes.ok) {
           const checkJson = await checkRes.json().catch(() => null);
           if (checkJson?.data?.available === false) {
-            setError(
-              "An account with this email already exists. Please sign in instead."
-            );
+            setError(t("errAccountExists"));
             return;
           }
         }
@@ -841,7 +839,7 @@ function QuestionnaireForm() {
       await persistOnboardingDraft();
       setStep((currentStep) => currentStep === 2 ? 3 : currentStep);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save onboarding draft");
+      setError(err instanceof Error ? err.message : t("errDraftSave"));
     } finally {
       setDraftSaving(false);
     }
@@ -868,41 +866,41 @@ function QuestionnaireForm() {
           </div>
           <h1 className="text-2xl font-bold text-parchment">
             {step === 1
-              ? "Tell us about your business"
+              ? t("step1Title")
               : step === 2
-                ? "Assistant interview"
-                : "Review & payment"}
+                ? t("step2Title")
+                : t("step3Title")}
           </h1>
-          <p className="text-sm text-parchment/50 mt-1">Step {step} of 4</p>
+          <p className="text-sm text-parchment/50 mt-1">{t("stepOf", { step })}</p>
         </div>
 
         <Card>
           {step === 1 && (
             <div className="space-y-4">
               <Input
-                label="Business Name"
+                label={t("businessName")}
                 value={form.businessName}
                 onChange={(e) => update("businessName", e.target.value)}
-                placeholder="Sunrise Realty"
+                placeholder={t("businessNamePlaceholder")}
                 required
               />
               <div>
                 <RichSelect
-                  label="Business Type"
+                  label={t("businessType")}
                   value={deriveBusinessTypeSelection(form.businessType).selection}
                   onChange={(nextValue) => {
                     const { otherText } = deriveBusinessTypeSelection(form.businessType);
                     update("businessType", serializeBusinessTypeSelection(nextValue, otherText));
                   }}
                   options={BUSINESS_TYPE_OPTIONS}
-                  placeholder="Select your industry"
-                  searchPlaceholder="Filter industries..."
-                  noMatchesLabel="No industries match that search."
+                  placeholder={t("businessTypePlaceholder")}
+                  searchPlaceholder={t("businessTypeSearch")}
+                  noMatchesLabel={t("businessTypeNoMatch")}
                 />
                 {deriveBusinessTypeSelection(form.businessType).selection === BUSINESS_TYPE_OTHER_VALUE && (
                   <div className="mt-4">
                     <Input
-                      label="What kind of business?"
+                      label={t("businessTypeOther")}
                       value={deriveBusinessTypeSelection(form.businessType).otherText}
                       onChange={(e) =>
                         update(
@@ -910,7 +908,7 @@ function QuestionnaireForm() {
                           serializeBusinessTypeSelection(BUSINESS_TYPE_OTHER_VALUE, e.target.value)
                         )
                       }
-                      placeholder="e.g. Drone Photography, Notary Services"
+                      placeholder={t("businessTypeOtherPlaceholder")}
                       maxLength={120}
                       required
                     />
@@ -918,21 +916,21 @@ function QuestionnaireForm() {
                 )}
               </div>
               <Input
-                label="Your Name"
+                label={t("yourName")}
                 value={form.ownerName}
                 onChange={(e) => update("ownerName", e.target.value)}
-                placeholder="Jane Doe"
+                placeholder={t("yourNamePlaceholder")}
                 required
               />
               <Input
-                label="Phone Number"
+                label={t("phoneNumber")}
                 type="tel"
                 value={form.phone}
                 onChange={(e) => update("phone", e.target.value)}
                 placeholder="+1 (555) 000-0000"
               />
               <Input
-                label="Preferred Area Code for your AI Coworker (optional)"
+                label={t("preferredAreaCode")}
                 type="tel"
                 inputMode="numeric"
                 maxLength={5}
@@ -940,28 +938,21 @@ function QuestionnaireForm() {
                 onChange={(e) => update("preferredAreaCode", e.target.value)}
                 placeholder="519"
               />
-              <p className="-mt-2 text-[11px] text-parchment/45">
-                We&apos;ll try to get your coworker a phone number in this area code. If none are
-                available we&apos;ll match your own phone&apos;s area code, then fall back to a
-                nearby one.
-              </p>
+              <p className="-mt-2 text-[11px] text-parchment/45">{t("areaCodeHelp")}</p>
               <Input
-                label="Business Website (optional)"
+                label={t("website")}
                 type="url"
                 value={form.websiteUrl}
                 onChange={(e) => update("websiteUrl", e.target.value)}
                 placeholder="https://sunriserealty.com"
                 autoComplete="url"
               />
-              <p className="-mt-2 text-[11px] text-parchment/45">
-                We scan public pages to give your new coworker context about what you do,
-                and to understand your business better.
-              </p>
+              <p className="-mt-2 text-[11px] text-parchment/45">{t("websiteHelp")}</p>
               <Input
-                label="Service Area"
+                label={t("serviceArea")}
                 value={form.serviceArea}
                 onChange={(e) => update("serviceArea", e.target.value)}
-                placeholder="Phoenix metro, AZ"
+                placeholder={t("serviceAreaPlaceholder")}
                 required
               />
               {/* Team size — segmented control. Closed-class buckets
@@ -972,14 +963,12 @@ function QuestionnaireForm() {
                   nine or ten", "a couple of agents", etc). */}
               <div>
                 <label className="text-sm font-medium text-parchment/80">
-                  Team Size
+                  {t("teamSize")}
                 </label>
-                <p className="mt-0.5 text-[11px] text-parchment/45">
-                  How many people on your team interact with leads, including you?
-                </p>
+                <p className="mt-0.5 text-[11px] text-parchment/45">{t("teamSizeHelp")}</p>
                 <div
                   role="radiogroup"
-                  aria-label="Team size"
+                  aria-label={t("teamSize")}
                   className="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-6"
                 >
                   {TEAM_SIZE_OPTIONS.map((option) => {
@@ -1012,37 +1001,37 @@ function QuestionnaireForm() {
                   product on the market. */}
               <div>
                 <RichSelect
-                  label="CRM Tool"
+                  label={t("crmTool")}
                   value={deriveCrmSelection(form.crmUsed).selection}
                   onChange={(nextValue) => {
                     const { otherText } = deriveCrmSelection(form.crmUsed);
                     update("crmUsed", serializeCrmSelection(nextValue, otherText));
                   }}
                   options={[...CRM_OPTIONS]}
-                  placeholder="Pick what you use to track leads"
-                  searchPlaceholder="Filter CRMs..."
-                  noMatchesLabel="No CRMs match that search."
+                  placeholder={t("crmPlaceholder")}
+                  searchPlaceholder={t("crmSearch")}
+                  noMatchesLabel={t("crmNoMatch")}
                 />
                 {deriveCrmSelection(form.crmUsed).selection === CRM_OTHER_VALUE && (
                   <div className="mt-4"> 
                   <Input
-                    label="Which CRM?"
+                    label={t("whichCrm")}
                     value={deriveCrmSelection(form.crmUsed).otherText}
                     onChange={(e) =>
                       update("crmUsed", serializeCrmSelection(CRM_OTHER_VALUE, e.target.value))
                     }
-                    placeholder="e.g. Wise Agent, LionDesk"
+                    placeholder={t("whichCrmPlaceholder")}
                     required
                   />
                   </div>
                 )}
               </div>
               <Input
-                label="Email"
+                label={t("email")}
                 type="email"
                 value={signupEmail}
                 onChange={(e) => setSignupEmail(e.target.value)}
-                placeholder="you@business.com"
+                placeholder={t("emailPlaceholder")}
                 autoComplete="email"
                 required
               />
@@ -1058,8 +1047,8 @@ function QuestionnaireForm() {
                       AI
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-parchment">Onboarding Assistant</p>
-                      <p className="text-xs text-parchment/50">Answer naturally. The assistant will guide the interview.</p>
+                      <p className="text-sm font-semibold text-parchment">{t("assistantName")}</p>
+                      <p className="text-xs text-parchment/50">{t("assistantHint")}</p>
                     </div>
                   </div>
                 </div>
@@ -1073,10 +1062,10 @@ function QuestionnaireForm() {
                       className="flex h-full min-h-[12rem] items-center justify-center text-center text-sm text-parchment/45"
                       role="status"
                       aria-live="polite"
-                      aria-label="Starting your onboarding interview"
+                      aria-label={t("startingInterview")}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        <span>Starting your onboarding interview</span>
+                        <span>{t("startingInterview")}</span>
                         <span className="inline-flex items-end gap-0.5" aria-hidden="true">
                           <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
                           <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
@@ -1097,7 +1086,7 @@ function QuestionnaireForm() {
                     >
                       <div className="mb-1 flex items-center justify-between gap-3">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
-                          {message.role === "assistant" ? "Assistant" : "You"}
+                          {message.role === "assistant" ? t("assistantLabel") : t("youLabel")}
                         </p>
                         <span className="text-[11px] text-parchment/35">
                           {formatMessageTimestamp(message.timestamp)}
@@ -1113,7 +1102,7 @@ function QuestionnaireForm() {
                     <div className="ml-12 rounded-2xl border border-claw-green/12 bg-claw-green/10 px-4 py-3 text-sm leading-relaxed text-parchment/90 shadow-[0_10px_30px_rgba(0,0,0,0.14)]">
                       <div className="mb-1 flex items-center justify-between gap-3">
                         <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
-                          You
+                          {t("youLabel")}
                         </p>
                         <span className="text-[11px] text-parchment/35">
                           {formatMessageTimestamp(pendingUserMessage.timestamp)}
@@ -1127,10 +1116,10 @@ function QuestionnaireForm() {
                       className="mr-12 rounded-2xl border border-signal-teal/12 bg-signal-teal/10 px-4 py-3 text-sm text-parchment/70"
                       role="status"
                       aria-live="polite"
-                      aria-label="Onboarding assistant is thinking"
+                      aria-label={t("thinking")}
                     >
                       <span className="inline-flex items-center gap-1.5">
-                        <span>Thinking</span>
+                        <span>{t("thinking")}</span>
                         <span className="inline-flex items-end gap-0.5" aria-hidden="true">
                           <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.3s]" />
                           <span className="inline-block h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:-0.15s]" />
@@ -1143,9 +1132,7 @@ function QuestionnaireForm() {
 
                 {chatClosed ? (
                   <div className="rounded-xl border border-claw-green/20 bg-claw-green/10 px-4 py-3 text-sm text-parchment/85">
-                    {assistantDone
-                      ? "The interview is complete. Continue when you're ready."
-                      : "This interview has reached its message limit. Continue to the next step with the current draft."}
+                    {assistantDone ? t("interviewComplete") : t("interviewLimit")}
                   </div>
                 ) : (
                   <div className="flex gap-2">
@@ -1157,11 +1144,11 @@ function QuestionnaireForm() {
                       }}
                       onKeyDown={handleChatKeyDown}
                       rows={3}
-                      placeholder="Type your answer. Press Enter to send, Shift+Enter for a new line."
+                      placeholder={t("chatPlaceholder")}
                       className="min-h-[88px] flex-1 rounded-lg border border-parchment/20 bg-deep-ink/50 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
                     />
                     <Button className="self-end" onClick={sendChatMessage} loading={chatLoading} disabled={!chatInput.trim()}>
-                      Send
+                      {t("send")}
                     </Button>
                   </div>
                 )}
@@ -1174,7 +1161,7 @@ function QuestionnaireForm() {
                       className="font-semibold text-parchment"
                       disabled={chatClosed}
                     >
-                      Retry
+                      {t("retry")}
                     </button>
                   </div>
                 )}
@@ -1199,23 +1186,17 @@ function QuestionnaireForm() {
                     })}
                   />
 
-                  <p className="text-xs text-parchment/40 text-center">
-                    30-day money-back guarantee · Cancel within 30 days for a refund
-                    (excluding the one-time carrier registration fee; 12/24-month plans
-                    deduct one month at the monthly rate)
-                  </p>
+                  <p className="text-xs text-parchment/40 text-center">{t("guaranteeNote")}</p>
 
                   <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
-                    After payment, you&apos;ll complete Step 4 by creating your password and confirming your email.
+                    {t("afterPaymentNote")}
                   </div>
 
                   <Button type="submit" className="w-full" loading={signupLoading}>
-                    Proceed to Payment →
+                    {t("proceedToPayment")}
                   </Button>
 
-                  <p className="text-center text-xs text-parchment/30">
-                    You&apos;ll be redirected to Stripe for secure payment.
-                  </p>
+                  <p className="text-center text-xs text-parchment/30">{t("stripeRedirect")}</p>
               </form>
             </div>
           )}
@@ -1231,7 +1212,7 @@ function QuestionnaireForm() {
               setError(null);
               setStep((s) => (s - 1) as Step);
             }} disabled={draftSaving}>
-              Back
+              {t("back")}
             </Button>
           )}
           {step < 3 ? (
@@ -1252,7 +1233,7 @@ function QuestionnaireForm() {
                 (step === 2 && !canContinueFromChat)
               }
             >
-              {step === 2 && draftSaving ? "Saving..." : "Continue →"}
+              {step === 2 && draftSaving ? t("saving") : t("continue")}
             </Button>
           ) : null}
         </div>

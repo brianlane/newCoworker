@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useActionState } from "react";
+import { useActionState, type ReactNode } from "react";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import {
   confirmEmailVerificationAction,
@@ -46,6 +47,7 @@ type Props = {
  * check on the underlying POST automatically.
  */
 export function ConfirmForm({ token, email }: Props) {
+  const t = useTranslations("auth");
   const [result, formAction, pending] = useActionState<
     ConfirmEmailVerificationResult | null,
     FormData
@@ -55,18 +57,16 @@ export function ConfirmForm({ token, email }: Props) {
     return (
       <Card className="text-center space-y-3">
         <p className="text-sm font-semibold text-claw-green">
-          {result.alreadyVerified ? "Email already confirmed" : "Email confirmed"}
+          {result.alreadyVerified ? t("verifyAlreadyConfirmed") : t("verifyConfirmed")}
         </p>
         <p className="text-xs text-parchment/65">
-          {result.alreadyVerified
-            ? "This email was already confirmed on your account. You're all set."
-            : "Thanks for confirming your email. Your account is fully secured."}
+          {result.alreadyVerified ? t("verifyAlreadyConfirmedBody") : t("verifyConfirmedBody")}
         </p>
         <Link
           href="/dashboard"
           className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
         >
-          Go to Dashboard →
+          {t("goToDashboard")}
         </Link>
       </Card>
     );
@@ -75,20 +75,20 @@ export function ConfirmForm({ token, email }: Props) {
   if (result?.kind === "error") {
     const heading =
       result.reason === "expired"
-        ? "Verification link expired"
+        ? t("verifyExpiredTitle")
         : result.reason === "invalid" || result.reason === "missing_token"
-          ? "Invalid verification link"
+          ? t("verifyInvalidTitle")
           : result.reason === "not_found"
-            ? "We couldn't find your account"
-            : "Something went wrong";
+            ? t("verifyNotFoundTitle")
+            : t("verifyErrorTitle");
     const body =
       result.reason === "expired"
-        ? "Verification links are valid for 7 days. Sign in and request a fresh one from the dashboard banner."
+        ? t("verifyExpiredBlurb")
         : result.reason === "invalid" || result.reason === "missing_token"
-          ? "This link doesn't look right. Sign in and request a fresh verification email from your dashboard."
+          ? t("verifyInvalidBlurb")
           : result.reason === "not_found"
-            ? "We couldn't find a NewCoworker account for the email on this verification link. Reach out to support and we'll help you sort it out."
-            : "We hit a snag confirming your email. Try again; your verification link is still valid.";
+            ? t("verifyNotFoundBody")
+            : t("verifyInternalBody");
     const ctaClasses =
       "inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors";
     return (
@@ -103,18 +103,18 @@ export function ConfirmForm({ token, email }: Props) {
           // the server component, which re-validates the token and mounts
           // a fresh confirm form for the user to click again.
           <button type="button" onClick={() => window.location.reload()} className={ctaClasses}>
-            Try again
+            {t("tryAgain")}
           </button>
         ) : result.reason === "not_found" ? (
           // mailto: deliberately uses a plain <a> rather than next/link —
           // we don't want client-side navigation to intercept it, the
           // browser should hand off to the user's mail client.
           <a href="mailto:support@newcoworker.com" className={ctaClasses}>
-            Contact support
+            {t("contactSupport")}
           </a>
         ) : (
           <Link href="/login" className={ctaClasses}>
-            Sign in
+            {t("signIn")}
           </Link>
         )}
       </Card>
@@ -125,14 +125,14 @@ export function ConfirmForm({ token, email }: Props) {
     <Card className="space-y-4">
       <div className="text-center space-y-1">
         <p className="text-sm text-parchment/70">
-          Click below to confirm{" "}
-          <span className="font-medium text-parchment/90">{email}</span> as the email on your
-          NewCoworker account.
+          {t.rich("verifyClickBelow", {
+            email,
+            strong: (chunks: ReactNode) => (
+              <span className="font-medium text-parchment/90">{chunks}</span>
+            )
+          })}
         </p>
-        <p className="text-xs text-parchment/45">
-          We require this extra click so automated mailbox scanners can&apos;t confirm your account
-          on your behalf.
-        </p>
+        <p className="text-xs text-parchment/45">{t("verifyScannersNote")}</p>
       </div>
       <form action={formAction} className="space-y-2">
         <input type="hidden" name="token" value={token} />
@@ -141,7 +141,7 @@ export function ConfirmForm({ token, email }: Props) {
           disabled={pending}
           className="w-full rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {pending ? "Confirming…" : "Confirm email"}
+          {pending ? t("confirming") : t("confirmEmail")}
         </button>
       </form>
     </Card>

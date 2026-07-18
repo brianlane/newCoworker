@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { getLocale, getTranslations } from "next-intl/server";
+import type { AppLocale } from "@/i18n/routing";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
@@ -17,18 +19,19 @@ import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 
-export const metadata: Metadata = {
-  title: "Pricing",
-  description:
-    "Simple plans for a 24/7 AI employee: answered calls, texts, emails, and booked appointments. 30-day money-back guarantee on every plan.",
-  alternates: { canonical: "/pricing" },
-  openGraph: {
-    title: "Pricing | New Coworker",
-    description:
-      "Simple plans for a 24/7 AI employee. Starter, Standard, and Enterprise, all with a 30-day money-back guarantee.",
-    url: "/pricing"
-  }
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.pricing");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/pricing" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/pricing"
+    }
+  };
+}
 
 type ComparisonRow = {
   label: string;
@@ -40,60 +43,64 @@ type ComparisonRow = {
 const CHECK = "✓";
 const DASH = "–";
 
-const comparisonRows: ComparisonRow[] = [
-  {
-    label: "Included voice minutes",
-    starter: voiceMinutesLine("starter"),
-    standard: voiceMinutesLine("standard"),
-    enterprise: "Custom"
-  },
-  {
-    label: "SMS per month",
-    starter: `${TIER_LIMITS.starter.smsPerMonth}`,
-    standard: `${TIER_LIMITS.standard.smsPerMonth}`,
-    enterprise: "Custom"
-  },
-  {
-    label: "Concurrent calls",
-    starter: concurrentCallsLine(TIER_LIMITS.starter.maxConcurrentCalls),
-    standard: concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls),
-    enterprise: "Custom"
-  },
-  {
-    label: "Monthly AI budget for agentic tasks",
-    starter: "$5",
-    standard: "$10",
-    enterprise: "Custom"
-  },
-  {
-    label: "AI image generation",
-    starter: imageGenerationLine("starter"),
-    standard: imageGenerationLine("standard"),
-    enterprise: "Custom"
-  },
-  { label: "Dedicated phone number & email", starter: CHECK, standard: CHECK, enterprise: CHECK },
-  { label: "Appointment booking & follow-ups", starter: CHECK, standard: CHECK, enterprise: CHECK },
-  { label: "Lossless permanent memory", starter: CHECK, standard: CHECK, enterprise: CHECK },
-  { label: "Website chat widget (embed on your site)", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Bring your own number (port-in)", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "RCS messaging (verified sender)", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Zapier (8,000+ apps) & developer API", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Texts during calls & missed-call auto-text", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Scheduled texts & message templates", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "AI call summaries & caller sentiment", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Analytics dashboard & missed-call alerts", starter: DASH, standard: CHECK, enterprise: CHECK },
-  { label: "Warm handoff call transfers", starter: DASH, standard: CHECK, enterprise: CHECK },
-  {
-    label: "Browser skills",
-    starter: "Reads public web pages",
-    standard: "Operates websites like a person",
-    enterprise: "Operates websites like a person"
-  },
-  { label: "Support", starter: "Email", standard: "Priority email", enterprise: "SLA + dedicated" },
-  { label: "White-label & multi-tenant setup", starter: DASH, standard: DASH, enterprise: CHECK }
-];
+export default async function PricingPage() {
+  const t = await getTranslations("marketing.pricing");
+  const locale = (await getLocale()) as AppLocale;
 
-function buildPricingFaq(): FaqItem[] {
+  const custom = t("custom");
+  const comparisonRows: ComparisonRow[] = [
+    {
+      label: t("rowVoiceMinutes"),
+      starter: voiceMinutesLine("starter", undefined, locale),
+      standard: voiceMinutesLine("standard", undefined, locale),
+      enterprise: custom
+    },
+    {
+      label: t("rowSmsPerMonth"),
+      starter: `${TIER_LIMITS.starter.smsPerMonth}`,
+      standard: `${TIER_LIMITS.standard.smsPerMonth}`,
+      enterprise: custom
+    },
+    {
+      label: t("rowConcurrentCalls"),
+      starter: concurrentCallsLine(TIER_LIMITS.starter.maxConcurrentCalls, locale),
+      standard: concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls, locale),
+      enterprise: custom
+    },
+    { label: t("rowAiBudget"), starter: "$5", standard: "$10", enterprise: custom },
+    {
+      label: t("rowImageGen"),
+      starter: imageGenerationLine("starter", undefined, locale),
+      standard: imageGenerationLine("standard", undefined, locale),
+      enterprise: custom
+    },
+    { label: t("rowDedicated"), starter: CHECK, standard: CHECK, enterprise: CHECK },
+    { label: t("rowBooking"), starter: CHECK, standard: CHECK, enterprise: CHECK },
+    { label: t("rowMemory"), starter: CHECK, standard: CHECK, enterprise: CHECK },
+    { label: t("rowWidget"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowByon"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowRcs"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowZapier"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowTextsDuringCalls"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowScheduledTexts"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowSummaries"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowAnalytics"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowWarmHandoff"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    {
+      label: t("rowBrowserSkills"),
+      starter: t("browserStarter"),
+      standard: t("browserStandard"),
+      enterprise: t("browserStandard")
+    },
+    {
+      label: t("rowSupport"),
+      starter: t("supportStarter"),
+      standard: t("supportStandard"),
+      enterprise: t("supportEnterprise")
+    },
+    { label: t("rowWhiteLabel"), starter: DASH, standard: DASH, enterprise: CHECK }
+  ];
+
   // Same env-driven address the footer uses, so the two can't diverge.
   const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
@@ -101,126 +108,63 @@ function buildPricingFaq(): FaqItem[] {
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);
   const standardRenewal = formatPricePerMonth(getPeriodPricing("standard", "biennial").renewalMonthlyCents);
 
-  return [
+  const faq: FaqItem[] = [
+    { question: t("faqBillingQ"), answer: <>{t("faqBillingA")}</> },
     {
-      question: "How does billing work for 12 and 24-month plans?",
+      question: t("faqTermEndQ"),
+      answer: <>{t("faqTermEndA", { starterRenewal, standardRenewal })}</>
+    },
+    {
+      question: t("faqCarrierFeeQ", { carrierFee }),
+      answer: <>{t("faqCarrierFeeA", { carrierFee })}</>
+    },
+    { question: t("faqGuaranteeQ"), answer: <>{t("faqGuaranteeA")}</> },
+    {
+      question: t("faqCanadaFeeQ", { canadaFeeMonthly }),
+      answer: <>{t("faqCanadaFeeA", { canadaFeeMonthly })}</>
+    },
+    { question: t("faqKeepNumberQ"), answer: <>{t("faqKeepNumberA")}</> },
+    {
+      question: t("faqExtraNumbersQ"),
       answer: (
         <>
-          The full term is billed once at checkout at the discounted effective monthly rate.
-          That is how we lock in your dedicated server for the whole contract. Included usage
-          (voice minutes, SMS, AI budget) still resets every month.
+          {t.rich("faqExtraNumbersA", {
+            contactEmail,
+            email: () => (
+              <a href={`mailto:${contactEmail}`} className="text-signal-teal hover:underline">
+                {contactEmail}
+              </a>
+            )
+          })}
         </>
       )
     },
+    { question: t("faqUsageCapsQ"), answer: <>{t("faqUsageCapsA")}</> },
     {
-      question: "What happens when my term ends?",
+      question: t("faqWhiteGloveQ"),
       answer: (
         <>
-          Service continues month-to-month at the renewal rate shown on your plan card (for
-          example, {starterRenewal} for Starter or {standardRenewal} for Standard after a 24-month
-          term), unless you start a new contract at the contract rate.
-        </>
-      )
-    },
-    {
-      question: `What is the one-time ${carrierFee} carrier registration fee?`,
-      answer: (
-        <>
-          US carriers require every business that sends text messages to register (10DLC brand
-          and campaign registration). We pass this one-time {carrierFee} fee through at cost.
-          It is charged once at signup and is non-refundable, since carriers do not refund it
-          to us.
-        </>
-      )
-    },
-    {
-      question: "Is there a money-back guarantee?",
-      answer: (
-        <>
-          Yes. Every plan has a 30-day money-back window from the initial purchase date. The
-          one-time carrier registration fee is excluded, because carriers do not refund it.
-          On 12/24-month plans the refund deducts one month of service at the monthly rate,
-          so the time you used is billed as if uncommitted.
-        </>
-      )
-    },
-    {
-      question: `What is the ${canadaFeeMonthly}/mo Canadian messaging surcharge?`,
-      answer: (
-        <>
-          Canadian mobile carriers (Bell, Rogers, Telus, and others) charge per-message fees for
-          business texting that US carriers structure differently. Canadian-based businesses pay
-          a flat {canadaFeeMonthly}/mo surcharge that covers these carrier pass-through fees, so
-          your coworker can text your Canadian customers with no per-message surprises. It
-          appears as its own line item at checkout and renews with your plan; US-based businesses
-          never pay it.
-        </>
-      )
-    },
-    {
-      question: "Can I keep my existing business number?",
-      answer: (
-        <>
-          Yes. Standard and Enterprise plans support bring-your-own-number: we port your
-          existing number in and your coworker answers on it. Every plan also includes a
-          dedicated number out of the box.
-        </>
-      )
-    },
-    {
-      question: "Can I get more than one phone number?",
-      answer: (
-        <>
-          Every plan includes one dedicated number. Extra numbers are $5/mo each. Contact{" "}
-          <a href={`mailto:${contactEmail}`} className="text-signal-teal hover:underline">
-            {contactEmail}
-          </a>{" "}
-          to add one to your account.
-        </>
-      )
-    },
-    {
-      question: "What happens if I use up my included voice minutes or SMS?",
-      answer: (
-        <>
-          Your coworker stops placing metered voice calls or sending customer texts once the
-          monthly cap is reached, and you get an alert well before that happens. Caps reset
-          every month, and you can upgrade your plan at any time from the dashboard. You can
-          also buy one-time voice minute or SMS top-up packs from Dashboard → Billing without
-          upgrading — bonus usage is consumed after your included monthly allowance and lasts
-          until the end of your billing period or 30 days from purchase, whichever is later.
-        </>
-      )
-    },
-    {
-      question: "What does white-glove onboarding include?",
-      answer: (
-        <>
-          Two one-time packages: <b>White-glove setup</b> covers guided setup, number porting,
-          and a live 1:1 training call; <b>White-glove buildout</b> adds everything in setup
-          plus a full custom AiFlow buildout. Both include 30 days of priority call and video
-          support.{" "}
-          <Link href="/contact?topic=white-glove" className="text-signal-teal hover:underline">
-            Tell us you&apos;re interested
-          </Link>{" "}
-          and a specialist will reach out.
+          {t.rich("faqWhiteGloveA", {
+            b: (chunks) => <b>{chunks}</b>,
+            link: (chunks) => (
+              <Link href="/contact?topic=white-glove" className="text-signal-teal hover:underline">
+                {chunks}
+              </Link>
+            )
+          })}
         </>
       )
     }
   ];
-}
-
-export default function PricingPage() {
-  const faq = buildPricingFaq();
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
 
       <PageHero
-        eyebrow="Pricing"
-        title="One coworker. Every channel. Simple plans."
-        subtitle="Every plan includes a dedicated private server, phone number, email, and a trained AI coworker, backed by a 30-day money-back guarantee."
+        eyebrow={t("heroEyebrow")}
+        title={t("heroTitle")}
+        subtitle={t("heroSubtitle")}
       />
 
       <section className="mx-auto max-w-5xl px-6 pb-20">
@@ -229,15 +173,15 @@ export default function PricingPage() {
 
       {/* Comparison table */}
       <section className="mx-auto max-w-5xl px-6 pb-20">
-        <SectionHeading title="Compare plans in detail" />
+        <SectionHeading title={t("compareTitle")} />
         <div className="mobile-scroll-x rounded-xl border border-parchment/10">
           <table className="w-full min-w-[640px] border-collapse text-sm">
             <thead>
               <tr className="border-b border-parchment/10 bg-parchment/[0.03] text-left">
-                <th className="px-4 py-3 font-semibold text-parchment/60">Feature</th>
-                <th className="px-4 py-3 font-semibold text-parchment">Starter</th>
-                <th className="px-4 py-3 font-semibold text-signal-teal">Standard</th>
-                <th className="px-4 py-3 font-semibold text-parchment">Enterprise</th>
+                <th className="px-4 py-3 font-semibold text-parchment/60">{t("tableFeature")}</th>
+                <th className="px-4 py-3 font-semibold text-parchment">{t("tierStarter")}</th>
+                <th className="px-4 py-3 font-semibold text-signal-teal">{t("tierStandard")}</th>
+                <th className="px-4 py-3 font-semibold text-parchment">{t("tierEnterprise")}</th>
               </tr>
             </thead>
             <tbody>
@@ -262,14 +206,14 @@ export default function PricingPage() {
 
       {/* Pricing FAQ */}
       <section className="mx-auto max-w-3xl px-6 pb-24">
-        <SectionHeading title="Pricing questions, answered" />
+        <SectionHeading title={t("faqTitle")} />
         <FaqAccordion items={faq} />
       </section>
 
       <CtaBanner
-        title="Ready to hire your New Coworker?"
-        subtitle="Pick a plan and your coworker is live in minutes."
-        ctaLabel="Choose your plan"
+        title={t("ctaTitle")}
+        subtitle={t("ctaSubtitle")}
+        ctaLabel={t("ctaLabel")}
         ctaHref="/onboard"
       />
 

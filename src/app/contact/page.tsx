@@ -1,6 +1,8 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import { Briefcase, LifeBuoy, Mail, Users } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 import { getAuthUser } from "@/lib/auth";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -20,43 +22,26 @@ const CONTACT_PAGE_JSON_LD = {
   about: { "@id": "https://newcoworker.com/#organization" }
 };
 
-export const metadata: Metadata = {
-  title: "Contact",
-  description:
-    "Get in touch with New Coworker: sales for Enterprise plans, support for existing customers, and white-glove onboarding. Most inquiries receive a response within 24 hours.",
-  alternates: { canonical: "/contact" },
-  openGraph: {
-    title: "Contact | New Coworker",
-    description: "Sales, support, and white-glove onboarding. A human replies within 24 hours.",
-    url: "/contact"
-  }
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.contactPage");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/contact" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/contact"
+    }
+  };
+}
 
-const topics = [
-  {
-    title: "Support",
-    description:
-      "Existing customers get a human reply. Standard plans get priority handling; white-glove customers have a 30-day priority call & video line.",
-    Icon: LifeBuoy
-  },
-  {
-    title: "Enterprise sales",
-    description:
-      "Multi-location, agency, white-label, or custom compliance needs? Tell us about your business and we'll put a proposal together.",
-    Icon: Briefcase
-  },
-  {
-    title: "White-glove onboarding",
-    description:
-      "Want a specialist to set everything up live with you? Porting, training, and custom workflow buildout included.",
-    Icon: Users
-  },
-  {
-    title: "Everything else",
-    description: "Partnerships, press, or a question that doesn't fit a box. We read it all.",
-    Icon: Mail
-  }
-];
+const TOPIC_DEFS = [
+  { key: "support", Icon: LifeBuoy },
+  { key: "enterprise", Icon: Briefcase },
+  { key: "whiteGlove", Icon: Users },
+  { key: "everythingElse", Icon: Mail }
+] as const;
 
 /**
  * Known ?topic= values map to a prefilled form subject so CTAs elsewhere
@@ -124,6 +109,7 @@ export default async function ContactPage({
 }: {
   searchParams: Promise<{ topic?: string }>;
 }) {
+  const t = await getTranslations("marketing.contactPage");
   const { topic } = await searchParams;
   const defaultSubject = topic ? TOPIC_SUBJECTS[topic] : undefined;
   const prefill = await resolvePrefill();
@@ -132,35 +118,37 @@ export default async function ContactPage({
       ? TOPIC_MESSAGES[topic](prefill.businessName ?? null)
       : undefined;
 
+  const topics = TOPIC_DEFS.map(({ key, Icon }) => ({
+    title: t(`${key}.title`),
+    description: t(`${key}.description`),
+    Icon
+  }));
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <JsonLd data={CONTACT_PAGE_JSON_LD} />
       <MarketingNav />
 
       <PageHero
-        eyebrow="Contact"
-        title="Talk to a human"
-        subtitle="Our coworker answers our phones too, but every message below lands with a person."
+        eyebrow={t("heroEyebrow")}
+        title={t("heroTitle")}
+        subtitle={t("heroSubtitle")}
       />
 
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <div className="flex flex-col items-start gap-10 lg:flex-row">
           <div className="min-w-0 flex-1">
             <h2 className="text-3xl font-bold text-parchment">
-              Send us a <span className="text-claw-green">message</span>
+              {t("formTitle")} <span className="text-claw-green">{t("formTitleHighlight")}</span>
             </h2>
-            <p className="mt-4 leading-relaxed text-parchment/60">
-              Whether you&apos;re evaluating plans, need help with setup or billing, or want a
-              specialist to build everything out with you, use the form and we&apos;ll reply as
-              quickly as possible. Most inquiries receive a response within 24 hours.
-            </p>
+            <p className="mt-4 leading-relaxed text-parchment/60">{t("formBody")}</p>
 
             <div className="mt-8 grid grid-cols-1 gap-5 sm:grid-cols-2">
-              {topics.map((t) => (
-                <div key={t.title} className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-5">
-                  <t.Icon className="mb-3 h-5 w-5 text-claw-green" />
-                  <h3 className="text-sm font-semibold text-parchment">{t.title}</h3>
-                  <p className="mt-1.5 text-sm leading-relaxed text-parchment/50">{t.description}</p>
+              {topics.map((topicCard) => (
+                <div key={topicCard.title} className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-5">
+                  <topicCard.Icon className="mb-3 h-5 w-5 text-claw-green" />
+                  <h3 className="text-sm font-semibold text-parchment">{topicCard.title}</h3>
+                  <p className="mt-1.5 text-sm leading-relaxed text-parchment/50">{topicCard.description}</p>
                 </div>
               ))}
             </div>
@@ -180,15 +168,18 @@ export default async function ContactPage({
 
       <section className="mx-auto max-w-3xl px-6 pb-24 text-center">
         <p className="text-sm text-parchment/45">
-          Looking for answers right now? The{" "}
-          <Link href="/faq" className="text-signal-teal hover:underline">
-            FAQ
-          </Link>{" "}
-          covers setup, billing, privacy, and porting, or see{" "}
-          <Link href="/pricing" className="text-signal-teal hover:underline">
-            plans and pricing
-          </Link>
-          .
+          {t.rich("faqPrompt", {
+            faq: (chunks: ReactNode) => (
+              <Link href="/faq" className="text-signal-teal hover:underline">
+                {chunks}
+              </Link>
+            ),
+            pricing: (chunks: ReactNode) => (
+              <Link href="/pricing" className="text-signal-teal hover:underline">
+                {chunks}
+              </Link>
+            )
+          })}
         </p>
       </section>
 

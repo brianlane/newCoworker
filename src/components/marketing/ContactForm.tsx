@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 
 type Status = "idle" | "sending" | "sent" | "error";
 
@@ -29,6 +30,7 @@ export function ContactForm({
   defaultBusinessName,
   defaultMessage
 }: Props) {
+  const t = useTranslations("marketing.contactPage.form");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -54,14 +56,14 @@ export function ContactForm({
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(body?.error ?? "We couldn't send your message. Please try again.");
+        setError(body?.error ?? t("sendFailed"));
         setStatus("error");
         return;
       }
       form.reset();
       setStatus("sent");
     } catch {
-      setError("We couldn't send your message. Please try again.");
+      setError(t("sendFailed"));
       setStatus("error");
     }
   }
@@ -69,17 +71,14 @@ export function ContactForm({
   if (status === "sent") {
     return (
       <div className="rounded-xl border border-claw-green/30 bg-claw-green/10 p-8 text-center">
-        <h3 className="text-lg font-semibold text-parchment">Message sent</h3>
-        <p className="mt-2 text-sm leading-relaxed text-parchment/60">
-          Thanks for reaching out. A human reads every message, and most inquiries receive a
-          response within 24 hours.
-        </p>
+        <h3 className="text-lg font-semibold text-parchment">{t("sentTitle")}</h3>
+        <p className="mt-2 text-sm leading-relaxed text-parchment/60">{t("sentBody")}</p>
         <button
           type="button"
           onClick={() => setStatus("idle")}
           className="mt-6 text-sm font-semibold text-signal-teal hover:underline"
         >
-          Send another message
+          {t("sendAnother")}
         </button>
       </div>
     );
@@ -93,7 +92,7 @@ export function ContactForm({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="contact-name" className={LABEL_CLASSES}>
-            Name
+            {t("name")}
           </label>
           <input
             id="contact-name"
@@ -108,7 +107,7 @@ export function ContactForm({
         </div>
         <div>
           <label htmlFor="contact-email" className={LABEL_CLASSES}>
-            Email
+            {t("email")}
           </label>
           <input
             id="contact-email"
@@ -125,7 +124,7 @@ export function ContactForm({
 
       <div className="mt-4">
         <label htmlFor="contact-business" className={LABEL_CLASSES}>
-          Business Name (Optional)
+          {t("businessName")}
         </label>
         <input
           id="contact-business"
@@ -140,7 +139,7 @@ export function ContactForm({
 
       <div className="mt-4">
         <label htmlFor="contact-subject" className={LABEL_CLASSES}>
-          Subject
+          {t("subject")}
         </label>
         <input
           id="contact-subject"
@@ -155,7 +154,7 @@ export function ContactForm({
 
       <div className="mt-4">
         <label htmlFor="contact-message" className={LABEL_CLASSES}>
-          Message
+          {t("message")}
         </label>
         <textarea
           id="contact-message"
@@ -164,7 +163,7 @@ export function ContactForm({
           rows={4}
           maxLength={5000}
           defaultValue={defaultMessage}
-          placeholder="Tell us how we can help: support, enterprise plans, white-glove onboarding, partnerships, or anything else."
+          placeholder={t("messagePlaceholder")}
           className={`${INPUT_CLASSES} resize-none`}
         />
       </div>
@@ -173,7 +172,7 @@ export function ContactForm({
           Deliberately NOT named like a real field (website/url/phone), so
           browser autofill heuristics never populate it for real visitors. */}
       <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
-        <label htmlFor="contact-extra-field">Leave this field empty</label>
+        <label htmlFor="contact-extra-field">{t("honeypot")}</label>
         <input
           id="contact-extra-field"
           name="extra_field"
@@ -190,7 +189,7 @@ export function ContactForm({
         disabled={status === "sending"}
         className="mt-6 w-full rounded-lg bg-claw-green px-4 py-3 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {status === "sending" ? "Sending..." : "Send Message"}
+        {status === "sending" ? t("sending") : t("send")}
       </button>
     </form>
   );
