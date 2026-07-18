@@ -283,7 +283,12 @@ export function AiFlowRunsManager({
   };
 
   const loadSteps = async (runId: string) => {
-    if (steps[runId] !== undefined && runLinks[runId] !== undefined) return;
+    // Terminal runs never change — their cached steps/links are final. A
+    // LIVE run keeps producing steps and tracked links after the first
+    // expand, so re-expanding refetches instead of serving the stale cache.
+    const run = runs.find((r) => r.id === runId);
+    const isTerminal = run ? TERMINAL_STATUSES.has(run.status) : true;
+    if (isTerminal && steps[runId] !== undefined && runLinks[runId] !== undefined) return;
     const res = await fetch(
       `/api/aiflows/runs/${runId}?businessId=${encodeURIComponent(businessId)}`,
       { cache: "no-store" }
