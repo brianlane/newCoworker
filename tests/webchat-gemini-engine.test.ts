@@ -11,6 +11,7 @@ import {
   type WebchatJobInputMessage
 } from "@/lib/webchat/gemini-engine";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { customerLanguageLine } from "@/lib/i18n/customer-language";
 import { WEBCHAT_TOOL_DECLARATIONS } from "@/lib/webchat/engine-tools";
 import type { GeminiChatStepResult } from "@/lib/gemini-chat";
 import type { ConfigRow } from "@/lib/db/configs";
@@ -66,6 +67,7 @@ function makeDeps(overrides: Partial<WebchatGeminiTurnDeps> = {}): Required<
     | "meter"
     | "env"
     | "now"
+    | "getCustomerLanguages"
   >
 > {
   return {
@@ -77,6 +79,10 @@ function makeDeps(overrides: Partial<WebchatGeminiTurnDeps> = {}): Required<
     meter: vi.fn(async () => undefined),
     env: { GOOGLE_API_KEY: "k" },
     now: () => new Date("2026-07-14T16:00:00Z"),
+    getCustomerLanguages: vi.fn(async () => ({
+      defaultLanguage: "en" as const,
+      supported: ["en" as const, "es" as const]
+    })),
     ...overrides
   };
 }
@@ -187,7 +193,9 @@ describe("runWebchatGeminiTurn", () => {
     const step = vi.mocked(deps.chatStep).mock.calls[0][0];
     const expectedInstructions = buildAgentInstructions(CONFIG, "");
     expect(step.systemInstruction).toBe(
-      [expectedInstructions, INPUT[0].content, INPUT[1].content].join("\n\n")
+      [expectedInstructions, customerLanguageLine({ defaultLang: "en" }), INPUT[0].content, INPUT[1].content]
+        .filter(Boolean)
+        .join("\n\n")
     );
     // Vault field order parity with deploy-client.sh: identity → profile →
     // soul → website → memory (documents digest empty here).
@@ -224,6 +232,18 @@ describe("runWebchatGeminiTurn", () => {
     await runWebchatGeminiTurn(ARGS, deps);
     const step = vi.mocked(deps.chatStep).mock.calls[0][0];
     expect(step.systemInstruction).toContain("You are a professional AI coworker.");
+  });
+
+  it("omits the language line for an English-only tenant", async () => {
+    const deps = makeDeps({
+      getCustomerLanguages: vi.fn(async () => ({
+        defaultLanguage: "en" as const,
+        supported: ["en" as const]
+      }))
+    });
+    await runWebchatGeminiTurn(ARGS, deps);
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).not.toContain("Language: reply in the same language");
   });
 
   it("continues without the documents digest when the list read fails", async () => {

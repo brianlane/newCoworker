@@ -13,6 +13,7 @@
  */
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
+import { customerLanguageLine } from "./customer-language-line.js";
 
 /**
  * Who the caller is (owner / team member / customer). When the caller is
@@ -238,6 +239,10 @@ export function systemInstructionForBusiness(
           : trimmed;
       base.push("\n" + clipped);
     }
+  }
+
+  if (!isStaff) {
+    base.push(customerLanguageLine({ defaultLang: "en" }));
   }
 
   return base.join(" ");

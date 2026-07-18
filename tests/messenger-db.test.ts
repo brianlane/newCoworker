@@ -26,6 +26,7 @@ import {
   messengerWindowOpen,
   reclaimStaleMessengerJobs,
   requeueMessengerJob,
+  setMessengerConversationLanguage,
   updateMessengerConversationContact,
   upsertMessengerConversation
 } from "@/lib/messenger/db";
@@ -306,6 +307,24 @@ describe("updateMessengerConversationContact", () => {
   });
 });
 
+describe("setMessengerConversationLanguage", () => {
+  it("writes the detected language", async () => {
+    const c = chain();
+    c.eq.mockReturnValue(Promise.resolve({ error: null }));
+    await setMessengerConversationLanguage(CONV_ID, "es", makeDb(c));
+    expect(c.update).toHaveBeenCalledWith({ preferred_language: "es" });
+    expect(c.eq).toHaveBeenCalledWith("id", CONV_ID);
+  });
+
+  it("throws on an update error", async () => {
+    const c = chain();
+    c.eq.mockReturnValue(Promise.resolve({ error: { message: "lang fail" } }));
+    await expect(setMessengerConversationLanguage(CONV_ID, "en", makeDb(c))).rejects.toThrow(
+      /lang fail/
+    );
+  });
+});
+
 describe("listMessengerConversationsForBusiness", () => {
   it("maps embedded message counts and tolerates malformed embeds", async () => {
     const c = chain({
@@ -576,6 +595,14 @@ describe("default service client", () => {
     expect(await reclaimStaleMessengerJobs()).toBe(2);
     (c as unknown as { delete: unknown }).delete = vi.fn(() => c);
     await deleteMessengerMessage(1);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+
+  it("setMessengerConversationLanguage falls back to the default client", async () => {
+    const c = chain();
+    c.eq.mockReturnValue(Promise.resolve({ error: null }));
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await setMessengerConversationLanguage(CONV_ID, "es");
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });

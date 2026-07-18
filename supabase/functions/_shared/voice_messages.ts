@@ -1,48 +1,31 @@
 /** Short IVR copy for §6 failure paths (MIN_GRANT = 60s in plan). Single source for Edge + app. */
-export const VOICE_MSG_UNCONFIGURED_NUMBER =
-  "This number is not configured for AI assistant service. Goodbye.";
+import { edgeMessage, type EdgeLocale } from "./edge_messages.ts";
 
-export const VOICE_MSG_QUOTA_EXHAUSTED =
-  "Sorry, included voice time for this billing period is used up. You can add more from your dashboard or reply by text message. Goodbye.";
+export const VOICE_MSG_UNCONFIGURED_NUMBER = edgeMessage("VOICE_MSG_UNCONFIGURED_NUMBER");
+export const VOICE_MSG_QUOTA_EXHAUSTED = edgeMessage("VOICE_MSG_QUOTA_EXHAUSTED");
+export const VOICE_MSG_AI_BUDGET_EXHAUSTED = edgeMessage("VOICE_MSG_AI_BUDGET_EXHAUSTED");
+export const VOICE_MSG_BRIDGE_DEGRADED = edgeMessage("VOICE_MSG_BRIDGE_DEGRADED");
+export const VOICE_MSG_SYSTEM_ERROR = edgeMessage("VOICE_MSG_SYSTEM_ERROR");
+export const VOICE_MSG_CONCURRENT_LIMIT = edgeMessage("VOICE_MSG_CONCURRENT_LIMIT");
+export const VOICE_MSG_STREAM_ROLLOUT_DISABLED = edgeMessage("VOICE_MSG_STREAM_ROLLOUT_DISABLED");
+export const VOICE_MSG_PAUSED = edgeMessage("VOICE_MSG_PAUSED");
+export const VOICE_MSG_SAFE_MODE_CONNECTING = edgeMessage("VOICE_MSG_SAFE_MODE_CONNECTING");
+export const VOICE_MSG_SAFE_MODE_FORWARD_FAILED = edgeMessage("VOICE_MSG_SAFE_MODE_FORWARD_FAILED");
 
-/**
- * Shared AI budget exhausted (owner_chat_model_spend cap hit). A live voice
- * call can't fall back to a local model, so the AI receptionist can't take the
- * call. Kept short + friendly: apologize, point them to text, hang up. Mirrors
- * the mid-call "owner isn't available" wording the bridge uses when the budget
- * is hit during a call.
- */
-export const VOICE_MSG_AI_BUDGET_EXHAUSTED =
-  "Sorry, the owner isn't available right now. Please send us a text message instead and we'll get back to you. Goodbye.";
-
-export const VOICE_MSG_BRIDGE_DEGRADED =
-  "Our voice assistant is temporarily unavailable. Please try again later or send a text message. Goodbye.";
-
-export const VOICE_MSG_SYSTEM_ERROR =
-  "We could not connect your call. Please try again later. Goodbye.";
-
-/** §6: concurrent call cap — answer + speak (same class as quota UX). */
-export const VOICE_MSG_CONCURRENT_LIMIT =
-  "All of our lines are busy right now. Please try again in a few minutes or send a text message. Goodbye.";
-
-/**
- * Rollout guard: VOICE_AI_STREAM_ENABLED=false on Edge skips Gemini stream and plays this instead.
- */
-export const VOICE_MSG_STREAM_ROLLOUT_DISABLED =
-  "AI voice is not available for this call right now. Please send a text message or try again later. Goodbye.";
-
-/** Kill switch (is_paused): hard stop, no forwarding. */
-export const VOICE_MSG_PAUSED =
-  "This line is temporarily unavailable. Please try again later. Goodbye.";
-
-/** Safe mode: about to transfer to the owner's forwarding number. */
-export const VOICE_MSG_SAFE_MODE_CONNECTING = "Connecting you now.";
-
-/**
- * Safe mode: Telnyx refused the /actions/transfer request (e.g. the forwarding
- * number isn't reachable, account misconfig). Played before we hang up so the
- * caller isn't stuck on a silent answered line waiting for Telnyx's inactivity
- * timeout.
- */
-export const VOICE_MSG_SAFE_MODE_FORWARD_FAILED =
-  "We're sorry, we could not connect your call right now. Please try again later. Goodbye.";
+/** Localized IVR copy for system speak paths (uses business default when live detection unavailable). */
+export function voiceMessageForLocale(
+  key:
+    | "VOICE_MSG_UNCONFIGURED_NUMBER"
+    | "VOICE_MSG_QUOTA_EXHAUSTED"
+    | "VOICE_MSG_AI_BUDGET_EXHAUSTED"
+    | "VOICE_MSG_BRIDGE_DEGRADED"
+    | "VOICE_MSG_SYSTEM_ERROR"
+    | "VOICE_MSG_CONCURRENT_LIMIT"
+    | "VOICE_MSG_STREAM_ROLLOUT_DISABLED"
+    | "VOICE_MSG_PAUSED"
+    | "VOICE_MSG_SAFE_MODE_CONNECTING"
+    | "VOICE_MSG_SAFE_MODE_FORWARD_FAILED",
+  locale: "en" | "es" = "en"
+): string {
+  return edgeMessage(key, locale);
+}

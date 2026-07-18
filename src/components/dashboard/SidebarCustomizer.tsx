@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ArrowDown, ArrowUp, GripVertical } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -17,6 +18,7 @@ type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string 
  * not hide.
  */
 export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLayoutItem[] }) {
+  const tNav = useTranslations("dashboard.nav");
   const router = useRouter();
   const [items, setItems] = useState(initialLayout);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -129,7 +131,9 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
         data-testid="sidebar-customizer-list"
         onDragLeave={handleListDragLeave}
       >
-        {items.map((item, index) => (
+        {items.map((item, index) => {
+          const label = tNav(item.labelKey);
+          return (
           <li
             key={item.key}
             draggable
@@ -155,7 +159,7 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
             <div className="flex flex-col">
               <button
                 type="button"
-                aria-label={`Move ${item.label} up`}
+                aria-label={`Move ${label} up`}
                 onClick={() => move(index, -1)}
                 disabled={index === 0}
                 className="text-parchment/40 hover:text-parchment disabled:opacity-20"
@@ -164,7 +168,7 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
               </button>
               <button
                 type="button"
-                aria-label={`Move ${item.label} down`}
+                aria-label={`Move ${label} down`}
                 onClick={() => move(index, 1)}
                 disabled={index === items.length - 1}
                 className="text-parchment/40 hover:text-parchment disabled:opacity-20"
@@ -175,7 +179,7 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
             <span
               className={`flex-1 text-sm select-none ${item.visible ? "text-parchment" : "text-parchment/35 line-through"}`}
             >
-              {item.label}
+              {label}
             </span>
             {item.locked ? (
               <span className="text-[10px] uppercase tracking-wider text-parchment/30">
@@ -193,7 +197,8 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
               </label>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
       <div className="flex items-center gap-3">
         <Button type="button" size="sm" onClick={() => void save()} loading={status.kind === "saving"}>

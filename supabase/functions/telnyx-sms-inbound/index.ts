@@ -16,6 +16,7 @@ import {
   inboundSmsBody,
   isHelpKeyword,
   isRcsInboundPayload,
+  isSpanishComplianceKeyword,
   isStartKeyword,
   isStopKeyword,
   rcsInboundAgentId,
@@ -1326,12 +1327,12 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   });
 }
 
-const HELP_REPLY_TEXT =
-  "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.";
-const STOP_REPLY_TEXT =
-  "You're opted out of New Coworker marketing SMS for this number. You may still get transactional messages.";
-const START_REPLY_TEXT =
-  "You're subscribed to New Coworker SMS for this number. Reply STOP to opt out. Msg&data rates may apply.";
+import { edgeMessage, type EdgeLocale } from "../_shared/edge_messages.ts";
+
+/** Reply in the language the keyword itself was sent in (AYUDA → Spanish). */
+function complianceReplyLocale(bodyNorm: string): EdgeLocale {
+  return isSpanishComplianceKeyword(bodyNorm) ? "es" : "en";
+}
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {
@@ -1609,7 +1610,7 @@ serve(async (req: Request) => {
           messagingProfileId,
           fromE164: smsFromE164,
           toE164: from!,
-          text: STOP_REPLY_TEXT,
+          text: edgeMessage("SMS_STOP_REPLY", complianceReplyLocale(bodyNorm)),
           idempotencyKey: stopReplyIdem
         });
         if (!send.ok) {
@@ -1646,7 +1647,7 @@ serve(async (req: Request) => {
           messagingProfileId,
           fromE164: smsFromE164,
           toE164: from!,
-          text: HELP_REPLY_TEXT,
+          text: edgeMessage("SMS_HELP_REPLY", complianceReplyLocale(bodyNorm)),
           idempotencyKey: helpReplyIdem
         });
         if (!send.ok) {
@@ -1697,7 +1698,7 @@ serve(async (req: Request) => {
           messagingProfileId,
           fromE164: smsFromE164,
           toE164: from!,
-          text: START_REPLY_TEXT,
+          text: edgeMessage("SMS_START_REPLY", complianceReplyLocale(bodyNorm)),
           idempotencyKey: startReplyIdem
         });
         if (!send.ok) {

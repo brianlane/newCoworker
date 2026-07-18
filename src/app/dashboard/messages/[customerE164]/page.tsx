@@ -23,6 +23,8 @@ import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 import { ContactReplyModeToggle } from "@/components/dashboard/ContactReplyModeToggle";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { ContactNameEditor } from "@/components/dashboard/ContactNameEditor";
+import { ContactLanguageEditor } from "@/components/dashboard/ContactLanguageEditor";
+import { getContactLanguage } from "@/lib/db/contact-language";
 import { SmsThreadComposer } from "@/components/dashboard/SmsThreadComposer";
 import { ConversationScroll } from "@/components/dashboard/ConversationScroll";
 import { DeleteItemButton } from "@/components/dashboard/DeleteItemButton";
@@ -76,18 +78,17 @@ export default async function SmsThreadPage({
 
   // The four reads are independent — one parallel group instead of four
   // serial awaits (for residency tenants each is a tunnel round-trip).
-  const [messages, rcsEnabled, memory, contactMap] = await Promise.all([
+  const [messages, rcsEnabled, memory, contactMap, contactLanguage] = await Promise.all([
     listMessagesForCustomer(business.id, customerE164, { limit: 100 }),
-    // RCS-first tenants (approved agent + concrete from-number, the same
-    // precondition sendTelnyxSms checks) get the softened emoji hint in the
-    // reply composer.
     rcsChannelActiveForBusiness(db, business.id),
-    // Reply-mode toggle state: tolerate a missing profile (numbers with thread
-    // history but no contact row default to 'auto'; the PATCH creates the row).
     getCustomerMemory(business.id, customerE164).catch(() => null),
     resolveContactNames(business.id, [customerE164]).catch(
       () => new Map<string, ContactName>()
-    )
+    ),
+    getContactLanguage(business.id, customerE164).catch(() => ({
+      preferred_language: null,
+      language_source: null
+    }))
   ]);
   if (messages.length === 0) notFound();
   const outboundLogIds = messages
@@ -161,6 +162,11 @@ export default async function SmsThreadPage({
             e164={customerE164}
             currentName={contact?.name ?? null}
             hasOverride={Boolean(contact?.override)}
+          />
+          <ContactLanguageEditor
+            customerE164={customerE164}
+            initialLanguage={contactLanguage.preferred_language}
+            initialSource={contactLanguage.language_source}
           />
           <span>·</span>
           <span>

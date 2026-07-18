@@ -28,6 +28,12 @@ import {
   type GeminiChatStepResult
 } from "@/lib/gemini-chat";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { customerLanguageLine, detectCustomerLanguage } from "@/lib/i18n/customer-language";
+import {
+  getBusinessCustomerLanguages,
+  type BusinessCustomerLanguages
+} from "@/lib/db/business-language";
+import { getContactLanguage, type ContactLanguageRow } from "@/lib/db/contact-language";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import {
   getChatSpendSnapshotForBusiness,
@@ -43,16 +49,23 @@ import {
   type WebchatToolResult
 } from "@/lib/webchat/engine-tools";
 import { captureMessengerLead } from "@/lib/messenger/lead-capture";
-import type {
-  MessengerConversationRow,
-  MessengerMessageRow
+import {
+  setMessengerConversationLanguage,
+  type MessengerConversationRow,
+  type MessengerMessageRow
 } from "@/lib/messenger/db";
 import type { PlanTier } from "@/lib/plans/tier";
 import { logger } from "@/lib/logger";
+import edgeEn from "../../../messages/edge-en.json";
+import edgeEs from "../../../messages/edge-es.json";
 
 /** Same honest copy as the webchat engine's over-cap refusal. */
-export const MESSENGER_ENGINE_OVER_CAP_REFUSAL =
-  "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
+export const MESSENGER_ENGINE_OVER_CAP_REFUSAL = edgeEn.MESSENGER_OVER_CAP;
+
+/** Over-cap refusal in the thread's language (stored preferred_language). */
+export function messengerOverCapRefusal(language?: "en" | "es" | null): string {
+  return language === "es" ? edgeEs.MESSENGER_OVER_CAP : edgeEn.MESSENGER_OVER_CAP;
+}
 
 /**
  * Default bumped 2.5-flash-lite → 2.5-flash (2026-07-16): the lite tier is
@@ -162,6 +175,15 @@ export type MessengerGeminiTurnDeps = {
   meter?: typeof meterGeminiSpendForBusiness;
   env?: Record<string, string | undefined>;
   now?: () => Date;
+  getCustomerLanguages?: (businessId: string) => Promise<BusinessCustomerLanguages>;
+  persistConversationLanguage?: (
+    conversationId: string,
+    language: "en" | "es"
+  ) => Promise<void>;
+  fetchContactLanguage?: (
+    businessId: string,
+    customerE164: string
+  ) => Promise<ContactLanguageRow>;
 };
 
 export type MessengerGeminiTurnResult = {
@@ -209,6 +231,10 @@ export async function runMessengerGeminiTurn(
   const meter = deps.meter ?? meterGeminiSpendForBusiness;
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
+  const getCustomerLanguages = deps.getCustomerLanguages ?? getBusinessCustomerLanguages;
+  const persistConversationLanguage =
+    deps.persistConversationLanguage ?? setMessengerConversationLanguage;
+  const fetchContactLanguage = deps.fetchContactLanguage ?? getContactLanguage;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -218,10 +244,77 @@ export async function runMessengerGeminiTurn(
   if (!contents) throw new Error("messenger_engine_no_input");
 
   // Shared AI budget fuse FIRST — over-cap tenants must not bill Google.
+  // Language resolution runs before the refusal below so a capped thread is
+  // refused in the same language a normal reply would use (owner override,
+  // stored thread language, or fresh detection) — DB reads are fine here,
+  // only Gemini calls are fused.
   const snapshot = await getSpendSnapshot(args.businessId, args.tier);
-  if (snapshot.spendMicros >= snapshot.effectiveCapMicros) {
+  const overCap = snapshot.spendMicros >= snapshot.effectiveCapMicros;
+
+  const customerLanguages = await getCustomerLanguages(args.businessId);
+
+  // Owner override on the contact profile is authoritative across every
+  // channel (same rule as the SMS worker). Only reachable once a phone was
+  // captured for this thread; best-effort — a read blip must not kill the
+  // turn.
+  let ownerSetLanguage: "en" | "es" | null = null;
+  if (args.conversation.contact_phone) {
+    try {
+      const contactLang = await fetchContactLanguage(
+        args.businessId,
+        args.conversation.contact_phone
+      );
+      if (contactLang.language_source === "owner_set") {
+        ownerSetLanguage = contactLang.preferred_language;
+      }
+    } catch (err) {
+      logger.warn("messenger engine: contact language read failed; continuing", {
+        conversationId: args.conversation.id,
+        error: String(err)
+      });
+    }
+  }
+
+  // Classify the latest user turn (sticky: the stored thread language wins
+  // over a one-token confirmation) and persist confident detections so
+  // later turns keep the thread language. `contents` being non-null above
+  // guarantees the history contains a user row.
+  const lastUserText = [...args.history].reverse().find((m) => m.role === "user")!.content;
+  const detected = detectCustomerLanguage({
+    text: lastUserText,
+    establishedLanguage: ownerSetLanguage ?? args.conversation.preferred_language ?? undefined,
+    defaultLanguage: customerLanguages.defaultLanguage,
+    supported: customerLanguages.supported
+  });
+  if (
+    !ownerSetLanguage &&
+    detected.persist &&
+    detected.language !== args.conversation.preferred_language
+  ) {
+    // Best-effort: a persistence blip must not kill the reply turn.
+    try {
+      await persistConversationLanguage(args.conversation.id, detected.language);
+    } catch (err) {
+      logger.warn("messenger engine: language persist failed; continuing", {
+        conversationId: args.conversation.id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  // Owner override beats everything; otherwise a confident detection wins
+  // over the stored thread language (mirrors the SMS worker): a mid-thread
+  // switch in full sentences must not leave the prompt pointing at the old
+  // language while the persisted row catches up. Weak signals ("si") already
+  // return the established language from detectCustomerLanguage, so
+  // stickiness is preserved.
+  const threadLanguage =
+    ownerSetLanguage ??
+    (detected.persist ? detected.language : args.conversation.preferred_language ?? null);
+
+  if (overCap) {
     return {
-      reply: MESSENGER_ENGINE_OVER_CAP_REFUSAL,
+      reply: messengerOverCapRefusal(threadLanguage ?? detected.language),
       refusedOverCap: true,
       toolRounds: 0
     };
@@ -253,8 +346,16 @@ export async function runMessengerGeminiTurn(
   );
   const systemInstruction = [
     instructions,
+    customerLanguageLine({
+      detected: detected.language,
+      established: threadLanguage,
+      defaultLang: customerLanguages.defaultLanguage,
+      supported: customerLanguages.supported
+    }),
     buildMessengerPreamble(args.conversation, now())
-  ].join("\n\n");
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 
   const model = messengerEngineModel(env);
 

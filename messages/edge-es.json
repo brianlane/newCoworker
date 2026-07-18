@@ -1,0 +1,17 @@
+{
+  "VOICE_MSG_UNCONFIGURED_NUMBER": "Este número no está configurado para el asistente de IA. Adiós.",
+  "VOICE_MSG_QUOTA_EXHAUSTED": "Lo sentimos, el tiempo de voz incluido de este periodo de facturación se agotó. Puede agregar más desde su panel o responder por mensaje de texto. Adiós.",
+  "VOICE_MSG_AI_BUDGET_EXHAUSTED": "Lo sentimos, el propietario no está disponible en este momento. Envíenos un mensaje de texto y le responderemos. Adiós.",
+  "VOICE_MSG_BRIDGE_DEGRADED": "Nuestro asistente de voz no está disponible temporalmente. Inténtelo más tarde o envíe un mensaje de texto. Adiós.",
+  "VOICE_MSG_SYSTEM_ERROR": "No pudimos conectar su llamada. Inténtelo más tarde. Adiós.",
+  "VOICE_MSG_CONCURRENT_LIMIT": "Todas nuestras líneas están ocupadas. Inténtelo en unos minutos o envíe un mensaje de texto. Adiós.",
+  "VOICE_MSG_STREAM_ROLLOUT_DISABLED": "La voz con IA no está disponible para esta llamada. Envíe un mensaje de texto o inténtelo más tarde. Adiós.",
+  "VOICE_MSG_PAUSED": "Esta línea no está disponible temporalmente. Inténtelo más tarde. Adiós.",
+  "VOICE_MSG_SAFE_MODE_CONNECTING": "Conectándole ahora.",
+  "VOICE_MSG_SAFE_MODE_FORWARD_FAILED": "Lo sentimos, no pudimos conectar su llamada. Inténtelo más tarde. Adiós.",
+  "SMS_HELP_REPLY": "New Coworker: Para ayuda, use el panel de su negocio o contacte soporte. Pueden aplicarse tarifas de msg&datos. Responda STOP para cancelar.",
+  "SMS_START_REPLY": "Está suscrito a SMS de New Coworker para este número. Responda STOP para cancelar. Pueden aplicarse tarifas de msg&datos.",
+  "SMS_STOP_REPLY": "Ha cancelado los SMS de marketing de New Coworker para este número. Aún puede recibir mensajes transaccionales.",
+  "SMS_STOP_SUFFIX": "Responda STOP para cancelar.",
+  "MESSENGER_OVER_CAP": "Lo sentimos — nuestro asistente de chat no está disponible temporalmente. Inténtelo más tarde o contáctenos directamente."
+}

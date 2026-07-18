@@ -74,6 +74,45 @@ describe("proxy", () => {
     process.env = OLD_ENV;
   });
 
+  // --- /es SEO mirrors ---
+
+  it("rewrites /es/pricing to /pricing and pins the Spanish locale cookie", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/es/pricing");
+    const res = await proxy(req);
+    expect(res.headers.get("x-middleware-rewrite")).toContain("/pricing");
+    expect(res.headers.get("x-middleware-rewrite")).not.toContain("/es/");
+    expect(res.cookies.get("NEXT_LOCALE")?.value).toBe("es");
+  });
+
+  it("rate-limits /es mirrors like their canonical paths (AUTH bucket for /es/login POST)", async () => {
+    mockSupabaseWithUser(null);
+    await proxy(makeRequest("/es/login", { method: "POST" }));
+    expect(rateLimit).toHaveBeenCalledWith(
+      expect.stringContaining("auth"),
+      expect.objectContaining({ maxRequests: 5 })
+    );
+
+    vi.mocked(rateLimit).mockReturnValueOnce({
+      success: false,
+      limit: 60,
+      remaining: 0,
+      reset: Date.now() + 60000
+    });
+    const limited = await proxy(makeRequest("/es/pricing"));
+    expect(limited.status).toBe(429);
+    expect(limited.headers.get("Retry-After")).toBeTruthy();
+  });
+
+  it("does not rewrite non-marketing /es paths or English URLs", async () => {
+    mockSupabaseWithUser(null);
+    const dashboard = await proxy(makeRequest("/es/dashboard"));
+    expect(dashboard.cookies.get("NEXT_LOCALE")).toBeUndefined();
+    const english = await proxy(makeRequest("/pricing"));
+    expect(english.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(english.cookies.get("NEXT_LOCALE")).toBeUndefined();
+  });
+
   // --- CSRF protection ---
 
   it("blocks POST to /api without origin header", async () => {

@@ -14,10 +14,12 @@ import {
   MESSENGER_ENGINE_MAX_TOOL_ROUNDS,
   MESSENGER_ENGINE_OVER_CAP_REFUSAL,
   MESSENGER_ENGINE_TURN_TIMEOUT_MS,
+  messengerOverCapRefusal,
   runMessengerGeminiTurn,
   type MessengerGeminiTurnDeps
 } from "@/lib/messenger/engine";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
+import { customerLanguageLine } from "@/lib/i18n/customer-language";
 import { WEBCHAT_TOOL_DECLARATIONS } from "@/lib/webchat/engine-tools";
 import type { GeminiChatStepResult } from "@/lib/gemini-chat";
 import type {
@@ -107,6 +109,9 @@ function makeDeps(overrides: Partial<MessengerGeminiTurnDeps> = {}): Required<
     | "meter"
     | "env"
     | "now"
+    | "getCustomerLanguages"
+    | "persistConversationLanguage"
+    | "fetchContactLanguage"
   >
 > {
   return {
@@ -118,6 +123,15 @@ function makeDeps(overrides: Partial<MessengerGeminiTurnDeps> = {}): Required<
     meter: vi.fn(async () => undefined),
     env: { GOOGLE_API_KEY: "k" },
     now: () => new Date("2026-07-15T20:05:00Z"),
+    getCustomerLanguages: vi.fn(async () => ({
+      defaultLanguage: "en" as const,
+      supported: ["en" as const, "es" as const]
+    })),
+    persistConversationLanguage: vi.fn(async () => undefined),
+    fetchContactLanguage: vi.fn(async () => ({
+      preferred_language: null,
+      language_source: null
+    })),
     ...overrides
   };
 }
@@ -238,6 +252,22 @@ describe("runMessengerGeminiTurn", () => {
     expect(deps.getSpendSnapshot).toHaveBeenCalledWith(BIZ, "standard");
   });
 
+  it("speaks the over-cap refusal in the thread's stored language", async () => {
+    const deps = makeDeps({
+      getSpendSnapshot: vi.fn(async () => ({
+        ...SNAPSHOT_UNDER,
+        spendMicros: SNAPSHOT_UNDER.effectiveCapMicros
+      }))
+    });
+    const res = await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...CONVERSATION, preferred_language: "es" } },
+      deps
+    );
+    expect(res.refusedOverCap).toBe(true);
+    expect(res.reply).toBe(messengerOverCapRefusal("es"));
+    expect(res.reply).toContain("asistente de chat");
+  });
+
   it("grounds the system instruction with the vault instructions then the preamble", async () => {
     const deps = makeDeps();
     const res = await runMessengerGeminiTurn(ARGS, deps);
@@ -252,8 +282,11 @@ describe("runMessengerGeminiTurn", () => {
     expect(step.systemInstruction).toBe(
       [
         expectedInstructions,
+        customerLanguageLine({ defaultLang: "en" }),
         buildMessengerPreamble(CONVERSATION, new Date("2026-07-15T20:05:00Z"))
-      ].join("\n\n")
+      ]
+        .filter(Boolean)
+        .join("\n\n")
     );
     expect(step.contents).toEqual([
       { role: "user", parts: [{ text: "Hi! How much is the Standard plan?" }] }
@@ -268,6 +301,117 @@ describe("runMessengerGeminiTurn", () => {
       surface: "messenger_gemini_engine",
       usage: { promptTokens: 100, outputTokens: 20 }
     });
+  });
+
+  it("persists a confident Spanish detection and injects it as the thread language", async () => {
+    const spanishHistory = [
+      msg(1, "user", "Hola, quiero hacer una cita para el viernes por favor")
+    ];
+    const deps = makeDeps();
+    await runMessengerGeminiTurn({ ...ARGS, history: spanishHistory }, deps);
+    expect(deps.persistConversationLanguage).toHaveBeenCalledWith(CONV_ID, "es");
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
+  it("does not re-persist when the thread language already matches", async () => {
+    const spanishHistory = [msg(1, "user", "Quiero cambiar mi cita para el martes")];
+    const deps = makeDeps();
+    await runMessengerGeminiTurn(
+      {
+        ...ARGS,
+        conversation: { ...CONVERSATION, preferred_language: "es" },
+        history: spanishHistory
+      },
+      deps
+    );
+    expect(deps.persistConversationLanguage).not.toHaveBeenCalled();
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
+  it("owner-set contact language is authoritative once a phone is captured", async () => {
+    const deps = makeDeps({
+      fetchContactLanguage: vi.fn(async () => ({
+        preferred_language: "es" as const,
+        language_source: "owner_set" as const
+      }))
+    });
+    await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...CONVERSATION, contact_phone: "+16025550100" } },
+      deps
+    );
+    expect(deps.fetchContactLanguage).toHaveBeenCalledWith(BIZ, "+16025550100");
+    // Detection must not overwrite the override at the conversation level.
+    expect(deps.persistConversationLanguage).not.toHaveBeenCalled();
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
+  it("non-owner-set contact rows do not override, and read failures are best-effort", async () => {
+    const deps = makeDeps({
+      fetchContactLanguage: vi.fn(async () => ({
+        preferred_language: "es" as const,
+        language_source: "detected" as const
+      }))
+    });
+    await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...CONVERSATION, contact_phone: "+16025550100" } },
+      deps
+    );
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).not.toContain("Current conversation language: es.");
+
+    const failing = makeDeps({
+      fetchContactLanguage: vi.fn(async () => Promise.reject(new Error("db down")))
+    });
+    expect(
+      (
+        await runMessengerGeminiTurn(
+          { ...ARGS, conversation: { ...CONVERSATION, contact_phone: "+16025550100" } },
+          failing
+        )
+      ).reply
+    ).toContain("$99");
+  });
+
+  it("follows a confident mid-thread language switch over the stored thread language", async () => {
+    const switchedHistory = [
+      msg(1, "user", "Hi, do you have anything available Friday?"),
+      msg(2, "assistant", "Yes, we have openings Friday."),
+      msg(3, "user", "Perfecto, quiero cambiar mi cita para el viernes por favor")
+    ];
+    const deps = makeDeps();
+    await runMessengerGeminiTurn(
+      {
+        ...ARGS,
+        conversation: { ...CONVERSATION, preferred_language: "en" },
+        history: switchedHistory
+      },
+      deps
+    );
+    expect(deps.persistConversationLanguage).toHaveBeenCalledWith(CONV_ID, "es");
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
+  it("continues the reply when language persistence fails (Error and non-Error)", async () => {
+    const spanishHistory = [
+      msg(1, "user", "Hola, quiero hacer una cita para el viernes por favor")
+    ];
+    const deps = makeDeps({
+      persistConversationLanguage: vi.fn(async () => Promise.reject(new Error("db down")))
+    });
+    expect(
+      (await runMessengerGeminiTurn({ ...ARGS, history: spanishHistory }, deps)).reply
+    ).toContain("$99");
+
+    const stringy = makeDeps({
+      persistConversationLanguage: vi.fn(async () => Promise.reject("plain refusal"))
+    });
+    expect(
+      (await runMessengerGeminiTurn({ ...ARGS, history: spanishHistory }, stringy)).reply
+    ).toContain("$99");
   });
 
   it("falls back to the default persona when the config row is missing", async () => {

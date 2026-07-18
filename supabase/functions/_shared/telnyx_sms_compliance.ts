@@ -47,16 +47,28 @@ export function rcsInboundAgentId(payload: Record<string, unknown>): string | nu
 
 /** Single-word STOP variants (case-insensitive). */
 export function isStopKeyword(normalizedUpper: string): boolean {
-  return /^(STOP|STOPALL|UNSUBSCRIBE|CANCEL|END|QUIT)$/.test(normalizedUpper.trim());
+  return /^(STOP|STOPALL|UNSUBSCRIBE|CANCEL|END|QUIT|ALTO|BAJA|BAJAR|SALIR)$/.test(
+    normalizedUpper.trim()
+  );
 }
 
 export function isHelpKeyword(normalizedUpper: string): boolean {
-  return /^HELP$/.test(normalizedUpper.trim());
+  return /^(HELP|AYUDA|INFO|INFORMACION|INFORMACIÓN)$/.test(normalizedUpper.trim());
 }
 
 /** START / UNSTOP — case-insensitive single token (carrier re-subscribe). */
 export function isStartKeyword(normalizedUpper: string): boolean {
-  return /^(START|YES|UNSTOP)$/.test(normalizedUpper.trim());
+  return /^(START|YES|UNSTOP|INICIO|COMENZAR|ALTA|SUSCRIBIR)$/.test(normalizedUpper.trim());
+}
+
+/**
+ * True when a compliance keyword is one of the Spanish aliases — the auto-reply
+ * should answer in Spanish. Unambiguous tokens only ("INFO" stays English).
+ */
+export function isSpanishComplianceKeyword(normalizedUpper: string): boolean {
+  return /^(ALTO|BAJA|BAJAR|SALIR|AYUDA|INFORMACION|INFORMACIÓN|INICIO|COMENZAR|ALTA|SUSCRIBIR)$/.test(
+    normalizedUpper.trim()
+  );
 }
 
 export async function telnyxSendSms(params: {

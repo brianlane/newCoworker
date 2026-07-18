@@ -1,0 +1,17 @@
+{
+  "VOICE_MSG_UNCONFIGURED_NUMBER": "This number is not configured for AI assistant service. Goodbye.",
+  "VOICE_MSG_QUOTA_EXHAUSTED": "Sorry, included voice time for this billing period is used up. You can add more from your dashboard or reply by text message. Goodbye.",
+  "VOICE_MSG_AI_BUDGET_EXHAUSTED": "Sorry, the owner isn't available right now. Please send us a text message instead and we'll get back to you. Goodbye.",
+  "VOICE_MSG_BRIDGE_DEGRADED": "Our voice assistant is temporarily unavailable. Please try again later or send a text message. Goodbye.",
+  "VOICE_MSG_SYSTEM_ERROR": "We could not connect your call. Please try again later. Goodbye.",
+  "VOICE_MSG_CONCURRENT_LIMIT": "All of our lines are busy right now. Please try again in a few minutes or send a text message. Goodbye.",
+  "VOICE_MSG_STREAM_ROLLOUT_DISABLED": "AI voice is not available for this call right now. Please send a text message or try again later. Goodbye.",
+  "VOICE_MSG_PAUSED": "This line is temporarily unavailable. Please try again later. Goodbye.",
+  "VOICE_MSG_SAFE_MODE_CONNECTING": "Connecting you now.",
+  "VOICE_MSG_SAFE_MODE_FORWARD_FAILED": "We're sorry, we could not connect your call right now. Please try again later. Goodbye.",
+  "SMS_HELP_REPLY": "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.",
+  "SMS_START_REPLY": "You're subscribed to New Coworker SMS for this number. Reply STOP to opt out. Msg&data rates may apply.",
+  "SMS_STOP_REPLY": "You're opted out of New Coworker marketing SMS for this number. You may still get transactional messages.",
+  "SMS_STOP_SUFFIX": "Reply STOP to opt out.",
+  "MESSENGER_OVER_CAP": "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help."
+}

@@ -146,6 +146,6 @@ describe("AiFlow flow-context block", () => {
   it("whitespace-only flow context adds nothing", () => {
     // Timestamp caveat again: assert the instruction still ENDS at the
     // persona's final line (the whitespace blob was never appended).
-    expect(build({ flowContext: "  \n " }).endsWith("recognized it.")).toBe(true);
+    expect(build({ flowContext: "  \n " }).endsWith("Default to en when unclear.")).toBe(true);
   });
 });

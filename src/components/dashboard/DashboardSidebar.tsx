@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Sidebar } from "@/components/ui/Sidebar";
 import { SIDEBAR_ITEMS } from "@/lib/dashboard/sidebar-items";
 import type { SidebarLayoutItem } from "@/lib/dashboard/sidebar-prefs";
@@ -59,7 +60,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
 };
 
 const defaultNavItems = SIDEBAR_ITEMS.map((item) => ({
-  label: item.label,
+  labelKey: item.labelKey,
   href: item.href,
   icon: NAV_ICONS[item.key] ?? LayoutDashboard
 }));
@@ -141,17 +142,24 @@ export function DashboardSidebar({
   /** Per-user layout (order + visibility); omitted = default catalog order. */
   layout?: SidebarLayoutItem[] | null;
 }) {
+  const tNav = useTranslations("dashboard.nav");
   const unread = useUnreadNotificationCount(businessId ?? null);
 
-  const items = layout
+  const rawItems = layout
     ? layout
         .filter((item) => item.visible)
         .map((item) => ({
-          label: item.label,
+          labelKey: item.labelKey,
           href: item.href,
           icon: NAV_ICONS[item.key] ?? LayoutDashboard
         }))
     : defaultNavItems;
+
+  const items = rawItems.map((item) => ({
+    label: tNav(item.labelKey),
+    href: item.href,
+    icon: item.icon
+  }));
 
   return (
     <Sidebar

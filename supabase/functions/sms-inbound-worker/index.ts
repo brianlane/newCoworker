@@ -53,6 +53,11 @@ import {
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE
 } from "../_shared/sms_prompt_lines.ts";
+import {
+  customerLanguageLine,
+  detectCustomerLanguage,
+  type CustomerLanguage
+} from "../_shared/customer_language.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 // Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
 // against the tenant pool like all traffic but never refused (Jul 14 2026).
@@ -422,10 +427,17 @@ serve(async (req: Request) => {
     // (kvm2/kvm8) degrades to the CoworkerLocal twin; kvm1 has none, so
     // over-cap turns are refused (see pickSmsTurn / tenantHasLocalModel).
     let businessVpsSize: string | null = null;
+    // Customer-language defaults: `supported_customer_languages` is the
+    // per-tenant escape hatch ({en} disables Spanish detection + prompt).
+    let businessDefaultLang: CustomerLanguage = "en";
+    let businessSupportedLangs: CustomerLanguage[] = ["en", "es"];
     {
       const { data: bizRow } = await supabase
         .from("businesses")
-        .select("is_paused, customer_channels_enabled, timezone, tier, vps_size")
+        .select(
+          "is_paused, customer_channels_enabled, timezone, tier, vps_size, " +
+            "default_customer_language, supported_customer_languages"
+        )
         .eq("id", job.business_id)
         .maybeSingle();
       const biz = bizRow as
@@ -435,11 +447,20 @@ serve(async (req: Request) => {
             timezone?: string | null;
             tier?: string | null;
             vps_size?: string | null;
+            default_customer_language?: string | null;
+            supported_customer_languages?: string[] | null;
           }
         | null;
       businessTimezone = typeof biz?.timezone === "string" ? biz.timezone : null;
       businessTier = typeof biz?.tier === "string" ? biz.tier : null;
       businessVpsSize = typeof biz?.vps_size === "string" ? biz.vps_size : null;
+      if (biz?.default_customer_language === "es") businessDefaultLang = "es";
+      if (Array.isArray(biz?.supported_customer_languages)) {
+        const langs = biz.supported_customer_languages.filter(
+          (l): l is CustomerLanguage => l === "en" || l === "es"
+        );
+        if (langs.length > 0) businessSupportedLangs = langs;
+      }
 
       if (biz?.is_paused || biz?.customer_channels_enabled === false) {
         // Staff jobs were already handled at inbound time (audit row + optional
@@ -991,11 +1012,74 @@ serve(async (req: Request) => {
         .from("contacts")
         .select(
           "customer_e164, display_name, summary_md, pinned_md, " +
-            "total_interaction_count, last_channel, last_interaction_at"
+            "total_interaction_count, last_channel, last_interaction_at, " +
+            "preferred_language, language_source"
         )
         .eq("business_id", job.business_id)
         .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
         .maybeSingle();
+      const contactLang = (memoryRow as { preferred_language?: CustomerLanguage | null; language_source?: string | null } | null)
+        ?.preferred_language;
+      const contactLangSource = (memoryRow as { language_source?: string | null } | null)?.language_source;
+      const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
+      const inboundPayload = envelope?.data?.payload ?? {};
+      const inboundText = inboundPayloadText(inboundPayload);
+      const detected = detectCustomerLanguage({
+        text: inboundText,
+        establishedLanguage: contactLang ?? undefined,
+        defaultLanguage: businessDefaultLang,
+        supported: businessSupportedLangs
+      });
+      if (detected.persist && contactLangSource !== "owner_set") {
+        const langPatch = {
+          preferred_language: detected.language,
+          language_source: "detected"
+        };
+        if (memoryRow) {
+          // Alias-aware: a texter merged into another profile must persist on
+          // the surviving row's primary number, not the alias (which matches
+          // zero rows).
+          const contactPrimaryE164 =
+            (memoryRow as { customer_e164?: string | null }).customer_e164 ?? fromE164;
+          await supabase
+            .from("contacts")
+            .update(langPatch)
+            .eq("business_id", job.business_id)
+            .eq("customer_e164", contactPrimaryE164);
+        } else {
+          // First contact: no contacts row exists yet (record_customer_interaction
+          // runs later in this job), so an UPDATE would silently hit zero rows and
+          // the detected language would never land. Insert the row now; on a
+          // concurrent-create race (unique violation) fall back to the update.
+          const { error: langInsErr } = await supabase.from("contacts").insert({
+            business_id: job.business_id,
+            customer_e164: fromE164,
+            ...langPatch
+          });
+          if (langInsErr) {
+            await supabase
+              .from("contacts")
+              .update(langPatch)
+              .eq("business_id", job.business_id)
+              .eq("customer_e164", fromE164);
+          }
+        }
+      }
+      // Thread language for the prompt: an owner override is authoritative;
+      // otherwise a confident detection wins (mid-thread switch), and a weak
+      // signal keeps the stored thread language (mirrors the Messenger engine).
+      const smsThreadLanguage =
+        contactLangSource === "owner_set"
+          ? contactLang
+          : detected.persist
+            ? detected.language
+            : contactLang ?? detected.language;
+      const languageLine = customerLanguageLine({
+        detected: detected.language,
+        established: smsThreadLanguage,
+        defaultLang: businessDefaultLang,
+        supported: businessSupportedLangs
+      });
       const memoryPreamble =
         memoryRow == null
           ? null
@@ -1048,7 +1132,9 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = `${identityLine}\n\n${groundedActionsLine}\n\n${conversationQualityLine}\n\n${dateLine}\n\n${phoneLine}`;
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, dateLine, phoneLine, languageLine]
+        .filter(Boolean)
+        .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, contactTimeline, flowContext]
         .filter((part): part is string => Boolean(part))
         .join("\n\n");

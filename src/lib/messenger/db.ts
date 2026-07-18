@@ -29,6 +29,8 @@ export type MessengerConversationRow = {
   display_name: string | null;
   contact_phone: string | null;
   status: "active" | "closed";
+  /** Sticky thread language for AI replies (en/es); null until known. */
+  preferred_language?: "en" | "es" | null;
   last_user_message_at: string;
   created_at: string;
   updated_at: string;
@@ -197,6 +199,24 @@ export async function insertOutboundMessengerConversation(
   const winner = await getMessengerConversationByIdentity(input, db);
   if (winner) return winner;
   throw new Error(`insertOutboundMessengerConversation: ${error.message}`);
+}
+
+/**
+ * Persist the detected thread language so later turns (and the SMS bridge,
+ * once a phone is captured) stay sticky. Detection-only writes — there is no
+ * owner override at the conversation level (that lives on contacts).
+ */
+export async function setMessengerConversationLanguage(
+  conversationId: string,
+  language: "en" | "es",
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("messenger_conversations")
+    .update({ preferred_language: language })
+    .eq("id", conversationId);
+  if (error) throw new Error(`setMessengerConversationLanguage: ${error.message}`);
 }
 
 export async function getMessengerConversationById(

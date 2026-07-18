@@ -1,0 +1,230 @@
+{
+  "common": {
+    "language": "Language",
+    "english": "English",
+    "spanish": "Español",
+    "languageSaveFailed": "Could not save language preference.",
+    "save": "Save",
+    "saved": "Saved.",
+    "loading": "Loading…",
+    "error": "Something went wrong.",
+    "networkError": "Network error. Please try again."
+  },
+  "marketing": {
+    "nav": {
+      "features": "Features",
+      "pricing": "Pricing",
+      "integrations": "Integrations",
+      "industries": "Industries",
+      "faq": "FAQ",
+      "about": "About",
+      "contact": "Contact",
+      "privacy": "Privacy Policy",
+      "terms": "Terms of Service",
+      "signIn": "Sign in",
+      "getStarted": "Get Started",
+      "brand": "New Coworker"
+    },
+    "footer": {
+      "product": "Product",
+      "company": "Company",
+      "legal": "Legal",
+      "vsGohighlevel": "vs GoHighLevel",
+      "tagline": "Your AI employee that answers calls, texts, and emails around the clock, on infrastructure dedicated to your business.",
+      "copyright": "All rights reserved.",
+      "forAi": "For AI assistants"
+    },
+    "home": {
+      "metaDescription": "New Coworker gives your business a 24/7 AI employee to answer calls, handle messages, book appointments, and keep operations moving.",
+      "heroTitle": "Your AI employee that",
+      "heroHighlight": "never sleeps",
+      "heroSubtitle": "New Coworker answers calls, texts, and emails around the clock: booking appointments, following up with leads, and remembering every customer. Built for all businesses.",
+      "startFor": "Start for {price}",
+      "seePricing": "See pricing",
+      "comparePlans": "Compare plans",
+      "tryNow": "Try it right now",
+      "callDemoTitle": "Don't take our word for it — call our AI coworker",
+      "callDemoBody": "Our own coworker answers this line 24/7. Ask it anything about New Coworker: what it can do, pricing, how setup works. It can even text you a follow-up.",
+      "featuresTitle": "Everything your business needs,",
+      "featuresHighlight": "handled",
+      "featuresSubtitle": "Not a chatbot. A trained coworker that answers, acts, books, and follows up across every channel.",
+      "howEyebrow": "How it works",
+      "howTitle": "Live in minutes, not weeks",
+      "howSubtitle": "Signup to first answered call is fully automated. No IT project, no sales call required.",
+      "privacyEyebrow": "Privacy-first by design",
+      "privacyTitle": "Your business runs on its own private server",
+      "privacyBody": "Unlike shared AI platforms, every New Coworker business gets its own dedicated server running its AI coworker, with its own credentials and configuration. Your data is isolated per business, never shared with other companies, and always yours.",
+      "plansFrom": "Plans from",
+      "plansTeaser": "A fraction of the cost of a receptionist or answering service, with a 30-day money-back guarantee on every plan.",
+      "ctaTitle": "Ready to hire your New Coworker?",
+      "ctaSubtitle": "New coworker starts learning from day one.",
+      "ctaLabel": "Choose your plan",
+      "ogTitle": "Your AI employee that never sleeps",
+      "ogDescription": "Answer calls, texts, and emails around the clock with New Coworker."
+    },
+    "stats": {
+      "stat1Value": "24/7",
+      "stat1Label": "Every call and text answered: nights, weekends, holidays",
+      "stat2Value": "{calls} calls",
+      "stat2Label": "Handled at once, so there are no busy signals during your rush",
+      "stat3Value": "8,000+",
+      "stat3Label": "Everyday apps connected through Zapier, no code required",
+      "stat4Value": "1 server",
+      "stat4Label": "Dedicated to your business, so business stays your business"
+    },
+    "features": {
+      "voiceCoworker": {
+        "title": "AI Voice Coworker",
+        "description": "Answers every call 24/7 with human-level conversation. It qualifies callers, checks your calendar, and books appointments on the spot."
+      },
+      "warmTransfer": {
+        "title": "Warm Call Transfers",
+        "description": "When a caller needs you, your coworker transfers the call to you or your team with full context. No cold handoffs."
+      },
+      "textingRcs": {
+        "title": "Texting, RCS & Auto-Replies",
+        "description": "Two-way SMS and RCS messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates."
+      },
+      "callSummaries": {
+        "title": "AI Call Summaries & Sentiment",
+        "description": "Every call lands on your dashboard with an AI summary and caller sentiment, so you know what happened without replaying audio."
+      },
+      "analyticsAlerts": {
+        "title": "Analytics & Alerts",
+        "description": "Call trends, peak hours, and answer rate at a glance, with alerts when callers are turned away so you never miss a spike."
+      },
+      "automatedWorkflows": {
+        "title": "Automated Workflows",
+        "description": "AiFlows capture leads from Meta (Facebook & Instagram) ads and text them back in seconds, follow up on schedule, route to your team, and run browser tasks."
+      },
+      "appIntegrations": {
+        "title": "8,000+ App Integrations",
+        "description": "Connect your coworker to Zapier, Google Workspace, Microsoft 365, and your CRM. One connection unlocks 8,000+ everyday business apps."
+      },
+      "permanentMemory": {
+        "title": "Permanent Memory",
+        "description": "Lossless memory learns your business over time so every call, text, and email builds on real context. Nothing gets forgotten."
+      },
+      "appointmentBooking": {
+        "title": "Appointment Booking",
+        "description": "Your coworker finds open slots on your Google or Microsoft calendar and books them mid-call, then sends the confirmation for you."
+      },
+      "complianceGuardrails": {
+        "title": "Compliance Guardrails",
+        "description": "Built-in compliance guardrails, including Fair Housing rules for real estate, protect your business from costly violations."
+      },
+      "yourDashboard": {
+        "title": "Your Dashboard",
+        "description": "Monitor calls, messages, and emails, review memory, manage notifications and billing. All in one place, on any device."
+      },
+      "deployMinutes": {
+        "title": "Deploy in Minutes",
+        "description": "One-click provisioning: your tailored assistant, dedicated server, and phone number are live minutes after signup."
+      }
+    },
+    "steps": {
+      "step1": {
+        "title": "Tell us about your business",
+        "description": "Pick a plan and answer a short questionnaire. Your coworker learns your services, hours, and how you like to work. It can even read your website."
+      },
+      "step2": {
+        "title": "We provision everything",
+        "description": "A dedicated private server, a phone number (or bring your own), email, and your trained AI coworker, all set up automatically."
+      },
+      "step3": {
+        "title": "Your coworker gets to work",
+        "description": "Calls answered, texts returned, appointments booked, leads followed up, around the clock. You watch it all from your dashboard."
+      }
+    },
+    "privacyBullets": {
+      "dedicated": "Dedicated private server per business with no shared tenancy",
+      "isolated": "Conversations and business records isolated per business, exportable any time",
+      "memory": "Permanent, lossless memory that stays under your control",
+      "security": "Deny-by-default security posture with per-business credentials"
+    }
+  },
+  "auth": {
+    "signIn": "Sign in",
+    "signInFailed": "Sign in failed",
+    "enterEmailFirst": "Enter your email first",
+    "magicLinkSent": "Check your email for a magic link.",
+    "resetSent": "Password reset email sent.",
+    "email": "Email",
+    "password": "Password",
+    "forgotPassword": "Forgot password?",
+    "sendMagicLink": "Send magic link",
+    "createAccount": "Create an account"
+  },
+  "dashboard": {
+    "nav": {
+      "dashboard": "Dashboard",
+      "tasks": "Tasks",
+      "analytics": "Analytics",
+      "chat": "Chat",
+      "calls": "Calls",
+      "messages": "Texts",
+      "messenger": "Messenger",
+      "whatsapp": "WhatsApp",
+      "aiflows": "AiFlows",
+      "agents": "Agents",
+      "webchat": "Web chat",
+      "emails": "Emails",
+      "customers": "Contacts",
+      "employees": "Employees",
+      "memory": "Memory",
+      "marketing": "Marketing",
+      "importExport": "Import / Export",
+      "integrations": "Integrations",
+      "billing": "Billing",
+      "settings": "Settings",
+      "notifications": "Notifications"
+    },
+    "settings": {
+      "accountTitle": "Account",
+      "accountBlurb": "Plan, billing, login email, and password",
+      "languageTitle": "Display language",
+      "languageBlurb": "Choose the language for your dashboard and emails. English is the default unless you change it here.",
+      "emailLabel": "Email",
+      "planLabel": "Plan",
+      "includedUsage": "Included usage",
+      "subscriptionStatus": "Subscription status",
+      "nextBilling": "Next billing date",
+      "voiceTopUps": "Voice minutes and top-ups →"
+    },
+    "contacts": {
+      "languageLabel": "Language",
+      "languageHelp": "Language your AI coworker uses with this contact. Override detection if needed.",
+      "languageDetected": "Auto-detected",
+      "languageOwnerSet": "Set by you",
+      "languageEnglish": "English",
+      "languageSpanish": "Spanish"
+    }
+  },
+  "admin": {
+    "title": "Admin",
+    "dashboard": "Dashboard",
+    "clients": "Clients",
+    "allClients": "All Clients",
+    "webchat": "Web chat",
+    "usage": "Usage",
+    "costs": "Costs",
+    "revenue": "Revenue",
+    "engagement": "Engagement",
+    "provisioning": "Provisioning",
+    "system": "System"
+  },
+  "emails": {
+    "common": {
+      "openDashboard": "Open dashboard",
+      "goToDashboard": "Go to dashboard",
+      "visitDashboard": "Visit your dashboard:",
+      "teamSignoff": "— The New Coworker Team",
+      "urgentSubject": "Urgent: {summary}",
+      "urgentBody": "Your AI Coworker flagged an urgent event: {summary}"
+    },
+    "provisioningLive": {
+      "subject": "Your AI Coworker is live!",
+      "body": "Your New Coworker is set up and ready."
+    }
+  }
+}

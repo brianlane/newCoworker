@@ -1,6 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { rateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/rate-limit";
+import { LOCALE_COOKIE } from "@/i18n/routing";
+import { isSpanishMarketingPath, stripSpanishPrefix } from "@/lib/i18n/es-routes";
 
 type AuthUser = {
   id: string;
@@ -85,6 +87,50 @@ function sourceMatchesRequestOrigin(request: NextRequest, source: string): boole
 export async function proxy(request: NextRequest) {
   const pathname = request.nextUrl.pathname;
   const method = request.method;
+
+  // --- /es/... SEO mirrors for public marketing pages ---
+  // Rewrite to the canonical unprefixed route and pin the locale cookie to
+  // Spanish. English URLs are untouched; the UI never sniffs Accept-Language.
+  if (isSpanishMarketingPath(pathname)) {
+    const canonicalPath = stripSpanishPrefix(pathname);
+    // Same limiter as the canonical English path — /es/login POSTs must not
+    // dodge the stricter AUTH bucket by riding the mirror.
+    const esConfigKey: keyof typeof RATE_LIMITS =
+      method === "POST" && canonicalPath.includes("/login") ? "AUTH" : "API";
+    const esRlConfig: RateLimitConfig = RATE_LIMITS[esConfigKey];
+    const esRlResult = rateLimit(getIdentifier(request, esConfigKey), esRlConfig);
+    if (!esRlResult.success) {
+      return new NextResponse(
+        JSON.stringify({
+          error: "TOO_MANY_REQUESTS",
+          message: "Rate limit exceeded. Please try again later.",
+          retryAfter: Math.ceil((esRlResult.reset - Date.now()) / 1000),
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/json",
+            "Retry-After": String(Math.ceil((esRlResult.reset - Date.now()) / 1000)),
+            "X-RateLimit-Limit": String(esRlResult.limit),
+            "X-RateLimit-Remaining": String(esRlResult.remaining),
+            "X-RateLimit-Reset": String(esRlResult.reset),
+          },
+        },
+      );
+    }
+    const rewriteUrl = request.nextUrl.clone();
+    rewriteUrl.pathname = canonicalPath;
+    const rewrite = NextResponse.rewrite(rewriteUrl);
+    rewrite.cookies.set(LOCALE_COOKIE, "es", {
+      path: "/",
+      sameSite: "lax",
+      maxAge: 60 * 60 * 24 * 365
+    });
+    rewrite.headers.set("X-RateLimit-Limit", String(esRlResult.limit));
+    rewrite.headers.set("X-RateLimit-Remaining", String(esRlResult.remaining));
+    rewrite.headers.set("X-RateLimit-Reset", String(esRlResult.reset));
+    return rewrite;
+  }
 
   // --- CSRF protection for state-changing API requests (skip webhooks) ---
   if (
