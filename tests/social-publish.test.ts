@@ -1,0 +1,250 @@
+/**
+ * Instagram post publishing engine (src/lib/social/publish.ts): guarded
+ * promotion, the Graph two-step, connection-gap failures with plain-words
+ * guidance, stale-publishing dead-lettering, and per-post error isolation.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => {
+    throw new Error("default client must not be used in tests");
+  })
+}));
+vi.mock("@/lib/social/db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/social/db")>()),
+  listDueScheduledPosts: vi.fn(),
+  listStalePublishingPosts: vi.fn(),
+  patchSocialPost: vi.fn(),
+  transitionSocialPost: vi.fn()
+}));
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+}));
+
+import {
+  processSocialPostSweep,
+  SOCIAL_PUBLISH_STALE_MINUTES
+} from "@/lib/social/publish";
+import {
+  listDueScheduledPosts,
+  listStalePublishingPosts,
+  patchSocialPost,
+  transitionSocialPost,
+  type SocialPostRow
+} from "@/lib/social/db";
+import type { MetaConnectionRow } from "@/lib/db/meta-connections";
+
+const BIZ = "11111111-1111-4111-8111-111111111111";
+const NOW = new Date("2026-07-18T18:00:00Z");
+
+const listDue = vi.mocked(listDueScheduledPosts);
+const listStale = vi.mocked(listStalePublishingPosts);
+const patch = vi.mocked(patchSocialPost);
+const transition = vi.mocked(transitionSocialPost);
+
+const createContainer = vi.fn();
+const publishMedia = vi.fn();
+const loadConnection = vi.fn();
+
+// The sweep only reads client/now from deps; the db mock is never dialed.
+const db = {} as never;
+
+function post(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
+  return {
+    id: "p-1",
+    business_id: BIZ,
+    caption: "Spring special!",
+    media_url: "https://cdn.test/photo.jpg",
+    media_type: "image",
+    status: "scheduled",
+    publish_at: "2026-07-18T17:00:00Z",
+    started_at: null,
+    published_at: null,
+    ig_media_id: null,
+    error_detail: null,
+    created_at: "2026-07-17T00:00:00Z",
+    updated_at: "2026-07-17T00:00:00Z",
+    ...overrides
+  };
+}
+
+function connection(overrides: Partial<MetaConnectionRow> = {}): MetaConnectionRow {
+  return {
+    id: "mc-1",
+    business_id: BIZ,
+    status: "active",
+    page_id: "page-1",
+    page_name: "Truly Insurance",
+    account_name: "Owner",
+    instagram_account_id: "ig-1",
+    instagram_username: "trulyinsurance",
+    is_active: true,
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z",
+    userToken: null,
+    pageToken: "page-tok",
+    ...overrides
+  };
+}
+
+function deps() {
+  return { client: db, createContainer, publishMedia, loadConnection, now: () => NOW };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  listDue.mockResolvedValue([]);
+  listStale.mockResolvedValue([]);
+  patch.mockResolvedValue(undefined);
+  transition.mockResolvedValue(true);
+  loadConnection.mockResolvedValue(connection());
+  createContainer.mockResolvedValue("container-1");
+  publishMedia.mockResolvedValue("media-9");
+});
+
+describe("processSocialPostSweep — publish", () => {
+  it("claims FIRST (single publisher), runs the Graph two-step, stamps published", async () => {
+    listDue.mockResolvedValue([post()]);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ promoted: 1, published: 1, failed: 0, staled: 0 });
+    // Claim precedes any Graph call — the guarded transition is the lock.
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      "scheduled",
+      { status: "publishing", started_at: NOW.toISOString() },
+      db
+    );
+    expect(transition.mock.invocationCallOrder[0]).toBeLessThan(
+      createContainer.mock.invocationCallOrder[0]
+    );
+    expect(createContainer).toHaveBeenCalledWith(
+      "ig-1",
+      "page-tok",
+      "https://cdn.test/photo.jpg",
+      "Spring special!"
+    );
+    expect(publishMedia).toHaveBeenCalledWith("ig-1", "page-tok", "container-1");
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      {
+        status: "published",
+        published_at: NOW.toISOString(),
+        ig_media_id: "media-9",
+        error_detail: null
+      },
+      db
+    );
+  });
+
+  it("a lost claim (owner cancel / overlapping sweep) skips the post untouched", async () => {
+    listDue.mockResolvedValue([post()]);
+    transition.mockResolvedValue(false);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ promoted: 0, published: 0, failed: 0 });
+    expect(createContainer).not.toHaveBeenCalled();
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("fails with owner guidance when the connection is missing, paused, IG-less, or token-less", async () => {
+    const cases: Array<[MetaConnectionRow | null, RegExp]> = [
+      [null, /connection is missing or paused/],
+      [connection({ is_active: false }), /connection is missing or paused/],
+      [connection({ status: "pending" }), /connection is missing or paused/],
+      [connection({ instagram_account_id: null }), /no linked Instagram professional account/],
+      [connection({ pageToken: null }), /missing its page credential/]
+    ];
+    for (const [conn, message] of cases) {
+      vi.clearAllMocks();
+      listDue.mockResolvedValue([post()]);
+      listStale.mockResolvedValue([]);
+      transition.mockResolvedValue(true);
+      patch.mockResolvedValue(undefined);
+      loadConnection.mockResolvedValue(conn);
+      const result = await processSocialPostSweep(deps());
+      expect(result).toMatchObject({ promoted: 1, published: 0, failed: 1 });
+      expect(result.errors[0].message).toMatch(message);
+      expect(patch).toHaveBeenCalledWith(
+        BIZ,
+        "p-1",
+        expect.objectContaining({ status: "failed", error_detail: expect.stringMatching(message) }),
+        db
+      );
+      expect(createContainer).not.toHaveBeenCalled();
+    }
+  });
+
+  it("stamps a Graph failure (truncated) and keeps sweeping the rest", async () => {
+    listDue.mockResolvedValue([post(), post({ id: "p-2" })]);
+    createContainer
+      .mockRejectedValueOnce(new Error(`boom ${"x".repeat(600)}`))
+      .mockResolvedValueOnce("container-2");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ promoted: 2, published: 1, failed: 1 });
+    const failedPatch = patch.mock.calls.find(
+      (c) => (c[2] as { status?: string }).status === "failed"
+    );
+    expect((failedPatch?.[2] as { error_detail: string }).error_detail).toHaveLength(500);
+  });
+
+  it("a non-Error Graph throw and a publish-step failure both stamp failed", async () => {
+    listDue.mockResolvedValue([post()]);
+    publishMedia.mockRejectedValue("string-throw");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ failed: 1 });
+    expect(result.errors[0].message).toBe("string-throw");
+  });
+
+  it("isolates an outcome-stamp crash to its post (collected, sweep continues)", async () => {
+    listDue.mockResolvedValue([post(), post({ id: "p-2" })]);
+    // First post's published-stamp write blows up; second post sails through.
+    patch.mockRejectedValueOnce(new Error("db down")).mockResolvedValue(undefined);
+    const result = await processSocialPostSweep(deps());
+    expect(result.published).toBe(1);
+    expect(result.errors.some((e) => e.postId === "p-1" && /db down/.test(e.message))).toBe(true);
+  });
+
+  it("stringifies a non-Error crash from the claim itself", async () => {
+    listDue.mockResolvedValue([post()]);
+    transition.mockRejectedValueOnce("claim exploded");
+    const result = await processSocialPostSweep(deps());
+    expect(result.errors[0]).toMatchObject({ postId: "p-1", message: "claim exploded" });
+  });
+});
+
+describe("processSocialPostSweep — stale dead-letter", () => {
+  it("marks stuck publishing rows failed with a duplicate-check warning, before promoting", async () => {
+    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 1, promoted: 0 });
+    expect(listStale).toHaveBeenCalledWith(
+      new Date(NOW.getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000).toISOString(),
+      db
+    );
+    expect(patch).toHaveBeenCalledWith(
+      BIZ,
+      "p-old",
+      expect.objectContaining({
+        status: "failed",
+        error_detail: expect.stringMatching(/duplicate/)
+      }),
+      db
+    );
+  });
+
+  it("collects a dead-letter stamp failure and keeps going", async () => {
+    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    patch.mockRejectedValueOnce("stamp failed");
+    const result = await processSocialPostSweep(deps());
+    expect(result.staled).toBe(0);
+    expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp failed" });
+  });
+
+  it("keeps an Error-instance dead-letter failure's message", async () => {
+    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    patch.mockRejectedValueOnce(new Error("stamp error"));
+    const result = await processSocialPostSweep(deps());
+    expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp error" });
+  });
+});

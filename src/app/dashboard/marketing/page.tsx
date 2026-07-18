@@ -14,9 +14,14 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getMetaConnection } from "@/lib/db/meta-connections";
 import { listSystemLogs } from "@/lib/db/system-logs";
 import { countContactsTagged } from "@/lib/campaigns/audience";
+import { listSocialPosts, type SocialPostRow } from "@/lib/social/db";
 import { INSTAGRAM_PROSPECT_TAG } from "@/lib/ai-flows/templates";
 import { Card } from "@/components/ui/Card";
-import { CampaignsManager } from "@/components/dashboard/CampaignsManager";
+import {
+  CampaignsManager,
+  type CalendarExtraItem
+} from "@/components/dashboard/CampaignsManager";
+import { SocialPostsManager } from "@/components/dashboard/SocialPostsManager";
 
 export const dynamic = "force-dynamic";
 
@@ -56,6 +61,26 @@ function summarizeWebhookSources(
   };
 }
 
+/** Scheduled/publishing/published IG posts as unified-calendar rows. */
+function socialCalendarExtras(posts: SocialPostRow[]): CalendarExtraItem[] {
+  const rows: CalendarExtraItem[] = [];
+  for (const p of posts) {
+    const at = p.publish_at ?? p.published_at;
+    if (!at || (p.status !== "scheduled" && p.status !== "publishing" && p.status !== "published")) {
+      continue;
+    }
+    rows.push({
+      id: p.id,
+      label: p.caption.trim() ? p.caption.slice(0, 80) : "Instagram post",
+      at,
+      statusText:
+        p.status === "published" ? "Published" : p.status === "publishing" ? "Publishing…" : "Scheduled",
+      channel: "IG"
+    });
+  }
+  return rows;
+}
+
 export default async function MarketingPage() {
   const user = await getAuthUser();
   if (!user?.email) redirect("/login?redirectTo=/dashboard/marketing");
@@ -70,9 +95,9 @@ export default async function MarketingPage() {
 
   const business = businesses?.[0] ?? null;
 
-  // Lead-sources panel reads, all best-effort: a failed read renders the
-  // panel's empty state, never takes down the campaigns surface.
-  const [metaConnection, webhookLogs, reviewCount] = business
+  // Lead-sources panel + calendar reads, all best-effort: a failed read
+  // renders the panel's empty state, never takes down the campaigns surface.
+  const [metaConnection, webhookLogs, reviewCount, socialPosts] = business
     ? await Promise.all([
         getMetaConnection(business.id, db).catch(() => null),
         listSystemLogs(
@@ -80,11 +105,13 @@ export default async function MarketingPage() {
           { source: "aiflow", search: "webhook_event_received", limit: WEBHOOK_SCAN_LIMIT },
           db
         ).catch(() => []),
-        countContactsTagged(business.id, INSTAGRAM_PROSPECT_TAG, db).catch(() => 0)
+        countContactsTagged(business.id, INSTAGRAM_PROSPECT_TAG, db).catch(() => 0),
+        listSocialPosts(business.id, db).catch(() => [] as SocialPostRow[])
       ])
-    : [null, [], 0];
+    : [null, [], 0, []];
 
   const metaActive = metaConnection?.status === "active" && metaConnection.is_active;
+  const igConnected = metaActive && Boolean(metaConnection?.instagram_account_id);
   const { counts: sourceCounts, clipped: sourcesClipped } = summarizeWebhookSources(webhookLogs);
 
   return (
@@ -210,7 +237,15 @@ export default async function MarketingPage() {
               </div>
             </div>
           </Card>
-          <CampaignsManager businessId={business.id} />
+          <SocialPostsManager
+            businessId={business.id}
+            igConnected={igConnected}
+            instagramUsername={metaConnection?.instagram_username ?? null}
+          />
+          <CampaignsManager
+            businessId={business.id}
+            calendarExtras={socialCalendarExtras(socialPosts)}
+          />
         </>
       ) : (
         <Card>

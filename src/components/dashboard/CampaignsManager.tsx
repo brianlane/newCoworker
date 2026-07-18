@@ -61,7 +61,29 @@ type AudiencePreview = {
   tags: string[];
 };
 
-export function CampaignsManager({ businessId }: { businessId: string }) {
+/**
+ * A non-email item on the unified content calendar (e.g. a scheduled
+ * Instagram post), server-fetched by the Marketing page.
+ */
+export type CalendarExtraItem = {
+  id: string;
+  /** Short display label (a caption snippet, a subject line). */
+  label: string;
+  /** The anchor instant (publish/send time). */
+  at: string;
+  /** Badge text ("Scheduled", "Published", …). */
+  statusText: string;
+  /** Channel marker rendered beside the label. */
+  channel: string;
+};
+
+export function CampaignsManager({
+  businessId,
+  calendarExtras = []
+}: {
+  businessId: string;
+  calendarExtras?: CalendarExtraItem[];
+}) {
   const [campaigns, setCampaigns] = useState<CampaignItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -190,15 +212,38 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
     }
   }
 
-  // Content calendar: scheduled + sent campaigns grouped by their month.
-  const calendar = new Map<string, CampaignItem[]>();
+  // Content calendar: scheduled + sent campaigns and any extra channel
+  // items (Instagram posts) merged into one monthly view. Rows normalize
+  // to { at, label, statusText, channel } so both render identically.
+  type CalendarRow = { id: string; at: string; label: string; statusText: string; tone: string; channel: string };
+  const calendar = new Map<string, CalendarRow[]>();
+  const pushRow = (row: CalendarRow) => {
+    const key = row.at.slice(0, 7);
+    calendar.set(key, [...(calendar.get(key) ?? []), row]);
+  };
   for (const c of campaigns) {
     const anchor = c.send_at ?? c.completed_at;
     if (!anchor || (c.status !== "scheduled" && c.status !== "sending" && c.status !== "sent")) {
       continue;
     }
-    const key = anchor.slice(0, 7);
-    calendar.set(key, [...(calendar.get(key) ?? []), c]);
+    pushRow({
+      id: c.id,
+      at: anchor,
+      label: c.subject,
+      statusText: STATUS_BADGES[c.status].text,
+      tone: STATUS_BADGES[c.status].tone,
+      channel: "Email"
+    });
+  }
+  for (const x of calendarExtras) {
+    pushRow({
+      id: x.id,
+      at: x.at,
+      label: x.label,
+      statusText: x.statusText,
+      tone: "text-signal-teal border-signal-teal/40",
+      channel: x.channel
+    });
   }
   const calendarMonths = [...calendar.keys()].sort();
 
@@ -373,15 +418,18 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
                 </p>
                 <ul className="space-y-0.5">
                   {(calendar.get(month) ?? [])
-                    .sort((a, b) => (a.send_at ?? "").localeCompare(b.send_at ?? ""))
-                    .map((c) => (
-                      <li key={c.id} className="flex items-center gap-2 text-xs">
+                    .sort((a, b) => a.at.localeCompare(b.at))
+                    .map((row) => (
+                      <li key={row.id} className="flex items-center gap-2 text-xs">
                         <span className="text-parchment/40 w-14 shrink-0">
-                          {(c.send_at ?? c.completed_at ?? "").slice(5, 10)}
+                          {row.at.slice(5, 10)}
                         </span>
-                        <span className="text-parchment/80">{c.subject}</span>
-                        <span className={`rounded border px-1 py-0 text-[10px] ${STATUS_BADGES[c.status].tone}`}>
-                          {STATUS_BADGES[c.status].text}
+                        <span className="rounded border border-parchment/15 px-1 py-0 text-[10px] uppercase tracking-wider text-parchment/45">
+                          {row.channel}
+                        </span>
+                        <span className="truncate text-parchment/80">{row.label}</span>
+                        <span className={`rounded border px-1 py-0 text-[10px] ${row.tone}`}>
+                          {row.statusText}
                         </span>
                       </li>
                     ))}

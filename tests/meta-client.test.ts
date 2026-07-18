@@ -24,6 +24,7 @@ import {
   subscribeWabaToApp,
   unsubscribeWabaFromApp,
   buildMetaLoginUrl,
+  createInstagramMediaContainer,
   createMetaOAuthState,
   exchangeCodeForToken,
   exchangeForLongLivedToken,
@@ -36,6 +37,7 @@ import {
   getUserName,
   listManagedPages,
   metaCallbackUrl,
+  publishInstagramMedia,
   sendMessengerMessage,
   subscribePageToLeadgen,
   unsubscribePage,
@@ -308,6 +310,49 @@ describe("subscribePageToLeadgen", () => {
     await expect(subscribePageToLeadgen("p1", "page-tok")).rejects.toThrow(
       /not confirmed/
     );
+  });
+});
+
+describe("Instagram content publishing", () => {
+  it("creates a media container and returns its id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "container-1" }));
+    const id = await createInstagramMediaContainer(
+      "ig-1",
+      "page-tok",
+      "https://cdn.test/photo.jpg",
+      "Spring special!"
+    );
+    expect(id).toBe("container-1");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/v25.0/ig-1/media");
+    expect(parsed.searchParams.get("image_url")).toBe("https://cdn.test/photo.jpg");
+    expect(parsed.searchParams.get("caption")).toBe("Spring special!");
+    expect(parsed.searchParams.get("access_token")).toBe("page-tok");
+  });
+
+  it("rejects a container response without an id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    await expect(
+      createInstagramMediaContainer("ig-1", "page-tok", "https://x.test/a.jpg", "")
+    ).rejects.toThrow(/no id/);
+  });
+
+  it("publishes a container and returns the media id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "media-9" }));
+    const id = await publishInstagramMedia("ig-1", "page-tok", "container-1");
+    expect(id).toBe("media-9");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/v25.0/ig-1/media_publish");
+    expect(parsed.searchParams.get("creation_id")).toBe("container-1");
+  });
+
+  it("rejects a publish response without an id", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { id: "" }));
+    await expect(publishInstagramMedia("ig-1", "page-tok", "c1")).rejects.toThrow(/no id/);
   });
 });
 

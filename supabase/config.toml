@@ -103,6 +103,9 @@ verify_jwt = false
 [functions.email-campaign-sweep]
 verify_jwt = false
 
+[functions.social-post-sweep]
+verify_jwt = false
+
 [functions.hardware-escalation-advisor]
 verify_jwt = false
 
