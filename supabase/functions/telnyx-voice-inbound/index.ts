@@ -146,7 +146,7 @@ type MissedCallSupabase = {
 };
 
 /**
- * Text the owner that the AI receptionist couldn't take a live call because the
+ * Text the owner that the AI coworker couldn't take a live call because the
  * shared AI budget is exhausted. Reuses the tenant's existing SMS fallback
  * config (`business_telnyx_settings`) — same gate the voice-bridge's missed-call
  * SMS uses: only fires when `sms_fallback_enabled` is on AND a forward number +
@@ -185,7 +185,7 @@ async function sendMissedAiCallSms(
       (bizRow as { name?: string | null } | null)?.name || "your business";
     const caller = params.callerE164 || "an unknown number";
     const text =
-      `[${businessName}] your AI receptionist couldn't take a live call from ${caller} ` +
+      `[${businessName}] your AI coworker couldn't take a live call from ${caller} ` +
       `because the AI budget for this billing period is used up. Please call them back, ` +
       `or add budget from your dashboard.`;
     const res = await telnyxSendSms({
@@ -1315,7 +1315,7 @@ serve(async (req: Request) => {
   // earlier speak-only paths consume NO AI budget, so an exhausted pool must not
   // preempt their intended messages with the "please text us" refusal.
   //
-  // The AI receptionist's Gemini spend (voice_task via the router + Gemini Live
+  // The AI coworker's Gemini spend (voice_task via the router + Gemini Live
   // via the bridge) is billed to the SAME $5/$10 AI budget pool as owner chat +
   // SMS (`owner_chat_model_spend`). Chat/SMS degrade to a local model when the
   // pool is exhausted, but a LIVE voice call can't — so this is a hard stop:

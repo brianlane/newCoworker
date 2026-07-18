@@ -1,6 +1,6 @@
 -- Dedup ledger for warm-transfer SMS notifications.
 --
--- Every voice warm transfer (AI receptionist transfer_to_owner, AiFlow
+-- Every voice warm transfer (AI coworker transfer_to_owner, AiFlow
 -- live-transfer handoff chain, caller-rule blind transfer) fires an outcome SMS
 -- to the recipient (and the owner when the recipient isn't the owner) from the
 -- Telnyx webhook handler (telnyx-voice-call-end). Telnyx retries webhooks and

@@ -492,7 +492,7 @@ async function sendMissedCallSms(params: {
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   if (!apiKey) return;
   const text =
-    `[${businessName}] your AI receptionist couldn't take a live call from ${callerE164}. ` +
+    `[${businessName}] your AI coworker couldn't take a live call from ${callerE164}. ` +
     `Please call them back. (Reason: ${reason.slice(0, 80)})`;
   const res = await telnyxSendPlainSms(apiKey, {
     toE164: settings.forwardToE164,

@@ -48,7 +48,7 @@ export const metadata: Metadata = {
   keywords: [
     "AI employee",
     "AI call answering",
-    "AI receptionist",
+    "AI coworker",
     "business automation",
     "virtual assistant for business"
   ],
