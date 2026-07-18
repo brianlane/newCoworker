@@ -35,6 +35,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   notificationCategoryEnabled,
   resolveNotificationCategory,
@@ -368,10 +369,44 @@ export async function dispatchUrgentNotification(
       // Jul 14 2026 policy) but never REFUSED: "operational" mode counts
       // the send (plan/bonus/overage) without the hard stop, so the cap
       // alert itself can outrun the cap it reports.
-      await sendTelnyxSms(config, targets.phone, text, {
-        meterBusinessId: input.businessId,
-        meterMode: "operational"
-      });
+      const { id: telnyxMessageId, channel: sentChannel } = await sendTelnyxSms(
+        config,
+        targets.phone,
+        text,
+        {
+          meterBusinessId: input.businessId,
+          meterMode: "operational"
+        }
+      );
+      // Best-effort durable log so the alert renders in the owner's dashboard
+      // Messages thread (merged from sms_outbound_log — see
+      // src/lib/db/sms-history.ts). Mirrors the notifications Edge function.
+      // A failed insert must not fail the dispatch — the SMS already went out.
+      try {
+        const db = await createSupabaseServiceClient();
+        const { error: logErr } = await db.from("sms_outbound_log").insert({
+          business_id: input.businessId,
+          to_e164: targets.phone,
+          from_e164: config.fromE164 ?? null,
+          body: text,
+          source: "owner_alert",
+          run_id: null,
+          flow_id: null,
+          telnyx_message_id: telnyxMessageId,
+          channel: sentChannel
+        });
+        if (logErr) {
+          logger.warn("notifications.dispatch: owner_alert outbound log insert failed", {
+            businessId: input.businessId,
+            error: logErr.message
+          });
+        }
+      } catch (logCatchErr) {
+        logger.warn("notifications.dispatch: owner_alert outbound log insert threw", {
+          businessId: input.businessId,
+          error: logCatchErr instanceof Error ? logCatchErr.message : String(logCatchErr)
+        });
+      }
       results.push(
         await recordRow(input.businessId, "sms", "sent", summary, kind, {
           ...payload,

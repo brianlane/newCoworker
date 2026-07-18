@@ -116,6 +116,11 @@ export function buildMessengerPreamble(
       : "The person's name is not known yet — ask naturally when it helps.",
     "Keep replies short, warm, and human — this is a casual chat surface, not email.",
     "You cannot send SMS or email from this conversation. If follow-up outside this chat is needed, capture their phone number with the lead tool.",
+    // Grounded capture (messenger twin of the SMS worker's grounded-actions
+    // line): the live e2e harness caught the model telling a visitor "I've
+    // captured your number — someone will text you shortly" with NO
+    // capture_lead call behind it, which silently loses the lead.
+    "Recording a visitor's contact details for the team happens ONLY through the capture_lead tool — never tell them their details were noted, captured, or passed along unless that tool call succeeded in this conversation.",
     `sessionRef (pass verbatim to capture_lead): ${conversation.id}`,
     `Current datetime: ${now.toISOString()}`
   ];

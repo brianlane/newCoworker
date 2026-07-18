@@ -102,6 +102,27 @@ describe("planLifecycleAction: cancelWithRefund", () => {
     );
   });
 
+  it("threads the route-computed billable-usage carve-out onto the refund op", () => {
+    const ctx = makeCtx({ billableUsageCents: 1234 });
+    const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    expect(res.plan.stripeOps[0]).toEqual(
+      expect.objectContaining({
+        type: "refund_latest_charge",
+        usageCarveOutCents: 1234
+      })
+    );
+  });
+
+  it("defaults the usage carve-out to zero when the context never loaded it", () => {
+    const ctx = makeCtx({ billableUsageCents: null });
+    const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
+    if (!res.ok) throw new Error(`expected ok, got ${res.reason}`);
+    expect(res.plan.stripeOps[0]).toEqual(
+      expect.objectContaining({ usageCarveOutCents: 0 })
+    );
+  });
+
   it("produces refund + cancel + snapshot + backup + stop + auto-renew disable + grace update", () => {
     const ctx = makeCtx();
     const res = planLifecycleAction({ type: "cancelWithRefund" }, ctx);
@@ -113,7 +134,8 @@ describe("planLifecycleAction: cancelWithRefund", () => {
         type: "refund_latest_charge",
         stripeSubscriptionId: "sub_stripe_1",
         reason: "thirty_day_money_back",
-        termCarveOutCents: 0
+        termCarveOutCents: 0,
+        usageCarveOutCents: 0
       },
       { type: "cancel_subscription", stripeSubscriptionId: "sub_stripe_1", releaseSchedule: true }
     ]);

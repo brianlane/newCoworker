@@ -15,7 +15,7 @@
 
 import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
+import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { mintWebchatSessionToken } from "@/lib/webchat/keys";
 import { createWebchatSession } from "@/lib/webchat/db";
 import { resolveWidgetContext } from "@/lib/webchat/service";
@@ -24,7 +24,9 @@ import { buildVisitorMeta, webchatClientMetaSchema } from "@/lib/webchat/visitor
 export const dynamic = "force-dynamic";
 
 // New sessions are cheap rows but each one is a fresh anonymous identity —
-// keep a single IP from minting them in bulk.
+// keep a single IP from minting them in bulk. Durable (Postgres-backed) so
+// the quota binds fleet-wide instead of per Vercel isolate (audit 2026-07,
+// finding M3); it falls back to the in-memory limiter on any DB blip.
 const SESSION_RATE = { interval: 10 * 60 * 1000, maxRequests: 20 };
 
 const bodySchema = z.object({
@@ -45,7 +47,7 @@ const bodySchema = z.object({
 export async function POST(request: Request) {
   try {
     const ip = rateLimitIdentifierFromRequest(request);
-    const limiter = rateLimit(`webchat-session:${ip}`, SESSION_RATE);
+    const limiter = await rateLimitDurable(`webchat-session:${ip}`, SESSION_RATE);
     if (!limiter.success) {
       return errorResponse("CONFLICT", "Too many chat sessions, please wait a moment.", 429);
     }

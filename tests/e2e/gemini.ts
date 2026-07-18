@@ -19,7 +19,17 @@
 /** Same default the ai-flow-worker uses for extract/classify. */
 export const E2E_GEMINI_MODEL = process.env.AIFLOW_EXTRACT_MODEL ?? "gemini-2.5-flash-lite";
 
-const MAX_ATTEMPTS = 3;
+/**
+ * 5 attempts with 1s/2s/4s/8s backoff (~15s worst case). The old
+ * 3-attempt/~1.5s policy lost a whole CI run to a sustained "high demand"
+ * 503 spike (main push 2026-07-16); the suite runs file-serial, so the
+ * longer waits cost time only during an actual capacity incident.
+ */
+const MAX_ATTEMPTS = 5;
+
+export function transientBackoffMs(attempt: number): number {
+  return 1000 * 2 ** (attempt - 1);
+}
 
 export function requireGeminiKey(): string {
   const key = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
@@ -55,7 +65,7 @@ async function generateContent(
       const transient = res.status === 429 || res.status >= 500;
       if (!res.ok && transient && attempt < MAX_ATTEMPTS) {
         await res.text().catch(() => {});
-        await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+        await new Promise((r) => setTimeout(r, transientBackoffMs(attempt)));
         continue;
       }
       const body = (await res.json()) as GeminiBody;
@@ -66,7 +76,7 @@ async function generateContent(
     } catch (e) {
       lastErr = e;
       if (attempt === MAX_ATTEMPTS) throw e;
-      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+      await new Promise((r) => setTimeout(r, transientBackoffMs(attempt)));
     }
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));

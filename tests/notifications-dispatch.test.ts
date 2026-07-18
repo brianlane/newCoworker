@@ -28,6 +28,10 @@ vi.mock("@/lib/telnyx/messaging", () => ({
   }))
 }));
 
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn()
+}));
+
 import {
   dispatchUrgentNotification,
   resolveNotificationTargets
@@ -36,8 +40,9 @@ import { getBusiness } from "@/lib/db/businesses";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
-import { sendTelnyxSms } from "@/lib/telnyx/messaging";
+import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -57,6 +62,7 @@ const BUSINESS = { id: BIZ, owner_email: "owner@example.com" };
 
 describe("notifications/dispatch", () => {
   const original = process.env;
+  let outboundLogInsert: ReturnType<typeof vi.fn>;
   beforeEach(() => {
     vi.clearAllMocks();
     process.env = {
@@ -73,6 +79,15 @@ describe("notifications/dispatch", () => {
       via: "text",
       messageId: "wamid-1"
     } as never);
+    // Service client used ONLY for the best-effort owner_alert outbound-log
+    // row after a successful SMS send.
+    outboundLogInsert = vi.fn(async () => ({ error: null }));
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      from: vi.fn(() => ({ insert: outboundLogInsert }))
+    } as never);
+    // Default success shape ({ id, channel }) — the dispatcher destructures
+    // the result to stamp telnyx_message_id on the outbound-log row.
+    vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "sms_id", channel: "sms" } as never);
   });
   afterEach(() => {
     process.env = original;
@@ -125,7 +140,6 @@ describe("notifications/dispatch", () => {
 
   it("dispatchUrgentNotification writes 3 sent rows and calls senders when toggles on", async () => {
     vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
-    vi.mocked(sendTelnyxSms).mockResolvedValue("sms_id" as never);
     const result = await dispatchUrgentNotification({
       businessId: BIZ,
       summary: "URGENT call",
@@ -370,6 +384,95 @@ describe("notifications/dispatch", () => {
       .find((r) => r.delivery_channel === "sms");
     expect(smsRow?.status).toBe("failed");
     expect((smsRow?.payload as Record<string, unknown>).reason).toBe("send_failed");
+  });
+
+  describe("owner_alert outbound log (dashboard Messages thread visibility)", () => {
+    it("writes an sms_outbound_log row with source owner_alert after a successful send", async () => {
+      vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({
+        apiKey: "k",
+        messagingProfileId: "mp",
+        fromE164: "+15555550111"
+      } as never);
+      vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "tx-123", channel: "sms" } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Take over with +15555550123",
+        kind: "urgent_alert"
+      });
+      expect(outboundLogInsert).toHaveBeenCalledTimes(1);
+      expect(outboundLogInsert).toHaveBeenCalledWith({
+        business_id: BIZ,
+        to_e164: "+15555550100",
+        from_e164: "+15555550111",
+        body: expect.stringContaining("Take over with +15555550123"),
+        source: "owner_alert",
+        run_id: null,
+        flow_id: null,
+        telnyx_message_id: "tx-123",
+        channel: "sms"
+      });
+      // The sent history row is unaffected by the log write.
+      const smsRow = vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .find((r) => r.delivery_channel === "sms");
+      expect(smsRow?.status).toBe("sent");
+    });
+
+    it("logs from_e164 null when the resolved config has no from number", async () => {
+      vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({
+        apiKey: "k",
+        messagingProfileId: "mp"
+      } as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(outboundLogInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ from_e164: null, source: "owner_alert" })
+      );
+    });
+
+    it("does not log when the SMS send failed", async () => {
+      vi.mocked(sendTelnyxSms).mockRejectedValue(new Error("telnyx down"));
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(outboundLogInsert).not.toHaveBeenCalled();
+    });
+
+    it("keeps the sent status when the outbound-log insert returns an error", async () => {
+      outboundLogInsert.mockResolvedValue({ error: { message: "constraint violated" } } as never);
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "sms")?.status).toBe("sent");
+    });
+
+    it("keeps the sent status when the service client throws an Error", async () => {
+      vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("db gone"));
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "sms")?.status).toBe("sent");
+    });
+
+    it("keeps the sent status when the service client throws a non-Error (String(err) branch)", async () => {
+      vi.mocked(createSupabaseServiceClient).mockRejectedValue("plain failure");
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "sms")?.status).toBe("sent");
+    });
   });
 
   it("logs business-lookup failure with non-Error rejection (String(err) branch)", async () => {

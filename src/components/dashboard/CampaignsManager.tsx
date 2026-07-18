@@ -5,11 +5,16 @@
  *
  * Compose a campaign (subject + body + audience tag), leave it as a draft
  * or schedule it, and watch the send counters fill in as the per-minute
- * sweep drains the audience. The content calendar below groups scheduled
- * and sent campaigns by month so the marketing plan reads at a glance.
+ * sweep drains the audience. The audience field offers the directory's
+ * existing tags and previews the live recipient count (debounced through
+ * /api/dashboard/campaigns/audience) so scheduling is never a blind send —
+ * including a warning when the audience holds Instagram prospects still
+ * pending review. The content calendar below groups scheduled and sent
+ * campaigns by month so the marketing plan reads at a glance.
  */
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -49,6 +54,13 @@ function monthLabel(iso: string): string {
   });
 }
 
+type AudiencePreview = {
+  recipients: number;
+  needsReview: number;
+  clipped: boolean;
+  tags: string[];
+};
+
 export function CampaignsManager({ businessId }: { businessId: string }) {
   const [campaigns, setCampaigns] = useState<CampaignItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,6 +72,7 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
   const [audienceTag, setAudienceTag] = useState("");
   const [sendAt, setSendAt] = useState("");
   const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState<AudiencePreview | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -79,6 +92,33 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  // Debounced live audience preview: re-count as the owner edits the tag.
+  // Best-effort — a failed preview keeps the last count rather than blocking
+  // the composer (the sweep re-snapshots authoritatively at send time). The
+  // cleanup flag drops out-of-order responses: a slow response for an OLD
+  // tag must never overwrite the preview for the tag currently typed.
+  useEffect(() => {
+    let stale = false;
+    const handle = setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch(
+            `/api/dashboard/campaigns/audience?businessId=${encodeURIComponent(businessId)}&tag=${encodeURIComponent(audienceTag.trim())}`,
+            { cache: "no-store" }
+          );
+          const json = (await res.json()) as { ok: boolean; data?: AudiencePreview };
+          if (!stale && json.ok && json.data) setPreview(json.data);
+        } catch {
+          /* keep the last preview */
+        }
+      })();
+    }, 400);
+    return () => {
+      stale = true;
+      clearTimeout(handle);
+    };
+  }, [businessId, audienceTag]);
 
   async function create(asDraft: boolean) {
     if (!subject.trim() || !bodyMd.trim()) {
@@ -198,7 +238,31 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
                 onChange={(e) => setAudienceTag(e.target.value)}
                 placeholder="vip"
                 maxLength={40}
+                list="campaign-audience-tags"
               />
+              <datalist id="campaign-audience-tags">
+                {(preview?.tags ?? []).map((t) => (
+                  <option key={t} value={t} />
+                ))}
+              </datalist>
+              {preview ? (
+                <p className="mt-1 text-[11px] text-parchment/50">
+                  Reaches{" "}
+                  <span className="text-parchment/80">
+                    {preview.clipped ? "at least " : ""}
+                    {preview.recipients.toLocaleString()}
+                  </span>{" "}
+                  contact{preview.recipients === 1 ? "" : "s"} right now
+                  {preview.needsReview > 0 ? (
+                    <span className="text-spark-orange">
+                      {" "}
+                      — includes {preview.needsReview} Instagram prospect
+                      {preview.needsReview === 1 ? "" : "s"} pending review (scraped, never
+                      opted in — review them before emailing)
+                    </span>
+                  ) : null}
+                </p>
+              ) : null}
             </div>
             <div>
               <label className={labelClass}>Send at</label>
@@ -225,7 +289,12 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
           )}
           <p className="text-[11px] text-parchment/40">
             Sends go out from your AI mailbox in batches, only to customers who haven&apos;t
-            unsubscribed from marketing. Replies go to your email.
+            unsubscribed from marketing. Replies go to your email. Want a text follow-up for
+            the same audience? Build it as an{" "}
+            <Link href="/dashboard/aiflows" className="text-signal-teal hover:underline">
+              AiFlow
+            </Link>{" "}
+            — texts need each contact&apos;s SMS consent.
           </p>
         </div>
       </Card>

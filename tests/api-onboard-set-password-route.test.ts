@@ -27,9 +27,18 @@ vi.mock("@/lib/email/verification-token", () => ({
   createEmailVerificationToken: vi.fn(() => "test-verification-token")
 }));
 
+vi.mock("@/lib/rate-limit", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/rate-limit")>("@/lib/rate-limit");
+  return {
+    ...actual,
+    rateLimitDurable: vi.fn()
+  };
+});
+
 import { POST } from "@/app/api/onboard/set-password/route";
 import { findAuthUserIdByEmail } from "@/lib/auth";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { rateLimitDurable } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
@@ -87,6 +96,35 @@ describe("api/onboard/set-password route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStripeSession();
+    vi.mocked(rateLimitDurable).mockResolvedValue({
+      success: true,
+      limit: 10,
+      remaining: 9,
+      reset: Date.now() + 900000
+    });
+  });
+
+  it("returns 429 when the durable per-IP rate limit is exhausted (audit M3)", async () => {
+    vi.mocked(rateLimitDurable).mockResolvedValue({
+      success: false,
+      limit: 10,
+      remaining: 0,
+      reset: Date.now() + 900000
+    });
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.ok).toBe(false);
+    expect(getStripe).not.toHaveBeenCalled();
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+    expect(rateLimitDurable).toHaveBeenCalledWith(
+      expect.stringMatching(/^onboard-set-password:/),
+      expect.objectContaining({ maxRequests: 10 })
+    );
   });
 
   it("mints a brand-new auth user without ever calling updateUserById", async () => {

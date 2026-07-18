@@ -73,6 +73,16 @@ export type StripeOp =
        * stays a dumb subtractor.
        */
       termCarveOutCents: number;
+      /**
+       * Billable-usage refund policy (Jul 2026): the tenant's third-party
+       * usage charges — SMS, voice minutes, Gemini spend — are non-refundable
+       * (we already paid the vendors), so they are withheld from the refund
+       * at platform cost. Computed by the refund routes via
+       * src/lib/billing/usage-charges.ts and threaded through
+       * {@link LifecycleContext.billableUsageCents}; the executor stays a
+       * dumb subtractor here too.
+       */
+      usageCarveOutCents: number;
     };
 
 export type HostingerOp =
@@ -316,6 +326,14 @@ export type LifecycleContext = {
   didE164?: string | null;
   /** Most recent Stripe invoice amount we're likely to refund, for the refund-issued email. */
   lastInvoiceAmountCents?: number | null;
+  /**
+   * The tenant's billable third-party usage since the refunded invoice's
+   * period start, priced at platform cost (src/lib/billing/usage-charges.ts).
+   * Computed by the refund routes (cancel / admin force-refund) — the
+   * planner stays pure and just threads it into the refund op. Null/omitted
+   * → 0 (non-refund plans never load it).
+   */
+  billableUsageCents?: number | null;
   /** Now, injected so tests can freeze it. */
   now?: Date;
 };
@@ -863,7 +881,8 @@ function buildCancelPlan(args: {
       type: "refund_latest_charge",
       stripeSubscriptionId: sub.stripe_subscription_id,
       reason: "thirty_day_money_back",
-      termCarveOutCents: termRefundCarveOutCents(sub.tier, sub.billing_period)
+      termCarveOutCents: termRefundCarveOutCents(sub.tier, sub.billing_period),
+      usageCarveOutCents: ctx.billableUsageCents ?? 0
     });
   }
   if (!skipStripeCancel && sub.stripe_subscription_id) {

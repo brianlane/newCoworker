@@ -28,6 +28,10 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
+import {
+  loadBillableUsageCarveOutCents,
+  resolveUsageCarveOutWindow
+} from "@/lib/billing/usage-charges";
 import { logger } from "@/lib/logger";
 
 // Vercel Pro allows up to 300s. The cancel flow's slow phase (SSH backup
@@ -99,10 +103,54 @@ export async function POST(request: Request) {
         ? ({ type: "cancelWithRefund" } as const)
         : ({ type: "cancelAtPeriodEnd" } as const);
 
-    const planRes = planLifecycleAction(action, ctxRes.context);
+    // Validate eligibility BEFORE loading the usage carve-out, so an
+    // ineligible caller gets the planner's typed error (refund_window_closed,
+    // refund_already_used, missing_context, …) rather than a shadowing
+    // usage_window_unknown. The planner is pure, so re-planning below with
+    // the loaded carve-out is cheap.
+    let planRes = planLifecycleAction(action, ctxRes.context);
     if (!planRes.ok) {
       // Surface typed planner errors as 409s so the UI can branch.
       return errorResponse("CONFLICT", planRes.reason, 409);
+    }
+
+    if (payload.mode === "refund") {
+      // Billable-usage carve-out (Jul 2026): the refund withholds the
+      // tenant's third-party usage charges (SMS, voice, Gemini spend) at
+      // platform cost, scoped to the refunded invoice's period. FAIL CLOSED
+      // on an unknown window or a read error — refunding money we cannot
+      // verify wasn't already spent on usage is the expensive mistake; the
+      // customer can simply retry. (For an eligible self-serve refund the
+      // window is always resolvable: the period cache, or first_paid_at
+      // while the 30-day window is open.)
+      const anchor = resolveUsageCarveOutWindow({
+        stripeCurrentPeriodStart: ctxRes.context.subscription.stripe_current_period_start,
+        profile: ctxRes.context.profile
+      });
+      if (!anchor.ok) {
+        return errorResponse("CONFLICT", anchor.reason, 409);
+      }
+      let billableUsageCents: number;
+      try {
+        ({ cents: billableUsageCents } = await loadBillableUsageCarveOutCents(
+          business.id,
+          anchor.window
+        ));
+      } catch (err) {
+        logger.error("billable-usage carve-out load failed on /api/billing/cancel", {
+          businessId: business.id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse(
+          "INTERNAL_SERVER_ERROR",
+          "Could not verify usage charges; please retry",
+          500
+        );
+      }
+      planRes = planLifecycleAction(action, { ...ctxRes.context, billableUsageCents });
+      if (!planRes.ok) {
+        return errorResponse("CONFLICT", planRes.reason, 409);
+      }
     }
 
     const extra = {

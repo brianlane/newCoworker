@@ -56,8 +56,12 @@ import {
   executeLifecyclePlanFastPhase,
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
+import {
+  loadBillableUsageCarveOutCents,
+  resolveUsageCarveOutWindow
+} from "@/lib/billing/usage-charges";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
-import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
+import { getCustomerProfileById, upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { logAdminAction } from "@/lib/admin/audit";
 import { logger } from "@/lib/logger";
 
@@ -168,9 +172,17 @@ export async function POST(request: Request) {
       // Thread the real profile id into the lifecycle context so the
       // planner's `cancelWithRefund` precondition check sees a profile
       // (and so the rewritten plan stamps `customer_profile_id` on the
-      // `subscriptions` row for future self-serve lookups).
+      // `subscriptions` row for future self-serve lookups). Also load the
+      // upserted ROW itself — the email upsert can merge onto an existing
+      // profile whose `first_paid_at` anchors the usage carve-out window
+      // below when the Stripe period cache is cold; leaving `profile` null
+      // here would fail that refund with a spurious usage_window_unknown.
+      // Best-effort (`getCustomerProfileById` returns null on error): a
+      // missing row just keeps the pre-existing fail-closed behavior.
+      const upsertedProfile = await getCustomerProfileById(profileIdForPlan);
       effectiveCtx = {
         ...ctxRes.context,
+        profile: upsertedProfile,
         subscription: {
           ...ctxRes.context.subscription,
           customer_profile_id: profileIdForPlan
@@ -178,7 +190,51 @@ export async function POST(request: Request) {
       };
     }
 
-    const plan = buildAdminForceRefundPlan(effectiveCtx);
+    // Validate the plan BEFORE loading the usage carve-out so structural
+    // blockers (no Stripe subscription, …) surface as their own typed 409s
+    // rather than a shadowing usage_window_unknown. The planner is pure, so
+    // rebuilding below with the loaded carve-out is cheap.
+    let plan = buildAdminForceRefundPlan(effectiveCtx);
+    if (!plan.ok) {
+      return errorResponse("CONFLICT", plan.reason, 409);
+    }
+
+    // Billable-usage carve-out (Jul 2026): like the self-serve refund, the
+    // admin force-refund withholds the tenant's third-party usage charges
+    // (SMS, voice, Gemini spend) at platform cost, scoped to the refunded
+    // invoice's period. FAIL CLOSED both on an unknown window (long-lived
+    // subscription with a cold Stripe-period cache — run
+    // scripts/backfill-stripe-subscription-periods.ts, then retry) and on
+    // a read error — refunding money already spent on usage cannot be
+    // clawed back.
+    const anchor = resolveUsageCarveOutWindow({
+      stripeCurrentPeriodStart: effectiveCtx.subscription.stripe_current_period_start,
+      profile: effectiveCtx.profile
+    });
+    if (!anchor.ok) {
+      logger.warn("admin.force-refund: usage carve-out window unknown", {
+        adminEmail: admin.email,
+        businessId: body.businessId
+      });
+      return errorResponse("CONFLICT", anchor.reason, 409);
+    }
+    try {
+      const { cents } = await loadBillableUsageCarveOutCents(body.businessId, anchor.window);
+      effectiveCtx = { ...effectiveCtx, billableUsageCents: cents };
+    } catch (err) {
+      logger.error("admin.force-refund: billable-usage carve-out load failed", {
+        adminEmail: admin.email,
+        businessId: body.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        "Could not verify usage charges; please retry",
+        500
+      );
+    }
+
+    plan = buildAdminForceRefundPlan(effectiveCtx);
     if (!plan.ok) {
       return errorResponse("CONFLICT", plan.reason, 409);
     }
