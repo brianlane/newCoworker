@@ -47,21 +47,25 @@ const TOPIC_DEFS = [
  * Known ?topic= values map to a prefilled form subject so CTAs elsewhere
  * (e.g. the white-glove lead button on /pricing and /dashboard/billing) land
  * as labeled leads. The message template gets the business name when the
- * visitor is a signed-in owner, so the lead arrives ready to send.
+ * visitor is a signed-in owner, so the lead arrives ready to send. Both
+ * subject and message render in the visitor's locale (the form is editable
+ * prefill — ops reads the lead in whichever language it arrives in).
  */
-const TOPIC_SUBJECTS: Record<string, string> = {
-  "white-glove": "White-glove onboarding",
-  enterprise: "Enterprise inquiry",
-  support: "Support request"
-};
-
-const TOPIC_MESSAGES: Record<string, (businessName: string | null) => string> = {
-  "white-glove": (businessName) =>
-    `Hi, I'm interested in white-glove onboarding${businessName ? ` for ${businessName}` : ""}. Please reach out to talk through setup, number porting, training, and pricing.`,
-  enterprise: (businessName) =>
-    `Hi, I'd like to talk about an Enterprise plan${businessName ? ` for ${businessName}` : ""}. Please reach out with next steps.`,
-  support: (businessName) =>
-    `Hi, I need help with${businessName ? ` ${businessName}'s` : " my"} account. Here's what's going on: `
+const TOPIC_DEFS_BY_PARAM: Record<
+  string,
+  { subjectKey: string; msgKey: string; msgForKey: string }
+> = {
+  "white-glove": {
+    subjectKey: "subjectWhiteGlove",
+    msgKey: "msgWhiteGlove",
+    msgForKey: "msgWhiteGloveFor"
+  },
+  enterprise: {
+    subjectKey: "subjectEnterprise",
+    msgKey: "msgEnterprise",
+    msgForKey: "msgEnterpriseFor"
+  },
+  support: { subjectKey: "subjectSupport", msgKey: "msgSupport", msgForKey: "msgSupportFor" }
 };
 
 /**
@@ -111,12 +115,14 @@ export default async function ContactPage({
 }) {
   const t = await getTranslations("marketing.contactPage");
   const { topic } = await searchParams;
-  const defaultSubject = topic ? TOPIC_SUBJECTS[topic] : undefined;
+  const topicDef = topic ? TOPIC_DEFS_BY_PARAM[topic] : undefined;
   const prefill = await resolvePrefill();
-  const defaultMessage =
-    topic && TOPIC_MESSAGES[topic]
-      ? TOPIC_MESSAGES[topic](prefill.businessName ?? null)
-      : undefined;
+  const defaultSubject = topicDef ? t(topicDef.subjectKey) : undefined;
+  const defaultMessage = topicDef
+    ? prefill.businessName
+      ? t(topicDef.msgForKey, { businessName: prefill.businessName })
+      : t(topicDef.msgKey)
+    : undefined;
 
   const topics = TOPIC_DEFS.map(({ key, Icon }) => ({
     title: t(`${key}.title`),
