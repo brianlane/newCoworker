@@ -55,9 +55,15 @@ describe("bad-phone-report classify (live Gemini)", () => {
     expect(CLASSIFY.question).toBeTruthy();
   });
 
-  it.each(CASES)('"%s" → %s', async (reply, want) => {
-    const prompt = buildClassifyPrompt(CLASSIFY.categories, reply, CLASSIFY.question);
-    const text = await geminiJson(prompt);
-    expect(parseClassifyChoice(text, CLASSIFY.categories)).toBe(want);
-  });
+  // Explicit loop instead of it.each so every single-shot boundary
+  // classification carries the suite-standard { retry: 1 } — the near-miss
+  // cases sit right on the category line and a lone marginal draw must not
+  // fail the gated CI run.
+  for (const [reply, want] of CASES) {
+    it(`"${reply}" → ${want}`, { retry: 1, timeout: 60_000 }, async () => {
+      const prompt = buildClassifyPrompt(CLASSIFY.categories, reply, CLASSIFY.question);
+      const text = await geminiJson(prompt);
+      expect(parseClassifyChoice(text, CLASSIFY.categories)).toBe(want);
+    });
+  }
 });
