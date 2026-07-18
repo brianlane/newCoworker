@@ -244,18 +244,40 @@ export async function ensureCalendlyWebhookSubscription(
     if (first !== "conflict") return first;
 
     // Conflict: an earlier subscription for this callback still exists but
-    // its signing key is unrecoverable — delete it and re-create once.
-    const listRes = await request(businessId, conn, {
-      endpoint: "/webhook_subscriptions",
-      method: "GET",
-      params: { organization: orgUri, user: userUri, scope: "user", count: "100" }
-    });
-    const stale = ((listRes?.data as SubscriptionListing | undefined)?.collection ?? []).find(
-      (s) => s?.callback_url === callbackUrl && typeof s.uri === "string" && s.uri.length > 0
-    );
+    // its signing key is unrecoverable — delete it and re-create once. The
+    // stale hook may belong to a PREVIOUS Calendly user in the same
+    // organization (account switch — Bugbot on PR #746), so when the
+    // user-scoped listing misses, fall back to the organization-scoped one;
+    // that lookup (and the delete after it) is permission-dependent, so a
+    // refusal degrades to the recorded error and the polling sweep.
+    const findStale = async (
+      params: Record<string, string>
+    ): Promise<{ uri: string } | null> => {
+      try {
+        const listRes = await request(businessId, conn, {
+          endpoint: "/webhook_subscriptions",
+          method: "GET",
+          params: { organization: orgUri, count: "100", ...params }
+        });
+        const hit = ((listRes?.data as SubscriptionListing | undefined)?.collection ?? []).find(
+          (s) => s?.callback_url === callbackUrl && typeof s.uri === "string" && s.uri.length > 0
+        );
+        return hit ? { uri: hit.uri as string } : null;
+      } catch (err) {
+        logger.warn("calendly webhook conflict listing failed", {
+          businessId,
+          scope: params.scope,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return null;
+      }
+    };
+    const stale =
+      (await findStale({ user: userUri, scope: "user" })) ??
+      (await findStale({ scope: "organization" }));
     if (!stale) return await record("error");
     await request(businessId, conn, {
-      endpoint: `/webhook_subscriptions/${encodeURIComponent(resourceUuid(stale.uri as string))}`,
+      endpoint: `/webhook_subscriptions/${encodeURIComponent(resourceUuid(stale.uri))}`,
       method: "DELETE"
     });
     const second = await create();

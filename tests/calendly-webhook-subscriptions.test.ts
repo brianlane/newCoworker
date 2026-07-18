@@ -411,27 +411,84 @@ describe("ensureCalendlyWebhookSubscription", () => {
     });
   });
 
+  it("recovers a same-org account switch: the stale hook only shows in the ORG listing", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
+    const callback = calendlyWebhookCallbackUrl(BIZ);
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockRejectedValueOnce({ status: 409 }) // first create
+      .mockResolvedValueOnce({ data: { collection: [] } }) // user listing: miss
+      .mockResolvedValueOnce({
+        // org listing: the previous user's hook holds our callback
+        data: {
+          collection: [
+            { uri: "https://api.calendly.com/webhook_subscriptions/OLDUSER", callback_url: callback }
+          ]
+        }
+      })
+      .mockResolvedValueOnce({ data: null }) // DELETE stale
+      .mockResolvedValueOnce(CREATED_RES); // second create
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "active", attempted: true });
+    expect(request).toHaveBeenNthCalledWith(4, BIZ, CONN, {
+      endpoint: "/webhook_subscriptions",
+      method: "GET",
+      params: {
+        organization: "https://api.calendly.com/organizations/O1",
+        count: "100",
+        scope: "organization"
+      }
+    });
+    expect(request).toHaveBeenNthCalledWith(5, BIZ, CONN, {
+      endpoint: "/webhook_subscriptions/OLDUSER",
+      method: "DELETE"
+    });
+  });
+
   it("records error when the conflict recovery cannot find or re-create the hook", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
-    // Listing has no matching callback.
+    // Neither listing has a matching callback.
     const requestNoMatch = vi
       .fn()
       .mockResolvedValueOnce(USER_RES)
       .mockRejectedValueOnce({ status: 409 })
-      .mockResolvedValueOnce({ data: { collection: [{ callback_url: "https://elsewhere", uri: "https://api.calendly.com/webhook_subscriptions/X" }] } });
+      .mockResolvedValueOnce({ data: { collection: [{ callback_url: "https://elsewhere", uri: "https://api.calendly.com/webhook_subscriptions/X" }] } })
+      .mockResolvedValueOnce({ data: { collection: [] } });
     expect(
       await ensureCalendlyWebhookSubscription(BIZ, CONN, { request: requestNoMatch, nowMs: NOW }, db)
     ).toEqual({ status: "error", attempted: true });
 
-    // Listing itself refused (null) → nothing to recover.
+    // Listings refused (null) / throwing (permission-gated org scope) →
+    // nothing to recover, warn only.
     const requestNullList = vi
       .fn()
       .mockResolvedValueOnce(USER_RES)
       .mockRejectedValueOnce({ status: 409 })
-      .mockResolvedValueOnce(null);
+      .mockResolvedValueOnce(null)
+      .mockRejectedValueOnce(new Error("org listing forbidden"));
     expect(
       await ensureCalendlyWebhookSubscription(BIZ, CONN, { request: requestNullList, nowMs: NOW }, db)
     ).toEqual({ status: "error", attempted: true });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "calendly webhook conflict listing failed",
+      expect.objectContaining({ businessId: BIZ, scope: "organization", error: "org listing forbidden" })
+    );
+
+    // Non-Error listing failures are stringified in the same warn.
+    const requestStrThrow = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockRejectedValueOnce({ status: 409 })
+      .mockRejectedValueOnce("user listing sad")
+      .mockResolvedValueOnce({ data: { collection: [] } });
+    expect(
+      await ensureCalendlyWebhookSubscription(BIZ, CONN, { request: requestStrThrow, nowMs: NOW }, db)
+    ).toEqual({ status: "error", attempted: true });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "calendly webhook conflict listing failed",
+      expect.objectContaining({ scope: "user", error: "user listing sad" })
+    );
 
     // Second create conflicts again.
     const callback = calendlyWebhookCallbackUrl(BIZ);
