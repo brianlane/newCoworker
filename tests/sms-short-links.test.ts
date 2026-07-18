@@ -156,6 +156,9 @@ describe("extractShortenableUrls", () => {
     ).toEqual([]);
     // Mid-path dotted segment of a larger token ⇒ not a match.
     expect(extractShortenableUrls(`see docs/${bareUrl} in the repo`, BASE)).toEqual([]);
+    // Malformed scheme ("https:" without "//") ⇒ the host segment must NOT
+    // be swapped out from under the stray prefix.
+    expect(extractShortenableUrls(`go https:${bareUrl} now`, BASE)).toEqual([]);
   });
 
   it("skips our own short links even when typed without the scheme or www", () => {

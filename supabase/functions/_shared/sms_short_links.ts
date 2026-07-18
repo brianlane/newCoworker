@@ -76,10 +76,11 @@ export function shortLinkUrl(baseUrl: string, code: string): string {
 //      ("calendly.com/james/intro-call") — dotted labels ending in an
 //      alphabetic TLD, then a REQUIRED "/path" (so plain "example.com" in
 //      prose, filenames, and version numbers like "1.2.3" never match). The
-//      lookbehind keeps it off email tails ("john@x.com/…") and the middle
-//      of larger tokens.
+//      lookbehind keeps it off email tails ("john@x.com/…"), the middle of
+//      larger tokens, and hosts right after a scheme-ish "xyz:" prefix
+//      (a malformed "https:x.com/a" must not get its host segment swapped).
 const URL_RE =
-  /https?:\/\/[^\s<>"']+|(?<![\w@.\/-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}\/[^\s<>"']+/gi;
+  /https?:\/\/[^\s<>"']+|(?<![\w@.\/:-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}\/[^\s<>"']+/gi;
 
 /** Bare-domain matches get https:// so the stored redirect target is absolute. */
 export function ensureUrlScheme(url: string): string {
