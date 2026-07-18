@@ -31,8 +31,6 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 
 const VOICE_TOOLS_MODEL = "gemini-2.5-flash";
 
-const CALLER = "+16025550137";
-
 /** The REAL bridge instruction: customer persona, tools on, no transfer. */
 const SYSTEM = systemInstructionForBusiness(
   "Harbor Nail Studio",
@@ -272,18 +270,19 @@ describe("voice booking flow (live model, real bridge declarations)", () => {
   // harness; see the never-invent contract below for what IS hard mid-call.
 
   it("never invents a phone number for the follow-up text", () => {
-    // The instruction: the assistant already has the caller's number (their
-    // ANI) and must "never invent or guess ... phone numbers". The tool's
-    // toE164 "defaults to the caller's ANI if omitted" — so any explicit
-    // toE164 must be the caller's real number, never a made-up one (the
-    // first main run sent the confirmation text to +15551234567). Also the
-    // receptionist must never ask the caller to read their number back.
+    // The instruction: "never invent or guess ... phone numbers", and the
+    // tool contract says texting the CALLER means OMITTING the destination
+    // (it defaults to their ANI, which the model cannot see — the number is
+    // never in the prompt). Sarah dictated no other number in this scenario,
+    // so ANY explicit destination is an invention — the first main run sent
+    // the confirmation text to a made-up +15551234567.
     for (const call of [...openCalls, ...pickCalls]) {
       if (call.name !== "send_follow_up_sms" && call.name !== "document_share") continue;
-      const to = digits(call.args.toE164 ?? call.args.phone ?? "");
-      if (to.length > 0) {
-        expect(to, `call: ${JSON.stringify(call)}`).toBe(digits(CALLER));
-      }
+      expect(
+        digits(call.args.toE164 ?? call.args.phone ?? ""),
+        `explicit destination on ${JSON.stringify(call)} — no number was dictated, ` +
+          "so the arg must be omitted (it defaults to the caller's ANI)"
+      ).toBe("");
     }
   });
 
