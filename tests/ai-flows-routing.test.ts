@@ -17,6 +17,7 @@ describe("parseRouting", () => {
   it("passes well-formed fields through and returns a copy", () => {
     const raw = {
       offered: "+15550001111",
+      route_step_id: "s_route",
       offered_log: ["+15550001111", "+15550002222"],
       tried: ["+15550001111"],
       claimed_by: "+15550002222",
@@ -37,6 +38,7 @@ describe("parseRouting", () => {
     const parsed = parseRouting({
       offered: 42,
       claimed_by: { nested: true },
+      route_step_id: 7,
       step_index: "3",
       tried: "not-an-array",
       offered_log: [1, "+15550001111", null],
@@ -49,6 +51,7 @@ describe("parseRouting", () => {
     });
     expect(parsed.offered).toBeUndefined();
     expect(parsed.claimed_by).toBeUndefined();
+    expect(parsed.route_step_id).toBeUndefined();
     expect(parsed.step_index).toBeUndefined();
     expect(parsed.tried).toBeUndefined();
     // Arrays are filtered to their string members, not dropped wholesale.

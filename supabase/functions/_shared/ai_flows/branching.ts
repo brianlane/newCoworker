@@ -120,3 +120,71 @@ export function isOnActivePath(
   }
   return true;
 }
+
+/** Engine var carrying the STEP ID the run's `current_step` index points at. */
+export const RESUME_STEP_ID_VAR = "__resume_step_id";
+
+/** Marker recorded when `current_step` points past the last step (run done). */
+export const RESUME_END_MARKER = "__end__";
+
+/** The marker value to persist alongside a `current_step: index` write. */
+export function resumeMarkerFor(flat: FlatStepEntry[], index: number): string {
+  return flat[index]?.step.id ?? RESUME_END_MARKER;
+}
+
+/**
+ * Resolve where a parked run should resume in the CURRENT definition's
+ * flattened order.
+ *
+ * `current_step` is a flat integer index — only stable while the definition
+ * never changes. Editing a flow while runs are parked shifts every index, and
+ * a stale index re-executes arbitrary steps (a lead once got the greeting +
+ * two nudges re-sent back-to-back this way). The marker var pins the STEP ID
+ * the index pointed at when the run parked, so a resume against an edited
+ * definition relocates to that step instead of marching from a wrong index.
+ *
+ * Returns:
+ *   - the stored index when there is no marker (legacy runs) or it still
+ *     points at the marked step (unchanged definition — the common case);
+ *   - `flat.length` for the end marker (a finished cursor must never
+ *     re-execute steps appended by a later edit);
+ *   - the marked step's new index when the edit moved it;
+ *   - null when the marked step no longer exists — the caller must stop the
+ *     run rather than guess.
+ */
+export function resolveResumeIndex(
+  flat: FlatStepEntry[],
+  storedIndex: number,
+  markerId: string | null | undefined
+): number | null {
+  if (typeof markerId !== "string" || markerId.length === 0) return storedIndex;
+  if (markerId === RESUME_END_MARKER) return flat.length;
+  if (flat[storedIndex]?.step.id === markerId) return storedIndex;
+  const remapped = flat.findIndex((e) => e.step.id === markerId);
+  return remapped === -1 ? null : remapped;
+}
+
+/**
+ * Return a context copy whose resume marker matches an EXTERNALLY written
+ * `current_step` (goal jumps, route-claim rewinds — writers outside the
+ * worker's step loop). A stale marker would relocate the next resume back to
+ * wherever the run previously parked, silently undoing the jump/rewind.
+ * `markerId` null/absent DELETES the marker (resume falls back to the raw
+ * index — the pre-marker behavior).
+ */
+export function withResumeMarkerVar(
+  context: Record<string, unknown>,
+  markerId: string | null | undefined
+): Record<string, unknown> {
+  const rawVars = context.vars;
+  const vars: Record<string, unknown> =
+    rawVars && typeof rawVars === "object" && !Array.isArray(rawVars)
+      ? { ...(rawVars as Record<string, unknown>) }
+      : {};
+  if (typeof markerId === "string" && markerId.length > 0) {
+    vars[RESUME_STEP_ID_VAR] = markerId;
+  } else {
+    delete vars[RESUME_STEP_ID_VAR];
+  }
+  return { ...context, vars };
+}

@@ -61,6 +61,14 @@ export type OfferRouting = {
    */
   route_step_index?: number;
   /**
+   * The route_to_team step's ID — the definition-edit-proof companion to
+   * route_step_index. The webhook rewinds restore it as the run's resume
+   * marker (RESUME_STEP_ID_VAR) so a rewound run relocates correctly even if
+   * the flow was edited while parked. Set: worker when the route step
+   * executes. Never cleared.
+   */
+  route_step_id?: string;
+  /**
    * What just happened, for the worker to consume on resume.
    * Set: webhook (claim/reject/unclaim) or escalation sweep (timeout).
    * Cleared: worker after consuming it.
@@ -127,7 +135,8 @@ const STRING_FIELDS = [
   "claimed_name",
   "reply_from",
   "claim_timeframe",
-  "pass_reason"
+  "pass_reason",
+  "route_step_id"
 ] as const;
 const NUMBER_FIELDS = ["step_index", "route_step_index"] as const;
 const LAST_EVENTS: readonly string[] = ["claim", "reject", "timeout", "unclaim"];

@@ -100,7 +100,7 @@ export async function listLinkClickEventsForBusiness(
   if (linkIds.length === 0) return { events: [], clipped: linksClipped };
   const { data, error } = await db
     .from("sms_link_clicks")
-    .select("id, link_id, clicked_at")
+    .select("id, link_id, clicked_at, likely_prefetch")
     .eq("business_id", businessId)
     .in("link_id", linkIds)
     .gte("clicked_at", cutoffIso)

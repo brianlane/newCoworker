@@ -43,6 +43,7 @@ import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
 import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
 import { parseRouting } from "../_shared/ai_flows/routing.ts";
+import { withResumeMarkerVar } from "../_shared/ai_flows/branching.ts";
 import {
   matchLateClaimReply,
   type LateClaimCandidate
@@ -966,7 +967,13 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
   // and continues the flow exactly like an on-time "1" claim.
   if (isLate) routing.late_claim = true;
   const stepIndex = matchStepIndex;
-  const nextContext = { ...(match.context ?? {}), routing };
+  // The rewind moves current_step outside the worker's loop: restore the
+  // resume marker to the route step (edit-proof relocation), or drop a stale
+  // one on legacy runs that predate route_step_id.
+  const nextContext = withResumeMarkerVar(
+    { ...(match.context ?? {}), routing },
+    routing.route_step_id ?? null
+  );
 
   // Optimistic concurrency: gate the reopen on the revision we read (a DB
   // trigger bumps it on EVERY update). Two teammates can both reply before
@@ -1272,7 +1279,12 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
   const routing = parseRouting(match.context!.routing);
   routing.last_event = "unclaim";
   routing.reply_from = from;
-  const nextContext = { ...(match.context ?? {}), routing };
+  // Same marker refresh as the claim rewind above: current_step is being
+  // moved outside the worker's loop.
+  const nextContext = withResumeMarkerVar(
+    { ...(match.context ?? {}), routing },
+    routing.route_step_id ?? null
+  );
 
   // Optimistic concurrency: gate on the revision we read (trigger-bumped on
   // every update) so a racing duplicate "86" (or the worker mutating the row)

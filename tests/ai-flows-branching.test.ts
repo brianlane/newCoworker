@@ -9,10 +9,15 @@ import {
 } from "@/lib/ai-flows/schema";
 import {
   BRANCH_ELSE_ARM,
+  RESUME_END_MARKER,
+  RESUME_STEP_ID_VAR,
   branchChoiceVar,
   chooseBranchArm,
   flattenSteps,
-  isOnActivePath
+  isOnActivePath,
+  resolveResumeIndex,
+  resumeMarkerFor,
+  withResumeMarkerVar
 } from "../supabase/functions/_shared/ai_flows/branching";
 import { planStep } from "../supabase/functions/_shared/ai_flows/steps";
 import type { FlowStep as EngineFlowStep } from "../supabase/functions/_shared/ai_flows/types";
@@ -417,6 +422,76 @@ describe("chooseBranchArm + isOnActivePath", () => {
     // Unevaluated branch (skipped or not yet run) → children are NOT active.
     expect(isOnActivePath(path, {})).toBe(false);
     expect(isOnActivePath([], {})).toBe(true);
+  });
+});
+
+describe("resumeMarkerFor + resolveResumeIndex", () => {
+  const stepsOf = (ids: string[]): EngineFlowStep[] =>
+    ids.map((id) => ({ id, type: "notify_owner", message: id }) as EngineFlowStep);
+
+  it("stamps the step id at the index, and the end marker past the last step", () => {
+    const flat = flattenSteps(stepsOf(["a", "b", "c"]));
+    expect(resumeMarkerFor(flat, 0)).toBe("a");
+    expect(resumeMarkerFor(flat, 2)).toBe("c");
+    expect(resumeMarkerFor(flat, 3)).toBe(RESUME_END_MARKER);
+  });
+
+  it("keeps the stored index when the marker is missing (legacy) or still matches", () => {
+    const flat = flattenSteps(stepsOf(["a", "b", "c"]));
+    expect(resolveResumeIndex(flat, 1, null)).toBe(1);
+    expect(resolveResumeIndex(flat, 1, undefined)).toBe(1);
+    expect(resolveResumeIndex(flat, 1, "")).toBe(1);
+    expect(resolveResumeIndex(flat, 1, "b")).toBe(1);
+  });
+
+  it("relocates to the marked step when a flow edit shifted the indices", () => {
+    // The Jul 18 incident shape: the run parked at index 1 ("b"), then an
+    // edit inserted steps before it — the stale index now points elsewhere.
+    const edited = flattenSteps(stepsOf(["new1", "new2", "a", "b", "c"]));
+    expect(resolveResumeIndex(edited, 1, "b")).toBe(3);
+  });
+
+  it("completes (never re-executes appended steps) for the end marker", () => {
+    const grown = flattenSteps(stepsOf(["a", "b", "c", "appended"]));
+    expect(resolveResumeIndex(grown, 3, RESUME_END_MARKER)).toBe(4);
+  });
+
+  it("returns null when the marked step was deleted by the edit", () => {
+    const edited = flattenSteps(stepsOf(["a", "c"]));
+    expect(resolveResumeIndex(edited, 1, "b")).toBeNull();
+  });
+
+  it("prefers the stored index over an earlier duplicate id", () => {
+    // Duplicate ids are invalid at author time, but a stored row can carry
+    // them — the stored index wins when it still points at a matching id.
+    const flat = flattenSteps(stepsOf(["dup", "x", "dup"]));
+    expect(resolveResumeIndex(flat, 2, "dup")).toBe(2);
+    // When it does not, the first occurrence is the deterministic fallback.
+    expect(resolveResumeIndex(flat, 1, "dup")).toBe(0);
+  });
+});
+
+describe("withResumeMarkerVar", () => {
+  it("sets the marker without mutating the source context", () => {
+    const context = { vars: { lead_name: "Muhammad" }, trigger: { channel: "webhook" } };
+    const next = withResumeMarkerVar(context, "s_route");
+    expect(next.vars).toEqual({ lead_name: "Muhammad", [RESUME_STEP_ID_VAR]: "s_route" });
+    expect(next.trigger).toEqual({ channel: "webhook" });
+    expect(context.vars).toEqual({ lead_name: "Muhammad" });
+  });
+
+  it("deletes a stale marker when no id is given (fall back to raw index)", () => {
+    const context = { vars: { [RESUME_STEP_ID_VAR]: "old_step", keep: "1" } };
+    expect(withResumeMarkerVar(context, null).vars).toEqual({ keep: "1" });
+    expect(withResumeMarkerVar(context, "").vars).toEqual({ keep: "1" });
+  });
+
+  it("tolerates malformed vars (non-object / array)", () => {
+    expect(withResumeMarkerVar({ vars: "nope" }, "s1").vars).toEqual({
+      [RESUME_STEP_ID_VAR]: "s1"
+    });
+    expect(withResumeMarkerVar({ vars: [1, 2] }, null).vars).toEqual({});
+    expect(withResumeMarkerVar({}, "s1").vars).toEqual({ [RESUME_STEP_ID_VAR]: "s1" });
   });
 });
 

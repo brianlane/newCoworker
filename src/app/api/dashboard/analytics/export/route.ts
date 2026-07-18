@@ -102,7 +102,8 @@ export async function GET(request: Request) {
           originalUrl: e.original_url,
           toE164: e.to_e164,
           flowId: e.flow_id,
-          runId: e.run_id
+          runId: e.run_id,
+          likelyPrefetch: e.likely_prefetch
         })),
         clipped
       );
