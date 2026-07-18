@@ -192,6 +192,39 @@ async function recordRow(
   }
 }
 
+/**
+ * Best-effort `sms_outbound_log` row for a Telnyx-accepted owner-alert SMS,
+ * so the page renders in the owner's dashboard Messages thread (the thread
+ * merges sms_inbound_jobs + sms_outbound_log — see src/lib/db/sms-history.ts).
+ * Without this the only record of "the owner was paged" lived in Telnyx
+ * (observed live: the Jul 17 2026 needs-human page was sent but invisible).
+ * A logging failure must never fail the alert that already went out — same
+ * convention as the ai-flow-worker's logOutboundSms.
+ */
+async function logOwnerAlertSms(
+  supa: SupaClient,
+  args: {
+    businessId: string;
+    to: string;
+    from: string | null;
+    body: string;
+    telnyxMessageId: string | null;
+  }
+): Promise<void> {
+  const { error } = await supa.from("sms_outbound_log").insert({
+    business_id: args.businessId,
+    to_e164: args.to,
+    from_e164: args.from,
+    body: args.body,
+    source: "owner_alert",
+    telnyx_message_id: args.telnyxMessageId,
+    channel: "sms"
+  });
+  if (error) {
+    console.error("owner_alert sms_outbound_log insert", error);
+  }
+}
+
 serve(async (req: Request) => {
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
@@ -355,9 +388,10 @@ serve(async (req: Request) => {
     // alert nor release the same slot twice.
     let smsMeterSettled = false;
     try {
+      const smsText = `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
       const body: Record<string, string> = {
         to: targets.phone,
-        text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+        text: smsText,
         messaging_profile_id: telnyxProfile
       };
       if (telnyxFrom) body.from = telnyxFrom;
@@ -375,6 +409,22 @@ serve(async (req: Request) => {
       }
       smsMeterSettled = true;
       if (smsRes.ok) {
+        // Best-effort message-id extraction: a 2xx with an unparseable body
+        // still logs the send (id null) rather than dropping the thread row.
+        let telnyxMessageId: string | null = null;
+        try {
+          const smsJson = (await smsRes.json()) as { data?: { id?: string } };
+          telnyxMessageId = smsJson?.data?.id ?? null;
+        } catch {
+          telnyxMessageId = null;
+        }
+        await logOwnerAlertSms(supa, {
+          businessId: record.business_id,
+          to: targets.phone,
+          from: telnyxFrom || null,
+          body: smsText,
+          telnyxMessageId
+        });
         await recordRow(
           supa,
           record.business_id,
