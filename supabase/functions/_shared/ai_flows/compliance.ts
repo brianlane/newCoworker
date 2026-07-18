@@ -96,15 +96,20 @@ export function gsmSafeSmsText(text: string): string {
  * ≤670-char UCS-2 body past Telnyx's ten-segment limit — failing exactly the
  * sends the STOP suffix exists to protect.
  */
-export function prepareSmsBody(raw: string, opts: { requireStop?: boolean } = {}): string {
+export function prepareSmsBody(
+  raw: string,
+  opts: { requireStop?: boolean; locale?: string | null } = {}
+): string {
+  // Recipient's language decides the opt-out wording (ALTO for es contacts).
+  const suffix = stopSuffixForLocale(opts.locale);
   let body = gsmSafeSmsText(raw);
-  if (opts.requireStop) body = ensureStopLanguage(body);
+  if (opts.requireStop) body = ensureStopLanguage(body, suffix);
   // Suffix may have pushed a kept-emoji body past the UCS-2 sendable cap;
   // re-running the guard strips the non-GSM chars in that case.
   body = gsmSafeSmsText(body);
   if (body.length > SMS_MAX_BODY_CHARS) {
     body = opts.requireStop
-      ? ensureStopLanguage(body.slice(0, SMS_MAX_BODY_CHARS - STOP_SUFFIX.length - 1))
+      ? ensureStopLanguage(body.slice(0, SMS_MAX_BODY_CHARS - suffix.length - 1), suffix)
       : body.slice(0, SMS_MAX_BODY_CHARS);
   }
   return body;

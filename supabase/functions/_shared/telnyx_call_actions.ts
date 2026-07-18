@@ -111,14 +111,15 @@ export async function answerThenSpeak(
   apiKey: string,
   callControlId: string,
   text: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  language = "en-US"
 ): Promise<void> {
   const ans = await telnyxAnswerPlain(apiKey, callControlId, fetchImpl);
   if (!ans.ok) {
     console.error("answer plain failed", callControlId, ans.status, await ans.text());
     return;
   }
-  const sp = await telnyxSpeak(apiKey, callControlId, text, "female", fetchImpl);
+  const sp = await telnyxSpeak(apiKey, callControlId, text, "female", fetchImpl, language);
   if (!sp.ok) {
     console.error("speak failed", callControlId, sp.status, await sp.text());
   }

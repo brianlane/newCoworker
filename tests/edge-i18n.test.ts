@@ -7,6 +7,7 @@ import {
   STOP_SUFFIX,
   STOP_SUFFIX_ES,
   ensureStopLanguage,
+  prepareSmsBody,
   stopSuffixForLocale
 } from "../supabase/functions/_shared/ai_flows/compliance";
 import { isSpanishComplianceKeyword } from "../supabase/functions/_shared/telnyx_sms_compliance";
@@ -58,5 +59,14 @@ describe("stop suffix locale", () => {
   it("ensureStopLanguage treats ALTO as existing opt-out language", () => {
     const body = "Hola, responde ALTO para cancelar.";
     expect(ensureStopLanguage(body, STOP_SUFFIX_ES)).toBe(body);
+  });
+
+  it("prepareSmsBody appends the locale-matched STOP suffix on cold sends", () => {
+    expect(prepareSmsBody("Hola Maria, ¿sigue en venta?", { requireStop: true, locale: "es" })).toBe(
+      `Hola Maria, ¿sigue en venta? ${STOP_SUFFIX_ES}`
+    );
+    expect(prepareSmsBody("Hi Maria, still selling?", { requireStop: true })).toBe(
+      `Hi Maria, still selling? ${STOP_SUFFIX}`
+    );
   });
 });

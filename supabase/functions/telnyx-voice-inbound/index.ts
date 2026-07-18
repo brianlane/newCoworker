@@ -25,17 +25,10 @@ import {
 } from "../_shared/chat_spend_cap.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import {
-  VOICE_MSG_AI_BUDGET_EXHAUSTED,
-  VOICE_MSG_BRIDGE_DEGRADED,
-  VOICE_MSG_CONCURRENT_LIMIT,
-  VOICE_MSG_PAUSED,
-  VOICE_MSG_QUOTA_EXHAUSTED,
-  VOICE_MSG_SAFE_MODE_CONNECTING,
-  VOICE_MSG_SAFE_MODE_FORWARD_FAILED,
-  VOICE_MSG_STREAM_ROLLOUT_DISABLED,
-  VOICE_MSG_SYSTEM_ERROR,
-  VOICE_MSG_UNCONFIGURED_NUMBER
+  VOICE_MSG_UNCONFIGURED_NUMBER,
+  voiceMessageForLocale
 } from "../_shared/voice_messages.ts";
+import { telnyxTtsLanguage, type EdgeLocale } from "../_shared/edge_messages.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -933,12 +926,20 @@ serve(async (req: Request) => {
   // on either branch.
   const { data: gateBizRow } = await supabase
     .from("businesses")
-    .select("is_paused, customer_channels_enabled")
+    .select("is_paused, customer_channels_enabled, default_customer_language")
     .eq("id", businessId)
     .maybeSingle();
   const gateBiz = gateBizRow as
-    | { is_paused?: boolean; customer_channels_enabled?: boolean }
+    | {
+        is_paused?: boolean;
+        customer_channels_enabled?: boolean;
+        default_customer_language?: string | null;
+      }
     | null;
+  // System IVR (no AI stream) speaks the business's default customer language
+  // — live detection is impossible on speak-only paths, per the i18n plan.
+  const voiceLocale: EdgeLocale = gateBiz?.default_customer_language === "es" ? "es" : "en";
+  const voiceTtsLang = telnyxTtsLanguage(voiceLocale);
 
   if (gateBiz?.is_paused || gateBiz?.customer_channels_enabled === false) {
     const { data: gateSettingsRow } = await supabase
@@ -957,7 +958,13 @@ serve(async (req: Request) => {
     });
 
     if (gate.kind === "paused") {
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_PAUSED);
+      await answerThenSpeak(
+        apiKey,
+        callControlId,
+        voiceMessageForLocale("VOICE_MSG_PAUSED", voiceLocale),
+        fetch,
+        voiceTtsLang
+      );
       await telemetryRecord(supabase, "voice_killswitch", {
         business_id: businessId,
         call_control_id: callControlId,
@@ -978,7 +985,13 @@ serve(async (req: Request) => {
       // concurrent / indeterminate) still forwards as before.
       const fwdAvail = await checkVoiceBudgetAvailable(supabase, { businessId });
       if (fwdAvail.status === "blocked" && fwdAvail.reason === "quota_exhausted") {
-        await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
+        await answerThenSpeak(
+          apiKey,
+          callControlId,
+          voiceMessageForLocale("VOICE_MSG_QUOTA_EXHAUSTED", voiceLocale),
+          fetch,
+          voiceTtsLang
+        );
         await telemetryRecord(supabase, "voice_safe_mode_forward_skipped_no_minutes", {
           business_id: businessId,
           call_control_id: callControlId
@@ -1011,7 +1024,13 @@ serve(async (req: Request) => {
         await missedCallFollowUp("quota_exhausted");
         return jsonOk("safe_mode_forward_no_minutes");
       }
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SAFE_MODE_CONNECTING);
+      await answerThenSpeak(
+        apiKey,
+        callControlId,
+        voiceMessageForLocale("VOICE_MSG_SAFE_MODE_CONNECTING", voiceLocale),
+        fetch,
+        voiceTtsLang
+      );
       // Telnyx `speak` returns as soon as TTS is queued, not when playback
       // finishes. If we call `transfer` immediately, the call bridges to the
       // owner before the caller hears the "Connecting you now." confirmation.
@@ -1062,7 +1081,10 @@ serve(async (req: Request) => {
         const sp = await telnyxSpeak(
           apiKey,
           callControlId,
-          VOICE_MSG_SAFE_MODE_FORWARD_FAILED
+          voiceMessageForLocale("VOICE_MSG_SAFE_MODE_FORWARD_FAILED", voiceLocale),
+          "female",
+          fetch,
+          voiceTtsLang
         );
         if (!sp.ok) {
           console.error(
@@ -1124,7 +1146,13 @@ serve(async (req: Request) => {
   if (!reserve.ok) {
     const reason = reserve.reason;
     if (reason === "concurrent_limit") {
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_CONCURRENT_LIMIT);
+      await answerThenSpeak(
+        apiKey,
+        callControlId,
+        voiceMessageForLocale("VOICE_MSG_CONCURRENT_LIMIT", voiceLocale),
+        fetch,
+        voiceTtsLang
+      );
       await telemetryRecord(supabase, "voice_concurrent_limit_spoken", {
         business_id: businessId,
         call_control_id: callControlId
@@ -1139,7 +1167,13 @@ serve(async (req: Request) => {
       });
       await missedCallFollowUp("concurrent_limit");
     } else if (reason === "quota_exhausted") {
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_QUOTA_EXHAUSTED);
+      await answerThenSpeak(
+        apiKey,
+        callControlId,
+        voiceMessageForLocale("VOICE_MSG_QUOTA_EXHAUSTED", voiceLocale),
+        fetch,
+        voiceTtsLang
+      );
       await systemLog(supabase, {
         businessId,
         source: "voice",
@@ -1161,7 +1195,13 @@ serve(async (req: Request) => {
           payload: { call_control_id: callControlId }
         });
       }
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
+      await answerThenSpeak(
+        apiKey,
+        callControlId,
+        voiceMessageForLocale("VOICE_MSG_SYSTEM_ERROR", voiceLocale),
+        fetch,
+        voiceTtsLang
+      );
     }
     return new Response(JSON.stringify({ ok: true, path: reason }), {
       status: 200,
@@ -1199,7 +1239,13 @@ serve(async (req: Request) => {
     ? new Date(settings.bridge_last_heartbeat_at as string).getTime()
     : 0;
   if (!hb || Date.now() - hb > heartbeatTtlSec * 1000) {
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
+    await answerThenSpeak(
+      apiKey,
+      callControlId,
+      voiceMessageForLocale("VOICE_MSG_BRIDGE_DEGRADED", voiceLocale),
+      fetch,
+      voiceTtsLang
+    );
     const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -1222,7 +1268,13 @@ serve(async (req: Request) => {
   const path = pathTrimmed.startsWith("/") ? pathTrimmed : `/${pathTrimmed}`;
 
   if (!origin) {
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_BRIDGE_DEGRADED);
+    await answerThenSpeak(
+      apiKey,
+      callControlId,
+      voiceMessageForLocale("VOICE_MSG_BRIDGE_DEGRADED", voiceLocale),
+      fetch,
+      voiceTtsLang
+    );
     const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -1234,7 +1286,13 @@ serve(async (req: Request) => {
   }
 
   if (!envVoiceAiStreamEnabled()) {
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_STREAM_ROLLOUT_DISABLED);
+    await answerThenSpeak(
+      apiKey,
+      callControlId,
+      voiceMessageForLocale("VOICE_MSG_STREAM_ROLLOUT_DISABLED", voiceLocale),
+      fetch,
+      voiceTtsLang
+    );
     const { error: relRollErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
@@ -1329,7 +1387,13 @@ serve(async (req: Request) => {
     }
 
     if (refuseAiBudget) {
-      await answerThenSpeak(apiKey, callControlId, VOICE_MSG_AI_BUDGET_EXHAUSTED);
+      await answerThenSpeak(
+        apiKey,
+        callControlId,
+        voiceMessageForLocale("VOICE_MSG_AI_BUDGET_EXHAUSTED", voiceLocale),
+        fetch,
+        voiceTtsLang
+      );
       const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
         p_call_control_id: callControlId
       });
@@ -1385,7 +1449,13 @@ serve(async (req: Request) => {
   });
   if (nonceErr) {
     console.error("nonce", nonceErr);
-    await answerThenSpeak(apiKey, callControlId, VOICE_MSG_SYSTEM_ERROR);
+    await answerThenSpeak(
+      apiKey,
+      callControlId,
+      voiceMessageForLocale("VOICE_MSG_SYSTEM_ERROR", voiceLocale),
+      fetch,
+      voiceTtsLang
+    );
     const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
       p_call_control_id: callControlId
     });
