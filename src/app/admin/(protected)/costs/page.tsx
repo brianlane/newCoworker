@@ -1,4 +1,5 @@
 import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
+import { getTranslations } from "next-intl/server";
 import {
   PLATFORM_COST_SYNC_STATUS_KEY,
   parsePlatformCostSyncStatus
@@ -45,6 +46,7 @@ function trendWindowStartYmd(now: Date): string {
 }
 
 export default async function AdminCostsPage() {
+  const t = await getTranslations("admin.pages");
   const now = new Date();
   const [margins, syncStatusRaw, hostingerRows, telnyxTrendRows, inventory, balance] =
     await Promise.all([
@@ -130,11 +132,8 @@ export default async function AdminCostsPage() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Costs</h1>
-          <p className="text-sm text-parchment/50 mt-1">
-            Vendor actuals synced from Telnyx + Hostinger; Gemini from our own metering. Nothing
-            bills from these numbers.
-          </p>
+          <h1 className="text-2xl font-bold text-parchment">{t("costsTitle")}</h1>
+          <p className="text-sm text-parchment/50 mt-1">{t("costsSubtitle")}</p>
           <p className="text-xs text-parchment/30 mt-1">
             {syncStatus ? (
               <>

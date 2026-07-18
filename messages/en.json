@@ -1169,7 +1169,29 @@
     "revenue": "Revenue",
     "engagement": "Engagement",
     "provisioning": "Provisioning",
-    "system": "System"
+    "system": "System",
+    "pages": {
+      "dashboardTitle": "Dashboard",
+      "dashboardSubtitle": "Business health at a glance.",
+      "clientsTitle": "Admin Overview",
+      "clientsSubtitle": "{active} active · {total} total",
+      "provisionTitle": "Provisioning",
+      "provisionSubtitle": "Manage client deployment and subscription activation.",
+      "costsTitle": "Costs",
+      "costsSubtitle": "Vendor actuals synced from Telnyx + Hostinger; Gemini from our own metering. Nothing bills from these numbers.",
+      "usageTitle": "Usage",
+      "usageSubtitle": "Every tenant's metered usage vs caps — voice minutes and call counts from settled Telnyx records, peak concurrency from call transcript overlap, SMS from the metering counters, AI from the Gemini spend fuse, Telnyx cost from synced invoice records.",
+      "engagementTitle": "Engagement",
+      "engagementSubtitle": "Sign-in activity across every owner and team member.",
+      "systemTitle": "System",
+      "systemSubtitle": "Environment configuration and service health.",
+      "revenueTitle": "Revenue",
+      "revenueSubtitle": "Subscription analytics — best-effort operator metrics, nothing bills from these numbers.",
+      "webchatTitle": "Web chat",
+      "webchatSubtitle": "Visitor conversations from the chat widget on newcoworker.com",
+      "tenantWebchatTitle": "Web chat conversations",
+      "tenantWebchatSubtitle": "Visitor sessions from the chat widget on this business's website"
+    }
   },
   "emails": {
     "common": {

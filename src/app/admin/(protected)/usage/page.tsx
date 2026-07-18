@@ -1,4 +1,5 @@
 import { listBusinesses } from "@/lib/db/businesses";
+import { getTranslations } from "next-intl/server";
 import {
   getFleetCalendarMonthUsageByBusiness,
   type BusinessMonthUsage
@@ -32,6 +33,7 @@ export default async function AdminUsagePage({
 }: {
   searchParams: Promise<{ month?: string }>;
 }) {
+  const t = await getTranslations("admin.pages");
   const now = new Date();
   const { month: monthParam } = await searchParams;
   const months = listRecentMonths(now, 3);
@@ -109,12 +111,8 @@ export default async function AdminUsagePage({
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Usage</h1>
-          <p className="text-sm text-parchment/50 mt-1">
-            Every tenant&apos;s metered usage vs caps — voice minutes and call counts from settled
-            Telnyx records, peak concurrency from call transcript overlap, SMS from the metering
-            counters, AI from the Gemini spend fuse, Telnyx cost from synced invoice records.
-          </p>
+          <h1 className="text-2xl font-bold text-parchment">{t("usageTitle")}</h1>
+          <p className="text-sm text-parchment/50 mt-1">{t("usageSubtitle")}</p>
         </div>
         <div className="flex items-center gap-1">
           {months.map((ym) => (

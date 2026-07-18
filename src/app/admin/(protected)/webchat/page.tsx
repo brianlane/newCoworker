@@ -19,6 +19,7 @@
  */
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { hashWebchatToken, parseWidgetKey } from "@/lib/webchat/keys";
@@ -106,12 +107,11 @@ function aggregateJobStats(jobs: WebchatJobStatRow[]) {
 }
 
 export default async function AdminSiteWebchatPage() {
+  const t = await getTranslations("admin.pages");
   const header = (
     <div>
-      <h1 className="text-2xl font-bold text-parchment">Web chat</h1>
-      <p className="text-sm text-parchment/50 mt-1">
-        Visitor conversations from the chat widget on newcoworker.com
-      </p>
+      <h1 className="text-2xl font-bold text-parchment">{t("webchatTitle")}</h1>
+      <p className="text-sm text-parchment/50 mt-1">{t("webchatSubtitle")}</p>
     </div>
   );
 
