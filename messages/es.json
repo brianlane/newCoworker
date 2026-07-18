@@ -58,7 +58,9 @@
       "plansTeaser": "Una fracción del costo de una recepcionista o servicio de contestación, con garantía de devolución de 30 días en todos los planes.",
       "ctaTitle": "¿Listo para contratar a tu New Coworker?",
       "ctaSubtitle": "Tu coworker empieza a aprender desde el primer día.",
-      "ctaLabel": "Elige tu plan"
+      "ctaLabel": "Elige tu plan",
+      "ogTitle": "Tu empleado de IA que nunca duerme",
+      "ogDescription": "Contesta llamadas, textos y correos las 24 horas con New Coworker."
     },
     "stats": {
       "stat1Value": "24/7",
@@ -139,9 +141,7 @@
       "isolated": "Conversaciones y registros aislados por negocio, exportables en cualquier momento",
       "memory": "Memoria permanente sin pérdida bajo tu control",
       "security": "Postura de seguridad deny-by-default con credenciales por negocio"
-    },
-    "ogTitle": "Tu empleado de IA que nunca duerme",
-    "ogDescription": "Contesta llamadas, textos y correos las 24 horas con New Coworker."
+    }
   },
   "auth": {
     "signIn": "Iniciar sesión",

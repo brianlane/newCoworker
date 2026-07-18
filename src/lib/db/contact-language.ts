@@ -8,6 +8,15 @@ export type ContactLanguageRow = {
   language_source: LanguageSource | null;
 };
 
+/**
+ * Alias-aware contact match: a number merged into another profile
+ * (alias_e164s) must resolve to the surviving row, mirroring contact-memory
+ * lookups elsewhere.
+ */
+function contactMatchFilter(customerE164: string): string {
+  return `customer_e164.eq.${customerE164},alias_e164s.cs.{${customerE164}}`;
+}
+
 export async function getContactLanguage(
   businessId: string,
   customerE164: string,
@@ -18,7 +27,7 @@ export async function getContactLanguage(
     .from("contacts")
     .select("preferred_language, language_source")
     .eq("business_id", businessId)
-    .eq("customer_e164", customerE164)
+    .or(contactMatchFilter(customerE164))
     .maybeSingle();
   if (error) throw new Error(error.message);
   return {
@@ -41,7 +50,7 @@ export async function setContactLanguageOwnerOverride(
       language_source: language ? "owner_set" : null
     })
     .eq("business_id", businessId)
-    .eq("customer_e164", customerE164);
+    .or(contactMatchFilter(customerE164));
   if (error) throw new Error(error.message);
 }
 
@@ -62,6 +71,6 @@ export async function persistDetectedContactLanguage(
       language_source: "detected"
     })
     .eq("business_id", businessId)
-    .eq("customer_e164", customerE164);
+    .or(contactMatchFilter(customerE164));
   if (error) throw new Error(error.message);
 }

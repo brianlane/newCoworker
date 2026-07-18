@@ -7,7 +7,7 @@ type StubResult = {
 
 function makeBuilder(result: StubResult) {
   const b: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "insert", "update", "delete", "upsert", "order", "limit"]) {
+  for (const m of ["select", "eq", "or", "insert", "update", "delete", "upsert", "order", "limit"]) {
     b[m] = vi.fn(() => b);
   }
   b.single = vi.fn(async () => result);

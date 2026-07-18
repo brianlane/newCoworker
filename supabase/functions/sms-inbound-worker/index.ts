@@ -427,10 +427,17 @@ serve(async (req: Request) => {
     // (kvm2/kvm8) degrades to the CoworkerLocal twin; kvm1 has none, so
     // over-cap turns are refused (see pickSmsTurn / tenantHasLocalModel).
     let businessVpsSize: string | null = null;
+    // Customer-language defaults: `supported_customer_languages` is the
+    // per-tenant escape hatch ({en} disables Spanish detection + prompt).
+    let businessDefaultLang: CustomerLanguage = "en";
+    let businessSupportedLangs: CustomerLanguage[] = ["en", "es"];
     {
       const { data: bizRow } = await supabase
         .from("businesses")
-        .select("is_paused, customer_channels_enabled, timezone, tier, vps_size")
+        .select(
+          "is_paused, customer_channels_enabled, timezone, tier, vps_size, " +
+            "default_customer_language, supported_customer_languages"
+        )
         .eq("id", job.business_id)
         .maybeSingle();
       const biz = bizRow as
@@ -440,11 +447,20 @@ serve(async (req: Request) => {
             timezone?: string | null;
             tier?: string | null;
             vps_size?: string | null;
+            default_customer_language?: string | null;
+            supported_customer_languages?: string[] | null;
           }
         | null;
       businessTimezone = typeof biz?.timezone === "string" ? biz.timezone : null;
       businessTier = typeof biz?.tier === "string" ? biz.tier : null;
       businessVpsSize = typeof biz?.vps_size === "string" ? biz.vps_size : null;
+      if (biz?.default_customer_language === "es") businessDefaultLang = "es";
+      if (Array.isArray(biz?.supported_customer_languages)) {
+        const langs = biz.supported_customer_languages.filter(
+          (l): l is CustomerLanguage => l === "en" || l === "es"
+        );
+        if (langs.length > 0) businessSupportedLangs = langs;
+      }
 
       if (biz?.is_paused || biz?.customer_channels_enabled === false) {
         // Staff jobs were already handled at inbound time (audit row + optional
@@ -1011,9 +1027,15 @@ serve(async (req: Request) => {
       const detected = detectCustomerLanguage({
         text: inboundText,
         establishedLanguage: contactLang ?? undefined,
-        defaultLanguage: "en"
+        defaultLanguage: businessDefaultLang,
+        supported: businessSupportedLangs
       });
       if (detected.persist && contactLangSource !== "owner_set") {
+        // Alias-aware: a texter merged into another profile must persist on
+        // the surviving row's primary number, not the alias (which matches
+        // zero rows). Fall back to the texter's number for first contact.
+        const contactPrimaryE164 =
+          (memoryRow as { customer_e164?: string | null } | null)?.customer_e164 ?? fromE164;
         await supabase
           .from("contacts")
           .update({
@@ -1021,12 +1043,13 @@ serve(async (req: Request) => {
             language_source: "detected"
           })
           .eq("business_id", job.business_id)
-          .eq("customer_e164", fromE164);
+          .eq("customer_e164", contactPrimaryE164);
       }
       const languageLine = customerLanguageLine({
         detected: detected.language,
         established: contactLangSource === "owner_set" ? contactLang : detected.language,
-        defaultLang: "en"
+        defaultLang: businessDefaultLang,
+        supported: businessSupportedLangs
       });
       const memoryPreamble =
         memoryRow == null

@@ -58,7 +58,9 @@
       "plansTeaser": "A fraction of the cost of a receptionist or answering service, with a 30-day money-back guarantee on every plan.",
       "ctaTitle": "Ready to hire your New Coworker?",
       "ctaSubtitle": "New coworker starts learning from day one.",
-      "ctaLabel": "Choose your plan"
+      "ctaLabel": "Choose your plan",
+      "ogTitle": "Your AI employee that never sleeps",
+      "ogDescription": "Answer calls, texts, and emails around the clock with New Coworker."
     },
     "stats": {
       "stat1Value": "24/7",
@@ -139,9 +141,7 @@
       "isolated": "Conversations and business records isolated per business, exportable any time",
       "memory": "Permanent, lossless memory that stays under your control",
       "security": "Deny-by-default security posture with per-business credentials"
-    },
-    "ogTitle": "Your AI employee that never sleeps",
-    "ogDescription": "Answer calls, texts, and emails around the clock with New Coworker."
+    }
   },
   "auth": {
     "signIn": "Sign in",

@@ -41,8 +41,8 @@ export function LanguageSwitcher({ persist = false, className = "" }: Props) {
         return;
       }
       if (next === "en" && window.location.pathname.startsWith("/es")) {
-        window.location.href =
-          window.location.pathname.replace(/^\/es/, "") || "/" + window.location.search;
+        const bare = window.location.pathname.replace(/^\/es/, "") || "/";
+        window.location.href = bare + window.location.search;
         return;
       }
     }
