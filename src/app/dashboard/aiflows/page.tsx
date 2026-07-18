@@ -55,6 +55,12 @@ export default async function AiFlowsPage({ searchParams }: Props) {
               How to: Meta ad leads
             </Link>
             <Link
+              href="/dashboard/aiflows/guides/instagram-leads"
+              className="text-signal-teal hover:underline"
+            >
+              How to: Instagram prospects
+            </Link>
+            <Link
               href="/dashboard/aiflows/import-leads"
               className="text-signal-teal hover:underline"
             >

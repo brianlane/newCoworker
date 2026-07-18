@@ -2,12 +2,17 @@ import { describe, expect, it } from "vitest";
 import {
   cleanReviewLink,
   documentReceiptTemplate,
+  instagramProspectTemplate,
+  INSTAGRAM_PROSPECT_TAG,
+  INSTAGRAM_SCRAPER_SOURCE,
+  META_LEAD_ADS_SOURCE,
   metaLeadFollowUpTemplate,
   priceSheetShareTemplate,
   reviewRequestTemplate,
   REVIEW_LINK_MAX_LENGTH
 } from "@/lib/ai-flows/templates";
 import { parseAiFlowDefinition, summarizeDefinition } from "@/lib/ai-flows/schema";
+import { evaluateTriggerConditions } from "@/lib/ai-flows/trigger-eval";
 
 describe("metaLeadFollowUpTemplate", () => {
   it("is a valid definition the install route can persist as-is", () => {
@@ -28,7 +33,96 @@ describe("metaLeadFollowUpTemplate", () => {
       "send_sms",
       "notify_owner"
     ]);
-    expect(summarizeDefinition(def)).toContain("When any webhook event arrives");
+    expect(summarizeDefinition(def)).toContain("When a webhook event matches 1 condition(s)");
+  });
+
+  it("only fires for the facebook_lead_ads source — it auto-texts, so scraped prospects must never reach it", () => {
+    const def = metaLeadFollowUpTemplate().definition;
+    expect(def.trigger).toMatchObject({
+      channel: "webhook",
+      conditions: [{ type: "from_matches", value: META_LEAD_ADS_SOURCE }]
+    });
+    const conditions = "conditions" in def.trigger ? def.trigger.conditions : [];
+    expect(evaluateTriggerConditions(conditions, "any text", "facebook_lead_ads")).toBe(true);
+    expect(evaluateTriggerConditions(conditions, "any text", INSTAGRAM_SCRAPER_SOURCE)).toBe(false);
+  });
+});
+
+describe("instagramProspectTemplate", () => {
+  it("is a valid definition the install route can persist as-is", () => {
+    const tpl = instagramProspectTemplate();
+    const def = parseAiFlowDefinition(tpl.definition);
+    expect(def.trigger.channel).toBe("webhook");
+    expect(tpl.key).toBe("instagram_prospect_intake");
+    expect(tpl.name.length).toBeGreaterThan(0);
+  });
+
+  it("only fires for the instagram_scraper source label", () => {
+    const def = instagramProspectTemplate().definition;
+    expect(def.trigger).toMatchObject({
+      channel: "webhook",
+      conditions: [{ type: "from_matches", value: INSTAGRAM_SCRAPER_SOURCE }]
+    });
+    const conditions = "conditions" in def.trigger ? def.trigger.conditions : [];
+    // The webhook channel evaluates from_matches against the caller-supplied
+    // source label — the guide's suggested label matches, others don't.
+    expect(evaluateTriggerConditions(conditions, "any text", "instagram_scraper")).toBe(true);
+    expect(evaluateTriggerConditions(conditions, "any text", "facebook_lead_ads")).toBe(false);
+  });
+
+  it("extracts, briefs the owner FIRST, then files + tags the prospect — never texts or emails", () => {
+    const def = instagramProspectTemplate().definition;
+    // The brief precedes the phone-gated filing so it always reaches the
+    // owner and can never claim a contact/tag a skipped step didn't create.
+    expect(def.steps.map((s) => s.type)).toEqual([
+      "extract_text",
+      "notify_owner",
+      "upsert_customer",
+      "update_contact"
+    ]);
+    // Compliance invariant: scraped prospects never consented, so the starter
+    // must not carry any outbound-contact step.
+    expect(def.steps.some((s) => s.type === "send_sms" || s.type === "send_email")).toBe(false);
+    const tag = def.steps[3];
+    if (tag.type === "update_contact") {
+      expect(tag.addTags).toEqual([INSTAGRAM_PROSPECT_TAG]);
+    }
+  });
+
+  it("gates the phone-keyed file + tag steps on a usable phone", () => {
+    const def = instagramProspectTemplate().definition;
+    const file = def.steps[2];
+    const tag = def.steps[3];
+    // The CRM is phone-keyed; a scraped profile often has only email/handle.
+    // Both steps skip cleanly on 'none' instead of failing the run.
+    if (file.type === "upsert_customer") {
+      expect(file.when).toEqual({ var: "lead_phone", notEquals: "none" });
+    }
+    if (tag.type === "update_contact") {
+      expect(tag.when).toEqual({ var: "lead_phone", notEquals: "none" });
+    }
+    // The extractor is told the exact sentinel — 'none', never an empty
+    // string — because the when-guards test for it literally.
+    const extract = def.steps[0];
+    if (extract.type === "extract_text") {
+      const phoneField = extract.fields.find((f) => f.name === "lead_phone");
+      expect(phoneField?.description).toContain("'none'");
+      expect(phoneField?.description).toContain("not an empty string");
+    }
+  });
+
+  it("briefs the owner unconditionally with the handle + email, without claiming a filing", () => {
+    const def = instagramProspectTemplate().definition;
+    const notify = def.steps[1];
+    if (notify.type === "notify_owner") {
+      expect(notify.when).toBeUndefined();
+      expect(notify.message).toContain("{{vars.lead_handle}}");
+      expect(notify.message).toContain("{{vars.lead_email}}");
+      // The brief must not assert "filed and tagged" — phone-less profiles
+      // skip those steps (Bugbot 0d7238c4).
+      expect(notify.message).not.toMatch(/filed and tagged/i);
+      expect(notify.message).toContain("If their profile has a phone number");
+    }
   });
 });
 
