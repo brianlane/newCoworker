@@ -57,6 +57,7 @@ vi.mock("@/lib/ai-flows/webhook-events", () => ({
 import {
   MESSENGER_ATTACHMENT_PLACEHOLDER,
   parseMetaWebhookBody,
+  processMetaCommentEvent,
   processMetaLeadgenEvent,
   processMetaMessageEvent,
   processMetaWebhookEvents,
@@ -88,14 +89,15 @@ describe("parseMetaWebhookBody", () => {
   it("returns empty events for unknown objects and non-leadgen fields", () => {
     expect(parseMetaWebhookBody({ object: "permissions", entry: [] })).toEqual({
       leadgen: [],
-      messages: []
+      messages: [],
+      comments: []
     });
     expect(
       parseMetaWebhookBody({
         object: "page",
         entry: [{ id: "p1", changes: [{ field: "feed", value: {} }] }]
       })
-    ).toEqual({ leadgen: [], messages: [] });
+    ).toEqual({ leadgen: [], messages: [], comments: [] });
   });
 
   it("extracts leadgen events, falling back to the entry id for the page", () => {
@@ -274,6 +276,77 @@ describe("parseMetaWebhookBody", () => {
     expect(parsed?.messages).toEqual([
       { platform: "instagram", accountId: "ig-1", senderId: "777", mid: "ig-m1", text: "dm hello" }
     ]);
+  });
+
+  it("extracts instagram comment events, skipping self-comments and id-less values", () => {
+    const parsed = parseMetaWebhookBody({
+      object: "instagram",
+      entry: [
+        {
+          id: "ig-1",
+          changes: [
+            {
+              field: "comments",
+              value: {
+                id: 42,
+                text: " love this! price? ",
+                from: { id: 777, username: "jane_doe" },
+                media: { id: "m-1" }
+              }
+            },
+            // The account replying under its own post — never a flow event.
+            { field: "comments", value: { id: "c-2", from: { id: "ig-1" } } },
+            // No comment id → skipped.
+            { field: "comments", value: { text: "hi" } },
+            // Unrelated instagram change fields → skipped.
+            { field: "story_insights", value: {} }
+          ]
+        },
+        // No entry id → skipped.
+        { changes: [{ field: "comments", value: { id: "c-9" } }] },
+        // No changes array at all (DM-only entry) → nothing to scan.
+        { id: "ig-1" }
+      ]
+    });
+    expect(parsed?.comments).toEqual([
+      {
+        instagramAccountId: "ig-1",
+        commentId: "42",
+        mediaId: "m-1",
+        text: "love this! price?",
+        fromId: "777",
+        fromUsername: "jane_doe"
+      }
+    ]);
+    // Sparse deliveries (no media/text/username) still parse with "" fills.
+    const sparse = parseMetaWebhookBody({
+      object: "instagram",
+      entry: [{ id: "ig-1", changes: [{ field: "comments", value: { id: "c-4", from: { id: 888 } } }] }]
+    });
+    expect(sparse?.comments).toEqual([
+      {
+        instagramAccountId: "ig-1",
+        commentId: "c-4",
+        mediaId: "",
+        text: "",
+        fromId: "888",
+        fromUsername: ""
+      }
+    ]);
+    // Comment changes never arrive on the page object.
+    const pageParsed = parseMetaWebhookBody({
+      object: "page",
+      entry: [{ id: "p1", changes: [{ field: "comments", value: { id: "c-3" } }] }]
+    });
+    expect(pageParsed?.comments).toEqual([]);
+  });
+
+  it("tolerates a comment value that fails its schema (arrays where objects belong)", () => {
+    const parsed = parseMetaWebhookBody({
+      object: "instagram",
+      entry: [{ id: "ig-1", changes: [{ field: "comments", value: { from: "not-an-object" } }] }]
+    });
+    expect(parsed?.comments).toEqual([]);
   });
 });
 
@@ -615,7 +688,7 @@ describe("processMetaMessageEvent", () => {
 });
 
 describe("processMetaWebhookEvents", () => {
-  it("counts leadgen and message events independently", async () => {
+  it("counts leadgen, comment, and message events independently", async () => {
     getActiveMetaConnectionByPageIdMock
       // leadgen p1 → connected
       .mockResolvedValueOnce({ business_id: BIZ, pageToken: "tok", page_id: "p1" })
@@ -624,6 +697,16 @@ describe("processMetaWebhookEvents", () => {
       // message p1 → connected
       .mockResolvedValueOnce({ business_id: BIZ, pageToken: "tok", page_id: "p1" })
       // message p3 → unknown (counts as not enqueued)
+      .mockResolvedValueOnce(null);
+    // comment ig-1 → connected (handled alongside the leadgen count);
+    // comment ig-2 → unknown (counts as not handled).
+    getActiveMetaConnectionByInstagramIdMock
+      .mockResolvedValueOnce({
+        business_id: BIZ,
+        pageToken: "tok",
+        page_id: "p1",
+        instagram_account_id: "ig-1"
+      })
       .mockResolvedValueOnce(null);
     fetchLeadMock.mockResolvedValue({
       id: "lg-1",
@@ -652,22 +735,125 @@ describe("processMetaWebhookEvents", () => {
         { pageId: "p1", leadgenId: "lg-1" },
         { pageId: "p2", leadgenId: "lg-2" }
       ],
+      comments: [
+        {
+          instagramAccountId: "ig-1",
+          commentId: "c-1",
+          mediaId: "m-1",
+          text: "price?",
+          fromId: "777",
+          fromUsername: "jane"
+        },
+        {
+          instagramAccountId: "ig-2",
+          commentId: "c-2",
+          mediaId: "",
+          text: "hello",
+          fromId: "888",
+          fromUsername: ""
+        }
+      ],
       messages: [
         { platform: "messenger", accountId: "p1", senderId: "psid-1", mid: "m1", text: "hi" },
         { platform: "messenger", accountId: "p3", senderId: "psid-2", mid: "m2", text: "yo" }
       ]
     });
-    expect(result).toEqual({ handled: 1, messagesEnqueued: 1, messagesRateLimited: 0 });
+    expect(result).toEqual({ handled: 2, messagesEnqueued: 1, messagesRateLimited: 0 });
   });
 
   it("counts rate-limited message events separately (route flips to 429)", async () => {
     rateLimitMock.mockReturnValue({ success: false });
     const result = await processMetaWebhookEvents({
       leadgen: [],
+      comments: [],
       messages: [
         { platform: "messenger", accountId: "p1", senderId: "psid-1", mid: "m1", text: "hi" }
       ]
     });
     expect(result).toEqual({ handled: 0, messagesEnqueued: 0, messagesRateLimited: 1 });
+  });
+});
+
+describe("processMetaCommentEvent", () => {
+  const EVENT = {
+    instagramAccountId: "ig-1",
+    commentId: "c-1",
+    mediaId: "m-1",
+    text: "how much for a cut?",
+    fromId: "777",
+    fromUsername: "jane_doe"
+  };
+  const CONNECTION = {
+    business_id: BIZ,
+    pageToken: "tok",
+    page_id: "p1",
+    instagram_account_id: "ig-1"
+  };
+
+  it("resolves the tenant and enqueues a flow event keyed by the comment id", async () => {
+    getActiveMetaConnectionByInstagramIdMock.mockResolvedValue(CONNECTION);
+    processWebhookFlowEventMock.mockResolvedValue({ enqueued: 1, flowsMatched: 1 });
+
+    expect(await processMetaCommentEvent(EVENT)).toBe(true);
+    expect(getActiveMetaConnectionByInstagramIdMock).toHaveBeenCalledWith("ig-1");
+    expect(processWebhookFlowEventMock).toHaveBeenCalledWith(BIZ, {
+      source: "instagram_comment",
+      eventId: "c-1",
+      data: {
+        comment_id: "c-1",
+        comment_text: "how much for a cut?",
+        username: "jane_doe",
+        from_id: "777",
+        media_id: "m-1",
+        instagram_account_id: "ig-1"
+      }
+    });
+  });
+
+  it("omits absent optional fields from the flow payload", async () => {
+    getActiveMetaConnectionByInstagramIdMock.mockResolvedValue(CONNECTION);
+    processWebhookFlowEventMock.mockResolvedValue({ enqueued: 0, flowsMatched: 0 });
+    expect(
+      await processMetaCommentEvent({
+        ...EVENT,
+        mediaId: "",
+        fromId: "",
+        fromUsername: ""
+      })
+    ).toBe(true);
+    expect(processWebhookFlowEventMock).toHaveBeenCalledWith(BIZ, {
+      source: "instagram_comment",
+      eventId: "c-1",
+      data: {
+        comment_id: "c-1",
+        comment_text: "how much for a cut?",
+        instagram_account_id: "ig-1"
+      }
+    });
+  });
+
+  it("acknowledges without enqueueing when rate limited or unconnected", async () => {
+    rateLimitMock.mockReturnValueOnce({ success: false });
+    expect(await processMetaCommentEvent(EVENT)).toBe(false);
+    expect(getActiveMetaConnectionByInstagramIdMock).not.toHaveBeenCalled();
+
+    getActiveMetaConnectionByInstagramIdMock.mockResolvedValue(null);
+    expect(await processMetaCommentEvent(EVENT)).toBe(false);
+    expect(processWebhookFlowEventMock).not.toHaveBeenCalled();
+  });
+
+  it("never throws: lookup and enqueue failures resolve false", async () => {
+    getActiveMetaConnectionByInstagramIdMock.mockRejectedValue(new Error("db down"));
+    expect(await processMetaCommentEvent(EVENT)).toBe(false);
+
+    getActiveMetaConnectionByInstagramIdMock.mockRejectedValue("lookup string throw");
+    expect(await processMetaCommentEvent(EVENT)).toBe(false);
+
+    getActiveMetaConnectionByInstagramIdMock.mockResolvedValue(CONNECTION);
+    processWebhookFlowEventMock.mockRejectedValue(new Error("enqueue down"));
+    expect(await processMetaCommentEvent(EVENT)).toBe(false);
+
+    processWebhookFlowEventMock.mockRejectedValue("string throw");
+    expect(await processMetaCommentEvent(EVENT)).toBe(false);
   });
 });

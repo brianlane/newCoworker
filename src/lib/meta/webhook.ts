@@ -3,7 +3,7 @@
  *
  * Mirrors src/lib/vagaro/webhook.ts: the route stays a thin
  * verify-and-delegate layer, and everything after signature verification
- * lives here. Two event families arrive on the same callback:
+ * lives here. Three event families arrive on the same callback:
  *
  *   * `entry[].changes[]` with field "leadgen" (object "page") — lead ads.
  *     Each becomes a webhook flow event with source "facebook_lead_ads"
@@ -16,6 +16,13 @@
  *     reply job; a NEW conversation also fires a first-contact webhook
  *     flow event (source "facebook_messenger" / "instagram_dm" /
  *     "whatsapp", conversation id as the idempotency key).
+ *   * `entry[].changes[]` with field "comments" (object "instagram") —
+ *     comments on the linked IG professional account's posts. Each becomes
+ *     a webhook flow event with source "instagram_comment" and the comment
+ *     id as the idempotency key, so owners can build keyword-scoped
+ *     engagement flows (notify, follow up) without any new rules engine.
+ *     Requires the platform Meta app's App-Dashboard subscription to the
+ *     instagram object's `comments` field.
  */
 import { z } from "zod";
 import {
@@ -132,6 +139,41 @@ export type MetaLeadgenEvent = {
   leadgenId: string;
 };
 
+export type MetaCommentEvent = {
+  /** The IG professional account whose media was commented on. */
+  instagramAccountId: string;
+  /** IG comment id — the flow-event idempotency key. */
+  commentId: string;
+  /** The commented media, when the delivery carried it. */
+  mediaId: string;
+  text: string;
+  /** IG-scoped commenter id + public username (may be absent). */
+  fromId: string;
+  fromUsername: string;
+};
+
+/**
+ * Instagram comment change payload (object "instagram", field "comments"):
+ * value.id is the comment id; from/media/text ride alongside.
+ */
+const commentChangeValueSchema = z
+  .object({
+    id: z.union([z.string(), z.number()]).optional(),
+    text: z.string().optional(),
+    from: z
+      .object({
+        id: z.union([z.string(), z.number()]).optional(),
+        username: z.string().optional()
+      })
+      .passthrough()
+      .optional(),
+    media: z
+      .object({ id: z.union([z.string(), z.number()]).optional() })
+      .passthrough()
+      .optional()
+  })
+  .passthrough();
+
 export type MetaMessageEvent = {
   platform: MessengerPlatform;
   /**
@@ -151,6 +193,7 @@ export type MetaMessageEvent = {
 export type MetaWebhookEvents = {
   leadgen: MetaLeadgenEvent[];
   messages: MetaMessageEvent[];
+  comments: MetaCommentEvent[];
 };
 
 /** Shown in transcripts for image/audio/file messages we don't ingest. */
@@ -167,7 +210,7 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
   const parsed = webhookBodySchema.safeParse(json);
   if (!parsed.success) return null;
 
-  const events: MetaWebhookEvents = { leadgen: [], messages: [] };
+  const events: MetaWebhookEvents = { leadgen: [], messages: [], comments: [] };
   const object = parsed.data.object;
   if (object === "whatsapp_business_account") {
     for (const entry of parsed.data.entry) {
@@ -228,6 +271,27 @@ export function parseMetaWebhookBody(json: unknown): MetaWebhookEvents | null {
         const leadgenId = String(change.value.leadgen_id ?? "");
         if (!pageId || !leadgenId) continue;
         events.leadgen.push({ pageId, leadgenId });
+      }
+    }
+
+    if (platform === "instagram") {
+      for (const change of entry.changes ?? []) {
+        if (change.field !== "comments") continue;
+        const value = commentChangeValueSchema.safeParse(change.value);
+        if (!value.success) continue;
+        const commentId = String(value.data.id ?? "");
+        const fromId = String(value.data.from?.id ?? "");
+        // The business commenting/replying on its own media must never
+        // trigger flows (the DM path's echo rule, applied to comments).
+        if (!entryId || !commentId || fromId === entryId) continue;
+        events.comments.push({
+          instagramAccountId: entryId,
+          commentId,
+          mediaId: String(value.data.media?.id ?? ""),
+          text: value.data.text?.trim() ?? "",
+          fromId,
+          fromUsername: value.data.from?.username?.trim() ?? ""
+        });
       }
     }
 
@@ -330,6 +394,71 @@ export const MESSENGER_FLOW_SOURCES: Record<MessengerPlatform, string> = {
   instagram: "instagram_dm",
   whatsapp: "whatsapp"
 };
+
+/** Flow-trigger source label for IG comment events. */
+export const INSTAGRAM_COMMENT_FLOW_SOURCE = "instagram_comment";
+
+/**
+ * Resolve and enqueue one IG comment event as a webhook flow event. Never
+ * throws — a failure for one comment must not fail the delivery batch
+ * (Meta redelivers, and the comment-id dedupe key makes the retry safe).
+ * Returns true when the comment reached the flow engine.
+ */
+export async function processMetaCommentEvent(event: MetaCommentEvent): Promise<boolean> {
+  const { instagramAccountId, commentId } = event;
+
+  const limiter = rateLimit(`meta-webhook-comment:${instagramAccountId}`, META_WEBHOOK_RATE);
+  if (!limiter.success) {
+    logger.warn("meta comment webhook rate limited", { instagramAccountId });
+    return false;
+  }
+
+  const connection = await getActiveMetaConnectionByInstagramId(instagramAccountId).catch(
+    (err) => {
+      logger.warn("meta comment connection lookup failed", {
+        instagramAccountId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return null;
+    }
+  );
+  if (!connection) {
+    // Unknown/disabled account: acknowledge so Meta doesn't retry forever.
+    logger.warn("meta comment for unconnected account", { instagramAccountId });
+    return false;
+  }
+
+  try {
+    const result = await processWebhookFlowEvent(connection.business_id, {
+      source: INSTAGRAM_COMMENT_FLOW_SOURCE,
+      eventId: event.commentId,
+      data: {
+        comment_id: event.commentId,
+        comment_text: event.text,
+        ...(event.fromUsername ? { username: event.fromUsername } : {}),
+        ...(event.fromId ? { from_id: event.fromId } : {}),
+        ...(event.mediaId ? { media_id: event.mediaId } : {}),
+        instagram_account_id: instagramAccountId
+      }
+    });
+    logger.info("meta comment processed", {
+      businessId: connection.business_id,
+      instagramAccountId,
+      commentId,
+      enqueued: result.enqueued,
+      flowsMatched: result.flowsMatched
+    });
+    return true;
+  } catch (err) {
+    logger.warn("meta comment processing failed", {
+      businessId: connection.business_id,
+      instagramAccountId,
+      commentId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
 
 /**
  * The business-side send credentials for one inbound message, platform-
@@ -496,6 +625,9 @@ export async function processMetaWebhookEvents(
   let handled = 0;
   for (const event of events.leadgen) {
     if (await processMetaLeadgenEvent(event)) handled += 1;
+  }
+  for (const event of events.comments) {
+    if (await processMetaCommentEvent(event)) handled += 1;
   }
   let messagesEnqueued = 0;
   let messagesRateLimited = 0;
