@@ -6,6 +6,7 @@
  */
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { notFound, redirect } from "next/navigation";
 import { z } from "zod";
@@ -40,6 +41,7 @@ export default async function SmsThreadPage({
 }: {
   params: Promise<{ customerE164: string }>;
 }) {
+  const t = await getTranslations("dashboard.pages");
   const { customerE164: rawSegment } = await params;
   // Next has already URL-decoded the segment, but defend against
   // double-encoding bugs upstream by re-decoding any residual %2B etc.
@@ -122,7 +124,7 @@ export default async function SmsThreadPage({
           ← Back to text history
         </Link>
         <div className="mt-2 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold text-parchment">SMS thread</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("smsThreadTitle")}</h1>
           <DeleteItemButton
             url={`/api/dashboard/messages/${encodeURIComponent(customerE164)}?businessId=${encodeURIComponent(business.id)}`}
             confirmMessage="Delete this entire conversation from your history? The contact itself is kept."

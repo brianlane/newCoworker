@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
@@ -16,6 +17,7 @@ export const dynamic = "force-dynamic";
 type Props = { params: Promise<{ flowId: string }> };
 
 export default async function AiFlowViewPage({ params }: Props) {
+  const t = await getTranslations("dashboard.pages");
   const { flowId } = await params;
 
   const user = await getAuthUser();
@@ -112,7 +114,7 @@ export default async function AiFlowViewPage({ params }: Props) {
               </p>
             </>
           ) : (
-            <h1 className="text-2xl font-bold text-parchment">AiFlow not found</h1>
+            <h1 className="text-2xl font-bold text-parchment">{t("aiflowNotFound")}</h1>
           )}
         </div>
         <div className="flex flex-wrap items-center gap-4 text-sm sm:shrink-0 sm:flex-nowrap sm:whitespace-nowrap">

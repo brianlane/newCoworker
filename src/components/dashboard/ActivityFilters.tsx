@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { ACTIVITY_BADGE } from "@/components/dashboard/activity-badge";
 import type { ActivityKind } from "@/lib/db/activity";
 
@@ -33,6 +34,8 @@ export function ActivityFilters({
   /** The tier's maximum window — presets at/above it collapse into "All". */
   windowDays: number;
 }) {
+  const tBadge = useTranslations("dashboard.activityBadge");
+  const t = useTranslations("dashboard.activityFilters");
   const router = useRouter();
 
   const navigate = (nextKinds: ActivityKind[], nextDays: number | undefined) => {
@@ -55,7 +58,7 @@ export function ActivityFilters({
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by type">
+      <div className="flex flex-wrap items-center gap-1.5" role="group" aria-label={t("filterByType")}>
         {KINDS.map((kind) => {
           const active = kinds.includes(kind);
           return (
@@ -71,7 +74,7 @@ export function ActivityFilters({
                   : "border-parchment/15 text-parchment/60 hover:border-parchment/35 hover:text-parchment"
               ].join(" ")}
             >
-              {ACTIVITY_BADGE[kind].label}
+              {tBadge(ACTIVITY_BADGE[kind].labelKey)}
             </button>
           );
         })}
@@ -81,14 +84,14 @@ export function ActivityFilters({
             onClick={() => navigate([], days)}
             className="px-1.5 py-1 text-xs text-parchment/40 hover:text-parchment transition-colors"
           >
-            Clear
+            {t("clear")}
           </button>
         )}
       </div>
 
       <div className="flex items-center gap-1.5">
         <label htmlFor="activity-days" className="text-xs text-parchment/50">
-          Time
+          {t("time")}
         </label>
         <select
           id="activity-days"
@@ -101,15 +104,15 @@ export function ActivityFilters({
         >
           {presets.map((d) => (
             <option key={d} value={d}>
-              {d === 1 ? "Today" : `Last ${d} days`}
+              {d === 1 ? t("today") : t("lastDays", { days: d })}
             </option>
           ))}
           {extraDays !== null && (
             <option value={extraDays}>
-              Last {Math.min(extraDays, windowDays)} days
+              {t("lastDays", { days: Math.min(extraDays, windowDays) })}
             </option>
           )}
-          <option value="">Last {windowDays} days (all)</option>
+          <option value="">{t("lastDaysAll", { days: windowDays })}</option>
         </select>
       </div>
     </div>

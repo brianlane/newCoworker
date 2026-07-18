@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -9,6 +10,7 @@ import { DashboardChat } from "@/components/dashboard/DashboardChat";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardChatPage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/chat");
   if (!user.email) redirect("/login?redirectTo=/dashboard/chat");
@@ -30,20 +32,18 @@ export default async function DashboardChatPage() {
     return (
       <div className="space-y-6 max-w-4xl">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Chat with your coworker</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("chatTitle")}</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Private chat with your local AI coworker
+            {t("chatSubtitle")}
           </p>
         </div>
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-            >
-              Get Started →
-            </a>
+            >{t("getStarted")}</a>
           </div>
         </Card>
       </div>
@@ -54,8 +54,8 @@ export default async function DashboardChatPage() {
     return (
       <div className="space-y-6 max-w-4xl">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Chat with your coworker</h1>
-          <p className="text-sm text-parchment/50 mt-1">Private chat with your local AI coworker</p>
+          <h1 className="text-2xl font-bold text-parchment">{t("chatTitle")}</h1>
+          <p className="text-sm text-parchment/50 mt-1">{t("chatSubtitle")}</p>
         </div>
         <Card className="border-signal-teal/40 bg-signal-teal/5">
           <p className="text-sm font-semibold text-signal-teal">Still provisioning</p>

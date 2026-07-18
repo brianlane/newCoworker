@@ -13,6 +13,7 @@
  */
 
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -33,6 +34,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export default async function DashboardCustomersPage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/customers");
   if (!user.email) redirect("/login?redirectTo=/dashboard/customers");
@@ -55,20 +57,18 @@ export default async function DashboardCustomersPage() {
     return (
       <div className="space-y-6 max-w-4xl">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Customers</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("customersTitle")}</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Everyone your AI coworker has talked to across SMS and voice
+            {t("customersEmptySubtitle")}
           </p>
         </div>
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-            >
-              Get Started →
-            </a>
+            >{t("getStarted")}</a>
           </div>
         </Card>
       </div>
@@ -136,10 +136,9 @@ export default async function DashboardCustomersPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Contacts</h1>
+        <h1 className="text-2xl font-bold text-parchment">{t("contactsTitle")}</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Everyone in one place: customers, your team, the owner, and the people
-          and services you work with
+          {t("contactsSubtitle")}
         </p>
       </div>
 

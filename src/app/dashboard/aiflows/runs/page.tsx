@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { redirect } from "next/navigation";
 import Link from "next/link";
@@ -17,6 +18,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 type Props = { searchParams: Promise<{ flowId?: string }> };
 
 export default async function AiFlowRunsPage({ searchParams }: Props) {
+  const t = await getTranslations("dashboard.pages");
   const { flowId: rawFlowId } = await searchParams;
   // Ignore a malformed flowId rather than letting it reach the query and 500
   // (mirrors the runs API route, which also drops invalid ids).
@@ -69,12 +71,12 @@ export default async function AiFlowRunsPage({ searchParams }: Props) {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="min-w-0">
           <h1 className="break-words text-2xl font-bold text-parchment">
-            {filteredFlow ? `${filteredFlow.name}: runs` : "AiFlow runs"}
+            {filteredFlow ? t("aiflowRunsTitleFlow", { name: filteredFlow.name }) : t("aiflowRunsTitle")}
           </h1>
           <p className="mt-1 text-sm text-parchment/50">
             {filteredFlow
-              ? "Run history and approvals for this AiFlow."
-              : "History of automation runs and approvals."}
+              ? t("aiflowRunsSubtitleFlow")
+              : t("aiflowRunsSubtitleAll")}
           </p>
         </div>
         <Link

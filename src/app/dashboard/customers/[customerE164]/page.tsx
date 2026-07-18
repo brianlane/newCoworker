@@ -9,6 +9,7 @@
  */
 
 import { notFound, redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import Link from "next/link";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -45,6 +46,7 @@ export const dynamic = "force-dynamic";
 type Props = { params: Promise<{ customerE164: string }> };
 
 export default async function CustomerDetailPage({ params }: Props) {
+  const tBadge = await getTranslations("dashboard.activityBadge");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/customers");
   if (!user.email) redirect("/login?redirectTo=/dashboard/customers");
@@ -322,7 +324,7 @@ export default async function CustomerDetailPage({ params }: Props) {
                     </p>
                   </div>
                   <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
-                    {ACTIVITY_BADGE[item.kind].label}
+                    {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}
                   </Badge>
                 </Link>
               </li>
