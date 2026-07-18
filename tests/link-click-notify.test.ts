@@ -7,18 +7,24 @@ const {
   resolveContactNames,
   hasRecentNotificationForContact,
   createSupabaseServiceClient,
-  businessLookup
+  businessLookup,
+  linkUpdate
 } = vi.hoisted(() => {
   const businessLookup = vi.fn();
+  const linkUpdate = vi.fn();
   return {
     dispatchUrgentNotification: vi.fn(),
     resolveContactNames: vi.fn(),
     hasRecentNotificationForContact: vi.fn(),
     businessLookup,
+    linkUpdate,
     createSupabaseServiceClient: vi.fn().mockResolvedValue({
-      from: () => ({
+      from: (table: string) => ({
         select: () => ({
           eq: () => ({ maybeSingle: businessLookup })
+        }),
+        update: (patch: Record<string, unknown>) => ({
+          eq: (...args: unknown[]) => linkUpdate(table, patch, ...args)
         })
       })
     })
@@ -80,6 +86,8 @@ describe("notifyLinkClick", () => {
     hasRecentNotificationForContact.mockResolvedValue(false);
     businessLookup.mockReset();
     businessLookup.mockResolvedValue({ data: { name: "KYP Ads" }, error: null });
+    linkUpdate.mockReset();
+    linkUpdate.mockResolvedValue({ data: null, error: null });
   });
 
   it("dispatches when the RPC says should_notify, with booking-link wording for calendly URLs", async () => {
@@ -165,7 +173,7 @@ describe("notifyLinkClick", () => {
     );
   });
 
-  it("falls back to 'link' for a URL with an empty host and logs non-Error dispatch failures", async () => {
+  it("falls back to 'link' for a URL with an empty host; a non-Error dispatch failure releases the stamp", async () => {
     dispatchUrgentNotification.mockRejectedValueOnce("string failure");
     const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
     // Parses as a URL but carries no hostname → the `host || "link"` branch.
@@ -173,14 +181,31 @@ describe("notifyLinkClick", () => {
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({ summary: "A lead tapped your link" })
     );
+    // Thrown dispatch → notified_at released so the next human tap retries.
+    expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
   });
 
-  it("uses the 'link' label for unparseable URLs and logs Error dispatch failures", async () => {
+  it("uses the 'link' label for unparseable URLs and releases the stamp on Error dispatch failures", async () => {
     dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
     const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
     await notifyLinkClick(rpcResult({ to_e164: null, original_url: "not-a-url" }));
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({ summary: "A lead tapped your link" })
     );
+    expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
+  });
+
+  it("keeps the stamp on success, and stays at-most-once when the release itself fails", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
+    expect(linkUpdate).not.toHaveBeenCalled();
+
+    dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
+    linkUpdate.mockRejectedValueOnce(new Error("db down"));
+    await expect(notifyLinkClick(rpcResult())).resolves.toBeUndefined();
+
+    dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
+    linkUpdate.mockRejectedValueOnce("string failure");
+    await expect(notifyLinkClick(rpcResult())).resolves.toBeUndefined();
   });
 });

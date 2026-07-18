@@ -120,5 +120,23 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
       linkId: result.link_id,
       error: err instanceof Error ? err.message : String(err)
     });
+    // The RPC stamped notified_at BEFORE this dispatch (atomic dedupe against
+    // concurrent taps). A THROWN dispatch means no alert and no audit rows —
+    // release the stamp so the lead's next human tap retries, instead of the
+    // owner silently losing this link's one alert. Best-effort: if this write
+    // also fails we stay at-most-once by design (never alert-storm). The
+    // per-contact hourly throttle bounds any retry.
+    try {
+      await db
+        .from("sms_links")
+        .update({ notified_at: null })
+        .eq("id", result.link_id);
+    } catch (resetErr) {
+      logger.warn("link-click-notify: notified_at release failed", {
+        businessId: result.business_id,
+        linkId: result.link_id,
+        error: resetErr instanceof Error ? resetErr.message : String(resetErr)
+      });
+    }
   }
 }
