@@ -27,8 +27,10 @@ vi.mock("@/lib/db/platform-costs", () => ({
 import {
   dedupeSubscriptionsPreferringActive,
   hostingCentsByBusiness,
+  hostingSizesByBusiness,
   loadFleetMargins,
   monthStartYmdUtc,
+  syncedHostingContradictsPin,
   telnyxMicrosByBusiness
 } from "@/lib/admin/margin-data";
 import { listBusinesses } from "@/lib/db/businesses";
@@ -38,6 +40,7 @@ import { getFleetCalendarMonthUsageByBusiness } from "@/lib/db/usage";
 import { getFleetCurrentAiSpendMicrosByBusiness } from "@/lib/db/chat-usage";
 import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
 import type { HostingerVpsCostRow, TelnyxCostDailyRow } from "@/lib/db/platform-costs";
+import { HOSTING_MONTHLY_CENTS_BY_SIZE } from "@/lib/plans/enterprise-pricing";
 
 const NOW = new Date("2026-07-12T18:00:00.000Z");
 
@@ -186,6 +189,39 @@ describe("hostingCentsByBusiness", () => {
   });
 });
 
+describe("hostingSizesByBusiness", () => {
+  it("collects parseable sizes per business under the same row filter as the cents map", () => {
+    const map = hostingSizesByBusiness([
+      HOSTINGER_ROW, // KVM 2
+      { ...HOSTINGER_ROW, subscription_id: "sub-2", plan: "KVM 8" },
+      { ...HOSTINGER_ROW, subscription_id: "sub-3", plan: "Mystery SKU" }, // unparseable → skipped
+      { ...HOSTINGER_ROW, subscription_id: "sub-4", assigned_business_id: null },
+      { ...HOSTINGER_ROW, subscription_id: "sub-5", monthly_price_cents: null },
+      { ...HOSTINGER_ROW, subscription_id: "sub-6", status: "cancelled" }
+    ]);
+    expect(map.get("biz-amy")).toEqual(["kvm2", "kvm8"]);
+    expect(map.size).toBe(1);
+  });
+});
+
+describe("syncedHostingContradictsPin", () => {
+  it("is false without a valid pin or without synced sizes", () => {
+    expect(syncedHostingContradictsPin(null, ["kvm8"])).toBe(false);
+    expect(syncedHostingContradictsPin("weird", ["kvm8"])).toBe(false);
+    expect(syncedHostingContradictsPin("kvm2", undefined)).toBe(false);
+    expect(syncedHostingContradictsPin("kvm2", [])).toBe(false);
+  });
+
+  it("is false when every synced box matches the pin", () => {
+    expect(syncedHostingContradictsPin("kvm2", ["kvm2", "kvm2"])).toBe(false);
+  });
+
+  it("is true when any synced box disagrees with the pin", () => {
+    expect(syncedHostingContradictsPin("kvm2", ["kvm8"])).toBe(true);
+    expect(syncedHostingContradictsPin("kvm2", ["kvm2", "kvm8"])).toBe(true);
+  });
+});
+
 describe("telnyxMicrosByBusiness", () => {
   it("sums cost per business, excluding unattributed rows", () => {
     const map = telnyxMicrosByBusiness([
@@ -234,6 +270,33 @@ describe("loadFleetMargins", () => {
     expect(data.businesses).toHaveLength(2);
     expect(data.usageByBusiness.get("biz-amy")?.smsSent).toBe(251);
     expect(data.aiSpendMicrosByBusiness.get("biz-amy")).toBe(410_000);
+  });
+
+  it("replaces the synced price with the pinned SKU when the box size contradicts the pin", async () => {
+    // Scar Fairy scenario: standard tenant pinned kvm2, but the assigned
+    // (lapsing) billing row is still the old KVM8 at $73.99 — the margin
+    // must reflect the pinned kvm2 SKU, not the outgoing box's bill.
+    vi.mocked(listHostingerVpsCosts).mockResolvedValue([
+      { ...HOSTINGER_ROW, plan: "KVM 8", monthly_price_cents: 7399, status: "non_renewing" }
+    ]);
+    const data = await loadFleetMargins(NOW);
+    const amy = data.byBusiness.get("biz-amy")!;
+    expect(amy.lines.find((l) => l.key === "hosting")).toMatchObject({
+      cents: HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2,
+      source: "estimate"
+    });
+  });
+
+  it("keeps the synced price when the box size matches the pin (promo pricing wins)", async () => {
+    vi.mocked(listHostingerVpsCosts).mockResolvedValue([
+      { ...HOSTINGER_ROW, monthly_price_cents: 1899 } // KVM 2 promo below SKU
+    ]);
+    const data = await loadFleetMargins(NOW);
+    const amy = data.byBusiness.get("biz-amy")!;
+    expect(amy.lines.find((l) => l.key === "hosting")).toMatchObject({
+      cents: 1899,
+      source: "actual"
+    });
   });
 
   it("degrades every best-effort read to estimates/zeroes", async () => {
