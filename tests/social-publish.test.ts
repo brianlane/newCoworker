@@ -412,6 +412,24 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     );
   });
 
+  it("keeps waiting when the resolution publish call itself throws (ambiguous — even past stale)", async () => {
+    // Same ambiguity rule as the live path: the throw may have surfaced
+    // after Meta published, so never dead-letter on it — the next pass
+    // re-reads status_code, and a dead container expires to ERROR/EXPIRED.
+    for (const thrown of [new Error("publish timeout"), "publish string throw"]) {
+      vi.clearAllMocks();
+      listDue.mockResolvedValue([]);
+      listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]); // past stale
+      transition.mockResolvedValue(true);
+      loadConnection.mockResolvedValue(connection());
+      containerStatus.mockResolvedValue("FINISHED");
+      publishMedia.mockRejectedValue(thrown);
+      const result = await processSocialPostSweep(deps());
+      expect(result).toMatchObject({ staled: 0, published: 0, unsettled: 1 });
+      expect(transition).not.toHaveBeenCalled();
+    }
+  });
+
   it("completes a FINISHED container one cron beat later — no 15-minute wait, no duplicate risk", async () => {
     listInFlight.mockResolvedValue([
       inFlight({ started_at: STARTED_RESUMABLE, ig_creation_id: "container-7" })

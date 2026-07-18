@@ -263,11 +263,28 @@ async function resolveInFlightPost(
           return won ? "published" : "lost";
         }
         if (status === "FINISHED" && connection.instagram_account_id) {
-          const igMediaId = await deps.publishMedia(
-            connection.instagram_account_id,
-            connection.pageToken,
-            post.ig_creation_id
-          );
+          let igMediaId = "";
+          try {
+            igMediaId = await deps.publishMedia(
+              connection.instagram_account_id,
+              connection.pageToken,
+              post.ig_creation_id
+            );
+          } catch (err) {
+            // AMBIGUOUS, same as the live path: the throw may have surfaced
+            // after Meta published. Keep waiting — the next pass re-reads
+            // status_code (PUBLISHED → stamp; FINISHED → retry), and a
+            // never-publishing container expires within Meta's 24h window,
+            // dead-lettering through the ERROR/EXPIRED path.
+            logger.warn(
+              "social-post-sweep: resolution publish call failed; will re-read container status next pass",
+              {
+                postId: post.id,
+                error: err instanceof Error ? err.message : String(err)
+              }
+            );
+            return "waiting";
+          }
           const won = await stampOutcome(db, post, {
             status: "published",
             published_at: nowIso,
