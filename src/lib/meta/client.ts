@@ -22,10 +22,12 @@ export const META_OAUTH_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERS
 
 /**
  * Permissions for the Lead Ads use case ("Capture & manage ad leads with
- * Marketing API") plus the Messenger/Instagram DM conversation channel:
- * read leads, list/choose the Page, manage its webhook subscription, and
- * read/send messages on the Page and its linked IG professional account.
- * Existing connections must reconnect once to grant the newer scopes.
+ * Marketing API") plus the Messenger/Instagram DM conversation channel and
+ * Instagram content publishing (the Marketing page's scheduled posts):
+ * read leads, list/choose the Page, manage its webhook subscription,
+ * read/send messages on the Page and its linked IG professional account,
+ * and publish media to that account. Existing connections must reconnect
+ * once to grant the newer scopes.
  */
 export const META_LOGIN_SCOPES = [
   "leads_retrieval",
@@ -35,7 +37,8 @@ export const META_LOGIN_SCOPES = [
   "pages_manage_ads",
   "pages_messaging",
   "instagram_basic",
-  "instagram_manage_messages"
+  "instagram_manage_messages",
+  "instagram_content_publish"
 ] as const;
 
 /** Outbound budget per Graph call — fail fast on a stuck upstream. */
@@ -306,6 +309,72 @@ export async function subscribePageToLeadgen(
   if (success !== true) {
     throw new MetaApiError("request_failed", "Meta leadgen subscription was not confirmed");
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Instagram content publishing (Marketing page scheduled posts)       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Step 1 of the IG publish two-step: create a media container for a
+ * single-image feed post. Meta fetches `imageUrl` server-side, so it must
+ * be a publicly reachable https URL. Returns the container (creation) id.
+ */
+export async function createInstagramMediaContainer(
+  igUserId: string,
+  pageToken: string,
+  imageUrl: string,
+  caption: string
+): Promise<string> {
+  const payload = await graphRequest(
+    `/${igUserId}/media`,
+    { image_url: imageUrl, caption, access_token: pageToken },
+    { method: "POST" }
+  );
+  const id = (payload as { id?: unknown } | null)?.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new MetaApiError("request_failed", "Instagram media container returned no id");
+  }
+  return id;
+}
+
+/**
+ * A media container's publish state (`GET /{creation_id}?fields=status_code`).
+ * PUBLISHED means the post is live even if our publish call's response was
+ * lost — the stale-publish sweep uses this to resolve interrupted publishes
+ * truthfully instead of guessing.
+ */
+export async function getInstagramContainerStatus(
+  creationId: string,
+  pageToken: string
+): Promise<string> {
+  const payload = await graphRequest(`/${creationId}`, {
+    fields: "status_code",
+    access_token: pageToken
+  });
+  const status = (payload as { status_code?: unknown } | null)?.status_code;
+  return typeof status === "string" ? status : "";
+}
+
+/**
+ * Step 2: publish a previously created container. Returns the published
+ * media id (the permalink handle).
+ */
+export async function publishInstagramMedia(
+  igUserId: string,
+  pageToken: string,
+  creationId: string
+): Promise<string> {
+  const payload = await graphRequest(
+    `/${igUserId}/media_publish`,
+    { creation_id: creationId, access_token: pageToken },
+    { method: "POST" }
+  );
+  const id = (payload as { id?: unknown } | null)?.id;
+  if (typeof id !== "string" || id.length === 0) {
+    throw new MetaApiError("request_failed", "Instagram media publish returned no id");
+  }
+  return id;
 }
 
 /** Best-effort unsubscribe on disconnect — never throws. */
