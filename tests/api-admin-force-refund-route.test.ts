@@ -139,7 +139,7 @@ beforeEach(() => {
 
 describe("api/admin/force-refund route", () => {
   it("runs cancelWithRefund directly and relabels refund audit as admin_force", async () => {
-    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+    vi.mocked(planLifecycleAction).mockReturnValue({
       ok: true,
       plan: {
         stripeOps: [
@@ -192,7 +192,9 @@ describe("api/admin/force-refund route", () => {
       { type: "cancelWithRefund" },
       expect.anything()
     );
-    expect(planLifecycleAction).toHaveBeenCalledTimes(1);
+    // Twice: the eligibility-validation build, then the final build with
+    // the billable-usage carve-out threaded into the context.
+    expect(planLifecycleAction).toHaveBeenCalledTimes(2);
     expect(executeLifecyclePlanFastPhase).toHaveBeenCalledWith(
       expect.objectContaining({
         stripeOps: [
@@ -227,38 +229,44 @@ describe("api/admin/force-refund route", () => {
   });
 
   it("retries with a synthetic profile when the refund window has closed", async () => {
+    // The route builds the plan twice (validation, then with the usage
+    // carve-out); each build first fails on the real profile and then
+    // succeeds on the synthetic one — hence the alternating sequence.
+    const okPlan = {
+      ok: true,
+      plan: {
+        stripeOps: [
+          {
+            type: "refund_latest_charge",
+            stripeSubscriptionId: "sub_stripe",
+            reason: "thirty_day_money_back"
+          }
+        ],
+        hostingerOps: [],
+        sshOps: [],
+        dbUpdates: [
+          {
+            type: "record_refund",
+            subscriptionId: "sub-1",
+            profileId: "prof-1",
+            stripeRefundId: null,
+            stripeChargeId: null,
+            amountCents: 1000,
+            reason: "thirty_day_money_back"
+          }
+        ],
+        emailsToSend: []
+      }
+    };
     vi.mocked(planLifecycleAction)
       .mockReturnValueOnce({ ok: false, reason: "refund_window_closed" } as never)
-      .mockReturnValueOnce({
-        ok: true,
-        plan: {
-          stripeOps: [
-            {
-              type: "refund_latest_charge",
-              stripeSubscriptionId: "sub_stripe",
-              reason: "thirty_day_money_back"
-            }
-          ],
-          hostingerOps: [],
-          sshOps: [],
-          dbUpdates: [
-            {
-              type: "record_refund",
-              subscriptionId: "sub-1",
-              profileId: "prof-1",
-              stripeRefundId: null,
-              stripeChargeId: null,
-              amountCents: 1000,
-              reason: "thirty_day_money_back"
-            }
-          ],
-          emailsToSend: []
-        }
-      } as never);
+      .mockReturnValueOnce(okPlan as never)
+      .mockReturnValueOnce({ ok: false, reason: "refund_window_closed" } as never)
+      .mockReturnValueOnce(okPlan as never);
 
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
-    expect(planLifecycleAction).toHaveBeenCalledTimes(2);
+    expect(planLifecycleAction).toHaveBeenCalledTimes(4);
     const secondCallCtx = (planLifecycleAction as unknown as { mock: { calls: [unknown, { profile: { refund_used_at: string | null; first_paid_at: string | null } }][] } })
       .mock.calls[1][1];
     expect(secondCallCtx.profile.refund_used_at).toBeNull();
@@ -291,7 +299,7 @@ describe("api/admin/force-refund route", () => {
       }
     } as never);
     vi.mocked(upsertCustomerProfile).mockResolvedValueOnce("prof-upserted");
-    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+    vi.mocked(planLifecycleAction).mockReturnValue({
       ok: true,
       plan: {
         stripeOps: [
@@ -419,7 +427,7 @@ describe("api/admin/force-refund route", () => {
     } as never);
     vi.mocked(upsertCustomerProfile).mockResolvedValueOnce("prof-upserted");
     vi.mocked(setBusinessCustomerProfile).mockRejectedValueOnce(new Error("attach failed"));
-    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+    vi.mocked(planLifecycleAction).mockReturnValue({
       ok: true,
       plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
     } as never);
@@ -433,30 +441,29 @@ describe("api/admin/force-refund route", () => {
   });
 
   it("retries with a synthetic profile when the refund was already used", async () => {
+    const okPlan = {
+      ok: true,
+      plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
+    };
+    // fail/ok for the validation build, then fail/ok again for the final
+    // build with the usage carve-out.
     vi.mocked(planLifecycleAction)
       .mockReturnValueOnce({ ok: false, reason: "refund_already_used" } as never)
-      .mockReturnValueOnce({
-        ok: true,
-        plan: {
-          stripeOps: [],
-          hostingerOps: [],
-          sshOps: [],
-          dbUpdates: [],
-          emailsToSend: []
-        }
-      } as never);
+      .mockReturnValueOnce(okPlan as never)
+      .mockReturnValueOnce({ ok: false, reason: "refund_already_used" } as never)
+      .mockReturnValueOnce(okPlan as never);
 
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
-    expect(planLifecycleAction).toHaveBeenCalledTimes(2);
+    expect(planLifecycleAction).toHaveBeenCalledTimes(4);
   });
 
-  it("threads the billable-usage carve-out into the planner context", async () => {
+  it("threads the billable-usage carve-out into the final planner context", async () => {
     vi.mocked(loadBillableUsageCarveOutCents).mockResolvedValueOnce({
       usage: { smsSent: 10, voiceSeconds: 300, aiSpendMicros: 0 },
       cents: 250
     });
-    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+    vi.mocked(planLifecycleAction).mockReturnValue({
       ok: true,
       plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
     } as never);
@@ -467,13 +474,17 @@ describe("api/admin/force-refund route", () => {
       sinceIso: "2026-04-01T00:00:00.000Z",
       aiSpendSinceIso: "2026-04-01T00:00:00.000Z"
     });
-    expect(planLifecycleAction).toHaveBeenCalledWith(
+    expect(planLifecycleAction).toHaveBeenLastCalledWith(
       { type: "cancelWithRefund" },
       expect.objectContaining({ billableUsageCents: 250 })
     );
   });
 
   it("returns 409 when the usage window cannot be resolved (cold period cache)", async () => {
+    vi.mocked(planLifecycleAction).mockReturnValue({
+      ok: true,
+      plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
+    } as never);
     vi.mocked(resolveUsageCarveOutWindow).mockReturnValueOnce({
       ok: false,
       reason: "usage_window_unknown"
@@ -486,19 +497,41 @@ describe("api/admin/force-refund route", () => {
       error: expect.objectContaining({ message: "usage_window_unknown" })
     });
     expect(loadBillableUsageCarveOutCents).not.toHaveBeenCalled();
-    expect(planLifecycleAction).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
     expect(logger.warn).toHaveBeenCalledWith(
       "admin.force-refund: usage carve-out window unknown",
       expect.objectContaining({ businessId: BUSINESS_ID })
     );
   });
 
-  it("fails closed (500, no plan) when the usage read errors", async () => {
+  it("structural planner blockers win over an unresolvable usage window", async () => {
+    // The validation build runs first, so a subscription with no Stripe
+    // backing surfaces as no_stripe_subscription — never the shadowing
+    // usage_window_unknown.
+    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+      ok: false,
+      reason: "no_stripe_subscription"
+    } as never);
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ message: "no_stripe_subscription" })
+    });
+    expect(resolveUsageCarveOutWindow).not.toHaveBeenCalled();
+    expect(loadBillableUsageCarveOutCents).not.toHaveBeenCalled();
+  });
+
+  it("fails closed (500, no execution) when the usage read errors", async () => {
+    vi.mocked(planLifecycleAction).mockReturnValue({
+      ok: true,
+      plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
+    } as never);
     vi.mocked(loadBillableUsageCarveOutCents).mockRejectedValueOnce(new Error("db down"));
 
     const response = await POST(makeRequest());
     expect(response.status).toBe(500);
-    expect(planLifecycleAction).not.toHaveBeenCalled();
     expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(
       "admin.force-refund: billable-usage carve-out load failed",
@@ -540,7 +573,7 @@ describe("api/admin/force-refund route", () => {
         vpsHost: "1.1.1.1"
       }
     } as never);
-    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+    vi.mocked(planLifecycleAction).mockReturnValue({
       ok: true,
       plan: {
         stripeOps: [],
@@ -616,7 +649,7 @@ describe("api/admin/force-refund route", () => {
     });
 
     it("runs the fast phase inline and defers the slow phase via after()", async () => {
-      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(planLifecycleAction).mockReturnValue({ ok: true, plan: makeFullPlan() } as never);
       vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValueOnce({
         refund: { stripeRefundId: "re_1", stripeChargeId: "ch_1", amountCents: 1000 }
       } as never);
@@ -643,7 +676,7 @@ describe("api/admin/force-refund route", () => {
     });
 
     it("returns 500 and skips after() when the fast phase throws", async () => {
-      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(planLifecycleAction).mockReturnValue({ ok: true, plan: makeFullPlan() } as never);
       vi.mocked(executeLifecyclePlanFastPhase).mockRejectedValueOnce(
         new Error("stripe refund declined")
       );
@@ -662,7 +695,7 @@ describe("api/admin/force-refund route", () => {
     });
 
     it("swallows slow-phase errors so the operator's HTTP call still succeeds", async () => {
-      vi.mocked(planLifecycleAction).mockReturnValueOnce({ ok: true, plan: makeFullPlan() } as never);
+      vi.mocked(planLifecycleAction).mockReturnValue({ ok: true, plan: makeFullPlan() } as never);
       vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValueOnce({} as never);
       vi.mocked(executeLifecyclePlanSlowPhase).mockRejectedValueOnce(
         new Error("hostinger api 500")

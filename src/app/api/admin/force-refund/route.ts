@@ -182,6 +182,15 @@ export async function POST(request: Request) {
       };
     }
 
+    // Validate the plan BEFORE loading the usage carve-out so structural
+    // blockers (no Stripe subscription, …) surface as their own typed 409s
+    // rather than a shadowing usage_window_unknown. The planner is pure, so
+    // rebuilding below with the loaded carve-out is cheap.
+    let plan = buildAdminForceRefundPlan(effectiveCtx);
+    if (!plan.ok) {
+      return errorResponse("CONFLICT", plan.reason, 409);
+    }
+
     // Billable-usage carve-out (Jul 2026): like the self-serve refund, the
     // admin force-refund withholds the tenant's third-party usage charges
     // (SMS, voice, Gemini spend) at platform cost, scoped to the refunded
@@ -217,7 +226,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const plan = buildAdminForceRefundPlan(effectiveCtx);
+    plan = buildAdminForceRefundPlan(effectiveCtx);
     if (!plan.ok) {
       return errorResponse("CONFLICT", plan.reason, 409);
     }

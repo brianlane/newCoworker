@@ -91,13 +91,30 @@ export async function POST(request: Request) {
     // placements are governed by the enterprise agreement. Support can
     // still honor edge cases via /api/admin/force-refund, which is
     // deliberately not gated on placement.
-    let effectiveContext = ctxRes.context;
     if (payload.mode === "refund") {
       const { resolveVpsProvider } = await import("@/lib/vps/provider");
       if (resolveVpsProvider(ctxRes.context.vpsProvider) !== "hostinger") {
         return errorResponse("CONFLICT", "refund_not_available_for_placement", 409);
       }
+    }
 
+    const action =
+      payload.mode === "refund"
+        ? ({ type: "cancelWithRefund" } as const)
+        : ({ type: "cancelAtPeriodEnd" } as const);
+
+    // Validate eligibility BEFORE loading the usage carve-out, so an
+    // ineligible caller gets the planner's typed error (refund_window_closed,
+    // refund_already_used, missing_context, …) rather than a shadowing
+    // usage_window_unknown. The planner is pure, so re-planning below with
+    // the loaded carve-out is cheap.
+    let planRes = planLifecycleAction(action, ctxRes.context);
+    if (!planRes.ok) {
+      // Surface typed planner errors as 409s so the UI can branch.
+      return errorResponse("CONFLICT", planRes.reason, 409);
+    }
+
+    if (payload.mode === "refund") {
       // Billable-usage carve-out (Jul 2026): the refund withholds the
       // tenant's third-party usage charges (SMS, voice, Gemini spend) at
       // platform cost, scoped to the refunded invoice's period. FAIL CLOSED
@@ -113,9 +130,12 @@ export async function POST(request: Request) {
       if (!anchor.ok) {
         return errorResponse("CONFLICT", anchor.reason, 409);
       }
+      let billableUsageCents: number;
       try {
-        const { cents } = await loadBillableUsageCarveOutCents(business.id, anchor.window);
-        effectiveContext = { ...ctxRes.context, billableUsageCents: cents };
+        ({ cents: billableUsageCents } = await loadBillableUsageCarveOutCents(
+          business.id,
+          anchor.window
+        ));
       } catch (err) {
         logger.error("billable-usage carve-out load failed on /api/billing/cancel", {
           businessId: business.id,
@@ -127,17 +147,10 @@ export async function POST(request: Request) {
           500
         );
       }
-    }
-
-    const action =
-      payload.mode === "refund"
-        ? ({ type: "cancelWithRefund" } as const)
-        : ({ type: "cancelAtPeriodEnd" } as const);
-
-    const planRes = planLifecycleAction(action, effectiveContext);
-    if (!planRes.ok) {
-      // Surface typed planner errors as 409s so the UI can branch.
-      return errorResponse("CONFLICT", planRes.reason, 409);
+      planRes = planLifecycleAction(action, { ...ctxRes.context, billableUsageCents });
+      if (!planRes.ok) {
+        return errorResponse("CONFLICT", planRes.reason, 409);
+      }
     }
 
     const extra = {

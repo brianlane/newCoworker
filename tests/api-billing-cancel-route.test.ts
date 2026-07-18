@@ -285,7 +285,7 @@ describe("/api/billing/cancel", () => {
 
   it("refund path runs fast phase synchronously and schedules slow phase post-response", async () => {
     const plan = refundPlan();
-    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan });
+    planLifecycleActionMock.mockReturnValue({ ok: true, plan });
     executeLifecyclePlanFastPhaseMock.mockResolvedValueOnce({
       refund: { stripeRefundId: "re_1", stripeChargeId: "ch_1", amountCents: 2500 }
     });
@@ -313,12 +313,14 @@ describe("/api/billing/cancel", () => {
     );
   });
 
-  it("refund mode threads the billable-usage carve-out into the planner context", async () => {
+  it("refund mode threads the billable-usage carve-out into the final planner context", async () => {
     loadBillableUsageCarveOutCentsMock.mockResolvedValueOnce({
       usage: { smsSent: 40, voiceSeconds: 600, aiSpendMicros: 500_000 },
       cents: 142
     });
-    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: refundPlan() });
+    // Called twice: eligibility validation, then the final plan with the
+    // loaded carve-out threaded in.
+    planLifecycleActionMock.mockReturnValue({ ok: true, plan: refundPlan() });
 
     const res = await POST(req({ mode: "refund" }));
 
@@ -327,21 +329,23 @@ describe("/api/billing/cancel", () => {
       sinceIso: "2026-05-01T00:00:00.000Z",
       aiSpendSinceIso: "2026-05-01T00:00:00.000Z"
     });
-    expect(planLifecycleActionMock).toHaveBeenCalledWith(
+    expect(planLifecycleActionMock).toHaveBeenCalledTimes(2);
+    expect(planLifecycleActionMock).toHaveBeenLastCalledWith(
       { type: "cancelWithRefund" },
       expect.objectContaining({ billableUsageCents: 142 })
     );
   });
 
-  it("refund mode fails closed (500, no plan) when the usage read errors", async () => {
+  it("refund mode fails closed (500, no execution) when the usage read errors", async () => {
+    planLifecycleActionMock.mockReturnValue({ ok: true, plan: refundPlan() });
     loadBillableUsageCarveOutCentsMock.mockRejectedValueOnce(new Error("db down"));
     const res = await POST(req({ mode: "refund" }));
     expect(res.status).toBe(500);
-    expect(planLifecycleActionMock).not.toHaveBeenCalled();
     expect(executeLifecyclePlanFastPhaseMock).not.toHaveBeenCalled();
   });
 
-  it("refund mode returns 409 when the usage window cannot be resolved", async () => {
+  it("refund mode returns 409 when the usage window cannot be resolved (eligible but cold cache)", async () => {
+    planLifecycleActionMock.mockReturnValue({ ok: true, plan: refundPlan() });
     resolveUsageCarveOutWindowMock.mockReturnValueOnce({
       ok: false,
       reason: "usage_window_unknown"
@@ -351,7 +355,23 @@ describe("/api/billing/cancel", () => {
     expect(res.status).toBe(409);
     expect(body.error.message).toBe("usage_window_unknown");
     expect(loadBillableUsageCarveOutCentsMock).not.toHaveBeenCalled();
-    expect(planLifecycleActionMock).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhaseMock).not.toHaveBeenCalled();
+  });
+
+  it("ineligible refunds get the planner's typed error, never usage_window_unknown", async () => {
+    // Eligibility is validated BEFORE the usage window is resolved, so a
+    // closed refund window surfaces as refund_window_closed even when the
+    // usage window would also be unresolvable.
+    planLifecycleActionMock.mockReturnValueOnce({
+      ok: false,
+      reason: "refund_window_closed"
+    } satisfies LifecyclePlanResult);
+    const res = await POST(req({ mode: "refund" }));
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.error.message).toBe("refund_window_closed");
+    expect(resolveUsageCarveOutWindowMock).not.toHaveBeenCalled();
+    expect(loadBillableUsageCarveOutCentsMock).not.toHaveBeenCalled();
   });
 
   it("period_end mode never loads the usage carve-out", async () => {
@@ -362,7 +382,7 @@ describe("/api/billing/cancel", () => {
   });
 
   it("refund path returns 500 if the fast phase throws (slow phase never kicks off)", async () => {
-    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: refundPlan() });
+    planLifecycleActionMock.mockReturnValue({ ok: true, plan: refundPlan() });
     executeLifecyclePlanFastPhaseMock.mockRejectedValueOnce(new Error("stripe refund 500"));
     const res = await POST(req({ mode: "refund" }));
     expect(res.status).toBe(500);
@@ -370,7 +390,7 @@ describe("/api/billing/cancel", () => {
   });
 
   it("refund path swallows background slow-phase failures so the HTTP response still succeeds", async () => {
-    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: refundPlan() });
+    planLifecycleActionMock.mockReturnValue({ ok: true, plan: refundPlan() });
     executeLifecyclePlanFastPhaseMock.mockResolvedValueOnce({});
     executeLifecyclePlanSlowPhaseMock.mockRejectedValueOnce(new Error("hostinger 500"));
 
@@ -383,7 +403,7 @@ describe("/api/billing/cancel", () => {
   });
 
   it("refund path falls back to graceEndsAt: null when the plan has no update_subscription op", async () => {
-    planLifecycleActionMock.mockReturnValueOnce({
+    planLifecycleActionMock.mockReturnValue({
       ok: true,
       plan: { stripeOps: [], sshOps: [], hostingerOps: [], telnyxOps: [], dbUpdates: [], emailsToSend: [] }
     });
