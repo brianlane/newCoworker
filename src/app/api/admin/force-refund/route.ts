@@ -58,7 +58,7 @@ import {
 } from "@/lib/billing/lifecycle-executor";
 import {
   loadBillableUsageCarveOutCents,
-  resolveUsageCarveOutSinceIso
+  resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
@@ -184,16 +184,25 @@ export async function POST(request: Request) {
 
     // Billable-usage carve-out (Jul 2026): like the self-serve refund, the
     // admin force-refund withholds the tenant's third-party usage charges
-    // (SMS, voice, Gemini spend) at platform cost. FAIL CLOSED on a read
-    // error — the operator can retry; refunding money already spent on
-    // usage cannot be clawed back.
-    try {
-      const sinceIso = resolveUsageCarveOutSinceIso({
-        stripeCurrentPeriodStart: effectiveCtx.subscription.stripe_current_period_start,
-        firstPaidAt: effectiveCtx.profile?.first_paid_at ?? null,
-        subscriptionCreatedAt: effectiveCtx.subscription.created_at
+    // (SMS, voice, Gemini spend) at platform cost, scoped to the refunded
+    // invoice's period. FAIL CLOSED both on an unknown window (long-lived
+    // subscription with a cold Stripe-period cache — run
+    // scripts/backfill-stripe-subscription-periods.ts, then retry) and on
+    // a read error — refunding money already spent on usage cannot be
+    // clawed back.
+    const anchor = resolveUsageCarveOutWindow({
+      stripeCurrentPeriodStart: effectiveCtx.subscription.stripe_current_period_start,
+      profile: effectiveCtx.profile
+    });
+    if (!anchor.ok) {
+      logger.warn("admin.force-refund: usage carve-out window unknown", {
+        adminEmail: admin.email,
+        businessId: body.businessId
       });
-      const { cents } = await loadBillableUsageCarveOutCents(body.businessId, sinceIso);
+      return errorResponse("CONFLICT", anchor.reason, 409);
+    }
+    try {
+      const { cents } = await loadBillableUsageCarveOutCents(body.businessId, anchor.window);
       effectiveCtx = { ...effectiveCtx, billableUsageCents: cents };
     } catch (err) {
       logger.error("admin.force-refund: billable-usage carve-out load failed", {

@@ -30,7 +30,7 @@ import {
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   loadBillableUsageCarveOutCents,
-  resolveUsageCarveOutSinceIso
+  resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
 import { logger } from "@/lib/logger";
 
@@ -100,16 +100,21 @@ export async function POST(request: Request) {
 
       // Billable-usage carve-out (Jul 2026): the refund withholds the
       // tenant's third-party usage charges (SMS, voice, Gemini spend) at
-      // platform cost. FAIL CLOSED on a read error — refunding money we
-      // cannot verify wasn't already spent on usage is the expensive
-      // mistake; the customer can simply retry.
+      // platform cost, scoped to the refunded invoice's period. FAIL CLOSED
+      // on an unknown window or a read error — refunding money we cannot
+      // verify wasn't already spent on usage is the expensive mistake; the
+      // customer can simply retry. (For an eligible self-serve refund the
+      // window is always resolvable: the period cache, or first_paid_at
+      // while the 30-day window is open.)
+      const anchor = resolveUsageCarveOutWindow({
+        stripeCurrentPeriodStart: ctxRes.context.subscription.stripe_current_period_start,
+        profile: ctxRes.context.profile
+      });
+      if (!anchor.ok) {
+        return errorResponse("CONFLICT", anchor.reason, 409);
+      }
       try {
-        const sinceIso = resolveUsageCarveOutSinceIso({
-          stripeCurrentPeriodStart: ctxRes.context.subscription.stripe_current_period_start,
-          firstPaidAt: ctxRes.context.profile?.first_paid_at ?? null,
-          subscriptionCreatedAt: ctxRes.context.subscription.created_at
-        });
-        const { cents } = await loadBillableUsageCarveOutCents(business.id, sinceIso);
+        const { cents } = await loadBillableUsageCarveOutCents(business.id, anchor.window);
         effectiveContext = { ...ctxRes.context, billableUsageCents: cents };
       } catch (err) {
         logger.error("billable-usage carve-out load failed on /api/billing/cancel", {

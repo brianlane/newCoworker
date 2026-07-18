@@ -10,7 +10,7 @@ const {
   executeLifecyclePlanFastPhaseMock,
   executeLifecyclePlanSlowPhaseMock,
   loadBillableUsageCarveOutCentsMock,
-  resolveUsageCarveOutSinceIsoMock
+  resolveUsageCarveOutWindowMock
 } = vi.hoisted(() => ({
   getAuthUserMock: vi.fn(),
   supabaseFromMock: vi.fn(),
@@ -20,7 +20,7 @@ const {
   executeLifecyclePlanFastPhaseMock: vi.fn(),
   executeLifecyclePlanSlowPhaseMock: vi.fn(),
   loadBillableUsageCarveOutCentsMock: vi.fn(),
-  resolveUsageCarveOutSinceIsoMock: vi.fn()
+  resolveUsageCarveOutWindowMock: vi.fn()
 }));
 
 // `after()` from `next/server` requires the Next.js work-units context
@@ -82,7 +82,7 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
 
 vi.mock("@/lib/billing/usage-charges", () => ({
   loadBillableUsageCarveOutCents: loadBillableUsageCarveOutCentsMock,
-  resolveUsageCarveOutSinceIso: resolveUsageCarveOutSinceIsoMock
+  resolveUsageCarveOutWindow: resolveUsageCarveOutWindowMock
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -169,7 +169,13 @@ describe("/api/billing/cancel", () => {
     executeLifecyclePlanMock.mockResolvedValue({});
     executeLifecyclePlanFastPhaseMock.mockResolvedValue({});
     executeLifecyclePlanSlowPhaseMock.mockResolvedValue(undefined);
-    resolveUsageCarveOutSinceIsoMock.mockReturnValue("2026-05-01T00:00:00.000Z");
+    resolveUsageCarveOutWindowMock.mockReturnValue({
+      ok: true,
+      window: {
+        sinceIso: "2026-05-01T00:00:00.000Z",
+        aiSpendSinceIso: "2026-05-01T00:00:00.000Z"
+      }
+    });
     loadBillableUsageCarveOutCentsMock.mockResolvedValue({
       usage: { smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 },
       cents: 0
@@ -317,10 +323,10 @@ describe("/api/billing/cancel", () => {
     const res = await POST(req({ mode: "refund" }));
 
     expect(res.status).toBe(200);
-    expect(loadBillableUsageCarveOutCentsMock).toHaveBeenCalledWith(
-      "biz_1",
-      "2026-05-01T00:00:00.000Z"
-    );
+    expect(loadBillableUsageCarveOutCentsMock).toHaveBeenCalledWith("biz_1", {
+      sinceIso: "2026-05-01T00:00:00.000Z",
+      aiSpendSinceIso: "2026-05-01T00:00:00.000Z"
+    });
     expect(planLifecycleActionMock).toHaveBeenCalledWith(
       { type: "cancelWithRefund" },
       expect.objectContaining({ billableUsageCents: 142 })
@@ -333,6 +339,19 @@ describe("/api/billing/cancel", () => {
     expect(res.status).toBe(500);
     expect(planLifecycleActionMock).not.toHaveBeenCalled();
     expect(executeLifecyclePlanFastPhaseMock).not.toHaveBeenCalled();
+  });
+
+  it("refund mode returns 409 when the usage window cannot be resolved", async () => {
+    resolveUsageCarveOutWindowMock.mockReturnValueOnce({
+      ok: false,
+      reason: "usage_window_unknown"
+    });
+    const res = await POST(req({ mode: "refund" }));
+    const body = await res.json();
+    expect(res.status).toBe(409);
+    expect(body.error.message).toBe("usage_window_unknown");
+    expect(loadBillableUsageCarveOutCentsMock).not.toHaveBeenCalled();
+    expect(planLifecycleActionMock).not.toHaveBeenCalled();
   });
 
   it("period_end mode never loads the usage carve-out", async () => {

@@ -50,7 +50,7 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
 
 vi.mock("@/lib/billing/usage-charges", () => ({
   loadBillableUsageCarveOutCents: vi.fn(),
-  resolveUsageCarveOutSinceIso: vi.fn()
+  resolveUsageCarveOutWindow: vi.fn()
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -69,7 +69,7 @@ import {
 } from "@/lib/billing/lifecycle-executor";
 import {
   loadBillableUsageCarveOutCents,
-  resolveUsageCarveOutSinceIso
+  resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
 import { logger } from "@/lib/logger";
 
@@ -124,7 +124,13 @@ beforeEach(() => {
   vi.mocked(executeLifecyclePlanSlowPhase).mockResolvedValue(undefined as never);
   vi.mocked(upsertCustomerProfile).mockResolvedValue("prof-upserted");
   vi.mocked(setBusinessCustomerProfile).mockResolvedValue(undefined);
-  vi.mocked(resolveUsageCarveOutSinceIso).mockReturnValue("2026-04-01T00:00:00.000Z");
+  vi.mocked(resolveUsageCarveOutWindow).mockReturnValue({
+    ok: true,
+    window: {
+      sinceIso: "2026-04-01T00:00:00.000Z",
+      aiSpendSinceIso: "2026-04-01T00:00:00.000Z"
+    }
+  });
   vi.mocked(loadBillableUsageCarveOutCents).mockResolvedValue({
     usage: { smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 },
     cents: 0
@@ -457,13 +463,33 @@ describe("api/admin/force-refund route", () => {
 
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
-    expect(loadBillableUsageCarveOutCents).toHaveBeenCalledWith(
-      BUSINESS_ID,
-      "2026-04-01T00:00:00.000Z"
-    );
+    expect(loadBillableUsageCarveOutCents).toHaveBeenCalledWith(BUSINESS_ID, {
+      sinceIso: "2026-04-01T00:00:00.000Z",
+      aiSpendSinceIso: "2026-04-01T00:00:00.000Z"
+    });
     expect(planLifecycleAction).toHaveBeenCalledWith(
       { type: "cancelWithRefund" },
       expect.objectContaining({ billableUsageCents: 250 })
+    );
+  });
+
+  it("returns 409 when the usage window cannot be resolved (cold period cache)", async () => {
+    vi.mocked(resolveUsageCarveOutWindow).mockReturnValueOnce({
+      ok: false,
+      reason: "usage_window_unknown"
+    });
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      error: expect.objectContaining({ message: "usage_window_unknown" })
+    });
+    expect(loadBillableUsageCarveOutCents).not.toHaveBeenCalled();
+    expect(planLifecycleAction).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "admin.force-refund: usage carve-out window unknown",
+      expect.objectContaining({ businessId: BUSINESS_ID })
     );
   });
 

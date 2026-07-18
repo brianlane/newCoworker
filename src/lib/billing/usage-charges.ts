@@ -21,6 +21,10 @@ import {
   ENTERPRISE_UNIT_COSTS,
   VOICE_ALL_IN_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
+import {
+  isWithinLifetimeRefundWindow,
+  type CustomerProfileRow
+} from "@/lib/db/customer-profiles";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -44,39 +48,93 @@ export function computeBillableUsageCents(usage: BillableUsage): number {
   );
 }
 
+export type UsageCarveOutWindow = {
+  /** Anchor for the timestamp-keyed reads (SMS days, voice settlements/meters). */
+  sinceIso: string;
+  /**
+   * `period_start` filter for the AI-spend read; null = sum EVERY spend row
+   * for the business. Null only in the first-paid fallback: the spend
+   * writers key `period_start` at the UTC calendar-month start when the
+   * subscription's Stripe period cache is cold, which can predate a
+   * mid-month `first_paid_at` — a `>= sinceIso` filter would silently miss
+   * the current spend row. In that fallback the account is ≤30 days old,
+   * so its lifetime spend IS the refundable-window spend.
+   */
+  aiSpendSinceIso: string | null;
+};
+
+export type UsageCarveOutAnchor =
+  | { ok: true; window: UsageCarveOutWindow }
+  | { ok: false; reason: "usage_window_unknown" };
+
 /**
- * The instant the refunded invoice's usage window opened: prefer the cached
- * Stripe period start (the invoice being refunded IS the current period),
- * then the profile's `first_paid_at` (self-serve refunds only exist within
- * 30 days of it), then the subscription row's creation. Never null — every
- * refundable subscription has a `created_at`.
+ * The window of usage the refund may withhold.
+ *
+ * The refund executor refunds the LATEST Stripe invoice only, so the usage
+ * we may withhold is exactly the usage covered by that invoice's period:
+ * the cached `stripe_current_period_start` (for monthly plans the current
+ * month; for full-upfront term plans the whole term — the Stripe period IS
+ * the term via `interval_count=12|24`).
+ *
+ * When the period cache is missing (fresh checkout before the first
+ * lifecycle webhook, pre-backfill rows), the profile's `first_paid_at` is a
+ * safe substitute ONLY while the lifetime 30-day money-back window is still
+ * open — the account is ≤30 days old, so "everything since first payment"
+ * and "the refunded invoice's period" coincide. Outside that window (admin
+ * force-refund of a long-lived subscription with a cold cache) there is NO
+ * safe fallback: anchoring on `first_paid_at` would subtract months of
+ * prior-period usage from a one-month refund. We FAIL CLOSED instead —
+ * the operator remedy is `scripts/backfill-stripe-subscription-periods.ts`.
  */
-export function resolveUsageCarveOutSinceIso(input: {
+export function resolveUsageCarveOutWindow(input: {
   stripeCurrentPeriodStart: string | null;
-  firstPaidAt: string | null;
-  subscriptionCreatedAt: string;
-}): string {
-  if (input.stripeCurrentPeriodStart && Number.isFinite(Date.parse(input.stripeCurrentPeriodStart))) {
-    return input.stripeCurrentPeriodStart;
+  profile: Pick<CustomerProfileRow, "first_paid_at" | "refund_used_at"> | null;
+  now?: Date;
+}): UsageCarveOutAnchor {
+  if (
+    input.stripeCurrentPeriodStart &&
+    Number.isFinite(Date.parse(input.stripeCurrentPeriodStart))
+  ) {
+    // Spend writers key windows via deriveMonthlyQuotaWindow(periodStart),
+    // which never precedes the period start — the >= filter is exact here.
+    return {
+      ok: true,
+      window: {
+        sinceIso: input.stripeCurrentPeriodStart,
+        aiSpendSinceIso: input.stripeCurrentPeriodStart
+      }
+    };
   }
-  if (input.firstPaidAt && Number.isFinite(Date.parse(input.firstPaidAt))) {
-    return input.firstPaidAt;
+  if (
+    input.profile !== null &&
+    isWithinLifetimeRefundWindow(input.profile, input.now ?? new Date())
+  ) {
+    // Window-open implies a non-null, parseable first_paid_at — the window
+    // is anchored on it (a null/malformed timestamp reads as closed).
+    return {
+      ok: true,
+      window: {
+        sinceIso: input.profile.first_paid_at as string,
+        aiSpendSinceIso: null
+      }
+    };
   }
-  return input.subscriptionCreatedAt;
+  return { ok: false, reason: "usage_window_unknown" };
 }
 
 /**
- * Sum the tenant's metered usage since `sinceIso`:
+ * Sum the tenant's metered usage inside the carve-out window:
  *
- * - SMS from `daily_usage.sms_sent` (usage_date ≥ since's UTC day — the
- *   whole signup day counts, which can only over-include the tenant's own
- *   sends from earlier that day).
+ * - SMS from `daily_usage.sms_sent` (usage_date ≥ the window's UTC day —
+ *   the whole signup day counts, which can only over-include the tenant's
+ *   own sends from earlier that day).
  * - Voice from `voice_settlements.billable_seconds` (AI portions) plus
  *   `voice_forwarded_call_meter.billable_seconds` (forwarded/transferred
  *   human legs) — together the same population the quota pool commits.
- * - Gemini chat spend from `owner_chat_model_spend` rows whose
- *   `period_start` ≥ since (window keys inside the Stripe period are always
- *   ≥ the period start).
+ * - Gemini chat spend from `owner_chat_model_spend` rows, filtered by
+ *   `period_start` ≥ `aiSpendSinceIso` when set (see
+ *   {@link UsageCarveOutWindow.aiSpendSinceIso} for why the first-paid
+ *   fallback sums every row instead).
  *
  * Every read pages in 1000-row chunks: PostgREST silently caps a single
  * response at 1000 rows, and a silent truncation here would under-withhold
@@ -85,11 +143,12 @@ export function resolveUsageCarveOutSinceIso(input: {
  */
 export async function loadBillableUsageSince(
   businessId: string,
-  sinceIso: string,
+  window: UsageCarveOutWindow,
   client?: SupabaseClient
 ): Promise<BillableUsage> {
   const db = client ?? (await createSupabaseServiceClient());
   const pageSize = 1000;
+  const sinceIso = window.sinceIso;
   const sinceYmd = sinceIso.slice(0, 10);
 
   let smsSent = 0;
@@ -147,11 +206,14 @@ export async function loadBillableUsageSince(
 
   let aiSpendMicros = 0;
   for (let from = 0; ; from += pageSize) {
-    const { data, error } = await db
+    let query = db
       .from("owner_chat_model_spend")
       .select("spend_micros")
-      .eq("business_id", businessId)
-      .gte("period_start", sinceIso)
+      .eq("business_id", businessId);
+    if (window.aiSpendSinceIso !== null) {
+      query = query.gte("period_start", window.aiSpendSinceIso);
+    }
+    const { data, error } = await query
       .order("period_start", { ascending: true })
       .range(from, from + pageSize - 1);
     if (error) throw new Error(`loadBillableUsageSince(owner_chat_model_spend): ${error.message}`);
@@ -169,9 +231,9 @@ export async function loadBillableUsageSince(
 /** Load + price in one call — what the refund routes use. */
 export async function loadBillableUsageCarveOutCents(
   businessId: string,
-  sinceIso: string,
+  window: UsageCarveOutWindow,
   client?: SupabaseClient
 ): Promise<{ usage: BillableUsage; cents: number }> {
-  const usage = await loadBillableUsageSince(businessId, sinceIso, client);
+  const usage = await loadBillableUsageSince(businessId, window, client);
   return { usage, cents: computeBillableUsageCents(usage) };
 }

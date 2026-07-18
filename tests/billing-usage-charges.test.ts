@@ -8,7 +8,7 @@ import {
   computeBillableUsageCents,
   loadBillableUsageCarveOutCents,
   loadBillableUsageSince,
-  resolveUsageCarveOutSinceIso
+  resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
 import {
   ENTERPRISE_UNIT_COSTS,
@@ -37,49 +37,73 @@ describe("computeBillableUsageCents", () => {
   });
 });
 
-describe("resolveUsageCarveOutSinceIso", () => {
-  it("prefers the cached Stripe period start", () => {
+describe("resolveUsageCarveOutWindow", () => {
+  const NOW = new Date("2026-07-10T12:00:00Z");
+
+  it("prefers the cached Stripe period start (AI spend filtered from the same instant)", () => {
     expect(
-      resolveUsageCarveOutSinceIso({
+      resolveUsageCarveOutWindow({
         stripeCurrentPeriodStart: "2026-07-01T00:00:00Z",
-        firstPaidAt: "2026-06-01T00:00:00Z",
-        subscriptionCreatedAt: "2026-05-01T00:00:00Z"
+        profile: { first_paid_at: "2026-06-01T00:00:00Z", refund_used_at: null },
+        now: NOW
       })
-    ).toBe("2026-07-01T00:00:00Z");
+    ).toEqual({
+      ok: true,
+      window: {
+        sinceIso: "2026-07-01T00:00:00Z",
+        aiSpendSinceIso: "2026-07-01T00:00:00Z"
+      }
+    });
   });
 
-  it("falls back to first_paid_at when the period cache is missing or malformed", () => {
-    expect(
-      resolveUsageCarveOutSinceIso({
-        stripeCurrentPeriodStart: null,
-        firstPaidAt: "2026-06-01T00:00:00Z",
-        subscriptionCreatedAt: "2026-05-01T00:00:00Z"
-      })
-    ).toBe("2026-06-01T00:00:00Z");
-    expect(
-      resolveUsageCarveOutSinceIso({
-        stripeCurrentPeriodStart: "not-a-date",
-        firstPaidAt: "2026-06-01T00:00:00Z",
-        subscriptionCreatedAt: "2026-05-01T00:00:00Z"
-      })
-    ).toBe("2026-06-01T00:00:00Z");
+  it("falls back to first_paid_at (lifetime AI spend) while the 30-day window is still open", () => {
+    for (const stripeCurrentPeriodStart of [null, "not-a-date"]) {
+      expect(
+        resolveUsageCarveOutWindow({
+          stripeCurrentPeriodStart,
+          profile: { first_paid_at: "2026-07-05T00:00:00Z", refund_used_at: null },
+          now: NOW
+        })
+      ).toEqual({
+        ok: true,
+        window: { sinceIso: "2026-07-05T00:00:00Z", aiSpendSinceIso: null }
+      });
+    }
   });
 
-  it("falls back to the subscription created_at last", () => {
+  it("fails closed with no period cache once the refund window is closed or used", () => {
+    // Closed window: first paid > 30 days before now. Anchoring on
+    // first_paid_at here would withhold months of prior-period usage from a
+    // one-month refund (admin force-refund path).
     expect(
-      resolveUsageCarveOutSinceIso({
+      resolveUsageCarveOutWindow({
         stripeCurrentPeriodStart: null,
-        firstPaidAt: "garbage",
-        subscriptionCreatedAt: "2026-05-01T00:00:00Z"
+        profile: { first_paid_at: "2026-01-01T00:00:00Z", refund_used_at: null },
+        now: NOW
       })
-    ).toBe("2026-05-01T00:00:00Z");
+    ).toEqual({ ok: false, reason: "usage_window_unknown" });
     expect(
-      resolveUsageCarveOutSinceIso({
+      resolveUsageCarveOutWindow({
         stripeCurrentPeriodStart: null,
-        firstPaidAt: null,
-        subscriptionCreatedAt: "2026-05-01T00:00:00Z"
+        profile: { first_paid_at: "2026-07-05T00:00:00Z", refund_used_at: "2026-07-06T00:00:00Z" },
+        now: NOW
       })
-    ).toBe("2026-05-01T00:00:00Z");
+    ).toEqual({ ok: false, reason: "usage_window_unknown" });
+  });
+
+  it("fails closed with no period cache and no profile", () => {
+    expect(
+      resolveUsageCarveOutWindow({ stripeCurrentPeriodStart: null, profile: null, now: NOW })
+    ).toEqual({ ok: false, reason: "usage_window_unknown" });
+  });
+
+  it("defaults `now` to the current time", () => {
+    expect(
+      resolveUsageCarveOutWindow({
+        stripeCurrentPeriodStart: null,
+        profile: { first_paid_at: new Date().toISOString(), refund_used_at: null }
+      }).ok
+    ).toBe(true);
   });
 });
 
@@ -122,6 +146,7 @@ function makeUsageClient(opts: {
 }
 
 const SINCE = "2026-07-01T12:34:56.000Z";
+const WINDOW = { sinceIso: SINCE, aiSpendSinceIso: SINCE };
 
 describe("loadBillableUsageSince", () => {
   beforeEach(() => {
@@ -138,7 +163,7 @@ describe("loadBillableUsageSince", () => {
       }
     });
 
-    const usage = await loadBillableUsageSince("biz-1", SINCE, client as never);
+    const usage = await loadBillableUsageSince("biz-1", WINDOW, client as never);
 
     expect(usage).toEqual({ smsSent: 15, voiceSeconds: 180, aiSpendMicros: 2_500_000 });
     // The SMS read filters on the UTC day of the anchor; the timestamp reads
@@ -148,6 +173,21 @@ describe("loadBillableUsageSince", () => {
     expect(chains.voice_forwarded_call_meter.gte).toHaveBeenCalledWith("created_at", SINCE);
     expect(chains.owner_chat_model_spend.gte).toHaveBeenCalledWith("period_start", SINCE);
     expect(chains.daily_usage.eq).toHaveBeenCalledWith("business_id", "biz-1");
+  });
+
+  it("sums EVERY AI-spend row when the window has no period filter (first-paid fallback)", async () => {
+    const { client, chains } = makeUsageClient({
+      pages: {
+        owner_chat_model_spend: [[{ spend_micros: 1_000_000 }, { spend_micros: 250_000 }]]
+      }
+    });
+    const usage = await loadBillableUsageSince(
+      "biz-1",
+      { sinceIso: SINCE, aiSpendSinceIso: null },
+      client as never
+    );
+    expect(usage.aiSpendMicros).toBe(1_250_000);
+    expect(chains.owner_chat_model_spend.gte).not.toHaveBeenCalled();
   });
 
   it("ignores negative or malformed AI spend values and tolerates null data payloads", async () => {
@@ -161,7 +201,7 @@ describe("loadBillableUsageSince", () => {
         ]
       }
     });
-    const usage = await loadBillableUsageSince("biz-1", SINCE, client as never);
+    const usage = await loadBillableUsageSince("biz-1", WINDOW, client as never);
     expect(usage).toEqual({ smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 });
   });
 
@@ -179,7 +219,7 @@ describe("loadBillableUsageSince", () => {
         owner_chat_model_spend: [fullPage({ spend_micros: 10 }), [{ spend_micros: 7 }]]
       }
     });
-    const usage = await loadBillableUsageSince("biz-1", SINCE, client as never);
+    const usage = await loadBillableUsageSince("biz-1", WINDOW, client as never);
     expect(usage.smsSent).toBe(1005);
     expect(usage.voiceSeconds).toBe(2000);
     expect(usage.aiSpendMicros).toBe(10_007);
@@ -197,7 +237,7 @@ describe("loadBillableUsageSince", () => {
 
   it("tolerates a null AI-spend data payload", async () => {
     const { client } = makeUsageClient({ pages: { owner_chat_model_spend: [null] } });
-    const usage = await loadBillableUsageSince("biz-1", SINCE, client as never);
+    const usage = await loadBillableUsageSince("biz-1", WINDOW, client as never);
     expect(usage.aiSpendMicros).toBe(0);
   });
 
@@ -208,7 +248,7 @@ describe("loadBillableUsageSince", () => {
     "owner_chat_model_spend"
   ])("throws (fail closed) when the %s read errors", async (table) => {
     const { client } = makeUsageClient({ errors: { [table]: { message: "boom" } } });
-    await expect(loadBillableUsageSince("biz-1", SINCE, client as never)).rejects.toThrow(
+    await expect(loadBillableUsageSince("biz-1", WINDOW, client as never)).rejects.toThrow(
       `loadBillableUsageSince(${table}): boom`
     );
   });
@@ -216,7 +256,7 @@ describe("loadBillableUsageSince", () => {
   it("falls back to the service client when none is passed", async () => {
     const { client } = makeUsageClient({});
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client as never);
-    const usage = await loadBillableUsageSince("biz-1", SINCE);
+    const usage = await loadBillableUsageSince("biz-1", WINDOW);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
     expect(usage).toEqual({ smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 });
   });
@@ -231,7 +271,7 @@ describe("loadBillableUsageCarveOutCents", () => {
         owner_chat_model_spend: [[{ spend_micros: 1_000_000 }]]
       }
     });
-    const result = await loadBillableUsageCarveOutCents("biz-1", SINCE, client as never);
+    const result = await loadBillableUsageCarveOutCents("biz-1", WINDOW, client as never);
     expect(result.usage).toEqual({
       smsSent: 100,
       voiceSeconds: 3000,
