@@ -93,9 +93,19 @@ revoke execute on function public.sms_link_click(text) from public;
 revoke execute on function public.sms_link_click(text) from anon, authenticated;
 grant execute on function public.sms_link_click(text) to service_role;
 
--- Backfill: links that already alerted under the old first-click rule must
--- not alert again when their next human click arrives.
-update public.sms_links
-   set notified_at = first_clicked_at
- where notified_at is null
-   and first_clicked_at is not null;
+-- Backfill: links that ALREADY produced a link_click alert under the old
+-- first-click rule must not alert again on their next human click. Exact,
+-- not heuristic: only links with a recorded link_click notification row are
+-- stamped (any status — a skipped/failed dispatch still consumed the link's
+-- one alert). Links whose only clicks predate the alert feature (or were
+-- never clicked) keep notified_at null, so their FIRST human tap after this
+-- deploy still alerts once.
+update public.sms_links l
+   set notified_at = coalesce(l.first_clicked_at, now())
+ where l.notified_at is null
+   and exists (
+     select 1
+       from public.notifications n
+      where n.kind = 'link_click'
+        and n.payload->>'link_id' = l.id::text
+   );
