@@ -177,7 +177,7 @@ describe("/api/billing/cancel", () => {
       }
     });
     loadBillableUsageCarveOutCentsMock.mockResolvedValue({
-      usage: { smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 },
+      usage: { smsSent: 0, smsReceived: 0, voiceSeconds: 0, aiSpendMicros: 0 },
       cents: 0
     });
   });
@@ -315,7 +315,7 @@ describe("/api/billing/cancel", () => {
 
   it("refund mode threads the billable-usage carve-out into the final planner context", async () => {
     loadBillableUsageCarveOutCentsMock.mockResolvedValueOnce({
-      usage: { smsSent: 40, voiceSeconds: 600, aiSpendMicros: 500_000 },
+      usage: { smsSent: 40, smsReceived: 12, voiceSeconds: 600, aiSpendMicros: 500_000 },
       cents: 142
     });
     // Called twice: eligibility validation, then the final plan with the

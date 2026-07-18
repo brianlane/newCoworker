@@ -3,11 +3,20 @@
  *
  * Policy (Jul 2026): the money-back guarantee refunds the plan price, not
  * the third-party charges the tenant ran up on our vendor accounts — SMS
- * (Telnyx), voice minutes (Telnyx carriage + Gemini Live audio), and Gemini
- * chat spend. Those are priced AT OUR COST — the same per-unit rates the
+ * sent AND received (Telnyx), voice minutes (Telnyx carriage), and metered
+ * Gemini spend. Those are priced AT OUR COST — the same per-unit rates the
  * margin engine and the enterprise deal calculator use
  * (src/lib/plans/enterprise-pricing.ts) — so the carve-out recovers exactly
  * what we are out of pocket, no markup.
+ *
+ * Voice is priced at the TELNYX-ONLY per-minute rate on purpose: the Gemini
+ * side of a call is NOT estimated here because it arrives as metered
+ * actuals in `aiSpendMicros` — `owner_chat_model_spend` is the single pool
+ * for ALL per-tenant Gemini usage (llm-router exact tokens for Rowboat
+ * chat/SMS/voice_task, platform surfaces via meterGeminiSpendForBusiness
+ * incl. image generation, webchat/messenger engines, and Gemini Live audio
+ * settled at call teardown via `owner_chat_ai_settle`). Pricing voice
+ * all-in here would double-charge the Gemini Live component.
  *
  * The refund executor subtracts the resulting cents from the Stripe refund
  * alongside the carrier-registration fee and the term carve-out (see
@@ -17,10 +26,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import {
-  ENTERPRISE_UNIT_COSTS,
-  VOICE_ALL_IN_CENTS_PER_MINUTE
-} from "@/lib/plans/enterprise-pricing";
+import { ENTERPRISE_UNIT_COSTS } from "@/lib/plans/enterprise-pricing";
 import {
   isWithinLifetimeRefundWindow,
   type CustomerProfileRow
@@ -30,20 +36,27 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type BillableUsage = {
   smsSent: number;
+  /** Inbound messages (one `sms_inbound_jobs` row per delivered inbound). */
+  smsReceived: number;
   /** Settled AI voice seconds + forwarded/transferred human-leg seconds. */
   voiceSeconds: number;
-  /** Gemini chat spend, micro-USD (1 cent = 10,000 micros). */
+  /**
+   * Metered Gemini spend, micro-USD (1 cent = 10,000 micros). Covers ALL
+   * per-tenant Gemini usage, not just chat — see the module docstring.
+   */
   aiSpendMicros: number;
 };
 
 /**
  * Price a usage snapshot at platform cost. Rounded once at the end so the
- * three components can't each donate a rounding cent.
+ * components can't each donate a rounding cent. Voice is Telnyx-only — the
+ * Gemini component is already inside `aiSpendMicros` (module docstring).
  */
 export function computeBillableUsageCents(usage: BillableUsage): number {
   return Math.round(
     usage.smsSent * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
-      (usage.voiceSeconds / 60) * VOICE_ALL_IN_CENTS_PER_MINUTE +
+      usage.smsReceived * ENTERPRISE_UNIT_COSTS.smsInboundCentsPerMessage +
+      (usage.voiceSeconds / 60) * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
       usage.aiSpendMicros / 10_000
   );
 }
@@ -125,13 +138,19 @@ export function resolveUsageCarveOutWindow(input: {
 /**
  * Sum the tenant's metered usage inside the carve-out window:
  *
- * - SMS from `daily_usage.sms_sent` (usage_date ≥ the window's UTC day —
- *   the whole signup day counts, which can only over-include the tenant's
- *   own sends from earlier that day).
+ * - Outbound SMS from `daily_usage.sms_sent` (usage_date ≥ the window's UTC
+ *   day — the whole signup day counts, which can only over-include the
+ *   tenant's own sends from earlier that day).
+ * - Inbound SMS from `sms_inbound_jobs` (one row per delivered inbound
+ *   message, deduped by Telnyx event id — AI-reply jobs, team/owner reply
+ *   captures, and safe-mode forwards all persist here). Counted with a
+ *   HEAD count query, so no paging concern. Keyword-only traffic
+ *   (STOP/HELP) that short-circuits before the insert is not counted —
+ *   under-counting in the customer's favor.
  * - Voice from `voice_settlements.billable_seconds` (AI portions) plus
  *   `voice_forwarded_call_meter.billable_seconds` (forwarded/transferred
  *   human legs) — together the same population the quota pool commits.
- * - Gemini chat spend from `owner_chat_model_spend` rows, filtered by
+ * - Metered Gemini spend from `owner_chat_model_spend` rows, filtered by
  *   `period_start` ≥ `aiSpendSinceIso` when set (see
  *   {@link UsageCarveOutWindow.aiSpendSinceIso} for why the first-paid
  *   fallback sums every row instead).
@@ -167,6 +186,16 @@ export async function loadBillableUsageSince(
     }
     if (rows.length < pageSize) break;
   }
+
+  const { count: inboundCount, error: inboundErr } = await db
+    .from("sms_inbound_jobs")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .gte("created_at", sinceIso);
+  if (inboundErr) {
+    throw new Error(`loadBillableUsageSince(sms_inbound_jobs): ${inboundErr.message}`);
+  }
+  const smsReceived = inboundCount ?? 0;
 
   let voiceSeconds = 0;
   for (let from = 0; ; from += pageSize) {
@@ -225,7 +254,7 @@ export async function loadBillableUsageSince(
     if (rows.length < pageSize) break;
   }
 
-  return { smsSent, voiceSeconds, aiSpendMicros };
+  return { smsSent, smsReceived, voiceSeconds, aiSpendMicros };
 }
 
 /** Load + price in one call — what the refund routes use. */
