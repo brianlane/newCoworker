@@ -1,8 +1,10 @@
 /**
  * Tracked SMS short links (concept ported from BizBlasts' SmsLinkShortener).
  *
- * Outbound lead-facing texts rewrite long http(s) URLs to `<app>/s/<code>`
- * redirects backed by the `sms_links` table, so link engagement is
+ * Outbound lead-facing texts rewrite long URLs — scheme-prefixed http(s)
+ * ones AND bare-domain ones like "calendly.com/james/intro" — to
+ * `<app>/s/<code>` redirects backed by the `sms_links` table, so link
+ * engagement is
  * measurable per business / flow / run (the flow-funnel analytics read the
  * click counts). Shortening is strictly fail-safe: any insert error, missing
  * base URL, or URL that would not actually get shorter leaves the original
@@ -67,9 +69,35 @@ export function shortLinkUrl(baseUrl: string, code: string): string {
   return `${trimBase(baseUrl)}/s/${code}`;
 }
 
-// http(s) runs up to whitespace/angle-quote; trailing sentence punctuation is
-// stripped below so "…see https://x.com/a." doesn't capture the period.
-const URL_RE = /https?:\/\/[^\s<>"']+/gi;
+// Two alternatives, matched up to whitespace/angle-quote (trailing sentence
+// punctuation is stripped below so "…see https://x.com/a." drops the period):
+//   1. scheme-prefixed http(s) URLs;
+//   2. bare-domain URLs the way owners actually type them into flow bodies
+//      ("calendly.com/james/intro-call") — dotted labels ending in an
+//      alphabetic TLD, then a REQUIRED "/path" (so plain "example.com" in
+//      prose, filenames, and version numbers like "1.2.3" never match). The
+//      lookbehind keeps it off email tails ("john@x.com/…"), the middle of
+//      larger tokens, and hosts right after a scheme-ish "xyz:" prefix
+//      (a malformed "https:x.com/a" must not get its host segment swapped).
+const URL_RE =
+  /https?:\/\/[^\s<>"']+|(?<![\w@.\/:-])(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z]{2,24}\/[^\s<>"']+/gi;
+
+/** Bare-domain matches get https:// so the stored redirect target is absolute. */
+export function ensureUrlScheme(url: string): string {
+  return /^https?:\/\//i.test(url) ? url : `https://${url}`;
+}
+
+/**
+ * Whether a matched URL is one of our own /s/<code> redirects. Compared with
+ * the scheme stripped and "www." optional on both sides, so a short link
+ * quoted bare or at the apex domain ("newcoworker.com/s/…") is still
+ * recognized and never re-shortened.
+ */
+function isOwnShortLink(url: string, base: string): boolean {
+  const strip = (u: string) =>
+    u.replace(/^https?:\/\//i, "").replace(/^www\./i, "").toLowerCase();
+  return strip(url).startsWith(`${strip(base)}/s/`);
+}
 
 /**
  * Trim sentence punctuation from a matched URL's tail without mutilating
@@ -103,8 +131,9 @@ export function trimTrailingUrlPunctuation(raw: string): string {
  * of another ("https://x.com/a" inside "https://x.com/a/b"), replacing the
  * longer one first keeps the shorter replacement from corrupting it.
  *
- * Skipped: URLs already under our own /s/ prefix (never re-shorten), and
- * URLs short enough that the replacement would not meaningfully shrink them.
+ * Skipped: URLs already under our own /s/ prefix (never re-shorten, whether
+ * typed with or without the scheme), and URLs short enough that the
+ * replacement would not meaningfully shrink them.
  */
 export function extractShortenableUrls(text: string, baseUrl: string): string[] {
   const base = trimBase(baseUrl);
@@ -114,7 +143,7 @@ export function extractShortenableUrls(text: string, baseUrl: string): string[] 
   for (const match of text.matchAll(URL_RE)) {
     const url = trimTrailingUrlPunctuation(match[0]);
     if (url.length <= minLength) continue;
-    if (url.startsWith(`${base}/s/`)) continue;
+    if (isOwnShortLink(url, base)) continue;
     seen.add(url);
   }
   return [...seen].sort((a, b) => b.length - a.length);
@@ -157,7 +186,9 @@ async function insertShortLink(
       const { error } = await db.from("sms_links").insert({
         business_id: opts.businessId,
         short_code: code,
-        original_url: originalUrl,
+        // Bare-domain matches are stored scheme-prefixed: the /s/<code>
+        // redirect needs an absolute URL.
+        original_url: ensureUrlScheme(originalUrl),
         to_e164: opts.toE164 ?? null,
         source: opts.source,
         flow_id: opts.flowId ?? null,

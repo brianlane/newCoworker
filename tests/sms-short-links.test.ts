@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   SHORT_CODE_LENGTH,
   deleteShortLinks,
+  ensureUrlScheme,
   extractShortenableUrls,
   generateShortCode,
   linkSmsLinksToOutboundLog,
@@ -129,6 +130,56 @@ describe("extractShortenableUrls", () => {
   it("returns [] when there are no URLs at all", () => {
     expect(extractShortenableUrls("plain text, no links", BASE)).toEqual([]);
   });
+
+  const bareUrl = "calendly.com/james-kyp-ads/my-free-scale-plan";
+
+  it("finds bare-domain URLs typed without a scheme", () => {
+    expect(extractShortenableUrls(`grab a time here: ${bareUrl}`, BASE)).toEqual([bareUrl]);
+    // Trailing sentence punctuation falls the same way as for scheme'd URLs.
+    expect(extractShortenableUrls(`Book now: ${bareUrl}.`, BASE)).toEqual([bareUrl]);
+    // Case-insensitive on the domain.
+    expect(
+      extractShortenableUrls("go Calendly.com/james-kyp-ads/my-free-scale-plan now", BASE)
+    ).toEqual(["Calendly.com/james-kyp-ads/my-free-scale-plan"]);
+  });
+
+  it("does not treat an email's domain as a bare URL", () => {
+    expect(extractShortenableUrls(`write john@${bareUrl} today`, BASE)).toEqual([]);
+  });
+
+  it("ignores dotted tokens that are not bare URLs", () => {
+    // No path ⇒ not a match (also below the length floor by construction).
+    expect(extractShortenableUrls("visit example.com for info", BASE)).toEqual([]);
+    // Numeric final label (version-like) ⇒ not a match.
+    expect(
+      extractShortenableUrls("upgraded to 1.2.3/with-a-long-changelog-entry-attached", BASE)
+    ).toEqual([]);
+    // Mid-path dotted segment of a larger token ⇒ not a match.
+    expect(extractShortenableUrls(`see docs/${bareUrl} in the repo`, BASE)).toEqual([]);
+    // Malformed scheme ("https:" without "//") ⇒ the host segment must NOT
+    // be swapped out from under the stray prefix.
+    expect(extractShortenableUrls(`go https:${bareUrl} now`, BASE)).toEqual([]);
+  });
+
+  it("skips our own short links even when typed without the scheme or www", () => {
+    const query = "?utm_source=sms&utm_medium=text&utm_campaign=x";
+    for (const ours of [
+      `www.newcoworker.com/s/abc12345${query}`,
+      `newcoworker.com/s/abc12345${query}`,
+      `https://newcoworker.com/s/abc12345${query}`,
+      `HTTPS://WWW.NEWCOWORKER.COM/s/abc12345${query}`
+    ]) {
+      expect(extractShortenableUrls(`tap ${ours} now`, BASE)).toEqual([]);
+    }
+  });
+});
+
+describe("ensureUrlScheme", () => {
+  it("prefixes https:// on bare URLs and leaves scheme'd ones alone", () => {
+    expect(ensureUrlScheme("calendly.com/a/b")).toBe("https://calendly.com/a/b");
+    expect(ensureUrlScheme("https://calendly.com/a/b")).toBe("https://calendly.com/a/b");
+    expect(ensureUrlScheme("HTTP://calendly.com/a/b")).toBe("HTTP://calendly.com/a/b");
+  });
 });
 
 describe("shortenSmsBodyUrls", () => {
@@ -176,6 +227,18 @@ describe("shortenSmsBodyUrls", () => {
         run_id: "run-1"
       }
     ]);
+  });
+
+  it("shortens a bare-domain URL and stores it scheme-prefixed for the redirect", async () => {
+    const bare = "calendly.com/james-kyp-ads/my-free-scale-plan";
+    const { db, inserts } = stubDb([ok]);
+    const res = await shortenSmsBodyUrls(db, {
+      ...staticOpts, randomBytes: bytes(0),
+      text: `You can grab a time here: ${bare}`
+    });
+    expect(res.text).toBe(`You can grab a time here: ${BASE}/s/abcdefgh`);
+    expect(res.links).toEqual([{ shortCode: "abcdefgh", originalUrl: bare }]);
+    expect(inserts[0]).toMatchObject({ original_url: `https://${bare}` });
   });
 
   it("defaults recipient/flow/run attribution to null when omitted", async () => {
