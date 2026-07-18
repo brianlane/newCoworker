@@ -31,8 +31,6 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 
 const VOICE_TOOLS_MODEL = "gemini-2.5-flash";
 
-const CALLER = "+16025550137";
-
 /** The REAL bridge instruction: customer persona, tools on, no transfer. */
 const SYSTEM = systemInstructionForBusiness(
   "Harbor Nail Studio",
@@ -263,19 +261,29 @@ describe("voice booking flow (live model, real bridge declarations)", () => {
     expect(pickText.trim().length).toBeGreaterThan(0);
   });
 
-  it("captures the caller as a lead at some point across the call", () => {
-    // The instruction: "Never let a call with a genuine lead end without
-    // having called it." Name persistence may ride either tool.
-    const all = [...openCalls, ...pickCalls];
-    const captured = all.filter(
-      (c) => c.name === "capture_caller_details" || c.name === "customer_set_display_name"
-    );
-    expect(captured.length, `calls: ${JSON.stringify(all)}`).toBeGreaterThan(0);
-    expect(
-      captured.some((c) =>
-        `${c.args.name ?? ""} ${c.args.displayName ?? ""}`.match(/sarah/i)
-      )
-    ).toBe(true);
+  // NOTE deliberately NOT pinned here: capture_caller_details timing. The
+  // instruction's rule is "never let a call with a genuine lead END without
+  // having called it" — this harness never ends the call, and the first
+  // post-merge main run proved mid-call capture timing is model freedom
+  // (it booked + texted without a capture call, which the end-of-call rule
+  // does not forbid at that point). A capture pin needs an end_call-shaped
+  // harness; see the never-invent contract below for what IS hard mid-call.
+
+  it("never invents a phone number for the follow-up text", () => {
+    // The instruction: "never invent or guess ... phone numbers", and the
+    // tool contract says texting the CALLER means OMITTING the destination
+    // (it defaults to their ANI, which the model cannot see — the number is
+    // never in the prompt). Sarah dictated no other number in this scenario,
+    // so ANY explicit destination is an invention — the first main run sent
+    // the confirmation text to a made-up +15551234567.
+    for (const call of [...openCalls, ...pickCalls]) {
+      if (call.name !== "send_follow_up_sms" && call.name !== "document_share") continue;
+      expect(
+        digits(call.args.toE164 ?? call.args.phone ?? ""),
+        `explicit destination on ${JSON.stringify(call)} — no number was dictated, ` +
+          "so the arg must be omitted (it defaults to the caller's ANI)"
+      ).toBe("");
+    }
   });
 
   it("with inviteEmail null, never promises a calendar invite", async () => {

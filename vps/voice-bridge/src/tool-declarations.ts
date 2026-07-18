@@ -96,13 +96,14 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "send_follow_up_sms",
       description:
-        "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars. The body must only contain facts the caller stated or a tool returned — no invented details, and no appointment described as scheduled unless it was actually booked.",
+        "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars. The body must only contain facts the caller stated or a tool returned — no invented details, and no appointment described as scheduled unless it was actually booked. To text the CALLER, OMIT toE164 entirely — it defaults to the number they are calling from, which you cannot see; NEVER fill it with a guessed or placeholder number.",
       parameters: {
         type: Type.OBJECT,
         properties: {
           toE164: {
             type: Type.STRING,
-            description: "Destination phone in E.164. Defaults to the caller's ANI if omitted."
+            description:
+              "Destination phone in E.164 — ONLY when the caller explicitly dictated a different number to you. Omit to text the caller on the line they are calling from."
           },
           body: { type: Type.STRING, description: "Message body. Plain text." }
         },
