@@ -32,7 +32,7 @@ export class CalendlyApiError extends Error {
 export type CalendlyDirectRequest = {
   /** Path on api.calendly.com, e.g. "/users/me". */
   endpoint: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "DELETE";
   params?: Record<string, string>;
   data?: unknown;
 };

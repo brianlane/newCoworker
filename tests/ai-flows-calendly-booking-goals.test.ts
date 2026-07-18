@@ -21,6 +21,11 @@ vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ calendlyRequest: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 vi.mock("@/lib/db/contact-emails", () => ({ findContactsByEmails: vi.fn() }));
+vi.mock("@/lib/calendly/webhook-subscriptions", () => ({
+  ensureCalendlyWebhookSubscription: vi
+    .fn()
+    .mockResolvedValue({ status: "unsupported", attempted: false })
+}));
 
 import {
   BOOKING_GOAL_FLOW_PAGE,
@@ -28,10 +33,12 @@ import {
   BOOKING_GOAL_RUN_STATUSES,
   bookingCreatedRecently,
   definitionWatchesBookingGoal,
+  fireBookingGoalsForInvitees,
   inviteePhoneE164,
   sweepCalendlyBookingGoals,
   type BookingGoalSweepDeps
 } from "@/lib/ai-flows/calendly-booking-goals";
+import { ensureCalendlyWebhookSubscription } from "@/lib/calendly/webhook-subscriptions";
 import { CALENDAR_CREATED_LOOKBACK_MINUTES } from "@/lib/ai-flows/calendar-poll";
 import { CALENDLY_POLL_PAGE_COUNT } from "@/lib/ai-flows/calendly-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -429,6 +436,14 @@ describe("sweepCalendlyBookingGoals", () => {
       goalsFired: 3,
       jumpedRuns: 1
     });
+    // The swept business also got a webhook fast-path upgrade attempt
+    // (module default — cooldown/plan gating live inside ensure).
+    expect(ensureCalendlyWebhookSubscription).toHaveBeenCalledWith(
+      BIZ,
+      CONN,
+      { request: request as never },
+      db
+    );
     // The jump landed → an info log tells the owner what happened.
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -580,6 +595,24 @@ describe("sweepCalendlyBookingGoals", () => {
     );
   });
 
+  it("honors an injected webhook upgrader and skips it for non-swept businesses", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1", BIZ), goalFlowRow("f2", BIZ2)] }],
+      // BIZ has a jumpable run; BIZ2 does not (ensure must not run for it).
+      ai_flow_runs: [{ data: [{ id: "run-1" }] }, { data: [] }]
+    });
+    const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) => {
+      if (config.endpoint === "/users/me") return USER_RES;
+      return { data: { collection: [] } };
+    });
+    const ensureWebhook = vi.fn().mockResolvedValue({ status: "active", attempted: false });
+    const d = deps({ request: request as never, ensureWebhook });
+    await sweepCalendlyBookingGoals(db, d);
+    expect(ensureWebhook).toHaveBeenCalledTimes(1);
+    expect(ensureWebhook).toHaveBeenCalledWith(BIZ, CONN, { request }, db);
+    expect(ensureCalendlyWebhookSubscription).not.toHaveBeenCalled();
+  });
+
   it("stringifies a non-Error per-business failure", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1")] }],
@@ -593,5 +626,20 @@ describe("sweepCalendlyBookingGoals", () => {
         message: "Calendly booking-goal sweep failed: weird"
       })
     );
+  });
+});
+
+describe("fireBookingGoalsForInvitees (direct, production defaults)", () => {
+  it("fires with the default goal applier when no deps are injected", async () => {
+    // The real applyGoalEvent runs against the fake client: its candidate-
+    // run lookup returns no rows, so it no-ops safely (never throws).
+    const { db } = fakeDb({
+      contacts: [{ data: null }],
+      ai_flow_runs: [{ data: null }]
+    });
+    const out = await fireBookingGoalsForInvitees(db as never, BIZ, [
+      { status: "active", text_reminder_number: "+17808039935" }
+    ]);
+    expect(out).toEqual({ goalsFired: 1, jumpedRuns: 0 });
   });
 });

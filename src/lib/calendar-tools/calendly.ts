@@ -74,7 +74,7 @@ function proxyLink(conn: ResolvedVoiceConnection): ProxyLink {
 
 export type CalendlyRequestConfig = {
   endpoint: string;
-  method: "GET" | "POST";
+  method: "GET" | "POST" | "DELETE";
   params?: Record<string, string>;
   data?: unknown;
 };
