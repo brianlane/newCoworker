@@ -35,6 +35,10 @@ export const dynamic = "force-dynamic";
 // Zoom fetch + Gemini condense both run inline (owner-attended action).
 export const maxDuration = 120;
 
+// Same ceiling as POST /api/dashboard/documents — an imported transcript
+// must not exceed what a manual upload of the same VTT would be allowed.
+const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
+
 const bodySchema = z.object({
   businessId: z.string().uuid(),
   // Zoom meeting ids are numeric (9–12 digits); owners paste them with or
@@ -86,6 +90,12 @@ export async function POST(request: Request) {
     const documentId = randomUUID();
     const storagePath = `${businessId}/${documentId}/zoom-meeting-${meetingId}.vtt`;
     const bytes = Buffer.from(transcript.vtt, "utf8");
+    if (bytes.byteLength > MAX_DOCUMENT_BYTES) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "This transcript is larger than the 10 MB document limit."
+      );
+    }
 
     const db = await createSupabaseServiceClient();
     const { error: uploadError } = await db.storage
