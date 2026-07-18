@@ -33,6 +33,7 @@ import {
   getBusinessCustomerLanguages,
   type BusinessCustomerLanguages
 } from "@/lib/db/business-language";
+import { getContactLanguage, type ContactLanguageRow } from "@/lib/db/contact-language";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import {
   getChatSpendSnapshotForBusiness,
@@ -179,6 +180,10 @@ export type MessengerGeminiTurnDeps = {
     conversationId: string,
     language: "en" | "es"
   ) => Promise<void>;
+  fetchContactLanguage?: (
+    businessId: string,
+    customerE164: string
+  ) => Promise<ContactLanguageRow>;
 };
 
 export type MessengerGeminiTurnResult = {
@@ -229,6 +234,7 @@ export async function runMessengerGeminiTurn(
   const getCustomerLanguages = deps.getCustomerLanguages ?? getBusinessCustomerLanguages;
   const persistConversationLanguage =
     deps.persistConversationLanguage ?? setMessengerConversationLanguage;
+  const fetchContactLanguage = deps.fetchContactLanguage ?? getContactLanguage;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -274,6 +280,28 @@ export async function runMessengerGeminiTurn(
     },
     documentsMd
   );
+  // Owner override on the contact profile is authoritative across every
+  // channel (same rule as the SMS worker). Only reachable once a phone was
+  // captured for this thread; best-effort — a read blip must not kill the
+  // turn.
+  let ownerSetLanguage: "en" | "es" | null = null;
+  if (args.conversation.contact_phone) {
+    try {
+      const contactLang = await fetchContactLanguage(
+        args.businessId,
+        args.conversation.contact_phone
+      );
+      if (contactLang.language_source === "owner_set") {
+        ownerSetLanguage = contactLang.preferred_language;
+      }
+    } catch (err) {
+      logger.warn("messenger engine: contact language read failed; continuing", {
+        conversationId: args.conversation.id,
+        error: String(err)
+      });
+    }
+  }
+
   // Classify the latest user turn (sticky: the stored thread language wins
   // over a one-token confirmation) and persist confident detections so
   // later turns keep the thread language. `contents` being non-null above
@@ -281,11 +309,15 @@ export async function runMessengerGeminiTurn(
   const lastUserText = [...args.history].reverse().find((m) => m.role === "user")!.content;
   const detected = detectCustomerLanguage({
     text: lastUserText,
-    establishedLanguage: args.conversation.preferred_language ?? undefined,
+    establishedLanguage: ownerSetLanguage ?? args.conversation.preferred_language ?? undefined,
     defaultLanguage: customerLanguages.defaultLanguage,
     supported: customerLanguages.supported
   });
-  if (detected.persist && detected.language !== args.conversation.preferred_language) {
+  if (
+    !ownerSetLanguage &&
+    detected.persist &&
+    detected.language !== args.conversation.preferred_language
+  ) {
     // Best-effort: a persistence blip must not kill the reply turn.
     try {
       await persistConversationLanguage(args.conversation.id, detected.language);
@@ -297,14 +329,15 @@ export async function runMessengerGeminiTurn(
     }
   }
 
-  // A confident detection wins over the stored thread language (mirrors the
-  // SMS worker): a mid-thread switch in full sentences must not leave the
-  // prompt pointing at the old language while the persisted row catches up.
-  // Weak signals ("si") already return the established language from
-  // detectCustomerLanguage, so stickiness is preserved.
-  const threadLanguage = detected.persist
-    ? detected.language
-    : args.conversation.preferred_language ?? null;
+  // Owner override beats everything; otherwise a confident detection wins
+  // over the stored thread language (mirrors the SMS worker): a mid-thread
+  // switch in full sentences must not leave the prompt pointing at the old
+  // language while the persisted row catches up. Weak signals ("si") already
+  // return the established language from detectCustomerLanguage, so
+  // stickiness is preserved.
+  const threadLanguage =
+    ownerSetLanguage ??
+    (detected.persist ? detected.language : args.conversation.preferred_language ?? null);
   const systemInstruction = [
     instructions,
     customerLanguageLine({

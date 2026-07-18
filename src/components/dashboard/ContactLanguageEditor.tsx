@@ -19,6 +19,7 @@ export function ContactLanguageEditor({
   const tCommon = useTranslations("common");
   const router = useRouter();
   const [language, setLanguage] = useState<"en" | "es" | "">(initialLanguage ?? "");
+  const [source, setSource] = useState<"detected" | "owner_set" | null>(initialSource);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -36,6 +37,10 @@ export function ContactLanguageEditor({
       });
       if (!res.ok) throw new Error("save failed");
       setLanguage(next);
+      // A save from this editor is by definition an owner override; clearing
+      // the field clears the source too. Keeps the hint correct without
+      // waiting on router.refresh().
+      setSource(next === "" ? null : "owner_set");
       router.refresh();
     } catch {
       setError(tCommon("languageSaveFailed"));
@@ -58,10 +63,10 @@ export function ContactLanguageEditor({
         <option value="es">{t("languageSpanish")}</option>
       </select>
       <p className="text-[11px] text-parchment/40">{t("languageHelp")}</p>
-      {initialSource === "detected" && language && (
+      {source === "detected" && language && (
         <p className="text-[11px] text-parchment/35">{t("languageDetected")}</p>
       )}
-      {initialSource === "owner_set" && language && (
+      {source === "owner_set" && language && (
         <p className="text-[11px] text-parchment/35">{t("languageOwnerSet")}</p>
       )}
       {error && <p className="text-xs text-red-400">{error}</p>}
