@@ -16,19 +16,44 @@ env:
   NODE_VERSION: "22"
 
 jobs:
+  # Audits EVERY package tree in the repo, not just the root (audit doc M2:
+  # the sub-trees were invisible to CI, which is how the zapier/ adm-zip
+  # advisory sat unnoticed until Dependabot flagged it).
+  #
+  # - Root (`.`) audits prod deps only (`--omit=dev`) — unchanged behavior;
+  #   the app's dev tree is huge and only prod deps ship to Vercel.
+  # - Sub-trees audit dev deps too: the VPS trees run on tenant boxes and
+  #   have no meaningful dev/prod split, and the tool trees (zapier/,
+  #   cloudflare/email-worker) hold their real attack surface in
+  #   devDependencies (the adm-zip advisory was a devDependency of
+  #   zapier-platform-cli). Fix findings with an `overrides` pin in the
+  #   tree's package.json when the owning tool has no patched release.
+  #
+  # `npm audit` needs only the lockfile (it posts the dependency graph to
+  # the registry's advisory endpoint), so no install step is required.
   audit:
+    name: audit (${{ matrix.dir }})
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - dir: "."
+            flags: "--omit=dev"
+          - dir: vps/chat-worker
+          - dir: vps/voice-bridge
+          - dir: vps/data-api
+          - dir: vps/aiflow-render
+          - dir: cloudflare/email-worker
+          - dir: zapier
     steps:
       - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
 
-      - name: Install dependencies
-        run: npm ci
-
-      - name: npm audit (prod only)
-        run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (high+)
+        working-directory: ${{ matrix.dir }}
+        run: npm audit ${{ matrix.flags }} --audit-level=high
