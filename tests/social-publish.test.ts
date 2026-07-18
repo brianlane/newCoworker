@@ -141,9 +141,12 @@ describe("processSocialPostSweep — publish", () => {
       publishMedia.mock.invocationCallOrder[0]
     );
     expect(publishMedia).toHaveBeenCalledWith("ig-1", "page-tok", "container-1");
-    expect(patch).toHaveBeenCalledWith(
+    // The outcome stamp is a GUARDED transition from `publishing`, so a
+    // concurrent resolver can never flip a settled row (Bugbot db659cb1).
+    expect(transition).toHaveBeenCalledWith(
       BIZ,
       "p-1",
+      "publishing",
       {
         status: "published",
         published_at: NOW.toISOString(),
@@ -152,6 +155,24 @@ describe("processSocialPostSweep — publish", () => {
       },
       db
     );
+  });
+
+  it("counts nothing when a concurrent resolver settled the row first (lost outcome stamp)", async () => {
+    listDue.mockResolvedValue([post()]);
+    // Claim wins; the outcome transition loses (row no longer `publishing`).
+    transition.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0 });
+    expect(result.errors).toEqual([]);
+  });
+
+  it("a lost FAILED stamp also counts nothing (concurrent resolver won)", async () => {
+    listDue.mockResolvedValue([post()]);
+    loadConnection.mockResolvedValue(null); // config-gap failure path
+    transition.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0 });
+    expect(result.errors).toEqual([]);
   });
 
   it("a lost claim (owner cancel / overlapping sweep) skips the post untouched", async () => {
@@ -181,9 +202,10 @@ describe("processSocialPostSweep — publish", () => {
       const result = await processSocialPostSweep(deps());
       expect(result).toMatchObject({ promoted: 1, published: 0, failed: 1 });
       expect(result.errors[0].message).toMatch(message);
-      expect(patch).toHaveBeenCalledWith(
+      expect(transition).toHaveBeenCalledWith(
         BIZ,
         "p-1",
+        "publishing",
         expect.objectContaining({ status: "failed", error_detail: expect.stringMatching(message) }),
         db
       );
@@ -198,10 +220,10 @@ describe("processSocialPostSweep — publish", () => {
       .mockResolvedValueOnce("container-2");
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ promoted: 2, published: 1, failed: 1 });
-    const failedPatch = patch.mock.calls.find(
-      (c) => (c[2] as { status?: string }).status === "failed"
+    const failedStamp = transition.mock.calls.find(
+      (c) => (c[3] as { status?: string }).status === "failed"
     );
-    expect((failedPatch?.[2] as { error_detail: string }).error_detail).toHaveLength(500);
+    expect((failedStamp?.[3] as { error_detail: string }).error_detail).toHaveLength(500);
   });
 
   it("a non-Error Graph throw and a publish-step failure both stamp failed", async () => {
@@ -214,13 +236,13 @@ describe("processSocialPostSweep — publish", () => {
 
   it("isolates a published-stamp crash to its post; the row stays resolvable", async () => {
     listDue.mockResolvedValue([post(), post({ id: "p-2" })]);
-    // Post 1: container persist succeeds, the PUBLISHED stamp blows up —
-    // the row stays `publishing` with its container id, for the stale
-    // sweep's container-status check to settle. Post 2 sails through.
-    patch
-      .mockResolvedValueOnce(undefined)
+    // Post 1: claim wins, the PUBLISHED stamp transition blows up — the
+    // row stays `publishing` with its container id, for the stale sweep's
+    // container-status check to settle. Post 2 sails through.
+    transition
+      .mockResolvedValueOnce(true)
       .mockRejectedValueOnce(new Error("db down"))
-      .mockResolvedValue(undefined);
+      .mockResolvedValue(true);
     const result = await processSocialPostSweep(deps());
     expect(result.published).toBe(1);
     expect(result.errors.some((e) => e.postId === "p-1" && /db down/.test(e.message))).toBe(true);
@@ -252,9 +274,10 @@ describe("processSocialPostSweep — stale resolution", () => {
       db
     );
     expect(containerStatus).not.toHaveBeenCalled();
-    expect(patch).toHaveBeenCalledWith(
+    expect(transition).toHaveBeenCalledWith(
       BIZ,
       "p-old",
+      "publishing",
       expect.objectContaining({
         status: "failed",
         error_detail: expect.stringMatching(/duplicate/)
@@ -271,12 +294,34 @@ describe("processSocialPostSweep — stale resolution", () => {
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ staled: 0, published: 1 });
     expect(containerStatus).toHaveBeenCalledWith("container-7", "page-tok");
-    expect(patch).toHaveBeenCalledWith(
+    // Guarded from `publishing`: a concurrent resolver can't be overwritten.
+    expect(transition).toHaveBeenCalledWith(
       BIZ,
       "p-old",
+      "publishing",
       { status: "published", published_at: NOW.toISOString(), error_detail: null },
       db
     );
+  });
+
+  it("counts nothing when a concurrent sweep settles the stuck row first", async () => {
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("PUBLISHED");
+    transition.mockResolvedValue(false); // published stamp loses
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 0, published: 0 });
+    expect(result.errors).toEqual([]);
+
+    // Same for a lost FAILED stamp on a container-less stuck row.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    transition.mockResolvedValue(false);
+    const lostFailed = await processSocialPostSweep(deps());
+    expect(lostFailed).toMatchObject({ staled: 0, published: 0 });
+    expect(lostFailed.errors).toEqual([]);
   });
 
   it("fails a stuck row whose container never published, or can't be verified", async () => {
@@ -304,14 +349,15 @@ describe("processSocialPostSweep — stale resolution", () => {
       listStale.mockResolvedValue([
         post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
       ]);
-      patch.mockResolvedValue(undefined);
+      transition.mockResolvedValue(true);
       loadConnection.mockResolvedValue(connection());
       containerStatus.mockRejectedValue(thrown);
       const result = await processSocialPostSweep(deps());
       expect(result.staled).toBe(1);
-      expect(patch).toHaveBeenCalledWith(
+      expect(transition).toHaveBeenCalledWith(
         BIZ,
         "p-old",
+        "publishing",
         expect.objectContaining({ status: "failed" }),
         db
       );
@@ -320,7 +366,7 @@ describe("processSocialPostSweep — stale resolution", () => {
 
   it("collects a resolution stamp failure and keeps going", async () => {
     listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
-    patch.mockRejectedValueOnce("stamp failed");
+    transition.mockRejectedValueOnce("stamp failed");
     const result = await processSocialPostSweep(deps());
     expect(result.staled).toBe(0);
     expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp failed" });
@@ -328,7 +374,7 @@ describe("processSocialPostSweep — stale resolution", () => {
 
   it("keeps an Error-instance resolution failure's message", async () => {
     listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
-    patch.mockRejectedValueOnce(new Error("stamp error"));
+    transition.mockRejectedValueOnce(new Error("stamp error"));
     const result = await processSocialPostSweep(deps());
     expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp error" });
   });

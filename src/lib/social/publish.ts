@@ -70,19 +70,39 @@ type GraphDeps = Required<
   >
 >;
 
+type PublishOutcome =
+  | { kind: "published" }
+  | { kind: "failed"; detail: string }
+  /** A concurrent resolver settled the row first — count nothing. */
+  | { kind: "lost" };
+
 /**
- * Publish one promoted post. Returns the failure detail ("" = published).
- * Never throws for Graph/config problems — the outcome is stamped on the
- * row either way. A DB failure writing the outcome DOES propagate: the row
- * stays `publishing` with its container id persisted, and the stale sweep
- * resolves it truthfully next pass via the container's status_code.
+ * Stamp a promoted post's outcome, guarded on it still being `publishing`:
+ * overlapping sweeps (a pass outrunning the cron interval) can both try to
+ * settle the same row, and last-write-wins could flip a live post back to
+ * failed — the guard makes exactly one resolver win.
+ */
+async function stampOutcome(
+  db: SupabaseClient,
+  post: SocialPostRow,
+  patch: Parameters<typeof transitionSocialPost>[3]
+): Promise<boolean> {
+  return transitionSocialPost(post.business_id, post.id, "publishing", patch, db);
+}
+
+/**
+ * Publish one promoted post. Never throws for Graph/config problems — the
+ * outcome is stamped on the row either way. A DB failure writing the
+ * outcome DOES propagate: the row stays `publishing` with its container id
+ * persisted, and the stale sweep resolves it truthfully next pass via the
+ * container's status_code.
  */
 async function publishOne(
   db: SupabaseClient,
   post: SocialPostRow,
   deps: GraphDeps,
   nowIso: string
-): Promise<string> {
+): Promise<PublishOutcome> {
   let failure = "";
   let igMediaId = "";
   try {
@@ -121,21 +141,19 @@ async function publishOne(
   }
 
   if (failure) {
-    await patchSocialPost(
-      post.business_id,
-      post.id,
-      { status: "failed", error_detail: failure.slice(0, 500) },
-      db
-    );
-    return failure;
+    const won = await stampOutcome(db, post, {
+      status: "failed",
+      error_detail: failure.slice(0, 500)
+    });
+    return won ? { kind: "failed", detail: failure } : { kind: "lost" };
   }
-  await patchSocialPost(
-    post.business_id,
-    post.id,
-    { status: "published", published_at: nowIso, ig_media_id: igMediaId, error_detail: null },
-    db
-  );
-  return "";
+  const won = await stampOutcome(db, post, {
+    status: "published",
+    published_at: nowIso,
+    ig_media_id: igMediaId,
+    error_detail: null
+  });
+  return won ? { kind: "published" } : { kind: "lost" };
 }
 
 /**
@@ -149,20 +167,19 @@ async function resolveStalePost(
   post: SocialPostRow,
   deps: GraphDeps,
   nowIso: string
-): Promise<"published" | "failed"> {
+): Promise<"published" | "failed" | "lost"> {
   if (post.ig_creation_id) {
     try {
       const connection = await deps.loadConnection(post.business_id, db);
       if (connection?.pageToken) {
         const status = await deps.containerStatus(post.ig_creation_id, connection.pageToken);
         if (status === "PUBLISHED") {
-          await patchSocialPost(
-            post.business_id,
-            post.id,
-            { status: "published", published_at: nowIso, error_detail: null },
-            db
-          );
-          return "published";
+          const won = await stampOutcome(db, post, {
+            status: "published",
+            published_at: nowIso,
+            error_detail: null
+          });
+          return won ? "published" : "lost";
         }
       }
     } catch (err) {
@@ -174,17 +191,12 @@ async function resolveStalePost(
       });
     }
   }
-  await patchSocialPost(
-    post.business_id,
-    post.id,
-    {
-      status: "failed",
-      error_detail:
-        "Publishing was interrupted — check Instagram for a duplicate before re-scheduling."
-    },
-    db
-  );
-  return "failed";
+  const won = await stampOutcome(db, post, {
+    status: "failed",
+    error_detail:
+      "Publishing was interrupted — check Instagram for a duplicate before re-scheduling."
+  });
+  return won ? "failed" : "lost";
 }
 
 /**
@@ -226,7 +238,8 @@ export async function processSocialPostSweep(
     try {
       const outcome = await resolveStalePost(db, post, graph, nowIso);
       if (outcome === "published") result.published += 1;
-      else result.staled += 1;
+      else if (outcome === "failed") result.staled += 1;
+      // "lost": a concurrent resolver settled the row — nothing to count.
     } catch (err) {
       result.errors.push({
         postId: post.id,
@@ -250,13 +263,14 @@ export async function processSocialPostSweep(
       if (!claimed) continue;
       result.promoted += 1;
 
-      const failure = await publishOne(db, post, graph, nowIso);
-      if (failure) {
+      const outcome = await publishOne(db, post, graph, nowIso);
+      if (outcome.kind === "failed") {
         result.failed += 1;
-        result.errors.push({ postId: post.id, message: failure });
-      } else {
+        result.errors.push({ postId: post.id, message: outcome.detail });
+      } else if (outcome.kind === "published") {
         result.published += 1;
       }
+      // "lost": a concurrent resolver settled the row — nothing to count.
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error("social-post-sweep: post pass failed", { postId: post.id, message });
