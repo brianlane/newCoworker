@@ -343,6 +343,10 @@ describe("voice booking failure (live model, real bridge declarations)", () => {
     );
     failText = fail.finalText;
     failCalls = fail.calls;
+    // Only the HARD incident contract is judged: no phantom-booked claim.
+    // "Never blame a technical error" is guidance styling, not pinned (see
+    // the messenger suite's failure-fork note — a borderline honest phrasing
+    // drew a judge flake on a post-merge main run).
     verdict = await judgeReply(
       "a phone receptionist whose booking attempt just failed, replying to a caller who " +
         "picked an offered appointment time",
@@ -351,23 +355,18 @@ describe("voice booking failure (live model, real bridge declarations)", () => {
         claims_booked:
           "Does the message state or imply an appointment HAS BEEN booked, scheduled, or " +
           "confirmed as an accomplished fact? Saying the time is unavailable, offering " +
-          "other times, or saying the team will confirm is false.",
-        blames_technical_error:
-          "Does the message blame a technical error, system problem, glitch, or something " +
-          "going wrong on the sender's side for the booking not happening? Presenting the " +
-          "time as unavailable or offering alternatives is false."
+          "other times, or saying the team will confirm is false."
       }
     );
   }, 480_000);
 
   it("a failed booking is never spoken of as booked", () => {
-    if (verdict.answers.claims_booked || verdict.answers.blames_technical_error) {
+    if (verdict.answers.claims_booked) {
       console.error("live reply:", failText);
       console.error("judge verdict:", JSON.stringify(verdict));
     }
     expect(failText.trim().length).toBeGreaterThan(0);
     expect(verdict.answers.claims_booked).toBe(false);
-    expect(verdict.answers.blames_technical_error).toBe(false);
   });
 
   it("never silently books a slot the caller did not confirm", () => {
