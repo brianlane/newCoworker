@@ -2,8 +2,10 @@
  * Calendly webhook subscription lifecycle (the invitee.created fast path).
  *
  * Webhook subscriptions are a PAID Calendly feature created via
- * POST /webhook_subscriptions; the response carries a per-subscription
- * `signing_key` exactly once. `ensureCalendlyWebhookSubscription` is called
+ * POST /webhook_subscriptions; the platform mints its own per-subscription
+ * `signing_key` and supplies it IN the create request (Calendly signs
+ * deliveries with the shared secret — it does not return one).
+ * `ensureCalendlyWebhookSubscription` is called
  * lazily from the booking-goal sweep for businesses that actually have
  * jumpable runs on booking-goal flows, so:
  *   - tenants whose plan supports webhooks get real-time
@@ -34,6 +36,7 @@
  * reconnecting under a new account retries immediately (the new account may
  * be on a paid plan).
  */
+import { randomBytes } from "crypto";
 import {
   resolveCalendarConnection,
   type ResolvedVoiceConnection
@@ -97,7 +100,7 @@ export type CalendlyWebhookEnsureResult = {
 };
 
 type UserResource = { resource?: { uri?: string; current_organization?: string } };
-type SubscriptionResource = { resource?: { uri?: string; signing_key?: string } };
+type SubscriptionResource = { resource?: { uri?: string } };
 type SubscriptionListing = { collection?: Array<{ uri?: string; callback_url?: string }> };
 
 /**
@@ -191,6 +194,12 @@ export async function ensureCalendlyWebhookSubscription(
     }
 
     const callbackUrl = calendlyWebhookCallbackUrl(businessId);
+    // The signing key is CLIENT-supplied: Calendly's create accepts an
+    // optional `signing_key` and does NOT return one in the response
+    // resource (verified against the live API on 2026-07-18 — the shipped
+    // wait-for-it-in-the-response contract left an orphaned hook we could
+    // never verify). Mint our own high-entropy secret, send it, store it.
+    const signingKey = randomBytes(32).toString("base64url");
     const createConfig: CalendlyRequestConfig = {
       endpoint: "/webhook_subscriptions",
       method: "POST",
@@ -199,7 +208,8 @@ export async function ensureCalendlyWebhookSubscription(
         events: [...CALENDLY_WEBHOOK_EVENTS],
         organization: orgUri,
         user: userUri,
-        scope: "user"
+        scope: "user",
+        signing_key: signingKey
       }
     };
 
@@ -227,17 +237,13 @@ export async function ensureCalendlyWebhookSubscription(
         return record("unsupported");
       }
       const sub = (res.data as SubscriptionResource | undefined)?.resource;
-      if (
-        typeof sub?.uri !== "string" ||
-        sub.uri.length === 0 ||
-        typeof sub.signing_key !== "string" ||
-        sub.signing_key.length === 0
-      ) {
-        // A creation response without a signing key is unverifiable — treat
-        // as an error rather than accepting unauthenticated webhooks.
+      if (typeof sub?.uri !== "string" || sub.uri.length === 0) {
+        // A creation response without the resource URI leaves an unmanaged
+        // hook we cannot reference — record the failure (the next attempt's
+        // 409 recovery reaps it by callback URL).
         return record("error");
       }
-      return record("active", sub.uri, sub.signing_key, userUri);
+      return record("active", sub.uri, signingKey, userUri);
     };
 
     const first = await create();
