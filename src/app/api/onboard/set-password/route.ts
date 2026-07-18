@@ -5,6 +5,7 @@ import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verif
 import { createEmailVerificationToken } from "@/lib/email/verification-token";
 import { logger } from "@/lib/logger";
 import { getPasswordValidationError } from "@/lib/password";
+import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { z } from "zod";
@@ -13,6 +14,12 @@ const schema = z.object({
   sessionId: z.string().min(1),
   password: z.string().min(1)
 });
+
+// Durable (cross-isolate) per-IP limit: every call costs a Stripe session
+// retrieve and can mint an auth user, so the quota must bind fleet-wide
+// rather than per Vercel isolate (audit 2026-07, finding M3). Generous
+// enough for legitimate retries after a network drop.
+const SET_PASSWORD_RATE = { interval: 15 * 60 * 1000, maxRequests: 10 };
 
 /**
  * Mint the auth user for a paid Stripe Checkout session.
@@ -78,6 +85,14 @@ const schema = z.object({
  */
 export async function POST(request: Request) {
   try {
+    const limiter = await rateLimitDurable(
+      `onboard-set-password:${rateLimitIdentifierFromRequest(request)}`,
+      SET_PASSWORD_RATE
+    );
+    if (!limiter.success) {
+      return errorResponse("CONFLICT", "Too many attempts. Please wait a few minutes and try again.", 429);
+    }
+
     const body = schema.parse(await request.json());
 
     // Mirror the client-side rule check so a degraded client

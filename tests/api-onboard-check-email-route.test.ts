@@ -4,8 +4,17 @@ vi.mock("@/lib/auth", () => ({
   findAuthUserIdByEmail: vi.fn()
 }));
 
+vi.mock("@/lib/rate-limit", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/rate-limit")>("@/lib/rate-limit");
+  return {
+    ...actual,
+    rateLimitDurable: vi.fn()
+  };
+});
+
 import { POST } from "@/app/api/onboard/check-email/route";
 import { findAuthUserIdByEmail } from "@/lib/auth";
+import { rateLimitDurable } from "@/lib/rate-limit";
 
 function makeRequest(body: Record<string, unknown>) {
   return new Request("http://localhost:3000/api/onboard/check-email", {
@@ -18,6 +27,12 @@ function makeRequest(body: Record<string, unknown>) {
 describe("api/onboard/check-email route (UX preflight)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(rateLimitDurable).mockResolvedValue({
+      success: true,
+      limit: 10,
+      remaining: 9,
+      reset: Date.now() + 60000
+    });
   });
 
   it("reports the email as available when no auth user exists for it", async () => {
@@ -72,5 +87,25 @@ describe("api/onboard/check-email route (UX preflight)", () => {
     const response = await POST(makeRequest({}));
     expect(response.status).toBe(400);
     expect(findAuthUserIdByEmail).not.toHaveBeenCalled();
+  });
+
+  it("returns 429 when the durable per-IP rate limit is exhausted (audit M3)", async () => {
+    vi.mocked(rateLimitDurable).mockResolvedValue({
+      success: false,
+      limit: 10,
+      remaining: 0,
+      reset: Date.now() + 60000
+    });
+
+    const response = await POST(makeRequest({ email: "fresh@example.com" }));
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.ok).toBe(false);
+    expect(findAuthUserIdByEmail).not.toHaveBeenCalled();
+    expect(rateLimitDurable).toHaveBeenCalledWith(
+      expect.stringMatching(/^onboard-check-email:/),
+      expect.objectContaining({ maxRequests: 10 })
+    );
   });
 });

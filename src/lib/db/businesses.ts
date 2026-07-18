@@ -247,6 +247,26 @@ export async function getBusiness(id: string, client?: SupabaseClient): Promise<
 }
 
 /**
+ * Strict existence check for a business row. Unlike `getBusiness` (which
+ * collapses every error into `null`), a query error here THROWS so security
+ * gates can fail closed — the onboarding-draft first-claim gate must not
+ * treat "the lookup errored" as "the business does not exist", or a
+ * transient DB failure would reopen the unauthenticated pre-claim window
+ * it guards (audit 2026-07, finding L3).
+ */
+export async function businessExists(id: string, client?: SupabaseClient): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("businesses")
+    .select("id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) throw new Error(`businessExists: ${error.message}`);
+  return data !== null;
+}
+
+/**
  * Ids of every business owned by `ownerEmail` (newest first). Businesses are
  * keyed by `owner_email` (no stable owner_user_id), so this is the canonical
  * "businesses of the signed-in user" lookup. Throws on a query error — the
