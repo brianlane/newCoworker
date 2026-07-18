@@ -206,6 +206,41 @@ describe("computeDayCurrentMrr", () => {
     });
     expect(result.totalCents).toBe(9900);
   });
+
+  it("splits refund-exposed revenue out of the committed number", () => {
+    const result = computeDayCurrentMrr({
+      subscriptions: [sub({ refund_exposed: true }), sub({ refund_exposed: false }), sub()],
+      enterpriseDeals: [{ monthly_cents: 49_500 }],
+      now: NOW
+    });
+    expect(result.totalCents).toBe(3 * 9900 + 49_500);
+    expect(result.refundExposedCents).toBe(9900);
+    expect(result.committedCents).toBe(2 * 9900 + 49_500);
+  });
+
+  it("never counts enterprise deals or excluded subscriptions as refund-exposed", () => {
+    const result = computeDayCurrentMrr({
+      subscriptions: [
+        sub({ tier: "enterprise", refund_exposed: true }),
+        sub({ status: "pending", refund_exposed: true }),
+        sub({ stripe_subscription_id: null, refund_exposed: true })
+      ],
+      enterpriseDeals: [{ monthly_cents: 49_500 }],
+      now: NOW
+    });
+    expect(result.refundExposedCents).toBe(0);
+    expect(result.committedCents).toBe(result.totalCents);
+  });
+
+  it("treats subscriptions without the refund_exposed flag as committed", () => {
+    const result = computeDayCurrentMrr({
+      subscriptions: [sub()],
+      enterpriseDeals: [],
+      now: NOW
+    });
+    expect(result.refundExposedCents).toBe(0);
+    expect(result.committedCents).toBe(result.totalCents);
+  });
 });
 
 function biz(overrides: Partial<PlatformCostBusinessInput> = {}): PlatformCostBusinessInput {

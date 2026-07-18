@@ -99,6 +99,28 @@ export async function getCustomerProfileById(
   return data as CustomerProfileRow;
 }
 
+/**
+ * Batch-load profiles by id (admin MRR refund-exposure stamping). Returns a
+ * map so callers can join in O(1); missing ids are simply absent.
+ */
+export async function listCustomerProfilesByIds(
+  ids: string[],
+  client?: SupabaseClient
+): Promise<Map<string, CustomerProfileRow>> {
+  if (ids.length === 0) return new Map();
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("customer_profiles")
+    .select()
+    .in("id", ids);
+  if (error) throw new Error(`listCustomerProfilesByIds: ${error.message}`);
+  const map = new Map<string, CustomerProfileRow>();
+  for (const row of (data ?? []) as CustomerProfileRow[]) {
+    map.set(row.id, row);
+  }
+  return map;
+}
+
 export async function getCustomerProfileByEmail(
   email: string,
   client?: SupabaseClient

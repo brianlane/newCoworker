@@ -117,7 +117,8 @@ export function CancelSheet({
           <div className="rounded-lg border border-claw-green/30 bg-claw-green/5 p-4 space-y-2">
             <p className="text-sm font-semibold text-parchment">Cancel now and refund</p>
             <p className="text-xs text-parchment/60">
-              We refund your last charge, excluding the one-time carrier registration fee —
+              We refund your last charge, excluding the one-time carrier registration fee
+              and any usage charges billed at cost (texts sent, call minutes, AI usage) —
               and, on 12/24-month plans, minus one month of service at the monthly rate for
               the time you&apos;ve used. We shut down your VPS immediately and keep your data
               for 30 days so you can reactivate without losing anything. This is your

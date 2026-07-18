@@ -380,16 +380,22 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       // month at the tier's monthly-intro rate on annual/biennial refunds —
       // see `termRefundCarveOutCents` in lifecycle.ts. Zero for monthly.
       const termCarveOutCents = op.termCarveOutCents;
+      // Billable-usage policy (Jul 2026): the tenant's third-party usage
+      // charges (SMS, voice, Gemini spend) are withheld at platform cost —
+      // computed by the refund route via src/lib/billing/usage-charges.ts
+      // and threaded through the op. Zero when the plan never loaded it.
+      const usageCarveOutCents = op.usageCarveOutCents;
       const refundCents = Math.min(
-        Math.max(amountPaidCents - carrierFeeCents - termCarveOutCents, 0),
+        Math.max(amountPaidCents - carrierFeeCents - termCarveOutCents - usageCarveOutCents, 0),
         amountPaidCents
       );
-      if (carrierFeeCents > 0 || termCarveOutCents > 0) {
+      if (carrierFeeCents > 0 || termCarveOutCents > 0 || usageCarveOutCents > 0) {
         logger.info("refund_latest_charge: carving out non-refundable amounts", {
           stripeSubscriptionId: op.stripeSubscriptionId,
           invoiceId: latestInvoiceId,
           carrierFeeCents,
           termCarveOutCents,
+          usageCarveOutCents,
           refundCents
         });
       }

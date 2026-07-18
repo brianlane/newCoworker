@@ -35,10 +35,10 @@ export type RevenueDeal = {
  * resurface a resolved problem; churn alone deliberately keeps the full
  * history (its per-business sets need the canceled rows).
  */
-export function dedupeNewestPerBusiness(
-  subscriptions: RevenueSubscription[]
-): RevenueSubscription[] {
-  const newest = new Map<string, RevenueSubscription>();
+export function dedupeNewestPerBusiness<
+  T extends Pick<RevenueSubscription, "business_id" | "created_at">
+>(subscriptions: T[]): T[] {
+  const newest = new Map<string, T>();
   for (const sub of subscriptions) {
     const existing = newest.get(sub.business_id);
     if (!existing || Date.parse(sub.created_at) > Date.parse(existing.created_at)) {
