@@ -2,12 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   cleanReviewLink,
   documentReceiptTemplate,
+  instagramProspectTemplate,
+  INSTAGRAM_PROSPECT_TAG,
+  INSTAGRAM_SCRAPER_SOURCE,
   metaLeadFollowUpTemplate,
   priceSheetShareTemplate,
   reviewRequestTemplate,
   REVIEW_LINK_MAX_LENGTH
 } from "@/lib/ai-flows/templates";
 import { parseAiFlowDefinition, summarizeDefinition } from "@/lib/ai-flows/schema";
+import { evaluateTriggerConditions } from "@/lib/ai-flows/trigger-eval";
 
 describe("metaLeadFollowUpTemplate", () => {
   it("is a valid definition the install route can persist as-is", () => {
@@ -29,6 +33,67 @@ describe("metaLeadFollowUpTemplate", () => {
       "notify_owner"
     ]);
     expect(summarizeDefinition(def)).toContain("When any webhook event arrives");
+  });
+});
+
+describe("instagramProspectTemplate", () => {
+  it("is a valid definition the install route can persist as-is", () => {
+    const tpl = instagramProspectTemplate();
+    const def = parseAiFlowDefinition(tpl.definition);
+    expect(def.trigger.channel).toBe("webhook");
+    expect(tpl.key).toBe("instagram_prospect_intake");
+    expect(tpl.name.length).toBeGreaterThan(0);
+  });
+
+  it("only fires for the instagram_scraper source label", () => {
+    const def = instagramProspectTemplate().definition;
+    expect(def.trigger).toMatchObject({
+      channel: "webhook",
+      conditions: [{ type: "from_matches", value: INSTAGRAM_SCRAPER_SOURCE }]
+    });
+    const conditions = "conditions" in def.trigger ? def.trigger.conditions : [];
+    // The webhook channel evaluates from_matches against the caller-supplied
+    // source label — the guide's suggested label matches, others don't.
+    expect(evaluateTriggerConditions(conditions, "any text", "instagram_scraper")).toBe(true);
+    expect(evaluateTriggerConditions(conditions, "any text", "facebook_lead_ads")).toBe(false);
+  });
+
+  it("extracts, files + tags the prospect, and briefs the owner — never texts or emails", () => {
+    const def = instagramProspectTemplate().definition;
+    expect(def.steps.map((s) => s.type)).toEqual([
+      "extract_text",
+      "upsert_customer",
+      "update_contact",
+      "notify_owner"
+    ]);
+    // Compliance invariant: scraped prospects never consented, so the starter
+    // must not carry any outbound-contact step.
+    expect(def.steps.some((s) => s.type === "send_sms" || s.type === "send_email")).toBe(false);
+    const tag = def.steps[2];
+    if (tag.type === "update_contact") {
+      expect(tag.addTags).toEqual([INSTAGRAM_PROSPECT_TAG]);
+    }
+  });
+
+  it("gates the phone-keyed file + tag steps on a usable phone", () => {
+    const def = instagramProspectTemplate().definition;
+    const file = def.steps[1];
+    const tag = def.steps[2];
+    // The CRM is phone-keyed; a scraped profile often has only email/handle.
+    // Both steps skip cleanly on 'none' instead of failing the run.
+    if (file.type === "upsert_customer") {
+      expect(file.when).toEqual({ var: "lead_phone", notEquals: "none" });
+    }
+    if (tag.type === "update_contact") {
+      expect(tag.when).toEqual({ var: "lead_phone", notEquals: "none" });
+    }
+    // The owner brief still carries the handle + email for phone-less leads.
+    const notify = def.steps[3];
+    if (notify.type === "notify_owner") {
+      expect(notify.when).toBeUndefined();
+      expect(notify.message).toContain("{{vars.lead_handle}}");
+      expect(notify.message).toContain("{{vars.lead_email}}");
+    }
   });
 });
 

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { IntegrationTile } from "@/components/dashboard/IntegrationTile";
 import {
@@ -81,6 +82,26 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
                   />
                 ))}
               </div>
+              {category === "Lead sources" && (
+                <p className="text-xs text-parchment/45">
+                  Using another lead source? Any tool that exports a spreadsheet or calls a
+                  webhook can feed your coworker — see the{" "}
+                  <Link
+                    href="/dashboard/aiflows/guides/instagram-leads"
+                    className="text-signal-teal hover:underline"
+                  >
+                    Instagram prospects guide
+                  </Link>{" "}
+                  or the{" "}
+                  <Link
+                    href="/dashboard/aiflows/guides/meta-leads"
+                    className="text-signal-teal hover:underline"
+                  >
+                    Meta ad leads guide
+                  </Link>
+                  .
+                </p>
+              )}
             </section>
           );
         })

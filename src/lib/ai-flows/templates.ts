@@ -77,6 +77,98 @@ export function metaLeadFollowUpTemplate(): AiFlowTemplate {
   };
 }
 
+/**
+ * Tag the Instagram-leads starter stamps on every filed prospect, so the
+ * Marketing page (and campaign audience filters) can single them out for
+ * owner review before any outreach.
+ */
+export const INSTAGRAM_PROSPECT_TAG = "instagram-prospect";
+
+/** Source label the Instagram-leads guide tells bridges/imports to send. */
+export const INSTAGRAM_SCRAPER_SOURCE = "instagram_scraper";
+
+/**
+ * "Instagram prospect intake": the starter flow the Instagram-leads How-To
+ * guide installs. A webhook event (a scraped profile forwarded by an
+ * Apify/Make/Zapier bridge, or a row from the lead-backlog importer with
+ * source "instagram_scraper") is parsed, filed as a contact tagged
+ * `instagram-prospect`, and summarized to the owner.
+ *
+ * Deliberately NO send_sms / send_email step: scraped prospects never gave
+ * consent (TCPA / CAN-SPAM), so nothing is sent until the owner reviews the
+ * contact and reaches out on their own terms. The file + tag steps are
+ * gated on a usable phone (the CRM is phone-keyed); phone-less prospects
+ * still reach the owner via the notify step with their handle and email.
+ * Installed DISABLED so the owner reviews the flow before anything runs.
+ */
+export function instagramProspectTemplate(): AiFlowTemplate {
+  return {
+    key: "instagram_prospect_intake",
+    name: "Instagram prospect intake",
+    definition: {
+      version: 1,
+      trigger: {
+        channel: "webhook",
+        conditions: [{ type: "from_matches", value: INSTAGRAM_SCRAPER_SOURCE }]
+      },
+      steps: [
+        {
+          id: "s_extract",
+          type: "extract_text",
+          fields: [
+            {
+              name: "lead_name",
+              description: "The prospect's full name. 'there' if unknown."
+            },
+            {
+              name: "lead_phone",
+              description:
+                "The prospect's phone number, digits and + only. 'none' if the profile has no phone."
+            },
+            {
+              name: "lead_email",
+              description: "The prospect's email address. 'none' if the profile has no email."
+            },
+            {
+              name: "lead_handle",
+              description: "The prospect's Instagram username/handle. 'none' if not present."
+            },
+            {
+              name: "lead_notes",
+              description:
+                "Everything else useful: bio, follower count, hashtag or search that found them, website. 'none' if nothing."
+            }
+          ]
+        },
+        {
+          id: "s_file",
+          type: "upsert_customer",
+          phoneVar: "lead_phone",
+          nameVar: "lead_name",
+          emailVar: "lead_email",
+          when: { var: "lead_phone", notEquals: "none" }
+        },
+        {
+          id: "s_tag",
+          type: "update_contact",
+          phoneVar: "lead_phone",
+          addTags: [INSTAGRAM_PROSPECT_TAG],
+          when: { var: "lead_phone", notEquals: "none" }
+        },
+        {
+          id: "s_notify_owner",
+          type: "notify_owner",
+          message:
+            "New Instagram prospect: {{vars.lead_name}} (@{{vars.lead_handle}}) — " +
+            "{{vars.lead_phone}} / {{vars.lead_email}}. Notes: {{vars.lead_notes}}. " +
+            "Filed and tagged for your review — I did NOT contact them (scraped " +
+            "prospects haven't consented to texts or marketing email)."
+        }
+      ]
+    }
+  };
+}
+
 /** Review links ride inside an SMS body (1600-char cap); keep them sane. */
 export const REVIEW_LINK_MAX_LENGTH = 300;
 

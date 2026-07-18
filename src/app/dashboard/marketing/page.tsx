@@ -5,6 +5,7 @@
  */
 
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -29,12 +30,30 @@ export default async function MarketingPage() {
 
   return (
     <div className="space-y-6 max-w-4xl">
-      <div>
-        <h1 className="text-2xl font-bold text-parchment">Marketing</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Email campaigns to your contacts — every send is reviewed and scheduled by you, and
-          every mail carries a one-click unsubscribe.
-        </p>
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold text-parchment">Marketing</h1>
+          <p className="text-sm text-parchment/50 mt-1">
+            Email campaigns to your contacts — every send is reviewed and scheduled by you, and
+            every mail carries a one-click unsubscribe.
+          </p>
+        </div>
+        {business ? (
+          <div className="flex flex-wrap items-center gap-4 text-sm sm:shrink-0 sm:flex-nowrap sm:whitespace-nowrap">
+            <Link
+              href="/dashboard/aiflows/guides/meta-leads"
+              className="text-signal-teal hover:underline"
+            >
+              Capture Meta ad leads
+            </Link>
+            <Link
+              href="/dashboard/aiflows/guides/instagram-leads"
+              className="text-signal-teal hover:underline"
+            >
+              Import Instagram prospects
+            </Link>
+          </div>
+        ) : null}
       </div>
       {business ? (
         <CampaignsManager businessId={business.id} />
