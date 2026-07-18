@@ -61,7 +61,7 @@ import {
   resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
-import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
+import { getCustomerProfileById, upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { logAdminAction } from "@/lib/admin/audit";
 import { logger } from "@/lib/logger";
 
@@ -172,9 +172,17 @@ export async function POST(request: Request) {
       // Thread the real profile id into the lifecycle context so the
       // planner's `cancelWithRefund` precondition check sees a profile
       // (and so the rewritten plan stamps `customer_profile_id` on the
-      // `subscriptions` row for future self-serve lookups).
+      // `subscriptions` row for future self-serve lookups). Also load the
+      // upserted ROW itself — the email upsert can merge onto an existing
+      // profile whose `first_paid_at` anchors the usage carve-out window
+      // below when the Stripe period cache is cold; leaving `profile` null
+      // here would fail that refund with a spurious usage_window_unknown.
+      // Best-effort (`getCustomerProfileById` returns null on error): a
+      // missing row just keeps the pre-existing fail-closed behavior.
+      const upsertedProfile = await getCustomerProfileById(profileIdForPlan);
       effectiveCtx = {
         ...ctxRes.context,
+        profile: upsertedProfile,
         subscription: {
           ...ctxRes.context.subscription,
           customer_profile_id: profileIdForPlan

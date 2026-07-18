@@ -32,7 +32,8 @@ vi.mock("@/lib/db/businesses", () => ({
 }));
 
 vi.mock("@/lib/db/customer-profiles", () => ({
-  upsertCustomerProfile: vi.fn()
+  upsertCustomerProfile: vi.fn(),
+  getCustomerProfileById: vi.fn()
 }));
 
 vi.mock("@/lib/billing/lifecycle-loader", () => ({
@@ -60,7 +61,7 @@ vi.mock("@/lib/logger", () => ({
 import { POST } from "@/app/api/admin/force-refund/route";
 import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
-import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
+import { getCustomerProfileById, upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import {
@@ -123,6 +124,7 @@ beforeEach(() => {
   vi.mocked(executeLifecyclePlanFastPhase).mockResolvedValue({} as never);
   vi.mocked(executeLifecyclePlanSlowPhase).mockResolvedValue(undefined as never);
   vi.mocked(upsertCustomerProfile).mockResolvedValue("prof-upserted");
+  vi.mocked(getCustomerProfileById).mockResolvedValue(null);
   vi.mocked(setBusinessCustomerProfile).mockResolvedValue(undefined);
   vi.mocked(resolveUsageCarveOutWindow).mockReturnValue({
     ok: true,
@@ -359,6 +361,41 @@ describe("api/admin/force-refund route", () => {
       | { type: "update_subscription"; patch: { customer_profile_id: string } }
       | undefined;
     expect(updateOp?.patch.customer_profile_id).toBe("prof-upserted");
+  });
+
+  it("threads the upserted profile ROW into the usage-window resolution", async () => {
+    // The email upsert can merge onto an existing profile whose
+    // first_paid_at anchors the carve-out window when the Stripe period
+    // cache is cold — leaving ctx.profile null would fail the refund with
+    // a spurious usage_window_unknown.
+    vi.mocked(loadLifecycleContextForBusiness).mockResolvedValueOnce({
+      ...defaultCtx,
+      context: {
+        ...defaultCtx.context,
+        subscription: {
+          ...defaultCtx.context.subscription,
+          customer_profile_id: null
+        },
+        profile: null
+      }
+    } as never);
+    const upsertedProfile = {
+      id: "prof-upserted",
+      first_paid_at: "2026-04-01T00:00:00.000Z",
+      refund_used_at: null
+    };
+    vi.mocked(getCustomerProfileById).mockResolvedValueOnce(upsertedProfile as never);
+    vi.mocked(planLifecycleAction).mockReturnValue({
+      ok: true,
+      plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
+    } as never);
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(200);
+    expect(getCustomerProfileById).toHaveBeenCalledWith("prof-upserted");
+    expect(resolveUsageCarveOutWindow).toHaveBeenCalledWith(
+      expect.objectContaining({ profile: upsertedProfile })
+    );
   });
 
   it("returns 409 when no real profile exists and the business has no owner_email", async () => {
