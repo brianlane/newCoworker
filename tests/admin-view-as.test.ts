@@ -88,7 +88,7 @@ describe("resolveViewAsContext", () => {
     });
     expect(await resolveViewAsContext(admin)).toEqual({
       ownerEmail: "amy@x.com",
-      viewAs: { businessId: BIZ_ID, name: "Amy's Plumbing", tier: "starter" }
+      viewAs: { businessId: BIZ_ID, name: "Amy's Plumbing", tier: "starter", selfOwned: false }
     });
   });
 
@@ -106,7 +106,8 @@ describe("resolveViewAsContext", () => {
       viewAs: {
         businessId: "9d1f00c0-8023-4cf5-bde9-db07fc5f0027",
         name: "New Biz",
-        tier: "standard"
+        tier: "standard",
+        selfOwned: false
       }
     });
   });
@@ -120,7 +121,7 @@ describe("resolveViewAsContext", () => {
       .mockResolvedValueOnce({ data: null });
     expect(await resolveViewAsContext(admin)).toEqual({
       ownerEmail: "solo@x.com",
-      viewAs: { businessId: BIZ_ID, name: "Solo Biz", tier: "starter" }
+      viewAs: { businessId: BIZ_ID, name: "Solo Biz", tier: "starter", selfOwned: false }
     });
   });
 
@@ -131,7 +132,7 @@ describe("resolveViewAsContext", () => {
     });
     expect(await resolveViewAsContext(admin)).toEqual({
       ownerEmail: "amy@x.com",
-      viewAs: { businessId: BIZ_ID, name: "", tier: "starter" }
+      viewAs: { businessId: BIZ_ID, name: "", tier: "starter", selfOwned: false }
     });
   });
 
@@ -141,6 +142,21 @@ describe("resolveViewAsContext", () => {
     expect(await resolveViewAsContext(admin)).toEqual({
       ownerEmail: "admin@x.com",
       viewAs: null
+    });
+  });
+
+  it("marks self-impersonation (admin-owned business) selfOwned, keeping the context", async () => {
+    // The internal HQ tenant is owned by the admin email itself. The context
+    // stays non-null (the dashboard layout keys the admin→/admin redirect
+    // and the banner off its presence) but is flagged selfOwned so the
+    // read-only write guard does not fire. Email match is case-insensitive.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "Admin@X.com" }
+    });
+    expect(await resolveViewAsContext(admin)).toEqual({
+      ownerEmail: "Admin@X.com",
+      viewAs: { businessId: BIZ_ID, name: "HQ", tier: "standard", selfOwned: true }
     });
   });
 });
@@ -163,6 +179,16 @@ describe("isViewAsActive", () => {
     // the exit banner in this state — blocking writes would strand the admin.
     cookieGet.mockReturnValue({ value: BIZ_ID });
     maybeSingle.mockResolvedValue({ data: null });
+    expect(await isViewAsActive(admin)).toBe(false);
+  });
+
+  it("stays inactive when the admin views their own business (HQ tenant)", async () => {
+    // Writes stay allowed: email-resolved mutations target the exact
+    // business being viewed, so the wrong-tenant hazard cannot occur.
+    cookieGet.mockReturnValue({ value: BIZ_ID });
+    maybeSingle.mockResolvedValue({
+      data: { id: BIZ_ID, name: "HQ", tier: "standard", owner_email: "admin@x.com" }
+    });
     expect(await isViewAsActive(admin)).toBe(false);
   });
 });

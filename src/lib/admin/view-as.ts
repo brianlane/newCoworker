@@ -44,8 +44,15 @@ export async function getViewAsBusinessId(user: AuthUser | null): Promise<string
 export type ViewAsContext = {
   /** Email to use in `owner_email` dashboard lookups. */
   ownerEmail: string | null;
-  /** Set iff the admin is actively impersonating a tenant. */
-  viewAs: { businessId: string; name: string; tier: string } | null;
+  /**
+   * Set iff the admin is actively impersonating a tenant. `selfOwned` marks
+   * the special case where the impersonated business's owner IS the admin
+   * (the internal HQ tenant): the dashboard renders exactly as it would for
+   * the plain owner, so the read-only write guard must not fire — but the
+   * context stays non-null because the dashboard layout keys the
+   * admin→/admin redirect and the banner off its presence.
+   */
+  viewAs: { businessId: string; name: string; tier: string; selfOwned: boolean } | null;
 };
 
 /**
@@ -69,6 +76,16 @@ export async function resolveViewAsContext(user: AuthUser): Promise<ViewAsContex
     .maybeSingle();
   if (!data?.owner_email) return { ownerEmail: user.email, viewAs: null };
 
+  // Self-impersonation: the impersonated business's owner IS the admin (the
+  // internal HQ tenant). The dashboard resolves to the same business either
+  // way, so this is not a wrong-tenant hazard — writes stay allowed
+  // (isViewAsActive below ignores selfOwned contexts) — but the context is
+  // still returned so the layout keeps the admin on /dashboard with the
+  // banner (and its exit) instead of bouncing them to /admin/dashboard.
+  const selfOwned =
+    typeof user.email === "string" &&
+    (data.owner_email as string).toLowerCase() === user.email.toLowerCase();
+
   // Dashboard pages resolve "the" business as the NEWEST row under
   // owner_email, so view-as is effectively "view as this OWNER". When the
   // owner has multiple businesses, mirror the pages' newest-row pick here so
@@ -88,7 +105,8 @@ export async function resolveViewAsContext(user: AuthUser): Promise<ViewAsContex
     viewAs: {
       businessId: effective.id,
       name: effective.name ?? "",
-      tier: effective.tier ?? "starter"
+      tier: effective.tier ?? "starter",
+      selfOwned
     }
   };
 }
@@ -110,8 +128,14 @@ export async function resolveDashboardOwnerEmail(user: AuthUser): Promise<string
  * deleted business does NOT count as active (the dashboard already fell back
  * to the admin's own identity and hides the exit banner, so blocking writes
  * there would leave the admin 403'd with no visible way out).
+ *
+ * Self-owned view-as (the admin viewing the business their OWN email owns —
+ * the internal HQ tenant) also does not count: email-resolved writes target
+ * the exact business being viewed, so the wrong-tenant hazard this guard
+ * exists for cannot occur, and the admin-owner is entitled to mutate it.
  */
 export async function isViewAsActive(user: AuthUser | null): Promise<boolean> {
   if (!user) return false;
-  return (await resolveViewAsContext(user)).viewAs !== null;
+  const { viewAs } = await resolveViewAsContext(user);
+  return viewAs !== null && !viewAs.selfOwned;
 }

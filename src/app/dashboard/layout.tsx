@@ -196,6 +196,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             businessId={viewAs.businessId}
             businessName={viewAs.name}
             tier={viewAs.tier}
+            selfOwned={viewAs.selfOwned}
           />
         )}
         {grace && (
