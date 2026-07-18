@@ -12,6 +12,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -48,6 +49,7 @@ type Props = {
 };
 
 export function SocialPostsManager({ businessId, instagramUsername, igConnected }: Props) {
+  const router = useRouter();
   const [posts, setPosts] = useState<SocialPostItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +74,17 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
       setLoading(false);
     }
   }, [businessId]);
+
+  /**
+   * Post-mutation refresh: this card's list AND the server components —
+   * the unified content calendar's Instagram rows are server-rendered
+   * (`calendarExtras`), so without router.refresh() a newly scheduled or
+   * cancelled post would leave the calendar stale until a full reload.
+   */
+  const refreshEverywhere = useCallback(async () => {
+    await refresh();
+    router.refresh();
+  }, [refresh, router]);
 
   // Always load: drafts/scheduled posts outlive a disconnected IG account,
   // and the owner must still be able to cancel or delete them here.
@@ -109,7 +122,7 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
       setCaption("");
       setMediaUrl("");
       setPublishAt("");
-      await refresh();
+      await refreshEverywhere();
     } catch {
       setError("Could not save the post — try again.");
     } finally {
@@ -126,7 +139,7 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
       if (!json.ok) setError(json.error?.message ?? "Could not cancel");
-      await refresh();
+      await refreshEverywhere();
     } catch {
       setError("Could not cancel — try again.");
     }
@@ -141,7 +154,7 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
       );
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
       if (!json.ok) setError(json.error?.message ?? "Could not delete");
-      await refresh();
+      await refreshEverywhere();
     } catch {
       setError("Could not delete — try again.");
     }
