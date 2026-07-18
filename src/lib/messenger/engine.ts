@@ -28,7 +28,7 @@ import {
   type GeminiChatStepResult
 } from "@/lib/gemini-chat";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
-import { customerLanguageLine } from "@/lib/i18n/customer-language";
+import { customerLanguageLine, detectCustomerLanguage } from "@/lib/i18n/customer-language";
 import {
   getBusinessCustomerLanguages,
   type BusinessCustomerLanguages
@@ -48,9 +48,10 @@ import {
   type WebchatToolResult
 } from "@/lib/webchat/engine-tools";
 import { captureMessengerLead } from "@/lib/messenger/lead-capture";
-import type {
-  MessengerConversationRow,
-  MessengerMessageRow
+import {
+  setMessengerConversationLanguage,
+  type MessengerConversationRow,
+  type MessengerMessageRow
 } from "@/lib/messenger/db";
 import type { PlanTier } from "@/lib/plans/tier";
 import { logger } from "@/lib/logger";
@@ -168,6 +169,10 @@ export type MessengerGeminiTurnDeps = {
   env?: Record<string, string | undefined>;
   now?: () => Date;
   getCustomerLanguages?: (businessId: string) => Promise<BusinessCustomerLanguages>;
+  persistConversationLanguage?: (
+    conversationId: string,
+    language: "en" | "es"
+  ) => Promise<void>;
 };
 
 export type MessengerGeminiTurnResult = {
@@ -216,6 +221,8 @@ export async function runMessengerGeminiTurn(
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
   const getCustomerLanguages = deps.getCustomerLanguages ?? getBusinessCustomerLanguages;
+  const persistConversationLanguage =
+    deps.persistConversationLanguage ?? setMessengerConversationLanguage;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -259,12 +266,33 @@ export async function runMessengerGeminiTurn(
     },
     documentsMd
   );
+  // Classify the latest user turn (sticky: the stored thread language wins
+  // over a one-token confirmation) and persist confident detections so
+  // later turns keep the thread language. `contents` being non-null above
+  // guarantees the history contains a user row.
+  const lastUserText = [...args.history].reverse().find((m) => m.role === "user")!.content;
+  const detected = detectCustomerLanguage({
+    text: lastUserText,
+    establishedLanguage: args.conversation.preferred_language ?? undefined,
+    defaultLanguage: customerLanguages.defaultLanguage,
+    supported: customerLanguages.supported
+  });
+  if (detected.persist && detected.language !== args.conversation.preferred_language) {
+    // Best-effort: a persistence blip must not kill the reply turn.
+    try {
+      await persistConversationLanguage(args.conversation.id, detected.language);
+    } catch (err) {
+      logger.warn("messenger engine: language persist failed; continuing", {
+        conversationId: args.conversation.id,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   const systemInstruction = [
     instructions,
     customerLanguageLine({
-      // Sticky thread language when the conversation has one on record;
-      // otherwise the line's follow-the-customer instruction handles
-      // detection in-context (the model sees the user's turns directly).
+      detected: detected.language,
       established: args.conversation.preferred_language ?? null,
       defaultLang: customerLanguages.defaultLanguage,
       supported: customerLanguages.supported

@@ -86,13 +86,33 @@ export async function persistDetectedContactLanguage(
   const existing = await getContactLanguage(businessId, customerE164, db);
   if (existing.language_source === "owner_set") return;
 
-  const { error } = await db
+  const patch = {
+    preferred_language: language,
+    language_source: "detected" as const
+  };
+  // Update-then-insert (same rationale as setContactLanguageOwnerOverride):
+  // a thread can exist before any contacts row, and a zero-row UPDATE would
+  // silently drop the detection.
+  const { data: updated, error } = await db
     .from("contacts")
-    .update({
-      preferred_language: language,
-      language_source: "detected"
-    })
+    .update(patch)
+    .eq("business_id", businessId)
+    .or(contactMatchFilter(customerE164))
+    .select("id");
+  if (error) throw new Error(error.message);
+  if (updated && updated.length > 0) return;
+
+  const { error: insErr } = await db.from("contacts").insert({
+    business_id: businessId,
+    customer_e164: customerE164,
+    ...patch
+  });
+  if (!insErr) return;
+  if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
+  const { error: raceErr } = await db
+    .from("contacts")
+    .update(patch)
     .eq("business_id", businessId)
     .or(contactMatchFilter(customerE164));
-  if (error) throw new Error(error.message);
+  if (raceErr) throw new Error(raceErr.message);
 }

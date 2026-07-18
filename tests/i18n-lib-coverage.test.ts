@@ -155,24 +155,73 @@ describe("contact-language db", () => {
     expect(supabaseStub.from).toHaveBeenCalledTimes(1);
   });
 
-  it("persistDetectedContactLanguage writes detected language", async () => {
+  it("persistDetectedContactLanguage updates the existing row", async () => {
     supabaseStub.from.mockReturnValueOnce(
       makeBuilder({ data: { preferred_language: null, language_source: null }, error: null })
     );
-    const writeBuilder = makeBuilder({ error: null });
+    const writeBuilder = makeBuilder({ data: [{ id: "row-1" }], error: null });
     supabaseStub.from.mockReturnValueOnce(writeBuilder);
     await persistDetectedContactLanguage(BIZ, E164, "es");
     expect(writeBuilder.update).toHaveBeenCalledWith({
       preferred_language: "es",
       language_source: "detected"
     });
+    expect(supabaseStub.from).toHaveBeenCalledTimes(2);
   });
 
-  it("persistDetectedContactLanguage throws on write error", async () => {
+  it("persistDetectedContactLanguage inserts when no contact row exists", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    const insertBuilder = makeBuilder({ error: null });
+    supabaseStub.from.mockReturnValueOnce(insertBuilder);
+    await persistDetectedContactLanguage(BIZ, E164, "es", injected);
+    expect(insertBuilder.insert).toHaveBeenCalledWith({
+      business_id: BIZ,
+      customer_e164: E164,
+      preferred_language: "es",
+      language_source: "detected"
+    });
+  });
+
+  it("persistDetectedContactLanguage relabels after a unique-violation race", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ error: { message: "dup", code: "23505" } as never })
+    );
+    const raceBuilder = makeBuilder({ error: null });
+    supabaseStub.from.mockReturnValueOnce(raceBuilder);
+    await persistDetectedContactLanguage(BIZ, E164, "en", injected);
+    expect(raceBuilder.update).toHaveBeenCalledWith({
+      preferred_language: "en",
+      language_source: "detected"
+    });
+  });
+
+  it("persistDetectedContactLanguage throws on write, insert, and race errors", async () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "write failed" } }));
     await expect(persistDetectedContactLanguage(BIZ, E164, "en", injected)).rejects.toThrow(
       "write failed"
+    );
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ error: { message: "insert failed", code: "42P01" } as never })
+    );
+    await expect(persistDetectedContactLanguage(BIZ, E164, "en", injected)).rejects.toThrow(
+      "insert failed"
+    );
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ error: { message: "dup", code: "23505" } as never })
+    );
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "race failed" } }));
+    await expect(persistDetectedContactLanguage(BIZ, E164, "en", injected)).rejects.toThrow(
+      "race failed"
     );
   });
 });

@@ -109,6 +109,7 @@ function makeDeps(overrides: Partial<MessengerGeminiTurnDeps> = {}): Required<
     | "env"
     | "now"
     | "getCustomerLanguages"
+    | "persistConversationLanguage"
   >
 > {
   return {
@@ -124,6 +125,7 @@ function makeDeps(overrides: Partial<MessengerGeminiTurnDeps> = {}): Required<
       defaultLanguage: "en" as const,
       supported: ["en" as const, "es" as const]
     })),
+    persistConversationLanguage: vi.fn(async () => undefined),
     ...overrides
   };
 }
@@ -277,6 +279,52 @@ describe("runMessengerGeminiTurn", () => {
       surface: "messenger_gemini_engine",
       usage: { promptTokens: 100, outputTokens: 20 }
     });
+  });
+
+  it("persists a confident Spanish detection and injects it as the thread language", async () => {
+    const spanishHistory = [
+      msg(1, "user", "Hola, quiero hacer una cita para el viernes por favor")
+    ];
+    const deps = makeDeps();
+    await runMessengerGeminiTurn({ ...ARGS, history: spanishHistory }, deps);
+    expect(deps.persistConversationLanguage).toHaveBeenCalledWith(CONV_ID, "es");
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
+  it("does not re-persist when the thread language already matches", async () => {
+    const spanishHistory = [msg(1, "user", "Quiero cambiar mi cita para el martes")];
+    const deps = makeDeps();
+    await runMessengerGeminiTurn(
+      {
+        ...ARGS,
+        conversation: { ...CONVERSATION, preferred_language: "es" },
+        history: spanishHistory
+      },
+      deps
+    );
+    expect(deps.persistConversationLanguage).not.toHaveBeenCalled();
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
+  it("continues the reply when language persistence fails (Error and non-Error)", async () => {
+    const spanishHistory = [
+      msg(1, "user", "Hola, quiero hacer una cita para el viernes por favor")
+    ];
+    const deps = makeDeps({
+      persistConversationLanguage: vi.fn(async () => Promise.reject(new Error("db down")))
+    });
+    expect(
+      (await runMessengerGeminiTurn({ ...ARGS, history: spanishHistory }, deps)).reply
+    ).toContain("$99");
+
+    const stringy = makeDeps({
+      persistConversationLanguage: vi.fn(async () => Promise.reject("plain refusal"))
+    });
+    expect(
+      (await runMessengerGeminiTurn({ ...ARGS, history: spanishHistory }, stringy)).reply
+    ).toContain("$99");
   });
 
   it("falls back to the default persona when the config row is missing", async () => {
