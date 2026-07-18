@@ -47,6 +47,8 @@ const STORED = {
   status: "active",
   subscription_uri: "https://api.calendly.com/webhook_subscriptions/WH1",
   signing_key_encrypted: "enc(sk-secret)",
+  user_uri: "https://api.calendly.com/users/U1",
+  connection_key: "calendly-direct:cx-1",
   last_attempt_at: "2026-07-18T00:00:00Z"
 };
 
@@ -91,7 +93,9 @@ describe("upsertCalendlyWebhookSubscription", () => {
         businessId: BIZ,
         status: "active",
         subscriptionUri: "https://api.calendly.com/webhook_subscriptions/WH1",
-        signingKey: "sk-secret"
+        signingKey: "sk-secret",
+        userUri: "https://api.calendly.com/users/U1",
+        connectionKey: "calendly-direct:cx-1"
       },
       makeDb(c)
     );
@@ -101,6 +105,8 @@ describe("upsertCalendlyWebhookSubscription", () => {
         status: "active",
         subscription_uri: "https://api.calendly.com/webhook_subscriptions/WH1",
         signing_key_encrypted: "enc(sk-secret)",
+        user_uri: "https://api.calendly.com/users/U1",
+        connection_key: "calendly-direct:cx-1",
         last_attempt_at: expect.any(String)
       }),
       { onConflict: "business_id" }
@@ -115,7 +121,9 @@ describe("upsertCalendlyWebhookSubscription", () => {
       expect.objectContaining({
         status: "unsupported",
         subscription_uri: null,
-        signing_key_encrypted: null
+        signing_key_encrypted: null,
+        user_uri: null,
+        connection_key: null
       }),
       { onConflict: "business_id" }
     );

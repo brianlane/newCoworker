@@ -21,6 +21,18 @@
  * subscription survived a lost row (signing keys are unrecoverable after
  * creation) — recovery lists the subscriptions, deletes the one pointing at
  * our callback, and retries the create once.
+ *
+ * Account-switch safety (Bugbot on PR #746): every row records WHICH
+ * platform connection created it (`<providerConfigKey>:<connectionId>`) and
+ * WHICH Calendly user it observes. An active row only short-circuits while
+ * the connection key still matches; when the connection changed, one
+ * /users/me call re-validates the account — same user just refreshes the
+ * stored key, a different user replaces the subscription (best-effort
+ * remote delete of the old one first), so the receiver can never keep
+ * firing goals off a previous Calendly account's bookings. A refused
+ * (unsupported/error) row's cooldown is also scoped to its connection key:
+ * reconnecting under a new account retries immediately (the new account may
+ * be on a paid plan).
  */
 import {
   resolveCalendarConnection,
@@ -101,20 +113,30 @@ export async function ensureCalendlyWebhookSubscription(
 ): Promise<CalendlyWebhookEnsureResult> {
   const request = deps.request ?? calendlyRequest;
   const nowMs = deps.nowMs ?? Date.now();
+  const connectionKey = `${conn.providerConfigKey}:${conn.connectionId}`;
   try {
     const row = await getCalendlyWebhookSubscription(businessId, client);
-    if (row?.status === "active") return { status: "active", attempted: false };
-    if (row && nowMs - Date.parse(row.last_attempt_at) < CALENDLY_WEBHOOK_RETRY_COOLDOWN_MS) {
+    const sameConnection = row?.connection_key === connectionKey;
+    if (row?.status === "active" && sameConnection) {
+      return { status: "active", attempted: false };
+    }
+    if (
+      row &&
+      row.status !== "active" &&
+      sameConnection &&
+      nowMs - Date.parse(row.last_attempt_at) < CALENDLY_WEBHOOK_RETRY_COOLDOWN_MS
+    ) {
       return { status: row.status, attempted: false };
     }
 
     const record = async (
       status: CalendlyWebhookSubscriptionStatus,
       subscriptionUri?: string,
-      signingKey?: string
+      signingKey?: string,
+      userUri?: string
     ): Promise<CalendlyWebhookEnsureResult> => {
       await upsertCalendlyWebhookSubscription(
-        { businessId, status, subscriptionUri, signingKey },
+        { businessId, status, subscriptionUri, signingKey, userUri, connectionKey },
         client
       );
       return { status, attempted: true };
@@ -131,8 +153,41 @@ export async function ensureCalendlyWebhookSubscription(
       orgUri.length === 0
     ) {
       // Token refused or identity incomplete: transient from the webhook
-      // path's perspective (the connection layer owns token health).
+      // path's perspective (the connection layer owns token health). An
+      // ACTIVE row is left untouched — a flaky identity probe must not
+      // destroy a working subscription; the mismatched connection key just
+      // re-checks next tick.
+      if (row?.status === "active") return { status: "error", attempted: true };
       return await record("error");
+    }
+
+    // Active row reached through a DIFFERENT connection: re-validate the
+    // account behind it.
+    if (row?.status === "active") {
+      if (row.user_uri === userUri && row.subscription_uri && row.signingKey) {
+        // Same Calendly account, new connection (e.g. Nango reconnect) —
+        // the subscription is still right; just re-stamp the key.
+        return await record("active", row.subscription_uri, row.signingKey, userUri);
+      }
+      // Different account (or an unusable legacy row): the old subscription
+      // observes someone else's bookings now. Best-effort remote delete
+      // (the old account's grant may already be gone), then subscribe fresh
+      // under the current account.
+      if (row.subscription_uri) {
+        try {
+          await request(businessId, conn, {
+            endpoint: `/webhook_subscriptions/${encodeURIComponent(
+              resourceUuid(row.subscription_uri)
+            )}`,
+            method: "DELETE"
+          });
+        } catch (err) {
+          logger.warn("calendly webhook stale-subscription delete failed", {
+            businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
     }
 
     const callbackUrl = calendlyWebhookCallbackUrl(businessId);
@@ -182,7 +237,7 @@ export async function ensureCalendlyWebhookSubscription(
         // as an error rather than accepting unauthenticated webhooks.
         return record("error");
       }
-      return record("active", sub.uri, sub.signing_key);
+      return record("active", sub.uri, sub.signing_key, userUri);
     };
 
     const first = await create();

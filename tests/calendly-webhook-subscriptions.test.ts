@@ -101,23 +101,157 @@ describe("httpStatusOf", () => {
 describe("ensureCalendlyWebhookSubscription", () => {
   const db = {} as never;
 
-  function row(status: "active" | "unsupported" | "error", lastAttemptMs: number) {
+  function row(
+    status: "active" | "unsupported" | "error",
+    lastAttemptMs: number,
+    overrides: Record<string, unknown> = {}
+  ) {
     return {
       id: "cws-1",
       business_id: BIZ,
       status,
       subscription_uri: status === "active" ? "https://api.calendly.com/webhook_subscriptions/WH1" : null,
       signingKey: status === "active" ? "sk-secret" : null,
-      last_attempt_at: new Date(lastAttemptMs).toISOString()
+      user_uri: status === "active" ? "https://api.calendly.com/users/U1" : null,
+      connection_key: `${CONN.providerConfigKey}:${CONN.connectionId}`,
+      last_attempt_at: new Date(lastAttemptMs).toISOString(),
+      ...overrides
     };
   }
 
-  it("short-circuits on an active row without calling Calendly", async () => {
+  it("short-circuits on an active row for the SAME connection without calling Calendly", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(row("active", NOW - 1) as never);
     const request = vi.fn();
     const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
     expect(out).toEqual({ status: "active", attempted: false });
     expect(request).not.toHaveBeenCalled();
+  });
+
+  it("re-stamps (keeps) an active subscription when a NEW connection serves the same account", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("active", NOW - 1, { connection_key: "calendly:old-nango-conn" }) as never
+    );
+    const request = vi.fn().mockResolvedValueOnce(USER_RES); // same user U1
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "active", attempted: true });
+    // No delete, no create — one identity probe, then the row is re-stamped
+    // under the new connection key.
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
+      {
+        businessId: BIZ,
+        status: "active",
+        subscriptionUri: "https://api.calendly.com/webhook_subscriptions/WH1",
+        signingKey: "sk-secret",
+        userUri: "https://api.calendly.com/users/U1",
+        connectionKey: `${CONN.providerConfigKey}:${CONN.connectionId}`
+      },
+      db
+    );
+  });
+
+  it("replaces the subscription when the connection now serves a DIFFERENT account", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("active", NOW - 1, {
+        connection_key: "calendly:old-nango-conn",
+        user_uri: "https://api.calendly.com/users/OLD"
+      }) as never
+    );
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES) // current account is U1, row says OLD
+      .mockResolvedValueOnce({ data: null }) // DELETE stale subscription
+      .mockResolvedValueOnce(CREATED_RES); // fresh create under U1
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "active", attempted: true });
+    expect(request).toHaveBeenNthCalledWith(2, BIZ, CONN, {
+      endpoint: "/webhook_subscriptions/WH1",
+      method: "DELETE"
+    });
+    expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "active",
+        userUri: "https://api.calendly.com/users/U1",
+        connectionKey: `${CONN.providerConfigKey}:${CONN.connectionId}`
+      }),
+      db
+    );
+  });
+
+  it("still replaces when the stale-subscription delete fails (warn only)", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("active", NOW - 1, {
+        connection_key: "calendly:old-nango-conn",
+        user_uri: "https://api.calendly.com/users/OLD"
+      }) as never
+    );
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockRejectedValueOnce("revoked") // stale delete refused (non-Error arm)
+      .mockResolvedValueOnce(CREATED_RES);
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "active", attempted: true });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "calendly webhook stale-subscription delete failed",
+      expect.objectContaining({ businessId: BIZ, error: "revoked" })
+    );
+
+    // Error-shaped failures report their message; an active row WITHOUT a
+    // stored uri skips the remote hop entirely.
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("active", NOW - 1, {
+        connection_key: "calendly:old-nango-conn",
+        user_uri: "https://api.calendly.com/users/OLD"
+      }) as never
+    );
+    const requestErr = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockRejectedValueOnce(new Error("gone"))
+      .mockResolvedValueOnce(CREATED_RES);
+    await ensureCalendlyWebhookSubscription(BIZ, CONN, { request: requestErr, nowMs: NOW }, db);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "calendly webhook stale-subscription delete failed",
+      expect.objectContaining({ error: "gone" })
+    );
+
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("active", NOW - 1, {
+        connection_key: "calendly:old-nango-conn",
+        user_uri: "https://api.calendly.com/users/OLD",
+        subscription_uri: null
+      }) as never
+    );
+    const requestNoUri = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockResolvedValueOnce(CREATED_RES); // straight to create
+    await ensureCalendlyWebhookSubscription(BIZ, CONN, { request: requestNoUri, nowMs: NOW }, db);
+    expect(requestNoUri).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves an active row untouched when the identity probe fails on a changed connection", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("active", NOW - 1, { connection_key: "calendly:old-nango-conn" }) as never
+    );
+    const request = vi.fn().mockResolvedValueOnce(null); // /users/me refused
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "error", attempted: true });
+    // No record: a flaky probe must not destroy a working subscription.
+    expect(upsertCalendlyWebhookSubscription).not.toHaveBeenCalled();
+  });
+
+  it("bypasses a refused row's cooldown when the connection changed (new account may be paid)", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(
+      row("unsupported", NOW, { connection_key: "calendly:old-nango-conn" }) as never
+    );
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockResolvedValueOnce(CREATED_RES);
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "active", attempted: true });
   });
 
   it("respects the retry cooldown for refused attempts", async () => {
@@ -154,7 +288,9 @@ describe("ensureCalendlyWebhookSubscription", () => {
         businessId: BIZ,
         status: "active",
         subscriptionUri: "https://api.calendly.com/webhook_subscriptions/WH1",
-        signingKey: "sk-secret"
+        signingKey: "sk-secret",
+        userUri: "https://api.calendly.com/users/U1",
+        connectionKey: `${CONN.providerConfigKey}:${CONN.connectionId}`
       },
       db
     );
@@ -180,7 +316,14 @@ describe("ensureCalendlyWebhookSubscription", () => {
       const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
       expect(out).toEqual({ status: "error", attempted: true });
       expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
-        { businessId: BIZ, status: "error", subscriptionUri: undefined, signingKey: undefined },
+        {
+          businessId: BIZ,
+          status: "error",
+          subscriptionUri: undefined,
+          signingKey: undefined,
+          userUri: undefined,
+          connectionKey: `${CONN.providerConfigKey}:${CONN.connectionId}`
+        },
         db
       );
     }

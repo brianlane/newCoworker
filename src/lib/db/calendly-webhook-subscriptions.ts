@@ -30,6 +30,10 @@ type StoredRow = {
   status: CalendlyWebhookSubscriptionStatus;
   subscription_uri: string | null;
   signing_key_encrypted: string | null;
+  /** Calendly user URI the active subscription observes. */
+  user_uri: string | null;
+  /** `<providerConfigKey>:<connectionId>` that produced this row. */
+  connection_key: string | null;
   last_attempt_at: string;
 };
 
@@ -40,7 +44,8 @@ export type CalendlyWebhookSubscriptionRow = Omit<StoredRow, "signing_key_encryp
 };
 
 const ALL_COLUMNS =
-  "id,business_id,status,subscription_uri,signing_key_encrypted,last_attempt_at";
+  "id,business_id,status,subscription_uri,signing_key_encrypted,user_uri," +
+  "connection_key,last_attempt_at";
 
 function toDecryptedRow(row: StoredRow): CalendlyWebhookSubscriptionRow {
   const { signing_key_encrypted: encrypted, ...rest } = row;
@@ -69,6 +74,10 @@ export type UpsertCalendlyWebhookSubscriptionInput = {
   /** Both required for 'active'; both cleared otherwise. */
   subscriptionUri?: string | null;
   signingKey?: string | null;
+  /** Calendly user URI the subscription observes (active rows). */
+  userUri?: string | null;
+  /** `<providerConfigKey>:<connectionId>` behind this attempt. */
+  connectionKey?: string | null;
 };
 
 /** Record an attempt outcome (stamps last_attempt_at = now). */
@@ -84,6 +93,8 @@ export async function upsertCalendlyWebhookSubscription(
       status: input.status,
       subscription_uri: input.subscriptionUri ?? null,
       signing_key_encrypted: encryptIntegrationSecret(input.signingKey ?? null),
+      user_uri: input.userUri ?? null,
+      connection_key: input.connectionKey ?? null,
       last_attempt_at: now,
       updated_at: now
     },

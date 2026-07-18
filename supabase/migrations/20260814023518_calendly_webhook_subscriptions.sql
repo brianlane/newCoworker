@@ -26,6 +26,14 @@ create table if not exists public.calendly_webhook_subscriptions (
   subscription_uri text,
   -- AES-256-GCM envelope (`enc:v1:<iv>:<tag>:<ct>`); null unless active.
   signing_key_encrypted text,
+  -- WHICH Calendly account the active subscription observes (the connected
+  -- user's canonical URI) and WHICH platform connection created it
+  -- (`<providerConfigKey>:<connectionId>`). A reconnect under a different
+  -- account must not keep verifying the old account's bookings: the ensure
+  -- path re-validates when the connection key changes and replaces the row
+  -- when the account changed (see src/lib/calendly/webhook-subscriptions.ts).
+  user_uri text,
+  connection_key text,
   last_attempt_at timestamptz not null default now(),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
