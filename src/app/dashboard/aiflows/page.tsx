@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
@@ -13,6 +14,7 @@ export const dynamic = "force-dynamic";
 type Props = { searchParams: Promise<{ edit?: string; adapt?: string }> };
 
 export default async function AiFlowsPage({ searchParams }: Props) {
+  const t = await getTranslations("dashboard.pages");
   const { edit, adapt } = await searchParams;
 
   const user = await getAuthUser();
@@ -39,11 +41,9 @@ export default async function AiFlowsPage({ searchParams }: Props) {
     <div className="max-w-4xl space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-parchment">AiFlows</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("aiflowsTitle")}</h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Automate multi-step workflows: start from an inbound text or email, on a
-            schedule, or on demand: browse links, extract details, ask for approval, and
-            send texts or emails.
+            {t("aiflowsSubtitle")}
           </p>
         </div>
         {businessId && (

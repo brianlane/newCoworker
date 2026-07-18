@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { can } from "@/lib/authz/policy";
 import Link from "next/link";
@@ -24,6 +25,7 @@ export const dynamic = "force-dynamic";
  * meta-leads guide page one-for-one in auth and data loading.
  */
 export default async function InstagramLeadsGuidePage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/aiflows/guides/instagram-leads");
   if (!user.email) redirect("/login");
@@ -66,12 +68,10 @@ export default async function InstagramLeadsGuidePage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">
-            Turn Instagram prospect lists into reviewed contacts
+            {t("instagramLeadsGuideTitle")}
           </h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Feed prospects from an Instagram scraping tool (Apify, PhantomBuster, IGLeads, …)
-            to your coworker — every one gets filed and tagged for your review, never
-            contacted without your say-so.
+            {t("instagramLeadsGuideSubtitle")}
           </p>
         </div>
         <Link

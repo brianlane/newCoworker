@@ -6,6 +6,7 @@
  */
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { notFound, redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
@@ -38,6 +39,7 @@ export default async function CallTranscriptPage({
 }: {
   params: Promise<{ callControlId: string }>;
 }) {
+  const t = await getTranslations("dashboard.pages");
   // The route segment is named `callControlId` for backward compatibility,
   // but the URL value is now the transcript row's UUID (see the list page
   // for the rationale — Telnyx call_control_id contains a literal `:` that
@@ -104,7 +106,7 @@ export default async function CallTranscriptPage({
           ← Back to call history
         </Link>
         <div className="mt-2 flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold text-parchment">Call transcript</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("callTranscriptTitle")}</h1>
           <DeleteItemButton
             url={`/api/dashboard/calls/${transcript.id}?businessId=${encodeURIComponent(business.id)}`}
             confirmMessage="Delete this call and its transcript from your history?"

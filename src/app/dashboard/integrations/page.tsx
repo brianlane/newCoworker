@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { IntegrationTile } from "@/components/dashboard/IntegrationTile";
 import {
@@ -12,6 +13,7 @@ export const dynamic = "force-dynamic";
 type SearchParams = Promise<{ error?: string; workspace?: string; meta?: string }>;
 
 export default async function IntegrationsPage({ searchParams }: { searchParams: SearchParams }) {
+  const t = await getTranslations("dashboard.pages");
   const q = await searchParams;
   const ctx = await loadIntegrationsContext("/dashboard/integrations");
   const { businessId, canManageApiKeys } = ctx;
@@ -22,10 +24,9 @@ export default async function IntegrationsPage({ searchParams }: { searchParams:
   return (
     <div className="space-y-8 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Integrations</h1>
+        <h1 className="text-2xl font-bold text-parchment">{t("integrationsTitle")}</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Connect the tools your business already runs on. Select an integration to set it
-          up or manage it.
+          {t("integrationsSubtitle")}
         </p>
       </div>
 

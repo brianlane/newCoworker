@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
@@ -16,6 +17,7 @@ export const dynamic = "force-dynamic";
  * a dedicated page instead of a card at the bottom of the builder.
  */
 export default async function ImportLeadsPage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/aiflows/import-leads");
   if (!user.email) redirect("/login");
@@ -34,11 +36,9 @@ export default async function ImportLeadsPage() {
     <div className="max-w-4xl space-y-8">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h1 className="text-2xl font-bold text-parchment">Import leads</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("importLeadsTitle")}</h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Upload an Excel or CSV backlog of leads and run an AiFlow on each row — pick
-            one flow, or let rows trigger-match your webhook-triggered flows the same way
-            a live Zapier/Make lead arrives.
+            {t("importLeadsSubtitle")}
           </p>
         </div>
         <Link

@@ -15,6 +15,7 @@
  * activity feed's deep link) highlights that lead's card.
  */
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { getAuthUser } from "@/lib/auth";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -27,6 +28,7 @@ export const dynamic = "force-dynamic";
 type Props = { searchParams: Promise<{ lead?: string }> };
 
 export default async function DashboardTasksPage({ searchParams }: Props) {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user?.email) redirect("/login?redirectTo=/dashboard/tasks");
 
@@ -36,16 +38,14 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   if (!ctx.businessId) {
     return (
       <div className="max-w-4xl space-y-6">
-        <h1 className="text-2xl font-bold text-parchment">Tasks</h1>
+        <h1 className="text-2xl font-bold text-parchment">{t("tasksTitle")}</h1>
         <Card>
           <div className="py-8 text-center">
-            <p className="mb-4 text-parchment/60">No coworker provisioned yet.</p>
+            <p className="mb-4 text-parchment/60">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green px-5 py-2.5 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-            >
-              Get Started →
-            </a>
+            >{t("getStarted")}</a>
           </div>
         </Card>
       </div>
@@ -90,11 +90,9 @@ export default async function DashboardTasksPage({ searchParams }: Props) {
   return (
     <div className="max-w-6xl space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Tasks</h1>
+        <h1 className="text-2xl font-bold text-parchment">{t("tasksTitle")}</h1>
         <p className="mt-1 text-sm text-parchment/50">
-          Every lead in motion: drag them through your pipeline, or open the list
-          for the full story — workflow position, goals, collected info, and why
-          the AI replied the way it did
+          {t("tasksSubtitle")}
         </p>
       </div>
       <TasksWorkspace

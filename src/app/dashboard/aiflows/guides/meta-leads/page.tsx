@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { can } from "@/lib/authz/policy";
 import Link from "next/link";
@@ -22,6 +23,7 @@ export const dynamic = "force-dynamic";
  * events" readout below reads webhook_event_received system logs).
  */
 export default async function MetaLeadsGuidePage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/aiflows/guides/meta-leads");
   if (!user.email) redirect("/login");
@@ -68,12 +70,10 @@ export default async function MetaLeadsGuidePage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="text-2xl font-bold text-parchment">
-            Capture Meta ad leads with your AI coworker
+            {t("metaLeadsGuideTitle")}
           </h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Connect your Facebook/Instagram lead ads so your coworker hears about every new
-            lead in real time — and texts them back, files them, and fills you in, on your
-            behalf.
+            {t("metaLeadsGuideSubtitle")}
           </p>
           <p className="mt-1 text-sm text-parchment/50">
             Already sitting on a spreadsheet of past leads?{" "}

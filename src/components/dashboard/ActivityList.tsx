@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/Badge";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -39,14 +40,18 @@ export function ActivityList({
   /** Open on the LAST client page (arriving here by stepping back from an older chunk). */
   startAtEnd?: boolean;
 }) {
+  const tBadge = useTranslations("dashboard.activityBadge");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(() =>
     startAtEnd ? Math.max(1, Math.ceil(items.length / PAGE_SIZE)) - 1 : 0
   );
 
   const filtered = useMemo(
-    () => items.filter((item) => matchesQuery(query, [item.label, ACTIVITY_BADGE[item.kind].label])),
-    [items, query]
+    () =>
+      items.filter((item) =>
+        matchesQuery(query, [item.label, tBadge(ACTIVITY_BADGE[item.kind].labelKey)])
+      ),
+    [items, query, tBadge]
   );
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
@@ -123,7 +128,7 @@ export function ActivityList({
                       </>
                     )}
                     <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
-                      {ACTIVITY_BADGE[item.kind].label}
+                      {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}
                     </Badge>
                   </div>
                 </div>

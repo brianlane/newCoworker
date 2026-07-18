@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
@@ -47,6 +48,7 @@ export default async function ActivityPage(props: {
     days?: string;
   }>;
 }) {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/activity");
   if (!user.email) redirect("/login");
@@ -116,12 +118,16 @@ export default async function ActivityPage(props: {
     <div className="max-w-3xl space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">All activity</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("activityTitle")}</h1>
           <p className="mt-1 text-sm text-parchment/50">
-            Calls, texts, emails, dashboard chat, AiFlow runs, new customers, and alerts from the
-            last {effectiveDays === 1 ? "day" : `${effectiveDays} days`}
-            {before ? " (viewing older activity)" : ""}.
-            {tier === "starter" && " Upgrade to Standard for 90 days of history."}
+            {t("activitySubtitle", {
+              period:
+                effectiveDays === 1
+                  ? t("activityDay")
+                  : t("activityDays", { days: effectiveDays }),
+              older: before ? t("activityOlder") : ""
+            })}
+            {tier === "starter" && t("activityUpgrade")}
           </p>
         </div>
         <Link href="/dashboard" className="text-sm text-signal-teal hover:underline">

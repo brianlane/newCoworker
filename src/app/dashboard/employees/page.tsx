@@ -8,6 +8,7 @@
  */
 
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -25,6 +26,7 @@ import { LeadAssignmentSettings } from "@/components/dashboard/LeadAssignmentSet
 export const dynamic = "force-dynamic";
 
 export default async function DashboardEmployeesPage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user?.email) redirect("/login?redirectTo=/dashboard/employees");
 
@@ -47,20 +49,18 @@ export default async function DashboardEmployeesPage() {
     return (
       <div className="space-y-6 max-w-4xl">
         <div>
-          <h1 className="text-2xl font-bold text-parchment">Employees</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("employeesTitle")}</h1>
           <p className="text-sm text-parchment/50 mt-1">
-            Your team roster for lead routing
+            {t("employeesEmptySubtitle")}
           </p>
         </div>
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-            >
-              Get Started →
-            </a>
+            >{t("getStarted")}</a>
           </div>
         </Card>
       </div>
@@ -77,10 +77,9 @@ export default async function DashboardEmployeesPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Employees</h1>
+        <h1 className="text-2xl font-bold text-parchment">{t("employeesTitle")}</h1>
         <p className="text-sm text-parchment/50 mt-1">
-          Who your AI coworker offers leads to, when they work, and when
-          they&apos;re out
+          {t("employeesSubtitle")}
         </p>
       </div>
 

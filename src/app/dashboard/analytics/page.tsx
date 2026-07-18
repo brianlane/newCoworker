@@ -23,6 +23,7 @@
  */
 
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { can } from "@/lib/authz/policy";
 import { getAuthUser } from "@/lib/auth";
@@ -113,6 +114,7 @@ function hourRangeLabel(hour: number): string {
 export default async function DashboardAnalyticsPage(props: {
   searchParams?: Promise<{ day?: string; sentiment?: string; hour?: string; flowId?: string }>;
 }) {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/analytics");
   if (!user.email) redirect("/login?redirectTo=/dashboard/analytics");
@@ -135,9 +137,9 @@ export default async function DashboardAnalyticsPage(props: {
 
   const header = (
     <div>
-      <h1 className="text-2xl font-bold text-parchment">Analytics</h1>
+      <h1 className="text-2xl font-bold text-parchment">{t("analyticsTitle")}</h1>
       <p className="text-sm text-parchment/50 mt-1">
-        How your AI coworker performed over the last 30 days
+        {t("analyticsSubtitle")}
       </p>
     </div>
   );
@@ -148,13 +150,11 @@ export default async function DashboardAnalyticsPage(props: {
         {header}
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-            >
-              Get Started →
-            </a>
+            >{t("getStarted")}</a>
           </div>
         </Card>
       </div>

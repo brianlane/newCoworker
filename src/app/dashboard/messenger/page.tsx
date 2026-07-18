@@ -9,6 +9,7 @@
  */
 
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { redirect } from "next/navigation";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
@@ -21,6 +22,7 @@ import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardMessengerPage() {
+  const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/messenger");
   if (!user.email) redirect("/login?redirectTo=/dashboard/messenger");
@@ -37,9 +39,9 @@ export default async function DashboardMessengerPage() {
 
   const header = (
     <div>
-      <h1 className="text-2xl font-bold text-parchment">Messenger</h1>
+      <h1 className="text-2xl font-bold text-parchment">{t("messengerTitle")}</h1>
       <p className="text-sm text-parchment/50 mt-1">
-        Facebook Messenger and Instagram DM conversations with your Page
+        {t("messengerSubtitle")}
       </p>
     </div>
   );
@@ -50,13 +52,11 @@ export default async function DashboardMessengerPage() {
         {header}
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-            >
-              Get Started →
-            </a>
+            >{t("getStarted")}</a>
           </div>
         </Card>
       </div>
