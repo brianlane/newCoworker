@@ -276,10 +276,21 @@ export async function ensureCalendlyWebhookSubscription(
       (await findStale({ user: userUri, scope: "user" })) ??
       (await findStale({ scope: "organization" }));
     if (!stale) return await record("error");
-    await request(businessId, conn, {
-      endpoint: `/webhook_subscriptions/${encodeURIComponent(resourceUuid(stale.uri))}`,
-      method: "DELETE"
-    });
+    try {
+      await request(businessId, conn, {
+        endpoint: `/webhook_subscriptions/${encodeURIComponent(resourceUuid(stale.uri))}`,
+        method: "DELETE"
+      });
+    } catch (err) {
+      // Record the failed attempt so last_attempt_at advances and the
+      // cooldown applies — otherwise the sweep would repeat the whole
+      // subscribe/conflict cycle every tick (Bugbot on PR #746).
+      logger.warn("calendly webhook conflict delete failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return await record("error");
+    }
     const second = await create();
     return second === "conflict" ? await record("error") : second;
   } catch (err) {

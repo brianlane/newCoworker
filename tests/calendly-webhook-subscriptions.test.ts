@@ -490,6 +490,46 @@ describe("ensureCalendlyWebhookSubscription", () => {
       expect.objectContaining({ scope: "user", error: "user listing sad" })
     );
 
+    // The stale-hook DELETE failing still RECORDS the attempt (the
+    // cooldown must advance so the sweep does not repeat the whole cycle
+    // every tick). Error and non-Error shapes both stringify into the warn.
+    const callback2 = calendlyWebhookCallbackUrl(BIZ);
+    const staleListing = {
+      data: {
+        collection: [
+          { uri: "https://api.calendly.com/webhook_subscriptions/STALE", callback_url: callback2 }
+        ]
+      }
+    };
+    for (const [failure, expected] of [
+      [new Error("delete refused"), "delete refused"],
+      ["delete sad", "delete sad"]
+    ] as const) {
+      vi.mocked(upsertCalendlyWebhookSubscription).mockClear();
+      const requestDeleteFail = vi
+        .fn()
+        .mockResolvedValueOnce(USER_RES)
+        .mockRejectedValueOnce({ status: 409 })
+        .mockResolvedValueOnce(staleListing)
+        .mockRejectedValueOnce(failure);
+      expect(
+        await ensureCalendlyWebhookSubscription(
+          BIZ,
+          CONN,
+          { request: requestDeleteFail, nowMs: NOW },
+          db
+        )
+      ).toEqual({ status: "error", attempted: true });
+      expect(logger.warn).toHaveBeenCalledWith(
+        "calendly webhook conflict delete failed",
+        expect.objectContaining({ businessId: BIZ, error: expected })
+      );
+      expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
+        expect.objectContaining({ status: "error" }),
+        db
+      );
+    }
+
     // Second create conflicts again.
     const callback = calendlyWebhookCallbackUrl(BIZ);
     const requestReconflict = vi
