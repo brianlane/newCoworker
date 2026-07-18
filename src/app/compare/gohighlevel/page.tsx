@@ -52,7 +52,7 @@ const rows: CompareRow[] = [
   {
     label: "Setup",
     us: "A 15-minute guided interview; live the same day, done-for-you",
-    them: "Agency + sub-account setup, phone/email wiring, workflow building — reviewers report weeks to feel comfortable",
+    them: "Agency + sub-account setup, phone/email wiring, workflow building which reviewers report weeks to feel comfortable",
     verdict: "us"
   },
   {
