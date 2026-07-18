@@ -238,12 +238,6 @@ export function InstagramLeadsGuide({
               <Button type="button" variant="primary" size="sm" onClick={installFlow} loading={installing}>
                 Install “{template.name}”
               </Button>
-              {otherWebhookFlow ? (
-                <span className="text-xs text-parchment/50">
-                  Your existing webhook flow “{otherWebhookFlow.name}” keeps working — this
-                  adds a separate starter for Instagram prospects.
-                </span>
-              ) : null}
             </>
           )}
         </div>
@@ -251,6 +245,22 @@ export function InstagramLeadsGuide({
           <p className="mt-2 text-xs text-spark-orange" role="alert">
             {installError}
           </p>
+        ) : null}
+        {otherWebhookFlow ? (
+          <div className="mt-3 rounded-md border border-spark-orange/40 bg-spark-orange/5 p-3">
+            <p className="text-xs text-parchment/70">
+              <strong>Check your other webhook flows first.</strong> Your flow “
+              {otherWebhookFlow.name}” (and any other enabled webhook flow without a
+              source filter) will <em>also</em> fire for every prospect delivered here —
+              if it sends texts or emails, it could contact scraped prospects who never
+              consented. Before sending anything, open each webhook flow and add a
+              trigger condition scoping it to its own source (e.g. “sender matches{" "}
+              <code className="font-mono text-[11px]">facebook_lead_ads</code>”), so only
+              the no-outreach starter above handles{" "}
+              <code className="font-mono text-[11px]">{INSTAGRAM_SCRAPER_SOURCE}</code>{" "}
+              events.
+            </p>
+          </div>
         ) : null}
       </Card>
 

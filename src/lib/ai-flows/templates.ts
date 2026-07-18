@@ -18,11 +18,24 @@ export type AiFlowTemplate = {
 };
 
 /**
+ * Source label every Meta Lead Ads path sends: the direct connection
+ * (src/lib/meta/webhook.ts), the Zapier action's default, and the Make.com
+ * guide's request body.
+ */
+export const META_LEAD_ADS_SOURCE = "facebook_lead_ads";
+
+/**
  * "Meta lead follow-up": the starter flow the Meta-leads How-To guide
  * installs. A webhook event (a lead forwarded by Zapier/Make from a Meta
  * Lead Ads form) is parsed with Gemini extraction, filed as a customer,
  * texted back within seconds, and summarized to the owner. Installed
  * DISABLED so the owner reviews the SMS wording before anything fires.
+ *
+ * Scoped to source "facebook_lead_ads" (every Meta path sends it) so this
+ * auto-texting starter can never fire for unrelated webhook events — e.g.
+ * scraped Instagram prospects (source "instagram_scraper"), who never
+ * consented to texts. Backlog imports of Meta leads reach it by setting the
+ * importer's source label to "facebook_lead_ads".
  */
 export function metaLeadFollowUpTemplate(): AiFlowTemplate {
   return {
@@ -30,7 +43,10 @@ export function metaLeadFollowUpTemplate(): AiFlowTemplate {
     name: "Meta lead follow-up",
     definition: {
       version: 1,
-      trigger: { channel: "webhook", conditions: [] },
+      trigger: {
+        channel: "webhook",
+        conditions: [{ type: "from_matches", value: META_LEAD_ADS_SOURCE }]
+      },
       steps: [
         {
           id: "s_extract",
@@ -91,15 +107,18 @@ export const INSTAGRAM_SCRAPER_SOURCE = "instagram_scraper";
  * "Instagram prospect intake": the starter flow the Instagram-leads How-To
  * guide installs. A webhook event (a scraped profile forwarded by an
  * Apify/Make/Zapier bridge, or a row from the lead-backlog importer with
- * source "instagram_scraper") is parsed, filed as a contact tagged
- * `instagram-prospect`, and summarized to the owner.
+ * source "instagram_scraper") is parsed, summarized to the owner, and —
+ * when the profile carries a usable phone — filed as a contact tagged
+ * `instagram-prospect`.
  *
  * Deliberately NO send_sms / send_email step: scraped prospects never gave
  * consent (TCPA / CAN-SPAM), so nothing is sent until the owner reviews the
- * contact and reaches out on their own terms. The file + tag steps are
- * gated on a usable phone (the CRM is phone-keyed); phone-less prospects
- * still reach the owner via the notify step with their handle and email.
- * Installed DISABLED so the owner reviews the flow before anything runs.
+ * contact and reaches out on their own terms. The owner brief runs FIRST
+ * and never claims a filing happened: the file + tag steps after it are
+ * gated on a phone being present (the CRM is phone-keyed), so phone-less
+ * profiles still reach the owner with their handle and email while the
+ * conditional steps skip. Installed DISABLED so the owner reviews the flow
+ * before anything runs.
  */
 export function instagramProspectTemplate(): AiFlowTemplate {
   return {
@@ -123,7 +142,8 @@ export function instagramProspectTemplate(): AiFlowTemplate {
             {
               name: "lead_phone",
               description:
-                "The prospect's phone number, digits and + only. 'none' if the profile has no phone."
+                "The prospect's phone number, digits and + only. You MUST return exactly " +
+                "'none' (not an empty string) when the profile has no phone number."
             },
             {
               name: "lead_email",
@@ -141,6 +161,20 @@ export function instagramProspectTemplate(): AiFlowTemplate {
           ]
         },
         {
+          // The brief runs BEFORE the conditional filing so it always reaches
+          // the owner and never claims a contact/tag that a phone-less
+          // profile's gated steps skipped.
+          id: "s_notify_owner",
+          type: "notify_owner",
+          message:
+            "New Instagram prospect: {{vars.lead_name}} (@{{vars.lead_handle}}) — " +
+            "{{vars.lead_phone}} / {{vars.lead_email}}. Notes: {{vars.lead_notes}}. " +
+            "I did NOT contact them (scraped prospects haven't consented to texts or " +
+            "marketing email). If their profile has a phone number I'll file them in " +
+            "your contacts tagged instagram-prospect next; otherwise add them yourself " +
+            "from these details."
+        },
+        {
           id: "s_file",
           type: "upsert_customer",
           phoneVar: "lead_phone",
@@ -154,15 +188,6 @@ export function instagramProspectTemplate(): AiFlowTemplate {
           phoneVar: "lead_phone",
           addTags: [INSTAGRAM_PROSPECT_TAG],
           when: { var: "lead_phone", notEquals: "none" }
-        },
-        {
-          id: "s_notify_owner",
-          type: "notify_owner",
-          message:
-            "New Instagram prospect: {{vars.lead_name}} (@{{vars.lead_handle}}) — " +
-            "{{vars.lead_phone}} / {{vars.lead_email}}. Notes: {{vars.lead_notes}}. " +
-            "Filed and tagged for your review — I did NOT contact them (scraped " +
-            "prospects haven't consented to texts or marketing email)."
         }
       ]
     }
