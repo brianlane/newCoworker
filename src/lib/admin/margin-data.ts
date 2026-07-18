@@ -25,6 +25,7 @@ import {
   type HostingerVpsCostRow,
   type TelnyxCostDailyRow
 } from "@/lib/db/platform-costs";
+import { isVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
 import {
   computeBusinessMargin,
   computeFleetMarginTotals,
@@ -102,6 +103,54 @@ export function hostingCentsByBusiness(rows: HostingerVpsCostRow[]): Map<string,
   return map;
 }
 
+/**
+ * businessId → parseable hardware sizes of its synced boxes (same row
+ * filter as {@link hostingCentsByBusiness}; unparseable plan labels are
+ * skipped rather than guessed).
+ */
+export function hostingSizesByBusiness(rows: HostingerVpsCostRow[]): Map<string, VpsSize[]> {
+  const map = new Map<string, VpsSize[]>();
+  for (const row of rows) {
+    if (
+      row.assigned_business_id === null ||
+      row.monthly_price_cents === null ||
+      row.status === "cancelled"
+    ) {
+      continue;
+    }
+    const size = vpsSizeFromHostingerPlan(row.plan);
+    if (size === null) continue;
+    const sizes = map.get(row.assigned_business_id) ?? [];
+    sizes.push(size);
+    map.set(row.assigned_business_id, sizes);
+  }
+  return map;
+}
+
+/**
+ * Whether the synced Hostinger billing should be REPLACED by the pinned
+ * size's SKU estimate for this business's margin: true when the business
+ * carries an explicit `vps_size` pin and ANY parseable synced box size
+ * disagrees with it.
+ *
+ * Rationale: a pinned tenant sitting on a differently-sized box (e.g. a
+ * standard tenant pinned kvm2 whose lapsing KVM8 is still the assigned
+ * billing row) is mid-transition — the pin is the intended steady-state
+ * hardware, so the pinned SKU is the tenant's RECURRING cost; the old
+ * box's remaining term is sunk money the fleet views (Costs page vendor
+ * table/KPI) still report. When the pin and box agree — or there is no
+ * pin, or no parseable plan — the synced actual wins: real promo/term
+ * pricing beats the SKU table.
+ */
+export function syncedHostingContradictsPin(
+  vpsSizePin: string | null | undefined,
+  syncedSizes: VpsSize[] | undefined
+): boolean {
+  if (!isVpsSize(vpsSizePin)) return false;
+  if (!syncedSizes || syncedSizes.length === 0) return false;
+  return syncedSizes.some((size) => size !== vpsSizePin);
+}
+
 /** businessId → this window's summed Telnyx cost (micro-USD); null key rows excluded. */
 export function telnyxMicrosByBusiness(rows: TelnyxCostDailyRow[]): Map<string, number> {
   const map = new Map<string, number>();
@@ -151,6 +200,7 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
   const subscriptionByBusiness = dedupeSubscriptionsPreferringActive(allSubscriptions);
   const dealByBusiness = new Map(deals.map((deal) => [deal.business_id, deal.monthly_cents]));
   const hostingByBusiness = hostingCentsByBusiness(hostingerRows);
+  const hostingSizes = hostingSizesByBusiness(hostingerRows);
   const telnyxByBusiness = telnyxMicrosByBusiness(telnyxRows);
   // Any synced row this month means the Telnyx sync is live: businesses
   // without rows genuinely had no Telnyx cost (actual 0), not "unknown".
@@ -160,6 +210,15 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
   const byBusiness = new Map<string, BusinessMarginEconomics>();
   for (const business of businesses) {
     const usage = usageByBusiness.get(business.id);
+    // A pinned tenant whose synced box size disagrees with the pin is
+    // mid-transition (e.g. standard pinned kvm2 with a lapsing KVM8 still
+    // assigned): drop the synced price so the margin reflects the pinned
+    // SKU — the intended recurring cost — instead of the old box's bill.
+    // See syncedHostingContradictsPin.
+    const pinContradicted = syncedHostingContradictsPin(
+      business.vps_size ?? null,
+      hostingSizes.get(business.id)
+    );
     const result = computeBusinessMargin(
       {
         businessId: business.id,
@@ -170,7 +229,9 @@ export async function loadFleetMargins(now: Date = new Date()): Promise<FleetMar
         vpsProvider: business.vps_provider ?? null,
         subscription: subscriptionByBusiness.get(business.id) ?? null,
         enterpriseDealMonthlyCents: dealByBusiness.get(business.id) ?? null,
-        hostingerMonthlyPriceCents: hostingByBusiness.get(business.id) ?? null,
+        hostingerMonthlyPriceCents: pinContradicted
+          ? null
+          : (hostingByBusiness.get(business.id) ?? null),
         telnyxMonthCostMicros: telnyxActuals ? (telnyxByBusiness.get(business.id) ?? 0) : null,
         monthSmsSent: usage?.smsSent ?? 0,
         monthVoiceMinutes: usage?.voiceMinutes ?? 0,
