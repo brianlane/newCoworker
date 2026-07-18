@@ -193,7 +193,7 @@
     },
     "contacts": {
       "languageLabel": "Language",
-      "languageHelp": "Language your AI coworker uses with this contact. Override detection if needed.",
+      "languageHelp": "Language your AI coworker uses with this contact.",
       "languageDetected": "Auto-detected",
       "languageOwnerSet": "Set by you",
       "languageEnglish": "English",
