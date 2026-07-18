@@ -14,7 +14,7 @@ import {
   type GeminiFunctionCall
 } from "@/lib/gemini-chat";
 import { currentDateTimeLine } from "../../supabase/functions/_shared/datetime_line";
-import { requireGeminiKey } from "./gemini";
+import { requireGeminiKey, transientBackoffMs } from "./gemini";
 import { judgeReply, type JudgeVerdict } from "./judge";
 
 /**
@@ -145,12 +145,14 @@ type ToolRouter = (name: string, args: Record<string, unknown>) => unknown;
 let SYSTEM = "";
 
 /** One retried live model step (mirror of gemini.ts's transient policy). */
+const MAX_STEP_ATTEMPTS = 5;
+
 async function stepWithRetry(
   contents: GeminiChatContent[]
 ): Promise<GeminiChatStepResult> {
   const apiKey = requireGeminiKey();
   let lastErr: unknown;
-  for (let attempt = 1; attempt <= 3; attempt++) {
+  for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
     try {
       return await geminiChatStep({
         apiKey,
@@ -165,8 +167,8 @@ async function stepWithRetry(
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);
       const transient = /^gemini_http_(429|5\d\d)/.test(msg);
-      if (!transient || attempt === 3) throw e;
-      await new Promise((r) => setTimeout(r, 500 * 2 ** (attempt - 1)));
+      if (!transient || attempt === MAX_STEP_ATTEMPTS) throw e;
+      await new Promise((r) => setTimeout(r, transientBackoffMs(attempt)));
     }
   }
   /* v8 ignore next -- unreachable */
