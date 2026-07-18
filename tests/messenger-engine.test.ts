@@ -14,6 +14,7 @@ import {
   MESSENGER_ENGINE_MAX_TOOL_ROUNDS,
   MESSENGER_ENGINE_OVER_CAP_REFUSAL,
   MESSENGER_ENGINE_TURN_TIMEOUT_MS,
+  messengerOverCapRefusal,
   runMessengerGeminiTurn,
   type MessengerGeminiTurnDeps
 } from "@/lib/messenger/engine";
@@ -244,6 +245,22 @@ describe("runMessengerGeminiTurn", () => {
     expect(deps.chatStep).not.toHaveBeenCalled();
     expect(deps.meter).not.toHaveBeenCalled();
     expect(deps.getSpendSnapshot).toHaveBeenCalledWith(BIZ, "standard");
+  });
+
+  it("speaks the over-cap refusal in the thread's stored language", async () => {
+    const deps = makeDeps({
+      getSpendSnapshot: vi.fn(async () => ({
+        ...SNAPSHOT_UNDER,
+        spendMicros: SNAPSHOT_UNDER.effectiveCapMicros
+      }))
+    });
+    const res = await runMessengerGeminiTurn(
+      { ...ARGS, conversation: { ...CONVERSATION, preferred_language: "es" } },
+      deps
+    );
+    expect(res.refusedOverCap).toBe(true);
+    expect(res.reply).toBe(messengerOverCapRefusal("es"));
+    expect(res.reply).toContain("asistente de chat");
   });
 
   it("grounds the system instruction with the vault instructions then the preamble", async () => {

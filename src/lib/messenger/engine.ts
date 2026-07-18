@@ -55,10 +55,16 @@ import {
 } from "@/lib/messenger/db";
 import type { PlanTier } from "@/lib/plans/tier";
 import { logger } from "@/lib/logger";
+import edgeEn from "../../../messages/edge-en.json";
+import edgeEs from "../../../messages/edge-es.json";
 
 /** Same honest copy as the webchat engine's over-cap refusal. */
-export const MESSENGER_ENGINE_OVER_CAP_REFUSAL =
-  "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
+export const MESSENGER_ENGINE_OVER_CAP_REFUSAL = edgeEn.MESSENGER_OVER_CAP;
+
+/** Over-cap refusal in the thread's language (stored preferred_language). */
+export function messengerOverCapRefusal(language?: "en" | "es" | null): string {
+  return language === "es" ? edgeEs.MESSENGER_OVER_CAP : edgeEn.MESSENGER_OVER_CAP;
+}
 
 /**
  * Default bumped 2.5-flash-lite → 2.5-flash (2026-07-16): the lite tier is
@@ -235,7 +241,9 @@ export async function runMessengerGeminiTurn(
   const snapshot = await getSpendSnapshot(args.businessId, args.tier);
   if (snapshot.spendMicros >= snapshot.effectiveCapMicros) {
     return {
-      reply: MESSENGER_ENGINE_OVER_CAP_REFUSAL,
+      // The stored thread language is on the row already — no extra read for
+      // an over-cap tenant.
+      reply: messengerOverCapRefusal(args.conversation.preferred_language),
       refusedOverCap: true,
       toolRounds: 0
     };
