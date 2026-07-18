@@ -5,10 +5,16 @@ import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+/**
+ * The user's explicitly saved UI locale, or null when they never saved one.
+ * Null matters: resolveUiLocale must fall through to the NEXT_LOCALE cookie
+ * (e.g. Spanish picked on marketing pages before signing in) instead of
+ * treating a missing row as an explicit English choice.
+ */
 export async function getUserUiLocale(
   userId: string,
   client?: SupabaseClient
-): Promise<AppLocale> {
+): Promise<AppLocale | null> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
     const { data, error } = await db
@@ -18,13 +24,13 @@ export async function getUserUiLocale(
       .maybeSingle();
     if (error) throw new Error(error.message);
     const raw = (data as { ui_locale?: string } | null)?.ui_locale;
-    return isAppLocale(raw) ? raw : defaultLocale;
+    return isAppLocale(raw) ? raw : null;
   } catch (err) {
-    logger.warn("getUserUiLocale failed; defaulting to en", {
+    logger.warn("getUserUiLocale failed; treating as no saved preference", {
       userId,
       error: err instanceof Error ? err.message : String(err)
     });
-    return defaultLocale;
+    return null;
   }
 }
 

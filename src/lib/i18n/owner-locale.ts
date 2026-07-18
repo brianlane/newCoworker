@@ -12,7 +12,7 @@ export async function resolveOwnerUiLocaleForEmail(
   try {
     const userId = await findAuthUserIdByEmail(normalized);
     if (!userId) return defaultLocale;
-    return getUserUiLocale(userId);
+    return (await getUserUiLocale(userId)) ?? defaultLocale;
   } catch {
     return defaultLocale;
   }

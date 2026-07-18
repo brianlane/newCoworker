@@ -3,7 +3,7 @@ import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getUserUiLocale, setUserUiLocale } from "@/lib/db/user-preferences";
-import { isAppLocale, LOCALE_COOKIE } from "@/i18n/routing";
+import { defaultLocale, isAppLocale, LOCALE_COOKIE } from "@/i18n/routing";
 
 const schema = z.object({
   locale: z.enum(["en", "es"])
@@ -13,7 +13,7 @@ export async function GET() {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required", 401);
-    const locale = await getUserUiLocale(user.userId);
+    const locale = (await getUserUiLocale(user.userId)) ?? defaultLocale;
     return successResponse({ locale });
   } catch (err) {
     return handleRouteError(err);

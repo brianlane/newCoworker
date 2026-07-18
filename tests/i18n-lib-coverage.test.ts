@@ -234,23 +234,26 @@ describe("user-preferences db", () => {
     expect(await getUserUiLocale(USER)).toBe("es");
   });
 
-  it("getUserUiLocale defaults on unknown value", async () => {
+  it("getUserUiLocale returns null on unknown value or missing row (cookie must win)", async () => {
     supabaseStub.from.mockReturnValueOnce(
       makeBuilder({ data: { ui_locale: "fr" }, error: null })
     );
-    expect(await getUserUiLocale(USER, injected)).toBe("en");
+    expect(await getUserUiLocale(USER, injected)).toBeNull();
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await getUserUiLocale(USER, injected)).toBeNull();
   });
 
-  it("getUserUiLocale defaults to en on db error", async () => {
+  it("getUserUiLocale returns null on db error", async () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "down" } }));
-    expect(await getUserUiLocale(USER, injected)).toBe("en");
+    expect(await getUserUiLocale(USER, injected)).toBeNull();
   });
 
-  it("getUserUiLocale defaults to en on a non-Error throw", async () => {
+  it("getUserUiLocale returns null on a non-Error throw", async () => {
     supabaseStub.from.mockImplementationOnce(() => {
       throw "raw string failure";
     });
-    expect(await getUserUiLocale(USER, injected)).toBe("en");
+    expect(await getUserUiLocale(USER, injected)).toBeNull();
   });
 
   it("setUserUiLocale upserts the row", async () => {
@@ -351,6 +354,12 @@ describe("owner-locale resolution", () => {
     );
     expect(await resolveOwnerUiLocaleForEmail("Owner@Example.com")).toBe("es");
     expect(findAuthUserIdByEmail).toHaveBeenCalledWith("owner@example.com");
+  });
+
+  it("defaults to en when the matched user never saved a preference", async () => {
+    findAuthUserIdByEmail.mockResolvedValueOnce(USER);
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await resolveOwnerUiLocaleForEmail("owner@example.com")).toBe("en");
   });
 
   it("defaults to en when lookup throws", async () => {
