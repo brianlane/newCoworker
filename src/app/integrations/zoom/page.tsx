@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import {
   CalendarCheck,
@@ -10,6 +11,7 @@ import {
   Trash2,
   Video
 } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero, SectionHeading } from "@/components/marketing/sections";
@@ -19,29 +21,33 @@ import { PageHero, SectionHeading } from "@/components/marketing/sections";
  * how to add, use, and remove the integration. This page is the app's
  * Documentation URL in the Zoom Marketplace listing, so it must keep
  * covering add / use / remove end to end (a Zoom review requirement).
+ * The canonical English URL renders English (default locale), so Zoom's
+ * reviewers see the reviewed copy; the /es mirror renders Spanish.
  */
 
-export const metadata: Metadata = {
-  title: "Zoom Integration — Setup, Usage & Removal",
-  description:
-    "How to connect Zoom to New Coworker, how your AI coworker creates Zoom meetings for booked appointments, and how to disconnect the integration.",
-  alternates: { canonical: "/integrations/zoom" },
-  openGraph: {
-    title: "Zoom Integration | New Coworker",
-    description:
-      "Connect Zoom so your AI coworker schedules video appointments with Zoom join links — and keeps them updated when plans change.",
-    url: "/integrations/zoom"
-  }
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.zoomPage");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/integrations/zoom" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/integrations/zoom"
+    }
+  };
+}
 
-const scopes = [
-  { scope: "meeting:write:meeting", use: "Create the Zoom meeting for an appointment your coworker books" },
-  { scope: "meeting:update:meeting", use: "Move the meeting when the appointment is rescheduled" },
-  { scope: "meeting:delete:meeting", use: "Delete the meeting when the appointment is canceled" },
-  { scope: "meeting:read:meeting / meeting:read:list_meetings", use: "Confirm meeting details after changes" },
-  { scope: "meeting:write:invite_links", use: "Create the join link your coworker sends to the customer" },
-  { scope: "user:read:user", use: "Identify the connected Zoom account (name and email shown on your dashboard card)" },
-  { scope: "cloud_recording:read:meeting_transcript", use: "Fetch a cloud-recorded meeting's transcript — only when you click Import transcript — to produce meeting minutes in your Documents" }
+/** Scope identifiers are literal API values; only the use column localizes. */
+const SCOPE_IDS = [
+  "meeting:write:meeting",
+  "meeting:update:meeting",
+  "meeting:delete:meeting",
+  "meeting:read:meeting / meeting:read:list_meetings",
+  "meeting:write:invite_links",
+  "user:read:user",
+  "cloud_recording:read:meeting_transcript"
 ];
 
 function StepCard({
@@ -62,92 +68,80 @@ function StepCard({
   );
 }
 
-export default function ZoomIntegrationDocsPage() {
+export default async function ZoomIntegrationDocsPage() {
+  const t = await getTranslations("marketing.zoomPage");
+
+  const bold = (chunks: ReactNode) => <b>{chunks}</b>;
+  const italic = (chunks: ReactNode) => <i>{chunks}</i>;
+  const zoomCardLink = (chunks: ReactNode) => (
+    <Link href="/dashboard/integrations/zoom" className="text-claw-green hover:underline">
+      {chunks}
+    </Link>
+  );
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
 
       <PageHero
-        eyebrow="Integrations · Zoom"
+        eyebrow={t("heroEyebrow")}
         title={
           <>
-            Zoom meetings, booked by your <span className="text-claw-green">AI coworker</span>
+            {t("heroTitle")} <span className="text-claw-green">{t("heroHighlight")}</span>
           </>
         }
-        subtitle="Connect Zoom once and every video appointment your coworker books comes with a Zoom meeting and a join link the customer receives automatically — kept in sync through reschedules and cancellations."
+        subtitle={t("heroSubtitle")}
       />
 
       {/* What it does */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
-        <SectionHeading eyebrow="Overview" title="What the integration does" />
+        <SectionHeading eyebrow={t("overviewEyebrow")} title={t("overviewTitle")} />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
             <Video className="h-5 w-5 text-claw-green" />
-            <h3 className="mt-3 font-semibold text-parchment">Meetings created with bookings</h3>
-            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              When a customer books a video appointment by phone, SMS, email, or web chat, your
-              coworker creates a scheduled Zoom meeting on your account for that exact time slot.
-            </p>
+            <h3 className="mt-3 font-semibold text-parchment">{t("card1Title")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">{t("card1Body")}</p>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
             <Link2 className="h-5 w-5 text-claw-green" />
-            <h3 className="mt-3 font-semibold text-parchment">Join links sent automatically</h3>
-            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              The meeting&apos;s join link rides along in the booking confirmation your customer
-              receives and in the calendar event&apos;s description, so nobody hunts for the link.
-            </p>
+            <h3 className="mt-3 font-semibold text-parchment">{t("card2Title")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">{t("card2Body")}</p>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
             <RefreshCcw className="h-5 w-5 text-claw-green" />
-            <h3 className="mt-3 font-semibold text-parchment">Kept in sync, end to end</h3>
-            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              If the appointment is rescheduled, the Zoom meeting moves with it. If it&apos;s
-              canceled, the meeting is deleted. No orphaned meetings on your account.
-            </p>
+            <h3 className="mt-3 font-semibold text-parchment">{t("card3Title")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">{t("card3Body")}</p>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7 lg:col-span-3">
             <FileText className="h-5 w-5 text-claw-green" />
-            <h3 className="mt-3 font-semibold text-parchment">Meeting minutes on demand</h3>
+            <h3 className="mt-3 font-semibold text-parchment">{t("card4Title")}</h3>
             <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              Had a meeting you cloud-recorded with audio transcript on? Paste its meeting ID into{" "}
-              <b>Dashboard → Integrations → Zoom → Meeting minutes</b> and your coworker fetches
-              the transcript and condenses it into minutes in your document library — staff-only by
-              default. Transcripts are only ever read when you ask for an import; nothing is pulled
-              automatically.
+              {t.rich("card4Body", { b: bold })}
             </p>
           </div>
         </div>
         <div className="mt-6 rounded-xl border border-claw-green/20 bg-claw-green/[0.05] p-4 text-sm text-parchment/60">
           <CalendarCheck className="mr-2 inline h-4 w-4 text-claw-green" />
-          Prerequisites: a New Coworker subscription with a connected calendar (Google, Microsoft
-          365, or CalDAV) and a Zoom account. Zoom meeting creation applies to appointments your
-          coworker books directly on those calendars.
+          {t("prereqNote")}
         </div>
       </section>
 
       {/* How to add */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
-          eyebrow="Setup"
-          title="How to add the integration"
-          subtitle="Connecting takes under a minute from your dashboard."
+          eyebrow={t("setupEyebrow")}
+          title={t("setupTitle")}
+          subtitle={t("setupSubtitle")}
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <StepCard step="1 · Open" title="Go to Dashboard → Integrations">
-            Sign in at newcoworker.com, open{" "}
-            <Link href="/dashboard/integrations/zoom" className="text-claw-green hover:underline">
-              Dashboard → Integrations → Zoom
-            </Link>
-            .
+          <StepCard step={t("step1Step")} title={t("step1Title")}>
+            {t.rich("step1Body", { link: zoomCardLink })}
           </StepCard>
-          <StepCard step="2 · Authorize" title="Click Connect and approve on Zoom">
-            You&apos;re sent to Zoom&apos;s consent screen listing exactly what New Coworker may
-            do (create, update, and delete meetings on your account). Click <b>Allow</b>. Zoom
-            returns you to your dashboard automatically.
+          <StepCard step={t("step2Step")} title={t("step2Title")}>
+            {t.rich("step2Body", { b: bold })}
           </StepCard>
-          <StepCard step="3 · Done" title="Verify the connected account">
-            The Zoom card now shows the connected account&apos;s name and email. From this moment,
-            video appointments your coworker books include a Zoom meeting and join link.
+          <StepCard step={t("step3Step")} title={t("step3Title")}>
+            {t("step3Body")}
           </StepCard>
         </div>
       </section>
@@ -155,40 +149,25 @@ export default function ZoomIntegrationDocsPage() {
       {/* How to use */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
-          eyebrow="Usage"
-          title="How to use it"
-          subtitle="There's nothing to operate day-to-day — your coworker does the work. Here's what happens behind the scenes."
+          eyebrow={t("usageEyebrow")}
+          title={t("usageTitle")}
+          subtitle={t("usageSubtitle")}
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <h3 className="font-semibold text-parchment">Booking</h3>
+            <h3 className="font-semibold text-parchment">{t("bookingTitle")}</h3>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-parchment/50">
-              <li>
-                A customer asks for an appointment (by phone, text, email, or web chat). Your
-                coworker finds an open slot on your connected calendar and books it.
-              </li>
-              <li>
-                With Zoom connected, the booking gets a scheduled Zoom meeting at that time, titled
-                after the appointment.
-              </li>
-              <li>
-                The customer&apos;s confirmation message includes the Zoom join link, and the link
-                is written into the calendar event so your team sees it too.
-              </li>
+              <li>{t("booking1")}</li>
+              <li>{t("booking2")}</li>
+              <li>{t("booking3")}</li>
             </ul>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <h3 className="font-semibold text-parchment">Changes and cancellations</h3>
+            <h3 className="font-semibold text-parchment">{t("changesTitle")}</h3>
             <ul className="mt-4 space-y-3 text-sm leading-relaxed text-parchment/50">
-              <li>
-                When a customer reschedules, your coworker moves the calendar event <i>and</i> the
-                Zoom meeting to the new time — same link, no new invite chains.
-              </li>
-              <li>When a customer cancels, the meeting is deleted along with the event.</li>
-              <li>
-                Zoom is never a point of failure: if Zoom is briefly unreachable, the appointment
-                still books — it just books without a video link.
-              </li>
+              <li>{t.rich("changes1", { i: italic })}</li>
+              <li>{t("changes2")}</li>
+              <li>{t("changes3")}</li>
             </ul>
           </div>
         </div>
@@ -197,53 +176,41 @@ export default function ZoomIntegrationDocsPage() {
       {/* How to remove */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
-          eyebrow="Removal"
-          title="How to remove the integration"
-          subtitle="Two ways — both fully disconnect New Coworker from your Zoom account."
+          eyebrow={t("removalEyebrow")}
+          title={t("removalTitle")}
+          subtitle={t("removalSubtitle")}
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
             <Trash2 className="h-5 w-5 text-signal-teal" />
-            <h3 className="mt-3 font-semibold text-parchment">From your New Coworker dashboard</h3>
+            <h3 className="mt-3 font-semibold text-parchment">{t("removeDashTitle")}</h3>
             <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-parchment/50">
-              <li>
-                Open{" "}
-                <Link
-                  href="/dashboard/integrations/zoom"
-                  className="text-claw-green hover:underline"
-                >
-                  Dashboard → Integrations → Zoom
-                </Link>
-                .
-              </li>
-              <li>Click <b>Disconnect</b> and confirm.</li>
-              <li>
-                We revoke our access token with Zoom and permanently delete the stored credentials.
-                Future bookings simply book without Zoom meetings.
-              </li>
+              <li>{t.rich("removeDash1", { link: zoomCardLink })}</li>
+              <li>{t.rich("removeDash2", { b: bold })}</li>
+              <li>{t("removeDash3")}</li>
             </ol>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
             <PlugZap className="h-5 w-5 text-signal-teal" />
-            <h3 className="mt-3 font-semibold text-parchment">From the Zoom App Marketplace</h3>
+            <h3 className="mt-3 font-semibold text-parchment">{t("removeZoomTitle")}</h3>
             <ol className="mt-4 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-parchment/50">
               <li>
-                Sign in to{" "}
-                <a
-                  href="https://marketplace.zoom.us/user/installed"
-                  className="text-claw-green hover:underline"
-                  rel="noopener noreferrer"
-                  target="_blank"
-                >
-                  marketplace.zoom.us
-                </a>{" "}
-                and open <b>Manage → Added Apps</b>.
+                {t.rich("removeZoom1", {
+                  b: bold,
+                  marketplace: (chunks: ReactNode) => (
+                    <a
+                      href="https://marketplace.zoom.us/user/installed"
+                      className="text-claw-green hover:underline"
+                      rel="noopener noreferrer"
+                      target="_blank"
+                    >
+                      {chunks}
+                    </a>
+                  )
+                })}
               </li>
-              <li>Find <b>New Coworker OAuth</b> and click <b>Remove</b>.</li>
-              <li>
-                Zoom revokes New Coworker&apos;s access immediately. Your dashboard card will show
-                the connection as needing reconnection.
-              </li>
+              <li>{t.rich("removeZoom2", { b: bold })}</li>
+              <li>{t("removeZoom3")}</li>
             </ol>
           </div>
         </div>
@@ -252,23 +219,23 @@ export default function ZoomIntegrationDocsPage() {
       {/* Scopes and data handling */}
       <section className="mx-auto max-w-6xl px-6 pb-24">
         <SectionHeading
-          eyebrow="Permissions & privacy"
-          title="Exactly what New Coworker can access"
-          subtitle="The integration requests the minimum Zoom scopes needed to schedule meetings on your behalf and, only when you ask, import a meeting transcript — nothing else."
+          eyebrow={t("scopesEyebrow")}
+          title={t("scopesTitle")}
+          subtitle={t("scopesSubtitle")}
         />
         <div className="overflow-x-auto rounded-2xl border border-parchment/10 bg-parchment/[0.02]">
           <table className="w-full text-left text-sm">
             <thead>
               <tr className="border-b border-parchment/10 text-xs uppercase tracking-wider text-parchment/40">
-                <th className="px-6 py-4">Zoom scope</th>
-                <th className="px-6 py-4">What it&apos;s used for</th>
+                <th className="px-6 py-4">{t("scopeColHeader")}</th>
+                <th className="px-6 py-4">{t("useColHeader")}</th>
               </tr>
             </thead>
             <tbody>
-              {scopes.map((s) => (
-                <tr key={s.scope} className="border-b border-parchment/5 last:border-0">
-                  <td className="px-6 py-3 font-mono text-xs text-claw-green">{s.scope}</td>
-                  <td className="px-6 py-3 text-parchment/60">{s.use}</td>
+              {SCOPE_IDS.map((scope, index) => (
+                <tr key={scope} className="border-b border-parchment/5 last:border-0">
+                  <td className="px-6 py-3 font-mono text-xs text-claw-green">{scope}</td>
+                  <td className="px-6 py-3 text-parchment/60">{t(`scopeUse${index + 1}`)}</td>
                 </tr>
               ))}
             </tbody>
@@ -276,20 +243,18 @@ export default function ZoomIntegrationDocsPage() {
         </div>
         <div className="mt-6 rounded-xl border border-signal-teal/20 bg-signal-teal/[0.05] p-5 text-sm leading-relaxed text-parchment/60">
           <ShieldCheck className="mr-2 inline h-4 w-4 text-signal-teal" />
-          Your Zoom tokens are encrypted at rest (AES-256-GCM) in a row-level-security-protected
-          database, are never exposed to the browser, and are deleted when you disconnect. Meeting
-          content is read in exactly one case: when you explicitly import a cloud-recorded
-          meeting&apos;s transcript for minutes — the transcript is processed into your document
-          library and never pulled automatically. Everything else touches only the scheduling data
-          for appointments your coworker manages. See our{" "}
-          <Link href="/privacy" className="text-claw-green hover:underline">
-            Privacy Policy
-          </Link>{" "}
-          for details. Questions? Reach us any time via{" "}
-          <Link href="/contact" className="text-claw-green hover:underline">
-            newcoworker.com/contact
-          </Link>
-          .
+          {t.rich("privacyNote", {
+            privacy: (chunks: ReactNode) => (
+              <Link href="/privacy" className="text-claw-green hover:underline">
+                {chunks}
+              </Link>
+            ),
+            contact: (chunks: ReactNode) => (
+              <Link href="/contact" className="text-claw-green hover:underline">
+                {chunks}
+              </Link>
+            )
+          })}
         </div>
       </section>
 
