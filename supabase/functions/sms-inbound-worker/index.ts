@@ -1045,9 +1045,18 @@ serve(async (req: Request) => {
           .eq("business_id", job.business_id)
           .eq("customer_e164", contactPrimaryE164);
       }
+      // Thread language for the prompt: an owner override is authoritative;
+      // otherwise a confident detection wins (mid-thread switch), and a weak
+      // signal keeps the stored thread language (mirrors the Messenger engine).
+      const smsThreadLanguage =
+        contactLangSource === "owner_set"
+          ? contactLang
+          : detected.persist
+            ? detected.language
+            : contactLang ?? detected.language;
       const languageLine = customerLanguageLine({
         detected: detected.language,
-        established: contactLangSource === "owner_set" ? contactLang : detected.language,
+        established: smsThreadLanguage,
         defaultLang: businessDefaultLang,
         supported: businessSupportedLangs
       });

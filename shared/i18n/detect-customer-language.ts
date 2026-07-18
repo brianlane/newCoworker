@@ -87,6 +87,12 @@ export function detectCustomerLanguage(
   }
 
   if (singleToken && SPANISH_LOANWORDS.test(singleToken)) {
+    // Sticky: a lone greeting/courtesy never changes an established thread
+    // language ("hola" on a Spanish thread stays Spanish, on an English
+    // thread stays English). Only with no history does it fall to default.
+    if (opts.establishedLanguage) {
+      return { language: opts.establishedLanguage, persist: false, confidence: "low" };
+    }
     return { language: defaultLanguage, persist: false, confidence: "none" };
   }
 

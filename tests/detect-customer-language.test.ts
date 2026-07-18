@@ -34,6 +34,25 @@ describe("detectCustomerLanguage", () => {
     expect(r.persist).toBe(false);
   });
 
+  it("keeps a lone Spanish greeting sticky to the established thread language", () => {
+    const onSpanishThread = detectCustomerLanguage({
+      text: "hola",
+      establishedLanguage: "es"
+    });
+    expect(onSpanishThread.language).toBe("es");
+    expect(onSpanishThread.persist).toBe(false);
+
+    const onEnglishThread = detectCustomerLanguage({
+      text: "gracias",
+      establishedLanguage: "en"
+    });
+    expect(onEnglishThread.language).toBe("en");
+
+    const firstContact = detectCustomerLanguage({ text: "hola" });
+    expect(firstContact.language).toBe("en");
+    expect(firstContact.persist).toBe(false);
+  });
+
   it("returns English-only fast path when supported is en only", () => {
     const r = detectCustomerLanguage({
       text: "Hola quiero una cita",
