@@ -22,11 +22,14 @@ export const VIEW_AS_BANNER_HIDE_KEY = "admin-view-as-banner-hidden";
 export function ViewAsBanner({
   businessId,
   businessName,
-  tier
+  tier,
+  selfOwned = false
 }: {
   businessId: string;
   businessName: string;
   tier: string;
+  /** Admin viewing their OWN business (HQ): writes are allowed. */
+  selfOwned?: boolean;
 }) {
   const [exiting, setExiting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,7 +73,9 @@ export function ViewAsBanner({
             {tier}
           </span>
           <span className="ml-2 text-parchment/40 text-xs">
-            account &amp; billing changes are disabled
+            {selfOwned
+              ? "your own business — changes are enabled"
+              : "account & billing changes are disabled"}
           </span>
         </span>
       </div>
