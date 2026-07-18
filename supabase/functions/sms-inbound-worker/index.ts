@@ -1031,19 +1031,39 @@ serve(async (req: Request) => {
         supported: businessSupportedLangs
       });
       if (detected.persist && contactLangSource !== "owner_set") {
-        // Alias-aware: a texter merged into another profile must persist on
-        // the surviving row's primary number, not the alias (which matches
-        // zero rows). Fall back to the texter's number for first contact.
-        const contactPrimaryE164 =
-          (memoryRow as { customer_e164?: string | null } | null)?.customer_e164 ?? fromE164;
-        await supabase
-          .from("contacts")
-          .update({
-            preferred_language: detected.language,
-            language_source: "detected"
-          })
-          .eq("business_id", job.business_id)
-          .eq("customer_e164", contactPrimaryE164);
+        const langPatch = {
+          preferred_language: detected.language,
+          language_source: "detected"
+        };
+        if (memoryRow) {
+          // Alias-aware: a texter merged into another profile must persist on
+          // the surviving row's primary number, not the alias (which matches
+          // zero rows).
+          const contactPrimaryE164 =
+            (memoryRow as { customer_e164?: string | null }).customer_e164 ?? fromE164;
+          await supabase
+            .from("contacts")
+            .update(langPatch)
+            .eq("business_id", job.business_id)
+            .eq("customer_e164", contactPrimaryE164);
+        } else {
+          // First contact: no contacts row exists yet (record_customer_interaction
+          // runs later in this job), so an UPDATE would silently hit zero rows and
+          // the detected language would never land. Insert the row now; on a
+          // concurrent-create race (unique violation) fall back to the update.
+          const { error: langInsErr } = await supabase.from("contacts").insert({
+            business_id: job.business_id,
+            customer_e164: fromE164,
+            ...langPatch
+          });
+          if (langInsErr) {
+            await supabase
+              .from("contacts")
+              .update(langPatch)
+              .eq("business_id", job.business_id)
+              .eq("customer_e164", fromE164);
+          }
+        }
       }
       // Thread language for the prompt: an owner override is authoritative;
       // otherwise a confident detection wins (mid-thread switch), and a weak
