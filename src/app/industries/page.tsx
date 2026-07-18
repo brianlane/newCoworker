@@ -1,37 +1,43 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero } from "@/components/marketing/sections";
 import { INDUSTRIES } from "./data";
 
-export const metadata: Metadata = {
-  title: "Industries",
-  description:
-    "New Coworker for real estate, home services, medical & dental, law firms, restaurants, and small businesses: a 24/7 AI employee tuned to how your industry works.",
-  alternates: { canonical: "/industries" },
-  openGraph: {
-    title: "Industries | New Coworker",
-    description:
-      "A 24/7 AI employee tuned to your industry: real estate, home services, medical & dental, law firms, and more.",
-    url: "/industries"
-  }
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.industriesPage");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/industries" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/industries"
+    }
+  };
+}
 
-export default function IndustriesPage() {
+export default async function IndustriesPage() {
+  const t = await getTranslations("marketing.industriesPage");
+  const tIndustries = await getTranslations("marketing.industries");
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
 
       <PageHero
-        eyebrow="Industries"
+        eyebrow={t("heroEyebrow")}
         title={
           <>
-            Built for how <span className="text-claw-green">your business</span> actually works
+            {t("heroTitle")} <span className="text-claw-green">{t("heroHighlight")}</span>{" "}
+            {t("heroTitleEnd")}
           </>
         }
-        subtitle="Your coworker learns your services, your compliance rules, and your customers, starting with the industries where a missed call costs the most."
+        subtitle={t("heroSubtitle")}
       />
 
       <section className="mx-auto max-w-6xl px-6 pb-24">
@@ -44,11 +50,15 @@ export default function IndustriesPage() {
             >
               <div className="mb-3 flex items-center gap-3">
                 <industry.Icon className="h-6 w-6 shrink-0 text-claw-green" />
-                <h2 className="text-lg font-semibold text-parchment">{industry.name}</h2>
+                <h2 className="text-lg font-semibold text-parchment">
+                  {tIndustries(`${industry.i18nKey}.name`)}
+                </h2>
               </div>
-              <p className="flex-1 text-sm leading-relaxed text-parchment/50">{industry.teaser}</p>
+              <p className="flex-1 text-sm leading-relaxed text-parchment/50">
+                {tIndustries(`${industry.i18nKey}.teaser`)}
+              </p>
               <span className="mt-5 inline-flex items-center gap-1.5 text-sm font-semibold text-signal-teal">
-                See how it works
+                {t("seeHow")}
                 <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-0.5" />
               </span>
             </Link>
@@ -57,9 +67,9 @@ export default function IndustriesPage() {
       </section>
 
       <CtaBanner
-        title="Don't see your industry?"
-        subtitle="Your coworker is trained on YOUR business during onboarding. Any business that takes calls and texts is a fit."
-        ctaLabel="Get Started"
+        title={t("ctaTitle")}
+        subtitle={t("ctaSubtitle")}
+        ctaLabel={t("ctaLabel")}
         ctaHref="/onboard"
       />
 

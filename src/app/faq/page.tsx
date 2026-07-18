@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import type { ReactNode } from "react";
 import Link from "next/link";
+import { getLocale, getTranslations } from "next-intl/server";
+import type { AppLocale } from "@/i18n/routing";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
@@ -16,265 +19,101 @@ import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { JsonLd } from "@/components/marketing/JsonLd";
 
-export const metadata: Metadata = {
-  title: "FAQ",
-  description:
-    "Frequently asked questions about New Coworker: how the AI employee works, setup, number porting, privacy, billing, usage limits, and support.",
-  alternates: { canonical: "/faq" },
-  openGraph: {
-    title: "FAQ | New Coworker",
-    description: "How New Coworker works: setup, porting, privacy, billing, limits, and support.",
-    url: "/faq"
-  }
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.faqPage");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/faq" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/faq"
+    }
+  };
+}
 
 type FaqSection = {
   title: string;
   items: (FaqItem & { plainAnswer: string })[];
 };
 
-function buildSections(): FaqSection[] {
+export default async function FaqPage() {
+  const t = await getTranslations("marketing.faqPage");
+  const locale = (await getLocale()) as AppLocale;
+
   const starterPrice = formatPricePerMonth(getPeriodPricing("starter", "biennial").monthlyCents);
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
   // e.g. "250 voice minutes" / "up to 10 concurrent calls" — same helpers as /pricing.
-  const standardVoice = voiceMinutesLine("standard");
-  const standardConcurrent = concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls).toLowerCase();
+  const standardVoice = voiceMinutesLine("standard", undefined, locale);
+  const standardConcurrent = concurrentCallsLine(
+    TIER_LIMITS.standard.maxConcurrentCalls,
+    locale
+  ).toLowerCase();
+  // Stringified so ICU doesn't re-format the count with digit grouping.
+  const standardSms = String(TIER_LIMITS.standard.smsPerMonth);
 
-  return [
+  const pricingLink = (chunks: ReactNode) => (
+    <Link href="/pricing" className="text-signal-teal hover:underline">
+      {chunks}
+    </Link>
+  );
+  const bold = (chunks: ReactNode) => <b>{chunks}</b>;
+
+  const sections: FaqSection[] = [
     {
-      title: "The product",
+      title: t("productTitle"),
       items: [
+        { question: t("whatIsQ"), plainAnswer: t("whatIsA"), answer: <>{t("whatIsA")}</> },
+        { question: t("differentQ"), plainAnswer: t("differentA"), answer: <>{t("differentA")}</> },
+        { question: t("knowledgeQ"), plainAnswer: t("knowledgeA"), answer: <>{t("knowledgeA")}</> },
+        { question: t("transfersQ"), plainAnswer: t("transfersA"), answer: <>{t("transfersA")}</> }
+      ]
+    },
+    {
+      title: t("setupTitle"),
+      items: [
+        { question: t("setupTimeQ"), plainAnswer: t("setupTimeA"), answer: <>{t("setupTimeA")}</> },
+        { question: t("keepNumberQ"), plainAnswer: t("keepNumberA"), answer: <>{t("keepNumberA")}</> },
         {
-          question: "What exactly is New Coworker?",
-          plainAnswer:
-            "New Coworker is a 24/7 AI employee for your business. It answers your business phone with human-level conversation, replies to texts and emails, books appointments on your calendar, qualifies leads, and remembers every customer, all monitored from a dashboard you control.",
-          answer: (
-            <>
-              New Coworker is a 24/7 AI employee for your business. It answers your business phone
-              with human-level conversation, replies to texts and emails, books appointments on
-              your calendar, qualifies leads, and remembers every customer, all monitored from a
-              dashboard you control.
-            </>
-          )
+          question: t("whiteGloveQ"),
+          plainAnswer: t("whiteGlovePlain"),
+          answer: <>{t.rich("whiteGloveA", { b: bold, link: pricingLink })}</>
         },
         {
-          question: "How is this different from an answering service or a chatbot?",
-          plainAnswer:
-            "An answering service takes messages; a chatbot follows scripts. Your coworker actually handles the interaction: it answers questions from your business's real knowledge, books appointments mid-call, sends follow-up texts and emails, and runs automated workflows. It also has permanent, lossless memory, so context builds instead of resetting every conversation.",
-          answer: (
-            <>
-              An answering service takes messages; a chatbot follows scripts. Your coworker
-              actually handles the interaction: it answers questions from your business&apos;s real
-              knowledge, books appointments mid-call, sends follow-up texts and emails, and runs
-              automated workflows. It also has permanent, lossless memory, so context builds
-              instead of resetting every conversation.
-            </>
-          )
-        },
-        {
-          question: "What does my coworker know about my business?",
-          plainAnswer:
-            "During onboarding you answer a short questionnaire, and your coworker can read your website to learn your services, pricing, and policies. From then on it learns from every conversation. You can review and edit its memory anytime from the dashboard.",
-          answer: (
-            <>
-              During onboarding you answer a short questionnaire, and your coworker can read your
-              website to learn your services, pricing, and policies. From then on it learns from
-              every conversation. You can review and edit its memory anytime from the dashboard.
-            </>
-          )
-        },
-        {
-          question: "Can it transfer calls to me or my team?",
-          plainAnswer:
-            "Yes. Standard plans include warm handoff transfers: when a caller needs a human, your coworker brings you onto the line with the context already gathered, so the caller never repeats themselves.",
-          answer: (
-            <>
-              Yes. Standard plans include warm handoff transfers: when a caller needs a human, your
-              coworker brings you onto the line with the context already gathered, so the caller
-              never repeats themselves.
-            </>
-          )
+          question: t("carrierFeeQ", { carrierFee }),
+          plainAnswer: t("carrierFeeA", { carrierFee }),
+          answer: <>{t("carrierFeeA", { carrierFee })}</>
         }
       ]
     },
     {
-      title: "Setup & phone numbers",
+      title: t("privacyTitle"),
       items: [
-        {
-          question: "How long does setup take?",
-          plainAnswer:
-            "Minutes. After checkout, provisioning is fully automated: your dedicated server, phone number, and email are created, and your coworker is trained from your questionnaire and website. No IT project, no sales call required.",
-          answer: (
-            <>
-              Minutes. After checkout, provisioning is fully automated: your dedicated server,
-              phone number, and email are created, and your coworker is trained from your
-              questionnaire and website. No IT project, no sales call required.
-            </>
-          )
-        },
-        {
-          question: "Can I keep my existing business number?",
-          plainAnswer:
-            "Yes. Standard and Enterprise plans support bring-your-own-number porting. We handle the port and your coworker answers on your existing number. Every plan also includes a dedicated number that works from day one.",
-          answer: (
-            <>
-              Yes. Standard and Enterprise plans support bring-your-own-number porting. We handle
-              the port and your coworker answers on your existing number. Every plan also includes
-              a dedicated number that works from day one.
-            </>
-          )
-        },
-        {
-          question: "Can someone set everything up for me?",
-          plainAnswer:
-            "Yes. White-glove setup ($750) gets you a specialist who configures everything live with you, handles number porting, and trains you 1:1. White-glove buildout ($2,000) adds a full custom workflow buildout. Both include 30 days of priority call and video support.",
-          answer: (
-            <>
-              Yes. <b>White-glove setup ($750)</b> gets you a specialist who configures everything
-              live with you, handles number porting, and trains you 1:1.{" "}
-              <b>White-glove buildout ($2,000)</b> adds a full custom workflow buildout. Both
-              include 30 days of priority call and video support. See{" "}
-              <Link href="/pricing" className="text-signal-teal hover:underline">
-                pricing
-              </Link>{" "}
-              for details.
-            </>
-          )
-        },
-        {
-          question: `What is the one-time ${carrierFee} carrier registration fee?`,
-          plainAnswer:
-            "US carriers require every business that sends text messages to complete 10DLC registration. We pass this one-time fee through at cost. It is charged at signup and is non-refundable because carriers do not refund it to us.",
-          answer: (
-            <>
-              US carriers require every business that sends text messages to complete 10DLC
-              registration. We pass this one-time fee through at cost. It is charged at signup and
-              is non-refundable because carriers do not refund it to us.
-            </>
-          )
-        }
+        { question: t("dataQ"), plainAnswer: t("dataA"), answer: <>{t("dataA")}</> },
+        { question: t("trainingQ"), plainAnswer: t("trainingA"), answer: <>{t("trainingA")}</> },
+        { question: t("complianceQ"), plainAnswer: t("complianceA"), answer: <>{t("complianceA")}</> }
       ]
     },
     {
-      title: "Privacy & security",
+      title: t("billingTitle"),
       items: [
         {
-          question: "Where does my data live?",
-          plainAnswer:
-            "Your AI coworker runs on a private server dedicated to your business, with its own credentials and a deny-by-default security posture. Conversations and business records are stored securely in our platform database, isolated per business and never shared with other businesses, and you can export your data at any time.",
-          answer: (
-            <>
-              Your AI coworker runs on a private server dedicated to your business, with its own
-              credentials and a deny-by-default security posture. Conversations and business
-              records are stored securely in our platform database, isolated per business and
-              never shared with other businesses, and you can export your data at any time.
-            </>
-          )
+          question: t("costQ"),
+          plainAnswer: t("costPlain", { starterPrice, standardConcurrent }),
+          answer: <>{t.rich("costA", { starterPrice, standardConcurrent, link: pricingLink })}</>
         },
+        { question: t("upfrontQ"), plainAnswer: t("upfrontA"), answer: <>{t("upfrontA")}</> },
+        { question: t("cancelQ"), plainAnswer: t("cancelA"), answer: <>{t("cancelA")}</> },
         {
-          question: "Is my customer data used to train AI models?",
-          plainAnswer:
-            "No. Your coworker's memory belongs to your business and is used only to serve your customers. We follow a deny-by-default security posture with per-business credentials throughout the platform.",
-          answer: (
-            <>
-              No. Your coworker&apos;s memory belongs to your business and is used only to serve
-              your customers. We follow a deny-by-default security posture with per-business
-              credentials throughout the platform.
-            </>
-          )
+          question: t("capsQ"),
+          plainAnswer: t("capsA", { standardVoice, standardSms }),
+          answer: <>{t("capsA", { standardVoice, standardSms })}</>
         },
-        {
-          question: "What about industry compliance?",
-          plainAnswer:
-            "Compliance guardrails are enforced in every conversation, including Fair Housing Act rules for real estate, and Enterprise plans support custom compliance modules for other regulated industries.",
-          answer: (
-            <>
-              Compliance guardrails are enforced in every conversation, including Fair Housing Act
-              rules for real estate, and Enterprise plans support custom compliance modules for
-              other regulated industries.
-            </>
-          )
-        }
-      ]
-    },
-    {
-      title: "Billing & plans",
-      items: [
-        {
-          question: "How much does it cost?",
-          plainAnswer: `Plans start at ${starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, ${standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is custom. Every plan has a 30-day money-back guarantee.`,
-          answer: (
-            <>
-              Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher
-              usage caps, {standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is
-              custom. Every plan has a 30-day money-back guarantee. See the full breakdown on the{" "}
-              <Link href="/pricing" className="text-signal-teal hover:underline">
-                pricing page
-              </Link>
-              .
-            </>
-          )
-        },
-        {
-          question: "Why is the full term billed upfront on 12 and 24-month plans?",
-          plainAnswer:
-            "Because your plan includes a dedicated private server that we prepay for your whole contract. Billing the term once is what makes the discounted monthly rate possible. Monthly plans are billed month-to-month.",
-          answer: (
-            <>
-              Because your plan includes a dedicated private server that we prepay for your whole
-              contract. Billing the term once is what makes the discounted monthly rate possible.
-              Monthly plans are billed month-to-month.
-            </>
-          )
-        },
-        {
-          question: "Can I cancel?",
-          plainAnswer:
-            "Yes. Every plan has a 30-day money-back window from the initial purchase date (the one-time carrier registration fee is excluded, usage charges already incurred — texts sent, call minutes, AI usage — are deducted at cost, and 12/24-month plans deduct one month of service at the monthly rate). After the term, service continues month-to-month at the renewal rate unless you start a new contract.",
-          answer: (
-            <>
-              Yes. Every plan has a 30-day money-back window from the initial purchase date (the
-              one-time carrier registration fee is excluded, usage charges already incurred —
-              texts sent, call minutes, AI usage — are deducted at cost, and 12/24-month plans
-              deduct one month of service at the monthly rate). After the term, service continues
-              month-to-month at the renewal rate unless you start a new contract.
-            </>
-          )
-        },
-        {
-          question: "What happens if I hit my monthly usage caps?",
-          plainAnswer: `Included usage resets monthly: for example, Standard includes ${standardVoice} and ${TIER_LIMITS.standard.smsPerMonth} SMS per month. You're alerted before you run out; at the cap, metered voice calls and customer texts pause until the next cycle or an upgrade. You can also buy one-time voice minute or SMS top-up packs from Dashboard → Billing without upgrading — bonus usage is consumed after your included monthly allowance and lasts until the end of your billing period or 30 days from purchase, whichever is later. Compliance messages are never blocked.`,
-          answer: (
-            <>
-              Included usage resets monthly: for example, Standard includes {standardVoice} and{" "}
-              {TIER_LIMITS.standard.smsPerMonth} SMS per month. You&apos;re alerted before you run
-              out; at the cap, metered voice calls and customer texts pause until the next cycle or
-              an upgrade. You can also buy one-time voice minute or SMS top-up packs from{" "}
-              Dashboard → Billing without upgrading — bonus usage is consumed after your included
-              monthly allowance and lasts until the end of your billing period or 30 days from
-              purchase, whichever is later. Compliance messages are never blocked.
-            </>
-          )
-        },
-        {
-          question: "What support is included?",
-          plainAnswer:
-            "Starter includes email support; Standard includes priority email support; Enterprise includes an SLA with dedicated support. Live call/video support is available through the white-glove onboarding packages.",
-          answer: (
-            <>
-              Starter includes email support; Standard includes priority email support; Enterprise
-              includes an SLA with dedicated support. Live call/video support is available through
-              the white-glove onboarding packages.
-            </>
-          )
-        }
+        { question: t("supportQ"), plainAnswer: t("supportA"), answer: <>{t("supportA")}</> }
       ]
     }
   ];
-}
-
-export default function FaqPage() {
-  const sections = buildSections();
 
   const jsonLd = {
     "@context": "https://schema.org",
@@ -294,9 +133,9 @@ export default function FaqPage() {
       <MarketingNav />
 
       <PageHero
-        eyebrow="FAQ"
-        title="Questions, answered"
-        subtitle="Everything owners ask before hiring their New Coworker. Something missing? Email us and a human replies."
+        eyebrow={t("heroEyebrow")}
+        title={t("heroTitle")}
+        subtitle={t("heroSubtitle")}
       />
 
       {sections.map((section) => (
@@ -307,9 +146,9 @@ export default function FaqPage() {
       ))}
 
       <CtaBanner
-        title="Still curious? Try it risk-free"
-        subtitle="Every plan comes with a 30-day money-back guarantee."
-        ctaLabel="Get Started"
+        title={t("ctaTitle")}
+        subtitle={t("ctaSubtitle")}
+        ctaLabel={t("ctaLabel")}
         ctaHref="/onboard"
       />
 

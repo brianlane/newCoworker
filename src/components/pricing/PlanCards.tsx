@@ -1,15 +1,17 @@
 "use client";
 
 import { useState } from "react";
+import { useLocale, useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import type { AppLocale } from "@/i18n/routing";
 import { listWhiteGlovePackages } from "@/lib/plans/white-glove";
 import {
+  getPeriodOptions,
+  getPeriodSummary,
   getTierCards,
-  getTierSavings,
-  PERIOD_OPTIONS,
-  PERIOD_SUMMARY
+  getTierSavings
 } from "@/lib/plans/tier-display";
 
 /**
@@ -18,11 +20,15 @@ import {
  * onboarding add-on grid. All display data comes from `tier-display.ts`.
  */
 export function PlanCards() {
+  const t = useTranslations("marketing.planCards");
+  const locale = useLocale() as AppLocale;
   const [period, setPeriod] = useState<BillingPeriod>("biennial");
 
   const starterSavings = getTierSavings("starter");
   const standardSavings = getTierSavings("standard");
-  const tiers = getTierCards(period);
+  const tiers = getTierCards(period, locale);
+  const periodOptions = getPeriodOptions(locale);
+  const periodSummary = getPeriodSummary(period, locale);
 
   return (
     <div className="space-y-10">
@@ -30,7 +36,7 @@ export function PlanCards() {
       <div className="space-y-4">
         <div className="flex justify-center">
           <div className="grid w-full max-w-3xl grid-cols-3 rounded-2xl border border-parchment/15 bg-parchment/5 p-1.5 gap-1 shadow-[0_12px_32px_rgba(0,0,0,0.18)] md:inline-flex md:w-auto">
-            {PERIOD_OPTIONS.map((opt) => (
+            {periodOptions.map((opt) => (
               <button
                 key={opt.id}
                 onClick={() => setPeriod(opt.id)}
@@ -51,7 +57,9 @@ export function PlanCards() {
                         : "bg-signal-teal/18 text-signal-teal"
                     ].join(" ")}
                   >
-                    Save up to {Math.max(starterSavings[opt.id], standardSavings[opt.id])}%
+                    {t("saveUpTo", {
+                      percent: Math.max(starterSavings[opt.id], standardSavings[opt.id])
+                    })}
                   </span>
                 )}
               </button>
@@ -65,26 +73,26 @@ export function PlanCards() {
         >
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="min-w-0">
-              <p className="text-sm font-semibold text-parchment">{PERIOD_SUMMARY[period].title}</p>
-              <p className="mt-1 text-sm text-parchment/68">{PERIOD_SUMMARY[period].description}</p>
+              <p className="text-sm font-semibold text-parchment">{periodSummary.title}</p>
+              <p className="mt-1 text-sm text-parchment/68">{periodSummary.description}</p>
             </div>
 
             {period === "monthly" ? (
               <div className="rounded-xl bg-deep-ink/45 px-4 py-3 text-sm text-parchment/72 md:max-w-xs">
-                Monthly billing keeps the commitment light while still applying a first-month intro discount.
+                {t("monthlyNote")}
               </div>
             ) : (
               <div className="grid gap-2 md:grid-cols-2 md:min-w-[320px]">
                 <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Standard savings</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">{t("standardSavings")}</p>
                   <p className="mt-1 text-base font-bold text-claw-green sm:text-lg">
-                    {standardSavings[period as "biennial" | "annual"]}% savings
+                    {t("savingsPercent", { percent: standardSavings[period as "biennial" | "annual"] })}
                   </p>
                 </div>
                 <div className="rounded-xl bg-deep-ink/45 px-4 py-3">
-                  <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">Starter savings</p>
+                  <p className="text-[11px] uppercase tracking-[0.18em] text-parchment/45">{t("starterSavings")}</p>
                   <p className="mt-1 text-base font-bold text-claw-green sm:text-lg">
-                    {starterSavings[period as "biennial" | "annual"]}% savings
+                    {t("savingsPercent", { percent: starterSavings[period as "biennial" | "annual"] })}
                   </p>
                 </div>
               </div>
@@ -126,11 +134,12 @@ export function PlanCards() {
               )}
               {tier.id !== "enterprise" && period !== "monthly" && (
                 <div className="inline-flex max-w-full items-center rounded-full border border-claw-green/25 bg-claw-green/10 px-2.5 py-1 text-center text-[11px] font-semibold leading-snug text-claw-green">
-                  Save{" "}
-                  {tier.id === "starter"
-                    ? starterSavings[period as "biennial" | "annual"]
-                    : standardSavings[period as "biennial" | "annual"]}
-                  % versus monthly
+                  {t("saveVersusMonthly", {
+                    percent:
+                      tier.id === "starter"
+                        ? starterSavings[period as "biennial" | "annual"]
+                        : standardSavings[period as "biennial" | "annual"]
+                  })}
                 </div>
               )}
               {tier.renewal && (
@@ -182,14 +191,13 @@ export function PlanCards() {
           specialist quotes from there. Purchase happens from Billing. */}
       <div className="rounded-2xl border border-parchment/15 bg-parchment/4 px-5 py-5">
         <h2 className="text-lg font-bold text-parchment">
-          Want us to set everything up for you?
+          {t("whiteGloveTitle")}
         </h2>
         <p className="mt-1 text-sm text-parchment/60">
-          With white-glove onboarding, a specialist sets everything up live with you. Tell us
-          what you need and we&apos;ll reach out. Plans without it include email support.
+          {t("whiteGloveBody")}
         </p>
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
-          {listWhiteGlovePackages().map((pkg) => (
+          {listWhiteGlovePackages(locale).map((pkg) => (
             <div
               key={pkg.id}
               className="rounded-xl border border-parchment/15 bg-deep-ink/40 p-4"
@@ -211,7 +219,7 @@ export function PlanCards() {
           href="/contact?topic=white-glove"
           className="mt-5 block w-full rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 md:mx-auto md:max-w-sm"
         >
-          I&apos;m interested in white-glove onboarding
+          {t("whiteGloveCta")}
         </a>
       </div>
     </div>

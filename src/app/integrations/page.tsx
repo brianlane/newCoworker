@@ -13,6 +13,7 @@ import {
   Webhook,
   Zap
 } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
@@ -20,208 +21,158 @@ import {
   FeatureCard,
   PageHero,
   SectionHeading,
-  StatBand,
-  type Feature
+  StatBand
 } from "@/components/marketing/sections";
 
-export const metadata: Metadata = {
-  title: "Integrations",
-  description:
-    "Connect New Coworker to Meta lead ads, Claude, 8,000+ apps through Zapier, native Google Workspace and Microsoft 365 calendar & email, a public REST API, and webhooks.",
-  alternates: { canonical: "/integrations" },
-  openGraph: {
-    title: "Integrations | New Coworker",
-    description:
-      "Meta lead ads, Claude connector, 8,000+ apps through Zapier, native Google & Microsoft calendar and email, public API, and webhooks.",
-    url: "/integrations"
-  }
-};
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.integrationsPage");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/integrations" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/integrations"
+    }
+  };
+}
 
-const zapierTriggers = [
-  { label: "SMS received", description: "A customer texts your business number", Icon: MessageSquareText },
-  { label: "SMS sent", description: "Your coworker sends a customer a text", Icon: MessageSquareText },
-  { label: "Call completed", description: "A call ends, with its AI summary attached", Icon: PhoneCall },
-  { label: "Email activity", description: "Your coworker sends or receives email", Icon: Mail }
-];
+const TRIGGER_DEFS = [
+  { labelKey: "triggerSmsReceived", descKey: "triggerSmsReceivedDesc", Icon: MessageSquareText },
+  { labelKey: "triggerSmsSent", descKey: "triggerSmsSentDesc", Icon: MessageSquareText },
+  { labelKey: "triggerCallCompleted", descKey: "triggerCallCompletedDesc", Icon: PhoneCall },
+  { labelKey: "triggerEmailActivity", descKey: "triggerEmailActivityDesc", Icon: Mail }
+] as const;
 
-const claudeConnector: Feature = {
-  title: "Claude connector",
-  description:
-    "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows all authenticated as you through OAuth, with permissions matching your dashboard role.",
-  Icon: Bot
-};
+const NATIVE_DEFS = [
+  { key: "google", Icon: CalendarCheck },
+  { key: "microsoft", Icon: CalendarCheck },
+  { key: "zapier", Icon: Zap },
+  { key: "api", Icon: Code2 },
+  { key: "webhooks", Icon: Webhook },
+  { key: "csv", Icon: FileSpreadsheet },
+  { key: "custom", Icon: ArrowLeftRight },
+  { key: "keys", Icon: KeyRound }
+] as const;
 
-const nativeIntegrations: Feature[] = [
-  {
-    title: "Google Workspace",
-    description:
-      "Calendar slot-finding and booking plus email follow-ups through your Google account, connected in two clicks.",
-    Icon: CalendarCheck
-  },
-  {
-    title: "Microsoft 365",
-    description:
-      "The same calendar and email superpowers for Outlook and Microsoft 365 businesses.",
-    Icon: CalendarCheck
-  },
-  {
-    title: "Zapier",
-    description:
-      "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing. No code required.",
-    Icon: Zap
-  },
-  {
-    title: "Public REST API",
-    description:
-      "Per-business API keys let your systems send SMS, read events, and manage subscriptions programmatically.",
-    Icon: Code2
-  },
-  {
-    title: "Webhooks",
-    description:
-      "Real-time REST hooks push calls, texts, and email events to any endpoint the moment they happen.",
-    Icon: Webhook
-  },
-  {
-    title: "CSV Import & Export",
-    description:
-      "Bring your contacts in and take your data out whenever you want. Your records are never locked in.",
-    Icon: FileSpreadsheet
-  },
-  {
-    title: "Custom Integrations",
-    description:
-      "Point your coworker at your own internal tools and portals. It can browse and operate them like a person would.",
-    Icon: ArrowLeftRight
-  },
-  {
-    title: "Dashboard-Managed Keys",
-    description:
-      "Create, rotate, and revoke API keys from the integrations page. Hashed at rest, capped per business.",
-    Icon: KeyRound
-  }
-];
+export default async function IntegrationsPage() {
+  const t = await getTranslations("marketing.integrationsPage");
 
-export default function IntegrationsPage() {
+  const zapierTriggers = TRIGGER_DEFS.map(({ labelKey, descKey, Icon }) => ({
+    label: t(labelKey),
+    description: t(descKey),
+    Icon
+  }));
+
+  const nativeIntegrations = NATIVE_DEFS.map(({ key, Icon }) => ({
+    title: t(`${key}.title`),
+    description: t(`${key}.description`),
+    Icon
+  }));
+
+  const claudeConnector = {
+    title: t("claude.title"),
+    description: t("claude.description"),
+    Icon: Bot
+  };
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
 
       <PageHero
-        eyebrow="Integrations"
+        eyebrow={t("heroEyebrow")}
         title={
           <>
-            Connect your coworker to <span className="text-claw-green">8,000+ apps</span>
+            {t("heroTitle")} <span className="text-claw-green">{t("heroHighlight")}</span>
           </>
         }
-        subtitle="Zapier, Google Workspace, Microsoft 365, and more: your coworker plugs into the tools your business already runs on. No code needed, and there's a developer API when you want it."
+        subtitle={t("heroSubtitle")}
       />
 
       <StatBand
         stats={[
-          { value: "Seconds", label: "From Meta ad lead submitted to lead texted back" },
-          { value: "8,000+", label: "Apps reachable through one Zapier connection" },
-          { value: "2 clicks", label: "To connect Google or Microsoft calendar & email" },
-          { value: "REST", label: "Public API with per-business keys and webhooks" }
+          { value: t("stat1Value"), label: t("stat1Label") },
+          { value: t("stat2Value"), label: t("stat2Label") },
+          { value: t("stat3Value"), label: t("stat3Label") },
+          { value: t("stat4Value"), label: t("stat4Label") }
         ]}
       />
 
       {/* Meta lead capture */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
-          eyebrow="Meta Lead Ads"
-          title="Facebook & Instagram leads, answered while they're still looking at your ad"
-          subtitle="Most businesses take hours to respond to an ad lead. Your coworker does it in seconds performed automatically, every time, day or night."
+          eyebrow={t("metaEyebrow")}
+          title={t("metaTitle2")}
+          subtitle={t("metaSubtitle")}
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">1 · Capture</p>
-            <h3 className="mt-3 font-semibold text-parchment">A lead submits your Instant Form</h3>
-            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              Your Meta lead ads connect to your coworker through a simple bridge (a free Make.com
-              account, Zapier, or lead tools like Privyr). A guided in-dashboard setup walks you
-              through it in about 15 minutes.
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">{t("captureStep")}</p>
+            <h3 className="mt-3 font-semibold text-parchment">{t("captureTitle")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">{t("captureBody")}</p>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">2 · Act</p>
-            <h3 className="mt-3 font-semibold text-parchment">Your coworker responds in seconds</h3>
-            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              The lead gets a personal text from your business number while their interest is
-              hottest, and the two-way conversation is handled by the same coworker that answers
-              your phone.
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">{t("actStep")}</p>
+            <h3 className="mt-3 font-semibold text-parchment">{t("actTitle")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">{t("actBody")}</p>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">3 · Follow through</p>
-            <h3 className="mt-3 font-semibold text-parchment">Filed, routed, and remembered</h3>
-            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
-              Every lead is saved to your customer list with full context, offered to your team by
-              text when you want routing, and you get a summary the moment it happens.
-            </p>
+            <p className="text-xs font-semibold uppercase tracking-[0.22em] text-claw-green">{t("followStep")}</p>
+            <h3 className="mt-3 font-semibold text-parchment">{t("followTitle")}</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">{t("followBody")}</p>
           </div>
         </div>
         <div className="mt-6 rounded-xl border border-claw-green/20 bg-claw-green/[0.05] p-4 text-sm text-parchment/60">
-          The same webhook trigger works for any lead source. Google lead forms, your website,
-          TikTok, or anything that can send a webhook not just Meta.
+          {t("webhookNote")}
         </div>
       </section>
 
       {/* Zapier */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
-          eyebrow="Zapier"
-          title="If it's in Zapier, it works with New Coworker"
-          subtitle="Wire your coworker's calls and texts into CRMs, spreadsheets, Slack, invoicing, and thousands of other apps. No code, no developer."
+          eyebrow={t("zapierEyebrow")}
+          title={t("zapierTitle")}
+          subtitle={t("zapierSubtitle")}
         />
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <h3 className="font-semibold text-parchment">Triggers: when things happen here</h3>
-            <p className="mt-1 text-sm text-parchment/50">
-              Start any Zap from your coworker&apos;s activity.
-            </p>
+            <h3 className="font-semibold text-parchment">{t("triggersTitle")}</h3>
+            <p className="mt-1 text-sm text-parchment/50">{t("triggersSubtitle")}</p>
             <ul className="mt-5 space-y-4">
-              {zapierTriggers.map((t) => (
-                <li key={t.label} className="flex items-start gap-3">
-                  <t.Icon className="mt-0.5 h-4 w-4 shrink-0 text-claw-green" />
+              {zapierTriggers.map((trigger) => (
+                <li key={trigger.label} className="flex items-start gap-3">
+                  <trigger.Icon className="mt-0.5 h-4 w-4 shrink-0 text-claw-green" />
                   <div>
-                    <p className="text-sm font-semibold text-parchment">{t.label}</p>
-                    <p className="text-sm text-parchment/50">{t.description}</p>
+                    <p className="text-sm font-semibold text-parchment">{trigger.label}</p>
+                    <p className="text-sm text-parchment/50">{trigger.description}</p>
                   </div>
                 </li>
               ))}
             </ul>
           </div>
           <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7">
-            <h3 className="font-semibold text-parchment">Actions: make things happen here</h3>
-            <p className="mt-1 text-sm text-parchment/50">
-              Let any app in your stack drive your coworker.
-            </p>
+            <h3 className="font-semibold text-parchment">{t("actionsTitle")}</h3>
+            <p className="mt-1 text-sm text-parchment/50">{t("actionsSubtitle")}</p>
             <ul className="mt-5 space-y-4">
               <li className="flex items-start gap-3">
                 <MessageSquareText className="mt-0.5 h-4 w-4 shrink-0 text-signal-teal" />
                 <div>
-                  <p className="text-sm font-semibold text-parchment">Send SMS</p>
-                  <p className="text-sm text-parchment/50">
-                    Trigger a text from your business number when something happens anywhere else:
-                    a new form fill, a paid invoice, a shipped order.
-                  </p>
+                  <p className="text-sm font-semibold text-parchment">{t("actionSendSms")}</p>
+                  <p className="text-sm text-parchment/50">{t("actionSendSmsDesc")}</p>
                 </div>
               </li>
               <li className="flex items-start gap-3">
                 <Zap className="mt-0.5 h-4 w-4 shrink-0 text-signal-teal" />
                 <div>
-                  <p className="text-sm font-semibold text-parchment">Send Lead to Coworker</p>
-                  <p className="text-sm text-parchment/50">
-                    Forward a lead from Facebook Lead Ads (or any trigger) and your coworker takes
-                    over: instant text-back, filing, routing, and follow-up.
-                  </p>
+                  <p className="text-sm font-semibold text-parchment">{t("actionSendLead")}</p>
+                  <p className="text-sm text-parchment/50">{t("actionSendLeadDesc")}</p>
                 </div>
               </li>
             </ul>
             <div className="mt-6 rounded-xl border border-signal-teal/20 bg-signal-teal/[0.05] p-4 text-sm text-parchment/60">
-              Example: a new lead lands in your CRM → Zapier tells your coworker → the lead gets a
-              personal text within seconds, and the reply is handled automatically.
+              {t("zapierExample")}
             </div>
           </div>
         </div>
@@ -230,8 +181,8 @@ export default function IntegrationsPage() {
       {/* Native + platform integrations */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
         <SectionHeading
-          eyebrow="Native & platform"
-          title="Built-in connections, plus an API for everything else"
+          eyebrow={t("nativeEyebrow")}
+          title={t("nativeTitle")}
         />
         <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
           {nativeIntegrations.map((f) => (
@@ -249,19 +200,15 @@ export default function IntegrationsPage() {
           <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-2">
             <div>
               <p className="mb-3 text-xs font-semibold uppercase tracking-[0.22em] text-signal-teal">
-                For developers
+                {t("devEyebrow")}
               </p>
-              <h2 className="text-2xl font-bold text-parchment">A real API, not a widget</h2>
-              <p className="mt-4 leading-relaxed text-parchment/60">
-                Your coworker comes with per-business API keys managed from your
-                dashboard. Send messages, read call and message events (with AI summaries), and
-                subscribe webhook endpoints to real-time events.
-              </p>
+              <h2 className="text-2xl font-bold text-parchment">{t("devTitle")}</h2>
+              <p className="mt-4 leading-relaxed text-parchment/60">{t("devBody")}</p>
               <Link
                 href="/onboard"
                 className="mt-6 inline-block rounded-lg border border-claw-green/40 px-6 py-2.5 text-sm font-semibold text-claw-green transition-colors hover:bg-claw-green/10"
               >
-                Get API access
+                {t("devCta")}
               </Link>
             </div>
             <pre className="mobile-scroll-x overflow-x-auto rounded-xl border border-parchment/10 bg-deep-ink p-5 text-xs leading-relaxed text-parchment/70">
@@ -279,9 +226,9 @@ Authorization: Bearer nck_...
       </section>
 
       <CtaBanner
-        title="Plug your coworker into your stack"
-        subtitle="Zapier, calendar, email, and API access are built in. No connector fees."
-        ctaLabel="Get Started"
+        title={t("ctaTitle")}
+        subtitle={t("ctaSubtitle")}
+        ctaLabel={t("ctaLabel")}
         ctaHref="/onboard"
       />
 

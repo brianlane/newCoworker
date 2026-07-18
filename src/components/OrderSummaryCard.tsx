@@ -1,3 +1,4 @@
+import { useTranslations } from "next-intl";
 import {
   getCommitmentMonths,
   getPeriodPricing,
@@ -33,16 +34,6 @@ type OrderSummaryCardProps = {
   canadianFee?: boolean;
 };
 
-function formatPlanLabel(tier: PlanTier): string {
-  return `${tier.charAt(0).toUpperCase()}${tier.slice(1)} plan`;
-}
-
-function formatBillingPeriod(period: BillingPeriod): string {
-  if (period === "biennial") return "24 months";
-  if (period === "annual") return "12 months";
-  return "1 month";
-}
-
 export function OrderSummaryCard({
   tier,
   period,
@@ -50,6 +41,7 @@ export function OrderSummaryCard({
   preferFirstMonthLabel = false,
   canadianFee = false
 }: OrderSummaryCardProps) {
+  const t = useTranslations("marketing.orderSummary");
   const hasIntroDiscount = hasFirstCycleDiscount(tier, period);
   const firstCyclePrice = getMonthlyRateDisplay(tier, period);
   const renewalPrice = getRenewalRateDisplay(tier, period);
@@ -73,24 +65,27 @@ export function OrderSummaryCard({
     planDueTodayCents + CARRIER_REGISTRATION_FEE_CENTS + canadaFeeDueTodayCents
   );
   const monthlyLabel = isTermPlan
-    ? "Effective monthly rate"
+    ? t("effectiveMonthly")
     : preferFirstMonthLabel && hasIntroDiscount
-      ? "First month"
-      : "Monthly rate";
+      ? t("firstMonth")
+      : t("monthlyRate");
+  const periodLabel =
+    period === "biennial" ? t("period24") : period === "annual" ? t("period12") : t("period1");
+  const planLabel = `${tier.charAt(0).toUpperCase()}${tier.slice(1)}`;
 
   return (
     <div className="bg-parchment/5 rounded-lg p-4 space-y-2">
-      <h3 className="font-semibold text-parchment">Order Summary</h3>
+      <h3 className="font-semibold text-parchment">{t("title")}</h3>
       <div className="flex justify-between text-parchment/70">
-        <span>Plan</span>
+        <span>{t("plan")}</span>
         <span className="capitalize">{tier}</span>
       </div>
       <div className="flex justify-between text-parchment/70">
-        <span>Billing period</span>
-        <span>{formatBillingPeriod(period)}</span>
+        <span>{t("billingPeriod")}</span>
+        <span>{periodLabel}</span>
       </div>
       <div className="flex justify-between text-parchment/70">
-        <span>Business</span>
+        <span>{t("business")}</span>
         <span>{businessName?.trim() ? businessName : "–"}</span>
       </div>
       <div className="flex justify-between text-parchment/70">
@@ -104,58 +99,56 @@ export function OrderSummaryCard({
       </div>
       {hasIntroDiscount && (
         <div className="flex justify-between text-spark-orange text-xs">
-          <span>Intro discount</span>
+          <span>{t("introDiscount")}</span>
           <span>-{firstCycleDiscount}</span>
         </div>
       )}
       <div className="flex justify-between text-parchment/40 text-xs">
-        <span>Renewal rate after {formatPlanLabel(tier)} ends</span>
+        <span>{t("renewalAfter", { plan: planLabel })}</span>
         <span>{renewalPrice}</span>
       </div>
       <div className="flex justify-between text-parchment/40 text-xs">
-        <span>Commitment total</span>
+        <span>{t("commitmentTotal")}</span>
         <span>{formatCommitmentTotal(tier, period)}</span>
       </div>
       <div className="flex justify-between text-parchment/70">
-        <span>Carrier registration (10DLC, one-time)</span>
+        <span>{t("carrierRegistration")}</span>
         <span>{formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)}</span>
       </div>
       {canadianFee && (
         <div className="flex justify-between text-parchment/70">
           <span>
-            {CANADA_MESSAGING_FEE_NAME} (
-            {formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS)}/mo
-            {isTermPlan ? ` × ${getCommitmentMonths(period)} months` : ""})
+            {t("canadaFeeLine", {
+              name: CANADA_MESSAGING_FEE_NAME,
+              monthly: formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS),
+              termSuffix: isTermPlan
+                ? t("canadaFeeTermSuffix", { months: getCommitmentMonths(period) })
+                : ""
+            })}
           </span>
           <span>{formatPriceCents(canadaFeeDueTodayCents)}</span>
         </div>
       )}
       <div className="flex justify-between text-parchment font-semibold pt-1 border-t border-parchment/10">
-        <span>Total due today</span>
+        <span>{t("totalDueToday")}</span>
         <span>{totalDueToday}</span>
       </div>
-      <p className="text-xs text-parchment/45">
-        The carrier registration fee covers your business&apos;s one-time SMS carrier
-        (10DLC) registration and is non-refundable.
-      </p>
+      <p className="text-xs text-parchment/45">{t("carrierFeeNote")}</p>
       {canadianFee && (
         <p className="text-xs text-parchment/45">
-          The {CANADA_MESSAGING_FEE_NAME.toLowerCase()} covers the per-message fees Canadian
-          mobile carriers charge for business texting, and renews with your plan.
+          {t("canadaFeeNote", { name: CANADA_MESSAGING_FEE_NAME.toLowerCase() })}
         </p>
       )}
       {isTermPlan && (
         <p className="text-xs text-parchment/45">
-          The full {formatBillingPeriod(period)} term is billed today. After the term, service
-          continues month-to-month at {renewalPrice} unless you renew your contract.
+          {t("termBilledNote", { period: periodLabel, renewalPrice })}
         </p>
       )}
       {isTermPlan && (
         <p className="text-xs text-parchment/45">
-          30-day money-back guarantee: cancel within 30 days and we refund your term payment
-          minus one month of service at the monthly rate (
-          {formatPriceCents(getPeriodPricing(tier, "monthly").monthlyCents)}) and the carrier
-          registration fee.
+          {t("guaranteeNote", {
+            monthlyPrice: formatPriceCents(getPeriodPricing(tier, "monthly").monthlyCents)
+          })}
         </p>
       )}
     </div>

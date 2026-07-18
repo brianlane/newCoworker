@@ -1,6 +1,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import type { ReactNode } from "react";
+import { useLocale, useTranslations } from "next-intl";
 
 type LegalPageProps = {
   eyebrow: string;
@@ -19,6 +20,8 @@ export function LegalPage({
   contactEmail,
   children
 }: LegalPageProps) {
+  const t = useTranslations("marketing.legal");
+  const locale = useLocale();
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <nav className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-6 py-5">
@@ -28,16 +31,16 @@ export function LegalPage({
         </Link>
         <div className="flex items-center gap-4 text-sm">
           <Link href="/privacy" className="text-parchment/60 transition-colors hover:text-parchment">
-            Privacy
+            {t("navPrivacy")}
           </Link>
           <Link href="/terms" className="text-parchment/60 transition-colors hover:text-parchment">
-            Terms
+            {t("navTerms")}
           </Link>
           <Link
             href="/onboard"
             className="rounded-lg bg-claw-green px-4 py-2 font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
           >
-            Get Started
+            {t("navGetStarted")}
           </Link>
         </div>
       </nav>
@@ -49,7 +52,15 @@ export function LegalPage({
           <p className="mt-5 max-w-3xl text-base leading-7 text-parchment/70 sm:text-lg">
             {summary}
           </p>
-          <p className="mt-6 text-sm text-parchment/45">Effective date: {effectiveDate}</p>
+          <p className="mt-6 text-sm text-parchment/45">{t("effectiveDate", { date: effectiveDate })}</p>
+          {/* Legal documents are authored (and binding) in English; other
+              locales get an explicit notice instead of an unreviewed
+              machine translation of contractual language. */}
+          {locale !== "en" && (
+            <p className="mt-4 rounded-lg border border-signal-teal/20 bg-signal-teal/[0.05] px-4 py-3 text-sm text-parchment/65">
+              {t("englishGoverns")}
+            </p>
+          )}
 
           <div className="mt-10 space-y-8 text-sm leading-7 text-parchment/78 sm:text-base">
             {children}
@@ -59,11 +70,11 @@ export function LegalPage({
 
       <footer className="border-t border-parchment/10 py-8">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-6 text-xs text-parchment/35 sm:flex-row">
-          <p>&copy; {new Date().getFullYear()} New Coworker. All rights reserved.</p>
+          <p>{t("copyright", { year: String(new Date().getFullYear()) })}</p>
           <div className="flex gap-6">
-            <a href={`mailto:${contactEmail}`} className="transition-colors hover:text-parchment/60">Contact</a>
-            <Link href="/privacy" className="transition-colors hover:text-parchment/60">Privacy Policy</Link>
-            <Link href="/terms" className="transition-colors hover:text-parchment/60">Terms of Service</Link>
+            <a href={`mailto:${contactEmail}`} className="transition-colors hover:text-parchment/60">{t("footerContact")}</a>
+            <Link href="/privacy" className="transition-colors hover:text-parchment/60">{t("footerPrivacy")}</Link>
+            <Link href="/terms" className="transition-colors hover:text-parchment/60">{t("footerTerms")}</Link>
           </div>
         </div>
       </footer>

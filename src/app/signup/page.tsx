@@ -1,14 +1,16 @@
 "use client";
 
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
+import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import type { AppLocale } from "@/i18n/routing";
 import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
-import { getPasswordValidationError, PASSWORD_RULES } from "@/lib/password";
+import { getPasswordRules, getPasswordValidationError } from "@/lib/password";
 import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type StoredOnboardingData = {
@@ -41,7 +43,9 @@ export default function SignupPage() {
 }
 
 function SignupForm() {
-  const passwordRules = PASSWORD_RULES;
+  const t = useTranslations("auth");
+  const locale = useLocale() as AppLocale;
+  const passwordRules = getPasswordRules(locale);
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? "/onboard";
@@ -72,13 +76,13 @@ function SignupForm() {
 
   async function handleSignup(e: FormEvent) {
     e.preventDefault();
-    const passwordError = getPasswordValidationError(password);
+    const passwordError = getPasswordValidationError(password, locale);
     if (passwordError) {
       setError(passwordError);
       return;
     }
     if (password !== confirmPassword) {
-      setError("Passwords do not match");
+      setError(t("passwordsDoNotMatch"));
       return;
     }
     setLoading(true);
@@ -122,7 +126,7 @@ function SignupForm() {
 
     const identities = signUpData.user?.identities ?? [];
     if (identities.length === 0) {
-      setError("An account with this email already exists. Please sign in instead.");
+      setError(t("accountExists"));
       return;
     }
 
@@ -135,22 +139,29 @@ function SignupForm() {
         <div className="w-full max-w-sm space-y-6 text-center">
           <div className="flex flex-col items-center gap-3">
             <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
-            <h1 className="text-2xl font-bold text-parchment">Check your email</h1>
+            <h1 className="text-2xl font-bold text-parchment">{t("checkYourEmail")}</h1>
             <p className="text-sm text-parchment/50 max-w-xs">
-              We sent a confirmation link to <span className="text-parchment font-medium">{email}</span>.
-              Click the link to activate your account and get started.
+              {t.rich("confirmationSent", {
+                email,
+                strong: (chunks: ReactNode) => (
+                  <span className="text-parchment font-medium">{chunks}</span>
+                )
+              })}
             </p>
           </div>
           <Card>
             <p className="text-xs text-parchment/40 text-center">
-              Didn&apos;t receive it? Check your spam folder or{" "}
-              <button
-                type="button"
-                onClick={() => setConfirmationPending(false)}
-                className="text-signal-teal hover:underline"
-              >
-                try again
-              </button>.
+              {t.rich("didntReceive", {
+                retry: (chunks: ReactNode) => (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmationPending(false)}
+                    className="text-signal-teal hover:underline"
+                  >
+                    {chunks}
+                  </button>
+                )
+              })}
             </p>
           </Card>
         </div>
@@ -163,69 +174,73 @@ function SignupForm() {
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
-          <h1 className="text-2xl font-bold text-parchment">Create your account</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("signupTitle")}</h1>
           <p className="text-sm text-parchment/50">
-            {tier ? `${tier.charAt(0).toUpperCase() + tier.slice(1)} plan selected. Almost there!` : "Your AI coworker starts here"}
+            {tier
+              ? t("signupTierSelected", {
+                  tier: tier.charAt(0).toUpperCase() + tier.slice(1)
+                })
+              : t("signupBlurb")}
           </p>
           <a href={questionnaireBaseHref} className="text-sm text-signal-teal hover:underline">
-            ← Back to onboarding
+            {t("backToOnboarding")}
           </a>
         </div>
 
         <Card>
           <form onSubmit={handleSignup} className="space-y-4">
             <Input
-              label="Business Name"
+              label={t("businessName")}
               type="text"
               value={businessName}
               onChange={(e) => setBusinessName(e.target.value)}
-              placeholder="Sunrise Realty"
+              placeholder={t("businessNamePlaceholder")}
               required
             />
             {emailFromOnboarding ? (
               <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-sm">
                 <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-parchment/45">
-                  Email
+                  {t("email")}
                 </p>
                 <p className="mt-1 text-parchment break-all">{email}</p>
                 <p className="mt-1 text-[11px] text-parchment/45">
-                  Using the email from your onboarding details.{" "}
+                  {t("emailFromOnboarding")}{" "}
                   <a href={questionnaireEditEmailHref} className="text-signal-teal hover:underline">
-                    Change it
+                    {t("changeIt")}
                   </a>
                 </p>
               </div>
             ) : (
               <Input
-                label="Email"
+                label={t("email")}
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@business.com"
+                placeholder={t("emailPlaceholder")}
                 autoComplete="email"
                 required
               />
             )}
             <Input
-              label="Password"
+              label={t("password")}
               type="password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="8+ chars, 1 uppercase, 1 number"
+              placeholder={t("passwordPlaceholder")}
               autoComplete="new-password"
               required
             />
             <Input
-              label="Confirm Password"
+              label={t("confirmPassword")}
               type="password"
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
-              placeholder="Re-enter your password"
+              placeholder={t("confirmPasswordPlaceholder")}
               autoComplete="new-password"
               required
             />
             <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
-              <p className="font-medium text-parchment/75">Password rules</p>
+              <p className="font-medium text-parchment/75">{t("passwordRules")}</p>
               <ul className="mt-1 list-disc pl-4 space-y-1">
                 {passwordRules.map((rule) => (
                   <li key={rule}>{rule}</li>
@@ -236,15 +251,15 @@ function SignupForm() {
             {error && <p className="text-xs text-spark-orange">{error}</p>}
 
             <Button type="submit" loading={loading} className="w-full">
-              Create account
+              {t("createAccountCta")}
             </Button>
           </form>
         </Card>
 
         <p className="text-center text-sm text-parchment/40">
-          Already have an account?{" "}
+          {t("alreadyHaveAccount")}{" "}
           <a href={loginHref} className="text-signal-teal hover:underline">
-            Sign in
+            {t("signIn")}
           </a>
         </p>
       </div>

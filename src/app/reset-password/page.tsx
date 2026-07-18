@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
@@ -15,6 +16,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
  * user has a (recovery) session and can set a new password via updateUser.
  */
 export default function ResetPasswordPage() {
+  const t = useTranslations("auth");
   const router = useRouter();
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
@@ -44,11 +46,11 @@ export default function ResetPasswordPage() {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+      setError(t("resetTooShort"));
       return;
     }
     if (password !== confirm) {
-      setError("Passwords do not match.");
+      setError(t("resetMismatch"));
       return;
     }
     setLoading(true);
@@ -66,7 +68,7 @@ export default function ResetPasswordPage() {
         router.push("/dashboard");
       }, 1200);
     } catch {
-      setError("Something went wrong. Please try again.");
+      setError(t("resetGenericError"));
     } finally {
       setLoading(false);
     }
@@ -77,41 +79,37 @@ export default function ResetPasswordPage() {
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
-          <h1 className="text-2xl font-bold text-parchment">Set a new password</h1>
+          <h1 className="text-2xl font-bold text-parchment">{t("resetTitle")}</h1>
         </div>
 
         {done ? (
           <Card>
-            <p className="text-center text-sm text-claw-green">
-              ✓ Password updated. Taking you to your dashboard…
-            </p>
+            <p className="text-center text-sm text-claw-green">{t("resetDone")}</p>
           </Card>
         ) : hasSession === false ? (
           <Card>
-            <p className="text-center text-sm text-spark-orange">
-              This reset link is invalid or has expired.
-            </p>
+            <p className="text-center text-sm text-spark-orange">{t("resetLinkInvalid")}</p>
             <a
               href="/login"
               className="mt-4 block text-center text-sm text-signal-teal hover:underline"
             >
-              Back to sign in
+              {t("backToSignIn")}
             </a>
           </Card>
         ) : (
           <Card>
             <form onSubmit={handleSubmit} className="space-y-4">
               <Input
-                label="New password"
+                label={t("newPassword")}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder="At least 8 characters"
+                placeholder={t("newPasswordPlaceholder")}
                 autoComplete="new-password"
                 required
               />
               <Input
-                label="Confirm new password"
+                label={t("confirmNewPassword")}
                 type="password"
                 value={confirm}
                 onChange={(e) => setConfirm(e.target.value)}
@@ -120,7 +118,7 @@ export default function ResetPasswordPage() {
               />
               {error && <p className="text-xs text-spark-orange">{error}</p>}
               <Button type="submit" loading={loading} disabled={hasSession === null} className="w-full">
-                Update password
+                {t("updatePassword")}
               </Button>
             </form>
           </Card>

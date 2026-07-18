@@ -63,8 +63,38 @@ const PACKAGES: Record<WhiteGlovePackageId, WhiteGlovePackage> = {
   }
 };
 
-export function listWhiteGlovePackages(): WhiteGlovePackage[] {
-  return WHITE_GLOVE_PACKAGE_IDS.map((id) => PACKAGES[id]);
+/**
+ * Spanish DISPLAY copy for the marketing/billing cards. Checkout keeps the
+ * English package objects (names/descriptions become Stripe line items and
+ * webhook records), so only card rendering passes a locale.
+ */
+const PACKAGES_ES: Record<WhiteGlovePackageId, Pick<WhiteGlovePackage, "name" | "description" | "features">> = {
+  setup: {
+    name: "White-glove setup",
+    description: "Configuramos todo contigo, portamos tu número y te entrenamos en vivo.",
+    features: [
+      "Configuración guiada del espacio con un especialista",
+      "Portabilidad del número telefónico gestionada por nosotros",
+      "Llamada de entrenamiento 1:1 en vivo",
+      "30 días de soporte prioritario por llamada y video"
+    ]
+  },
+  buildout: {
+    name: "White-glove buildout",
+    description: "Todo lo del setup, más una construcción completa de AiFlows a medida para tu negocio.",
+    features: [
+      "Todo lo de White-glove setup",
+      "Construcción completa de AiFlows a medida para tus flujos",
+      "Especialista dedicado hasta el lanzamiento",
+      "Línea prioritaria de 30 días (llamada y video)"
+    ]
+  }
+};
+
+export function listWhiteGlovePackages(locale: "en" | "es" = "en"): WhiteGlovePackage[] {
+  return WHITE_GLOVE_PACKAGE_IDS.map((id) =>
+    locale === "es" ? { ...PACKAGES[id], ...PACKAGES_ES[id] } : PACKAGES[id]
+  );
 }
 
 /** Null for unknown ids — API boundaries fail closed. */

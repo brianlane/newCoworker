@@ -1,8 +1,9 @@
 "use client";
 
-import { Suspense, useState, type FormEvent } from "react";
+import { Suspense, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
@@ -17,6 +18,7 @@ export default function LoginPage() {
 }
 
 function LoginForm() {
+  const t = useTranslations("auth");
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectTo = searchParams.get("redirectTo") ?? "/dashboard";
@@ -28,6 +30,8 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [magicSent, setMagicSent] = useState(false);
   const [resetSent, setResetSent] = useState(false);
+
+  const strong = (chunks: ReactNode) => <strong>{chunks}</strong>;
 
   async function handleSignIn(e: FormEvent) {
     e.preventDefault();
@@ -47,7 +51,7 @@ function LoginForm() {
       router.refresh();
       router.push(redirectTo);
     } catch {
-      setError("Sign in failed");
+      setError(t("signInFailed"));
     } finally {
       setLoading(false);
     }
@@ -55,7 +59,7 @@ function LoginForm() {
 
   async function handleMagicLink() {
     if (!email) {
-      setError("Enter your email first");
+      setError(t("enterEmailFirst"));
       return;
     }
     setLoading(true);
@@ -83,7 +87,7 @@ function LoginForm() {
 
   async function handleForgotPassword() {
     if (!email) {
-      setError("Enter your email first");
+      setError(t("enterEmailFirst"));
       return;
     }
     setLoading(true);
@@ -106,37 +110,36 @@ function LoginForm() {
       <div className="w-full max-w-sm space-y-6">
         <div className="flex flex-col items-center gap-3">
           <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
-          <h1 className="text-2xl font-bold text-parchment">Welcome back</h1>
-          <p className="text-sm text-parchment/50">Sign in to your New Coworker dashboard</p>
+          <h1 className="text-2xl font-bold text-parchment">{t("welcomeBack")}</h1>
+          <p className="text-sm text-parchment/50">{t("signInBlurb")}</p>
         </div>
 
         {magicSent ? (
           <Card>
             <p className="text-center text-sm text-signal-teal">
-              ✓ Magic link sent to <strong>{email}</strong>. Check your inbox.
+              {t.rich("magicSentTo", { email, strong })}
             </p>
           </Card>
         ) : resetSent ? (
           <Card>
             <p className="text-center text-sm text-signal-teal">
-              ✓ Password reset link sent to <strong>{email}</strong>. Check your inbox to set a new
-              password.
+              {t.rich("resetSentTo", { email, strong })}
             </p>
           </Card>
         ) : (
           <Card>
             <form onSubmit={handleSignIn} className="space-y-4">
               <Input
-                label="Email"
+                label={t("email")}
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@business.com"
+                placeholder={t("emailPlaceholder")}
                 autoComplete="email"
                 required
               />
               <Input
-                label="Password"
+                label={t("password")}
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -150,19 +153,19 @@ function LoginForm() {
                   onClick={handleForgotPassword}
                   className="text-xs text-parchment/50 hover:text-signal-teal"
                 >
-                  Forgot password?
+                  {t("forgotPassword")}
                 </button>
               </div>
 
               {error && <p className="text-xs text-spark-orange">{error}</p>}
 
               <Button type="submit" loading={loading} className="w-full">
-                Sign in
+                {t("signIn")}
               </Button>
 
               <div className="relative flex items-center">
                 <div className="flex-1 border-t border-parchment/10" />
-                <span className="mx-3 text-xs text-parchment/30">or</span>
+                <span className="mx-3 text-xs text-parchment/30">{t("or")}</span>
                 <div className="flex-1 border-t border-parchment/10" />
               </div>
 
@@ -173,16 +176,16 @@ function LoginForm() {
                 onClick={handleMagicLink}
                 loading={loading}
               >
-                Send magic link
+                {t("sendMagicLink")}
               </Button>
             </form>
           </Card>
         )}
 
         <p className="text-center text-sm text-parchment/40">
-          No account?{" "}
+          {t("noAccount")}{" "}
           <a href={signupHref} className="text-signal-teal hover:underline">
-            Get started
+            {t("getStarted")}
           </a>
         </p>
       </div>

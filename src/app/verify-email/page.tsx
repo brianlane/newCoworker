@@ -1,5 +1,6 @@
 import Link from "next/link";
 import Image from "next/image";
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { verifyEmailVerificationToken } from "@/lib/email/verification-token";
 import { ConfirmForm } from "./ConfirmForm";
@@ -58,6 +59,7 @@ export default async function VerifyEmailPage({ searchParams }: Props) {
   const sp = await searchParams;
   const rawToken = Array.isArray(sp.token) ? sp.token[0] : sp.token;
   const outcome = resolveServerOutcome(rawToken);
+  const t = await getTranslations("auth");
 
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4 py-12">
@@ -72,17 +74,17 @@ export default async function VerifyEmailPage({ searchParams }: Props) {
           />
           <h1 className="text-2xl font-bold text-parchment mt-6">
             {outcome.kind === "valid"
-              ? "Confirm your email"
+              ? t("verifyConfirmTitle")
               : outcome.kind === "expired"
-                ? "Verification link expired"
-                : "Invalid verification link"}
+                ? t("verifyExpiredTitle")
+                : t("verifyInvalidTitle")}
           </h1>
           <p className="text-sm text-parchment/60 mt-2">
             {outcome.kind === "valid"
-              ? "One more click to finish securing your NewCoworker account."
+              ? t("verifyConfirmBlurb")
               : outcome.kind === "expired"
-                ? "Verification links are valid for 7 days. Sign in and request a fresh one from the dashboard banner."
-                : "This link doesn't look right. Sign in and request a fresh verification email from your dashboard."}
+                ? t("verifyExpiredBlurb")
+                : t("verifyInvalidBlurb")}
           </p>
         </div>
 
@@ -94,7 +96,7 @@ export default async function VerifyEmailPage({ searchParams }: Props) {
               href="/login"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-6 py-2.5 text-sm font-semibold hover:bg-opacity-90 transition-colors"
             >
-              Sign in
+              {t("signIn")}
             </Link>
           </Card>
         )}

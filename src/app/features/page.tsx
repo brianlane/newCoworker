@@ -23,6 +23,7 @@ import {
   Workflow,
   Zap
 } from "lucide-react";
+import { getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import {
@@ -34,261 +35,110 @@ import {
 } from "@/components/marketing/sections";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
-export const metadata: Metadata = {
-  title: "Features",
-  description:
-    "Everything your AI coworker does: 24/7 call answering, appointment booking, SMS & RCS messaging, instant Meta lead capture, AI call summaries, analytics, automated workflows, and 8,000+ integrations.",
-  alternates: { canonical: "/features" },
-  openGraph: {
-    title: "Features | New Coworker",
-    description:
-      "24/7 call answering, appointment booking, SMS & RCS, Meta lead capture, AI summaries, analytics, workflows, and 8,000+ integrations.",
-    url: "/features"
-  }
+export async function generateMetadata(): Promise<Metadata> {
+  const t = await getTranslations("marketing.featuresPage");
+  return {
+    title: t("metaTitle"),
+    description: t("metaDescription"),
+    alternates: { canonical: "/features" },
+    openGraph: {
+      title: t("ogTitle"),
+      description: t("ogDescription"),
+      url: "/features"
+    }
+  };
+}
+
+type GroupDef = {
+  key: "voice" | "messaging" | "intelligence" | "automation" | "platform";
+  features: { key: string; Icon: Feature["Icon"] }[];
 };
 
-type FeatureGroup = {
-  eyebrow: string;
-  title: string;
-  subtitle: string;
-  features: Feature[];
-};
-
-const groups: FeatureGroup[] = [
+const GROUP_DEFS: GroupDef[] = [
   {
-    eyebrow: "Voice",
-    title: "Every call answered, every time",
-    subtitle:
-      "Your coworker answers with human-level conversation, books appointments mid-call, and hands off to you when it matters.",
+    key: "voice",
     features: [
-      {
-        title: "24/7 AI Call Answering",
-        description:
-          "Nights, weekends, holidays, and your busiest hours: every caller gets a real conversation, not voicemail.",
-        Icon: Phone
-      },
-      {
-        title: `Up to ${TIER_LIMITS.standard.maxConcurrentCalls} Concurrent Calls`,
-        description: `Your coworker holds up to ${TIER_LIMITS.standard.maxConcurrentCalls} conversations at once, so a busy morning never produces a busy signal.`,
-        Icon: PhoneIncoming
-      },
-      {
-        title: "Warm Call Transfers",
-        description:
-          "When a caller needs a human, the call is transferred to you or a teammate with context, so the caller never repeats themselves.",
-        Icon: PhoneForwarded
-      },
-      {
-        title: "Appointment Booking",
-        description:
-          "Connected to your Google or Microsoft calendar, your coworker finds open slots and books them during the call.",
-        Icon: CalendarCheck
-      },
-      {
-        title: "Lead Qualification",
-        description:
-          "Caller intent is understood within seconds; details are captured, qualified, and logged so follow-up is effortless.",
-        Icon: Users
-      },
-      {
-        title: "Bring Your Own Number",
-        description:
-          "Port your existing business number in, or use the dedicated number.",
-        Icon: Smartphone
-      }
+      { key: "answering", Icon: Phone },
+      { key: "concurrent", Icon: PhoneIncoming },
+      { key: "transfers", Icon: PhoneForwarded },
+      { key: "booking", Icon: CalendarCheck },
+      { key: "qualification", Icon: Users },
+      { key: "byon", Icon: Smartphone }
     ]
   },
   {
-    eyebrow: "Messaging",
-    title: "Texts that never sit unread",
-    subtitle:
-      "Two-way SMS and RCS messaging, handled by the same coworker that knows every caller.",
+    key: "messaging",
     features: [
-      {
-        title: "Two-Way SMS",
-        description:
-          "Customers text your business number and get useful, on-brand replies immediately, day or night.",
-        Icon: MessageSquareText
-      },
-      {
-        title: "RCS Messaging",
-        description:
-          "Texts delivered through a Google-verified sender with read receipts and rich formatting, with automatic SMS fallback from your business number.",
-        Icon: MessagesSquare
-      },
-      {
-        title: "Texts During Calls",
-        description:
-          "Your coworker can text a caller a link, address, or booking confirmation while still on the phone with them.",
-        Icon: Zap
-      },
-      {
-        title: "Missed-Call Auto-Text",
-        description:
-          "If you fail to answer a warm transfer, the caller instantly gets a text so the lead never goes cold.",
-        Icon: PhoneForwarded
-      },
-      {
-        title: "Scheduled Texts & Templates",
-        description:
-          "Queue texts for the right moment and keep your best messages as reusable saved templates.",
-        Icon: AlarmClockCheck
-      },
-      {
-        title: "Email Handling",
-        description:
-          "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too.",
-        Icon: Mail
-      }
+      { key: "sms", Icon: MessageSquareText },
+      { key: "rcs", Icon: MessagesSquare },
+      { key: "duringCalls", Icon: Zap },
+      { key: "missedCall", Icon: PhoneForwarded },
+      { key: "scheduled", Icon: AlarmClockCheck },
+      { key: "email", Icon: Mail }
     ]
   },
   {
-    eyebrow: "Intelligence",
-    title: "Know what happened without listening to every call",
-    subtitle:
-      "Summaries, sentiment, analytics, and a permanent memory that compounds with every conversation.",
+    key: "intelligence",
     features: [
-      {
-        title: "AI Call Summaries",
-        description:
-          "Every call lands on your dashboard with a concise AI summary: what the caller wanted and what happened.",
-        Icon: Sparkles
-      },
-      {
-        title: "Caller Sentiment",
-        description:
-          "See at a glance whether callers left happy, neutral, or frustrated, so you know where to step in.",
-        Icon: Users
-      },
-      {
-        title: "Analytics Dashboard",
-        description:
-          "Call trends, peak hours, and answer rate: the numbers that show whether opportunities are being captured.",
-        Icon: BarChart3
-      },
-      {
-        title: "Missed-Call Spike Alerts",
-        description:
-          "Get alerted when callers are being turned away, before a busy day turns into lost revenue.",
-        Icon: Bell
-      },
-      {
-        title: "Permanent Memory",
-        description:
-          "Lossless, hierarchical memory of your business and customers. Context builds forever instead of resetting per chat.",
-        Icon: Brain
-      },
-      {
-        title: "Website Knowledge",
-        description:
-          "Point your coworker at your website and it learns your services, pricing, and policies automatically.",
-        Icon: Globe
-      }
+      { key: "summaries", Icon: Sparkles },
+      { key: "sentiment", Icon: Users },
+      { key: "analytics", Icon: BarChart3 },
+      { key: "alerts", Icon: Bell },
+      { key: "memory", Icon: Brain },
+      { key: "website", Icon: Globe }
     ]
   },
   {
-    eyebrow: "Automation",
-    title: "Workflows that run your follow-up for you",
-    subtitle:
-      "AiFlows connect triggers to actions across calls, texts, email, and ad leads, plus real browser skills for everything else.",
+    key: "automation",
     features: [
-      {
-        title: "Instant Meta Lead Capture",
-        description:
-          "Facebook and Instagram lead ads flow straight to your coworker: the lead is texted back within seconds, filed as a customer, and you get the summary.",
-        Icon: Zap
-      },
-      {
-        title: "AiFlows",
-        description:
-          "Automated workflows that reply to texts and emails, follow up with leads on schedule (daily digests, weekly check-ins, or the moment a trigger fires), and route work to your team.",
-        Icon: Workflow
-      },
-      {
-        title: "Outbound Calls",
-        description:
-          "Your coworker can place scheduled outbound calls (reminders, confirmations, and follow-ups) on your behalf.",
-        Icon: Phone
-      },
-      {
-        title: "Browser Skills",
-        description:
-          "It can operate real websites: updating CRMs, checking portals, and completing forms, even behind logins.",
-        Icon: Globe
-      },
-      {
-        title: "Team Routing",
-        description:
-          "Offers and tasks route to the right teammate by SMS, with acceptance tracking built in.",
-        Icon: Users
-      },
-      {
-        title: "Owner Notifications",
-        description:
-          "Choose exactly which events reach you (by SMS, email, or dashboard) and when.",
-        Icon: Bell
-      }
+      { key: "metaLeads", Icon: Zap },
+      { key: "aiflows", Icon: Workflow },
+      { key: "outbound", Icon: Phone },
+      { key: "browser", Icon: Globe },
+      { key: "routing", Icon: Users },
+      { key: "notifications", Icon: Bell }
     ]
   },
   {
-    eyebrow: "Platform",
-    title: "A private platform, not a shared bot",
-    subtitle:
-      "Dedicated infrastructure per business, a full management dashboard, and compliance guardrails built in.",
+    key: "platform",
     features: [
-      {
-        title: "Dedicated Private Server",
-        description:
-          "Your AI coworker runs on its own dedicated server: isolated compute, per-business credentials, and consistent performance no shared bot can match.",
-        Icon: Server
-      },
-      {
-        title: "Your Dashboard",
-        description:
-          "Calls, messages, emails, memory, analytics, billing, and settings. One place, any device.",
-        Icon: LayoutDashboard
-      },
-      {
-        title: "Compliance Guardrails",
-        description:
-          "Industry guardrails, such as Fair Housing rules for real estate is just one example, are enforced in every conversation.",
-        Icon: ShieldCheck
-      },
-      {
-        title: "Deploy in Minutes",
-        description:
-          "Fully automated provisioning: server, phone number, email, and a trained coworker minutes after signup.",
-        Icon: Rocket
-      },
-      {
-        title: "Training & Memory Editing",
-        description:
-          "Review and edit what your coworker knows from the dashboard. Its knowledge is yours to shape.",
-        Icon: BookOpenCheck
-      },
-      {
-        title: "White-Glove Onboarding",
-        description:
-          "Optional setup and buildout packages where a specialist configures everything live with you.",
-        Icon: Users
-      }
+      { key: "server", Icon: Server },
+      { key: "dashboard", Icon: LayoutDashboard },
+      { key: "compliance", Icon: ShieldCheck },
+      { key: "deploy", Icon: Rocket },
+      { key: "training", Icon: BookOpenCheck },
+      { key: "whiteGlove", Icon: Users }
     ]
   }
 ];
 
-export default function FeaturesPage() {
+export default async function FeaturesPage() {
+  const t = await getTranslations("marketing.featuresPage");
+  const calls = TIER_LIMITS.standard.maxConcurrentCalls;
+
+  const groups = GROUP_DEFS.map((group) => ({
+    eyebrow: t(`${group.key}.eyebrow`),
+    title: t(`${group.key}.title`),
+    subtitle: t(`${group.key}.subtitle`),
+    features: group.features.map(({ key, Icon }) => ({
+      title: t(`${group.key}.${key}.title`, { calls }),
+      description: t(`${group.key}.${key}.description`, { calls }),
+      Icon
+    }))
+  }));
+
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
 
       <PageHero
-        eyebrow="Features"
+        eyebrow={t("heroEyebrow")}
         title={
           <>
-            One coworker. <span className="text-claw-green">Every job handled.</span>
+            {t("heroTitle")} <span className="text-claw-green">{t("heroHighlight")}</span>
           </>
         }
-        subtitle="Not a chatbot bolted onto a phone system, but a single AI employee that answers, texts, emails, books, remembers, and follows up."
+        subtitle={t("heroSubtitle")}
       />
 
       {groups.map((group) => (
@@ -299,9 +149,9 @@ export default function FeaturesPage() {
       ))}
 
       <CtaBanner
-        title="See it all live on your own number"
-        subtitle="Pick a plan and your coworker is answering within minutes, with a 30-day money-back guarantee."
-        ctaLabel="Get Started"
+        title={t("ctaTitle")}
+        subtitle={t("ctaSubtitle")}
+        ctaLabel={t("ctaLabel")}
         ctaHref="/onboard"
       />
 
