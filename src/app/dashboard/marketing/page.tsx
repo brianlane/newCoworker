@@ -21,6 +21,8 @@ import { CampaignsManager } from "@/components/dashboard/CampaignsManager";
 export const dynamic = "force-dynamic";
 
 const WEBHOOK_WINDOW_DAYS = 7;
+/** Newest-first fetch bound for the panel's source summary. */
+const WEBHOOK_SCAN_LIMIT = 500;
 
 /**
  * Last-N-days webhook deliveries, counted by the caller-supplied source
@@ -28,18 +30,30 @@ const WEBHOOK_WINDOW_DAYS = 7;
  * pipes are actually flowing. Module-level (not in the component body): the
  * clock read is impure and this is a server component, so the summarization
  * runs as plain data prep.
+ *
+ * `clipped`: the newest-first fetch filled its bound and even its OLDEST
+ * row is still inside the window — more in-window deliveries exist beyond
+ * the fetch, so the counts are floors. The panel renders them as "N+"
+ * with a note instead of silently underreporting (a big backlog import
+ * alone can exceed the bound).
  */
 function summarizeWebhookSources(
   logs: Array<{ created_at: string; payload: Record<string, unknown> }>
-): Array<[string, number]> {
+): { counts: Array<[string, number]>; clipped: boolean } {
   const windowStart = Date.now() - WEBHOOK_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const bySource = new Map<string, number>();
+  let oldestMs = Number.POSITIVE_INFINITY;
   for (const log of logs) {
-    if (Date.parse(log.created_at) < windowStart) continue;
+    const at = Date.parse(log.created_at);
+    if (at < oldestMs) oldestMs = at;
+    if (at < windowStart) continue;
     const source = String(log.payload?.source_label ?? "webhook");
     bySource.set(source, (bySource.get(source) ?? 0) + 1);
   }
-  return [...bySource.entries()].sort((a, b) => b[1] - a[1]);
+  return {
+    counts: [...bySource.entries()].sort((a, b) => b[1] - a[1]),
+    clipped: logs.length >= WEBHOOK_SCAN_LIMIT && oldestMs >= windowStart
+  };
 }
 
 export default async function MarketingPage() {
@@ -63,7 +77,7 @@ export default async function MarketingPage() {
         getMetaConnection(business.id, db).catch(() => null),
         listSystemLogs(
           business.id,
-          { source: "aiflow", search: "webhook_event_received", limit: 500 },
+          { source: "aiflow", search: "webhook_event_received", limit: WEBHOOK_SCAN_LIMIT },
           db
         ).catch(() => []),
         countContactsTagged(business.id, INSTAGRAM_PROSPECT_TAG, db).catch(() => 0)
@@ -71,7 +85,7 @@ export default async function MarketingPage() {
     : [null, [], 0];
 
   const metaActive = metaConnection?.status === "active" && metaConnection.is_active;
-  const sourceCounts = summarizeWebhookSources(webhookLogs);
+  const { counts: sourceCounts, clipped: sourcesClipped } = summarizeWebhookSources(webhookLogs);
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -136,16 +150,27 @@ export default async function MarketingPage() {
                 {sourceCounts.length === 0 ? (
                   <p className="mt-1 text-sm text-parchment/60">No deliveries yet</p>
                 ) : (
-                  <ul className="mt-1 space-y-0.5 text-sm text-parchment/80">
-                    {sourceCounts.slice(0, 4).map(([source, count]) => (
-                      <li key={source} className="flex items-baseline gap-2">
-                        <span className="truncate font-mono text-xs text-parchment/60">
-                          {source}
-                        </span>
-                        <span>{count.toLocaleString()}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <>
+                    <ul className="mt-1 space-y-0.5 text-sm text-parchment/80">
+                      {sourceCounts.slice(0, 4).map(([source, count]) => (
+                        <li key={source} className="flex items-baseline gap-2">
+                          <span className="truncate font-mono text-xs text-parchment/60">
+                            {source}
+                          </span>
+                          <span>
+                            {count.toLocaleString()}
+                            {sourcesClipped ? "+" : ""}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    {sourcesClipped ? (
+                      <p className="mt-1 text-[11px] text-parchment/45">
+                        Busy week — counting the most recent {WEBHOOK_SCAN_LIMIT} deliveries,
+                        so these are at-least numbers.
+                      </p>
+                    ) : null}
+                  </>
                 )}
                 <Link
                   href="/dashboard/aiflows/guides/instagram-leads"
