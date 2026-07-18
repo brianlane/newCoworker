@@ -26,7 +26,14 @@ export async function POST(request: Request): Promise<Response> {
     const result = await processSocialPostSweep();
     const durationMs = Date.now() - startedAt;
     // Quiet minutes (nothing due, nothing stuck) stay unlogged.
-    if (result.promoted || result.published || result.failed || result.staled || result.errors.length) {
+    if (
+      result.promoted ||
+      result.published ||
+      result.failed ||
+      result.staled ||
+      result.stillPreparing ||
+      result.errors.length
+    ) {
       logger.info("social-post-sweep: summary", { ...result, durationMs });
     }
     return successResponse({ ...result, durationMs });

@@ -44,12 +44,24 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 /** A publish stuck this long is a crashed sweep, not a slow Graph call. */
 export const SOCIAL_PUBLISH_STALE_MINUTES = 15;
 
+/**
+ * Container readiness polling: Meta downloads `image_url` asynchronously,
+ * so a fresh container is often IN_PROGRESS — publishing then fails even
+ * with a valid image. Poll status_code a few times before media_publish;
+ * a container still preparing after the last check stays `publishing` and
+ * the stale pass completes it (FINISHED → publish then, see below).
+ */
+export const CONTAINER_READY_ATTEMPTS = 4;
+export const CONTAINER_READY_DELAY_MS = 4000;
+
 export type SocialSweepResult = {
   promoted: number;
   published: number;
   failed: number;
   /** Stuck `publishing` rows dead-lettered this pass. */
   staled: number;
+  /** Containers still preparing at pass end — completed by a later pass. */
+  stillPreparing: number;
   errors: Array<{ postId: string; message: string }>;
 };
 
@@ -61,12 +73,14 @@ export type SocialSweepDeps = {
   containerStatus?: typeof getInstagramContainerStatus;
   loadConnection?: typeof getMetaConnection;
   now?: () => Date;
+  /** Injectable readiness-poll delay (tests run instantly). */
+  sleep?: (ms: number) => Promise<void>;
 };
 
 type GraphDeps = Required<
   Pick<
     SocialSweepDeps,
-    "createContainer" | "publishMedia" | "containerStatus" | "loadConnection"
+    "createContainer" | "publishMedia" | "containerStatus" | "loadConnection" | "sleep"
   >
 >;
 
@@ -74,7 +88,9 @@ type PublishOutcome =
   | { kind: "published" }
   | { kind: "failed"; detail: string }
   /** A concurrent resolver settled the row first — count nothing. */
-  | { kind: "lost" };
+  | { kind: "lost" }
+  /** Container still preparing — row stays `publishing` for a later pass. */
+  | { kind: "preparing" };
 
 /**
  * Stamp a promoted post's outcome, guarded on it still being `publishing`:
@@ -105,6 +121,7 @@ async function publishOne(
 ): Promise<PublishOutcome> {
   let failure = "";
   let igMediaId = "";
+  let preparing = false;
   try {
     const connection: MetaConnectionRow | null = await deps.loadConnection(
       post.business_id,
@@ -130,15 +147,36 @@ async function publishOne(
       // point is interrupted (crash, failed outcome write), the stale sweep
       // can ask Meta whether the container went live instead of guessing.
       await patchSocialPost(post.business_id, post.id, { ig_creation_id: creationId }, db);
-      igMediaId = await deps.publishMedia(
-        connection.instagram_account_id,
-        connection.pageToken,
-        creationId
-      );
+      // Meta downloads the image asynchronously — publish only once the
+      // container reports FINISHED, polling briefly.
+      let status = "";
+      for (let attempt = 0; attempt < CONTAINER_READY_ATTEMPTS; attempt++) {
+        if (attempt > 0) await deps.sleep(CONTAINER_READY_DELAY_MS);
+        status = await deps.containerStatus(creationId, connection.pageToken);
+        if (status !== "IN_PROGRESS" && status !== "") break;
+      }
+      if (status === "ERROR" || status === "EXPIRED") {
+        failure = `Instagram could not prepare the media (container ${status}) — check that the image URL is a public JPEG/PNG, then re-schedule.`;
+      } else if (status === "FINISHED" || status === "PUBLISHED") {
+        // PUBLISHED without our publish call would mean another actor beat
+        // us to it — either way the post is (about to be) live.
+        if (status === "FINISHED") {
+          igMediaId = await deps.publishMedia(
+            connection.instagram_account_id,
+            connection.pageToken,
+            creationId
+          );
+        }
+      } else {
+        // Still IN_PROGRESS after the poll budget: leave the row
+        // `publishing` — the stale pass completes a FINISHED container.
+        preparing = true;
+      }
     }
   } catch (err) {
     failure = err instanceof Error ? err.message : String(err);
   }
+  if (preparing) return { kind: "preparing" };
 
   if (failure) {
     const won = await stampOutcome(db, post, {
@@ -159,7 +197,9 @@ async function publishOne(
 /**
  * Resolve one stuck `publishing` row. When its container id is on file and
  * the connection can be reached, Meta's container status_code answers "did
- * this go live?" — PUBLISHED stamps `published`; anything else (or no
+ * this go live?" — PUBLISHED stamps `published`; FINISHED (prepared but
+ * never published, e.g. a slow image download outlived the original pass)
+ * is safely publishable NOW with zero duplicate risk; anything else (or no
  * container/credentials) stamps `failed` with a duplicate-check warning.
  */
 async function resolveStalePost(
@@ -177,6 +217,20 @@ async function resolveStalePost(
           const won = await stampOutcome(db, post, {
             status: "published",
             published_at: nowIso,
+            error_detail: null
+          });
+          return won ? "published" : "lost";
+        }
+        if (status === "FINISHED" && connection.instagram_account_id) {
+          const igMediaId = await deps.publishMedia(
+            connection.instagram_account_id,
+            connection.pageToken,
+            post.ig_creation_id
+          );
+          const won = await stampOutcome(db, post, {
+            status: "published",
+            published_at: nowIso,
+            ig_media_id: igMediaId,
             error_detail: null
           });
           return won ? "published" : "lost";
@@ -214,14 +268,16 @@ export async function processSocialPostSweep(
   const containerStatus = deps.containerStatus ?? getInstagramContainerStatus;
   const loadConnection = deps.loadConnection ?? getMetaConnection;
   const now = deps.now ?? (() => new Date());
+  const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   /* c8 ignore stop */
-  const graph: GraphDeps = { createContainer, publishMedia, containerStatus, loadConnection };
+  const graph: GraphDeps = { createContainer, publishMedia, containerStatus, loadConnection, sleep };
 
   const result: SocialSweepResult = {
     promoted: 0,
     published: 0,
     failed: 0,
     staled: 0,
+    stillPreparing: 0,
     errors: []
   };
 
@@ -269,6 +325,8 @@ export async function processSocialPostSweep(
         result.errors.push({ postId: post.id, message: outcome.detail });
       } else if (outcome.kind === "published") {
         result.published += 1;
+      } else if (outcome.kind === "preparing") {
+        result.stillPreparing += 1;
       }
       // "lost": a concurrent resolver settled the row — nothing to count.
     } catch (err) {

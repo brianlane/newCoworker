@@ -22,6 +22,8 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  CONTAINER_READY_ATTEMPTS,
+  CONTAINER_READY_DELAY_MS,
   processSocialPostSweep,
   SOCIAL_PUBLISH_STALE_MINUTES
 } from "@/lib/social/publish";
@@ -46,6 +48,7 @@ const createContainer = vi.fn();
 const publishMedia = vi.fn();
 const containerStatus = vi.fn();
 const loadConnection = vi.fn();
+const sleep = vi.fn(async () => {});
 
 // The sweep only reads client/now from deps; the db mock is never dialed.
 const db = {} as never;
@@ -96,6 +99,7 @@ function deps() {
     publishMedia,
     containerStatus,
     loadConnection,
+    sleep,
     now: () => NOW
   };
 }
@@ -108,7 +112,7 @@ beforeEach(() => {
   transition.mockResolvedValue(true);
   loadConnection.mockResolvedValue(connection());
   createContainer.mockResolvedValue("container-1");
-  containerStatus.mockResolvedValue("");
+  containerStatus.mockResolvedValue("FINISHED");
   publishMedia.mockResolvedValue("media-9");
 });
 
@@ -140,6 +144,9 @@ describe("processSocialPostSweep — publish", () => {
     expect(patch.mock.invocationCallOrder[0]).toBeLessThan(
       publishMedia.mock.invocationCallOrder[0]
     );
+    // Readiness confirmed (FINISHED) before publishing; no wait needed.
+    expect(containerStatus).toHaveBeenCalledWith("container-1", "page-tok");
+    expect(sleep).not.toHaveBeenCalled();
     expect(publishMedia).toHaveBeenCalledWith("ig-1", "page-tok", "container-1");
     // The outcome stamp is a GUARDED transition from `publishing`, so a
     // concurrent resolver can never flip a settled row (Bugbot db659cb1).
@@ -173,6 +180,55 @@ describe("processSocialPostSweep — publish", () => {
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0 });
     expect(result.errors).toEqual([]);
+  });
+
+  it("waits for a preparing container, publishing once it reports FINISHED", async () => {
+    listDue.mockResolvedValue([post()]);
+    containerStatus
+      .mockResolvedValueOnce("IN_PROGRESS")
+      .mockResolvedValueOnce("FINISHED");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ published: 1, stillPreparing: 0 });
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(sleep).toHaveBeenCalledWith(CONTAINER_READY_DELAY_MS);
+    expect(publishMedia).toHaveBeenCalled();
+  });
+
+  it("leaves a still-preparing container as `publishing` for a later pass", async () => {
+    listDue.mockResolvedValue([post()]);
+    containerStatus.mockResolvedValue("IN_PROGRESS");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 0, stillPreparing: 1 });
+    expect(containerStatus).toHaveBeenCalledTimes(CONTAINER_READY_ATTEMPTS);
+    expect(sleep).toHaveBeenCalledTimes(CONTAINER_READY_ATTEMPTS - 1);
+    expect(publishMedia).not.toHaveBeenCalled();
+    // No outcome stamp: only the scheduled→publishing claim ran.
+    expect(transition).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails a container Meta could not prepare (ERROR / EXPIRED)", async () => {
+    for (const status of ["ERROR", "EXPIRED"]) {
+      vi.clearAllMocks();
+      listDue.mockResolvedValue([post()]);
+      listStale.mockResolvedValue([]);
+      transition.mockResolvedValue(true);
+      patch.mockResolvedValue(undefined);
+      loadConnection.mockResolvedValue(connection());
+      createContainer.mockResolvedValue("container-1");
+      containerStatus.mockResolvedValue(status);
+      const result = await processSocialPostSweep(deps());
+      expect(result).toMatchObject({ failed: 1 });
+      expect(result.errors[0].message).toContain(status);
+      expect(publishMedia).not.toHaveBeenCalled();
+    }
+  });
+
+  it("treats a container that reports PUBLISHED pre-publish as already live", async () => {
+    listDue.mockResolvedValue([post()]);
+    containerStatus.mockResolvedValue("PUBLISHED");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ published: 1 });
+    expect(publishMedia).not.toHaveBeenCalled();
   });
 
   it("a lost claim (owner cancel / overlapping sweep) skips the post untouched", async () => {
@@ -304,6 +360,39 @@ describe("processSocialPostSweep — stale resolution", () => {
     );
   });
 
+  it("completes a FINISHED container that never reached media_publish — no duplicate risk", async () => {
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("FINISHED");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 0, published: 1 });
+    expect(publishMedia).toHaveBeenCalledWith("ig-1", "page-tok", "container-7");
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-old",
+      "publishing",
+      {
+        status: "published",
+        published_at: NOW.toISOString(),
+        ig_media_id: "media-9",
+        error_detail: null
+      },
+      db
+    );
+  });
+
+  it("cannot complete a FINISHED container without a linked IG account — fails honestly", async () => {
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("FINISHED");
+    loadConnection.mockResolvedValue(connection({ instagram_account_id: null }));
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 1, published: 0 });
+    expect(publishMedia).not.toHaveBeenCalled();
+  });
+
   it("counts nothing when a concurrent sweep settles the stuck row first", async () => {
     listStale.mockResolvedValue([
       post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
@@ -313,6 +402,20 @@ describe("processSocialPostSweep — stale resolution", () => {
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ staled: 0, published: 0 });
     expect(result.errors).toEqual([]);
+
+    // Same for the FINISHED-completion stamp.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listStale.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+    ]);
+    loadConnection.mockResolvedValue(connection());
+    containerStatus.mockResolvedValue("FINISHED");
+    publishMedia.mockResolvedValue("media-9");
+    transition.mockResolvedValue(false);
+    const lostFinished = await processSocialPostSweep(deps());
+    expect(lostFinished).toMatchObject({ staled: 0, published: 0 });
+    expect(lostFinished.errors).toEqual([]);
 
     // Same for a lost FAILED stamp on a container-less stuck row.
     vi.clearAllMocks();
