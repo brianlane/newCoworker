@@ -18,6 +18,7 @@ import {
   buildBadPhoneSteps,
   FLOW_CONFIGS
 } from "../../scripts/oneshot/add-bad-phone-agent-report";
+import { withResumeMarkerVar } from "../../supabase/functions/_shared/ai_flows/branching";
 
 /**
  * The bad-phone-report pattern against the REAL worker: after a
@@ -158,7 +159,13 @@ async function unclaimLikeWebhook(businessId: string, from: string): Promise<str
         respond_by_at: null,
         claimed_at: null,
         earliest_claim_at: null,
-        context: { ...(row.context ?? {}), routing },
+        // Like the real webhook: the rewind moves current_step outside the
+        // worker's loop, so the resume marker must follow (or a stale wait
+        // marker would relocate the resume right back to the parked wait).
+        context: withResumeMarkerVar(
+          { ...(row.context ?? {}), routing },
+          typeof routing.route_step_id === "string" ? routing.route_step_id : null
+        ),
         updated_at: new Date().toISOString()
       })
       .eq("id", row.id)

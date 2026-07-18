@@ -29,7 +29,7 @@
  * deliberately left alone: an approval prompt or live teammate offer is
  * mid-conversation state a background jump must not yank away.
  */
-import { flattenSteps } from "./branching.ts";
+import { RESUME_STEP_ID_VAR, flattenSteps } from "./branching.ts";
 import type { FlowStep, GoalEvent, GoalEventKind } from "./types.ts";
 
 /** Skip reason recorded on steps a goal jump short-circuited. */
@@ -231,7 +231,15 @@ async function jumpRunToGoal(
   };
   const nextContext = {
     ...(run.context ?? {}),
-    vars: { ...prevVars, [goalReachedVar(goalStep.id)]: event.kind, ...markerVars },
+    vars: {
+      ...prevVars,
+      [goalReachedVar(goalStep.id)]: event.kind,
+      ...markerVars,
+      // The jump moves current_step outside the worker's loop, so refresh the
+      // resume marker to the goal step — a stale marker would relocate the
+      // next claim back to wherever the run previously parked.
+      [RESUME_STEP_ID_VAR]: goalStep.id
+    },
     ...(run.status === "awaiting_reply"
       ? {
           waiting_reply: {

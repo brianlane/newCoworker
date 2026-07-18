@@ -97,18 +97,29 @@ export function smsLinkClicksCsv(
     toE164: string | null;
     flowId: string | null;
     runId: string | null;
+    /** Delivery-time preview/scanner fetch, not a human tap. */
+    likelyPrefetch: boolean;
   }>,
   clipped = false
 ): string {
   return serializeCsv([
-    ["clicked_at", "short_code", "destination_url", "recipient", "flow_id", "run_id"],
+    [
+      "clicked_at",
+      "short_code",
+      "destination_url",
+      "recipient",
+      "flow_id",
+      "run_id",
+      "likely_prefetch"
+    ],
     ...rows.map((r) => [
       r.clickedAt,
       r.shortCode,
       r.originalUrl,
       r.toE164 ?? "",
       r.flowId ?? "",
-      r.runId ?? ""
+      r.runId ?? "",
+      r.likelyPrefetch ? "yes" : "no"
     ]),
     ...(clipped ? [[CLIPPED_NOTE]] : [])
   ]);

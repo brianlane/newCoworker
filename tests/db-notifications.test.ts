@@ -3,6 +3,7 @@ import {
   insertNotification,
   getNotifications,
   getUnreadNotificationCount,
+  hasRecentNotificationForContact,
   markNotificationRead,
   markAllNotificationsRead,
   softDeleteNotification
@@ -139,6 +140,45 @@ describe("db/notifications", () => {
     const db = { ...mockDb(), limit };
     await getNotifications("biz-uuid-1", { unreadOnly: false }, db as never);
     expect(limit).toHaveBeenCalledWith(20);
+  });
+
+  it("hasRecentNotificationForContact: true when a sent alert exists in the window", async () => {
+    const gte = vi.fn().mockResolvedValue({ count: 1, error: null });
+    const db = { ...mockDb(), gte };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const recent = await hasRecentNotificationForContact(
+      "biz-uuid-1",
+      "link_click",
+      "+16478879033",
+      60 * 60 * 1000
+    );
+    expect(recent).toBe(true);
+    expect(db.eq).toHaveBeenCalledWith("payload->>to_e164", "+16478879033");
+    expect(db.eq).toHaveBeenCalledWith("kind", "link_click");
+    expect(db.eq).toHaveBeenCalledWith("status", "sent");
+  });
+
+  it("hasRecentNotificationForContact: false on zero/null count; explicit client honored", async () => {
+    const gte = vi.fn().mockResolvedValue({ count: 0, error: null });
+    const db = { ...mockDb(), gte };
+    expect(
+      await hasRecentNotificationForContact("b", "link_click", "+1", 1000, db as never)
+    ).toBe(false);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+
+    const gteNull = vi.fn().mockResolvedValue({ count: null, error: null });
+    const dbNull = { ...mockDb(), gte: gteNull };
+    expect(
+      await hasRecentNotificationForContact("b", "link_click", "+1", 1000, dbNull as never)
+    ).toBe(false);
+  });
+
+  it("hasRecentNotificationForContact throws on query error", async () => {
+    const gte = vi.fn().mockResolvedValue({ count: null, error: { message: "denied" } });
+    const db = { ...mockDb(), gte };
+    await expect(
+      hasRecentNotificationForContact("b", "link_click", "+1", 1000, db as never)
+    ).rejects.toThrow("hasRecentNotificationForContact: denied");
   });
 
   /**

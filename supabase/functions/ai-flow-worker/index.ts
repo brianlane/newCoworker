@@ -98,7 +98,13 @@ import {
   smsQuietDecision,
   timeWindowDecision
 } from "../_shared/ai_flows/quiet_hours.ts";
-import { flattenSteps, isOnActivePath } from "../_shared/ai_flows/branching.ts";
+import {
+  RESUME_STEP_ID_VAR,
+  flattenSteps,
+  isOnActivePath,
+  resolveResumeIndex,
+  resumeMarkerFor
+} from "../_shared/ai_flows/branching.ts";
 import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
 import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_mode.ts";
 import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
@@ -592,7 +598,63 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   // exactly def.steps, index for index.
   const flat = flattenSteps(def.steps);
 
-  let index = run.current_step;
+  // The flat cursor is only meaningful against the definition it was written
+  // for. Every park stamps the step ID it points at (RESUME_STEP_ID_VAR); if
+  // the flow was edited while this run waited, relocate to that step in the
+  // new layout instead of executing whatever now sits at the stale index
+  // (which once re-sent a lead the greeting + two nudges back-to-back).
+  const resumeMarker = scope.vars[RESUME_STEP_ID_VAR];
+  const resolvedIndex = resolveResumeIndex(
+    flat,
+    run.current_step,
+    typeof resumeMarker === "string" ? resumeMarker : null
+  );
+  if (resolvedIndex === null) {
+    // The step this run parked on no longer exists in the edited flow —
+    // stopping cleanly beats guessing (and re-sending) from a wrong index.
+    await updateRun(supabase, run.id, {
+      status: "canceled",
+      last_error:
+        "The flow was edited while this run was waiting and the step it parked on no longer exists, so the run was stopped to avoid sending the wrong messages.",
+      claimed_at: null
+    });
+    await telemetryRecord(supabase, "ai_flow_run_canceled_definition_changed", {
+      run_id: run.id,
+      business_id: run.business_id,
+      step_index: run.current_step
+    });
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_run_canceled_definition_changed",
+      message: "Run stopped: flow edited mid-run and its parked step was removed",
+      payload: { run_id: run.id, flow_id: run.flow_id, step_index: run.current_step }
+    });
+    return;
+  }
+  if (resolvedIndex !== run.current_step) {
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: "ai_flow_run_resume_remapped",
+      message: `Run resume relocated from step index ${run.current_step} to ${resolvedIndex} after a flow edit`,
+      payload: { run_id: run.id, flow_id: run.flow_id, from: run.current_step, to: resolvedIndex }
+    });
+  }
+
+  /**
+   * Stamp the step ID the given index points at into the run vars, so the
+   * `current_step` write that follows carries its own remap anchor. Must be
+   * called with the SAME index the write persists — a mismatched pair would
+   * relocate a resume onto an already-executed step.
+   */
+  const stampResumeMarker = (i: number) => {
+    scope.vars[RESUME_STEP_ID_VAR] = resumeMarkerFor(flat, i);
+  };
+
+  let index = resolvedIndex;
   while (index < flat.length) {
     const { step, branchPath } = flat[index];
     // Cooperative owner cancel: the dashboard "Stop this run" flips the row to
@@ -623,6 +685,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     if (branchPath.length > 0 && !isOnActivePath(branchPath, scope.vars)) {
       await recordStep(supabase, run, index, step, "skipped", { skipped: "branch_not_taken" });
       index += 1;
+      stampResumeMarker(index);
       await updateRun(supabase, run.id, {
         current_step: index,
         context: buildContext(scope, approval, routing)
@@ -681,6 +744,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           )
       });
       approval.options = gateOptions;
+      stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_approval",
         current_step: index,
@@ -749,6 +813,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       routing.route_step_index = index;
       // Persist the parked state BEFORE sending the offer so an inbound 1/2
       // reply can always be matched to this run (state before side effect).
+      stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_agent",
         current_step: index,
@@ -814,6 +879,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // the reply in context.vars[saveAs]. The timeout sweep
       // (resume_overdue_reply_waits) re-queues with the no_reply sentinel at
       // respond_by_at. Attempt giveback like defer — waiting is not a failure.
+      stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_reply",
         current_step: index,
@@ -871,6 +937,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // timeout sweep (resume_overdue_call_waits) re-queues with the
       // no_answer sentinel at respond_by_at. Attempt giveback like defer —
       // waiting on a live call is not a failure.
+      stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_call",
         current_step: index,
@@ -928,6 +995,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // runs whose earliest_claim_at is in the future. Give back the attempt
       // the claim charged (same as the paused-business defer) — waiting out
       // quiet hours is not a failure and must not drain any budget.
+      stampResumeMarker(index);
       const deferred = await updateRun(supabase, run.id, {
         status: "queued",
         current_step: index,
@@ -972,12 +1040,14 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       index += 1;
     }
+    stampResumeMarker(index);
     await updateRun(supabase, run.id, {
       current_step: index,
       context: buildContext(scope, approval, routing)
     });
   }
 
+  stampResumeMarker(index);
   const finished = await updateRun(supabase, run.id, {
     status: "done",
     current_step: index,
@@ -1228,6 +1298,10 @@ async function runStep(
       // in-place mutation semantics (persisted via context) are preserved.
       // `index` is the rewind target auto-assignment stamps as
       // route_step_index (offer mode stamps it later, at park time).
+      // The step ID is the edit-proof companion: webhook rewinds restore it
+      // as the resume marker so a rewound run relocates even after a flow
+      // edit shifted every index.
+      (routing as OfferRouting).route_step_id = step.id;
       return routeToTeamStep(supabase, run, scope, action, routing as OfferRouting, index);
     case "browse_action":
       return browseActionStep(supabase, run, index, scope, action);

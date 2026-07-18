@@ -73,7 +73,14 @@ const linkRow = {
 
 const flowRows = { data: [{ id: "flow-1", name: "Lead follow-up" }], error: null };
 const clickRows = {
-  data: [{ id: "c1", link_id: "link-1", clicked_at: "2026-07-17T19:25:00.000Z" }],
+  data: [
+    {
+      id: "c1",
+      link_id: "link-1",
+      clicked_at: "2026-07-17T19:25:00.000Z",
+      likely_prefetch: false
+    }
+  ],
   error: null
 };
 
@@ -478,7 +485,12 @@ describe("getSmsLinkStats", () => {
 
 describe("listLinkClickEventsForBusiness", () => {
   it("returns click rows joined to link metadata via the default client", async () => {
-    const straggler = { id: "c2", link_id: "link-gone", clicked_at: "2026-07-17T19:26:00.000Z" };
+    const straggler = {
+      id: "c2",
+      link_id: "link-gone",
+      clicked_at: "2026-07-17T19:26:00.000Z",
+      likely_prefetch: true
+    };
     const db = makeDb({
       sms_links: [
         builder({ data: [{ id: "link-1" }], error: null }),

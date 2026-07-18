@@ -280,56 +280,146 @@
         "eyebrow": "Voice",
         "title": "Every call answered, every time",
         "subtitle": "Your coworker answers with human-level conversation, books appointments mid-call, and hands off to you when it matters.",
-        "answering": { "title": "24/7 AI Call Answering", "description": "Nights, weekends, holidays, and your busiest hours: every caller gets a real conversation, not voicemail." },
-        "concurrent": { "title": "Up to {calls} Concurrent Calls", "description": "Your coworker holds up to {calls} conversations at once, so a busy morning never produces a busy signal." },
-        "transfers": { "title": "Warm Call Transfers", "description": "When a caller needs a human, the call is transferred to you or a teammate with context, so the caller never repeats themselves." },
-        "booking": { "title": "Appointment Booking", "description": "Connected to your Google or Microsoft calendar, your coworker finds open slots and books them during the call." },
-        "qualification": { "title": "Lead Qualification", "description": "Caller intent is understood within seconds; details are captured, qualified, and logged so follow-up is effortless." },
-        "byon": { "title": "Bring Your Own Number", "description": "Port your existing business number in, or use the dedicated number." }
+        "answering": {
+          "title": "24/7 AI Call Answering",
+          "description": "Nights, weekends, holidays, and your busiest hours: every caller gets a real conversation, not voicemail."
+        },
+        "concurrent": {
+          "title": "Up to {calls} Concurrent Calls",
+          "description": "Your coworker holds up to {calls} conversations at once, so a busy morning never produces a busy signal."
+        },
+        "transfers": {
+          "title": "Warm Call Transfers",
+          "description": "When a caller needs a human, the call is transferred to you or a teammate with context, so the caller never repeats themselves."
+        },
+        "booking": {
+          "title": "Appointment Booking",
+          "description": "Connected to your Google or Microsoft calendar, your coworker finds open slots and books them during the call."
+        },
+        "qualification": {
+          "title": "Lead Qualification",
+          "description": "Caller intent is understood within seconds; details are captured, qualified, and logged so follow-up is effortless."
+        },
+        "byon": {
+          "title": "Bring Your Own Number",
+          "description": "Port your existing business number in, or use the dedicated number."
+        }
       },
       "messaging": {
         "eyebrow": "Messaging",
         "title": "Texts that never sit unread",
         "subtitle": "Two-way SMS and RCS messaging, handled by the same coworker that knows every caller.",
-        "sms": { "title": "Two-Way SMS", "description": "Customers text your business number and get useful, on-brand replies immediately, day or night." },
-        "rcs": { "title": "RCS Messaging", "description": "Texts delivered through a Google-verified sender with read receipts and rich formatting, with automatic SMS fallback from your business number." },
-        "duringCalls": { "title": "Texts During Calls", "description": "Your coworker can text a caller a link, address, or booking confirmation while still on the phone with them." },
-        "missedCall": { "title": "Missed-Call Auto-Text", "description": "If you fail to answer a warm transfer, the caller instantly gets a text so the lead never goes cold." },
-        "scheduled": { "title": "Scheduled Texts & Templates", "description": "Queue texts for the right moment and keep your best messages as reusable saved templates." },
-        "email": { "title": "Email Handling", "description": "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too." }
+        "sms": {
+          "title": "Two-Way SMS",
+          "description": "Customers text your business number and get useful, on-brand replies immediately, day or night."
+        },
+        "rcs": {
+          "title": "RCS Messaging",
+          "description": "Texts delivered through a Google-verified sender with read receipts and rich formatting, with automatic SMS fallback from your business number."
+        },
+        "duringCalls": {
+          "title": "Texts During Calls",
+          "description": "Your coworker can text a caller a link, address, or booking confirmation while still on the phone with them."
+        },
+        "missedCall": {
+          "title": "Missed-Call Auto-Text",
+          "description": "If you fail to answer a warm transfer, the caller instantly gets a text so the lead never goes cold."
+        },
+        "scheduled": {
+          "title": "Scheduled Texts & Templates",
+          "description": "Queue texts for the right moment and keep your best messages as reusable saved templates."
+        },
+        "email": {
+          "title": "Email Handling",
+          "description": "A dedicated email address for your coworker. It reads, triages, and answers email in your voice too."
+        }
       },
       "intelligence": {
         "eyebrow": "Intelligence",
         "title": "Know what happened without listening to every call",
         "subtitle": "Summaries, sentiment, analytics, and a permanent memory that compounds with every conversation.",
-        "summaries": { "title": "AI Call Summaries", "description": "Every call lands on your dashboard with a concise AI summary: what the caller wanted and what happened." },
-        "sentiment": { "title": "Caller Sentiment", "description": "See at a glance whether callers left happy, neutral, or frustrated, so you know where to step in." },
-        "analytics": { "title": "Analytics Dashboard", "description": "Call trends, peak hours, and answer rate: the numbers that show whether opportunities are being captured." },
-        "alerts": { "title": "Missed-Call Spike Alerts", "description": "Get alerted when callers are being turned away, before a busy day turns into lost revenue." },
-        "memory": { "title": "Permanent Memory", "description": "Lossless, hierarchical memory of your business and customers. Context builds forever instead of resetting per chat." },
-        "website": { "title": "Website Knowledge", "description": "Point your coworker at your website and it learns your services, pricing, and policies automatically." }
+        "summaries": {
+          "title": "AI Call Summaries",
+          "description": "Every call lands on your dashboard with a concise AI summary: what the caller wanted and what happened."
+        },
+        "sentiment": {
+          "title": "Caller Sentiment",
+          "description": "See at a glance whether callers left happy, neutral, or frustrated, so you know where to step in."
+        },
+        "analytics": {
+          "title": "Analytics Dashboard",
+          "description": "Call trends, peak hours, and answer rate: the numbers that show whether opportunities are being captured."
+        },
+        "alerts": {
+          "title": "Missed-Call Spike Alerts",
+          "description": "Get alerted when callers are being turned away, before a busy day turns into lost revenue."
+        },
+        "memory": {
+          "title": "Permanent Memory",
+          "description": "Lossless, hierarchical memory of your business and customers. Context builds forever instead of resetting per chat."
+        },
+        "website": {
+          "title": "Website Knowledge",
+          "description": "Point your coworker at your website and it learns your services, pricing, and policies automatically."
+        }
       },
       "automation": {
         "eyebrow": "Automation",
         "title": "Workflows that run your follow-up for you",
         "subtitle": "AiFlows connect triggers to actions across calls, texts, email, and ad leads, plus real browser skills for everything else.",
-        "metaLeads": { "title": "Instant Meta Lead Capture", "description": "Facebook and Instagram lead ads flow straight to your coworker: the lead is texted back within seconds, filed as a customer, and you get the summary." },
-        "aiflows": { "title": "AiFlows", "description": "Automated workflows that reply to texts and emails, follow up with leads on schedule (daily digests, weekly check-ins, or the moment a trigger fires), and route work to your team." },
-        "outbound": { "title": "Outbound Calls", "description": "Your coworker can place scheduled outbound calls (reminders, confirmations, and follow-ups) on your behalf." },
-        "browser": { "title": "Browser Skills", "description": "It can operate real websites: updating CRMs, checking portals, and completing forms, even behind logins." },
-        "routing": { "title": "Team Routing", "description": "Offers and tasks route to the right teammate by SMS, with acceptance tracking built in." },
-        "notifications": { "title": "Owner Notifications", "description": "Choose exactly which events reach you (by SMS, email, or dashboard) and when." }
+        "metaLeads": {
+          "title": "Instant Meta Lead Capture",
+          "description": "Facebook and Instagram lead ads flow straight to your coworker: the lead is texted back within seconds, filed as a customer, and you get the summary."
+        },
+        "aiflows": {
+          "title": "AiFlows",
+          "description": "Automated workflows that reply to texts and emails, follow up with leads on schedule (daily digests, weekly check-ins, or the moment a trigger fires), and route work to your team."
+        },
+        "outbound": {
+          "title": "Outbound Calls",
+          "description": "Your coworker can place scheduled outbound calls (reminders, confirmations, and follow-ups) on your behalf."
+        },
+        "browser": {
+          "title": "Browser Skills",
+          "description": "It can operate real websites: updating CRMs, checking portals, and completing forms, even behind logins."
+        },
+        "routing": {
+          "title": "Team Routing",
+          "description": "Offers and tasks route to the right teammate by SMS, with acceptance tracking built in."
+        },
+        "notifications": {
+          "title": "Owner Notifications",
+          "description": "Choose exactly which events reach you (by SMS, email, or dashboard) and when."
+        }
       },
       "platform": {
         "eyebrow": "Platform",
         "title": "A private platform, not a shared bot",
         "subtitle": "Dedicated infrastructure per business, a full management dashboard, and compliance guardrails built in.",
-        "server": { "title": "Dedicated Private Server", "description": "Your AI coworker runs on its own dedicated server: isolated compute, per-business credentials, and consistent performance no shared bot can match." },
-        "dashboard": { "title": "Your Dashboard", "description": "Calls, messages, emails, memory, analytics, billing, and settings. One place, any device." },
-        "compliance": { "title": "Compliance Guardrails", "description": "Industry guardrails, such as Fair Housing rules for real estate is just one example, are enforced in every conversation." },
-        "deploy": { "title": "Deploy in Minutes", "description": "Fully automated provisioning: server, phone number, email, and a trained coworker minutes after signup." },
-        "training": { "title": "Training & Memory Editing", "description": "Review and edit what your coworker knows from the dashboard. Its knowledge is yours to shape." },
-        "whiteGlove": { "title": "White-Glove Onboarding", "description": "Optional setup and buildout packages where a specialist configures everything live with you." }
+        "server": {
+          "title": "Dedicated Private Server",
+          "description": "Your AI coworker runs on its own dedicated server: isolated compute, per-business credentials, and consistent performance no shared bot can match."
+        },
+        "dashboard": {
+          "title": "Your Dashboard",
+          "description": "Calls, messages, emails, memory, analytics, billing, and settings. One place, any device."
+        },
+        "compliance": {
+          "title": "Compliance Guardrails",
+          "description": "Industry guardrails, such as Fair Housing rules for real estate is just one example, are enforced in every conversation."
+        },
+        "deploy": {
+          "title": "Deploy in Minutes",
+          "description": "Fully automated provisioning: server, phone number, email, and a trained coworker minutes after signup."
+        },
+        "training": {
+          "title": "Training & Memory Editing",
+          "description": "Review and edit what your coworker knows from the dashboard. Its knowledge is yours to shape."
+        },
+        "whiteGlove": {
+          "title": "White-Glove Onboarding",
+          "description": "Optional setup and buildout packages where a specialist configures everything live with you."
+        }
       },
       "ctaTitle": "See it all live on your own number",
       "ctaSubtitle": "Pick a plan and your coworker is answering within minutes, with a 30-day money-back guarantee.",
@@ -399,10 +489,22 @@
       "storyP3": "And because a coworker knows things a vendor never should, we made privacy the foundation: your business is strictly isolated from every other, business stays your business, and your coworker's memory works for you alone.",
       "principlesEyebrow": "What we believe",
       "principlesTitle": "The principles behind the product",
-      "privacy": { "title": "Privacy is architecture, not a policy page", "description": "Every business's AI coworker runs on its own dedicated server with its own credentials, and your data is isolated per business, never shared with other companies, and always yours to export. We built it this way because trust shouldn't require reading the fine print." },
-      "employee": { "title": "An employee, not a chatbot", "description": "Chatbots respond; coworkers act. Ours books appointments, sends follow-ups, updates records, transfers calls with context, and runs workflows, because small business owners need the work done, not another inbox to manage." },
-      "memory": { "title": "Memory that compounds", "description": "Typical AI tools forget everything between sessions. Your coworker keeps permanent, lossless memory of your business and customers, so every conversation makes the next one better." },
-      "stack": { "title": "Own the stack, own the promise", "description": "We run the infrastructure end to end (voice, messaging, memory, and automation), so when we promise your calls get answered, no third-party black box can break that promise." },
+      "privacy": {
+        "title": "Privacy is architecture, not a policy page",
+        "description": "Every business's AI coworker runs on its own dedicated server with its own credentials, and your data is isolated per business, never shared with other companies, and always yours to export. We built it this way because trust shouldn't require reading the fine print."
+      },
+      "employee": {
+        "title": "An employee, not a chatbot",
+        "description": "Chatbots respond; coworkers act. Ours books appointments, sends follow-ups, updates records, transfers calls with context, and runs workflows, because small business owners need the work done, not another inbox to manage."
+      },
+      "memory": {
+        "title": "Memory that compounds",
+        "description": "Typical AI tools forget everything between sessions. Your coworker keeps permanent, lossless memory of your business and customers, so every conversation makes the next one better."
+      },
+      "stack": {
+        "title": "Own the stack, own the promise",
+        "description": "We run the infrastructure end to end (voice, messaging, memory, and automation), so when we promise your calls get answered, no third-party black box can break that promise."
+      },
       "contactPrompt": "Questions about the company, partnerships, or press?",
       "contactLink": "Get in touch",
       "ctaTitle": "Meet your first digital employee",
@@ -420,10 +522,22 @@
       "formTitle": "Send us a",
       "formTitleHighlight": "message",
       "formBody": "Whether you're evaluating plans, need help with setup or billing, or want a specialist to build everything out with you, use the form and we'll reply as quickly as possible. Most inquiries receive a response within 24 hours.",
-      "support": { "title": "Support", "description": "Existing customers get a human reply. Standard plans get priority handling; white-glove customers have a 30-day priority call & video line." },
-      "enterprise": { "title": "Enterprise sales", "description": "Multi-location, agency, white-label, or custom compliance needs? Tell us about your business and we'll put a proposal together." },
-      "whiteGlove": { "title": "White-glove onboarding", "description": "Want a specialist to set everything up live with you? Porting, training, and custom workflow buildout included." },
-      "everythingElse": { "title": "Everything else", "description": "Partnerships, press, or a question that doesn't fit a box. We read it all." },
+      "support": {
+        "title": "Support",
+        "description": "Existing customers get a human reply. Standard plans get priority handling; white-glove customers have a 30-day priority call & video line."
+      },
+      "enterprise": {
+        "title": "Enterprise sales",
+        "description": "Multi-location, agency, white-label, or custom compliance needs? Tell us about your business and we'll put a proposal together."
+      },
+      "whiteGlove": {
+        "title": "White-glove onboarding",
+        "description": "Want a specialist to set everything up live with you? Porting, training, and custom workflow buildout included."
+      },
+      "everythingElse": {
+        "title": "Everything else",
+        "description": "Partnerships, press, or a question that doesn't fit a box. We read it all."
+      },
       "faqPrompt": "Looking for answers right now? The <faq>FAQ</faq> covers setup, billing, privacy, and porting, or see <pricing>plans and pricing</pricing>.",
       "subjectWhiteGlove": "White-glove onboarding",
       "subjectEnterprise": "Enterprise inquiry",
@@ -481,12 +595,30 @@
         "teaser": "Answer every buyer and seller call, qualify leads in seconds, and book showings straight onto your calendar, with Fair Housing guardrails built in.",
         "headline": "Never lose a listing lead to voicemail again",
         "subheadline": "Buyers call the first agent who answers. Your AI coworker picks up every call 24/7, qualifies the lead, books the showing, and texts the follow-up while you're at a closing.",
-        "u1": { "title": "Lead Qualification in Seconds", "description": "Every inquiry is qualified on the first call: buying or selling, timeline, pre-approval, and neighborhood, captured and logged before you even see the notification." },
-        "u2": { "title": "Showings Booked Mid-Call", "description": "Connected to your calendar, your coworker offers real open slots and books the showing while the caller is still excited." },
-        "u3": { "title": "After-Hours Coverage", "description": "Sunday open-house traffic and 9pm Zillow browsers get a live conversation, not a callback queue." },
-        "u4": { "title": "Instant Text Follow-Up", "description": "Missed a warm transfer during a showing? The caller gets an immediate text and the conversation continues over SMS." },
-        "u5": { "title": "Fair Housing Guardrails", "description": "FHA compliance rules are enforced in every conversation, protecting your license from a costly slip." },
-        "u6": { "title": "Transaction Follow-Ups", "description": "AiFlows chase the gap between contract and close: document reminders, milestone updates, and check-ins run themselves." },
+        "u1": {
+          "title": "Lead Qualification in Seconds",
+          "description": "Every inquiry is qualified on the first call: buying or selling, timeline, pre-approval, and neighborhood, captured and logged before you even see the notification."
+        },
+        "u2": {
+          "title": "Showings Booked Mid-Call",
+          "description": "Connected to your calendar, your coworker offers real open slots and books the showing while the caller is still excited."
+        },
+        "u3": {
+          "title": "After-Hours Coverage",
+          "description": "Sunday open-house traffic and 9pm Zillow browsers get a live conversation, not a callback queue."
+        },
+        "u4": {
+          "title": "Instant Text Follow-Up",
+          "description": "Missed a warm transfer during a showing? The caller gets an immediate text and the conversation continues over SMS."
+        },
+        "u5": {
+          "title": "Fair Housing Guardrails",
+          "description": "FHA compliance rules are enforced in every conversation, protecting your license from a costly slip."
+        },
+        "u6": {
+          "title": "Transaction Follow-Ups",
+          "description": "AiFlows chase the gap between contract and close: document reminders, milestone updates, and check-ins run themselves."
+        },
         "day1": "A seller calls about listing their home. Your coworker qualifies the lead, captures the address, and books a listing consult for Thursday.",
         "day2": "You're in a showing. Two buyer calls come in at once. Both answered, both qualified, one showing booked.",
         "day3": "A buyer texts asking about a property's HOA. Your coworker answers from your website knowledge and offers a viewing slot.",
@@ -499,12 +631,30 @@
         "teaser": "Plumbers, electricians, HVAC: win the job by being the company that actually answers, and let auto-texts rescue every missed warm transfer call.",
         "headline": "The company that answers wins the job",
         "subheadline": "Homeowners call down the list until someone picks up. Your AI coworker answers every call, quotes your availability, books the appointment, and texts confirmations, even while your crew is on a roof.",
-        "u1": { "title": "Every Emergency Call Answered", "description": "Burst pipe at midnight? Your coworker answers, captures the details, and escalates to you by text or warm transfer." },
-        "u2": { "title": "Jobs Booked on the Spot", "description": "Real calendar slots offered mid-call, so the homeowner never has time to call your competitor." },
-        "u3": { "title": "Missed-Call Rescue", "description": "On a ladder with both hands full? The caller instantly gets a text and the job is saved, not lost from an unanswered forwarded call." },
-        "u4": { "title": "Appointment Reminders", "description": "Scheduled texts confirm tomorrow's window and cut no-shows without you lifting a finger." },
-        "u5": { "title": "Team Dispatch", "description": "Route jobs to the right tech by SMS with acceptance tracking. First to accept gets the job." },
-        "u6": { "title": "Call Summaries & Sentiment", "description": "Skim every conversation's AI summary on your dashboard at the end of the day. No voicemail box to dig through." },
+        "u1": {
+          "title": "Every Emergency Call Answered",
+          "description": "Burst pipe at midnight? Your coworker answers, captures the details, and escalates to you by text or warm transfer."
+        },
+        "u2": {
+          "title": "Jobs Booked on the Spot",
+          "description": "Real calendar slots offered mid-call, so the homeowner never has time to call your competitor."
+        },
+        "u3": {
+          "title": "Missed-Call Rescue",
+          "description": "On a ladder with both hands full? The caller instantly gets a text and the job is saved, not lost from an unanswered forwarded call."
+        },
+        "u4": {
+          "title": "Appointment Reminders",
+          "description": "Scheduled texts confirm tomorrow's window and cut no-shows without you lifting a finger."
+        },
+        "u5": {
+          "title": "Team Dispatch",
+          "description": "Route jobs to the right tech by SMS with acceptance tracking. First to accept gets the job."
+        },
+        "u6": {
+          "title": "Call Summaries & Sentiment",
+          "description": "Skim every conversation's AI summary on your dashboard at the end of the day. No voicemail box to dig through."
+        },
         "day1": "A homeowner calls about a dead water heater. Your coworker books the first available slot and texts the confirmation.",
         "day2": "Three calls land during a crawl-space job. All answered; two booked; one warm-transferred to you as urgent.",
         "day3": "Tomorrow's customers get automatic reminder texts with their arrival windows.",
@@ -516,12 +666,30 @@
         "teaser": "Fill the schedule and stop losing patients to hold music: appointment booking, reminders, and after-hours answering on private infrastructure.",
         "headline": "Every patient call answered. Every chair filled.",
         "subheadline": "Front desks get slammed; patients hang up. Your AI coworker answers every call, books and confirms appointments, and handles after-hours questions, all on infrastructure dedicated to your practice.",
-        "u1": { "title": "Appointment Scheduling", "description": "New and returning patients book real slots on your calendar during the call. No callback list." },
-        "u2": { "title": "No-Show Reduction", "description": "Scheduled reminder texts confirm every appointment and re-book cancellations automatically." },
-        "u3": { "title": "After-Hours Answering", "description": "Evening and weekend callers get answers and next-day bookings instead of an answering-service invoice." },
-        "u4": { "title": "Overflow Coverage", "description": "When the front desk is helping a patient, overflow calls roll to your coworker instead of voicemail." },
-        "u5": { "title": "Private By Design", "description": "A dedicated server per practice, with patient conversations isolated per business and never shared." },
-        "u6": { "title": "Recall Campaigns", "description": "AiFlows text patients who are due for cleanings or follow-ups and book them straight onto the schedule." },
+        "u1": {
+          "title": "Appointment Scheduling",
+          "description": "New and returning patients book real slots on your calendar during the call. No callback list."
+        },
+        "u2": {
+          "title": "No-Show Reduction",
+          "description": "Scheduled reminder texts confirm every appointment and re-book cancellations automatically."
+        },
+        "u3": {
+          "title": "After-Hours Answering",
+          "description": "Evening and weekend callers get answers and next-day bookings instead of an answering-service invoice."
+        },
+        "u4": {
+          "title": "Overflow Coverage",
+          "description": "When the front desk is helping a patient, overflow calls roll to your coworker instead of voicemail."
+        },
+        "u5": {
+          "title": "Private By Design",
+          "description": "A dedicated server per practice, with patient conversations isolated per business and never shared."
+        },
+        "u6": {
+          "title": "Recall Campaigns",
+          "description": "AiFlows text patients who are due for cleanings or follow-ups and book them straight onto the schedule."
+        },
         "day1": "Monday-morning rush: five calls in ten minutes. All answered; three appointments booked; two questions resolved.",
         "day2": "A patient cancels by text. Your coworker re-books them and offers the freed slot to the waitlist.",
         "day3": "An after-hours caller asks about insurance acceptance. Answered from your website knowledge, with a booking for Thursday.",
@@ -533,12 +701,30 @@
         "teaser": "Every potential client intake captured: after-hours answering, conflict-free scheduling, and instant follow-up texts that beat the firm across town.",
         "headline": "The first firm to respond gets the client",
         "subheadline": "Potential clients call several firms and retain the one that responds first. Your AI coworker answers every call, runs intake, books the consultation, and follows up by text, nights and weekends included.",
-        "u1": { "title": "Client Intake, Every Time", "description": "Matter type, urgency, and contact details captured on the first call and summarized to your dashboard." },
-        "u2": { "title": "Consultations Booked", "description": "Qualified callers book real consultation slots on your calendar before they hang up." },
-        "u3": { "title": "After-Hours Answering", "description": "Arrests, accidents, and disputes don't keep business hours. Your coworker answers when opposing counsel's firm doesn't." },
-        "u4": { "title": "Speed-to-Lead Texts", "description": "Every missed or after-hours forwarded caller gets an immediate text, keeping your firm first in mind." },
-        "u5": { "title": "Warm Transfers for Urgent Matters", "description": "Time-sensitive callers are transferred to you live, with the intake context already captured." },
-        "u6": { "title": "Private Infrastructure", "description": "A dedicated server per firm, with client conversations isolated per business and never shared." },
+        "u1": {
+          "title": "Client Intake, Every Time",
+          "description": "Matter type, urgency, and contact details captured on the first call and summarized to your dashboard."
+        },
+        "u2": {
+          "title": "Consultations Booked",
+          "description": "Qualified callers book real consultation slots on your calendar before they hang up."
+        },
+        "u3": {
+          "title": "After-Hours Answering",
+          "description": "Arrests, accidents, and disputes don't keep business hours. Your coworker answers when opposing counsel's firm doesn't."
+        },
+        "u4": {
+          "title": "Speed-to-Lead Texts",
+          "description": "Every missed or after-hours forwarded caller gets an immediate text, keeping your firm first in mind."
+        },
+        "u5": {
+          "title": "Warm Transfers for Urgent Matters",
+          "description": "Time-sensitive callers are transferred to you live, with the intake context already captured."
+        },
+        "u6": {
+          "title": "Private Infrastructure",
+          "description": "A dedicated server per firm, with client conversations isolated per business and never shared."
+        },
         "day1": "A potential PI client calls before the office opens. Intake runs, urgency is flagged, and a consult is booked for 11 AM.",
         "day2": "During a deposition, two calls are answered and triaged; one urgent matter is texted to you with a summary.",
         "day3": "A family-law inquiry after hours: intake captured, consultation booked, follow-up text sent.",
@@ -550,12 +736,30 @@
         "teaser": "Reservations taken, hours and menu questions answered, and catering leads captured, even during the dinner rush when nobody can reach the phone.",
         "headline": "Every table filled. Every call answered.",
         "subheadline": "During service, the phone loses to the kitchen every time. Your AI coworker answers every call, takes reservations, handles hours and menu questions, and captures catering inquiries while your staff stays with guests.",
-        "u1": { "title": "Reservations Without the Rush", "description": "Callers book real slots on your calendar mid-call, so a full dining room never costs you tomorrow's covers." },
-        "u2": { "title": "Hours, Menu & Allergy Questions", "description": "Your coworker answers from your website and business knowledge: hours, parking, gluten-free options, private dining." },
-        "u3": { "title": "Dinner-Rush Overflow", "description": "When the host stand is slammed, calls roll to your coworker instead of voicemail, and no reservation is lost." },
-        "u4": { "title": "Catering & Event Leads", "description": "Large-party and catering inquiries are qualified, captured, and summarized to your dashboard for follow-up." },
-        "u5": { "title": "Confirmation & Reminder Texts", "description": "Scheduled texts confirm reservations and cut no-shows without anyone working a call-back list." },
-        "u6": { "title": "Missed-Call Auto-Text", "description": "Any forwarded call that can't be answered gets an instant text, keeping the guest engaged until you're free." },
+        "u1": {
+          "title": "Reservations Without the Rush",
+          "description": "Callers book real slots on your calendar mid-call, so a full dining room never costs you tomorrow's covers."
+        },
+        "u2": {
+          "title": "Hours, Menu & Allergy Questions",
+          "description": "Your coworker answers from your website and business knowledge: hours, parking, gluten-free options, private dining."
+        },
+        "u3": {
+          "title": "Dinner-Rush Overflow",
+          "description": "When the host stand is slammed, calls roll to your coworker instead of voicemail, and no reservation is lost."
+        },
+        "u4": {
+          "title": "Catering & Event Leads",
+          "description": "Large-party and catering inquiries are qualified, captured, and summarized to your dashboard for follow-up."
+        },
+        "u5": {
+          "title": "Confirmation & Reminder Texts",
+          "description": "Scheduled texts confirm reservations and cut no-shows without anyone working a call-back list."
+        },
+        "u6": {
+          "title": "Missed-Call Auto-Text",
+          "description": "Any forwarded call that can't be answered gets an instant text, keeping the guest engaged until you're free."
+        },
         "day1": "A caller asks about weekend availability for a party of eight. Your coworker books it and texts the confirmation.",
         "day2": "Lunch rush: three calls arrive while every server is on the floor. All answered; two reservations, one to-go question.",
         "day3": "A catering inquiry for a 50-person office event is qualified and captured; you get the summary between seatings.",
@@ -567,12 +771,30 @@
         "teaser": "Whatever you run, if customers call and text it, your coworker answers it, books it, and follows it up, for less than an answering service.",
         "headline": "A full front office for less than an answering service",
         "subheadline": "Salons, gyms, shops, agencies: every business that loses customers to unanswered phones gets a 24/7 employee that answers, books, texts, and remembers every customer.",
-        "u1": { "title": "24/7 Answering", "description": "Every call answered in your business's voice, with your services, hours, and policies already learned." },
-        "u2": { "title": "Bookings & Reservations", "description": "Appointments booked straight onto your calendar while the customer is on the line." },
-        "u3": { "title": "Two-Way Texting", "description": "Customers text your number and get real answers, plus scheduled texts and saved templates for campaigns." },
-        "u4": { "title": "Customer Memory", "description": "Regulars are remembered: preferences, history, and past conversations inform every interaction." },
-        "u5": { "title": "Analytics & Alerts", "description": "See call trends and peak hours; get alerted when calls are being missed." },
-        "u6": { "title": "8,000+ Integrations", "description": "Zapier connects your coworker to the CRM, spreadsheet, or booking tool you already use." },
+        "u1": {
+          "title": "24/7 Answering",
+          "description": "Every call answered in your business's voice, with your services, hours, and policies already learned."
+        },
+        "u2": {
+          "title": "Bookings & Reservations",
+          "description": "Appointments booked straight onto your calendar while the customer is on the line."
+        },
+        "u3": {
+          "title": "Two-Way Texting",
+          "description": "Customers text your number and get real answers, plus scheduled texts and saved templates for campaigns."
+        },
+        "u4": {
+          "title": "Customer Memory",
+          "description": "Regulars are remembered: preferences, history, and past conversations inform every interaction."
+        },
+        "u5": {
+          "title": "Analytics & Alerts",
+          "description": "See call trends and peak hours; get alerted when calls are being missed."
+        },
+        "u6": {
+          "title": "8,000+ Integrations",
+          "description": "Zapier connects your coworker to the CRM, spreadsheet, or booking tool you already use."
+        },
         "day1": "A new customer calls asking about pricing. Answered from your website knowledge, then booked for Saturday.",
         "day2": "Lunch rush: three calls handled at once while you serve customers.",
         "day3": "A regular texts to reschedule. Done in one exchange, calendar updated.",
@@ -631,15 +853,42 @@
       "zapierExample": "Example: a new lead lands in your CRM → Zapier tells your coworker → the lead gets a personal text within seconds, and the reply is handled automatically.",
       "nativeEyebrow": "Native & platform",
       "nativeTitle": "Built-in connections, plus an API for everything else",
-      "claude": { "title": "Claude connector", "description": "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows all authenticated as you through OAuth, with permissions matching your dashboard role." },
-      "google": { "title": "Google Workspace", "description": "Calendar slot-finding and booking plus email follow-ups through your Google account, connected in two clicks." },
-      "microsoft": { "title": "Microsoft 365", "description": "The same calendar and email superpowers for Outlook and Microsoft 365 businesses." },
-      "zapier": { "title": "Zapier", "description": "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing. No code required." },
-      "api": { "title": "Public REST API", "description": "Per-business API keys let your systems send SMS, read events, and manage subscriptions programmatically." },
-      "webhooks": { "title": "Webhooks", "description": "Real-time REST hooks push calls, texts, and email events to any endpoint the moment they happen." },
-      "csv": { "title": "CSV Import & Export", "description": "Bring your contacts in and take your data out whenever you want. Your records are never locked in." },
-      "custom": { "title": "Custom Integrations", "description": "Point your coworker at your own internal tools and portals. It can browse and operate them like a person would." },
-      "keys": { "title": "Dashboard-Managed Keys", "description": "Create, rotate, and revoke API keys from the integrations page. Hashed at rest, capped per business." },
+      "claude": {
+        "title": "Claude connector",
+        "description": "Let Claude work with your coworker: look up contacts, read texts and call summaries, send messages, book appointments, and manage AiFlows all authenticated as you through OAuth, with permissions matching your dashboard role."
+      },
+      "google": {
+        "title": "Google Workspace",
+        "description": "Calendar slot-finding and booking plus email follow-ups through your Google account, connected in two clicks."
+      },
+      "microsoft": {
+        "title": "Microsoft 365",
+        "description": "The same calendar and email superpowers for Outlook and Microsoft 365 businesses."
+      },
+      "zapier": {
+        "title": "Zapier",
+        "description": "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing. No code required."
+      },
+      "api": {
+        "title": "Public REST API",
+        "description": "Per-business API keys let your systems send SMS, read events, and manage subscriptions programmatically."
+      },
+      "webhooks": {
+        "title": "Webhooks",
+        "description": "Real-time REST hooks push calls, texts, and email events to any endpoint the moment they happen."
+      },
+      "csv": {
+        "title": "CSV Import & Export",
+        "description": "Bring your contacts in and take your data out whenever you want. Your records are never locked in."
+      },
+      "custom": {
+        "title": "Custom Integrations",
+        "description": "Point your coworker at your own internal tools and portals. It can browse and operate them like a person would."
+      },
+      "keys": {
+        "title": "Dashboard-Managed Keys",
+        "description": "Create, rotate, and revoke API keys from the integrations page. Hashed at rest, capped per business."
+      },
       "devEyebrow": "For developers",
       "devTitle": "A real API, not a widget",
       "devBody": "Your coworker comes with per-business API keys managed from your dashboard. Send messages, read call and message events (with AI summaries), and subscribe webhook endpoints to real-time events.",
@@ -737,16 +986,56 @@
       "tableSubtitle": "GoHighLevel details reflect their published pricing and plan documentation as of July 2026. Where they're stronger, we say so.",
       "usColumn": "New Coworker",
       "themColumn": "GoHighLevel",
-      "row1": { "label": "What you're buying", "us": "An AI employee that answers, texts, books, and follows up on its own", "them": "A software toolbox (CRM, funnels, workflows) you configure and operate" },
-      "row2": { "label": "Setup", "us": "A 15-minute guided interview; live the same day, done-for-you", "them": "Agency + sub-account setup, phone/email wiring, workflow building which reviewers report weeks to feel comfortable" },
-      "row3": { "label": "24/7 AI call answering", "us": "Included on every plan, up to 10 concurrent calls on Standard", "them": "Voice AI available, but per-minute usage or the AI Employee add-on, configured by you" },
-      "row4": { "label": "Meta (Facebook/Instagram) lead capture", "us": "Guided setup; lead texted back in seconds and conversation handled end-to-end", "them": "Native integration into the CRM; you build the follow-up workflows yourself" },
-      "row5": { "label": "AI included in the price", "us": "All included conversation AI, voice AI, summaries, and workflows are the product", "them": "Extra: AI Employee is $97/mo per location (or metered per message/minute) on top of the plan" },
-      "row6": { "label": "Usage billing", "us": "Generous monthly quotas included; clear caps, no surprise per-message AI fees", "them": "SMS, email, voice, and premium AI are metered on top of the subscription" },
-      "row7": { "label": "Infrastructure", "us": "A dedicated private server per business — isolated compute and credentials", "them": "Shared multi-tenant SaaS" },
-      "row8": { "label": "Funnels, websites & courses", "us": "Not our product. We integrate with what you already use", "them": "Full builder suite included; genuinely strong here" },
-      "row9": { "label": "Agency white-labeling & resale", "us": "Enterprise white-label exists, but agencies aren't our focus", "them": "SaaS Mode resale is what GoHighLevel is built around" },
-      "row10": { "label": "Who it's really for", "us": "A business owner who wants outcomes without becoming a software operator", "them": "Agencies managing many clients, or owners happy to build and maintain systems" },
+      "row1": {
+        "label": "What you're buying",
+        "us": "An AI employee that answers, texts, books, and follows up on its own",
+        "them": "A software toolbox (CRM, funnels, workflows) you configure and operate"
+      },
+      "row2": {
+        "label": "Setup",
+        "us": "A 15-minute guided interview; live the same day, done-for-you",
+        "them": "Agency + sub-account setup, phone/email wiring, workflow building which reviewers report weeks to feel comfortable"
+      },
+      "row3": {
+        "label": "24/7 AI call answering",
+        "us": "Included on every plan, up to 10 concurrent calls on Standard",
+        "them": "Voice AI available, but per-minute usage or the AI Employee add-on, configured by you"
+      },
+      "row4": {
+        "label": "Meta (Facebook/Instagram) lead capture",
+        "us": "Guided setup; lead texted back in seconds and conversation handled end-to-end",
+        "them": "Native integration into the CRM; you build the follow-up workflows yourself"
+      },
+      "row5": {
+        "label": "AI included in the price",
+        "us": "All included conversation AI, voice AI, summaries, and workflows are the product",
+        "them": "Extra: AI Employee is $97/mo per location (or metered per message/minute) on top of the plan"
+      },
+      "row6": {
+        "label": "Usage billing",
+        "us": "Generous monthly quotas included; clear caps, no surprise per-message AI fees",
+        "them": "SMS, email, voice, and premium AI are metered on top of the subscription"
+      },
+      "row7": {
+        "label": "Infrastructure",
+        "us": "A dedicated private server per business — isolated compute and credentials",
+        "them": "Shared multi-tenant SaaS"
+      },
+      "row8": {
+        "label": "Funnels, websites & courses",
+        "us": "Not our product. We integrate with what you already use",
+        "them": "Full builder suite included; genuinely strong here"
+      },
+      "row9": {
+        "label": "Agency white-labeling & resale",
+        "us": "Enterprise white-label exists, but agencies aren't our focus",
+        "them": "SaaS Mode resale is what GoHighLevel is built around"
+      },
+      "row10": {
+        "label": "Who it's really for",
+        "us": "A business owner who wants outcomes without becoming a software operator",
+        "them": "Agencies managing many clients, or owners happy to build and maintain systems"
+      },
       "diffEyebrow": "The real difference",
       "diffTitle": "Tools wait for you. Employees don't.",
       "themCardTitle": "With GoHighLevel, a Meta lead means…",
@@ -1228,6 +1517,9 @@
       "languageOwnerSet": "Set by you",
       "languageEnglish": "English",
       "languageSpanish": "Spanish"
+    },
+    "trackedLinks": {
+      "previewFetch": "preview fetch"
     }
   },
   "admin": {

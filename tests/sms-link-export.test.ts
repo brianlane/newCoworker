@@ -55,7 +55,7 @@ describe("smsLinksCsv null fields", () => {
 });
 
 describe("smsLinkClicksCsv", () => {
-  it("writes one row per click event", () => {
+  it("writes one row per click event with the prefetch flag", () => {
     const csv = smsLinkClicksCsv([
       {
         clickedAt: "2026-07-17T19:25:00.000Z",
@@ -63,7 +63,17 @@ describe("smsLinkClicksCsv", () => {
         originalUrl: "https://calendly.com/kyp/strategy",
         toE164: "+16478879033",
         flowId: "flow-1",
-        runId: "run-1"
+        runId: "run-1",
+        likelyPrefetch: false
+      },
+      {
+        clickedAt: "2026-07-17T19:25:05.000Z",
+        shortCode: "36q72wrm",
+        originalUrl: "https://calendly.com/kyp/strategy",
+        toE164: "+16478879033",
+        flowId: "flow-1",
+        runId: "run-1",
+        likelyPrefetch: true
       }
     ]);
     const parsed = parseCsv(csv);
@@ -71,6 +81,8 @@ describe("smsLinkClicksCsv", () => {
     if (!parsed.ok) return;
     expect(parsed.rows[0]?.short_code).toBe("36q72wrm");
     expect(parsed.rows[0]?.run_id).toBe("run-1");
+    expect(parsed.rows[0]?.likely_prefetch).toBe("no");
+    expect(parsed.rows[1]?.likely_prefetch).toBe("yes");
   });
 
   it("appends partial-counts note when clipped", () => {
@@ -85,7 +97,8 @@ describe("smsLinkClicksCsv", () => {
         originalUrl: "https://example.com",
         toE164: null,
         flowId: null,
-        runId: null
+        runId: null,
+        likelyPrefetch: false
       }
     ]);
     const parsed = parseCsv(csv);

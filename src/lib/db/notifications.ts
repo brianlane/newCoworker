@@ -132,6 +132,33 @@ export async function getUnreadNotificationCount(
   return count ?? 0;
 }
 
+/**
+ * Was a notification of this kind SENT to this contact's payload within the
+ * window? Powers the per-contact link-click throttle: bursts of taps across
+ * several links in one thread collapse to a single owner alert per hour.
+ * `payload->>to_e164` is the dispatch payload's recipient stamp.
+ */
+export async function hasRecentNotificationForContact(
+  businessId: string,
+  kind: string,
+  toE164: string,
+  windowMs: number,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const sinceIso = new Date(Date.now() - windowMs).toISOString();
+  const { count, error } = await db
+    .from("notifications")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .eq("kind", kind)
+    .eq("status", "sent")
+    .eq("payload->>to_e164", toE164)
+    .gte("created_at", sinceIso);
+  if (error) throw new Error(`hasRecentNotificationForContact: ${error.message}`);
+  return (count ?? 0) > 0;
+}
+
 export async function markNotificationRead(
   notificationId: string,
   businessId: string,

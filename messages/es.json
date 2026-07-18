@@ -280,56 +280,146 @@
         "eyebrow": "Voz",
         "title": "Cada llamada contestada, siempre",
         "subtitle": "Tu coworker contesta con conversación natural, reserva citas durante la llamada y te transfiere cuando importa.",
-        "answering": { "title": "Contestación con IA 24/7", "description": "Noches, fines de semana, feriados y tus horas pico: cada llamada recibe una conversación real, no un buzón de voz." },
-        "concurrent": { "title": "Hasta {calls} llamadas simultáneas", "description": "Tu coworker mantiene hasta {calls} conversaciones a la vez, así una mañana ocupada nunca produce señal de ocupado." },
-        "transfers": { "title": "Transferencias con contexto", "description": "Cuando alguien necesita a un humano, la llamada se transfiere a ti o a tu equipo con contexto, para que nadie repita su historia." },
-        "booking": { "title": "Reserva de citas", "description": "Conectado a tu calendario de Google o Microsoft, tu coworker encuentra espacios libres y los reserva durante la llamada." },
-        "qualification": { "title": "Calificación de leads", "description": "La intención de quien llama se entiende en segundos; los detalles se capturan, califican y registran para un seguimiento sin esfuerzo." },
-        "byon": { "title": "Trae tu propio número", "description": "Porta tu número de negocio existente, o usa el número dedicado." }
+        "answering": {
+          "title": "Contestación con IA 24/7",
+          "description": "Noches, fines de semana, feriados y tus horas pico: cada llamada recibe una conversación real, no un buzón de voz."
+        },
+        "concurrent": {
+          "title": "Hasta {calls} llamadas simultáneas",
+          "description": "Tu coworker mantiene hasta {calls} conversaciones a la vez, así una mañana ocupada nunca produce señal de ocupado."
+        },
+        "transfers": {
+          "title": "Transferencias con contexto",
+          "description": "Cuando alguien necesita a un humano, la llamada se transfiere a ti o a tu equipo con contexto, para que nadie repita su historia."
+        },
+        "booking": {
+          "title": "Reserva de citas",
+          "description": "Conectado a tu calendario de Google o Microsoft, tu coworker encuentra espacios libres y los reserva durante la llamada."
+        },
+        "qualification": {
+          "title": "Calificación de leads",
+          "description": "La intención de quien llama se entiende en segundos; los detalles se capturan, califican y registran para un seguimiento sin esfuerzo."
+        },
+        "byon": {
+          "title": "Trae tu propio número",
+          "description": "Porta tu número de negocio existente, o usa el número dedicado."
+        }
       },
       "messaging": {
         "eyebrow": "Mensajería",
         "title": "Textos que nunca quedan sin leer",
         "subtitle": "Mensajería SMS y RCS bidireccional, atendida por el mismo coworker que conoce a cada cliente.",
-        "sms": { "title": "SMS bidireccional", "description": "Los clientes escriben a tu número de negocio y reciben respuestas útiles y con tu marca al instante, de día o de noche." },
-        "rcs": { "title": "Mensajería RCS", "description": "Textos entregados por un remitente verificado por Google con confirmaciones de lectura y formato enriquecido, con respaldo automático de SMS desde tu número." },
-        "duringCalls": { "title": "Textos durante llamadas", "description": "Tu coworker puede enviar a quien llama un enlace, dirección o confirmación de reserva mientras sigue al teléfono." },
-        "missedCall": { "title": "Auto-texto de llamada perdida", "description": "Si no contestas una transferencia, quien llamó recibe un texto al instante para que el lead nunca se enfríe." },
-        "scheduled": { "title": "Textos programados y plantillas", "description": "Programa textos para el momento justo y guarda tus mejores mensajes como plantillas reutilizables." },
-        "email": { "title": "Gestión de correo", "description": "Una dirección de correo dedicada para tu coworker. Lee, prioriza y responde el correo con tu voz también." }
+        "sms": {
+          "title": "SMS bidireccional",
+          "description": "Los clientes escriben a tu número de negocio y reciben respuestas útiles y con tu marca al instante, de día o de noche."
+        },
+        "rcs": {
+          "title": "Mensajería RCS",
+          "description": "Textos entregados por un remitente verificado por Google con confirmaciones de lectura y formato enriquecido, con respaldo automático de SMS desde tu número."
+        },
+        "duringCalls": {
+          "title": "Textos durante llamadas",
+          "description": "Tu coworker puede enviar a quien llama un enlace, dirección o confirmación de reserva mientras sigue al teléfono."
+        },
+        "missedCall": {
+          "title": "Auto-texto de llamada perdida",
+          "description": "Si no contestas una transferencia, quien llamó recibe un texto al instante para que el lead nunca se enfríe."
+        },
+        "scheduled": {
+          "title": "Textos programados y plantillas",
+          "description": "Programa textos para el momento justo y guarda tus mejores mensajes como plantillas reutilizables."
+        },
+        "email": {
+          "title": "Gestión de correo",
+          "description": "Una dirección de correo dedicada para tu coworker. Lee, prioriza y responde el correo con tu voz también."
+        }
       },
       "intelligence": {
         "eyebrow": "Inteligencia",
         "title": "Sabe qué pasó sin escuchar cada llamada",
         "subtitle": "Resúmenes, sentimiento, analítica y una memoria permanente que crece con cada conversación.",
-        "summaries": { "title": "Resúmenes de llamadas con IA", "description": "Cada llamada llega a tu panel con un resumen conciso de IA: qué quería la persona y qué pasó." },
-        "sentiment": { "title": "Sentimiento del cliente", "description": "Ve de un vistazo si quienes llamaron quedaron contentos, neutrales o frustrados, para saber dónde intervenir." },
-        "analytics": { "title": "Panel de analítica", "description": "Tendencias de llamadas, horas pico y tasa de respuesta: los números que muestran si se capturan las oportunidades." },
-        "alerts": { "title": "Alertas de picos de llamadas perdidas", "description": "Recibe alertas cuando se rechazan llamadas, antes de que un día ocupado se convierta en ingresos perdidos." },
-        "memory": { "title": "Memoria permanente", "description": "Memoria jerárquica y sin pérdida de tu negocio y tus clientes. El contexto crece para siempre en vez de reiniciarse por chat." },
-        "website": { "title": "Conocimiento de tu sitio web", "description": "Apunta tu coworker a tu sitio web y aprende tus servicios, precios y políticas automáticamente." }
+        "summaries": {
+          "title": "Resúmenes de llamadas con IA",
+          "description": "Cada llamada llega a tu panel con un resumen conciso de IA: qué quería la persona y qué pasó."
+        },
+        "sentiment": {
+          "title": "Sentimiento del cliente",
+          "description": "Ve de un vistazo si quienes llamaron quedaron contentos, neutrales o frustrados, para saber dónde intervenir."
+        },
+        "analytics": {
+          "title": "Panel de analítica",
+          "description": "Tendencias de llamadas, horas pico y tasa de respuesta: los números que muestran si se capturan las oportunidades."
+        },
+        "alerts": {
+          "title": "Alertas de picos de llamadas perdidas",
+          "description": "Recibe alertas cuando se rechazan llamadas, antes de que un día ocupado se convierta en ingresos perdidos."
+        },
+        "memory": {
+          "title": "Memoria permanente",
+          "description": "Memoria jerárquica y sin pérdida de tu negocio y tus clientes. El contexto crece para siempre en vez de reiniciarse por chat."
+        },
+        "website": {
+          "title": "Conocimiento de tu sitio web",
+          "description": "Apunta tu coworker a tu sitio web y aprende tus servicios, precios y políticas automáticamente."
+        }
       },
       "automation": {
         "eyebrow": "Automatización",
         "title": "Flujos que hacen el seguimiento por ti",
         "subtitle": "Los AiFlows conectan disparadores con acciones en llamadas, textos, correo y leads de anuncios, más habilidades reales de navegador para todo lo demás.",
-        "metaLeads": { "title": "Captura instantánea de leads de Meta", "description": "Los anuncios de leads de Facebook e Instagram llegan directo a tu coworker: el lead recibe un texto en segundos, queda archivado como cliente y tú recibes el resumen." },
-        "aiflows": { "title": "AiFlows", "description": "Flujos automatizados que responden textos y correos, dan seguimiento a leads según calendario (resúmenes diarios, revisiones semanales o al instante de un disparador) y enrutan trabajo a tu equipo." },
-        "outbound": { "title": "Llamadas salientes", "description": "Tu coworker puede hacer llamadas salientes programadas (recordatorios, confirmaciones y seguimientos) por ti." },
-        "browser": { "title": "Habilidades de navegador", "description": "Puede operar sitios web reales: actualizar CRMs, revisar portales y completar formularios, incluso detrás de inicios de sesión." },
-        "routing": { "title": "Enrutamiento a tu equipo", "description": "Ofertas y tareas se envían al miembro correcto por SMS, con seguimiento de aceptación integrado." },
-        "notifications": { "title": "Notificaciones para el dueño", "description": "Elige exactamente qué eventos te llegan (por SMS, correo o panel) y cuándo." }
+        "metaLeads": {
+          "title": "Captura instantánea de leads de Meta",
+          "description": "Los anuncios de leads de Facebook e Instagram llegan directo a tu coworker: el lead recibe un texto en segundos, queda archivado como cliente y tú recibes el resumen."
+        },
+        "aiflows": {
+          "title": "AiFlows",
+          "description": "Flujos automatizados que responden textos y correos, dan seguimiento a leads según calendario (resúmenes diarios, revisiones semanales o al instante de un disparador) y enrutan trabajo a tu equipo."
+        },
+        "outbound": {
+          "title": "Llamadas salientes",
+          "description": "Tu coworker puede hacer llamadas salientes programadas (recordatorios, confirmaciones y seguimientos) por ti."
+        },
+        "browser": {
+          "title": "Habilidades de navegador",
+          "description": "Puede operar sitios web reales: actualizar CRMs, revisar portales y completar formularios, incluso detrás de inicios de sesión."
+        },
+        "routing": {
+          "title": "Enrutamiento a tu equipo",
+          "description": "Ofertas y tareas se envían al miembro correcto por SMS, con seguimiento de aceptación integrado."
+        },
+        "notifications": {
+          "title": "Notificaciones para el dueño",
+          "description": "Elige exactamente qué eventos te llegan (por SMS, correo o panel) y cuándo."
+        }
       },
       "platform": {
         "eyebrow": "Plataforma",
         "title": "Una plataforma privada, no un bot compartido",
         "subtitle": "Infraestructura dedicada por negocio, un panel de gestión completo y reglas de cumplimiento integradas.",
-        "server": { "title": "Servidor privado dedicado", "description": "Tu coworker de IA corre en su propio servidor dedicado: cómputo aislado, credenciales por negocio y un rendimiento consistente que ningún bot compartido iguala." },
-        "dashboard": { "title": "Tu panel", "description": "Llamadas, mensajes, correos, memoria, analítica, facturación y configuración. Un solo lugar, cualquier dispositivo." },
-        "compliance": { "title": "Reglas de cumplimiento", "description": "Reglas por industria, como las normas de Fair Housing para bienes raíces por citar un ejemplo, se aplican en cada conversación." },
-        "deploy": { "title": "Listo en minutos", "description": "Aprovisionamiento totalmente automatizado: servidor, número telefónico, correo y un coworker entrenado minutos después del registro." },
-        "training": { "title": "Entrenamiento y edición de memoria", "description": "Revisa y edita lo que tu coworker sabe desde el panel. Su conocimiento es tuyo para moldearlo." },
-        "whiteGlove": { "title": "Onboarding white-glove", "description": "Paquetes opcionales de configuración y construcción donde un especialista configura todo en vivo contigo." }
+        "server": {
+          "title": "Servidor privado dedicado",
+          "description": "Tu coworker de IA corre en su propio servidor dedicado: cómputo aislado, credenciales por negocio y un rendimiento consistente que ningún bot compartido iguala."
+        },
+        "dashboard": {
+          "title": "Tu panel",
+          "description": "Llamadas, mensajes, correos, memoria, analítica, facturación y configuración. Un solo lugar, cualquier dispositivo."
+        },
+        "compliance": {
+          "title": "Reglas de cumplimiento",
+          "description": "Reglas por industria, como las normas de Fair Housing para bienes raíces por citar un ejemplo, se aplican en cada conversación."
+        },
+        "deploy": {
+          "title": "Listo en minutos",
+          "description": "Aprovisionamiento totalmente automatizado: servidor, número telefónico, correo y un coworker entrenado minutos después del registro."
+        },
+        "training": {
+          "title": "Entrenamiento y edición de memoria",
+          "description": "Revisa y edita lo que tu coworker sabe desde el panel. Su conocimiento es tuyo para moldearlo."
+        },
+        "whiteGlove": {
+          "title": "Onboarding white-glove",
+          "description": "Paquetes opcionales de configuración y construcción donde un especialista configura todo en vivo contigo."
+        }
       },
       "ctaTitle": "Míralo todo en vivo en tu propio número",
       "ctaSubtitle": "Elige un plan y tu coworker estará contestando en minutos, con garantía de devolución de 30 días.",
@@ -399,10 +489,22 @@
       "storyP3": "Y como un coworker sabe cosas que un proveedor nunca debería, hicimos de la privacidad el cimiento: tu negocio está estrictamente aislado de todos los demás, tu información sigue siendo tuya, y la memoria de tu coworker trabaja solo para ti.",
       "principlesEyebrow": "En qué creemos",
       "principlesTitle": "Los principios detrás del producto",
-      "privacy": { "title": "La privacidad es arquitectura, no una página de políticas", "description": "El coworker de IA de cada negocio corre en su propio servidor dedicado con sus propias credenciales, y tus datos están aislados por negocio, nunca se comparten con otras empresas y siempre son tuyos para exportar. Lo construimos así porque la confianza no debería requerir leer la letra chica." },
-      "employee": { "title": "Un empleado, no un chatbot", "description": "Los chatbots responden; los coworkers actúan. El nuestro reserva citas, envía seguimientos, actualiza registros, transfiere llamadas con contexto y ejecuta flujos, porque los dueños de pequeños negocios necesitan el trabajo hecho, no otra bandeja que administrar." },
-      "memory": { "title": "Memoria que se acumula", "description": "Las herramientas de IA típicas olvidan todo entre sesiones. Tu coworker mantiene memoria permanente y sin pérdida de tu negocio y tus clientes, así cada conversación mejora la siguiente." },
-      "stack": { "title": "Dueños del stack, dueños de la promesa", "description": "Operamos la infraestructura de punta a punta (voz, mensajería, memoria y automatización), así que cuando prometemos que tus llamadas se contestan, ninguna caja negra de terceros puede romper esa promesa." },
+      "privacy": {
+        "title": "La privacidad es arquitectura, no una página de políticas",
+        "description": "El coworker de IA de cada negocio corre en su propio servidor dedicado con sus propias credenciales, y tus datos están aislados por negocio, nunca se comparten con otras empresas y siempre son tuyos para exportar. Lo construimos así porque la confianza no debería requerir leer la letra chica."
+      },
+      "employee": {
+        "title": "Un empleado, no un chatbot",
+        "description": "Los chatbots responden; los coworkers actúan. El nuestro reserva citas, envía seguimientos, actualiza registros, transfiere llamadas con contexto y ejecuta flujos, porque los dueños de pequeños negocios necesitan el trabajo hecho, no otra bandeja que administrar."
+      },
+      "memory": {
+        "title": "Memoria que se acumula",
+        "description": "Las herramientas de IA típicas olvidan todo entre sesiones. Tu coworker mantiene memoria permanente y sin pérdida de tu negocio y tus clientes, así cada conversación mejora la siguiente."
+      },
+      "stack": {
+        "title": "Dueños del stack, dueños de la promesa",
+        "description": "Operamos la infraestructura de punta a punta (voz, mensajería, memoria y automatización), así que cuando prometemos que tus llamadas se contestan, ninguna caja negra de terceros puede romper esa promesa."
+      },
       "contactPrompt": "¿Preguntas sobre la empresa, alianzas o prensa?",
       "contactLink": "Escríbenos",
       "ctaTitle": "Conoce a tu primer empleado digital",
@@ -420,10 +522,22 @@
       "formTitle": "Envíanos un",
       "formTitleHighlight": "mensaje",
       "formBody": "Ya sea que estés evaluando planes, necesites ayuda con la configuración o facturación, o quieras que un especialista construya todo contigo, usa el formulario y responderemos lo antes posible. La mayoría de las consultas se responden en 24 horas.",
-      "support": { "title": "Soporte", "description": "Los clientes existentes reciben respuesta humana. Los planes Standard tienen gestión prioritaria; los clientes white-glove tienen una línea prioritaria de llamada y video por 30 días." },
-      "enterprise": { "title": "Ventas Enterprise", "description": "¿Múltiples ubicaciones, agencia, white-label o necesidades de cumplimiento a medida? Cuéntanos de tu negocio y armamos una propuesta." },
-      "whiteGlove": { "title": "Onboarding white-glove", "description": "¿Quieres que un especialista configure todo en vivo contigo? Portabilidad, entrenamiento y construcción de flujos a medida incluidos." },
-      "everythingElse": { "title": "Todo lo demás", "description": "Alianzas, prensa o una pregunta que no cabe en una casilla. Lo leemos todo." },
+      "support": {
+        "title": "Soporte",
+        "description": "Los clientes existentes reciben respuesta humana. Los planes Standard tienen gestión prioritaria; los clientes white-glove tienen una línea prioritaria de llamada y video por 30 días."
+      },
+      "enterprise": {
+        "title": "Ventas Enterprise",
+        "description": "¿Múltiples ubicaciones, agencia, white-label o necesidades de cumplimiento a medida? Cuéntanos de tu negocio y armamos una propuesta."
+      },
+      "whiteGlove": {
+        "title": "Onboarding white-glove",
+        "description": "¿Quieres que un especialista configure todo en vivo contigo? Portabilidad, entrenamiento y construcción de flujos a medida incluidos."
+      },
+      "everythingElse": {
+        "title": "Todo lo demás",
+        "description": "Alianzas, prensa o una pregunta que no cabe en una casilla. Lo leemos todo."
+      },
       "faqPrompt": "¿Buscas respuestas ahora mismo? Las <faq>preguntas frecuentes</faq> cubren configuración, facturación, privacidad y portabilidad, o mira <pricing>planes y precios</pricing>.",
       "subjectWhiteGlove": "Onboarding white-glove",
       "subjectEnterprise": "Consulta Enterprise",
@@ -481,12 +595,30 @@
         "teaser": "Contesta cada llamada de compradores y vendedores, califica leads en segundos y reserva visitas directo en tu calendario, con reglas de Fair Housing integradas.",
         "headline": "Nunca más pierdas un lead de listado en el buzón de voz",
         "subheadline": "Los compradores llaman al primer agente que contesta. Tu coworker de IA atiende cada llamada 24/7, califica el lead, reserva la visita y envía el seguimiento por texto mientras tú estás en un cierre.",
-        "u1": { "title": "Calificación de leads en segundos", "description": "Cada consulta se califica en la primera llamada: compra o venta, plazos, preaprobación y zona, capturado y registrado antes de que veas la notificación." },
-        "u2": { "title": "Visitas reservadas durante la llamada", "description": "Conectado a tu calendario, tu coworker ofrece espacios reales y reserva la visita mientras el interesado sigue entusiasmado." },
-        "u3": { "title": "Cobertura fuera de horario", "description": "El tráfico de open house del domingo y quien navega Zillow a las 9pm reciben una conversación en vivo, no una fila de devolución de llamadas." },
-        "u4": { "title": "Seguimiento por texto al instante", "description": "¿Perdiste una transferencia durante una visita? Quien llamó recibe un texto inmediato y la conversación continúa por SMS." },
-        "u5": { "title": "Reglas de Fair Housing", "description": "Las normas de cumplimiento FHA se aplican en cada conversación, protegiendo tu licencia de un desliz costoso." },
-        "u6": { "title": "Seguimientos de transacción", "description": "Los AiFlows cubren el trecho entre contrato y cierre: recordatorios de documentos, avances de hitos y revisiones corren solos." },
+        "u1": {
+          "title": "Calificación de leads en segundos",
+          "description": "Cada consulta se califica en la primera llamada: compra o venta, plazos, preaprobación y zona, capturado y registrado antes de que veas la notificación."
+        },
+        "u2": {
+          "title": "Visitas reservadas durante la llamada",
+          "description": "Conectado a tu calendario, tu coworker ofrece espacios reales y reserva la visita mientras el interesado sigue entusiasmado."
+        },
+        "u3": {
+          "title": "Cobertura fuera de horario",
+          "description": "El tráfico de open house del domingo y quien navega Zillow a las 9pm reciben una conversación en vivo, no una fila de devolución de llamadas."
+        },
+        "u4": {
+          "title": "Seguimiento por texto al instante",
+          "description": "¿Perdiste una transferencia durante una visita? Quien llamó recibe un texto inmediato y la conversación continúa por SMS."
+        },
+        "u5": {
+          "title": "Reglas de Fair Housing",
+          "description": "Las normas de cumplimiento FHA se aplican en cada conversación, protegiendo tu licencia de un desliz costoso."
+        },
+        "u6": {
+          "title": "Seguimientos de transacción",
+          "description": "Los AiFlows cubren el trecho entre contrato y cierre: recordatorios de documentos, avances de hitos y revisiones corren solos."
+        },
         "day1": "Un vendedor llama para listar su casa. Tu coworker califica el lead, captura la dirección y reserva una consulta de listado para el jueves.",
         "day2": "Estás en una visita. Entran dos llamadas de compradores a la vez. Ambas contestadas, ambas calificadas, una visita reservada.",
         "day3": "Un comprador pregunta por texto sobre la HOA de una propiedad. Tu coworker responde con el conocimiento de tu sitio y ofrece un horario de visita.",
@@ -499,12 +631,30 @@
         "teaser": "Plomeros, electricistas, HVAC: gana el trabajo siendo la empresa que sí contesta, y deja que los auto-textos rescaten cada transferencia perdida.",
         "headline": "La empresa que contesta gana el trabajo",
         "subheadline": "Los dueños de casa llaman por la lista hasta que alguien contesta. Tu coworker de IA atiende cada llamada, informa tu disponibilidad, reserva la cita y envía confirmaciones por texto, incluso mientras tu cuadrilla está en un techo.",
-        "u1": { "title": "Cada llamada de emergencia contestada", "description": "¿Tubería rota a medianoche? Tu coworker contesta, captura los detalles y te escala por texto o transferencia." },
-        "u2": { "title": "Trabajos reservados al momento", "description": "Espacios reales de calendario ofrecidos durante la llamada, para que el cliente nunca tenga tiempo de llamar a tu competencia." },
-        "u3": { "title": "Rescate de llamadas perdidas", "description": "¿En una escalera con las manos ocupadas? Quien llamó recibe un texto al instante y el trabajo se salva, en vez de perderse por una llamada sin contestar." },
-        "u4": { "title": "Recordatorios de citas", "description": "Textos programados confirman la ventana de mañana y reducen las inasistencias sin que muevas un dedo." },
-        "u5": { "title": "Despacho a tu equipo", "description": "Enruta trabajos al técnico correcto por SMS con seguimiento de aceptación. El primero en aceptar se lo queda." },
-        "u6": { "title": "Resúmenes y sentimiento", "description": "Repasa el resumen de IA de cada conversación en tu panel al final del día. Sin buzón de voz que escarbar." },
+        "u1": {
+          "title": "Cada llamada de emergencia contestada",
+          "description": "¿Tubería rota a medianoche? Tu coworker contesta, captura los detalles y te escala por texto o transferencia."
+        },
+        "u2": {
+          "title": "Trabajos reservados al momento",
+          "description": "Espacios reales de calendario ofrecidos durante la llamada, para que el cliente nunca tenga tiempo de llamar a tu competencia."
+        },
+        "u3": {
+          "title": "Rescate de llamadas perdidas",
+          "description": "¿En una escalera con las manos ocupadas? Quien llamó recibe un texto al instante y el trabajo se salva, en vez de perderse por una llamada sin contestar."
+        },
+        "u4": {
+          "title": "Recordatorios de citas",
+          "description": "Textos programados confirman la ventana de mañana y reducen las inasistencias sin que muevas un dedo."
+        },
+        "u5": {
+          "title": "Despacho a tu equipo",
+          "description": "Enruta trabajos al técnico correcto por SMS con seguimiento de aceptación. El primero en aceptar se lo queda."
+        },
+        "u6": {
+          "title": "Resúmenes y sentimiento",
+          "description": "Repasa el resumen de IA de cada conversación en tu panel al final del día. Sin buzón de voz que escarbar."
+        },
         "day1": "Un dueño de casa llama por un calentador de agua muerto. Tu coworker reserva el primer espacio disponible y envía la confirmación por texto.",
         "day2": "Tres llamadas entran durante un trabajo en el sótano. Todas contestadas; dos reservadas; una transferida a ti como urgente.",
         "day3": "Los clientes de mañana reciben textos de recordatorio automáticos con sus ventanas de llegada.",
@@ -516,12 +666,30 @@
         "teaser": "Llena la agenda y deja de perder pacientes con la música de espera: reserva de citas, recordatorios y contestación fuera de horario en infraestructura privada.",
         "headline": "Cada llamada de paciente contestada. Cada sillón ocupado.",
         "subheadline": "Las recepciones se saturan; los pacientes cuelgan. Tu coworker de IA contesta cada llamada, reserva y confirma citas, y atiende preguntas fuera de horario, todo en infraestructura dedicada a tu consultorio.",
-        "u1": { "title": "Agendamiento de citas", "description": "Pacientes nuevos y recurrentes reservan espacios reales en tu calendario durante la llamada. Sin lista de devolución." },
-        "u2": { "title": "Menos inasistencias", "description": "Textos de recordatorio programados confirman cada cita y reagendan cancelaciones automáticamente." },
-        "u3": { "title": "Contestación fuera de horario", "description": "Quienes llaman por la noche o el fin de semana reciben respuestas y reservas para el día siguiente en vez de la factura de un servicio de contestación." },
-        "u4": { "title": "Cobertura de desborde", "description": "Cuando la recepción atiende a un paciente, las llamadas de desborde pasan a tu coworker en vez del buzón de voz." },
-        "u5": { "title": "Privado por diseño", "description": "Un servidor dedicado por consultorio, con conversaciones de pacientes aisladas por negocio y nunca compartidas." },
-        "u6": { "title": "Campañas de recordatorio", "description": "Los AiFlows escriben a pacientes con limpiezas o controles pendientes y los agendan directo en el calendario." },
+        "u1": {
+          "title": "Agendamiento de citas",
+          "description": "Pacientes nuevos y recurrentes reservan espacios reales en tu calendario durante la llamada. Sin lista de devolución."
+        },
+        "u2": {
+          "title": "Menos inasistencias",
+          "description": "Textos de recordatorio programados confirman cada cita y reagendan cancelaciones automáticamente."
+        },
+        "u3": {
+          "title": "Contestación fuera de horario",
+          "description": "Quienes llaman por la noche o el fin de semana reciben respuestas y reservas para el día siguiente en vez de la factura de un servicio de contestación."
+        },
+        "u4": {
+          "title": "Cobertura de desborde",
+          "description": "Cuando la recepción atiende a un paciente, las llamadas de desborde pasan a tu coworker en vez del buzón de voz."
+        },
+        "u5": {
+          "title": "Privado por diseño",
+          "description": "Un servidor dedicado por consultorio, con conversaciones de pacientes aisladas por negocio y nunca compartidas."
+        },
+        "u6": {
+          "title": "Campañas de recordatorio",
+          "description": "Los AiFlows escriben a pacientes con limpiezas o controles pendientes y los agendan directo en el calendario."
+        },
         "day1": "Prisa de lunes por la mañana: cinco llamadas en diez minutos. Todas contestadas; tres citas reservadas; dos preguntas resueltas.",
         "day2": "Un paciente cancela por texto. Tu coworker lo reagenda y ofrece el espacio libre a la lista de espera.",
         "day3": "Alguien llama fuera de horario preguntando por seguros aceptados. Respondido con el conocimiento de tu sitio, con reserva para el jueves.",
@@ -533,12 +701,30 @@
         "teaser": "Cada intake de cliente potencial capturado: contestación fuera de horario, agendamiento sin conflictos y textos de seguimiento inmediatos que vencen al despacho de enfrente.",
         "headline": "El primer despacho en responder se queda con el cliente",
         "subheadline": "Los clientes potenciales llaman a varios despachos y contratan al que responde primero. Tu coworker de IA contesta cada llamada, hace el intake, reserva la consulta y da seguimiento por texto, noches y fines de semana incluidos.",
-        "u1": { "title": "Intake de clientes, siempre", "description": "Tipo de asunto, urgencia y datos de contacto capturados en la primera llamada y resumidos en tu panel." },
-        "u2": { "title": "Consultas reservadas", "description": "Los interesados calificados reservan espacios reales de consulta en tu calendario antes de colgar." },
-        "u3": { "title": "Contestación fuera de horario", "description": "Los arrestos, accidentes y disputas no tienen horario de oficina. Tu coworker contesta cuando el despacho de la contraparte no lo hace." },
-        "u4": { "title": "Textos de velocidad al lead", "description": "Cada llamada perdida o fuera de horario recibe un texto inmediato, manteniendo tu despacho primero en mente." },
-        "u5": { "title": "Transferencias para asuntos urgentes", "description": "Las llamadas urgentes se te transfieren en vivo, con el contexto del intake ya capturado." },
-        "u6": { "title": "Infraestructura privada", "description": "Un servidor dedicado por despacho, con conversaciones de clientes aisladas por negocio y nunca compartidas." },
+        "u1": {
+          "title": "Intake de clientes, siempre",
+          "description": "Tipo de asunto, urgencia y datos de contacto capturados en la primera llamada y resumidos en tu panel."
+        },
+        "u2": {
+          "title": "Consultas reservadas",
+          "description": "Los interesados calificados reservan espacios reales de consulta en tu calendario antes de colgar."
+        },
+        "u3": {
+          "title": "Contestación fuera de horario",
+          "description": "Los arrestos, accidentes y disputas no tienen horario de oficina. Tu coworker contesta cuando el despacho de la contraparte no lo hace."
+        },
+        "u4": {
+          "title": "Textos de velocidad al lead",
+          "description": "Cada llamada perdida o fuera de horario recibe un texto inmediato, manteniendo tu despacho primero en mente."
+        },
+        "u5": {
+          "title": "Transferencias para asuntos urgentes",
+          "description": "Las llamadas urgentes se te transfieren en vivo, con el contexto del intake ya capturado."
+        },
+        "u6": {
+          "title": "Infraestructura privada",
+          "description": "Un servidor dedicado por despacho, con conversaciones de clientes aisladas por negocio y nunca compartidas."
+        },
         "day1": "Un cliente potencial de lesiones llama antes de abrir la oficina. Corre el intake, se marca la urgencia y se reserva una consulta a las 11 AM.",
         "day2": "Durante una declaración, dos llamadas se contestan y priorizan; un asunto urgente se te envía por texto con resumen.",
         "day3": "Una consulta de derecho familiar fuera de horario: intake capturado, consulta reservada, texto de seguimiento enviado.",
@@ -550,12 +736,30 @@
         "teaser": "Reservaciones tomadas, preguntas de horario y menú respondidas, y leads de catering capturados, incluso durante la hora pico cuando nadie puede llegar al teléfono.",
         "headline": "Cada mesa llena. Cada llamada contestada.",
         "subheadline": "Durante el servicio, el teléfono siempre pierde contra la cocina. Tu coworker de IA contesta cada llamada, toma reservaciones, responde preguntas de horario y menú, y captura consultas de catering mientras tu personal atiende a los comensales.",
-        "u1": { "title": "Reservaciones sin prisa", "description": "Quienes llaman reservan espacios reales en tu calendario durante la llamada, así un comedor lleno nunca te cuesta los cubiertos de mañana." },
-        "u2": { "title": "Horarios, menú y alergias", "description": "Tu coworker responde con el conocimiento de tu sitio y tu negocio: horarios, estacionamiento, opciones sin gluten, comedor privado." },
-        "u3": { "title": "Desborde en hora pico", "description": "Cuando la recepción está saturada, las llamadas pasan a tu coworker en vez del buzón de voz, y ninguna reservación se pierde." },
-        "u4": { "title": "Leads de catering y eventos", "description": "Las consultas de grupos grandes y catering se califican, capturan y resumen en tu panel para el seguimiento." },
-        "u5": { "title": "Textos de confirmación y recordatorio", "description": "Textos programados confirman reservaciones y reducen inasistencias sin que nadie trabaje una lista de llamadas." },
-        "u6": { "title": "Auto-texto de llamada perdida", "description": "Cualquier llamada transferida que no se pueda contestar recibe un texto al instante, manteniendo al comensal interesado hasta que estés libre." },
+        "u1": {
+          "title": "Reservaciones sin prisa",
+          "description": "Quienes llaman reservan espacios reales en tu calendario durante la llamada, así un comedor lleno nunca te cuesta los cubiertos de mañana."
+        },
+        "u2": {
+          "title": "Horarios, menú y alergias",
+          "description": "Tu coworker responde con el conocimiento de tu sitio y tu negocio: horarios, estacionamiento, opciones sin gluten, comedor privado."
+        },
+        "u3": {
+          "title": "Desborde en hora pico",
+          "description": "Cuando la recepción está saturada, las llamadas pasan a tu coworker en vez del buzón de voz, y ninguna reservación se pierde."
+        },
+        "u4": {
+          "title": "Leads de catering y eventos",
+          "description": "Las consultas de grupos grandes y catering se califican, capturan y resumen en tu panel para el seguimiento."
+        },
+        "u5": {
+          "title": "Textos de confirmación y recordatorio",
+          "description": "Textos programados confirman reservaciones y reducen inasistencias sin que nadie trabaje una lista de llamadas."
+        },
+        "u6": {
+          "title": "Auto-texto de llamada perdida",
+          "description": "Cualquier llamada transferida que no se pueda contestar recibe un texto al instante, manteniendo al comensal interesado hasta que estés libre."
+        },
         "day1": "Alguien pregunta por disponibilidad el fin de semana para ocho personas. Tu coworker la reserva y envía la confirmación por texto.",
         "day2": "Hora pico del almuerzo: tres llamadas llegan mientras todos los meseros están en el piso. Todas contestadas; dos reservaciones, una pregunta para llevar.",
         "day3": "Una consulta de catering para un evento de oficina de 50 personas se califica y captura; recibes el resumen entre turnos.",
@@ -567,12 +771,30 @@
         "teaser": "Sea lo que sea que administres, si los clientes llaman y textean, tu coworker contesta, reserva y da seguimiento, por menos que un servicio de contestación.",
         "headline": "Una recepción completa por menos que un servicio de contestación",
         "subheadline": "Salones, gimnasios, tiendas, agencias: cada negocio que pierde clientes por teléfonos sin contestar recibe un empleado 24/7 que contesta, reserva, textea y recuerda a cada cliente.",
-        "u1": { "title": "Contestación 24/7", "description": "Cada llamada contestada con la voz de tu negocio, con tus servicios, horarios y políticas ya aprendidos." },
-        "u2": { "title": "Reservas y citas", "description": "Citas reservadas directo en tu calendario mientras el cliente está en la línea." },
-        "u3": { "title": "Textos bidireccionales", "description": "Los clientes escriben a tu número y reciben respuestas reales, más textos programados y plantillas guardadas para campañas." },
-        "u4": { "title": "Memoria de clientes", "description": "Los clientes frecuentes se recuerdan: preferencias, historial y conversaciones pasadas informan cada interacción." },
-        "u5": { "title": "Analítica y alertas", "description": "Ve tendencias de llamadas y horas pico; recibe alertas cuando se pierden llamadas." },
-        "u6": { "title": "8,000+ integraciones", "description": "Zapier conecta tu coworker al CRM, la hoja de cálculo o la herramienta de reservas que ya usas." },
+        "u1": {
+          "title": "Contestación 24/7",
+          "description": "Cada llamada contestada con la voz de tu negocio, con tus servicios, horarios y políticas ya aprendidos."
+        },
+        "u2": {
+          "title": "Reservas y citas",
+          "description": "Citas reservadas directo en tu calendario mientras el cliente está en la línea."
+        },
+        "u3": {
+          "title": "Textos bidireccionales",
+          "description": "Los clientes escriben a tu número y reciben respuestas reales, más textos programados y plantillas guardadas para campañas."
+        },
+        "u4": {
+          "title": "Memoria de clientes",
+          "description": "Los clientes frecuentes se recuerdan: preferencias, historial y conversaciones pasadas informan cada interacción."
+        },
+        "u5": {
+          "title": "Analítica y alertas",
+          "description": "Ve tendencias de llamadas y horas pico; recibe alertas cuando se pierden llamadas."
+        },
+        "u6": {
+          "title": "8,000+ integraciones",
+          "description": "Zapier conecta tu coworker al CRM, la hoja de cálculo o la herramienta de reservas que ya usas."
+        },
         "day1": "Un cliente nuevo llama preguntando por precios. Respondido con el conocimiento de tu sitio, y reservado para el sábado.",
         "day2": "Hora pico del almuerzo: tres llamadas atendidas a la vez mientras tú atiendes clientes.",
         "day3": "Un cliente frecuente textea para reagendar. Resuelto en un intercambio, calendario actualizado.",
@@ -631,15 +853,42 @@
       "zapierExample": "Ejemplo: un lead nuevo llega a tu CRM → Zapier avisa a tu coworker → el lead recibe un texto personal en segundos, y la respuesta se atiende automáticamente.",
       "nativeEyebrow": "Nativas y de plataforma",
       "nativeTitle": "Conexiones integradas, más una API para todo lo demás",
-      "claude": { "title": "Conector de Claude", "description": "Deja que Claude trabaje con tu coworker: buscar contactos, leer textos y resúmenes de llamadas, enviar mensajes, reservar citas y gestionar AiFlows, todo autenticado como tú vía OAuth, con permisos que igualan tu rol del panel." },
-      "google": { "title": "Google Workspace", "description": "Búsqueda de espacios y reserva de calendario más seguimientos por correo con tu cuenta de Google, conectado en dos clics." },
-      "microsoft": { "title": "Microsoft 365", "description": "Los mismos superpoderes de calendario y correo para negocios con Outlook y Microsoft 365." },
-      "zapier": { "title": "Zapier", "description": "Una conexión desbloquea 8,000+ apps: CRMs, hojas de cálculo, Slack, mesas de ayuda, facturación. Sin código." },
-      "api": { "title": "API REST pública", "description": "Claves de API por negocio permiten a tus sistemas enviar SMS, leer eventos y gestionar suscripciones por código." },
-      "webhooks": { "title": "Webhooks", "description": "Hooks REST en tiempo real envían llamadas, textos y eventos de correo a cualquier endpoint al momento en que ocurren." },
-      "csv": { "title": "Importar y exportar CSV", "description": "Trae tus contactos y llévate tus datos cuando quieras. Tus registros nunca quedan atrapados." },
-      "custom": { "title": "Integraciones a medida", "description": "Apunta tu coworker a tus propias herramientas y portales internos. Puede navegarlos y operarlos como lo haría una persona." },
-      "keys": { "title": "Claves gestionadas desde el panel", "description": "Crea, rota y revoca claves de API desde la página de integraciones. Con hash en reposo, con límite por negocio." },
+      "claude": {
+        "title": "Conector de Claude",
+        "description": "Deja que Claude trabaje con tu coworker: buscar contactos, leer textos y resúmenes de llamadas, enviar mensajes, reservar citas y gestionar AiFlows, todo autenticado como tú vía OAuth, con permisos que igualan tu rol del panel."
+      },
+      "google": {
+        "title": "Google Workspace",
+        "description": "Búsqueda de espacios y reserva de calendario más seguimientos por correo con tu cuenta de Google, conectado en dos clics."
+      },
+      "microsoft": {
+        "title": "Microsoft 365",
+        "description": "Los mismos superpoderes de calendario y correo para negocios con Outlook y Microsoft 365."
+      },
+      "zapier": {
+        "title": "Zapier",
+        "description": "Una conexión desbloquea 8,000+ apps: CRMs, hojas de cálculo, Slack, mesas de ayuda, facturación. Sin código."
+      },
+      "api": {
+        "title": "API REST pública",
+        "description": "Claves de API por negocio permiten a tus sistemas enviar SMS, leer eventos y gestionar suscripciones por código."
+      },
+      "webhooks": {
+        "title": "Webhooks",
+        "description": "Hooks REST en tiempo real envían llamadas, textos y eventos de correo a cualquier endpoint al momento en que ocurren."
+      },
+      "csv": {
+        "title": "Importar y exportar CSV",
+        "description": "Trae tus contactos y llévate tus datos cuando quieras. Tus registros nunca quedan atrapados."
+      },
+      "custom": {
+        "title": "Integraciones a medida",
+        "description": "Apunta tu coworker a tus propias herramientas y portales internos. Puede navegarlos y operarlos como lo haría una persona."
+      },
+      "keys": {
+        "title": "Claves gestionadas desde el panel",
+        "description": "Crea, rota y revoca claves de API desde la página de integraciones. Con hash en reposo, con límite por negocio."
+      },
       "devEyebrow": "Para desarrolladores",
       "devTitle": "Una API real, no un widget",
       "devBody": "Tu coworker viene con claves de API por negocio gestionadas desde tu panel. Envía mensajes, lee eventos de llamadas y mensajes (con resúmenes de IA) y suscribe endpoints de webhook a eventos en tiempo real.",
@@ -737,16 +986,56 @@
       "tableSubtitle": "Los detalles de GoHighLevel reflejan sus precios y documentación publicados a julio de 2026. Donde ellos son más fuertes, lo decimos.",
       "usColumn": "New Coworker",
       "themColumn": "GoHighLevel",
-      "row1": { "label": "Qué estás comprando", "us": "Un empleado de IA que contesta, textea, reserva y da seguimiento por su cuenta", "them": "Una caja de herramientas de software (CRM, funnels, flujos) que tú configuras y operas" },
-      "row2": { "label": "Configuración", "us": "Una entrevista guiada de 15 minutos; en vivo el mismo día, hecho por nosotros", "them": "Configuración de agencia + subcuentas, cableado de teléfono/correo, construcción de flujos que según reseñas toma semanas dominar" },
-      "row3": { "label": "Contestación de llamadas con IA 24/7", "us": "Incluida en todos los planes, hasta 10 llamadas simultáneas en Standard", "them": "IA de voz disponible, pero con uso por minuto o el complemento AI Employee, configurado por ti" },
-      "row4": { "label": "Captura de leads de Meta (Facebook/Instagram)", "us": "Configuración guiada; el lead recibe texto en segundos y la conversación se atiende de punta a punta", "them": "Integración nativa al CRM; tú construyes los flujos de seguimiento" },
-      "row5": { "label": "IA incluida en el precio", "us": "Todo incluido: la IA conversacional, la IA de voz, los resúmenes y los flujos son el producto", "them": "Extra: AI Employee cuesta $97/mes por ubicación (o medido por mensaje/minuto) sobre el plan" },
-      "row6": { "label": "Facturación por uso", "us": "Cuotas mensuales generosas incluidas; límites claros, sin sorpresas de tarifas de IA por mensaje", "them": "SMS, correo, voz e IA premium se miden encima de la suscripción" },
-      "row7": { "label": "Infraestructura", "us": "Un servidor privado dedicado por negocio — cómputo y credenciales aislados", "them": "SaaS multi-tenant compartido" },
-      "row8": { "label": "Funnels, sitios web y cursos", "us": "No es nuestro producto. Nos integramos con lo que ya usas", "them": "Suite completa de construcción incluida; genuinamente fuertes aquí" },
-      "row9": { "label": "White-label de agencia y reventa", "us": "Existe white-label Enterprise, pero las agencias no son nuestro foco", "them": "La reventa SaaS Mode es la razón de ser de GoHighLevel" },
-      "row10": { "label": "Para quién es realmente", "us": "Un dueño de negocio que quiere resultados sin volverse operador de software", "them": "Agencias que gestionan muchos clientes, o dueños dispuestos a construir y mantener sistemas" },
+      "row1": {
+        "label": "Qué estás comprando",
+        "us": "Un empleado de IA que contesta, textea, reserva y da seguimiento por su cuenta",
+        "them": "Una caja de herramientas de software (CRM, funnels, flujos) que tú configuras y operas"
+      },
+      "row2": {
+        "label": "Configuración",
+        "us": "Una entrevista guiada de 15 minutos; en vivo el mismo día, hecho por nosotros",
+        "them": "Configuración de agencia + subcuentas, cableado de teléfono/correo, construcción de flujos que según reseñas toma semanas dominar"
+      },
+      "row3": {
+        "label": "Contestación de llamadas con IA 24/7",
+        "us": "Incluida en todos los planes, hasta 10 llamadas simultáneas en Standard",
+        "them": "IA de voz disponible, pero con uso por minuto o el complemento AI Employee, configurado por ti"
+      },
+      "row4": {
+        "label": "Captura de leads de Meta (Facebook/Instagram)",
+        "us": "Configuración guiada; el lead recibe texto en segundos y la conversación se atiende de punta a punta",
+        "them": "Integración nativa al CRM; tú construyes los flujos de seguimiento"
+      },
+      "row5": {
+        "label": "IA incluida en el precio",
+        "us": "Todo incluido: la IA conversacional, la IA de voz, los resúmenes y los flujos son el producto",
+        "them": "Extra: AI Employee cuesta $97/mes por ubicación (o medido por mensaje/minuto) sobre el plan"
+      },
+      "row6": {
+        "label": "Facturación por uso",
+        "us": "Cuotas mensuales generosas incluidas; límites claros, sin sorpresas de tarifas de IA por mensaje",
+        "them": "SMS, correo, voz e IA premium se miden encima de la suscripción"
+      },
+      "row7": {
+        "label": "Infraestructura",
+        "us": "Un servidor privado dedicado por negocio — cómputo y credenciales aislados",
+        "them": "SaaS multi-tenant compartido"
+      },
+      "row8": {
+        "label": "Funnels, sitios web y cursos",
+        "us": "No es nuestro producto. Nos integramos con lo que ya usas",
+        "them": "Suite completa de construcción incluida; genuinamente fuertes aquí"
+      },
+      "row9": {
+        "label": "White-label de agencia y reventa",
+        "us": "Existe white-label Enterprise, pero las agencias no son nuestro foco",
+        "them": "La reventa SaaS Mode es la razón de ser de GoHighLevel"
+      },
+      "row10": {
+        "label": "Para quién es realmente",
+        "us": "Un dueño de negocio que quiere resultados sin volverse operador de software",
+        "them": "Agencias que gestionan muchos clientes, o dueños dispuestos a construir y mantener sistemas"
+      },
       "diffEyebrow": "La diferencia real",
       "diffTitle": "Las herramientas te esperan. Los empleados no.",
       "themCardTitle": "Con GoHighLevel, un lead de Meta significa…",
@@ -1228,6 +1517,9 @@
       "languageOwnerSet": "Establecido por ti",
       "languageEnglish": "Inglés",
       "languageSpanish": "Español"
+    },
+    "trackedLinks": {
+      "previewFetch": "vista previa automática"
     }
   },
   "admin": {

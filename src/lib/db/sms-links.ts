@@ -36,6 +36,8 @@ export type SmsLinkClickRow = {
   id: string;
   link_id: string;
   clicked_at: string;
+  /** Delivery-time preview/scanner fetch (see the sms_link_click RPC), not a human tap. */
+  likely_prefetch: boolean;
 };
 
 export type SmsLinkView = SmsLinkRow & {
@@ -99,7 +101,7 @@ async function fetchClickEvents(
     clicked.map(async (link) => {
       const { data, error } = await client
         .from("sms_link_clicks")
-        .select("id, link_id, clicked_at")
+        .select("id, link_id, clicked_at, likely_prefetch")
         .eq("link_id", link.id)
         .order("clicked_at", { ascending: false })
         .limit(limit);
@@ -149,7 +151,7 @@ export async function listClickEventsForLink(
   const limit = opts.limit ?? DEFAULT_LINK_CLICKS_LIMIT;
   const { data, error } = await db
     .from("sms_link_clicks")
-    .select("id, link_id, clicked_at")
+    .select("id, link_id, clicked_at, likely_prefetch")
     .eq("link_id", linkId)
     .order("clicked_at", { ascending: false })
     .limit(limit);

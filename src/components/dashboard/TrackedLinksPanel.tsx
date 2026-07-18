@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type { SmsLinkView } from "@/lib/db/sms-links";
 
@@ -30,6 +31,7 @@ function CopyButton({ text }: { text: string }) {
 }
 
 function ClickTimeline({ link }: { link: SmsLinkView }) {
+  const t = useTranslations("dashboard.trackedLinks");
   const [open, setOpen] = useState(false);
   if (link.click_count === 0) {
     return <span className="text-parchment/40">No clicks yet</span>;
@@ -50,6 +52,14 @@ function ClickTimeline({ link }: { link: SmsLinkView }) {
           {events.map((c) => (
             <li key={c.id} className="text-[11px] text-parchment/60">
               <LocalDateTime iso={c.clicked_at} />
+              {c.likely_prefetch && (
+                <span
+                  className="ml-1.5 text-[10px] uppercase tracking-wide text-parchment/35"
+                  title={t("previewFetch")}
+                >
+                  {t("previewFetch")}
+                </span>
+              )}
             </li>
           ))}
         </ul>

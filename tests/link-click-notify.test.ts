@@ -1,26 +1,59 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { notificationLink } from "@/lib/notifications/display";
+import type { LinkClickRpcResult } from "@/lib/notifications/link-click-notify";
 
-const { dispatchUrgentNotification, resolveContactNames, createSupabaseServiceClient, businessLookup } =
-  vi.hoisted(() => {
-    const businessLookup = vi.fn();
-    return {
-      dispatchUrgentNotification: vi.fn(),
-      resolveContactNames: vi.fn(),
-      businessLookup,
-      createSupabaseServiceClient: vi.fn().mockResolvedValue({
-        from: () => ({
-          select: () => ({
-            eq: () => ({ maybeSingle: businessLookup })
-          })
+const {
+  dispatchUrgentNotification,
+  resolveContactNames,
+  hasRecentNotificationForContact,
+  createSupabaseServiceClient,
+  businessLookup,
+  linkUpdate
+} = vi.hoisted(() => {
+  const businessLookup = vi.fn();
+  const linkUpdate = vi.fn();
+  return {
+    dispatchUrgentNotification: vi.fn(),
+    resolveContactNames: vi.fn(),
+    hasRecentNotificationForContact: vi.fn(),
+    businessLookup,
+    linkUpdate,
+    createSupabaseServiceClient: vi.fn().mockResolvedValue({
+      from: (table: string) => ({
+        select: () => ({
+          eq: () => ({ maybeSingle: businessLookup })
+        }),
+        update: (patch: Record<string, unknown>) => ({
+          eq: (...args: unknown[]) => linkUpdate(table, patch, ...args)
         })
       })
-    };
-  });
+    })
+  };
+});
 
 vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification }));
 vi.mock("@/lib/db/contact-names", () => ({ resolveContactNames }));
+vi.mock("@/lib/db/notifications", () => ({ hasRecentNotificationForContact }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient }));
+
+function rpcResult(overrides: Partial<LinkClickRpcResult> = {}): LinkClickRpcResult {
+  return {
+    ok: true,
+    url: "https://calendly.com/kyp-ads/strategy",
+    business_id: "biz-1",
+    link_id: "link-1",
+    short_code: "36q72wrm",
+    click_count: 1,
+    to_e164: "+16478879033",
+    original_url: "https://calendly.com/kyp-ads/strategy",
+    flow_id: "flow-1",
+    run_id: "run-1",
+    is_first_click: true,
+    is_prefetch: false,
+    should_notify: true,
+    ...overrides
+  };
+}
 
 describe("notificationLink link_click", () => {
   it("deep-links to the thread href in payload", () => {
@@ -43,31 +76,23 @@ describe("notificationLink link_click", () => {
   });
 });
 
-describe("notifyLinkClickFirstTap", () => {
+describe("notifyLinkClick", () => {
   beforeEach(() => {
     dispatchUrgentNotification.mockReset();
     dispatchUrgentNotification.mockResolvedValue({ results: [] });
     resolveContactNames.mockReset();
     resolveContactNames.mockResolvedValue(new Map([["+16478879033", { name: "Muhammad al" }]]));
+    hasRecentNotificationForContact.mockReset();
+    hasRecentNotificationForContact.mockResolvedValue(false);
     businessLookup.mockReset();
     businessLookup.mockResolvedValue({ data: { name: "KYP Ads" }, error: null });
+    linkUpdate.mockReset();
+    linkUpdate.mockResolvedValue({ data: null, error: null });
   });
 
-  it("dispatches on first click with booking-link wording for calendly URLs", async () => {
-    const { notifyLinkClickFirstTap } = await import("@/lib/notifications/link-click-notify");
-    await notifyLinkClickFirstTap({
-      ok: true,
-      url: "https://calendly.com/kyp-ads/strategy",
-      business_id: "biz-1",
-      link_id: "link-1",
-      short_code: "36q72wrm",
-      click_count: 1,
-      to_e164: "+16478879033",
-      original_url: "https://calendly.com/kyp-ads/strategy",
-      flow_id: "flow-1",
-      run_id: "run-1",
-      is_first_click: true
-    });
+  it("dispatches when the RPC says should_notify, with booking-link wording for calendly URLs", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
 
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -81,21 +106,56 @@ describe("notifyLinkClickFirstTap", () => {
     );
   });
 
+  it("skips when should_notify is false (prefetch or already notified)", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult({ should_notify: false, is_prefetch: true }));
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    expect(hasRecentNotificationForContact).not.toHaveBeenCalled();
+  });
+
+  it("collapses per contact: a recent link_click alert suppresses this one and releases the stamp", async () => {
+    hasRecentNotificationForContact.mockResolvedValue(true);
+    const { notifyLinkClick, LINK_CLICK_CONTACT_THROTTLE_MS } = await import(
+      "@/lib/notifications/link-click-notify"
+    );
+    await notifyLinkClick(rpcResult());
+    expect(hasRecentNotificationForContact).toHaveBeenCalledWith(
+      "biz-1",
+      "link_click",
+      "+16478879033",
+      LINK_CLICK_CONTACT_THROTTLE_MS,
+      expect.anything()
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    // The suppressed link gets its alert back for a later engagement moment.
+    expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
+  });
+
+  it("fails toward delivering when the throttle check errors (Error and non-Error)", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    hasRecentNotificationForContact.mockRejectedValueOnce(new Error("db down"));
+    await notifyLinkClick(rpcResult());
+    hasRecentNotificationForContact.mockRejectedValueOnce("string failure");
+    await notifyLinkClick(rpcResult());
+    expect(dispatchUrgentNotification).toHaveBeenCalledTimes(2);
+  });
+
+  it("skips the throttle for group links with no recipient number", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(
+      rpcResult({ to_e164: null, original_url: "https://www.example.com/offer" })
+    );
+    expect(hasRecentNotificationForContact).not.toHaveBeenCalled();
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ summary: "A lead tapped your example.com" })
+    );
+  });
+
   it("labels cal.com destinations as booking links too", async () => {
-    const { notifyLinkClickFirstTap } = await import("@/lib/notifications/link-click-notify");
-    await notifyLinkClickFirstTap({
-      ok: true,
-      url: "https://cal.com/kyp/intro",
-      business_id: "biz-1",
-      link_id: "link-1",
-      short_code: "abc12345",
-      click_count: 1,
-      to_e164: "+16478879033",
-      original_url: "https://cal.com/kyp/intro",
-      flow_id: null,
-      run_id: null,
-      is_first_click: true
-    });
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(
+      rpcResult({ original_url: "https://cal.com/kyp/intro", url: "https://cal.com/kyp/intro" })
+    );
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({ summary: "Muhammad al tapped your booking link" })
     );
@@ -104,20 +164,8 @@ describe("notifyLinkClickFirstTap", () => {
   it("falls back to the raw number and hostname when the contact is unnamed", async () => {
     resolveContactNames.mockResolvedValue(new Map());
     businessLookup.mockResolvedValue({ data: null, error: null });
-    const { notifyLinkClickFirstTap } = await import("@/lib/notifications/link-click-notify");
-    await notifyLinkClickFirstTap({
-      ok: true,
-      url: "https://www.example.com/offer",
-      business_id: "biz-1",
-      link_id: "link-1",
-      short_code: "abc12345",
-      click_count: 1,
-      to_e164: "+16478879033",
-      original_url: "https://www.example.com/offer",
-      flow_id: null,
-      run_id: null,
-      is_first_click: true
-    });
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult({ original_url: "https://www.example.com/offer" }));
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({
         summary: "+16478879033 tapped your example.com",
@@ -127,64 +175,39 @@ describe("notifyLinkClickFirstTap", () => {
     );
   });
 
-  it("falls back to 'link' for a URL with an empty host and logs non-Error dispatch failures", async () => {
+  it("falls back to 'link' for a URL with an empty host; a non-Error dispatch failure releases the stamp", async () => {
     dispatchUrgentNotification.mockRejectedValueOnce("string failure");
-    const { notifyLinkClickFirstTap } = await import("@/lib/notifications/link-click-notify");
-    await notifyLinkClickFirstTap({
-      ok: true,
-      url: "https://example.com/offer",
-      business_id: "biz-1",
-      link_id: "link-1",
-      short_code: "abc12345",
-      click_count: 1,
-      to_e164: null,
-      // Parses as a URL but carries no hostname → the `host || "link"` branch.
-      original_url: "file:///local/path",
-      flow_id: null,
-      run_id: null,
-      is_first_click: true
-    });
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    // Parses as a URL but carries no hostname → the `host || "link"` branch.
+    await notifyLinkClick(rpcResult({ to_e164: null, original_url: "file:///local/path" }));
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({ summary: "A lead tapped your link" })
     );
+    // Thrown dispatch → notified_at released so the next human tap retries.
+    expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
   });
 
-  it("uses hostname label for non-calendly URLs and logs dispatch failures", async () => {
+  it("uses the 'link' label for unparseable URLs and releases the stamp on Error dispatch failures", async () => {
     dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
-    const { notifyLinkClickFirstTap } = await import("@/lib/notifications/link-click-notify");
-    await notifyLinkClickFirstTap({
-      ok: true,
-      url: "https://example.com/offer",
-      business_id: "biz-1",
-      link_id: "link-1",
-      short_code: "abc12345",
-      click_count: 1,
-      to_e164: null,
-      original_url: "not-a-url",
-      flow_id: null,
-      run_id: null,
-      is_first_click: true
-    });
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult({ to_e164: null, original_url: "not-a-url" }));
     expect(dispatchUrgentNotification).toHaveBeenCalledWith(
       expect.objectContaining({ summary: "A lead tapped your link" })
     );
+    expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
   });
 
-  it("skips repeat clicks", async () => {
-    const { notifyLinkClickFirstTap } = await import("@/lib/notifications/link-click-notify");
-    await notifyLinkClickFirstTap({
-      ok: true,
-      url: "https://example.com",
-      business_id: "biz-1",
-      link_id: "link-1",
-      short_code: "abc12345",
-      click_count: 2,
-      to_e164: null,
-      original_url: "https://example.com",
-      flow_id: null,
-      run_id: null,
-      is_first_click: false
-    });
-    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  it("keeps the stamp on success, and stays at-most-once when the release itself fails", async () => {
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult());
+    expect(linkUpdate).not.toHaveBeenCalled();
+
+    dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
+    linkUpdate.mockRejectedValueOnce(new Error("db down"));
+    await expect(notifyLinkClick(rpcResult())).resolves.toBeUndefined();
+
+    dispatchUrgentNotification.mockRejectedValueOnce(new Error("smtp down"));
+    linkUpdate.mockRejectedValueOnce("string failure");
+    await expect(notifyLinkClick(rpcResult())).resolves.toBeUndefined();
   });
 });
