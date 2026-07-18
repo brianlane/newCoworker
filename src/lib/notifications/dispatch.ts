@@ -76,6 +76,8 @@ export type DispatchResult = {
 
 export type ResolvedTargets = {
   email: string | null;
+  /** The business owner's login email — the address `ui_locale` is keyed to. */
+  ownerEmail: string | null;
   phone: string | null;
   smsUrgentEnabled: boolean;
   /** WhatsApp channel toggle (delivery still requires a connected integration). */
@@ -170,6 +172,7 @@ export async function resolveNotificationTargets(
 
   return {
     email: prefsEmail ?? ownerEmail ?? fallbackEmail,
+    ownerEmail,
     phone: prefsPhone ?? fallbackPhone,
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
@@ -455,13 +458,17 @@ export async function dispatchUrgentNotification(
   } else {
     const text = input.smsBody ?? `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
     try {
+      // Owner alerts follow the owner's saved UI language, keyed to the
+      // OWNER login email (a custom alert_email may be someone else's).
+      const whatsappLocaleEmail = targets.ownerEmail ?? targets.email;
       const delivered = await deliverWhatsApp({
         businessId: input.businessId,
         to: targets.phone,
         text,
         audience: "owner",
-        // Owner alerts follow the owner's saved UI language.
-        language: targets.email ? await resolveOwnerUiLocaleForEmail(targets.email) : "en"
+        language: whatsappLocaleEmail
+          ? await resolveOwnerUiLocaleForEmail(whatsappLocaleEmail)
+          : "en"
       });
       if (delivered.ok) {
         results.push(
