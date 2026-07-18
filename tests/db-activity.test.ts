@@ -331,10 +331,11 @@ describe("buildActivityFeed", () => {
     expect(item.label).toBe("Urgent: call");
   });
 
-  it("reserves slots for alerts so routine events can't push them off", () => {
+  it("ranks alerts by recency like any other kind — newer routine events crowd out an old alert", () => {
     const items = buildActivityFeed(
       emptyInput({
-        // One old urgent alert plus three newer routine calls, limit 2.
+        // One old urgent alert plus three newer routine calls, limit 2: the
+        // alert gets no reserved slot and falls off the card.
         alerts: [{ task_type: "call", log_payload: { reason: "Gas leak" }, created_at: "2026-01-01T00:00:00Z" }],
         calls: [
           { caller_e164: "+1", status: "ok", started_at: "2026-01-09T00:00:00Z" },
@@ -345,34 +346,25 @@ describe("buildActivityFeed", () => {
       })
     );
     expect(items).toHaveLength(2);
-    // Newest routine call shown, but the old alert is retained (last by recency).
-    expect(items.map((i) => i.kind)).toEqual(["call", "alert"]);
-    expect(items[1].label).toBe("Urgent: Gas leak");
+    expect(items.map((i) => i.kind)).toEqual(["call", "call"]);
   });
 
-  it("caps alerts at half the feed so newer activity still appears", () => {
+  it("keeps an alert that is among the newest items", () => {
     const items = buildActivityFeed(
       emptyInput({
-        alerts: [
-          { task_type: "call", log_payload: { reason: "A1" }, created_at: "2026-02-01T04:00:00Z" },
-          { task_type: "call", log_payload: { reason: "A2" }, created_at: "2026-02-01T03:00:00Z" },
-          { task_type: "call", log_payload: { reason: "A3" }, created_at: "2026-02-01T02:00:00Z" },
-          { task_type: "call", log_payload: { reason: "A4" }, created_at: "2026-02-01T01:00:00Z" }
-        ],
+        alerts: [{ task_type: "call", log_payload: { reason: "Flood" }, created_at: "2026-02-02T11:00:00Z" }],
         calls: [
           { caller_e164: "+1", status: "ok", started_at: "2026-02-02T10:00:00Z" },
           { caller_e164: "+2", status: "ok", started_at: "2026-02-02T09:00:00Z" }
         ],
-        limit: 4
+        limit: 2
       })
     );
-    const kinds = items.map((i) => i.kind);
-    expect(items).toHaveLength(4);
-    expect(kinds.filter((k) => k === "alert")).toHaveLength(2);
-    expect(kinds.filter((k) => k === "call")).toHaveLength(2);
+    expect(items.map((i) => i.kind)).toEqual(["alert", "call"]);
+    expect(items[0].label).toBe("Urgent: Flood");
   });
 
-  it("backfills remaining slots with alerts when there is no other activity", () => {
+  it("shows the newest alerts when they are the only activity", () => {
     const items = buildActivityFeed(
       emptyInput({
         alerts: [
@@ -386,6 +378,7 @@ describe("buildActivityFeed", () => {
     );
     expect(items).toHaveLength(3);
     expect(items.every((i) => i.kind === "alert")).toBe(true);
+    expect(items.map((i) => i.label)).toEqual(["Urgent: A1", "Urgent: A2", "Urgent: A3"]);
   });
 
   it("sorts newest-first across sources and caps to limit", () => {
@@ -462,11 +455,11 @@ describe("collectActivityItems — contactE164 attribution", () => {
 });
 
 describe("collectActivityItems", () => {
-  it("returns every source unranked (no alert reservation/cap)", () => {
+  it("returns every source unranked and uncapped", () => {
     const items = collectActivityItems(
       emptyInput({
-        // A tiny limit would force the card's reservation logic to drop items;
-        // collect ignores limit entirely and keeps all of them.
+        // A tiny limit would force the card's cap to drop items; collect
+        // ignores limit entirely and keeps all of them.
         limit: 1,
         calls: [{ caller_e164: "+1", status: "ok", started_at: "2026-01-02T00:00:00Z" }],
         alerts: [{ task_type: "call", log_payload: { reason: "X" }, created_at: "2026-01-01T00:00:00Z" }]
@@ -479,11 +472,11 @@ describe("collectActivityItems", () => {
 });
 
 describe("paginateFullActivityFeed — ranking", () => {
-  it("ranks strictly by recency with no alert reservation", () => {
+  it("ranks strictly by recency, same as the card", () => {
     const { items } = paginateFullActivityFeed(
       emptyInput({
-        // Three newer routine calls plus one old alert; the card would reserve a
-        // slot for the alert, but the full feed is pure recency.
+        // Three newer routine calls plus one old alert; pure recency means the
+        // old alert doesn't make the cut.
         alerts: [{ task_type: "call", log_payload: { reason: "Old" }, created_at: "2026-01-01T00:00:00Z" }],
         calls: [
           { caller_e164: "+1", status: "ok", started_at: "2026-01-09T00:00:00Z" },
@@ -710,12 +703,11 @@ describe("getActivityFeedPage", () => {
     vi.mocked(resolveContactNames).mockResolvedValue(new Map<string, ContactName>());
   });
 
-  it("ranks strictly by recency (no alert reservation) so AiFlow runs surface", async () => {
+  it("ranks strictly by recency so AiFlow runs surface", async () => {
     const db = mockDbByTable({
       ...ALL_EMPTY,
-      // An older AiFlow run plus a newer alert: the recency-only full feed keeps
-      // both and orders the alert first (it is newer), unlike the card which
-      // would slot-reserve the alert regardless of age.
+      // An older AiFlow run plus a newer alert: the recency-only feed keeps
+      // both and orders the alert first (it is newer).
       ai_flow_runs: {
         data: [
           {

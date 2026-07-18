@@ -212,12 +212,11 @@ function alertLabel(row: ActivityAlertRow): string {
 
 /**
  * Build the unsorted list of activity items from every source. Pure and shared
- * by both the dashboard card ({@link buildActivityFeed}, which then reserves
- * slots for alerts) and the full "See all activity" page
- * ({@link paginateFullActivityFeed}, which sorts strictly by recency and
- * chunks with a cursor). Splitting the collection from the ordering keeps the
- * two surfaces in lockstep on what counts as activity while letting each pick
- * its own ranking.
+ * by both the dashboard card ({@link buildActivityFeed}, which caps to the
+ * card's limit) and the full "See all activity" page
+ * ({@link paginateFullActivityFeed}, which chunks with a cursor). Both rank
+ * strictly by recency; splitting the collection from the ordering keeps the
+ * two surfaces in lockstep on what counts as activity.
  */
 export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
   const items: ActivityItem[] = [];
@@ -350,22 +349,14 @@ function byRecency(a: ActivityItem, b: ActivityItem): number {
  * Merge every activity source into one chronological (newest-first) feed,
  * capped at `limit`. Pure — callers pass already-fetched plain rows.
  *
- * Used by the dashboard's compact Recent Activity card: alerts are high-signal
- * but mustn't dominate, so reserve at most half the feed for the newest alerts
- * (a backlog of urgent items can't hide the latest calls/texts), fill the rest
- * by recency, then backfill any unused slots with extra alerts when there isn't
- * enough other activity. The full "See all activity" page uses
- * {@link paginateFullActivityFeed} instead, which ranks purely by recency.
+ * Used by the dashboard's compact Recent Activity card. Alerts rank like every
+ * other kind — strictly by recency — so an old urgent item scrolls away as
+ * newer activity arrives instead of staying pinned (the notifications page
+ * remains the durable home for alerts). This matches the full "See all
+ * activity" page ({@link paginateFullActivityFeed}).
  */
 export function buildActivityFeed(input: ActivityFeedInput): ActivityItem[] {
-  const items = collectActivityItems(input);
-  const alerts = items.filter((i) => i.kind === "alert").sort(byRecency);
-  const rest = items.filter((i) => i.kind !== "alert").sort(byRecency);
-  const reserve = Math.ceil(input.limit / 2);
-  const reservedAlerts = alerts.slice(0, reserve);
-  const keptRest = rest.slice(0, input.limit - reservedAlerts.length);
-  const extraAlerts = alerts.slice(reservedAlerts.length, input.limit - keptRest.length);
-  return [...reservedAlerts, ...extraAlerts, ...keptRest].sort(byRecency);
+  return collectActivityItems(input).sort(byRecency).slice(0, input.limit);
 }
 
 export type ActivityFeedPage = {
@@ -722,9 +713,8 @@ async function fetchActivityFeedInput(
 /**
  * Fetch the most-recent activity across calls, texts, dashboard chat, AiFlow
  * runs, new customers, and urgent alerts for a business, merged into one
- * chronological feed for the dashboard's compact Recent Activity card. Alerts
- * are slot-reserved (see {@link buildActivityFeed}) and the result is capped to
- * `limit`.
+ * chronological feed for the dashboard's compact Recent Activity card, capped
+ * to `limit`.
  */
 export async function getRecentActivity(
   businessId: string,
@@ -740,8 +730,8 @@ export async function getRecentActivity(
 
 /**
  * Like {@link getRecentActivity} but for the full "See all activity" page:
- * loads ONE gap-free chunk of up to `limit` items ranked strictly by recency
- * (no alert reservation), plus the `nextBefore` cursor for the next-older
+ * loads ONE gap-free chunk of up to `limit` items ranked strictly by recency,
+ * plus the `nextBefore` cursor for the next-older
  * chunk — so the whole tier window (e.g. 90 days) is reachable, not just the
  * newest {@link ACTIVITY_FEED_MAX} events. Pass `before` (a previous chunk's
  * `nextBefore`) to walk older history. `filter` narrows kinds and the
