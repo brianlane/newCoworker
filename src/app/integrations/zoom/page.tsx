@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import {
   CalendarCheck,
+  FileText,
   Link2,
   PlugZap,
   RefreshCcw,
@@ -39,7 +40,8 @@ const scopes = [
   { scope: "meeting:delete:meeting", use: "Delete the meeting when the appointment is canceled" },
   { scope: "meeting:read:meeting / meeting:read:list_meetings", use: "Confirm meeting details after changes" },
   { scope: "meeting:write:invite_links", use: "Create the join link your coworker sends to the customer" },
-  { scope: "user:read:user", use: "Identify the connected Zoom account (name and email shown on your dashboard card)" }
+  { scope: "user:read:user", use: "Identify the connected Zoom account (name and email shown on your dashboard card)" },
+  { scope: "cloud_recording:read:meeting_transcript", use: "Fetch a cloud-recorded meeting's transcript — only when you click Import transcript — to produce meeting minutes in your Documents" }
 ];
 
 function StepCard({
@@ -101,6 +103,17 @@ export default function ZoomIntegrationDocsPage() {
             <p className="mt-2 text-sm leading-relaxed text-parchment/50">
               If the appointment is rescheduled, the Zoom meeting moves with it. If it&apos;s
               canceled, the meeting is deleted. No orphaned meetings on your account.
+            </p>
+          </div>
+          <div className="rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-7 lg:col-span-3">
+            <FileText className="h-5 w-5 text-claw-green" />
+            <h3 className="mt-3 font-semibold text-parchment">Meeting minutes on demand</h3>
+            <p className="mt-2 text-sm leading-relaxed text-parchment/50">
+              Had a meeting you cloud-recorded with audio transcript on? Paste its meeting ID into{" "}
+              <b>Dashboard → Integrations → Zoom → Meeting minutes</b> and your coworker fetches
+              the transcript and condenses it into minutes in your document library — staff-only by
+              default. Transcripts are only ever read when you ask for an import; nothing is pulled
+              automatically.
             </p>
           </div>
         </div>
@@ -241,7 +254,7 @@ export default function ZoomIntegrationDocsPage() {
         <SectionHeading
           eyebrow="Permissions & privacy"
           title="Exactly what New Coworker can access"
-          subtitle="The integration requests the minimum Zoom scopes needed to schedule meetings on your behalf — nothing else."
+          subtitle="The integration requests the minimum Zoom scopes needed to schedule meetings on your behalf and, only when you ask, import a meeting transcript — nothing else."
         />
         <div className="overflow-x-auto rounded-2xl border border-parchment/10 bg-parchment/[0.02]">
           <table className="w-full text-left text-sm">
@@ -264,9 +277,11 @@ export default function ZoomIntegrationDocsPage() {
         <div className="mt-6 rounded-xl border border-signal-teal/20 bg-signal-teal/[0.05] p-5 text-sm leading-relaxed text-parchment/60">
           <ShieldCheck className="mr-2 inline h-4 w-4 text-signal-teal" />
           Your Zoom tokens are encrypted at rest (AES-256-GCM) in a row-level-security-protected
-          database, are never exposed to the browser, and are deleted when you disconnect. We never
-          read meeting content — only the scheduling data for appointments your coworker manages.
-          See our{" "}
+          database, are never exposed to the browser, and are deleted when you disconnect. Meeting
+          content is read in exactly one case: when you explicitly import a cloud-recorded
+          meeting&apos;s transcript for minutes — the transcript is processed into your document
+          library and never pulled automatically. Everything else touches only the scheduling data
+          for appointments your coworker manages. See our{" "}
           <Link href="/privacy" className="text-claw-green hover:underline">
             Privacy Policy
           </Link>{" "}

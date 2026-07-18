@@ -17,12 +17,18 @@
  *   GET    ?businessId=…           (state, masked)
  *   PATCH  {businessId, isActive}
  *   DELETE {businessId}
+ *
+ * Once connected, the card also offers meeting-transcript import
+ * (POST /api/integrations/zoom/import-transcript): paste a meeting ID from a
+ * cloud-recorded meeting and the transcript lands in Documents as
+ * staff-only meeting minutes.
  */
 
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { Input } from "@/components/ui/Input";
 
 type ZoomConnection = {
   id: string;
@@ -45,12 +51,61 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
   const [connection, setConnection] = useState<ZoomConnection | null>(initialConnection);
   const [banner, setBanner] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  const [meetingId, setMeetingId] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState<
+    { kind: "success"; message: string } | { kind: "error"; message: string } | null
+  >(null);
 
   const connectHref = `/api/integrations/zoom/connect?businessId=${encodeURIComponent(businessId)}`;
   const connectedAndActive = !!connection && connection.is_active;
 
   function startConnect() {
     window.location.href = connectHref;
+  }
+
+  async function importTranscript() {
+    setImportResult(null);
+    setImporting(true);
+    try {
+      const res = await fetch("/api/integrations/zoom/import-transcript", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, meetingId })
+      });
+      const json = (await res.json().catch(() => null)) as {
+        error?: { message?: string };
+        data?: {
+          summary?: string | null;
+          document?: { status?: string; error_detail?: string | null };
+        };
+      } | null;
+      if (res.ok && json?.data?.document?.status === "ready") {
+        setMeetingId("");
+        setImportResult({
+          kind: "success",
+          message: json.data.summary
+            ? `Minutes saved to Documents: ${json.data.summary}`
+            : "Transcript imported — minutes are in your Documents."
+        });
+      } else if (res.ok) {
+        // 200 with a failed document: the transcript stored but the minutes
+        // condensation failed — same contract as the Documents upload route.
+        setImportResult({
+          kind: "error",
+          message: json?.data?.document?.error_detail
+            ? `The transcript was saved but minutes generation failed: ${json.data.document.error_detail}`
+            : "The transcript was saved but minutes generation failed — retry from Documents."
+        });
+      } else {
+        setImportResult({
+          kind: "error",
+          message: json?.error?.message ?? "Import failed — try again shortly."
+        });
+      }
+    } finally {
+      setImporting(false);
+    }
   }
 
   async function disconnect() {
@@ -122,6 +177,42 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
               </span>
             ) : null}
           </div>
+          {connection.is_active ? (
+            <div className="rounded-lg border border-parchment/10 bg-parchment/[0.02] p-3">
+              <p className="text-xs font-semibold text-parchment">Meeting minutes</p>
+              <p className="text-[11px] text-parchment/40 mt-1">
+                Paste the meeting ID of a cloud-recorded meeting (with audio transcript
+                on) and your coworker turns the transcript into minutes in Documents.
+              </p>
+              <div className="mt-2 flex gap-2">
+                <Input
+                  value={meetingId}
+                  onChange={(e) => setMeetingId(e.target.value)}
+                  placeholder="Meeting ID, e.g. 178 4344 402882"
+                  className="flex-1"
+                />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={importTranscript}
+                  loading={importing}
+                  disabled={meetingId.replace(/\s+/g, "").length === 0}
+                >
+                  Import transcript
+                </Button>
+              </div>
+              {importResult ? (
+                <p
+                  className={`text-xs mt-2 ${
+                    importResult.kind === "success" ? "text-claw-green" : "text-spark-orange"
+                  }`}
+                >
+                  {importResult.message}
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <div className="flex gap-2">
             {!connection.is_active ? (
               <Button type="button" variant="secondary" size="sm" onClick={startConnect}>

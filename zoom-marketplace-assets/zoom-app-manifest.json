@@ -55,9 +55,13 @@
       {
         "scope" : "meeting:write:invite_links",
         "optional" : false
+      },
+      {
+        "scope" : "cloud_recording:read:meeting_transcript",
+        "optional" : false
       }
     ],
-    "scope_description" : "New Coworker is an AI assistant for small businesses. It uses these meeting scopes to schedule, update, and cancel Zoom meetings on behalf of the connected business owner (e.g. booking customer appointments captured by phone, SMS, or email) and to create invite links it can send to customers. The user scope is used to identify the connected account. Meeting data is used only to fulfill the owner’s scheduling requests; any stored data is kept in an RLS-protected, encrypted database and is deleted on request."
+    "scope_description" : "New Coworker is an AI assistant for small businesses. It uses these meeting scopes to schedule, update, and cancel Zoom meetings on behalf of the connected business owner (e.g. booking customer appointments captured by phone, SMS, or email) and to create invite links it can send to customers. The user scope is used to identify the connected account. The meeting transcript read scope is used, at the owner's request, to fetch the cloud-recording transcript (VTT) of the owner's own meetings so the assistant can produce meeting minutes and action items for them. Meeting data is used only to fulfill the owner's scheduling and minutes requests; any stored data is kept in an RLS-protected, encrypted database and is deleted on request."
   },
   "developer_information" : {
     "contact_details" : [
