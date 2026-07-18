@@ -41,12 +41,13 @@ const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  // Zoom meeting ids are numeric (9–12 digits); owners paste them with or
-  // without spaces ("178 4344 402882").
+  // Zoom meeting ids are numeric (typically 9–11 digits, with longer ids in
+  // the wild — e.g. 13 digits); owners paste them with or without spaces
+  // ("178 4344 402882").
   meetingId: z
     .string()
     .transform((v) => v.replace(/\s+/g, ""))
-    .pipe(z.string().regex(/^\d{9,12}$/, "meetingId must be a Zoom meeting ID")),
+    .pipe(z.string().regex(/^\d{9,15}$/, "meetingId must be a Zoom meeting ID")),
   title: z.string().trim().max(200).optional()
 });
 
