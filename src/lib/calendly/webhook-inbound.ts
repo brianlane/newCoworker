@@ -67,7 +67,7 @@ export function verifyCalendlyWebhookSignature(
 
 export type CalendlyWebhookHandleResult = {
   handled: boolean;
-  reason?: "ignored_event" | "not_connected";
+  reason?: "ignored_event" | "not_connected" | "stale_subscription";
   goalsFired?: number;
   jumpedRuns?: number;
 };
@@ -82,11 +82,18 @@ export type CalendlyWebhookHandleDeps = BookingGoalFireDeps & {
  * other events (or a business whose calendar no longer resolves to Calendly
  * — a stale subscription outliving a disconnect) are acknowledged and
  * ignored so Calendly does not retry them.
+ *
+ * `subscription` is the row whose signing key just verified this delivery.
+ * A row created by a DIFFERENT connection than the business's current one
+ * belongs to a possibly-switched Calendly account (the sweep replaces it on
+ * its next tick — see webhook-subscriptions.ts); its deliveries are ignored
+ * rather than firing goals off the previous account's bookings.
  */
 export async function handleCalendlyWebhookEvent(
   db: SupabaseClient,
   businessId: string,
   body: unknown,
+  subscription: { connection_key: string | null },
   deps: CalendlyWebhookHandleDeps = {}
 ): Promise<CalendlyWebhookHandleResult> {
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
@@ -99,6 +106,9 @@ export async function handleCalendlyWebhookEvent(
   const conn = await resolveConnection(businessId);
   if (!conn || conn.provider !== "calendly") {
     return { handled: false, reason: "not_connected" };
+  }
+  if (subscription.connection_key !== `${conn.providerConfigKey}:${conn.connectionId}`) {
+    return { handled: false, reason: "stale_subscription" };
   }
 
   // The invitee.created payload IS the invitee resource — same fields the

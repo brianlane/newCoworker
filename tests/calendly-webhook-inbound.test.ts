@@ -80,13 +80,15 @@ describe("handleCalendlyWebhookEvent", () => {
     providerConfigKey: "calendly-direct",
     connectionId: "cx-1"
   };
+  // The row whose signing key verified the delivery, created by CONN.
+  const SUB = { connection_key: "calendly-direct:cx-1" };
 
   it("ignores non-invitee.created events (and non-object bodies)", async () => {
-    expect(await handleCalendlyWebhookEvent(db, BIZ, { event: "invitee.canceled" })).toEqual({
+    expect(await handleCalendlyWebhookEvent(db, BIZ, { event: "invitee.canceled" }, SUB)).toEqual({
       handled: false,
       reason: "ignored_event"
     });
-    expect(await handleCalendlyWebhookEvent(db, BIZ, null)).toEqual({
+    expect(await handleCalendlyWebhookEvent(db, BIZ, null, SUB)).toEqual({
       handled: false,
       reason: "ignored_event"
     });
@@ -102,9 +104,29 @@ describe("handleCalendlyWebhookEvent", () => {
         db,
         BIZ,
         { event: "invitee.created", payload: {} },
+        SUB,
         { resolveConnection }
       )
     ).toEqual({ handled: false, reason: "not_connected" });
+    expect(fireBookingGoalsForInvitees).not.toHaveBeenCalled();
+  });
+
+  it("ignores deliveries from a subscription created by a DIFFERENT connection", async () => {
+    const resolveConnection = vi.fn().mockResolvedValue(CONN);
+    for (const staleSub of [
+      { connection_key: "calendly:old-nango-conn" },
+      { connection_key: null }
+    ]) {
+      expect(
+        await handleCalendlyWebhookEvent(
+          db,
+          BIZ,
+          { event: "invitee.created", payload: {} },
+          staleSub,
+          { resolveConnection }
+        )
+      ).toEqual({ handled: false, reason: "stale_subscription" });
+    }
     expect(fireBookingGoalsForInvitees).not.toHaveBeenCalled();
   });
 
@@ -120,6 +142,7 @@ describe("handleCalendlyWebhookEvent", () => {
       db,
       BIZ,
       { event: "invitee.created", payload },
+      SUB,
       { resolveConnection }
     );
     expect(fireBookingGoalsForInvitees).toHaveBeenCalledWith(db, BIZ, [payload], {
@@ -143,6 +166,7 @@ describe("handleCalendlyWebhookEvent", () => {
       db,
       BIZ,
       { event: "invitee.created" },
+      SUB,
       { resolveConnection }
     );
     expect(fireBookingGoalsForInvitees).toHaveBeenCalledWith(db, BIZ, [{}], {
@@ -154,7 +178,9 @@ describe("handleCalendlyWebhookEvent", () => {
 
   it("uses the module connection resolver by default", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(null);
-    expect(await handleCalendlyWebhookEvent(db, BIZ, { event: "invitee.created" })).toEqual({
+    expect(
+      await handleCalendlyWebhookEvent(db, BIZ, { event: "invitee.created" }, SUB)
+    ).toEqual({
       handled: false,
       reason: "not_connected"
     });

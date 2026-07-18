@@ -75,7 +75,7 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", "body must be JSON");
     }
 
-    const result = await handleCalendlyWebhookEvent(db, businessId, json);
+    const result = await handleCalendlyWebhookEvent(db, businessId, json, sub);
     return successResponse(result);
   } catch (err) {
     return handleRouteError(err);

@@ -37,6 +37,8 @@ const ACTIVE_SUB = {
   status: "active",
   subscription_uri: "https://api.calendly.com/webhook_subscriptions/WH1",
   signingKey: KEY,
+  user_uri: "https://api.calendly.com/users/U1",
+  connection_key: "calendly-direct:cx-1",
   last_attempt_at: "2026-07-18T00:00:00Z"
 };
 
@@ -69,10 +71,14 @@ describe("POST /api/webhooks/calendly", () => {
     const body = JSON.stringify({ event: "invitee.created", payload: { email: "t@x.com" } });
     const res = await POST(signedRequest(body));
     expect(res.status).toBe(200);
-    expect(handleCalendlyWebhookEvent).toHaveBeenCalledWith(expect.anything(), BIZ, {
-      event: "invitee.created",
-      payload: { email: "t@x.com" }
-    });
+    // The verified subscription row travels into the handler so it can
+    // reject rows created by a different (switched) connection.
+    expect(handleCalendlyWebhookEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      BIZ,
+      { event: "invitee.created", payload: { email: "t@x.com" } },
+      ACTIVE_SUB
+    );
   });
 
   it("401s without a business uuid", async () => {
