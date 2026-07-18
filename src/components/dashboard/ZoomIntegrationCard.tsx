@@ -75,15 +75,27 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
       });
       const json = (await res.json().catch(() => null)) as {
         error?: { message?: string };
-        data?: { summary?: string | null };
+        data?: {
+          summary?: string | null;
+          document?: { status?: string; error_detail?: string | null };
+        };
       } | null;
-      if (res.ok) {
+      if (res.ok && json?.data?.document?.status === "ready") {
         setMeetingId("");
         setImportResult({
           kind: "success",
-          message: json?.data?.summary
+          message: json.data.summary
             ? `Minutes saved to Documents: ${json.data.summary}`
             : "Transcript imported — minutes are in your Documents."
+        });
+      } else if (res.ok) {
+        // 200 with a failed document: the transcript stored but the minutes
+        // condensation failed — same contract as the Documents upload route.
+        setImportResult({
+          kind: "error",
+          message: json?.data?.document?.error_detail
+            ? `The transcript was saved but minutes generation failed: ${json.data.document.error_detail}`
+            : "The transcript was saved but minutes generation failed — retry from Documents."
         });
       } else {
         setImportResult({
