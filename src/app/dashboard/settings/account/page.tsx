@@ -1,6 +1,7 @@
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { getTranslations } from "next-intl/server";
+import { getLocale, getTranslations } from "next-intl/server";
+import type { AppLocale } from "@/i18n/routing";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
@@ -14,6 +15,7 @@ export const dynamic = "force-dynamic";
 
 export default async function AccountSettingsPage() {
   const t = await getTranslations("dashboard.settings");
+  const locale = (await getLocale()) as AppLocale;
   const { user, business } = await loadSettingsContext();
   const subscription = business ? await getSubscription(business.id) : null;
   const nextBillingAt =
@@ -50,12 +52,14 @@ export default async function AccountSettingsPage() {
               <dd className="text-xs text-parchment/60 leading-relaxed">
                 {voiceMinutesLine(
                   business.tier as PlanTier,
-                  business.tier === "enterprise" ? business.enterprise_limits : undefined
+                  business.tier === "enterprise" ? business.enterprise_limits : undefined,
+                  locale
                 )}
                 <br />
                 {smsMonthlyLine(
                   business.tier as PlanTier,
-                  business.tier === "enterprise" ? business.enterprise_limits : undefined
+                  business.tier === "enterprise" ? business.enterprise_limits : undefined,
+                  locale
                 )}
               </dd>
             </div>
@@ -86,7 +90,7 @@ export default async function AccountSettingsPage() {
         {subscription?.stripe_customer_id && (
           <form action="/api/billing/portal" method="POST" className="mt-2">
             <button type="submit" className="text-sm text-claw-green hover:underline">
-              Manage billing and payment methods
+              {t("manageBilling")}
             </button>
           </form>
         )}

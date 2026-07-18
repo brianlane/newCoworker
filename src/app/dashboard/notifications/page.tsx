@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { getTranslations } from "next-intl/server";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
@@ -23,6 +24,7 @@ import { NotificationList } from "@/components/dashboard/NotificationList";
 export const dynamic = "force-dynamic";
 
 export default async function NotificationsPage() {
+  const t = await getTranslations("dashboard.notificationsPage");
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/notifications");
   if (!user.email) redirect("/login");
@@ -116,34 +118,30 @@ export default async function NotificationsPage() {
   return (
     <div className="space-y-8 max-w-3xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Notifications</h1>
-        <p className="text-sm text-parchment/50 mt-1">
-          Choose how we reach you and review recent delivery history
-        </p>
+        <h1 className="text-2xl font-bold text-parchment">{t("title")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("subtitle")}</p>
       </div>
 
       {!businessId || !prefsForDisplay ? (
         <Card>
-          <p className="text-parchment/60 text-sm text-center py-6">
-            Provision your coworker to configure notification preferences.
-          </p>
+          <p className="text-parchment/60 text-sm text-center py-6">{t("provisionFirst")}</p>
           <a
             href="/onboard"
             className="block text-center text-sm text-signal-teal hover:underline"
           >
-            Get started →
+            {t("getStarted")}
           </a>
         </Card>
       ) : (
         <>
           <Card>
-            <h2 className="text-sm font-semibold text-parchment mb-4">Preferences</h2>
+            <h2 className="text-sm font-semibold text-parchment mb-4">{t("preferences")}</h2>
             <NotificationPreferences businessId={businessId} initial={prefsForDisplay} />
           </Card>
 
           <Card>
             <div className="flex items-center justify-between mb-4">
-              <h2 className="text-sm font-semibold text-parchment">Recent notifications</h2>
+              <h2 className="text-sm font-semibold text-parchment">{t("recent")}</h2>
             </div>
             <NotificationList businessId={businessId} initial={recentWithNames} />
           </Card>

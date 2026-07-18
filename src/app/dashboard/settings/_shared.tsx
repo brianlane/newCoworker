@@ -9,6 +9,7 @@
  */
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { getAuthUser, type AuthUser } from "@/lib/auth";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
@@ -76,6 +77,7 @@ export function SettingsPageShell({
   blurb: string;
   children: React.ReactNode;
 }) {
+  const t = useTranslations("dashboard.settings");
   return (
     <div className="space-y-6 max-w-2xl">
       <div>
@@ -83,7 +85,7 @@ export function SettingsPageShell({
           href="/dashboard/settings"
           className="text-xs text-parchment/40 hover:text-parchment/70"
         >
-          ← Settings
+          {t("backToSettings")}
         </Link>
         <h1 className="text-2xl font-bold text-parchment mt-1">{title}</h1>
         <p className="text-sm text-parchment/50 mt-1">{blurb}</p>

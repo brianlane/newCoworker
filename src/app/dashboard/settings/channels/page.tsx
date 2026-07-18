@@ -1,3 +1,4 @@
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { SmsOptOutsCard } from "@/components/dashboard/SmsOptOutsCard";
 import { WebchatWidgetSettings } from "@/components/dashboard/WebchatWidgetSettings";
@@ -9,6 +10,7 @@ import { loadSettingsContext, SettingsPageShell } from "../_shared";
 export const dynamic = "force-dynamic";
 
 export default async function ChannelsSettingsPage() {
+  const t = await getTranslations("dashboard.settings");
   const { business, viewAs } = await loadSettingsContext();
 
   // Website chat widget (Standard+). Mint-on-first-read only outside
@@ -22,8 +24,8 @@ export default async function ChannelsSettingsPage() {
 
   return (
     <SettingsPageShell
-      title="Channels"
-      blurb="Phone number, website chat, and how we reach you"
+      title={t("hubChannelsTitle")}
+      blurb={t("channelsPageBlurb")}
     >
       {business && (
         <WebchatWidgetSettings
@@ -44,30 +46,24 @@ export default async function ChannelsSettingsPage() {
       )}
 
       <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-4">Phone number</h2>
-        <p className="text-xs text-parchment/40">
-          Already have a business number your customers know? Transfer it to your AI coworker;
-          most ports finish within a week.
-        </p>
+        <h2 className="text-sm font-semibold text-parchment mb-4">{t("channelsPhoneTitle")}</h2>
+        <p className="text-xs text-parchment/40">{t("channelsPhoneBody")}</p>
         <a
           href="/dashboard/settings/number"
           className="mt-4 inline-block text-sm text-claw-green hover:underline"
         >
-          Bring your own number →
+          {t("channelsPhoneCta")}
         </a>
       </Card>
 
       <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-4">Notifications</h2>
-        <p className="text-xs text-parchment/40">
-          Choose how your coworker reaches you when something urgent happens, and review
-          recent delivery history.
-        </p>
+        <h2 className="text-sm font-semibold text-parchment mb-4">{t("channelsNotificationsTitle")}</h2>
+        <p className="text-xs text-parchment/40">{t("channelsNotificationsBody")}</p>
         <a
           href="/dashboard/notifications"
           className="mt-4 inline-block text-sm text-claw-green hover:underline"
         >
-          Manage notifications →
+          {t("channelsNotificationsCta")}
         </a>
       </Card>
 

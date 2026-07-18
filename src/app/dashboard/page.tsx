@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { getLocale, getTranslations } from "next-intl/server";
+import type { AppLocale } from "@/i18n/routing";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
@@ -36,6 +38,9 @@ import { getTierLimits } from "@/lib/plans/limits";
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
+  const t = await getTranslations("dashboard.home");
+  const tBadge = await getTranslations("dashboard.activityBadge");
+  const locale = (await getLocale()) as AppLocale;
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard");
   if (!user.email) redirect("/login?redirectTo=/dashboard");
@@ -134,8 +139,8 @@ export default async function DashboardPage() {
   return (
     <div className="space-y-6 max-w-4xl">
       <div>
-        <h1 className="text-2xl font-bold text-parchment">Your AI Coworker</h1>
-        <p className="text-sm text-parchment/50 mt-1">Monitor and manage your digital employee</p>
+        <h1 className="text-2xl font-bold text-parchment">{t("title")}</h1>
+        <p className="text-sm text-parchment/50 mt-1">{t("subtitle")}</p>
       </div>
 
       {!emailVerified && <UnverifiedEmailBanner email={user.email} />}
@@ -143,12 +148,12 @@ export default async function DashboardPage() {
       {!business ? (
         <Card>
           <div className="text-center py-8">
-            <p className="text-parchment/60 mb-4">No coworker provisioned yet.</p>
+            <p className="text-parchment/60 mb-4">{t("noCoworker")}</p>
             <a
               href="/onboard"
               className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
             >
-              Get Started →
+              {t("getStarted")}
             </a>
           </div>
         </Card>
@@ -156,10 +161,8 @@ export default async function DashboardPage() {
         <>
           {business.is_paused && (
             <Card className="border-spark-orange/50 bg-spark-orange/10">
-              <p className="text-sm font-semibold text-spark-orange">Coworker is paused</p>
-              <p className="text-xs text-parchment/60 mt-1">
-                Automation is stopped. Use Resume below when you want your AI coworker active again.
-              </p>
+              <p className="text-sm font-semibold text-spark-orange">{t("pausedTitle")}</p>
+              <p className="text-xs text-parchment/60 mt-1">{t("pausedBody")}</p>
             </Card>
           )}
 
@@ -183,20 +186,20 @@ export default async function DashboardPage() {
           {/* Status Card */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <Card>
-              <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">Coworker Status</p>
+              <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">{t("coworkerStatus")}</p>
               <div className="flex flex-col gap-1">
                 {business.is_paused ? (
                   <div className="flex items-center gap-2">
-                    <Badge variant="error">Paused</Badge>
+                    <Badge variant="error">{t("paused")}</Badge>
                     <span className="text-xs text-parchment/45 capitalize">
-                      Infra: {business.status.replace("_", " ")}
+                      {t("infra", { status: business.status.replace("_", " ") })}
                     </span>
                   </div>
                 ) : business.customer_channels_enabled === false ? (
                   <div className="flex items-center gap-2">
-                    <Badge variant="pending">Safe mode</Badge>
+                    <Badge variant="pending">{t("safeMode")}</Badge>
                     <span className="text-xs text-parchment/45 capitalize">
-                      Infra: {business.status.replace("_", " ")}
+                      {t("infra", { status: business.status.replace("_", " ") })}
                     </span>
                   </div>
                 ) : (
@@ -208,40 +211,45 @@ export default async function DashboardPage() {
               </div>
             </Card>
             <Card>
-              <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">Plan</p>
+              <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">{t("plan")}</p>
               <Badge variant={business.tier === "starter" ? "neutral" : "online"}>
                 {business.tier.charAt(0).toUpperCase() + business.tier.slice(1)}
               </Badge>
               <p className="mt-2 text-xs text-parchment/50 leading-relaxed">
                 {voiceSnapshot
-                  ? `Voice ${Math.round(
-                      voiceSnapshot.committedIncludedSeconds / 60
-                    ).toLocaleString()} / ${Math.round(
-                      voiceSnapshot.tierCapSeconds / 60
-                    ).toLocaleString()} min`
+                  ? t("voiceUsage", {
+                      used: Math.round(voiceSnapshot.committedIncludedSeconds / 60).toLocaleString(),
+                      cap: Math.round(voiceSnapshot.tierCapSeconds / 60).toLocaleString()
+                    })
                   : voiceMinutesLine(
                       business.tier as PlanTier,
-                      business.tier === "enterprise" ? business.enterprise_limits : undefined
+                      business.tier === "enterprise" ? business.enterprise_limits : undefined,
+                      locale
                     )}
                 <br />
                 {smsUsedThisMonth !== null && smsCap !== null && Number.isFinite(smsCap)
-                  ? `Texts ${smsUsedThisMonth.toLocaleString()} / ${smsCap.toLocaleString()} this month`
+                  ? t("textsUsage", {
+                      used: smsUsedThisMonth.toLocaleString(),
+                      cap: smsCap.toLocaleString()
+                    })
                   : smsMonthlyLine(
                       business.tier as PlanTier,
-                      business.tier === "enterprise" ? business.enterprise_limits : undefined
+                      business.tier === "enterprise" ? business.enterprise_limits : undefined,
+                      locale
                     )}
                 {chatSpend && (
                   <>
                     <br />
-                    {`AI budget $${(chatSpend.spendMicros / 1_000_000).toFixed(2)} / $${(
-                      chatSpend.effectiveCapMicros / 1_000_000
-                    ).toFixed(2)}`}
+                    {t("aiBudgetUsage", {
+                      spent: `$${(chatSpend.spendMicros / 1_000_000).toFixed(2)}`,
+                      cap: `$${(chatSpend.effectiveCapMicros / 1_000_000).toFixed(2)}`
+                    })}
                   </>
                 )}
               </p>
             </Card>
             <Card>
-              <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">Business</p>
+              <p className="text-xs text-parchment/40 uppercase tracking-wider mb-2">{t("business")}</p>
               <p className="font-semibold text-parchment truncate">{business.name}</p>
             </Card>
           </div>
@@ -250,17 +258,17 @@ export default async function DashboardPage() {
           <Card>
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="text-sm font-semibold text-parchment/60 uppercase tracking-wider">
-                Recent Activity
+                {t("recentActivity")}
               </h2>
               <a
                 href="/dashboard/activity"
                 className="text-xs font-medium text-signal-teal hover:underline"
               >
-                See all activity →
+                {t("seeAllActivity")}
               </a>
             </div>
             {recentActivity.length === 0 ? (
-              <p className="text-sm text-parchment/40">No activity yet.</p>
+              <p className="text-sm text-parchment/40">{t("noActivity")}</p>
             ) : (
               <ul className="divide-y divide-parchment/10">
                 {recentActivity.map((item) => (
@@ -278,7 +286,7 @@ export default async function DashboardPage() {
                         </p>
                       </div>
                       <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
-                        {ACTIVITY_BADGE[item.kind].label}
+                        {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}
                       </Badge>
                     </a>
                   </li>
@@ -309,32 +317,32 @@ export default async function DashboardPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <a href="/dashboard/memory" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
-                <p className="font-semibold text-signal-teal text-sm">View Memory →</p>
-                <p className="text-xs text-parchment/40 mt-1">Review what your coworker has learned</p>
+                <p className="font-semibold text-signal-teal text-sm">{t("viewMemory")}</p>
+                <p className="text-xs text-parchment/40 mt-1">{t("viewMemoryBlurb")}</p>
               </Card>
             </a>
             <Link href="/dashboard/integrations" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
-                <p className="font-semibold text-signal-teal text-sm">Integrations →</p>
-                <p className="text-xs text-parchment/40 mt-1">Connections and platform settings</p>
+                <p className="font-semibold text-signal-teal text-sm">{t("integrations")}</p>
+                <p className="text-xs text-parchment/40 mt-1">{t("integrationsBlurb")}</p>
               </Card>
             </Link>
             <a href="/dashboard/notifications" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
-                <p className="font-semibold text-signal-teal text-sm">Notifications →</p>
-                <p className="text-xs text-parchment/40 mt-1">Configure SMS and email alerts</p>
+                <p className="font-semibold text-signal-teal text-sm">{t("notifications")}</p>
+                <p className="text-xs text-parchment/40 mt-1">{t("notificationsBlurb")}</p>
               </Card>
             </a>
             <a href="/dashboard/billing" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
-                <p className="font-semibold text-signal-teal text-sm">Billing →</p>
-                <p className="text-xs text-parchment/40 mt-1">Voice minutes and top-ups</p>
+                <p className="font-semibold text-signal-teal text-sm">{t("billing")}</p>
+                <p className="text-xs text-parchment/40 mt-1">{t("billingBlurb")}</p>
               </Card>
             </a>
             <a href="/dashboard/settings" className="block">
               <Card className="hover:border-signal-teal/40 transition-colors cursor-pointer">
-                <p className="font-semibold text-signal-teal text-sm">Account Settings →</p>
-                <p className="text-xs text-parchment/40 mt-1">Account and preferences</p>
+                <p className="font-semibold text-signal-teal text-sm">{t("accountSettings")}</p>
+                <p className="text-xs text-parchment/40 mt-1">{t("accountSettingsBlurb")}</p>
               </Card>
             </a>
           </div>

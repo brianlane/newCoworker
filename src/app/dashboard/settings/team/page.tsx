@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
 import { BrandingEditor } from "@/components/dashboard/BrandingEditor";
 import { DedicatedSupportCard } from "@/components/dashboard/DedicatedSupportCard";
@@ -12,24 +13,23 @@ import { loadSettingsContext, SettingsPageShell } from "../_shared";
 export const dynamic = "force-dynamic";
 
 export default async function TeamSettingsPage() {
+  const t = await getTranslations("dashboard.settings");
   const { business } = await loadSettingsContext();
   const isEnterprise = business?.tier === "enterprise";
 
   if (!business || !isEnterprise) {
     return (
       <SettingsPageShell
-        title="Team"
-        blurb="Dashboard access, branding, and dedicated support"
+        title={t("hubTeamTitle")}
+        blurb={t("teamPageBlurb")}
       >
         <Card>
-          <p className="text-sm text-parchment/60">
-            Team access, white-label branding, and dedicated support are Enterprise features.
-          </p>
+          <p className="text-sm text-parchment/60">{t("teamEnterpriseOnly")}</p>
           <Link
             href="/enterprise-offer"
             className="mt-4 inline-block text-sm text-claw-green hover:underline"
           >
-            Talk to us about Enterprise →
+            {t("teamEnterpriseCta")}
           </Link>
         </Card>
       </SettingsPageShell>
@@ -43,8 +43,8 @@ export default async function TeamSettingsPage() {
 
   return (
     <SettingsPageShell
-      title="Team"
-      blurb="Dashboard access, branding, and dedicated support"
+      title={t("hubTeamTitle")}
+      blurb={t("teamPageBlurb")}
     >
       <DedicatedSupportCard contact={getEnterpriseSupportContact()} />
 
