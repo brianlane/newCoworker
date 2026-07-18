@@ -158,9 +158,16 @@ describe("extractShortenableUrls", () => {
     expect(extractShortenableUrls(`see docs/${bareUrl} in the repo`, BASE)).toEqual([]);
   });
 
-  it("skips our own short links even when typed without the scheme", () => {
-    const oursBare = "www.newcoworker.com/s/abc12345?utm_source=sms&utm_medium=text";
-    expect(extractShortenableUrls(`tap ${oursBare} now`, BASE)).toEqual([]);
+  it("skips our own short links even when typed without the scheme or www", () => {
+    const query = "?utm_source=sms&utm_medium=text&utm_campaign=x";
+    for (const ours of [
+      `www.newcoworker.com/s/abc12345${query}`,
+      `newcoworker.com/s/abc12345${query}`,
+      `https://newcoworker.com/s/abc12345${query}`,
+      `HTTPS://WWW.NEWCOWORKER.COM/s/abc12345${query}`
+    ]) {
+      expect(extractShortenableUrls(`tap ${ours} now`, BASE)).toEqual([]);
+    }
   });
 });
 

@@ -87,6 +87,18 @@ export function ensureUrlScheme(url: string): string {
 }
 
 /**
+ * Whether a matched URL is one of our own /s/<code> redirects. Compared with
+ * the scheme stripped and "www." optional on both sides, so a short link
+ * quoted bare or at the apex domain ("newcoworker.com/s/…") is still
+ * recognized and never re-shortened.
+ */
+function isOwnShortLink(url: string, base: string): boolean {
+  const strip = (u: string) =>
+    u.replace(/^https?:\/\//i, "").replace(/^www\./i, "").toLowerCase();
+  return strip(url).startsWith(`${strip(base)}/s/`);
+}
+
+/**
  * Trim sentence punctuation from a matched URL's tail without mutilating
  * URLs that legitimately end in ")": a closing paren is only stripped while
  * the URL holds more ")" than "(" — so "(see https://x.com/a)" loses the
@@ -130,7 +142,7 @@ export function extractShortenableUrls(text: string, baseUrl: string): string[] 
   for (const match of text.matchAll(URL_RE)) {
     const url = trimTrailingUrlPunctuation(match[0]);
     if (url.length <= minLength) continue;
-    if (ensureUrlScheme(url).startsWith(`${base}/s/`)) continue;
+    if (isOwnShortLink(url, base)) continue;
     seen.add(url);
   }
   return [...seen].sort((a, b) => b.length - a.length);
