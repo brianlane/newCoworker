@@ -5,9 +5,9 @@
  * One row per business, upserted by the lifecycle module
  * (src/lib/calendly/webhook-subscriptions.ts):
  *   - status 'active' carries the subscription URI plus the signing key
- *     Calendly returned at creation (encrypted at rest, same crypto as
- *     calendly_connections) — the receiver decrypts it to verify the
- *     Calendly-Webhook-Signature header;
+ *     the platform minted and supplied at creation (encrypted at rest, same
+ *     crypto as calendly_connections) — the receiver decrypts it to verify
+ *     the Calendly-Webhook-Signature header;
  *   - status 'unsupported' / 'error' records a refused/failed attempt with
  *     its timestamp, so the sweep only re-tries on a long cooldown.
  *

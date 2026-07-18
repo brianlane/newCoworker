@@ -52,14 +52,18 @@ const USER_RES = {
     }
   }
 };
+// Calendly's create response carries the resource but NO signing key — the
+// platform supplies its own in the request (verified against the live API).
 const CREATED_RES = {
   data: {
     resource: {
-      uri: "https://api.calendly.com/webhook_subscriptions/WH1",
-      signing_key: "sk-secret"
+      uri: "https://api.calendly.com/webhook_subscriptions/WH1"
     }
   }
 };
+
+/** 32 random bytes, base64url → 43 chars. */
+const MINTED_KEY_RE = /^[A-Za-z0-9_-]{43}$/;
 
 const savedAppUrl = process.env.NEXT_PUBLIC_APP_URL;
 
@@ -264,7 +268,7 @@ describe("ensureCalendlyWebhookSubscription", () => {
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("creates a user-scoped invitee.created subscription and stores the signing key", async () => {
+  it("creates a user-scoped invitee.created subscription with a MINTED signing key", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
     const request = vi
       .fn()
@@ -272,7 +276,8 @@ describe("ensureCalendlyWebhookSubscription", () => {
       .mockResolvedValueOnce(CREATED_RES);
     const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
     expect(out).toEqual({ status: "active", attempted: true });
-    expect(request).toHaveBeenNthCalledWith(2, BIZ, CONN, {
+    const createCall = request.mock.calls[1];
+    expect(createCall[2]).toMatchObject({
       endpoint: "/webhook_subscriptions",
       method: "POST",
       data: {
@@ -283,12 +288,16 @@ describe("ensureCalendlyWebhookSubscription", () => {
         scope: "user"
       }
     });
+    // The signing key is client-supplied (Calendly returns none): the SAME
+    // high-entropy secret sent in the request must be the one stored.
+    const sentKey = (createCall[2] as { data: { signing_key: string } }).data.signing_key;
+    expect(sentKey).toMatch(MINTED_KEY_RE);
     expect(upsertCalendlyWebhookSubscription).toHaveBeenCalledWith(
       {
         businessId: BIZ,
         status: "active",
         subscriptionUri: "https://api.calendly.com/webhook_subscriptions/WH1",
-        signingKey: "sk-secret",
+        signingKey: sentKey,
         userUri: "https://api.calendly.com/users/U1",
         connectionKey: `${CONN.providerConfigKey}:${CONN.connectionId}`
       },
@@ -374,14 +383,12 @@ describe("ensureCalendlyWebhookSubscription", () => {
     );
   });
 
-  it("records error when the creation response has no signing key", async () => {
+  it("records error when the creation response has no resource uri", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
     const request = vi
       .fn()
       .mockResolvedValueOnce(USER_RES)
-      .mockResolvedValueOnce({
-        data: { resource: { uri: "https://api.calendly.com/webhook_subscriptions/WH1" } }
-      });
+      .mockResolvedValueOnce({ data: { resource: {} } });
     const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
     expect(out).toEqual({ status: "error", attempted: true });
   });
