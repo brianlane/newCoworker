@@ -40,8 +40,10 @@ export default function ZoomReviewTestPlanPage() {
         <p className="mt-4 text-parchment/60">
           New Coworker is an AI coworker for small businesses: it answers the phone, replies to
           SMS, email, and web chat, and books appointments. This integration lets it schedule Zoom
-          meetings for the appointments it books and send customers the join link. The steps below
-          walk through authorization, every requested scope, and removal.{" "}
+          meetings for the appointments it books, send customers the join link, and — at the
+          owner&apos;s explicit request — turn a cloud-recorded meeting&apos;s transcript into
+          meeting minutes. The steps below walk through authorization, every requested scope, and
+          removal.{" "}
           <b>Test credentials are provided in the submission&apos;s release notes.</b>
         </p>
 
@@ -123,7 +125,29 @@ export default function ZoomReviewTestPlanPage() {
             </p>
           </Step>
 
-          <Step n={6} title="Remove the integration">
+          <Step n={6} title="Import a meeting transcript (recording scope)">
+            <p>
+              This step exercises{" "}
+              <code className="text-xs text-claw-green">
+                cloud_recording:read:meeting_transcript
+              </code>
+              . On the Zoom account you connected in Step 2, start a short meeting, record it{" "}
+              <b>to the cloud</b> with audio transcript enabled (Settings → Recording → Cloud
+              recording → Create audio transcript), say a few sentences, then end the meeting and
+              wait for Zoom&apos;s &quot;cloud recording is now available&quot; email (transcript
+              processing can take a few minutes).
+            </p>
+            <p>
+              Back on <b>Dashboard → Integrations → Zoom</b>, paste the meeting ID into{" "}
+              <b>Meeting minutes → Import transcript</b>. Expected: the transcript is fetched from
+              your Zoom account and saved to the business&apos;s Documents as meeting minutes (a
+              success note with the generated summary appears on the card). If the meeting was not
+              cloud-recorded with a transcript, an explanatory error is shown instead — nothing is
+              stored.
+            </p>
+          </Step>
+
+          <Step n={7} title="Remove the integration">
             <p>
               Back on <b>Dashboard → Integrations</b>, click <b>Disconnect</b> on the Zoom card and
               confirm. Expected: the card returns to its disconnected state; our server revokes the
