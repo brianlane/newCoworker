@@ -8,8 +8,8 @@
  * /api/widget/poll for it (anonymous visitors have no Realtime identity).
  *
  * Auth: public site key (body) + per-session bearer (Authorization).
- * Abuse controls, in order of cheapness: per-IP and per-session in-memory
- * rate limits, message char cap, and the per-business rolling-24h visitor
+ * Abuse controls, in order of cheapness: per-session in-memory + per-IP
+ * durable rate limits, message char cap, and the per-business rolling-24h visitor
  * message ceiling (hard stop protecting the tenant's shared AI budget from
  * anonymous traffic — the spend fuse degrading to the local model is the
  * soft layer under this).
@@ -17,7 +17,7 @@
 
 import { z } from "zod";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
+import { rateLimit, rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import {
   appendWebchatMessage,
   countWebchatUserMessagesSince,
@@ -70,6 +70,9 @@ async function recordVisitorPage(
 export const dynamic = "force-dynamic";
 export const maxDuration = 30;
 
+// Per-session stays in-memory (cheap local backstop — a session is already
+// a scarce, bearer-authed identity); per-IP is durable so the quota binds
+// fleet-wide instead of per Vercel isolate (audit 2026-07, finding M3).
 const MESSAGE_RATE_PER_SESSION = { interval: 5 * 60 * 1000, maxRequests: 20 };
 const MESSAGE_RATE_PER_IP = { interval: 5 * 60 * 1000, maxRequests: 40 };
 
@@ -126,8 +129,11 @@ export async function POST(request: Request) {
 
     const ip = rateLimitIdentifierFromRequest(request);
     const sessionLimiter = rateLimit(`webchat-msg:s:${session.id}`, MESSAGE_RATE_PER_SESSION);
-    const ipLimiter = rateLimit(`webchat-msg:ip:${ip}`, MESSAGE_RATE_PER_IP);
-    if (!sessionLimiter.success || !ipLimiter.success) {
+    if (!sessionLimiter.success) {
+      return errorResponse("CONFLICT", "Too many messages, please wait a minute.", 429);
+    }
+    const ipLimiter = await rateLimitDurable(`webchat-msg:ip:${ip}`, MESSAGE_RATE_PER_IP);
+    if (!ipLimiter.success) {
       return errorResponse("CONFLICT", "Too many messages, please wait a minute.", 429);
     }
 

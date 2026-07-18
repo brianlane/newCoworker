@@ -12,14 +12,29 @@ vi.mock("@/lib/db/onboarding-drafts", () => ({
   getOnboardingDraft: vi.fn()
 }));
 
+vi.mock("@/lib/rate-limit", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/rate-limit")>("@/lib/rate-limit");
+  return {
+    ...actual,
+    rateLimitDurable: vi.fn()
+  };
+});
+
 import { POST } from "@/app/api/onboard/finalize-signup/route";
 import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
+import { rateLimitDurable } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 
 describe("api/onboard/finalize-signup route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(rateLimitDurable).mockResolvedValue({
+      success: true,
+      limit: 10,
+      remaining: 9,
+      reset: Date.now() + 60000
+    });
     vi.mocked(getStripe).mockReturnValue({
       checkout: {
         sessions: {
@@ -113,5 +128,31 @@ describe("api/onboard/finalize-signup route", () => {
     expect(body.data.ownerEmail).toBe("paid@example.com");
     expect(body.data.onboardingData).toBeUndefined();
     expect(body.data.onboardingDraftRecovered).toBe(false);
+  });
+
+  it("returns 429 when the durable per-IP rate limit is exhausted (audit M3)", async () => {
+    vi.mocked(rateLimitDurable).mockResolvedValue({
+      success: false,
+      limit: 10,
+      remaining: 0,
+      reset: Date.now() + 60000
+    });
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/onboard/finalize-signup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId: "cs_test_limited" })
+      })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(429);
+    expect(body.ok).toBe(false);
+    expect(getStripe).not.toHaveBeenCalled();
+    expect(rateLimitDurable).toHaveBeenCalledWith(
+      expect.stringMatching(/^onboard-finalize-signup:/),
+      expect.objectContaining({ maxRequests: 10 })
+    );
   });
 });

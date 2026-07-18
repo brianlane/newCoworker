@@ -1,6 +1,7 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
+import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 import { z } from "zod";
 
@@ -8,8 +9,22 @@ const schema = z.object({
   sessionId: z.string().min(1)
 });
 
+// Durable (cross-isolate) per-IP limit: unauthenticated and every call costs
+// a Stripe session retrieve, so the quota must bind fleet-wide rather than
+// per Vercel isolate (audit 2026-07, finding M3). Same budget as the
+// companion /api/onboard/set-password step.
+const FINALIZE_SIGNUP_RATE = { interval: 15 * 60 * 1000, maxRequests: 10 };
+
 export async function POST(request: Request) {
   try {
+    const limiter = await rateLimitDurable(
+      `onboard-finalize-signup:${rateLimitIdentifierFromRequest(request)}`,
+      FINALIZE_SIGNUP_RATE
+    );
+    if (!limiter.success) {
+      return errorResponse("CONFLICT", "Too many attempts. Please wait a few minutes and try again.", 429);
+    }
+
     const body = schema.parse(await request.json());
     const stripe = getStripe();
     const session = await stripe.checkout.sessions.retrieve(body.sessionId);

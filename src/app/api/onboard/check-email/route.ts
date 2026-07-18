@@ -1,11 +1,18 @@
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { findAuthUserIdByEmail } from "@/lib/auth";
 import { logger } from "@/lib/logger";
+import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { z } from "zod";
 
 const schema = z.object({
   email: z.string().email()
 });
+
+// Durable (cross-isolate) limit: this endpoint leaks "has account / does not
+// have account" per email, so the per-IP quota must bind fleet-wide — the
+// in-memory proxy limiter is per-isolate and lets a distributed caller
+// enumerate far past the configured numbers (audit 2026-07, finding M3).
+const CHECK_EMAIL_RATE = { interval: 60 * 1000, maxRequests: 10 };
 
 /**
  * UX preflight for the questionnaire's email field.
@@ -30,12 +37,19 @@ const schema = z.object({
  * for any email an anonymous caller can guess. That's the same
  * signal the public /login page leaks (any failed login at a
  * known-bad password reveals the same), so it doesn't expand the
- * existing privacy surface. If we ever care more about that we
- * should add per-IP rate-limiting at the edge for both endpoints
- * together.
+ * existing privacy surface. Enumeration speed is bounded by the
+ * durable per-IP limiter below (fleet-wide, not per-isolate).
  */
 export async function POST(request: Request) {
   try {
+    const limiter = await rateLimitDurable(
+      `onboard-check-email:${rateLimitIdentifierFromRequest(request)}`,
+      CHECK_EMAIL_RATE
+    );
+    if (!limiter.success) {
+      return errorResponse("CONFLICT", "Too many requests. Please wait a minute and try again.", 429);
+    }
+
     const body = schema.parse(await request.json());
 
     let existingUserId: string | null = null;

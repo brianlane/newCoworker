@@ -490,6 +490,10 @@ function QuestionnaireForm() {
       body: JSON.stringify({
         businessId,
         draftToken,
+        // Undefined on a brand-new signup (the token is minted later by
+        // /api/business/create); required by the server only to first-claim
+        // a draft slot whose business row already exists.
+        onboardingToken: onboardingData.onboardingToken,
         onboardingData
       })
     });
@@ -658,6 +662,7 @@ function QuestionnaireForm() {
           body: JSON.stringify({
             businessId: onboardingData.businessId,
             draftToken: onboardingData.draftToken,
+            onboardingToken: onboardingData.onboardingToken,
             onboardingData
           })
         });
