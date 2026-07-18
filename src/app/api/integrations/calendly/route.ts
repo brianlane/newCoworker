@@ -72,6 +72,15 @@ export async function POST(request: Request) {
     const user = await authorize(body.businessId);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
+    // A NEW token may belong to a different Calendly account; the existing
+    // webhook subscription (and its signing key) would keep verifying the
+    // OLD account's bookings. Tear it down BEFORE the old token is
+    // overwritten (the remote delete needs it) — the booking-goal sweep
+    // re-subscribes lazily under whichever account the new token serves.
+    if (body.accessToken) {
+      await teardownCalendlyWebhookSubscription(body.businessId);
+    }
+
     await upsertCalendlyConnection(body);
 
     // Verify the stored token end-to-end (works for both fresh and kept
