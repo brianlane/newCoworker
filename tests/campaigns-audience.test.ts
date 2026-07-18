@@ -130,6 +130,20 @@ describe("previewCampaignAudience", () => {
     expect(preview.recipients).toBe(2000);
   });
 
+  it("clips on the RAW returned rows, even when the email filter drops some", async () => {
+    // Query filled its bound, but a few rows lack a usable email: the
+    // directory may hold more eligible contacts beyond the cap, so counts
+    // must still read "at least" (Bugbot 6ca565e0).
+    const rows: ContactRow[] = Array.from({ length: CAMPAIGN_AUDIENCE_SCAN_LIMIT }, (_, i) => ({
+      id: `c${i}`,
+      email: i < 10 ? null : `c${i}@x.test`,
+      tags: []
+    }));
+    const { db } = makeDb(rows);
+    const preview = await previewCampaignAudience(BIZ, "", db);
+    expect(preview.clipped).toBe(true);
+  });
+
   it("tolerates a null scan payload and surfaces scan errors", async () => {
     const empty = makeDb(null);
     expect(await previewCampaignAudience(BIZ, "", empty.db)).toEqual({

@@ -67,10 +67,11 @@ async function scanAudience(
     .limit(CAMPAIGN_AUDIENCE_SCAN_LIMIT);
   if (error) throw new Error(`previewCampaignAudience: ${error.message}`);
 
-  const scanned = (
-    (data as Array<{ id: string; email: string | null; tags: string[] | null }> | null) ?? []
-  ).filter((c): c is { id: string; email: string; tags: string[] | null } =>
-    Boolean(c.email && c.email.includes("@"))
+  const returned =
+    (data as Array<{ id: string; email: string | null; tags: string[] | null }> | null) ?? [];
+  const scanned = returned.filter(
+    (c): c is { id: string; email: string; tags: string[] | null } =>
+      Boolean(c.email && c.email.includes("@"))
   );
 
   // Tag picker: every distinct tag in the emailable directory, before the
@@ -110,7 +111,10 @@ async function scanAudience(
   return {
     recipients: capped.length,
     needsReview,
-    clipped: scanned.length >= CAMPAIGN_AUDIENCE_SCAN_LIMIT,
+    // Measured on the RAW query result: a scan that filled its bound may
+    // hide more eligible rows even when some returned rows lacked a valid
+    // email (post-filter length would under-report the clip).
+    clipped: returned.length >= CAMPAIGN_AUDIENCE_SCAN_LIMIT,
     tags
   };
 }

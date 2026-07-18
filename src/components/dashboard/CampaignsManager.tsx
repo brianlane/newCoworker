@@ -95,8 +95,11 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
 
   // Debounced live audience preview: re-count as the owner edits the tag.
   // Best-effort — a failed preview keeps the last count rather than blocking
-  // the composer (the sweep re-snapshots authoritatively at send time).
+  // the composer (the sweep re-snapshots authoritatively at send time). The
+  // cleanup flag drops out-of-order responses: a slow response for an OLD
+  // tag must never overwrite the preview for the tag currently typed.
   useEffect(() => {
+    let stale = false;
     const handle = setTimeout(() => {
       void (async () => {
         try {
@@ -105,13 +108,16 @@ export function CampaignsManager({ businessId }: { businessId: string }) {
             { cache: "no-store" }
           );
           const json = (await res.json()) as { ok: boolean; data?: AudiencePreview };
-          if (json.ok && json.data) setPreview(json.data);
+          if (!stale && json.ok && json.data) setPreview(json.data);
         } catch {
           /* keep the last preview */
         }
       })();
     }, 400);
-    return () => clearTimeout(handle);
+    return () => {
+      stale = true;
+      clearTimeout(handle);
+    };
   }, [businessId, audienceTag]);
 
   async function create(asDraft: boolean) {
