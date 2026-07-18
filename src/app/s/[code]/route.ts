@@ -12,7 +12,7 @@
  * already received that exact URL in the text; this route just makes the
  * hop measurable. Unknown/expired codes fall back to the app homepage.
  */
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   notifyLinkClickFirstTap,
@@ -49,10 +49,14 @@ export async function GET(
     if (error || !isLinkClickResult(result)) {
       return NextResponse.redirect(homepage(), 303);
     }
-    void notifyLinkClickFirstTap(result).catch((err) => {
-      logger.warn("s/[code]: link click notify failed", {
-        code,
-        error: err instanceof Error ? err.message : String(err)
+    // after(): a bare fire-and-forget promise gets frozen on serverless the
+    // moment the redirect returns; this keeps the notify alive post-response.
+    after(async () => {
+      await notifyLinkClickFirstTap(result).catch((err) => {
+        logger.warn("s/[code]: link click notify failed", {
+          code,
+          error: err instanceof Error ? err.message : String(err)
+        });
       });
     });
     return NextResponse.redirect(result.url, 302);
