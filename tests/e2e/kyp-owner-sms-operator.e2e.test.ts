@@ -286,68 +286,64 @@ describe("scenario 1 — James's exact request, confirmation flow still disabled
 });
 
 describe("scenario 2 — flow ENABLED: presents both options, then executes the owner's choice", () => {
-  let round1Text = "";
-  let round1Calls: GeminiFunctionCall[] = [];
-  let round1Contents: GeminiChatContent[] = [];
-  let optionsVerdict: JudgeVerdict;
-  let round2Calls: GeminiFunctionCall[] = [];
-  let round2Text = "";
-
-  beforeAll(async () => {
-    const round1 = await operatorTurn([], JAMES_REQUEST, (name, args) => {
-      if (name === "list_aiflows") return flowsFixture(true);
-      if (name === "send_sms") return sendSmsSuccess(args);
-      if (name === "run_aiflow") return runAiflowSuccess("Booking confirmation text (Calendly)");
-      return { ok: false, message: `unexpected tool: ${name}` };
-    });
-    round1Text = round1.finalText;
-    round1Calls = round1.calls;
-    round1Contents = round1.contents;
-    optionsVerdict = await judgeReply(
-      "an assistant that can either send a text directly or run the owner's existing booking-confirmation automation, replying to the owner's request to text an invitee a call confirmation",
-      round1Text,
-      {
-        presents_both_options:
-          "Does the message offer the owner a choice between at least two ways of fulfilling the request (for example sending the text directly versus running an existing automation/flow)? A single yes/no confirmation question about one action is false.",
-        asks_owner_to_choose:
-          "Does the message ask the owner which option they want (or otherwise wait for their decision) instead of stating an action was already taken?"
-      }
-    );
-
-    // The owner picks the automation; the model must run exactly that.
-    const round2 = await operatorTurn(
-      round1Contents,
-      "[SMS from owner] run the automation",
-      (name, args) => {
+  // One retried test instead of beforeAll + three tests: a marginal round-1
+  // draw (the model committing an action before asking — seen once on PR
+  // #729's CI run) must re-roll the WHOLE exchange, and vitest retry cannot
+  // re-run a beforeAll.
+  it(
+    "commits nothing before the owner chooses, presents both options, then runs the chosen flow",
+    { retry: 1, timeout: 240_000 },
+    async () => {
+      const round1 = await operatorTurn([], JAMES_REQUEST, (name, args) => {
         if (name === "list_aiflows") return flowsFixture(true);
-        if (name === "run_aiflow") return runAiflowSuccess("Booking confirmation text (Calendly)");
         if (name === "send_sms") return sendSmsSuccess(args);
+        if (name === "run_aiflow") return runAiflowSuccess("Booking confirmation text (Calendly)");
         return { ok: false, message: `unexpected tool: ${name}` };
+      });
+
+      // Commits NOTHING before the owner chooses (reads like list_aiflows
+      // are fine).
+      const committed = round1.calls.filter(
+        (c) => c.name === "send_sms" || c.name === "run_aiflow"
+      );
+      expect(committed, `round1 text: ${round1.finalText}`).toEqual([]);
+
+      // Presents the direct-vs-automation choice and asks the owner.
+      const optionsVerdict: JudgeVerdict = await judgeReply(
+        "an assistant that can either send a text directly or run the owner's existing booking-confirmation automation, replying to the owner's request to text an invitee a call confirmation",
+        round1.finalText,
+        {
+          presents_both_options:
+            "Does the message offer the owner a choice between at least two ways of fulfilling the request (for example sending the text directly versus running an existing automation/flow)? A single yes/no confirmation question about one action is false.",
+          asks_owner_to_choose:
+            "Does the message ask the owner which option they want (or otherwise wait for their decision) instead of stating an action was already taken?"
+        }
+      );
+      if (!optionsVerdict.answers.presents_both_options || !optionsVerdict.answers.asks_owner_to_choose) {
+        console.error("round1 reply:", round1.finalText);
+        console.error("judge verdict:", JSON.stringify(optionsVerdict));
       }
-    );
-    round2Calls = round2.calls;
-    round2Text = round2.finalText;
-  }, 240_000);
+      expect(optionsVerdict.answers.presents_both_options).toBe(true);
+      expect(optionsVerdict.answers.asks_owner_to_choose).toBe(true);
 
-  it("commits NOTHING before the owner chooses (reads like list_aiflows are fine)", () => {
-    const committed = round1Calls.filter(
-      (c) => c.name === "send_sms" || c.name === "run_aiflow"
-    );
-    expect(committed).toEqual([]);
-  });
-
-  it("presents the direct-vs-automation choice and asks which the owner prefers", () => {
-    expect(optionsVerdict.answers.presents_both_options).toBe(true);
-    expect(optionsVerdict.answers.asks_owner_to_choose).toBe(true);
-  });
-
-  it("executes the CHOSEN option: run_aiflow on the confirmation flow, no direct text", () => {
-    const run = round2Calls.find((c) => c.name === "run_aiflow");
-    expect(run).toBeDefined();
-    expect(String(run!.args.flow)).toMatch(/booking confirmation|11111111-aaaa/i);
-    expect(round2Calls.find((c) => c.name === "send_sms")).toBeUndefined();
-    expect(round2Text.toLowerCase()).toMatch(/running|started|enqueued|on it/);
-  });
+      // The owner picks the automation; the model must run exactly that.
+      const round2 = await operatorTurn(
+        round1.contents,
+        "[SMS from owner] run the automation",
+        (name, args) => {
+          if (name === "list_aiflows") return flowsFixture(true);
+          if (name === "run_aiflow") return runAiflowSuccess("Booking confirmation text (Calendly)");
+          if (name === "send_sms") return sendSmsSuccess(args);
+          return { ok: false, message: `unexpected tool: ${name}` };
+        }
+      );
+      const run = round2.calls.find((c) => c.name === "run_aiflow");
+      expect(run, `round2 calls: ${JSON.stringify(round2.calls)}`).toBeDefined();
+      expect(String(run!.args.flow)).toMatch(/booking confirmation|11111111-aaaa/i);
+      expect(round2.calls.find((c) => c.name === "send_sms")).toBeUndefined();
+      expect(round2.finalText.toLowerCase()).toMatch(/running|started|enqueued|on it/);
+    }
+  );
 });
 
 describe("scenario 3 — 'didnt receie anything' re-sends the INTENDED body, never the chat reply", () => {
