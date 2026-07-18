@@ -9,6 +9,7 @@ import {
   ensureStopLanguage,
   stopSuffixForLocale
 } from "../supabase/functions/_shared/ai_flows/compliance";
+import { isSpanishComplianceKeyword } from "../supabase/functions/_shared/telnyx_sms_compliance";
 
 describe("edge message bundles", () => {
   it("edge-en.json and edge-es.json have identical keys", () => {
@@ -32,6 +33,17 @@ describe("voiceMessageForLocale", () => {
     expect(voiceMessageForLocale("VOICE_MSG_SYSTEM_ERROR", "es")).toBe(
       edgeEs.VOICE_MSG_SYSTEM_ERROR
     );
+  });
+});
+
+describe("isSpanishComplianceKeyword", () => {
+  it("flags Spanish aliases and leaves English/ambiguous tokens alone", () => {
+    expect(isSpanishComplianceKeyword("AYUDA")).toBe(true);
+    expect(isSpanishComplianceKeyword("ALTO")).toBe(true);
+    expect(isSpanishComplianceKeyword("INICIO")).toBe(true);
+    expect(isSpanishComplianceKeyword("HELP")).toBe(false);
+    expect(isSpanishComplianceKeyword("STOP")).toBe(false);
+    expect(isSpanishComplianceKeyword("INFO")).toBe(false);
   });
 });
 

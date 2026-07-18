@@ -108,6 +108,7 @@ function makeDeps(overrides: Partial<MessengerGeminiTurnDeps> = {}): Required<
     | "meter"
     | "env"
     | "now"
+    | "getCustomerLanguages"
   >
 > {
   return {
@@ -119,6 +120,10 @@ function makeDeps(overrides: Partial<MessengerGeminiTurnDeps> = {}): Required<
     meter: vi.fn(async () => undefined),
     env: { GOOGLE_API_KEY: "k" },
     now: () => new Date("2026-07-15T20:05:00Z"),
+    getCustomerLanguages: vi.fn(async () => ({
+      defaultLanguage: "en" as const,
+      supported: ["en" as const, "es" as const]
+    })),
     ...overrides
   };
 }

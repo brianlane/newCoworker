@@ -33,6 +33,7 @@ import {
   persistDetectedContactLanguage,
   setContactLanguageOwnerOverride
 } from "@/lib/db/contact-language";
+import { getBusinessCustomerLanguages } from "@/lib/db/business-language";
 import { getUserUiLocale, setUserUiLocale } from "@/lib/db/user-preferences";
 import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
 import { formatPricePerMonthLocalized, intlLocaleForApp } from "@/lib/i18n/format";
@@ -70,27 +71,75 @@ describe("contact-language db", () => {
     await expect(getContactLanguage(BIZ, E164, injected)).rejects.toThrow("boom");
   });
 
-  it("setContactLanguageOwnerOverride writes owner_set", async () => {
-    const builder = makeBuilder({ error: null });
+  it("setContactLanguageOwnerOverride updates an existing row", async () => {
+    const builder = makeBuilder({ data: [{ id: "row-1" }], error: null });
     supabaseStub.from.mockReturnValueOnce(builder);
     await setContactLanguageOwnerOverride(BIZ, E164, "es");
     expect(builder.update).toHaveBeenCalledWith({
       preferred_language: "es",
       language_source: "owner_set"
     });
+    expect(supabaseStub.from).toHaveBeenCalledTimes(1);
   });
 
-  it("setContactLanguageOwnerOverride clears when language null", async () => {
-    const builder = makeBuilder({ error: null });
+  it("setContactLanguageOwnerOverride clears without inserting when language null", async () => {
+    const builder = makeBuilder({ data: [], error: null });
     supabaseStub.from.mockReturnValueOnce(builder);
     await setContactLanguageOwnerOverride(BIZ, E164, null, injected);
     expect(builder.update).toHaveBeenCalledWith({
       preferred_language: null,
       language_source: null
     });
+    expect(supabaseStub.from).toHaveBeenCalledTimes(1);
   });
 
-  it("setContactLanguageOwnerOverride throws on error", async () => {
+  it("setContactLanguageOwnerOverride inserts a contact row when none matched", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    const insertBuilder = makeBuilder({ error: null });
+    supabaseStub.from.mockReturnValueOnce(insertBuilder);
+    await setContactLanguageOwnerOverride(BIZ, E164, "es", injected);
+    expect(insertBuilder.insert).toHaveBeenCalledWith({
+      business_id: BIZ,
+      customer_e164: E164,
+      preferred_language: "es",
+      language_source: "owner_set"
+    });
+  });
+
+  it("setContactLanguageOwnerOverride relabels after a unique-violation race", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ error: { message: "dup", code: "23505" } as never })
+    );
+    const raceBuilder = makeBuilder({ error: null });
+    supabaseStub.from.mockReturnValueOnce(raceBuilder);
+    await setContactLanguageOwnerOverride(BIZ, E164, "en", injected);
+    expect(raceBuilder.update).toHaveBeenCalledWith({
+      preferred_language: "en",
+      language_source: "owner_set"
+    });
+  });
+
+  it("setContactLanguageOwnerOverride throws on insert and race-update errors", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ error: { message: "hard fail", code: "42P01" } as never })
+    );
+    await expect(setContactLanguageOwnerOverride(BIZ, E164, "en", injected)).rejects.toThrow(
+      "hard fail"
+    );
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: [], error: null }));
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ error: { message: "dup", code: "23505" } as never })
+    );
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "race fail" } }));
+    await expect(setContactLanguageOwnerOverride(BIZ, E164, "en", injected)).rejects.toThrow(
+      "race fail"
+    );
+  });
+
+  it("setContactLanguageOwnerOverride throws on update error", async () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "nope" } }));
     await expect(setContactLanguageOwnerOverride(BIZ, E164, "en", injected)).rejects.toThrow(
       "nope"
@@ -168,6 +217,69 @@ describe("user-preferences db", () => {
   it("setUserUiLocale throws on error", async () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "denied" } }));
     await expect(setUserUiLocale(USER, "en", injected)).rejects.toThrow("denied");
+  });
+});
+
+describe("business customer languages", () => {
+  it("returns configured values", async () => {
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({
+        data: { default_customer_language: "es", supported_customer_languages: ["en", "es"] },
+        error: null
+      })
+    );
+    expect(await getBusinessCustomerLanguages(BIZ)).toEqual({
+      defaultLanguage: "es",
+      supported: ["en", "es"]
+    });
+  });
+
+  it("falls back to defaults on missing row, junk values, and empty arrays", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    expect(await getBusinessCustomerLanguages(BIZ, injected)).toEqual({
+      defaultLanguage: "en",
+      supported: ["en", "es"]
+    });
+
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({
+        data: { default_customer_language: "fr", supported_customer_languages: ["fr"] },
+        error: null
+      })
+    );
+    expect(await getBusinessCustomerLanguages(BIZ, injected)).toEqual({
+      defaultLanguage: "en",
+      supported: ["en", "es"]
+    });
+  });
+
+  it("honors the en-only escape hatch", async () => {
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({
+        data: { default_customer_language: "en", supported_customer_languages: ["en"] },
+        error: null
+      })
+    );
+    expect(await getBusinessCustomerLanguages(BIZ, injected)).toEqual({
+      defaultLanguage: "en",
+      supported: ["en"]
+    });
+  });
+
+  it("fails open to defaults on db errors (Error and non-Error)", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "down" } }));
+    expect(await getBusinessCustomerLanguages(BIZ, injected)).toEqual({
+      defaultLanguage: "en",
+      supported: ["en", "es"]
+    });
+
+    supabaseStub.from.mockImplementationOnce(() => {
+      throw "raw failure";
+    });
+    expect(await getBusinessCustomerLanguages(BIZ, injected)).toEqual({
+      defaultLanguage: "en",
+      supported: ["en", "es"]
+    });
   });
 });
 

@@ -11,6 +11,7 @@
   "VOICE_MSG_SAFE_MODE_FORWARD_FAILED": "We're sorry, we could not connect your call right now. Please try again later. Goodbye.",
   "SMS_HELP_REPLY": "New Coworker: For help, use your business dashboard or contact support. Msg&data rates may apply. Reply STOP to opt out.",
   "SMS_START_REPLY": "You're subscribed to New Coworker SMS for this number. Reply STOP to opt out. Msg&data rates may apply.",
+  "SMS_STOP_REPLY": "You're opted out of New Coworker marketing SMS for this number. You may still get transactional messages.",
   "SMS_STOP_SUFFIX": "Reply STOP to opt out.",
   "MESSENGER_OVER_CAP": "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help."
 }

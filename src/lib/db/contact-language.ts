@@ -1,5 +1,6 @@
 import type { CustomerLanguage, LanguageSource } from "../../../shared/i18n/detect-customer-language.ts";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -43,15 +44,36 @@ export async function setContactLanguageOwnerOverride(
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const patch = {
+    preferred_language: language,
+    language_source: language ? ("owner_set" as const) : null
+  };
+  // Update-then-insert (mirrors setContactOverride): an SMS thread can exist
+  // before any contacts row, and a silent zero-row UPDATE would report
+  // success while storing nothing.
+  const { data: updated, error } = await db
     .from("contacts")
-    .update({
-      preferred_language: language,
-      language_source: language ? "owner_set" : null
-    })
+    .update(patch)
+    .eq("business_id", businessId)
+    .or(contactMatchFilter(customerE164))
+    .select("id");
+  if (error) throw new Error(error.message);
+  if ((updated && updated.length > 0) || !language) return;
+
+  const { error: insErr } = await db.from("contacts").insert({
+    business_id: businessId,
+    customer_e164: customerE164,
+    ...patch
+  });
+  if (!insErr) return;
+  if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);
+  // Race: a concurrent writer created the row between update and insert.
+  const { error: raceErr } = await db
+    .from("contacts")
+    .update(patch)
     .eq("business_id", businessId)
     .or(contactMatchFilter(customerE164));
-  if (error) throw new Error(error.message);
+  if (raceErr) throw new Error(raceErr.message);
 }
 
 export async function persistDetectedContactLanguage(

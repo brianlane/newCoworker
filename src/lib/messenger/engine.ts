@@ -29,6 +29,10 @@ import {
 } from "@/lib/gemini-chat";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
 import { customerLanguageLine } from "@/lib/i18n/customer-language";
+import {
+  getBusinessCustomerLanguages,
+  type BusinessCustomerLanguages
+} from "@/lib/db/business-language";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import {
   getChatSpendSnapshotForBusiness,
@@ -163,6 +167,7 @@ export type MessengerGeminiTurnDeps = {
   meter?: typeof meterGeminiSpendForBusiness;
   env?: Record<string, string | undefined>;
   now?: () => Date;
+  getCustomerLanguages?: (businessId: string) => Promise<BusinessCustomerLanguages>;
 };
 
 export type MessengerGeminiTurnResult = {
@@ -210,6 +215,7 @@ export async function runMessengerGeminiTurn(
   const meter = deps.meter ?? meterGeminiSpendForBusiness;
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
+  const getCustomerLanguages = deps.getCustomerLanguages ?? getBusinessCustomerLanguages;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -231,7 +237,7 @@ export async function runMessengerGeminiTurn(
   // Grounding: agent instructions exactly as the vault sync seeds them,
   // then the channel preamble. Documents are best-effort (webchat
   // rationale: a digest failure must not kill the turn).
-  const [config, documents] = await Promise.all([
+  const [config, documents, customerLanguages] = await Promise.all([
     fetchConfig(args.businessId),
     fetchDocuments(args.businessId).catch((err) => {
       logger.warn("messenger engine: document digest failed; continuing without", {
@@ -239,7 +245,8 @@ export async function runMessengerGeminiTurn(
         error: err instanceof Error ? err.message : String(err)
       });
       return [] as BusinessDocumentRow[];
-    })
+    }),
+    getCustomerLanguages(args.businessId)
   ]);
   const documentsMd = buildDocumentsDigestMd(documents, now());
   const instructions = buildAgentInstructions(
@@ -254,7 +261,10 @@ export async function runMessengerGeminiTurn(
   );
   const systemInstruction = [
     instructions,
-    customerLanguageLine({ defaultLang: "en" }),
+    customerLanguageLine({
+      defaultLang: customerLanguages.defaultLanguage,
+      supported: customerLanguages.supported
+    }),
     buildMessengerPreamble(args.conversation, now())
   ]
     .filter(Boolean)

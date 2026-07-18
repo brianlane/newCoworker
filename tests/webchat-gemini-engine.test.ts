@@ -67,6 +67,7 @@ function makeDeps(overrides: Partial<WebchatGeminiTurnDeps> = {}): Required<
     | "meter"
     | "env"
     | "now"
+    | "getCustomerLanguages"
   >
 > {
   return {
@@ -78,6 +79,10 @@ function makeDeps(overrides: Partial<WebchatGeminiTurnDeps> = {}): Required<
     meter: vi.fn(async () => undefined),
     env: { GOOGLE_API_KEY: "k" },
     now: () => new Date("2026-07-14T16:00:00Z"),
+    getCustomerLanguages: vi.fn(async () => ({
+      defaultLanguage: "en" as const,
+      supported: ["en" as const, "es" as const]
+    })),
     ...overrides
   };
 }
@@ -227,6 +232,18 @@ describe("runWebchatGeminiTurn", () => {
     await runWebchatGeminiTurn(ARGS, deps);
     const step = vi.mocked(deps.chatStep).mock.calls[0][0];
     expect(step.systemInstruction).toContain("You are a professional AI coworker.");
+  });
+
+  it("omits the language line for an English-only tenant", async () => {
+    const deps = makeDeps({
+      getCustomerLanguages: vi.fn(async () => ({
+        defaultLanguage: "en" as const,
+        supported: ["en" as const]
+      }))
+    });
+    await runWebchatGeminiTurn(ARGS, deps);
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).not.toContain("Language: reply in the same language");
   });
 
   it("continues without the documents digest when the list read fails", async () => {

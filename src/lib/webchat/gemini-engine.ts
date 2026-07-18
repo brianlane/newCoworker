@@ -35,6 +35,10 @@ import {
 } from "@/lib/gemini-chat";
 import { buildAgentInstructions } from "@/lib/vps/sync-vault";
 import { customerLanguageLine } from "@/lib/i18n/customer-language";
+import {
+  getBusinessCustomerLanguages,
+  type BusinessCustomerLanguages
+} from "@/lib/db/business-language";
 import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getChatSpendSnapshotForBusiness, type ChatSpendSnapshot } from "@/lib/db/chat-usage";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
@@ -134,6 +138,7 @@ export type WebchatGeminiTurnDeps = {
   meter?: typeof meterGeminiSpendForBusiness;
   env?: Record<string, string | undefined>;
   now?: () => Date;
+  getCustomerLanguages?: (businessId: string) => Promise<BusinessCustomerLanguages>;
 };
 
 export type WebchatGeminiTurnResult = {
@@ -184,6 +189,7 @@ export async function runWebchatGeminiTurn(
   const meter = deps.meter ?? meterGeminiSpendForBusiness;
   const env = deps.env ?? process.env;
   const now = deps.now ?? (() => new Date());
+  const getCustomerLanguages = deps.getCustomerLanguages ?? getBusinessCustomerLanguages;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -215,7 +221,7 @@ export async function runWebchatGeminiTurn(
   // them, then the per-turn system blocks. Documents are best-effort (same
   // rationale as the knowledge lookup: a digest failure must not kill the
   // turn — the document_share tool still resolves titles server-side).
-  const [config, documents] = await Promise.all([
+  const [config, documents, customerLanguages] = await Promise.all([
     fetchConfig(args.businessId),
     fetchDocuments(args.businessId).catch((err) => {
       logger.warn("webchat gemini-engine: document digest failed; continuing without", {
@@ -223,7 +229,8 @@ export async function runWebchatGeminiTurn(
         error: err instanceof Error ? err.message : String(err)
       });
       return [] as BusinessDocumentRow[];
-    })
+    }),
+    getCustomerLanguages(args.businessId)
   ]);
   const documentsMd = buildDocumentsDigestMd(documents, now());
   const instructions = buildAgentInstructions(
@@ -238,7 +245,8 @@ export async function runWebchatGeminiTurn(
   );
   const languageLine = customerLanguageLine({
     detected: undefined,
-    defaultLang: "en"
+    defaultLang: customerLanguages.defaultLanguage,
+    supported: customerLanguages.supported
   });
   const systemInstruction = [instructions, languageLine, ...systemBlocks].filter(Boolean).join("\n\n");
 

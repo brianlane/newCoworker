@@ -11,6 +11,7 @@
   "VOICE_MSG_SAFE_MODE_FORWARD_FAILED": "Lo sentimos, no pudimos conectar su llamada. Inténtelo más tarde. Adiós.",
   "SMS_HELP_REPLY": "New Coworker: Para ayuda, use el panel de su negocio o contacte soporte. Pueden aplicarse tarifas de msg&datos. Responda STOP para cancelar.",
   "SMS_START_REPLY": "Está suscrito a SMS de New Coworker para este número. Responda STOP para cancelar. Pueden aplicarse tarifas de msg&datos.",
+  "SMS_STOP_REPLY": "Ha cancelado los SMS de marketing de New Coworker para este número. Aún puede recibir mensajes transaccionales.",
   "SMS_STOP_SUFFIX": "Responda STOP para cancelar.",
   "MESSENGER_OVER_CAP": "Lo sentimos — nuestro asistente de chat no está disponible temporalmente. Inténtelo más tarde o contáctenos directamente."
 }

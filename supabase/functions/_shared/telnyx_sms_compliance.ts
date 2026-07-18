@@ -61,6 +61,16 @@ export function isStartKeyword(normalizedUpper: string): boolean {
   return /^(START|YES|UNSTOP|INICIO|COMENZAR|ALTA|SUSCRIBIR)$/.test(normalizedUpper.trim());
 }
 
+/**
+ * True when a compliance keyword is one of the Spanish aliases — the auto-reply
+ * should answer in Spanish. Unambiguous tokens only ("INFO" stays English).
+ */
+export function isSpanishComplianceKeyword(normalizedUpper: string): boolean {
+  return /^(ALTO|BAJA|BAJAR|SALIR|AYUDA|INFORMACION|INFORMACIÓN|INICIO|COMENZAR|ALTA|SUSCRIBIR)$/.test(
+    normalizedUpper.trim()
+  );
+}
+
 export async function telnyxSendSms(params: {
   apiKey: string;
   messagingProfileId: string;
