@@ -25,6 +25,7 @@ import {
   upsertCalendlyConnection
 } from "@/lib/db/calendly-connections";
 import { verifyCalendlyToken } from "@/lib/calendly/client";
+import { teardownCalendlyWebhookSubscription } from "@/lib/calendly/webhook-subscriptions";
 
 const businessIdSchema = z.string().uuid();
 
@@ -110,6 +111,13 @@ export async function PATCH(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
     const existing = await getPublicCalendlyConnection(body.businessId);
     if (!existing) return errorResponse("NOT_FOUND", "No Calendly connection");
+    // Disabling also tears down the invitee.created webhook subscription
+    // (best-effort, BEFORE the flip — the remote delete needs the still-
+    // active token). Re-enabling needs nothing: the booking-goal sweep
+    // re-creates the subscription lazily.
+    if (!body.isActive) {
+      await teardownCalendlyWebhookSubscription(body.businessId);
+    }
     const row = await upsertCalendlyConnection({
       businessId: body.businessId,
       isActive: body.isActive
@@ -127,6 +135,9 @@ export async function DELETE(request: Request) {
       .parse(await request.json());
     const user = await authorize(body.businessId);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    // Teardown first: the remote subscription delete needs the connection's
+    // token, which is gone once the row is removed.
+    await teardownCalendlyWebhookSubscription(body.businessId);
     await deleteCalendlyConnection(body.businessId);
     return successResponse({ deleted: true });
   } catch (err) {

@@ -46,6 +46,7 @@ import {
   calendlyEventUuid
 } from "@/lib/ai-flows/calendly-poll";
 import { CALENDAR_CREATED_LOOKBACK_MINUTES } from "@/lib/ai-flows/calendar-poll";
+import { ensureCalendlyWebhookSubscription } from "@/lib/calendly/webhook-subscriptions";
 import { findContactsByEmails } from "@/lib/db/contact-emails";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
@@ -125,7 +126,12 @@ export function inviteePhoneE164(raw: string | undefined): string | null {
   return isE164(trimmed) ? trimmed : normalizeNanpToE164(trimmed);
 }
 
-type RawInvitee = {
+/**
+ * Invitee identity as Calendly reports it — the invitees listing item and
+ * the invitee.created webhook payload share these fields, so the sweep and
+ * the webhook receiver feed the same firing helper.
+ */
+export type CalendlyBookingInvitee = {
   status?: string;
   email?: string;
   text_reminder_number?: string;
@@ -162,6 +168,8 @@ export type BookingGoalSweepDeps = {
   applyGoal?: typeof applyGoalEvent;
   /** Injectable email→contact resolver (tests). */
   findByEmails?: typeof findContactsByEmails;
+  /** Injectable webhook-subscription upgrader (tests). */
+  ensureWebhook?: typeof ensureCalendlyWebhookSubscription;
 };
 
 /**
@@ -203,6 +211,69 @@ async function contactNumbersFor(
   }
 }
 
+export type BookingGoalFireDeps = {
+  /** Injectable goal applier (tests). */
+  applyGoal?: typeof applyGoalEvent;
+  /** Injectable email→contact resolver (tests). */
+  findByEmails?: typeof findContactsByEmails;
+};
+
+export type BookingGoalFireResult = {
+  /** applyGoalEvent invocations (unique numbers fired). */
+  goalsFired: number;
+  /** Runs fast-forwarded to their goal step. */
+  jumpedRuns: number;
+};
+
+/**
+ * Booked invitees → appointment_booked goal events. Shared by the polling
+ * sweep and the real-time webhook receiver (src/lib/calendly/webhook-inbound.ts):
+ * canceled invitees are skipped; the SMS-reminder phone (normalized to
+ * E.164) and the invitee email (resolved through the business's contacts)
+ * both seed the firing set, fanned out over each matched contact row's
+ * primary + merged aliases — `applyGoalEvent` matches runs by exact E.164.
+ */
+export async function fireBookingGoalsForInvitees(
+  db: SupabaseClient,
+  businessId: string,
+  invitees: CalendlyBookingInvitee[],
+  deps: BookingGoalFireDeps = {}
+): Promise<BookingGoalFireResult> {
+  const applyGoal = deps.applyGoal ?? applyGoalEvent;
+  const findByEmails = deps.findByEmails ?? findContactsByEmails;
+
+  const seedNumbers = new Set<string>();
+  const seedEmails = new Set<string>();
+  for (const invitee of invitees) {
+    if (invitee?.status === "canceled") continue;
+    const phone = inviteePhoneE164(invitee?.text_reminder_number);
+    if (phone) seedNumbers.add(phone);
+    const email = (invitee?.email ?? "").trim().toLowerCase();
+    if (email) seedEmails.add(email);
+  }
+
+  // Email → contact primary number (one contacts scan per call).
+  if (seedEmails.size > 0) {
+    const linked = await findByEmails(businessId, [...seedEmails], db);
+    for (const link of linked.values()) seedNumbers.add(link.customerE164);
+  }
+
+  // Fan out over the matched contact rows' full number sets, then fire.
+  const fireNumbers = new Set<string>();
+  for (const seed of seedNumbers) {
+    for (const n of await contactNumbersFor(db, businessId, seed)) fireNumbers.add(n);
+  }
+  const result: BookingGoalFireResult = { goalsFired: 0, jumpedRuns: 0 };
+  for (const number of fireNumbers) {
+    result.goalsFired += 1;
+    const { jumpedRuns } = await applyGoal(db, businessId, number, {
+      kind: "appointment_booked"
+    });
+    result.jumpedRuns += jumpedRuns;
+  }
+  return result;
+}
+
 /**
  * Sweep every candidate business once: fresh Calendly bookings →
  * appointment_booked goal events. Throws only when the initial flow listing
@@ -217,6 +288,7 @@ export async function sweepCalendlyBookingGoals(
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
   const applyGoal = deps.applyGoal ?? applyGoalEvent;
   const findByEmails = deps.findByEmails ?? findContactsByEmails;
+  const ensureWebhook = deps.ensureWebhook ?? ensureCalendlyWebhookSubscription;
   const db = client ?? (await createSupabaseServiceClient());
 
   // Enabled flows with any trunk goal step (jsonb containment narrows the
@@ -282,6 +354,12 @@ export async function sweepCalendlyBookingGoals(
       if (!conn || conn.provider !== "calendly") continue;
       result.swept += 1;
 
+      // Opportunistic real-time upgrade: businesses on a paid Calendly plan
+      // get an invitee.created webhook subscription (seconds instead of the
+      // poll's ~1-2 min); refused attempts are cooldown-gated inside, and
+      // this sweep keeps running either way. Never throws.
+      await ensureWebhook(businessId, conn, { request }, db);
+
       const userRes = await request(businessId, conn, { endpoint: "/users/me", method: "GET" });
       const userUri = (userRes?.data as { resource?: { uri?: string } } | undefined)?.resource
         ?.uri;
@@ -338,8 +416,7 @@ export async function sweepCalendlyBookingGoals(
       // be fetched this tick — a fresh booking cannot be starved past its
       // lookback by a same-tick burst (Bugbot on PR #742). A capped/refused
       // booking is retried next tick while it is still inside the lookback.
-      const seedNumbers = new Set<string>();
-      const seedEmails = new Set<string>();
+      const invitees: CalendlyBookingInvitee[] = [];
       let attempted = 0;
       for (const booking of bookings) {
         if (attempted >= BOOKING_GOAL_INVITEE_FETCH_CAP) {
@@ -369,35 +446,18 @@ export async function sweepCalendlyBookingGoals(
           });
           continue;
         }
-        for (const invitee of (invRes.data as { collection?: RawInvitee[] })?.collection ?? []) {
-          if (invitee?.status === "canceled") continue;
-          const phone = inviteePhoneE164(invitee?.text_reminder_number);
-          if (phone) seedNumbers.add(phone);
-          const email = (invitee?.email ?? "").trim().toLowerCase();
-          if (email) seedEmails.add(email);
-        }
+        invitees.push(
+          ...(((invRes.data as { collection?: CalendlyBookingInvitee[] })?.collection) ?? [])
+        );
       }
 
-      // Email → contact primary number (one contacts scan per business).
-      if (seedEmails.size > 0) {
-        const linked = await findByEmails(businessId, [...seedEmails], db);
-        for (const link of linked.values()) seedNumbers.add(link.customerE164);
-      }
-
-      // Fan out over the matched contact rows' full number sets, then fire.
-      const fireNumbers = new Set<string>();
-      for (const seed of seedNumbers) {
-        for (const n of await contactNumbersFor(db, businessId, seed)) fireNumbers.add(n);
-      }
-      let jumped = 0;
-      for (const number of fireNumbers) {
-        result.goalsFired += 1;
-        const { jumpedRuns } = await applyGoal(db, businessId, number, {
-          kind: "appointment_booked"
-        });
-        jumped += jumpedRuns;
-      }
-      result.jumpedRuns += jumped;
+      const fired = await fireBookingGoalsForInvitees(db, businessId, invitees, {
+        applyGoal,
+        findByEmails
+      });
+      result.goalsFired += fired.goalsFired;
+      result.jumpedRuns += fired.jumpedRuns;
+      const jumped = fired.jumpedRuns;
       if (jumped > 0) {
         await recordSystemLog({
           businessId,
