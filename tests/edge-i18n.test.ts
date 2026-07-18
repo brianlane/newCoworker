@@ -56,9 +56,14 @@ describe("stop suffix locale", () => {
     expect(stopSuffixForLocale()).toBe(STOP_SUFFIX);
   });
 
-  it("ensureStopLanguage treats ALTO as existing opt-out language", () => {
+  it("ensureStopLanguage treats an ALTO opt-out instruction as existing opt-out language", () => {
     const body = "Hola, responde ALTO para cancelar.";
     expect(ensureStopLanguage(body, STOP_SUFFIX_ES)).toBe(body);
+  });
+
+  it("ensureStopLanguage still appends when 'alto' is ordinary Spanish", () => {
+    const body = "El precio no es tan alto como piensas.";
+    expect(ensureStopLanguage(body, STOP_SUFFIX_ES)).toBe(`${body} ${STOP_SUFFIX_ES}`);
   });
 
   it("prepareSmsBody appends the locale-matched STOP suffix on cold sends", () => {

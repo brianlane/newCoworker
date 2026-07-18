@@ -244,42 +244,15 @@ export async function runMessengerGeminiTurn(
   if (!contents) throw new Error("messenger_engine_no_input");
 
   // Shared AI budget fuse FIRST — over-cap tenants must not bill Google.
+  // Language resolution runs before the refusal below so a capped thread is
+  // refused in the same language a normal reply would use (owner override,
+  // stored thread language, or fresh detection) — DB reads are fine here,
+  // only Gemini calls are fused.
   const snapshot = await getSpendSnapshot(args.businessId, args.tier);
-  if (snapshot.spendMicros >= snapshot.effectiveCapMicros) {
-    return {
-      // The stored thread language is on the row already — no extra read for
-      // an over-cap tenant.
-      reply: messengerOverCapRefusal(args.conversation.preferred_language),
-      refusedOverCap: true,
-      toolRounds: 0
-    };
-  }
+  const overCap = snapshot.spendMicros >= snapshot.effectiveCapMicros;
 
-  // Grounding: agent instructions exactly as the vault sync seeds them,
-  // then the channel preamble. Documents are best-effort (webchat
-  // rationale: a digest failure must not kill the turn).
-  const [config, documents, customerLanguages] = await Promise.all([
-    fetchConfig(args.businessId),
-    fetchDocuments(args.businessId).catch((err) => {
-      logger.warn("messenger engine: document digest failed; continuing without", {
-        businessId: args.businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-      return [] as BusinessDocumentRow[];
-    }),
-    getCustomerLanguages(args.businessId)
-  ]);
-  const documentsMd = buildDocumentsDigestMd(documents, now());
-  const instructions = buildAgentInstructions(
-    {
-      soul_md: config?.soul_md ?? "",
-      identity_md: config?.identity_md ?? "",
-      memory_md: config?.memory_md ?? "",
-      website_md: config?.website_md ?? "",
-      profile_md: config?.profile_md ?? ""
-    },
-    documentsMd
-  );
+  const customerLanguages = await getCustomerLanguages(args.businessId);
+
   // Owner override on the contact profile is authoritative across every
   // channel (same rule as the SMS worker). Only reachable once a phone was
   // captured for this thread; best-effort — a read blip must not kill the
@@ -338,6 +311,39 @@ export async function runMessengerGeminiTurn(
   const threadLanguage =
     ownerSetLanguage ??
     (detected.persist ? detected.language : args.conversation.preferred_language ?? null);
+
+  if (overCap) {
+    return {
+      reply: messengerOverCapRefusal(threadLanguage ?? detected.language),
+      refusedOverCap: true,
+      toolRounds: 0
+    };
+  }
+
+  // Grounding: agent instructions exactly as the vault sync seeds them,
+  // then the channel preamble. Documents are best-effort (webchat
+  // rationale: a digest failure must not kill the turn).
+  const [config, documents] = await Promise.all([
+    fetchConfig(args.businessId),
+    fetchDocuments(args.businessId).catch((err) => {
+      logger.warn("messenger engine: document digest failed; continuing without", {
+        businessId: args.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return [] as BusinessDocumentRow[];
+    })
+  ]);
+  const documentsMd = buildDocumentsDigestMd(documents, now());
+  const instructions = buildAgentInstructions(
+    {
+      soul_md: config?.soul_md ?? "",
+      identity_md: config?.identity_md ?? "",
+      memory_md: config?.memory_md ?? "",
+      website_md: config?.website_md ?? "",
+      profile_md: config?.profile_md ?? ""
+    },
+    documentsMd
+  );
   const systemInstruction = [
     instructions,
     customerLanguageLine({

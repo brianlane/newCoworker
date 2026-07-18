@@ -38,7 +38,11 @@ export function stopSuffixForLocale(locale?: string | null): string {
  * just the suffix.
  */
 export function ensureStopLanguage(body: string, suffix: string = STOP_SUFFIX): string {
-  if (/\b(stop|alto)\b/i.test(body)) return body;
+  // "ALTO" only counts as existing opt-out language in an actual opt-out
+  // instruction ("responde/envía ALTO ...") — the bare word is everyday
+  // Spanish ("un costo muy alto") and must not skip the required footer.
+  if (/\bstop\b/i.test(body)) return body;
+  if (/\b(responde|respondiendo|env[ií]a|texto|manda)\s+alto\b/i.test(body)) return body;
   const trimmed = body.trim();
   return trimmed.length > 0 ? `${trimmed} ${suffix}` : suffix;
 }
