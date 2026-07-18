@@ -62,8 +62,19 @@ function summarizeWebhookSources(
   };
 }
 
+/** Localized labels for the unified-calendar rows (dashboard.pages catalog). */
+type SocialCalendarLabels = {
+  fallbackLabel: string;
+  published: string;
+  publishing: string;
+  scheduled: string;
+};
+
 /** Scheduled/publishing/published IG posts as unified-calendar rows. */
-function socialCalendarExtras(posts: SocialPostRow[]): CalendarExtraItem[] {
+function socialCalendarExtras(
+  posts: SocialPostRow[],
+  labels: SocialCalendarLabels
+): CalendarExtraItem[] {
   const rows: CalendarExtraItem[] = [];
   for (const p of posts) {
     const at = p.publish_at ?? p.published_at;
@@ -72,10 +83,14 @@ function socialCalendarExtras(posts: SocialPostRow[]): CalendarExtraItem[] {
     }
     rows.push({
       id: p.id,
-      label: p.caption.trim() ? p.caption.slice(0, 80) : "Instagram post",
+      label: p.caption.trim() ? p.caption.slice(0, 80) : labels.fallbackLabel,
       at,
       statusText:
-        p.status === "published" ? "Published" : p.status === "publishing" ? "Publishing…" : "Scheduled",
+        p.status === "published"
+          ? labels.published
+          : p.status === "publishing"
+            ? labels.publishing
+            : labels.scheduled,
       channel: "IG"
     });
   }
@@ -245,7 +260,12 @@ export default async function MarketingPage() {
           />
           <CampaignsManager
             businessId={business.id}
-            calendarExtras={socialCalendarExtras(socialPosts)}
+            calendarExtras={socialCalendarExtras(socialPosts, {
+              fallbackLabel: t("igPostFallback"),
+              published: t("igPostPublished"),
+              publishing: t("igPostPublishing"),
+              scheduled: t("igPostScheduled")
+            })}
           />
         </>
       ) : (
