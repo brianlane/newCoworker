@@ -180,23 +180,20 @@ export async function listDueScheduledPosts(
 }
 
 /**
- * Posts stuck mid-publish past the stale window (a sweep crash between the
- * promotion and the outcome stamp). The sweep RESOLVES these — Meta's
- * container status_code says whether the post actually went live — rather
- * than blind-retrying: a duplicate feed post is worse than a manual retry.
+ * Every post currently mid-publish, oldest first. The sweep RESOLVES these
+ * each pass — Meta's container status_code says whether the post actually
+ * went live (or is ready to publish now) — rather than blind-retrying: a
+ * duplicate feed post is worse than a manual retry. Rows older than the
+ * stale window that still can't be resolved are dead-lettered.
  */
-export async function listStalePublishingPosts(
-  cutoffIso: string,
-  client?: SupabaseClient
-): Promise<SocialPostRow[]> {
+export async function listPublishingPosts(client?: SupabaseClient): Promise<SocialPostRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("social_posts")
     .select()
     .eq("status", "publishing")
-    .lte("started_at", cutoffIso)
     .order("started_at", { ascending: true })
     .limit(20);
-  if (error) throw new Error(`listStalePublishingPosts: ${error.message}`);
+  if (error) throw new Error(`listPublishingPosts: ${error.message}`);
   return (data ?? []) as SocialPostRow[];
 }

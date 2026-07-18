@@ -10,13 +10,18 @@
  *      container → media_publish) with the tenant's meta_connections page
  *      token and linked IG professional account; stamp `published` +
  *      `ig_media_id`, or `failed` + a human-readable error.
- *   3. Resolve posts stuck in `publishing` past the stale window (a crash
- *      between promotion and outcome). The container id was persisted
- *      BEFORE the publish call, so the sweep asks Meta for the container's
- *      status_code: PUBLISHED → the post is live, stamp `published`;
- *      anything else (or no container/connection) → `failed` with a
- *      duplicate-check warning. Never blind-retried — a duplicate feed
- *      post is worse than the owner re-scheduling by hand.
+ *   3. Resolve every in-flight `publishing` row older than a short grace
+ *      period (one cron beat — the pass that claimed it has finished its
+ *      attempt by then). The container id was persisted BEFORE the publish
+ *      call, so the sweep asks Meta for the container's status_code:
+ *      PUBLISHED → live, stamp `published`; FINISHED → publish it NOW (a
+ *      container publishes at most once, so this can never duplicate) and
+ *      stamp `published`; ERROR/EXPIRED → `failed` with an image hint;
+ *      still preparing → wait, unless the stale window has passed. Rows
+ *      that can't be verified at all (no container id, no connection)
+ *      dead-letter at the stale window with a duplicate-check warning.
+ *      Never blind-retried — a duplicate feed post is worse than the owner
+ *      re-scheduling by hand.
  *
  * A missing/paused Meta connection (or a Page with no linked IG
  * professional account) fails the post with plain-words guidance instead
@@ -33,7 +38,7 @@ import {
 import { logger } from "@/lib/logger";
 import {
   listDueScheduledPosts,
-  listStalePublishingPosts,
+  listPublishingPosts,
   patchSocialPost,
   transitionSocialPost,
   type SocialPostRow
@@ -43,6 +48,14 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** A publish stuck this long is a crashed sweep, not a slow Graph call. */
 export const SOCIAL_PUBLISH_STALE_MINUTES = 15;
+
+/**
+ * In-flight rows younger than this are left alone: the pass that claimed
+ * them is still (or was just) working, and its per-post attempt is bounded
+ * well under one cron beat. After the grace, container status makes any
+ * touch safe — a container publishes at most once.
+ */
+export const SOCIAL_PUBLISH_RESUME_GRACE_MINUTES = 2;
 
 /**
  * Container readiness polling: Meta downloads `image_url` asynchronously,
@@ -195,19 +208,23 @@ async function publishOne(
 }
 
 /**
- * Resolve one stuck `publishing` row. When its container id is on file and
- * the connection can be reached, Meta's container status_code answers "did
- * this go live?" — PUBLISHED stamps `published`; FINISHED (prepared but
- * never published, e.g. a slow image download outlived the original pass)
- * is safely publishable NOW with zero duplicate risk; anything else (or no
- * container/credentials) stamps `failed` with a duplicate-check warning.
+ * Resolve one in-flight `publishing` row (already past the resume grace).
+ * When its container id is on file and the connection can be reached,
+ * Meta's container status_code answers "did this go live?" — PUBLISHED
+ * stamps `published`; FINISHED (prepared but never published, e.g. a slow
+ * image download outlived the original pass) is safely publishable NOW —
+ * a container publishes at most once, so a racing resolver can't create a
+ * duplicate; ERROR/EXPIRED stamps `failed` with an image hint. A container
+ * still preparing keeps waiting until the STALE window, after which it (or
+ * any unverifiable row) is dead-lettered.
  */
-async function resolveStalePost(
+async function resolveInFlightPost(
   db: SupabaseClient,
   post: SocialPostRow,
   deps: GraphDeps,
-  nowIso: string
-): Promise<"published" | "failed" | "lost"> {
+  nowIso: string,
+  pastStaleWindow: boolean
+): Promise<"published" | "failed" | "lost" | "waiting"> {
   if (post.ig_creation_id) {
     try {
       const connection = await deps.loadConnection(post.business_id, db);
@@ -235,16 +252,34 @@ async function resolveStalePost(
           });
           return won ? "published" : "lost";
         }
+        if (status === "ERROR" || status === "EXPIRED") {
+          const won = await stampOutcome(db, post, {
+            status: "failed",
+            error_detail: `Instagram could not prepare the media (container ${status}) — check that the image URL is a public JPEG/PNG, then re-schedule.`
+          });
+          return won ? "failed" : "lost";
+        }
+        // Still preparing: keep waiting inside the stale window.
+        if (!pastStaleWindow) return "waiting";
+        const won = await stampOutcome(db, post, {
+          status: "failed",
+          error_detail:
+            "Instagram never finished preparing the media — check that the image URL is a public, reachable JPEG/PNG, then re-schedule."
+        });
+        return won ? "failed" : "lost";
       }
     } catch (err) {
-      // Fall through to the failed stamp — an unverifiable container is
+      // Fall through to the stale rules — an unverifiable container is
       // treated as not-live, with the duplicate-check warning intact.
-      logger.warn("social-post-sweep: stale container check failed", {
+      logger.warn("social-post-sweep: in-flight container check failed", {
         postId: post.id,
         error: err instanceof Error ? err.message : String(err)
       });
     }
   }
+  // Unverifiable (no container id, no connection, or the check threw):
+  // give it until the stale window, then dead-letter.
+  if (!pastStaleWindow) return "waiting";
   const won = await stampOutcome(db, post, {
     status: "failed",
     error_detail:
@@ -283,18 +318,27 @@ export async function processSocialPostSweep(
 
   const nowIso = now().toISOString();
 
-  // Resolve stuck rows first: a crashed sweep's `publishing` posts are
-  // settled (published when Meta confirms the container went live, failed
-  // otherwise) before this pass adds new ones, so the stale window is
-  // measured against THEIR promotion time, not ours.
-  const cutoffIso = new Date(
-    now().getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000
-  ).toISOString();
-  for (const post of await listStalePublishingPosts(cutoffIso, db)) {
+  // Resolve in-flight rows first — BEFORE promoting new posts, so rows this
+  // pass claims aren't in the list. Anything younger than the resume grace
+  // is skipped (its owning pass may still be working); past the grace the
+  // container check settles it as soon as Meta finishes preparing, so a
+  // slow image delays a post by ~one cron beat, not the whole stale window.
+  const graceCutoffMs = now().getTime() - SOCIAL_PUBLISH_RESUME_GRACE_MINUTES * 60 * 1000;
+  const staleCutoffMs = now().getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000;
+  for (const post of await listPublishingPosts(db)) {
+    const startedMs = post.started_at ? Date.parse(post.started_at) : 0;
+    if (startedMs > graceCutoffMs) continue;
     try {
-      const outcome = await resolveStalePost(db, post, graph, nowIso);
+      const outcome = await resolveInFlightPost(
+        db,
+        post,
+        graph,
+        nowIso,
+        startedMs <= staleCutoffMs
+      );
       if (outcome === "published") result.published += 1;
       else if (outcome === "failed") result.staled += 1;
+      else if (outcome === "waiting") result.stillPreparing += 1;
       // "lost": a concurrent resolver settled the row — nothing to count.
     } catch (err) {
       result.errors.push({

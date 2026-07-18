@@ -13,7 +13,7 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/social/db", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/social/db")>()),
   listDueScheduledPosts: vi.fn(),
-  listStalePublishingPosts: vi.fn(),
+  listPublishingPosts: vi.fn(),
   patchSocialPost: vi.fn(),
   transitionSocialPost: vi.fn()
 }));
@@ -25,11 +25,12 @@ import {
   CONTAINER_READY_ATTEMPTS,
   CONTAINER_READY_DELAY_MS,
   processSocialPostSweep,
+  SOCIAL_PUBLISH_RESUME_GRACE_MINUTES,
   SOCIAL_PUBLISH_STALE_MINUTES
 } from "@/lib/social/publish";
 import {
   listDueScheduledPosts,
-  listStalePublishingPosts,
+  listPublishingPosts,
   patchSocialPost,
   transitionSocialPost,
   type SocialPostRow
@@ -40,9 +41,18 @@ const BIZ = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-07-18T18:00:00Z");
 
 const listDue = vi.mocked(listDueScheduledPosts);
-const listStale = vi.mocked(listStalePublishingPosts);
+const listInFlight = vi.mocked(listPublishingPosts);
 const patch = vi.mocked(patchSocialPost);
 const transition = vi.mocked(transitionSocialPost);
+
+/** started_at older than the stale window (dead-letter territory). */
+const STARTED_STALE = new Date(
+  NOW.getTime() - (SOCIAL_PUBLISH_STALE_MINUTES + 1) * 60 * 1000
+).toISOString();
+/** started_at past the resume grace but inside the stale window. */
+const STARTED_RESUMABLE = new Date(
+  NOW.getTime() - (SOCIAL_PUBLISH_RESUME_GRACE_MINUTES + 1) * 60 * 1000
+).toISOString();
 
 const createContainer = vi.fn();
 const publishMedia = vi.fn();
@@ -107,7 +117,7 @@ function deps() {
 beforeEach(() => {
   vi.clearAllMocks();
   listDue.mockResolvedValue([]);
-  listStale.mockResolvedValue([]);
+  listInFlight.mockResolvedValue([]);
   patch.mockResolvedValue(undefined);
   transition.mockResolvedValue(true);
   loadConnection.mockResolvedValue(connection());
@@ -210,7 +220,7 @@ describe("processSocialPostSweep — publish", () => {
     for (const status of ["ERROR", "EXPIRED"]) {
       vi.clearAllMocks();
       listDue.mockResolvedValue([post()]);
-      listStale.mockResolvedValue([]);
+      listInFlight.mockResolvedValue([]);
       transition.mockResolvedValue(true);
       patch.mockResolvedValue(undefined);
       loadConnection.mockResolvedValue(connection());
@@ -251,7 +261,7 @@ describe("processSocialPostSweep — publish", () => {
     for (const [conn, message] of cases) {
       vi.clearAllMocks();
       listDue.mockResolvedValue([post()]);
-      listStale.mockResolvedValue([]);
+      listInFlight.mockResolvedValue([]);
       transition.mockResolvedValue(true);
       patch.mockResolvedValue(undefined);
       loadConnection.mockResolvedValue(conn);
@@ -320,15 +330,30 @@ describe("processSocialPostSweep — publish", () => {
   });
 });
 
-describe("processSocialPostSweep — stale resolution", () => {
+describe("processSocialPostSweep — in-flight resolution", () => {
+  /** An in-flight `publishing` row; started_at picks the resolution regime. */
+  function inFlight(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
+    return post({ id: "p-old", status: "publishing", started_at: STARTED_STALE, ...overrides });
+  }
+
+  it("leaves rows inside the resume grace untouched (their pass may still be working)", async () => {
+    listInFlight.mockResolvedValue([
+      inFlight({ started_at: new Date(NOW.getTime() - 30_000).toISOString() }),
+      // Defensive: a publishing row with no started_at resolves immediately.
+      inFlight({ id: "p-nostart", started_at: null, ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("PUBLISHED");
+    const result = await processSocialPostSweep(deps());
+    // Only the no-start row was resolved; the fresh row wasn't touched.
+    expect(result).toMatchObject({ published: 1, staled: 0 });
+    expect(transition).toHaveBeenCalledTimes(1);
+  });
+
   it("marks a container-less stuck row failed with a duplicate-check warning, before promoting", async () => {
-    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    listInFlight.mockResolvedValue([inFlight()]);
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ staled: 1, promoted: 0, published: 0 });
-    expect(listStale).toHaveBeenCalledWith(
-      new Date(NOW.getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000).toISOString(),
-      db
-    );
+    expect(listInFlight).toHaveBeenCalledWith(db);
     expect(containerStatus).not.toHaveBeenCalled();
     expect(transition).toHaveBeenCalledWith(
       BIZ,
@@ -342,10 +367,15 @@ describe("processSocialPostSweep — stale resolution", () => {
     );
   });
 
+  it("waits (not fails) on an unverifiable row still inside the stale window", async () => {
+    listInFlight.mockResolvedValue([inFlight({ started_at: STARTED_RESUMABLE })]);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 0, stillPreparing: 1 });
+    expect(transition).not.toHaveBeenCalled();
+  });
+
   it("stamps published when Meta confirms the persisted container went live", async () => {
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
-    ]);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
     containerStatus.mockResolvedValue("PUBLISHED");
     const result = await processSocialPostSweep(deps());
     expect(result).toMatchObject({ staled: 0, published: 1 });
@@ -360,9 +390,9 @@ describe("processSocialPostSweep — stale resolution", () => {
     );
   });
 
-  it("completes a FINISHED container that never reached media_publish — no duplicate risk", async () => {
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+  it("completes a FINISHED container one cron beat later — no 15-minute wait, no duplicate risk", async () => {
+    listInFlight.mockResolvedValue([
+      inFlight({ started_at: STARTED_RESUMABLE, ig_creation_id: "container-7" })
     ]);
     containerStatus.mockResolvedValue("FINISHED");
     const result = await processSocialPostSweep(deps());
@@ -382,10 +412,55 @@ describe("processSocialPostSweep — stale resolution", () => {
     );
   });
 
-  it("cannot complete a FINISHED container without a linked IG account — fails honestly", async () => {
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
+  it("keeps waiting on a still-preparing container inside the stale window, then fails it past it", async () => {
+    // Inside the window: IN_PROGRESS → wait.
+    listInFlight.mockResolvedValue([
+      inFlight({ started_at: STARTED_RESUMABLE, ig_creation_id: "container-7" })
     ]);
+    containerStatus.mockResolvedValue("IN_PROGRESS");
+    const waiting = await processSocialPostSweep(deps());
+    expect(waiting).toMatchObject({ staled: 0, published: 0, stillPreparing: 1 });
+    expect(transition).not.toHaveBeenCalled();
+
+    // Past the window: same status → dead-letter with a preparing message.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
+    transition.mockResolvedValue(true);
+    loadConnection.mockResolvedValue(connection());
+    containerStatus.mockResolvedValue("IN_PROGRESS");
+    const failed = await processSocialPostSweep(deps());
+    expect(failed).toMatchObject({ staled: 1, stillPreparing: 0 });
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-old",
+      "publishing",
+      expect.objectContaining({
+        status: "failed",
+        error_detail: expect.stringMatching(/never finished preparing/)
+      }),
+      db
+    );
+  });
+
+  it("fails a container Meta reports ERROR/EXPIRED as soon as the grace passes", async () => {
+    listInFlight.mockResolvedValue([
+      inFlight({ started_at: STARTED_RESUMABLE, ig_creation_id: "container-7" })
+    ]);
+    containerStatus.mockResolvedValue("ERROR");
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ staled: 1 });
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-old",
+      "publishing",
+      expect.objectContaining({ error_detail: expect.stringMatching(/ERROR/) }),
+      db
+    );
+  });
+
+  it("cannot complete a FINISHED container without a linked IG account — stale rules apply", async () => {
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
     containerStatus.mockResolvedValue("FINISHED");
     loadConnection.mockResolvedValue(connection({ instagram_account_id: null }));
     const result = await processSocialPostSweep(deps());
@@ -394,9 +469,7 @@ describe("processSocialPostSweep — stale resolution", () => {
   });
 
   it("counts nothing when a concurrent sweep settles the stuck row first", async () => {
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
-    ]);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
     containerStatus.mockResolvedValue("PUBLISHED");
     transition.mockResolvedValue(false); // published stamp loses
     const result = await processSocialPostSweep(deps());
@@ -406,9 +479,7 @@ describe("processSocialPostSweep — stale resolution", () => {
     // Same for the FINISHED-completion stamp.
     vi.clearAllMocks();
     listDue.mockResolvedValue([]);
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
-    ]);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
     loadConnection.mockResolvedValue(connection());
     containerStatus.mockResolvedValue("FINISHED");
     publishMedia.mockResolvedValue("media-9");
@@ -417,10 +488,32 @@ describe("processSocialPostSweep — stale resolution", () => {
     expect(lostFinished).toMatchObject({ staled: 0, published: 0 });
     expect(lostFinished.errors).toEqual([]);
 
+    // Same for a lost ERROR-container stamp.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
+    loadConnection.mockResolvedValue(connection());
+    containerStatus.mockResolvedValue("ERROR");
+    transition.mockResolvedValue(false);
+    const lostError = await processSocialPostSweep(deps());
+    expect(lostError).toMatchObject({ staled: 0, published: 0 });
+    expect(lostError.errors).toEqual([]);
+
+    // Same for a lost preparing-timeout stamp.
+    vi.clearAllMocks();
+    listDue.mockResolvedValue([]);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
+    loadConnection.mockResolvedValue(connection());
+    containerStatus.mockResolvedValue("IN_PROGRESS");
+    transition.mockResolvedValue(false);
+    const lostPreparing = await processSocialPostSweep(deps());
+    expect(lostPreparing).toMatchObject({ staled: 0, published: 0 });
+    expect(lostPreparing.errors).toEqual([]);
+
     // Same for a lost FAILED stamp on a container-less stuck row.
     vi.clearAllMocks();
     listDue.mockResolvedValue([]);
-    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    listInFlight.mockResolvedValue([inFlight()]);
     transition.mockResolvedValue(false);
     const lostFailed = await processSocialPostSweep(deps());
     expect(lostFailed).toMatchObject({ staled: 0, published: 0 });
@@ -428,20 +521,8 @@ describe("processSocialPostSweep — stale resolution", () => {
   });
 
   it("fails a stuck row whose container never published, or can't be verified", async () => {
-    // Not-published container status.
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
-    ]);
-    containerStatus.mockResolvedValue("ERROR");
-    expect((await processSocialPostSweep(deps())).staled).toBe(1);
-
     // No usable connection to verify with.
-    vi.clearAllMocks();
-    listDue.mockResolvedValue([]);
-    listStale.mockResolvedValue([
-      post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
-    ]);
-    patch.mockResolvedValue(undefined);
+    listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
     loadConnection.mockResolvedValue(null);
     expect((await processSocialPostSweep(deps())).staled).toBe(1);
 
@@ -449,9 +530,7 @@ describe("processSocialPostSweep — stale resolution", () => {
     for (const thrown of [new Error("graph down"), "graph string throw"]) {
       vi.clearAllMocks();
       listDue.mockResolvedValue([]);
-      listStale.mockResolvedValue([
-        post({ id: "p-old", status: "publishing", ig_creation_id: "container-7" })
-      ]);
+      listInFlight.mockResolvedValue([inFlight({ ig_creation_id: "container-7" })]);
       transition.mockResolvedValue(true);
       loadConnection.mockResolvedValue(connection());
       containerStatus.mockRejectedValue(thrown);
@@ -468,7 +547,7 @@ describe("processSocialPostSweep — stale resolution", () => {
   });
 
   it("collects a resolution stamp failure and keeps going", async () => {
-    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    listInFlight.mockResolvedValue([inFlight()]);
     transition.mockRejectedValueOnce("stamp failed");
     const result = await processSocialPostSweep(deps());
     expect(result.staled).toBe(0);
@@ -476,7 +555,7 @@ describe("processSocialPostSweep — stale resolution", () => {
   });
 
   it("keeps an Error-instance resolution failure's message", async () => {
-    listStale.mockResolvedValue([post({ id: "p-old", status: "publishing" })]);
+    listInFlight.mockResolvedValue([inFlight()]);
     transition.mockRejectedValueOnce(new Error("stamp error"));
     const result = await processSocialPostSweep(deps());
     expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp error" });

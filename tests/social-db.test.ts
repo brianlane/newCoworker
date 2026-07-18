@@ -15,8 +15,8 @@ import {
   getSocialPost,
   insertSocialPost,
   listDueScheduledPosts,
+  listPublishingPosts,
   listSocialPosts,
-  listStalePublishingPosts,
   patchSocialPost,
   transitionSocialPost
 } from "@/lib/social/db";
@@ -132,17 +132,16 @@ describe("transitionSocialPost", () => {
   });
 });
 
-describe("due / stale scans", () => {
-  it("filters by status + time and coerces null data", async () => {
+describe("due / in-flight scans", () => {
+  it("filters by status (+ time for due) and coerces null data", async () => {
     const due = chain({ data: [{ id: POST }], error: null });
     expect(await listDueScheduledPosts("2026-07-18T00:00:00Z", makeDb(due))).toHaveLength(1);
     expect(due.eq).toHaveBeenCalledWith("status", "scheduled");
     expect(due.lte).toHaveBeenCalledWith("publish_at", "2026-07-18T00:00:00Z");
 
-    const stale = chain({ data: null, error: null });
-    expect(await listStalePublishingPosts("2026-07-18T00:00:00Z", makeDb(stale))).toEqual([]);
-    expect(stale.eq).toHaveBeenCalledWith("status", "publishing");
-    expect(stale.lte).toHaveBeenCalledWith("started_at", "2026-07-18T00:00:00Z");
+    const inFlight = chain({ data: null, error: null });
+    expect(await listPublishingPosts(makeDb(inFlight))).toEqual([]);
+    expect(inFlight.eq).toHaveBeenCalledWith("status", "publishing");
 
     const dueNull = chain({ data: null, error: null });
     expect(await listDueScheduledPosts("2026-07-18T00:00:00Z", makeDb(dueNull))).toEqual([]);
@@ -151,7 +150,7 @@ describe("due / stale scans", () => {
       listDueScheduledPosts("x", makeDb(chain({ data: null, error: { message: "due" } })))
     ).rejects.toThrow(/due/);
     await expect(
-      listStalePublishingPosts("x", makeDb(chain({ data: null, error: { message: "st" } })))
+      listPublishingPosts(makeDb(chain({ data: null, error: { message: "st" } })))
     ).rejects.toThrow(/st/);
   });
 });
@@ -162,7 +161,7 @@ describe("default-client paths", () => {
     defaultClientSpy.mockReturnValue(makeDb(listChain));
     await listSocialPosts(BIZ);
     await listDueScheduledPosts("2026-07-18T00:00:00Z");
-    await listStalePublishingPosts("2026-07-18T00:00:00Z");
+    await listPublishingPosts();
     await patchSocialPost(BIZ, POST, { caption: "t" });
     await transitionSocialPost(BIZ, POST, "draft", { status: "cancelled" });
     await deleteSocialPost(BIZ, POST);
