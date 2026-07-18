@@ -24,6 +24,7 @@ import {
 } from "@/lib/white-glove/intake";
 import { INDUSTRY_OPTIONS } from "@/lib/white-glove/template";
 import { buildWhiteGloveIntakeEmail } from "@/lib/email/templates/white-glove-intake";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { logger } from "@/lib/logger";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -50,7 +51,8 @@ async function emailIntakeToRecipient(
     const { subject, text, html } = buildWhiteGloveIntakeEmail({
       intakeUrl,
       recipientEmail: intake.recipient_email,
-      siteUrl
+      siteUrl,
+      locale: await resolveOwnerUiLocaleForEmail(intake.recipient_email)
     });
     // Resend can reject WITHOUT throwing (returns no message id) — treat that
     // as a failed send so the admin copies the link manually instead of the

@@ -13,6 +13,9 @@
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import type { CancelReason } from "@/lib/db/subscriptions";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailDate, emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
 export type CancelConfirmationInput = {
   reason: CancelReason;
@@ -29,6 +32,8 @@ export type CancelConfirmationInput = {
    * like "ends on June 1". Falls back to the runtime default when omitted.
    */
   timeZone?: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export type CancelConfirmationEmail = {
@@ -61,22 +66,25 @@ function envelope(
 export function buildCancelConfirmationEmail(
   input: CancelConfirmationInput
 ): CancelConfirmationEmail {
-  const effective = fmtDate(input.effectiveAt, input.timeZone);
-  const graceEnds = input.graceEndsAt ? fmtDate(input.graceEndsAt, input.timeZone) : null;
+  const locale = input.locale ?? defaultLocale;
+  const copy = emailMessagesForLocale(locale);
+  const c = copy.cancelConfirmation;
+  const effective = fmtDate(input.effectiveAt, locale, input.timeZone);
+  const graceEnds = input.graceEndsAt ? fmtDate(input.graceEndsAt, locale, input.timeZone) : null;
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
   const billingUrl = `${normalizedSite}/dashboard/billing`;
   const dashboardUrl = `${normalizedSite}/dashboard`;
-  const billingCta = { label: "Open billing", href: billingUrl };
+  const billingCta = { label: copy.openBilling, href: billingUrl };
 
   if (input.reason === "user_period_end") {
     return envelope(
-      "Your NewCoworker subscription is scheduled to end",
+      c.periodEndSubject,
       [
-        "Your cancellation is scheduled.",
-        `Your NewCoworker subscription will end on ${effective}.`,
-        "You can undo this anytime before then from your billing dashboard.",
-        "After the end date, your workspace enters a 30-day data-retention window during which you can reactivate without losing any data.",
-        "— The NewCoworker Team"
+        c.periodEnd1,
+        fmtEmail(c.periodEnd2, { date: effective }),
+        c.periodEnd3,
+        c.periodEnd4,
+        copy.ncSignoff
       ],
       input.siteUrl,
       input.recipientEmail,
@@ -86,12 +94,12 @@ export function buildCancelConfirmationEmail(
 
   if (input.reason === "payment_failed") {
     return envelope(
-      "Your NewCoworker subscription has been paused",
+      c.paymentSubject,
       [
-        "We couldn't process your last payment, so your subscription has been canceled.",
-        `Your data is preserved until ${graceEnds ?? "30 days from now"} so you don't lose anything while you sort things out.`,
-        "Reactivate anytime from your billing dashboard to restore access — we'll run a fresh checkout and bring your workspace back online within a few minutes.",
-        "— The NewCoworker Team"
+        c.payment1,
+        fmtEmail(c.payment2, { date: graceEnds ?? c.thirtyDays }),
+        c.payment3,
+        copy.ncSignoff
       ],
       input.siteUrl,
       input.recipientEmail,
@@ -101,32 +109,19 @@ export function buildCancelConfirmationEmail(
 
   if (input.reason === "upgrade_switch") {
     return envelope(
-      "Your NewCoworker plan change is in progress",
-      [
-        "Your previous NewCoworker plan has been canceled as part of your plan change.",
-        "We're migrating your workspace to a fresh server on the new plan — this typically takes a few minutes.",
-        "You'll get a separate confirmation when the new plan is fully live.",
-        "— The NewCoworker Team"
-      ],
+      c.upgradeSubject,
+      [c.upgrade1, c.upgrade2, c.upgrade3, copy.ncSignoff],
       input.siteUrl,
       input.recipientEmail,
-      { label: "Open dashboard", href: dashboardUrl }
+      { label: copy.openDashboardCta, href: dashboardUrl }
     );
   }
 
-  const leadIn =
-    input.reason === "admin_force"
-      ? "A NewCoworker administrator canceled your subscription."
-      : "Your subscription has been canceled at your request.";
+  const leadIn = input.reason === "admin_force" ? c.adminLeadIn : c.userLeadIn;
   if (input.reason === "admin_force") {
     return envelope(
-      "Your NewCoworker account has been closed",
-      [
-        leadIn,
-        "Your workspace access has been disabled and account data has been scheduled for immediate wipe.",
-        "Contact support if you believe this was a mistake.",
-        "— The NewCoworker Team"
-      ],
+      c.adminSubject,
+      [leadIn, c.admin2, c.admin3, copy.ncSignoff],
       input.siteUrl,
       input.recipientEmail,
       undefined
@@ -134,12 +129,12 @@ export function buildCancelConfirmationEmail(
   }
 
   return envelope(
-    "Your NewCoworker subscription has been canceled",
+    c.defaultSubject,
     [
       leadIn,
-      `Your data is preserved until ${graceEnds ?? "30 days from now"}.`,
-      "Reactivate anytime from your billing dashboard to restore access before the data-retention window closes.",
-      "— The NewCoworker Team"
+      fmtEmail(c.default2, { date: graceEnds ?? c.thirtyDays }),
+      c.default3,
+      copy.ncSignoff
     ],
     input.siteUrl,
     input.recipientEmail,
@@ -147,14 +142,9 @@ export function buildCancelConfirmationEmail(
   );
 }
 
-function fmtDate(iso: string, timeZone?: string): string {
+function fmtDate(iso: string, locale: AppLocale, timeZone?: string): string {
   try {
-    return new Date(iso).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      ...(timeZone ? { timeZone } : {})
-    });
+    return emailDate(new Date(iso), locale, timeZone);
   } catch {
     return iso;
   }

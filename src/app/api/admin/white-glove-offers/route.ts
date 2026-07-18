@@ -30,6 +30,7 @@ import {
   type WhiteGloveOfferRow
 } from "@/lib/db/white-glove-offers";
 import { buildWhiteGloveOfferEmail } from "@/lib/email/templates/white-glove-offer";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { logger } from "@/lib/logger";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -61,7 +62,8 @@ async function emailOfferToRecipient(
       amountCents: offer.amount_cents,
       payUrl,
       recipientEmail,
-      siteUrl
+      siteUrl,
+      locale: await resolveOwnerUiLocaleForEmail(recipientEmail)
     });
     // Resend can reject WITHOUT throwing (returns no message id) — treat that
     // as a failed send so the admin is told to copy the link manually instead

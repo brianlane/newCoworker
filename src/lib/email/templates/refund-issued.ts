@@ -8,12 +8,17 @@
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
 export type RefundIssuedInput = {
   amountCents: number;
   recipientEmail: string;
   /** App origin without trailing slash (e.g. https://www.newcoworker.com). */
   siteUrl: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export type RefundIssuedEmail = {
@@ -30,14 +35,15 @@ const currency = new Intl.NumberFormat("en-US", {
 });
 
 export function buildRefundIssuedEmail(input: RefundIssuedInput): RefundIssuedEmail {
+  const copy = emailMessagesForLocale(input.locale ?? defaultLocale);
   const amount = currency.format(Math.max(0, input.amountCents) / 100);
-  const subject = "Your NewCoworker refund is on its way";
+  const subject = copy.refundIssued.subject;
   const textLines = [
-    `We've issued a refund of ${amount} to your original payment method.`,
-    "Refunds typically show up in 5–10 business days depending on your bank.",
-    "Your workspace has been scheduled for shutdown and we've saved a backup of your data for 30 days in case you decide to come back.",
-    "If you have any questions, just reply to this email.",
-    "— The NewCoworker Team"
+    fmtEmail(copy.refundIssued.line1, { amount }),
+    copy.refundIssued.line2,
+    copy.refundIssued.line3,
+    copy.refundIssued.line4,
+    copy.ncSignoff
   ];
   const text = textLines.join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
@@ -47,7 +53,7 @@ export function buildRefundIssuedEmail(input: RefundIssuedInput): RefundIssuedEm
     documentTitle: subject,
     heading: subject,
     bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
-    cta: { label: "Open billing", href: billingUrl },
+    cta: { label: copy.openBilling, href: billingUrl },
     recipientEmail: input.recipientEmail
   });
 

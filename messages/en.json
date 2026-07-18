@@ -1183,6 +1183,82 @@
     "provisioningLive": {
       "subject": "Your AI Coworker is live!",
       "body": "Your New Coworker is set up and ready."
+    },
+    "ncSignoff": "— The NewCoworker Team",
+    "questionsReply": "Questions? Just reply to this email.",
+    "openBilling": "Open billing",
+    "openDashboardCta": "Open dashboard",
+    "cancelConfirmation": {
+      "periodEndSubject": "Your NewCoworker subscription is scheduled to end",
+      "periodEnd1": "Your cancellation is scheduled.",
+      "periodEnd2": "Your NewCoworker subscription will end on {date}.",
+      "periodEnd3": "You can undo this anytime before then from your billing dashboard.",
+      "periodEnd4": "After the end date, your workspace enters a 30-day data-retention window during which you can reactivate without losing any data.",
+      "paymentSubject": "Your NewCoworker subscription has been paused",
+      "payment1": "We couldn't process your last payment, so your subscription has been canceled.",
+      "payment2": "Your data is preserved until {date} so you don't lose anything while you sort things out.",
+      "payment3": "Reactivate anytime from your billing dashboard to restore access — we'll run a fresh checkout and bring your workspace back online within a few minutes.",
+      "upgradeSubject": "Your NewCoworker plan change is in progress",
+      "upgrade1": "Your previous NewCoworker plan has been canceled as part of your plan change.",
+      "upgrade2": "We're migrating your workspace to a fresh server on the new plan — this typically takes a few minutes.",
+      "upgrade3": "You'll get a separate confirmation when the new plan is fully live.",
+      "adminLeadIn": "A NewCoworker administrator canceled your subscription.",
+      "userLeadIn": "Your subscription has been canceled at your request.",
+      "adminSubject": "Your NewCoworker account has been closed",
+      "admin2": "Your workspace access has been disabled and account data has been scheduled for immediate wipe.",
+      "admin3": "Contact support if you believe this was a mistake.",
+      "defaultSubject": "Your NewCoworker subscription has been canceled",
+      "default2": "Your data is preserved until {date}.",
+      "default3": "Reactivate anytime from your billing dashboard to restore access before the data-retention window closes.",
+      "thirtyDays": "30 days from now"
+    },
+    "refundIssued": {
+      "subject": "Your NewCoworker refund is on its way",
+      "line1": "We've issued a refund of {amount} to your original payment method.",
+      "line2": "Refunds typically show up in 5–10 business days depending on your bank.",
+      "line3": "Your workspace has been scheduled for shutdown and we've saved a backup of your data for 30 days in case you decide to come back.",
+      "line4": "If you have any questions, just reply to this email."
+    },
+    "emailVerification": {
+      "subject": "Confirm your NewCoworker email",
+      "welcome": "Welcome to NewCoworker!",
+      "textIntro": "To finish securing your account, please confirm your email address by opening the link below:",
+      "textExpiry": "This link expires in 7 days. If you didn't create a NewCoworker account, you can safely ignore this email.",
+      "htmlIntro": "Here's your link to confirm your email for <strong style=\"color:#1BD96A;\">New Coworker</strong>. Click the button below — no password needed.",
+      "warningLine": "This link expires in 7 days.",
+      "securityNote": "If you didn't create a NewCoworker account, you can safely ignore this email. Your account is secure.",
+      "cta": "Confirm email"
+    },
+    "teamInvite": {
+      "subject": "You've been added to {businessName} on NewCoworker",
+      "added": "{invitedBy} added you to {businessName}'s AI coworker dashboard as {role}.",
+      "roleManager": "As a manager you can run settings, AiFlows, integrations, and the team roster.",
+      "roleStaff": "As staff you can work the dashboard: messages, calls, and chat.",
+      "signIn": "Sign in with this email address to get started: {loginUrl}",
+      "cta": "Open the dashboard"
+    },
+    "whiteGloveOffer": {
+      "subject": "Your NewCoworker offer: {offerName}",
+      "line1": "We've prepared a custom white-glove offer for you: {offerName} — {price}, one-time.",
+      "payLine": "Pay securely through Stripe here: {payUrl}",
+      "afterPay": "After payment you'll get an email confirmation and a booking link, and everything follows your account automatically.",
+      "cta": "Pay {price} securely"
+    },
+    "whiteGloveIntake": {
+      "subject": "Your NewCoworker white-glove setup questionnaire",
+      "line1": "We're getting your white-glove build ready. To set everything up exactly the way you want it, we have a short questionnaire for you — mostly multiple choice, about 5 minutes.",
+      "line2": "It covers how your AI assistant should greet new leads, when it follows up, how appointments get booked, and which topics should always go straight to your team.",
+      "fillOut": "Fill it out here: {intakeUrl}",
+      "line4": "Your answers become the build plan our team installs from, so the more accurate they are, the better your assistant will fit your business from day one.",
+      "cta": "Start the questionnaire"
+    },
+    "whiteGloveConfirmation": {
+      "subject": "Your {packageName} is confirmed",
+      "line1": "Thanks for purchasing {packageName} — a specialist will work with you one-on-one to get your AI coworker fully dialed in.",
+      "bookingLine": "Book your onboarding session here: {bookingUrl}",
+      "replyLine": "Reply to this email and we'll schedule your onboarding session.",
+      "priorityLine": "Your priority call & video support line is open through {date}.",
+      "ctaBook": "Book your session"
     }
   }
 }

@@ -28,8 +28,10 @@ import {
   sanitizeWhatsAppTemplateParam,
   sendWhatsAppMessage,
   sendWhatsAppTemplate,
+  whatsappTemplateStateKey,
   WHATSAPP_STOCK_TEMPLATES
 } from "@/lib/meta/client";
+import { getContactLanguage } from "@/lib/db/contact-language";
 import {
   appendMessengerMessage,
   getMessengerConversationByIdentityPublic,
@@ -94,6 +96,11 @@ export type DeliverWhatsAppDeps = {
   sendText?: typeof sendWhatsAppMessage;
   sendTemplate?: typeof sendWhatsAppTemplate;
   fetchBusinessName?: (businessId: string) => Promise<string | null>;
+  /** Contact-audience language lookup for the template-variant pick. */
+  fetchContactLanguage?: (
+    businessId: string,
+    customerE164: string
+  ) => Promise<{ preferred_language: "en" | "es" | null } | null>;
   now?: () => Date;
 };
 
@@ -115,6 +122,13 @@ export async function deliverWhatsApp(
     to: string;
     text: string;
     audience: DeliverWhatsAppAudience;
+    /**
+     * Recipient language for the out-of-window template pick. When omitted
+     * for contact sends, the stored contact preference is looked up;
+     * English remains the default and the fallback when the es_US variant
+     * isn't approved.
+     */
+    language?: "en" | "es";
   },
   deps: DeliverWhatsAppDeps = {}
 ): Promise<DeliverWhatsAppResult> {
@@ -128,6 +142,7 @@ export async function deliverWhatsApp(
   const sendText = deps.sendText ?? sendWhatsAppMessage;
   const sendTemplate = deps.sendTemplate ?? sendWhatsAppTemplate;
   const fetchBusinessName = deps.fetchBusinessName ?? fetchBusinessNameDefault;
+  const fetchContactLanguage = deps.fetchContactLanguage ?? getContactLanguage;
   const now = deps.now ?? (() => new Date());
   /* c8 ignore stop */
 
@@ -213,7 +228,25 @@ export async function deliverWhatsApp(
     }
   } else {
     const templateName = AUDIENCE_TEMPLATE[input.audience];
-    const templateState = connection.templates?.[templateName];
+
+    // Language pick: explicit input wins; contact sends fall back to the
+    // stored contact preference. Spanish only applies when the es_US
+    // variant is APPROVED — otherwise the English variant keeps working
+    // exactly as before.
+    let wantEs = input.language === "es";
+    if (input.language === undefined && input.audience === "contact") {
+      try {
+        const row = await fetchContactLanguage(input.businessId, `+${waId}`);
+        wantEs = row?.preferred_language === "es";
+      } catch {
+        wantEs = false;
+      }
+    }
+    const esState = wantEs
+      ? connection.templates?.[whatsappTemplateStateKey(templateName, "es_US")]
+      : undefined;
+    const useEs = esState?.status === "APPROVED";
+    const templateState = useEs ? esState : connection.templates?.[templateName];
     if (templateState?.status !== "APPROVED") {
       return {
         ok: false,
@@ -221,7 +254,10 @@ export async function deliverWhatsApp(
         detail: `${templateName}: ${templateState?.status ?? "not registered"}`
       };
     }
-    const stock = WHATSAPP_STOCK_TEMPLATES.find((t) => t.name === templateName);
+    const templateLanguage = useEs ? "es_US" : "en_US";
+    const stock = WHATSAPP_STOCK_TEMPLATES.find(
+      (t) => t.name === templateName && t.language === templateLanguage
+    );
     /* c8 ignore next 3 -- unreachable: AUDIENCE_TEMPLATE only maps stock names */
     if (!stock) {
       return { ok: false, reason: "template_not_approved", detail: templateName };
@@ -237,7 +273,7 @@ export async function deliverWhatsApp(
     try {
       const sent = await sendTemplate(connection.phone_number_id, connection.accessToken, waId, {
         name: templateName,
-        language: templateState.language || stock.language,
+        language: useEs ? "es_US" : templateState.language || stock.language,
         bodyParams: [businessName, text]
       });
       messageId = sent.messageId;

@@ -31,6 +31,7 @@ import { assertTeamAccessAllowed, TeamAccessValidationError } from "@/lib/team/t
 import { getBusiness } from "@/lib/db/businesses";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { buildTeamInviteEmail } from "@/lib/email/templates/team-invite";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { logger } from "@/lib/logger";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
@@ -118,7 +119,9 @@ export async function POST(request: Request) {
             role: body.role,
             invitedBy: user.email ?? "The business owner",
             recipientEmail: email,
-            siteUrl: appUrl
+            siteUrl: appUrl,
+            // The INVITEE's saved locale (they already have a login here).
+            locale: await resolveOwnerUiLocaleForEmail(email)
           });
           const messageId = await sendOwnerEmail(apiKey, email, subject, { text, html });
           if (messageId) delivery = "notice_email";

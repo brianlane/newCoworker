@@ -649,7 +649,8 @@ describe("notifications/dispatch", () => {
         businessId: BIZ,
         to: "+15555550100",
         text: expect.stringContaining("Lead needs a callback"),
-        audience: "owner"
+        audience: "owner",
+        language: "en"
       });
     });
 

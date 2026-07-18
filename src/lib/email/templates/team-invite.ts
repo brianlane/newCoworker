@@ -9,6 +9,9 @@
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import type { MemberRole } from "@/lib/authz/policy";
+import type { AppLocale } from "@/i18n/routing";
+import { defaultLocale } from "@/i18n/routing";
+import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
 export type TeamInviteEmailInput = {
   businessName: string;
@@ -17,6 +20,8 @@ export type TeamInviteEmailInput = {
   recipientEmail: string;
   /** App origin without trailing slash. */
   siteUrl: string;
+  /** Recipient's UI locale; defaults to English. */
+  locale?: AppLocale;
 };
 
 export function buildTeamInviteEmail(input: TeamInviteEmailInput): {
@@ -24,18 +29,21 @@ export function buildTeamInviteEmail(input: TeamInviteEmailInput): {
   text: string;
   html: string;
 } {
-  const subject = `You've been added to ${input.businessName} on NewCoworker`;
-  const roleLine =
-    input.role === "manager"
-      ? "As a manager you can run settings, AiFlows, integrations, and the team roster."
-      : "As staff you can work the dashboard: messages, calls, and chat.";
+  const copy = emailMessagesForLocale(input.locale ?? defaultLocale);
+  const c = copy.teamInvite;
+  const subject = fmtEmail(c.subject, { businessName: input.businessName });
+  const roleLine = input.role === "manager" ? c.roleManager : c.roleStaff;
   const loginUrl = `${input.siteUrl.replace(/\/$/, "")}/login`;
   const textLines = [
-    `${input.invitedBy} added you to ${input.businessName}'s AI coworker dashboard as ${input.role}.`,
+    fmtEmail(c.added, {
+      invitedBy: input.invitedBy,
+      businessName: input.businessName,
+      role: input.role
+    }),
     roleLine,
-    `Sign in with this email address to get started: ${loginUrl}`,
-    "Questions? Just reply to this email.",
-    "— The NewCoworker Team"
+    fmtEmail(c.signIn, { loginUrl }),
+    copy.questionsReply,
+    copy.ncSignoff
   ];
   const text = textLines.join("\n\n");
   const html = buildBrandedEmailHtml({
@@ -43,7 +51,7 @@ export function buildTeamInviteEmail(input: TeamInviteEmailInput): {
     documentTitle: subject,
     heading: subject,
     bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
-    cta: { label: "Open the dashboard", href: loginUrl },
+    cta: { label: c.cta, href: loginUrl },
     recipientEmail: input.recipientEmail
   });
   return { subject, text, html };

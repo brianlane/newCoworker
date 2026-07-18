@@ -2,6 +2,9 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { findAuthUserIdByEmail } from "@/lib/auth";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verification";
+import { cookies } from "next/headers";
+import { LOCALE_COOKIE } from "@/i18n/routing";
+import { resolveUiLocale } from "@/lib/i18n/resolve-locale";
 import { createEmailVerificationToken } from "@/lib/email/verification-token";
 import { logger } from "@/lib/logger";
 import { getPasswordValidationError } from "@/lib/password";
@@ -186,10 +189,20 @@ export async function POST(request: Request) {
         const verificationToken = createEmailVerificationToken(ownerEmail);
         const verificationUrl =
           `${siteUrl}/verify-email?token=${encodeURIComponent(verificationToken)}`;
+        // A just-minted auth user can't have a saved ui_locale yet, so the
+        // onboarding session's explicit locale cookie is the only signal.
+        // cookies() throws outside a request scope; treat that as English.
+        let cookieLocale: string | null = null;
+        try {
+          cookieLocale = (await cookies()).get(LOCALE_COOKIE)?.value ?? null;
+        } catch {
+          cookieLocale = null;
+        }
         const { subject, text, html } = buildEmailVerificationMessage({
           verificationUrl,
           siteUrl,
-          recipientEmail: ownerEmail
+          recipientEmail: ownerEmail,
+          locale: resolveUiLocale({ cookieLocale })
         });
         await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", ownerEmail, subject, { text, html });
         logger.info("set-password: verification email dispatched", {

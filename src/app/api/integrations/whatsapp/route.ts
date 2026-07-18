@@ -33,6 +33,7 @@ import {
   exchangeEmbeddedSignupCode,
   fetchWhatsAppTemplateStatuses,
   registerWhatsAppTemplates,
+  whatsappTemplateStateKey,
   subscribeWabaToApp,
   unsubscribeWabaFromApp
 } from "@/lib/meta/client";
@@ -91,7 +92,10 @@ export async function GET(request: Request) {
           if (statuses.length > 0) {
             const merged: WhatsAppTemplatesState = { ...(connection.templates ?? {}) };
             for (const s of statuses) {
-              merged[s.name] = { status: s.status, language: s.language };
+              merged[whatsappTemplateStateKey(s.name, s.language)] = {
+                status: s.status,
+                language: s.language
+              };
             }
             await updateWhatsAppTemplates(parsed.data, merged);
             connection = { ...connection, templates: merged };
@@ -141,7 +145,10 @@ export async function POST(request: Request) {
     const templateStatuses = await registerWhatsAppTemplates(body.wabaId, accessToken);
     const templates: WhatsAppTemplatesState = {};
     for (const t of templateStatuses) {
-      templates[t.name] = { status: t.status, language: t.language };
+      templates[whatsappTemplateStateKey(t.name, t.language)] = {
+        status: t.status,
+        language: t.language
+      };
     }
     // Reconnects: registration answers "already exists" (recorded as
     // PENDING above), but the live review status may long since be
@@ -149,7 +156,10 @@ export async function POST(request: Request) {
     // someone happens to open the integration card. Best-effort.
     try {
       for (const s of await fetchWhatsAppTemplateStatuses(body.wabaId, accessToken)) {
-        templates[s.name] = { status: s.status, language: s.language };
+        templates[whatsappTemplateStateKey(s.name, s.language)] = {
+          status: s.status,
+          language: s.language
+        };
       }
     } catch (err) {
       logger.warn("whatsapp connect: template status fetch failed; card refresh will reconcile", {
