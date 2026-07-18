@@ -36,6 +36,27 @@ export type LinkClickRpcResult = {
 /** At most one link_click alert per contact per hour. */
 export const LINK_CLICK_CONTACT_THROTTLE_MS = 60 * 60 * 1000;
 
+type ServiceClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/**
+ * Give the link its alert back. The RPC stamps `notified_at` atomically with
+ * `should_notify` (that is the concurrent-tap dedupe), so any path that ends
+ * WITHOUT an owner alert must release the stamp — otherwise this link's one
+ * alert is consumed by a notification that never happened. Best-effort: a
+ * failed release stays at-most-once by design (never alert-storms).
+ */
+async function releaseNotifyStamp(db: ServiceClient, result: LinkClickRpcResult): Promise<void> {
+  try {
+    await db.from("sms_links").update({ notified_at: null }).eq("id", result.link_id);
+  } catch (err) {
+    logger.warn("link-click-notify: notified_at release failed", {
+      businessId: result.business_id,
+      linkId: result.link_id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 function linkDestinationLabel(url: string): string {
   try {
     const host = new URL(url).hostname.replace(/^www\./, "");
@@ -65,7 +86,12 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
         LINK_CLICK_CONTACT_THROTTLE_MS,
         db
       );
-      if (recent) return;
+      if (recent) {
+        // No alert went out for THIS link — release its stamp so a tap in a
+        // later engagement moment (past the throttle window) still alerts.
+        await releaseNotifyStamp(db, result);
+        return;
+      }
     } catch (err) {
       logger.warn("link-click-notify: throttle check failed; delivering", {
         businessId: result.business_id,
@@ -120,23 +146,9 @@ export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void>
       linkId: result.link_id,
       error: err instanceof Error ? err.message : String(err)
     });
-    // The RPC stamped notified_at BEFORE this dispatch (atomic dedupe against
-    // concurrent taps). A THROWN dispatch means no alert and no audit rows —
-    // release the stamp so the lead's next human tap retries, instead of the
-    // owner silently losing this link's one alert. Best-effort: if this write
-    // also fails we stay at-most-once by design (never alert-storm). The
-    // per-contact hourly throttle bounds any retry.
-    try {
-      await db
-        .from("sms_links")
-        .update({ notified_at: null })
-        .eq("id", result.link_id);
-    } catch (resetErr) {
-      logger.warn("link-click-notify: notified_at release failed", {
-        businessId: result.business_id,
-        linkId: result.link_id,
-        error: resetErr instanceof Error ? resetErr.message : String(resetErr)
-      });
-    }
+    // A THROWN dispatch means no alert and no audit rows — give the alert
+    // back so the lead's next human tap retries (the hourly throttle bounds
+    // how often).
+    await releaseNotifyStamp(db, result);
   }
 }

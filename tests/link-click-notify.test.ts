@@ -113,7 +113,7 @@ describe("notifyLinkClick", () => {
     expect(hasRecentNotificationForContact).not.toHaveBeenCalled();
   });
 
-  it("collapses per contact: a recent link_click alert suppresses this one", async () => {
+  it("collapses per contact: a recent link_click alert suppresses this one and releases the stamp", async () => {
     hasRecentNotificationForContact.mockResolvedValue(true);
     const { notifyLinkClick, LINK_CLICK_CONTACT_THROTTLE_MS } = await import(
       "@/lib/notifications/link-click-notify"
@@ -127,6 +127,8 @@ describe("notifyLinkClick", () => {
       expect.anything()
     );
     expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    // The suppressed link gets its alert back for a later engagement moment.
+    expect(linkUpdate).toHaveBeenCalledWith("sms_links", { notified_at: null }, "id", "link-1");
   });
 
   it("fails toward delivering when the throttle check errors (Error and non-Error)", async () => {
