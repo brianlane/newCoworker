@@ -46,6 +46,14 @@ export type MrrSubscriptionInput = {
   stripe_current_period_start: string | null;
   stripe_current_period_end: string | null;
   created_at: string;
+  /**
+   * True when the owner's 30-day money-back window is still open and unused
+   * AND the placement is self-serve refundable — this subscription's revenue
+   * could still be clawed back in full. Stamped by the admin-page loader
+   * (`stampRefundExposure` in src/lib/admin/mrr-exposure.ts); omitted/false →
+   * counted as committed revenue.
+   */
+  refund_exposed?: boolean;
 };
 
 export type DayCurrentMrr = {
@@ -56,6 +64,14 @@ export type DayCurrentMrr = {
   enterpriseDealCents: number;
   /** Subscriptions that actually counted (active + Stripe-backed, non-enterprise). */
   countedSubscriptions: number;
+  /**
+   * Portion of `totalCents` from refund-exposed subscriptions (owner still
+   * inside the unused 30-day money-back window — they can refund instead of
+   * merely not renewing). Enterprise deals never count here.
+   */
+  refundExposedCents: number;
+  /** `totalCents` minus `refundExposedCents` — MRR excluding first-month refund risk. */
+  committedCents: number;
 };
 
 /**
@@ -108,16 +124,19 @@ export function computeDayCurrentMrr(params: {
 
   let subscriptionCents = 0;
   let countedSubscriptions = 0;
+  let refundExposedCents = 0;
   for (const sub of params.subscriptions) {
     // Only money that actually recurs: an "active" flag with no Stripe
     // subscription behind it charges nobody. Enterprise revenue comes from
     // its deal row, not the $0 tier table.
     if (sub.status !== "active" || sub.stripe_subscription_id === null) continue;
     if (sub.tier === "enterprise") continue;
-    subscriptionCents += dayCurrentSubscriptionRateCents(
+    const rateCents = dayCurrentSubscriptionRateCents(
       sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
       now
     );
+    subscriptionCents += rateCents;
+    if (sub.refund_exposed === true) refundExposedCents += rateCents;
     countedSubscriptions += 1;
   }
 
@@ -126,11 +145,14 @@ export function computeDayCurrentMrr(params: {
     0
   );
 
+  const totalCents = subscriptionCents + enterpriseDealCents;
   return {
-    totalCents: subscriptionCents + enterpriseDealCents,
+    totalCents,
     subscriptionCents,
     enterpriseDealCents,
-    countedSubscriptions
+    countedSubscriptions,
+    refundExposedCents,
+    committedCents: totalCents - refundExposedCents
   };
 }
 

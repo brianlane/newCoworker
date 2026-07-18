@@ -28,6 +28,10 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
+import {
+  loadBillableUsageCarveOutCents,
+  resolveUsageCarveOutSinceIso
+} from "@/lib/billing/usage-charges";
 import { logger } from "@/lib/logger";
 
 // Vercel Pro allows up to 300s. The cancel flow's slow phase (SSH backup
@@ -87,10 +91,36 @@ export async function POST(request: Request) {
     // placements are governed by the enterprise agreement. Support can
     // still honor edge cases via /api/admin/force-refund, which is
     // deliberately not gated on placement.
+    let effectiveContext = ctxRes.context;
     if (payload.mode === "refund") {
       const { resolveVpsProvider } = await import("@/lib/vps/provider");
       if (resolveVpsProvider(ctxRes.context.vpsProvider) !== "hostinger") {
         return errorResponse("CONFLICT", "refund_not_available_for_placement", 409);
+      }
+
+      // Billable-usage carve-out (Jul 2026): the refund withholds the
+      // tenant's third-party usage charges (SMS, voice, Gemini spend) at
+      // platform cost. FAIL CLOSED on a read error — refunding money we
+      // cannot verify wasn't already spent on usage is the expensive
+      // mistake; the customer can simply retry.
+      try {
+        const sinceIso = resolveUsageCarveOutSinceIso({
+          stripeCurrentPeriodStart: ctxRes.context.subscription.stripe_current_period_start,
+          firstPaidAt: ctxRes.context.profile?.first_paid_at ?? null,
+          subscriptionCreatedAt: ctxRes.context.subscription.created_at
+        });
+        const { cents } = await loadBillableUsageCarveOutCents(business.id, sinceIso);
+        effectiveContext = { ...ctxRes.context, billableUsageCents: cents };
+      } catch (err) {
+        logger.error("billable-usage carve-out load failed on /api/billing/cancel", {
+          businessId: business.id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return errorResponse(
+          "INTERNAL_SERVER_ERROR",
+          "Could not verify usage charges; please retry",
+          500
+        );
       }
     }
 
@@ -99,7 +129,7 @@ export async function POST(request: Request) {
         ? ({ type: "cancelWithRefund" } as const)
         : ({ type: "cancelAtPeriodEnd" } as const);
 
-    const planRes = planLifecycleAction(action, ctxRes.context);
+    const planRes = planLifecycleAction(action, effectiveContext);
     if (!planRes.ok) {
       // Surface typed planner errors as 409s so the UI can branch.
       return errorResponse("CONFLICT", planRes.reason, 409);

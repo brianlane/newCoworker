@@ -230,12 +230,13 @@ function buildSections(): FaqSection[] {
         {
           question: "Can I cancel?",
           plainAnswer:
-            "Yes. Every plan has a 30-day money-back window from the initial purchase date (the one-time carrier registration fee is excluded, and 12/24-month plans deduct one month of service at the monthly rate). After the term, service continues month-to-month at the renewal rate unless you start a new contract.",
+            "Yes. Every plan has a 30-day money-back window from the initial purchase date (the one-time carrier registration fee is excluded, usage charges already incurred — texts sent, call minutes, AI usage — are deducted at cost, and 12/24-month plans deduct one month of service at the monthly rate). After the term, service continues month-to-month at the renewal rate unless you start a new contract.",
           answer: (
             <>
               Yes. Every plan has a 30-day money-back window from the initial purchase date (the
-              one-time carrier registration fee is excluded, and 12/24-month plans deduct one
-              month of service at the monthly rate). After the term, service continues
+              one-time carrier registration fee is excluded, usage charges already incurred —
+              texts sent, call minutes, AI usage — are deducted at cost, and 12/24-month plans
+              deduct one month of service at the monthly rate). After the term, service continues
               month-to-month at the renewal rate unless you start a new contract.
             </>
           )

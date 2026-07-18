@@ -8,6 +8,7 @@ import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { getFleetCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { getFleetCurrentAiSpendMicros } from "@/lib/db/chat-usage";
 import { computeDayCurrentMrr, estimateMonthlyPlatformCost } from "@/lib/admin/mrr";
+import { stampRefundExposureFromDb } from "@/lib/admin/mrr-exposure";
 import {
   formatAdminLabel,
   getLogBadgeVariant,
@@ -72,8 +73,20 @@ export default async function AdminDashboardPage() {
 
   // Day-current best-effort MRR (renewal-aware, Stripe-backed only, real
   // enterprise deal prices) and the estimated monthly platform spend against
-  // it — see src/lib/admin/mrr.ts.
-  const mrr = computeDayCurrentMrr({ subscriptions, enterpriseDeals });
+  // it — see src/lib/admin/mrr.ts. Refund-exposure stamping (which splits
+  // out revenue still inside an open 30-day money-back window) is best
+  // effort: a profile-read failure degrades to "everything committed"
+  // instead of erroring the whole dashboard.
+  const mrrSubscriptions = await stampRefundExposureFromDb(subscriptions, businesses).catch(
+    (err: unknown) => {
+      console.error(
+        "admin dashboard: refund-exposure stamping failed",
+        err instanceof Error ? err.message : err
+      );
+      return subscriptions;
+    }
+  );
+  const mrr = computeDayCurrentMrr({ subscriptions: mrrSubscriptions, enterpriseDeals });
   const platformCost = estimateMonthlyPlatformCost({ businesses, monthUsage, aiSpendMicros });
   const netCents = mrr.totalCents - platformCost.totalCents;
 
@@ -134,6 +147,9 @@ export default async function AdminDashboardPage() {
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Est. MRR</p>
           <p className="text-3xl font-bold text-parchment">{formatMoney(mrr.totalCents)}</p>
+          <p className="text-xs text-parchment/50 mt-0.5">
+            {formatMoney(mrr.committedCents)} ex. refund-window
+          </p>
           <p className="text-xs text-parchment/30 mt-1">
             − {formatMoney(platformCost.totalCents)}/mo est. cost ·{" "}
             <span className={netCents >= 0 ? "text-claw-green" : "text-spark-orange"}>

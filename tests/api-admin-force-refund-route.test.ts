@@ -48,6 +48,11 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
   executeLifecyclePlanSlowPhase: vi.fn()
 }));
 
+vi.mock("@/lib/billing/usage-charges", () => ({
+  loadBillableUsageCarveOutCents: vi.fn(),
+  resolveUsageCarveOutSinceIso: vi.fn()
+}));
+
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
 }));
@@ -62,6 +67,10 @@ import {
   executeLifecyclePlanFastPhase,
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
+import {
+  loadBillableUsageCarveOutCents,
+  resolveUsageCarveOutSinceIso
+} from "@/lib/billing/usage-charges";
 import { logger } from "@/lib/logger";
 
 const BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
@@ -115,6 +124,11 @@ beforeEach(() => {
   vi.mocked(executeLifecyclePlanSlowPhase).mockResolvedValue(undefined as never);
   vi.mocked(upsertCustomerProfile).mockResolvedValue("prof-upserted");
   vi.mocked(setBusinessCustomerProfile).mockResolvedValue(undefined);
+  vi.mocked(resolveUsageCarveOutSinceIso).mockReturnValue("2026-04-01T00:00:00.000Z");
+  vi.mocked(loadBillableUsageCarveOutCents).mockResolvedValue({
+    usage: { smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 },
+    cents: 0
+  });
 });
 
 describe("api/admin/force-refund route", () => {
@@ -429,6 +443,41 @@ describe("api/admin/force-refund route", () => {
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
     expect(planLifecycleAction).toHaveBeenCalledTimes(2);
+  });
+
+  it("threads the billable-usage carve-out into the planner context", async () => {
+    vi.mocked(loadBillableUsageCarveOutCents).mockResolvedValueOnce({
+      usage: { smsSent: 10, voiceSeconds: 300, aiSpendMicros: 0 },
+      cents: 250
+    });
+    vi.mocked(planLifecycleAction).mockReturnValueOnce({
+      ok: true,
+      plan: { stripeOps: [], hostingerOps: [], sshOps: [], dbUpdates: [], emailsToSend: [] }
+    } as never);
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(200);
+    expect(loadBillableUsageCarveOutCents).toHaveBeenCalledWith(
+      BUSINESS_ID,
+      "2026-04-01T00:00:00.000Z"
+    );
+    expect(planLifecycleAction).toHaveBeenCalledWith(
+      { type: "cancelWithRefund" },
+      expect.objectContaining({ billableUsageCents: 250 })
+    );
+  });
+
+  it("fails closed (500, no plan) when the usage read errors", async () => {
+    vi.mocked(loadBillableUsageCarveOutCents).mockRejectedValueOnce(new Error("db down"));
+
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(500);
+    expect(planLifecycleAction).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhase).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "admin.force-refund: billable-usage carve-out load failed",
+      expect.objectContaining({ businessId: BUSINESS_ID })
+    );
   });
 
   it("surfaces structural planner rejections as 409", async () => {

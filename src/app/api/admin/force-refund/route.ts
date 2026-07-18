@@ -56,6 +56,10 @@ import {
   executeLifecyclePlanFastPhase,
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
+import {
+  loadBillableUsageCarveOutCents,
+  resolveUsageCarveOutSinceIso
+} from "@/lib/billing/usage-charges";
 import { getBusiness, setBusinessCustomerProfile } from "@/lib/db/businesses";
 import { upsertCustomerProfile } from "@/lib/db/customer-profiles";
 import { logAdminAction } from "@/lib/admin/audit";
@@ -176,6 +180,32 @@ export async function POST(request: Request) {
           customer_profile_id: profileIdForPlan
         }
       };
+    }
+
+    // Billable-usage carve-out (Jul 2026): like the self-serve refund, the
+    // admin force-refund withholds the tenant's third-party usage charges
+    // (SMS, voice, Gemini spend) at platform cost. FAIL CLOSED on a read
+    // error — the operator can retry; refunding money already spent on
+    // usage cannot be clawed back.
+    try {
+      const sinceIso = resolveUsageCarveOutSinceIso({
+        stripeCurrentPeriodStart: effectiveCtx.subscription.stripe_current_period_start,
+        firstPaidAt: effectiveCtx.profile?.first_paid_at ?? null,
+        subscriptionCreatedAt: effectiveCtx.subscription.created_at
+      });
+      const { cents } = await loadBillableUsageCarveOutCents(body.businessId, sinceIso);
+      effectiveCtx = { ...effectiveCtx, billableUsageCents: cents };
+    } catch (err) {
+      logger.error("admin.force-refund: billable-usage carve-out load failed", {
+        adminEmail: admin.email,
+        businessId: body.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return errorResponse(
+        "INTERNAL_SERVER_ERROR",
+        "Could not verify usage charges; please retry",
+        500
+      );
     }
 
     const plan = buildAdminForceRefundPlan(effectiveCtx);

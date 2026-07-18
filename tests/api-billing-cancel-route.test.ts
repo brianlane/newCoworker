@@ -8,7 +8,9 @@ const {
   planLifecycleActionMock,
   executeLifecyclePlanMock,
   executeLifecyclePlanFastPhaseMock,
-  executeLifecyclePlanSlowPhaseMock
+  executeLifecyclePlanSlowPhaseMock,
+  loadBillableUsageCarveOutCentsMock,
+  resolveUsageCarveOutSinceIsoMock
 } = vi.hoisted(() => ({
   getAuthUserMock: vi.fn(),
   supabaseFromMock: vi.fn(),
@@ -16,7 +18,9 @@ const {
   planLifecycleActionMock: vi.fn(),
   executeLifecyclePlanMock: vi.fn(),
   executeLifecyclePlanFastPhaseMock: vi.fn(),
-  executeLifecyclePlanSlowPhaseMock: vi.fn()
+  executeLifecyclePlanSlowPhaseMock: vi.fn(),
+  loadBillableUsageCarveOutCentsMock: vi.fn(),
+  resolveUsageCarveOutSinceIsoMock: vi.fn()
 }));
 
 // `after()` from `next/server` requires the Next.js work-units context
@@ -74,6 +78,11 @@ vi.mock("@/lib/billing/lifecycle-executor", () => ({
   executeLifecyclePlan: executeLifecyclePlanMock,
   executeLifecyclePlanFastPhase: executeLifecyclePlanFastPhaseMock,
   executeLifecyclePlanSlowPhase: executeLifecyclePlanSlowPhaseMock
+}));
+
+vi.mock("@/lib/billing/usage-charges", () => ({
+  loadBillableUsageCarveOutCents: loadBillableUsageCarveOutCentsMock,
+  resolveUsageCarveOutSinceIso: resolveUsageCarveOutSinceIsoMock
 }));
 
 vi.mock("@/lib/logger", () => ({
@@ -160,6 +169,11 @@ describe("/api/billing/cancel", () => {
     executeLifecyclePlanMock.mockResolvedValue({});
     executeLifecyclePlanFastPhaseMock.mockResolvedValue({});
     executeLifecyclePlanSlowPhaseMock.mockResolvedValue(undefined);
+    resolveUsageCarveOutSinceIsoMock.mockReturnValue("2026-05-01T00:00:00.000Z");
+    loadBillableUsageCarveOutCentsMock.mockResolvedValue({
+      usage: { smsSent: 0, voiceSeconds: 0, aiSpendMicros: 0 },
+      cents: 0
+    });
   });
 
   function req(body: unknown): Request {
@@ -291,6 +305,41 @@ describe("/api/billing/cancel", () => {
         refund: expect.objectContaining({ stripeRefundId: "re_1" })
       })
     );
+  });
+
+  it("refund mode threads the billable-usage carve-out into the planner context", async () => {
+    loadBillableUsageCarveOutCentsMock.mockResolvedValueOnce({
+      usage: { smsSent: 40, voiceSeconds: 600, aiSpendMicros: 500_000 },
+      cents: 142
+    });
+    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: refundPlan() });
+
+    const res = await POST(req({ mode: "refund" }));
+
+    expect(res.status).toBe(200);
+    expect(loadBillableUsageCarveOutCentsMock).toHaveBeenCalledWith(
+      "biz_1",
+      "2026-05-01T00:00:00.000Z"
+    );
+    expect(planLifecycleActionMock).toHaveBeenCalledWith(
+      { type: "cancelWithRefund" },
+      expect.objectContaining({ billableUsageCents: 142 })
+    );
+  });
+
+  it("refund mode fails closed (500, no plan) when the usage read errors", async () => {
+    loadBillableUsageCarveOutCentsMock.mockRejectedValueOnce(new Error("db down"));
+    const res = await POST(req({ mode: "refund" }));
+    expect(res.status).toBe(500);
+    expect(planLifecycleActionMock).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhaseMock).not.toHaveBeenCalled();
+  });
+
+  it("period_end mode never loads the usage carve-out", async () => {
+    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: periodEndPlan() });
+    const res = await POST(req({ mode: "period_end" }));
+    expect(res.status).toBe(200);
+    expect(loadBillableUsageCarveOutCentsMock).not.toHaveBeenCalled();
   });
 
   it("refund path returns 500 if the fast phase throws (slow phase never kicks off)", async () => {

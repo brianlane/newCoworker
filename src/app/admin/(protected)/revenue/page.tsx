@@ -2,6 +2,7 @@ import { listBusinesses } from "@/lib/db/businesses";
 import { listAllSubscriptions } from "@/lib/db/subscriptions";
 import { listActiveEnterpriseDeals } from "@/lib/db/enterprise-deals";
 import { computeDayCurrentMrr } from "@/lib/admin/mrr";
+import { stampRefundExposureFromDb } from "@/lib/admin/mrr-exposure";
 import {
   computeArpuCents,
   computeChurnStats,
@@ -48,9 +49,22 @@ export default async function AdminRevenuePage() {
 
   // Newest row per business for the headline KPI — the same view the admin
   // dashboard's MRR card computes from listSubscriptionsByBusinessIds, so
-  // the two never disagree over historical/overlapping rows.
+  // the two never disagree over historical/overlapping rows. Refund-exposure
+  // stamping (splits out revenue still inside an open 30-day money-back
+  // window) is best effort, mirroring the dashboard card: a profile-read
+  // failure degrades to "everything committed" instead of erroring the page.
+  const headlineSubs = dedupeNewestPerBusiness(subscriptions);
+  const mrrSubscriptions = await stampRefundExposureFromDb(headlineSubs, businesses).catch(
+    (err: unknown) => {
+      console.error(
+        "admin revenue: refund-exposure stamping failed",
+        err instanceof Error ? err.message : err
+      );
+      return headlineSubs;
+    }
+  );
   const mrr = computeDayCurrentMrr({
-    subscriptions: dedupeNewestPerBusiness(revenueSubs),
+    subscriptions: mrrSubscriptions,
     enterpriseDeals: deals
   });
   const arpuCents = computeArpuCents({ subscriptions: revenueSubs, deals });
@@ -90,6 +104,9 @@ export default async function AdminRevenuePage() {
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Est. MRR</p>
           <p className="text-3xl font-bold text-parchment">{formatMoney(mrr.totalCents)}</p>
+          <p className="text-xs text-parchment/50 mt-0.5">
+            {formatMoney(mrr.committedCents)} ex. refund-window
+          </p>
           <p className="text-xs text-parchment/30 mt-1">
             {formatMoney(mrr.subscriptionCents)} subs · {formatMoney(mrr.enterpriseDealCents)}{" "}
             enterprise
