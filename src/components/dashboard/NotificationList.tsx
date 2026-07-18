@@ -30,6 +30,8 @@ function describeKind(row: NotificationRow): string {
       return "Urgent alert";
     case "voice_capture":
       return "Voice capture";
+    case "link_click":
+      return "Link click";
     case "digest":
       return row.payload?.window === "weekly" ? "Weekly digest" : "Daily digest";
     default:

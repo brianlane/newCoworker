@@ -303,7 +303,8 @@ export async function pruneExpiredContent(
 
   // ── sms_links (central-only: tracked short links carry the recipient ───
   // number + original URL; aged links go stale with their texts. Expired
-  // codes then 303 to the homepage — by design).
+  // codes then 303 to the homepage — by design). sms_link_clicks rows
+  // cascade on link delete, so pruning links clears click history too.
   {
     const { data, error } = await db
       .from("sms_links")

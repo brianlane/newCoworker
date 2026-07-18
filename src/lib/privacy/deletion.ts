@@ -536,9 +536,7 @@ export async function deleteEndUserData(
   // ── sms_links (tracked short links; central-only by design) ────────────
   // Rows persist the recipient number + the original URL from the message
   // body, so they are in scope for erasure. Same linked-number span as
-  // ai_reply_reasoning. The table stays central (see residency/tables.ts):
-  // the public /s/<code> redirect must keep resolving even when a tenant
-  // box is down.
+  // ai_reply_reasoning. sms_link_clicks cascade on link delete.
   if (linkedNumbers.size > 0) {
     const { data, error } = await db
       .from("sms_links")

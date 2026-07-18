@@ -48,3 +48,68 @@ export function flowFunnelsCsv(rows: FlowFunnelRow[], clipped = false): string {
     ...(clipped ? [[CLIPPED_NOTE]] : [])
   ]);
 }
+
+/** Per-link aggregate rows → CSV. */
+export function smsLinksCsv(
+  rows: Array<{
+    shortCode: string;
+    originalUrl: string;
+    toE164: string | null;
+    flowName: string | null;
+    clickCount: number;
+    firstClickedAt: string | null;
+    lastClickedAt: string | null;
+    createdAt: string;
+  }>,
+  clipped = false
+): string {
+  return serializeCsv([
+    [
+      "short_code",
+      "destination_url",
+      "recipient",
+      "flow",
+      "clicks",
+      "first_click",
+      "last_click",
+      "sent_at"
+    ],
+    ...rows.map((r) => [
+      r.shortCode,
+      r.originalUrl,
+      r.toE164 ?? "",
+      r.flowName ?? "",
+      r.clickCount,
+      r.firstClickedAt ?? "",
+      r.lastClickedAt ?? "",
+      r.createdAt
+    ]),
+    ...(clipped ? [[CLIPPED_NOTE]] : [])
+  ]);
+}
+
+/** Per-click event rows → CSV. */
+export function smsLinkClicksCsv(
+  rows: Array<{
+    clickedAt: string;
+    shortCode: string;
+    originalUrl: string;
+    toE164: string | null;
+    flowId: string | null;
+    runId: string | null;
+  }>,
+  clipped = false
+): string {
+  return serializeCsv([
+    ["clicked_at", "short_code", "destination_url", "recipient", "flow_id", "run_id"],
+    ...rows.map((r) => [
+      r.clickedAt,
+      r.shortCode,
+      r.originalUrl,
+      r.toE164 ?? "",
+      r.flowId ?? "",
+      r.runId ?? ""
+    ]),
+    ...(clipped ? [[CLIPPED_NOTE]] : [])
+  ]);
+}

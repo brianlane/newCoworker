@@ -7,6 +7,7 @@ import {
 describe("resolveNotificationCategory", () => {
   it("maps lead-capture kinds to leads", () => {
     expect(resolveNotificationCategory("voice_capture")).toBe("leads");
+    expect(resolveNotificationCategory("link_click")).toBe("leads");
   });
 
   it("maps team-notify kinds to team", () => {

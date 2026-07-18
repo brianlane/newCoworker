@@ -26,6 +26,8 @@ import type {
   PeriodChange
 } from "@/lib/analytics/dashboard-analytics";
 import type { VoiceCallSentiment } from "@/lib/db/voice-transcripts";
+import type { SmsLinkView } from "@/lib/db/sms-links";
+import { TrackedLinksPanel } from "@/components/dashboard/TrackedLinksPanel";
 
 /** Weekday + day-of-month label for chart tooltips (UTC date string in, e.g. "Jun 12" out). */
 function shortDate(ymd: string): string {
@@ -829,12 +831,16 @@ export function FlowFunnelCard({ rows, clipped }: { rows: FlowFunnelView[]; clip
             </Link>
             <span className="text-right text-parchment/70">{row.runs.toLocaleString()}</span>
             <span className="text-right text-parchment/70">{row.textsSent.toLocaleString()}</span>
-            <span className="text-right text-parchment/70">
+            <Link
+              href={`/dashboard/analytics?flowId=${row.flowId}#link-clicks`}
+              className="text-right text-parchment/70 hover:text-parchment hover:underline"
+              title="View tracked links for this flow"
+            >
               {row.linkClicks.toLocaleString()}
               {row.linksClicked > 0 ? (
                 <span className="text-parchment/40"> ({row.linksClicked} links)</span>
               ) : null}
-            </span>
+            </Link>
             <span className="text-right text-parchment/70">
               {row.goalsReached.toLocaleString()}
             </span>
@@ -845,6 +851,54 @@ export function FlowFunnelCard({ rows, clipped }: { rows: FlowFunnelView[]; clip
         Link clicks count tracked short links in flow texts; goals count runs an external
         milestone (reply, booking, claim, tag) fast-forwarded to a goal step.
         {clipped ? " High volume this window — counts cover the most recent activity only." : ""}
+      </p>
+    </Card>
+  );
+}
+
+export function SmsLinkStatsCard({
+  links,
+  clipped,
+  businessId,
+  flowFilterName
+}: {
+  links: SmsLinkView[];
+  clipped?: boolean;
+  businessId: string;
+  flowFilterName?: string | null;
+}) {
+  // A flow drill-down must always land somewhere: with a filter active the
+  // card renders even when empty (anchor + clear-filter affordance intact).
+  if (links.length === 0 && !flowFilterName) return null;
+  return (
+    <Card id="link-clicks">
+      <div className="flex flex-wrap items-baseline justify-between gap-3">
+        <p className="text-xs text-parchment/40 uppercase tracking-wider">
+          Tracked link engagement (30 days)
+          {flowFilterName ? (
+            <span className="normal-case text-parchment/60"> · {flowFilterName}</span>
+          ) : null}
+        </p>
+        {flowFilterName && (
+          <Link href="/dashboard/analytics#link-clicks" className="text-[11px] text-signal-teal hover:underline">
+            Clear filter
+          </Link>
+        )}
+      </div>
+      <div className="mt-3">
+        {links.length === 0 ? (
+          <p className="text-sm text-parchment/50">
+            No tracked links for this flow in the last 30 days.
+          </p>
+        ) : (
+          <TrackedLinksPanel businessId={businessId} links={links} mode="full" />
+        )}
+      </div>
+      <p className="text-[10px] text-parchment/35 mt-3">
+        Each row is a tracked short link embedded in an outbound text.
+        {clipped
+          ? " High volume this window — this list covers the most recent links only; the flow performance totals above count all activity."
+          : ""}
       </p>
     </Card>
   );

@@ -13,6 +13,7 @@ import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
 import {
   deleteShortLinks,
+  linkSmsLinksToOutboundLog,
   shortenSmsBodyUrls
 } from "../../../../../../supabase/functions/_shared/sms_short_links";
 
@@ -120,20 +121,29 @@ export async function POST(request: Request) {
       // A failed insert must not fail the tool call — the SMS already went out.
       try {
         const db = await createSupabaseServiceClient();
-        const { error: logErr } = await db.from("sms_outbound_log").insert({
-          business_id: envelope.businessId,
-          to_e164: toPhone,
-          from_e164: config.fromE164 ?? null,
-          // Log the body as sent (post-shortening) so Text history matches
-          // what the customer received.
-          body: smsBody,
-          source: "voice_follow_up",
-          run_id: null,
-          flow_id: null,
-          telnyx_message_id: messageId,
-          channel
-        });
+        const { data: logRow, error: logErr } = await db
+          .from("sms_outbound_log")
+          .insert({
+            business_id: envelope.businessId,
+            to_e164: toPhone,
+            from_e164: config.fromE164 ?? null,
+            // Log the body as sent (post-shortening) so Text history matches
+            // what the customer received.
+            body: smsBody,
+            source: "voice_follow_up",
+            run_id: null,
+            flow_id: null,
+            telnyx_message_id: messageId,
+            channel
+          })
+          .select("id")
+          .single();
         if (logErr) throw new Error(logErr.message);
+        await linkSmsLinksToOutboundLog(
+          linksDb,
+          shortened.links.map((l) => l.shortCode),
+          (logRow as { id: string }).id
+        );
       } catch (logErr) {
         logger.error("voice-tools/sms: outbound log insert failed", {
           businessId: envelope.businessId,

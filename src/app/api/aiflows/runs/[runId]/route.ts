@@ -6,6 +6,7 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getAiFlowRun, listAiFlowRunSteps } from "@/lib/ai-flows/db";
+import { listSmsLinksForRun } from "@/lib/db/sms-links";
 
 const idSchema = z.string().uuid();
 
@@ -27,8 +28,13 @@ export async function GET(request: Request, { params }: Ctx) {
     if (!user.isAdmin) await requireBusinessRole(businessId, "manage_aiflows");
     const run = await getAiFlowRun(businessId, runId);
     if (!run) return errorResponse("NOT_FOUND", "Run not found");
-    const steps = await listAiFlowRunSteps(businessId, runId);
-    return successResponse({ run, steps });
+    const [steps, links] = await Promise.all([
+      listAiFlowRunSteps(businessId, runId),
+      // Tracked links are supplementary: a links/clicks read error must not
+      // take down the step timeline the page is actually for.
+      listSmsLinksForRun(businessId, runId, { includeClicks: true }).catch(() => [])
+    ]);
+    return successResponse({ run, steps, links });
   } catch (err) {
     return handleRouteError(err);
   }

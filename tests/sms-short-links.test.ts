@@ -4,6 +4,7 @@ import {
   deleteShortLinks,
   extractShortenableUrls,
   generateShortCode,
+  linkSmsLinksToOutboundLog,
   shortLinkUrl,
   shortenSmsBodyUrls,
   type RandomBytes,
@@ -29,6 +30,7 @@ type InsertOutcome = { error: { message: string; code?: string } | null };
 
 function stubDb(outcomes: InsertOutcome[], deleteOutcome: InsertOutcome = { error: null }) {
   const inserts: Array<Record<string, unknown>> = [];
+  const updates: Array<{ codes: string[]; row: Record<string, unknown> }> = [];
   const deletes: Array<{ column: string; values: string[] }> = [];
   let call = 0;
   const db: ShortLinkSupabase = {
@@ -40,6 +42,14 @@ function stubDb(outcomes: InsertOutcome[], deleteOutcome: InsertOutcome = { erro
         call += 1;
         return Promise.resolve(outcome);
       },
+      update: (row: Record<string, unknown>) => ({
+        in: (column: string, values: string[]) => {
+          expect(table).toBe("sms_links");
+          expect(column).toBe("short_code");
+          updates.push({ codes: values, row });
+          return Promise.resolve({ error: null });
+        }
+      }),
       delete: () => ({
         in: (column: string, values: string[]) => {
           expect(table).toBe("sms_links");
@@ -49,7 +59,7 @@ function stubDb(outcomes: InsertOutcome[], deleteOutcome: InsertOutcome = { erro
       })
     })
   };
-  return { db, inserts, deletes };
+  return { db, inserts, updates, deletes };
 }
 
 const ok: InsertOutcome = { error: null };
@@ -237,6 +247,7 @@ describe("shortenSmsBodyUrls", () => {
       const db: ShortLinkSupabase = {
         from: () => ({
           insert: () => Promise.reject(thrown),
+          update: () => ({ in: () => Promise.resolve({ error: null }) }),
           delete: () => ({ in: () => Promise.resolve({ error: null }) })
         })
       };
@@ -258,6 +269,53 @@ describe("shortenSmsBodyUrls", () => {
     const res = await shortenSmsBodyUrls(db, { ...staticOpts, randomBytes: bytes(0), text: "no links here" });
     expect(res).toEqual({ text: "no links here", links: [] });
     expect(inserts).toHaveLength(0);
+  });
+});
+
+describe("linkSmsLinksToOutboundLog", () => {
+  it("updates short codes with the outbound log id", async () => {
+    const { db, updates } = stubDb([ok]);
+    await linkSmsLinksToOutboundLog(db, ["abc12345", "ijklmnop"], "log-1");
+    expect(updates).toEqual([
+      { codes: ["abc12345", "ijklmnop"], row: { sms_outbound_log_id: "log-1" } }
+    ]);
+  });
+
+  it("no-ops on empty codes or missing log id", async () => {
+    const { db, updates } = stubDb([ok]);
+    await linkSmsLinksToOutboundLog(db, [], "log-1");
+    await linkSmsLinksToOutboundLog(db, ["abc12345"], null);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("warns on update errors and thrown failures without throwing", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { db: errDb } = stubDb([ok]);
+    errDb.from = () => ({
+      insert: () => Promise.resolve({ error: null }),
+      update: () => ({
+        in: () => Promise.resolve({ error: { message: "denied" } })
+      }),
+      delete: () => ({ in: () => Promise.resolve({ error: null }) })
+    });
+    await linkSmsLinksToOutboundLog(errDb, ["abc12345"], "log-1");
+    expect(warn).toHaveBeenCalledWith("sms_short_links: outbound log pairing failed", "denied");
+
+    for (const thrown of [new Error("net down"), "string failure"]) {
+      const throwing: ShortLinkSupabase = {
+        from: () => ({
+          insert: () => Promise.resolve({ error: null }),
+          update: () => ({ in: () => Promise.reject(thrown) }),
+          delete: () => ({ in: () => Promise.resolve({ error: null }) })
+        })
+      };
+      await linkSmsLinksToOutboundLog(throwing, ["abc12345"], "log-1");
+    }
+    expect(warn).toHaveBeenCalledWith("sms_short_links: outbound log pairing threw", "net down");
+    expect(warn).toHaveBeenCalledWith(
+      "sms_short_links: outbound log pairing threw",
+      "string failure"
+    );
   });
 });
 
@@ -287,6 +345,7 @@ describe("deleteShortLinks", () => {
       const throwing: ShortLinkSupabase = {
         from: () => ({
           insert: () => Promise.resolve({ error: null }),
+          update: () => ({ in: () => Promise.resolve({ error: null }) }),
           delete: () => ({ in: () => Promise.reject(thrown) })
         })
       };

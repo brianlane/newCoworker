@@ -140,6 +140,8 @@ export type SmsMessage = {
   lastError: string | null;
   /** Set for worker-initiated sends from `sms_outbound_log` (AiFlow etc.). */
   source?: OutboundLogSource;
+  /** Outbound log row id when this bubble came from `sms_outbound_log`. */
+  outboundLogId?: string | null;
   /** Delivery channel; 'rcs' renders a channel badge in the thread UI. */
   channel?: "sms" | "rcs";
 };
@@ -465,6 +467,7 @@ export async function listMessagesForCustomer(
       status: "done",
       lastError: null,
       source: row.source,
+      outboundLogId: row.id,
       channel: row.channel === "rcs" ? "rcs" : "sms"
     });
   }
