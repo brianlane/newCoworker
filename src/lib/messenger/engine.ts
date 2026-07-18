@@ -289,11 +289,19 @@ export async function runMessengerGeminiTurn(
     }
   }
 
+  // A confident detection wins over the stored thread language (mirrors the
+  // SMS worker): a mid-thread switch in full sentences must not leave the
+  // prompt pointing at the old language while the persisted row catches up.
+  // Weak signals ("si") already return the established language from
+  // detectCustomerLanguage, so stickiness is preserved.
+  const threadLanguage = detected.persist
+    ? detected.language
+    : args.conversation.preferred_language ?? null;
   const systemInstruction = [
     instructions,
     customerLanguageLine({
       detected: detected.language,
-      established: args.conversation.preferred_language ?? null,
+      established: threadLanguage,
       defaultLang: customerLanguages.defaultLanguage,
       supported: customerLanguages.supported
     }),

@@ -308,6 +308,26 @@ describe("runMessengerGeminiTurn", () => {
     expect(step.systemInstruction).toContain("Current conversation language: es.");
   });
 
+  it("follows a confident mid-thread language switch over the stored thread language", async () => {
+    const switchedHistory = [
+      msg(1, "user", "Hi, do you have anything available Friday?"),
+      msg(2, "assistant", "Yes, we have openings Friday."),
+      msg(3, "user", "Perfecto, quiero cambiar mi cita para el viernes por favor")
+    ];
+    const deps = makeDeps();
+    await runMessengerGeminiTurn(
+      {
+        ...ARGS,
+        conversation: { ...CONVERSATION, preferred_language: "en" },
+        history: switchedHistory
+      },
+      deps
+    );
+    expect(deps.persistConversationLanguage).toHaveBeenCalledWith(CONV_ID, "es");
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.systemInstruction).toContain("Current conversation language: es.");
+  });
+
   it("continues the reply when language persistence fails (Error and non-Error)", async () => {
     const spanishHistory = [
       msg(1, "user", "Hola, quiero hacer una cita para el viernes por favor")
