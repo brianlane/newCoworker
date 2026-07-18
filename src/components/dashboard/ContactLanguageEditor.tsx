@@ -16,6 +16,7 @@ export function ContactLanguageEditor({
   initialSource
 }: Props) {
   const t = useTranslations("dashboard.contacts");
+  const tCommon = useTranslations("common");
   const router = useRouter();
   const [language, setLanguage] = useState<"en" | "es" | "">(initialLanguage ?? "");
   const [saving, setSaving] = useState(false);
@@ -37,7 +38,7 @@ export function ContactLanguageEditor({
       setLanguage(next);
       router.refresh();
     } catch {
-      setError(t("languageLabel"));
+      setError(tCommon("languageSaveFailed"));
     } finally {
       setSaving(false);
     }

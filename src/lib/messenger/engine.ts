@@ -262,6 +262,10 @@ export async function runMessengerGeminiTurn(
   const systemInstruction = [
     instructions,
     customerLanguageLine({
+      // Sticky thread language when the conversation has one on record;
+      // otherwise the line's follow-the-customer instruction handles
+      // detection in-context (the model sees the user's turns directly).
+      established: args.conversation.preferred_language ?? null,
       defaultLang: customerLanguages.defaultLanguage,
       supported: customerLanguages.supported
     }),
