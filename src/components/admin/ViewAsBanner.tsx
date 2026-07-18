@@ -13,11 +13,21 @@ import { Eye, EyeOff, X } from "lucide-react";
 export const VIEW_AS_BANNER_HIDE_KEY = "admin-view-as-banner-hidden";
 
 /**
+ * Per-tab (sessionStorage) record of the admin page the view-as session was
+ * started from (pathname + query, e.g. "/admin/clients?page=2"), written by
+ * ViewAsButton so Exit can land back where the admin was. Absent in a tab
+ * that didn't start the session (fresh tab) — Exit then falls back to the
+ * business detail page.
+ */
+export const VIEW_AS_RETURN_TO_KEY = "admin-view-as-return-to";
+
+/**
  * Sticky banner shown at the top of the owner dashboard while the admin is
  * impersonating a tenant (view-as). Exit clears the cookie server-side and
- * returns to the admin's business detail page. Hide dismisses the banner for
- * this tab's session; without the banner the only ways out of view-as are
- * closing the tab or the cookie's own expiry.
+ * returns to the admin page the session was started from (recorded by
+ * ViewAsButton), falling back to the admin's business detail page. Hide
+ * dismisses the banner for this tab's session; without the banner the only
+ * ways out of view-as are closing the tab or the cookie's own expiry.
  */
 export function ViewAsBanner({
   businessId,
@@ -46,7 +56,12 @@ export function ViewAsBanner({
       const res = await fetch("/api/admin/view-as", { method: "DELETE" });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       sessionStorage.removeItem(VIEW_AS_BANNER_HIDE_KEY);
-      window.location.href = `/admin/${businessId}`;
+      // Only same-origin admin paths are honored — anything else (stale or
+      // garbled value) falls back to the business detail page.
+      const returnTo = sessionStorage.getItem(VIEW_AS_RETURN_TO_KEY);
+      sessionStorage.removeItem(VIEW_AS_RETURN_TO_KEY);
+      window.location.href =
+        returnTo?.startsWith("/admin") ? returnTo : `/admin/${businessId}`;
     } catch {
       setError("Couldn't exit view-as; try again.");
       setExiting(false);
