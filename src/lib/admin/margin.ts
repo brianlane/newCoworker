@@ -5,9 +5,13 @@
  * Revenue is the renewal-aware day-current rate the MRR card uses
  * ({@link dayCurrentSubscriptionRateCents}) or the active enterprise
  * deal's real monthly price. Costs itemize hosting, DID rental, Telnyx
- * usage, Gemini (chat metering + Live voice rate), and Stripe fees, each
- * line flagged `actual` (a synced vendor number or our own metering) or
- * `estimate` (per-unit rates from src/lib/plans/enterprise-pricing.ts).
+ * usage, Gemini (metered spend actuals — `owner_chat_model_spend` is the
+ * single pool for ALL per-tenant Gemini usage, including Gemini Live audio
+ * settled at call teardown, so there is deliberately NO separate
+ * rate-estimated voice line: adding one would double-count), and Stripe
+ * fees, each line flagged `actual` (a synced vendor number or our own
+ * metering) or `estimate` (per-unit rates from
+ * src/lib/plans/enterprise-pricing.ts).
  *
  * Pure computation: callers assemble {@link BusinessMarginInput} (see
  * src/lib/admin/margin-data.ts for the production loader). Nothing bills
@@ -28,7 +32,6 @@ export type MarginLineKey =
   | "did"
   | "telnyx_usage"
   | "gemini_chat"
-  | "gemini_voice"
   | "stripe_fees";
 
 export type MarginLineSource = "actual" | "estimate";
@@ -165,19 +168,15 @@ export function computeBusinessMargin(
     });
   }
 
-  // ---- Gemini: chat spend is our own metering (actual); Live voice has no
-  // billing API, so it is settled minutes × the bridge rate. ----
+  // ---- Gemini: one metered-actuals line. `owner_chat_model_spend` already
+  // includes Gemini Live audio (the bridge settles exact tokens at call
+  // teardown via owner_chat_ai_settle), so a separate rate-estimated voice
+  // line would double-count the Live component. ----
   lines.push({
     key: "gemini_chat",
-    label: "Gemini chat (metered spend)",
+    label: "Gemini (metered spend, incl. Live voice)",
     cents: input.aiSpendMicros / 10_000,
     source: "actual"
-  });
-  lines.push({
-    key: "gemini_voice",
-    label: "Gemini Live voice (settled min × rate)",
-    cents: input.monthVoiceMinutes * ENTERPRISE_UNIT_COSTS.voiceGeminiCentsPerMinute,
-    source: "estimate"
   });
 
   // ---- Stripe fees on whatever we charge (term $0.30 spread over the term). ----

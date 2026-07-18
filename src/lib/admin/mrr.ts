@@ -15,9 +15,11 @@
  * COST: local estimate from the same cost snapshot the enterprise deal
  * calculator uses (src/lib/plans/enterprise-pricing.ts): the Hostinger
  * monthly SKU for every provisioned box, one Telnyx DID per live tenant,
- * this calendar month's metered SMS/voice usage at per-unit rates, and the
- * Gemini AI spend actuals. BYOS boxes cost the platform no hosting (the
- * customer owns the hardware) but still carry a DID.
+ * this calendar month's metered SMS/voice usage at TELNYX-ONLY per-unit
+ * rates, and the Gemini spend actuals (which already include Gemini Live
+ * voice, settled into `owner_chat_model_spend` at call teardown — pricing
+ * voice all-in here would double-count it). BYOS boxes cost the platform
+ * no hosting (the customer owns the hardware) but still carry a DID.
  *
  * Known best-effort drift, deliberately not modeled: grandfathered starter
  * renewal prices (pre-Jul-2026 schedules), the monthly intro coupon, and
@@ -30,8 +32,7 @@ import type { BillingPeriod } from "@/lib/plans/tier";
 import { isCommitmentElapsed } from "@/lib/db/subscriptions";
 import {
   ENTERPRISE_UNIT_COSTS,
-  HOSTING_MONTHLY_CENTS_BY_SIZE,
-  VOICE_ALL_IN_CENTS_PER_MINUTE
+  HOSTING_MONTHLY_CENTS_BY_SIZE
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { addUtcMonthsClamped } from "../../../supabase/functions/_shared/billing_period_window";
@@ -191,14 +192,9 @@ export type PlatformCostActuals = {
   /**
    * This calendar month's Telnyx invoice actuals fleet-wide (messaging +
    * voice + carrier fees, from `telnyx_cost_daily`). When present it
-   * REPLACES the per-unit usage estimate — the vendor's number wins. Note
-   * the estimate covers Telnyx + Gemini voice together, so the actual is
-   * topped up with the Gemini-voice rate component by the caller-provided
-   * `geminiVoiceCents`.
+   * REPLACES the per-unit usage estimate — the vendor's number wins.
    */
   telnyxMonthCostCents?: number;
-  /** Gemini Live voice cost (settled minutes × rate) to pair with the Telnyx actual. */
-  geminiVoiceCents?: number;
 };
 
 export function estimateMonthlyPlatformCost(params: {
@@ -225,16 +221,19 @@ export function estimateMonthlyPlatformCost(params: {
       HOSTING_MONTHLY_CENTS_BY_SIZE[resolveDeployedVpsSize(business.tier, business.vps_size)];
   }
 
-  // Vendor actual (Telnyx invoice records + Gemini Live rate on settled
-  // minutes) wins over the per-unit estimate when the sync has data.
+  // Vendor actual (Telnyx invoice records) wins over the per-unit estimate
+  // when the sync has data. Voice is priced TELNYX-ONLY here: the Gemini
+  // Live component is settled into `owner_chat_model_spend` at call
+  // teardown, so it already arrives via `aiSpendMicros` below — adding a
+  // rate-estimated Gemini-voice component would double-count it.
   const usageCents =
     params.actuals?.telnyxMonthCostCents !== undefined
-      ? Math.round(params.actuals.telnyxMonthCostCents + (params.actuals.geminiVoiceCents ?? 0))
+      ? Math.round(params.actuals.telnyxMonthCostCents)
       : Math.round(
           params.monthUsage.smsSent * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
-            params.monthUsage.voiceMinutes * VOICE_ALL_IN_CENTS_PER_MINUTE
+            params.monthUsage.voiceMinutes * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute
         );
-  // 1 cent = 10,000 micro-USD.
+  // 1 cent = 10,000 micro-USD. Includes Gemini Live voice (see above).
   const aiSpendCents = Math.round(params.aiSpendMicros / 10_000);
 
   return {

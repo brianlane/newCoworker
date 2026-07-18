@@ -179,16 +179,16 @@ describe("computeBusinessMargin — cost lines", () => {
     });
   });
 
-  it("meters Gemini chat spend as actual and Gemini Live voice at the bridge rate", () => {
+  it("meters Gemini as ONE actuals line — no rate-estimated Live-voice duplicate", () => {
+    // owner_chat_model_spend already includes Gemini Live audio (settled at
+    // call teardown), so a separate settled-minutes × rate line would
+    // double-count the voice component.
     const result = computeBusinessMargin(
       input({ aiSpendMicros: 410_000, monthVoiceMinutes: 31 }),
       NOW
     );
     expect(line(result, "gemini_chat")).toMatchObject({ cents: 41, source: "actual" });
-    expect(line(result, "gemini_voice")).toMatchObject({
-      cents: Math.round(31 * ENTERPRISE_UNIT_COSTS.voiceGeminiCentsPerMinute),
-      source: "estimate"
-    });
+    expect(result.lines.filter((l) => l.key.startsWith("gemini"))).toHaveLength(1);
   });
 
   it("sums rounded lines into costCents and marginCents", () => {
