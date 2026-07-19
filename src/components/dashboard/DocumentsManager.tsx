@@ -426,8 +426,14 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
         setError(json.error?.message ?? "Could not create the download link");
         return;
       }
-      // Signed URL carries a Content-Disposition download filename.
-      window.location.assign(json.data.url);
+      // Transient anchor click: the signed URL carries a Content-Disposition
+      // download filename, and the dashboard tab must stay where it is.
+      const a = document.createElement("a");
+      a.href = json.data.url;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
     } catch {
       setError("Could not create the download link — try again.");
     }
@@ -454,13 +460,16 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   // Directory view: filter by search + audience, then group by category.
   const query = search.trim().toLowerCase();
   const searching = query.length > 0;
+  // The OPEN document always stays in the list: filters narrowing it out
+  // mid-edit (or right after a ?doc= deep link) must not vanish the editor.
   const filtered = documents.filter(
     (doc) =>
-      (audienceFilter === "all" || doc.audience === audienceFilter) &&
-      (!searching ||
-        doc.title.toLowerCase().includes(query) ||
-        doc.summary.toLowerCase().includes(query) ||
-        doc.category.toLowerCase().includes(query))
+      doc.id === openId ||
+      ((audienceFilter === "all" || doc.audience === audienceFilter) &&
+        (!searching ||
+          doc.title.toLowerCase().includes(query) ||
+          doc.summary.toLowerCase().includes(query) ||
+          doc.category.toLowerCase().includes(query)))
   );
   const folders = new Map<string, DocumentItem[]>();
   for (const doc of filtered) {
