@@ -1394,6 +1394,51 @@ describe("poll failure escalation + owner alert", () => {
     );
   });
 
+  it("a partial-calendar failure (healthy primary, dead shared) never alerts the owner", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("shared-cal-x")) return null; // connection-class detail
+      return { data: { items: [] } };
+    }) as never);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }, { id: 2 }], error: null } // 2 priors — third strike
+      ])
+    );
+    // Persistent, so it logs at error — but flows on the primary calendar
+    // kept firing, so "your automations are paused" must NOT go out.
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "error" })
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  });
+
+  it("alerts when EVERY polled calendar fails with a connection-class detail (third strike)", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never); // both dead
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate
+        { data: [{ id: 1 }, { id: 2 }], error: null }, // 2 priors
+        { data: [], error: null } // alert dedupe: none yet
+      ])
+    );
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "calendar_connection_broken" })
+    );
+  });
+
   it("a persistent NON-connection failure logs error but never alerts the owner", async () => {
     vi.mocked(resolveCalendarConnection).mockRejectedValueOnce(new Error("provider 500"));
     await pollCalendarTriggers(

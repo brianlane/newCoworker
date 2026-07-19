@@ -619,7 +619,17 @@ async function logCalendarPollFailure(
   db: SupabaseClient,
   businessId: string,
   message: string,
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  opts: {
+    /**
+     * Whether this failure is evidence the CONNECTION is broken (owner-alert
+     * eligible). Defaults to the message carrying a connection-class detail;
+     * the per-source aggregation passes false when another calendar on the
+     * same connection still polled fine — "reconnect your calendar, your
+     * automations are paused" must never go out while flows keep firing.
+     */
+    connectionBroken?: boolean;
+  } = {}
 ): Promise<void> {
   // Failure-path-only lookback: healthy ticks never pay this query.
   let priorFailures = 0;
@@ -654,11 +664,8 @@ async function logCalendarPollFailure(
     payload
   });
 
-  if (
-    !lookbackFailed &&
-    priorFailures >= CALENDAR_POLL_ALERT_PRIOR_FAILURES &&
-    isConnectionFailure(message)
-  ) {
+  const connectionBroken = opts.connectionBroken ?? isConnectionFailure(message);
+  if (!lookbackFailed && priorFailures >= CALENDAR_POLL_ALERT_PRIOR_FAILURES && connectionBroken) {
     await alertOwnerCalendarBroken(db, businessId);
   }
 }
@@ -986,7 +993,16 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
             db,
             businessId,
             `Calendar-trigger poll failed for ${sourceFailures.length === 1 ? `the ${sourceFailures[0].source} calendar` : "both calendars"}: ${detail}`,
-            { calendars: sourceFailures.map((f) => f.source) }
+            { calendars: sourceFailures.map((f) => f.source) },
+            {
+              // Owner-alert eligible only when EVERY polled calendar failed
+              // with a connection-class detail — one dead shared calendar
+              // beside a healthy primary is not a broken connection, and the
+              // "your automations are paused" alert would be false.
+              connectionBroken:
+                sourceFailures.length === targets.size &&
+                sourceFailures.every((f) => isConnectionFailure(f.message))
+            }
           );
         }
       }
