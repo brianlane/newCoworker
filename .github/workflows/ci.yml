@@ -205,6 +205,10 @@ jobs:
             echo "ROWBOAT_CHAT_URL_TEMPLATE=http://${GW}:8977/chat"
             echo "ROWBOAT_DEFAULT_PROJECT_ID=itest-project"
             echo "ROWBOAT_VPS_CHAT_BEARER=itest-rowboat-bearer"
+            # The calendly-booking-goal-gap suite runs a fake platform app
+            # (port 8978) for the worker's pre-send booking precheck; the
+            # per-tick email/calendar poll kicks answer 200 there too.
+            echo "AIFLOW_PLATFORM_URL=http://${GW}:8978"
           } > supabase/functions/.env.itest
           # --no-verify-jwt mirrors production: every function is deployed
           # with verify_jwt = false (see supabase/config.toml) because they

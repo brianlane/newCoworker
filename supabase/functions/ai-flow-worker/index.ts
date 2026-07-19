@@ -105,7 +105,12 @@ import {
   resolveResumeIndex,
   resumeMarkerFor
 } from "../_shared/ai_flows/branching.ts";
-import { applyGoalEvent, goalReachedVar } from "../_shared/ai_flows/goal_events.ts";
+import {
+  applyGoalEvent,
+  GOAL_JUMP_SKIP,
+  goalReachedVar,
+  goalStepMatches
+} from "../_shared/ai_flows/goal_events.ts";
 import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_mode.ts";
 import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
 import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
@@ -692,6 +697,59 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       continue;
     }
+    // Pre-send Calendly booking gate (once per run, before the FIRST outward
+    // touch, only in flows watching appointment_booked): a lead who already
+    // holds an upcoming booking must get ZERO texts — greeting included, the
+    // part the ~1/min booking-goal sweep can lose the race on (Tim Tsai,
+    // Jul 18 2026). The platform route answers synchronously; on a hit this
+    // run fast-forwards to its goal step exactly like an external goal jump
+    // (the route already jumped the lead's OTHER parked runs — this claimed
+    // run is `running`, which applyGoalEvent deliberately never touches).
+    // Fails OPEN: any route/transport trouble stamps the marker and sends as
+    // normal — the young-run sweep catches the booking within ~1 min, long
+    // before the first nudge.
+    if (
+      COMM_STEP_TYPES.has(step.type) &&
+      !scope.testMode &&
+      scope.vars[BOOKING_PRECHECK_VAR] !== "1" &&
+      // A step whose `when` guard is unmet skips inside runStep anyway —
+      // don't spend the platform round-trip on a message that won't send.
+      (!step.when || evaluateStepCondition(step.when, scope))
+    ) {
+      // The marker rides scope.vars into every later context persist, so
+      // re-claims and later comm steps never re-pay the check.
+      scope.vars[BOOKING_PRECHECK_VAR] = "1";
+      const goalIndex = findBookingGoalAhead(flat, index);
+      if (goalIndex !== null && (await bookingPrecheckBooked(run))) {
+        const goalStep = flat[goalIndex].step as Extract<FlowStep, { type: "goal" }>;
+        // Record the short-circuited steps exactly like jumpRunToGoal does,
+        // so run history shows what the booking saved the lead from.
+        for (let i = index; i < goalIndex; i += 1) {
+          await recordStep(supabase, run, i, flat[i].step, "skipped", {
+            skipped: GOAL_JUMP_SKIP,
+            goal_step_id: goalStep.id,
+            event: "appointment_booked"
+          });
+        }
+        scope.vars[goalReachedVar(goalStep.id)] = "appointment_booked";
+        index = goalIndex;
+        stampResumeMarker(index);
+        await updateRun(supabase, run.id, {
+          current_step: index,
+          context: buildContext(scope, approval, routing)
+        });
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_booking_precheck_jumped",
+          message:
+            "The lead already had an upcoming Calendly booking, so this run skipped its messages and jumped to its goal",
+          payload: { run_id: run.id, flow_id: run.flow_id, from_step: run.current_step, to_step: index }
+        });
+        continue;
+      }
+    }
     let outcome: StepOutcome;
     try {
       outcome = await runStep(supabase, run, step, index, scope, approval, routing);
@@ -1082,6 +1140,82 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
  * other engine-internal vars (e.g. the after-hours email markers).
  */
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+
+/**
+ * Once-per-run marker for the pre-send Calendly booking gate. Stamped before
+ * the run's first communication step (success OR fail-open), persisted via
+ * buildContext like every other var, so re-claims and later comm steps never
+ * re-pay the platform round-trip.
+ */
+const BOOKING_PRECHECK_VAR = "__booking_precheck";
+
+/** The pre-send gate must answer well inside a tick; beyond this, fail open. */
+const BOOKING_PRECHECK_TIMEOUT_MS = 8_000;
+
+/**
+ * First TRUNK goal step at or after `fromIndex` watching appointment_booked
+ * (branch-nested goals are skipped for the same reason jumpRunToGoal skips
+ * them: jumping onto an unevaluated branch path is unsafe). Null when the
+ * rest of the flow carries none — then there is nothing to precheck for.
+ */
+function findBookingGoalAhead(
+  flat: ReturnType<typeof flattenSteps>,
+  fromIndex: number
+): number | null {
+  for (let i = fromIndex; i < flat.length; i += 1) {
+    const entry = flat[i];
+    if (entry.step.type !== "goal" || entry.branchPath.length > 0) continue;
+    if (
+      goalStepMatches(entry.step as Extract<FlowStep, { type: "goal" }>, {
+        kind: "appointment_booked"
+      })
+    ) {
+      return i;
+    }
+  }
+  return null;
+}
+
+/**
+ * Ask the platform whether this run's lead already holds an active
+ * future-start Calendly booking (POST /api/internal/aiflow-booking-precheck).
+ * Fails OPEN (false) on missing config, timeout, non-2xx, or malformed
+ * payload — the young-run booking-goal sweep remains the safety net.
+ */
+async function bookingPrecheckBooked(run: RunRow): Promise<boolean> {
+  const base = (
+    Deno.env.get("AIFLOW_PLATFORM_URL") ??
+    Deno.env.get("NEXT_PUBLIC_APP_URL") ??
+    ""
+  )
+    .trim()
+    .replace(/\/$/, "");
+  const secret = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!base || !secret) return false;
+  try {
+    const res = await fetch(`${base}/api/internal/aiflow-booking-precheck`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`
+      },
+      body: JSON.stringify({ businessId: run.business_id, runId: run.id }),
+      signal: AbortSignal.timeout(BOOKING_PRECHECK_TIMEOUT_MS)
+    });
+    if (!res.ok) {
+      console.error("booking precheck answered", res.status);
+      await res.body?.cancel();
+      return false;
+    }
+    const payload = (await res.json().catch(() => null)) as {
+      data?: { booked?: boolean };
+    } | null;
+    return payload?.data?.booked === true;
+  } catch (e) {
+    console.error("booking precheck unreachable", e);
+    return false;
+  }
+}
 
 /**
  * Trace an owner "Stop this run" observed mid-execution (at a step boundary,

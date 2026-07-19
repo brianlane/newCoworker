@@ -31,10 +31,13 @@ import {
   BOOKING_GOAL_FLOW_PAGE,
   BOOKING_GOAL_INVITEE_FETCH_CAP,
   BOOKING_GOAL_RUN_STATUSES,
+  BOOKING_GOAL_YOUNG_RUN_MINUTES,
   bookingCreatedRecently,
+  bookingStartsInFuture,
   definitionWatchesBookingGoal,
   fireBookingGoalsForInvitees,
   inviteePhoneE164,
+  runIsYoung,
   sweepCalendlyBookingGoals,
   type BookingGoalSweepDeps
 } from "@/lib/ai-flows/calendly-booking-goals";
@@ -79,10 +82,11 @@ function goalFlowRow(id: string, businessId = BIZ) {
   };
 }
 
-function booking(uuid: string, createdIso: string) {
+function booking(uuid: string, createdIso: string, startIso?: string) {
   return {
     uri: `https://api.calendly.com/scheduled_events/${uuid}`,
-    created_at: createdIso
+    created_at: createdIso,
+    ...(startIso ? { start_time: startIso } : {})
   };
 }
 
@@ -182,6 +186,28 @@ describe("bookingCreatedRecently", () => {
   it("is false for missing/unparseable created timestamps", () => {
     expect(bookingCreatedRecently(undefined, Date.now())).toBe(false);
     expect(bookingCreatedRecently("not-a-date", Date.now())).toBe(false);
+  });
+});
+
+describe("bookingStartsInFuture", () => {
+  it("is true only for parseable future starts", () => {
+    const now = Date.now();
+    expect(bookingStartsInFuture(new Date(now + 60_000).toISOString(), now)).toBe(true);
+    expect(bookingStartsInFuture(new Date(now - 60_000).toISOString(), now)).toBe(false);
+    expect(bookingStartsInFuture(undefined, now)).toBe(false);
+    expect(bookingStartsInFuture("not-a-date", now)).toBe(false);
+  });
+});
+
+describe("runIsYoung", () => {
+  it("is true only inside the young-run window", () => {
+    const now = Date.now();
+    expect(runIsYoung(new Date(now - 60_000).toISOString(), now)).toBe(true);
+    expect(
+      runIsYoung(new Date(now - (BOOKING_GOAL_YOUNG_RUN_MINUTES + 1) * 60_000).toISOString(), now)
+    ).toBe(false);
+    expect(runIsYoung(undefined, now)).toBe(false);
+    expect(runIsYoung("not-a-date", now)).toBe(false);
   });
 });
 
@@ -349,6 +375,61 @@ describe("sweepCalendlyBookingGoals", () => {
         message: expect.stringContaining("calendar_not_connected")
       })
     );
+  });
+
+  it("young run: an old-created booking with a FUTURE start still fires (booked-then-enrolled)", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      // Jumpable run created 1 minute ago → the widened firing set applies.
+      ai_flow_runs: [{ data: [{ id: "run-1", created_at: isoAgoMin(1) }] }],
+      contacts: [{ data: null }]
+    });
+    const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) => {
+      if (config.endpoint === "/users/me") return USER_RES;
+      if (config.endpoint === "/scheduled_events") {
+        return {
+          data: {
+            collection: [
+              // Tim's shape: booked 10 hours ago, starts tomorrow.
+              booking("EV-TIM", isoAgoMin(600), isoAgoMin(-24 * 60)),
+              // Already happened → stale-booking policy: never fires.
+              booking("EV-PAST", isoAgoMin(600), isoAgoMin(90))
+            ]
+          }
+        };
+      }
+      expect(config.endpoint).toBe("/scheduled_events/EV-TIM/invitees");
+      return {
+        data: { collection: [{ status: "active", text_reminder_number: "+17808039935" }] }
+      };
+    });
+    const applyGoal = vi.fn().mockResolvedValue({ jumpedRuns: 1 });
+    const d = deps({ request: request as never, applyGoal });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    expect(result).toMatchObject({ swept: 1, bookings: 1, goalsFired: 1, jumpedRuns: 1 });
+    expect(applyGoal).toHaveBeenCalledWith(db, BIZ, "+17808039935", {
+      kind: "appointment_booked"
+    });
+  });
+
+  it("no young run: the same old future-start booking stays out of the firing set", async () => {
+    const { db } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      // Newest jumpable run is older than the young window.
+      ai_flow_runs: [
+        { data: [{ id: "run-1", created_at: isoAgoMin(BOOKING_GOAL_YOUNG_RUN_MINUTES + 10) }] }
+      ]
+    });
+    const request = vi.fn(async (_b: string, _c: unknown, config: { endpoint: string }) => {
+      if (config.endpoint === "/users/me") return USER_RES;
+      if (config.endpoint === "/scheduled_events") {
+        return { data: { collection: [booking("EV-TIM", isoAgoMin(600), isoAgoMin(-24 * 60))] } };
+      }
+      throw new Error(`unexpected invitee fetch: ${config.endpoint}`);
+    });
+    const d = deps({ request: request as never });
+    const result = await sweepCalendlyBookingGoals(db, d);
+    expect(result).toMatchObject({ swept: 1, bookings: 0, goalsFired: 0 });
   });
 
   it("counts zero fresh bookings without firing anything", async () => {

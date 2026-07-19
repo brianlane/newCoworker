@@ -24,6 +24,19 @@
  * run started inside that window jumps immediately, which is the right
  * outcome: the lead has already booked, don't nurture them.)
  *
+ * Young-run widening (booked-then-enrolled gap, Jul 19 2026): a run enrolled
+ * AFTER its lead's booking aged out of the created lookback would otherwise
+ * never see that booking (Tim Tsai booked ~10h before this sweep first
+ * deployed and still got nudged). When a business has a jumpable run CREATED
+ * inside the young-run window, that tick's firing set widens from "bookings
+ * created inside the lookback" to "active bookings with a FUTURE start" —
+ * one extra invitee fetch per upcoming booking, only while a young run
+ * exists. Future-start-only is the stale-booking policy: an appointment
+ * that already happened never silently skips a new flow's steps. The
+ * synchronous pre-send gate in the worker (aiflow-booking-precheck) catches
+ * the same case before the FIRST text; this widening is its fail-open
+ * safety net.
+ *
  * Invitee → phone resolution fires over BOTH identifiers when present (they
  * belong to the same person, and `applyGoalEvent` matches by exact E.164):
  *   - the SMS-reminder phone, normalized to E.164, unioned with the matched
@@ -116,6 +129,36 @@ export function bookingCreatedRecently(
 }
 
 /**
+ * Whether a booking's start is still ahead — the young-run widening only
+ * fires goals for appointments that haven't happened yet (stale-booking
+ * policy). Missing/unparseable starts are never "future".
+ */
+export function bookingStartsInFuture(
+  startIso: string | undefined,
+  nowMs: number
+): boolean {
+  if (!startIso) return false;
+  const startMs = Date.parse(startIso);
+  return Number.isFinite(startMs) && startMs > nowMs;
+}
+
+/**
+ * How recently a jumpable run must have been created for the widened
+ * (future-start) firing set to apply. Same window as the created lookback:
+ * the pre-send gate checks the run's FIRST outward touch, which lands well
+ * inside this window even behind an extraction step or a worker backlog.
+ */
+export const BOOKING_GOAL_YOUNG_RUN_MINUTES = CALENDAR_CREATED_LOOKBACK_MINUTES;
+
+/** Whether a run row's created_at marks it "young" for the widening. */
+export function runIsYoung(createdIso: string | undefined, nowMs: number): boolean {
+  if (!createdIso) return false;
+  const createdMs = Date.parse(createdIso);
+  if (!Number.isFinite(createdMs)) return false;
+  return createdMs >= nowMs - BOOKING_GOAL_YOUNG_RUN_MINUTES * 60_000;
+}
+
+/**
  * Calendly's SMS-reminder phone → E.164 (already-E.164 kept as-is, loose
  * NANP normalized, anything else null) — the same tolerance as
  * fireGoalEvent's phone handling.
@@ -140,6 +183,7 @@ export type CalendlyBookingInvitee = {
 type RawBooking = {
   uri?: string;
   created_at?: string;
+  start_time?: string;
 };
 
 export type BookingGoalSweepResult = {
@@ -175,9 +219,10 @@ export type BookingGoalSweepDeps = {
 /**
  * The contact row's full number set for one seed number (primary + merged
  * aliases + the seed itself), for the exact-match fan-out. Best-effort: a
- * lookup failure degrades to just the seed number.
+ * lookup failure degrades to just the seed number. Exported for the
+ * backfill one-shot's dry-run preview (scripts/oneshot).
  */
-async function contactNumbersFor(
+export async function contactNumbersFor(
   db: SupabaseClient,
   businessId: string,
   seedE164: string
@@ -338,15 +383,20 @@ export async function sweepCalendlyBookingGoals(
   for (const [businessId, flowIds] of byBusiness) {
     try {
       // Anything jumpable at all? If not, skip the Calendly API entirely.
+      // Newest-first so the same single row also answers "is any jumpable
+      // run YOUNG?" — which switches this tick to the widened firing set.
       const { data: runRows, error: runErr } = await db
         .from("ai_flow_runs")
-        .select("id")
+        .select("id, created_at")
         .eq("business_id", businessId)
         .in("flow_id", flowIds)
         .in("status", [...BOOKING_GOAL_RUN_STATUSES])
+        .order("created_at", { ascending: false })
         .limit(1);
       if (runErr) throw new Error(`jumpable-run check: ${runErr.message}`);
-      if ((runRows ?? []).length === 0) continue;
+      const newest = ((runRows ?? []) as Array<{ id: string; created_at?: string }>)[0];
+      if (!newest) continue;
+      const hasYoungRun = runIsYoung(newest.created_at, nowMs);
 
       // Only Calendly needs this observer: the other providers' bookings
       // are platform-created and fire the goal at the booking call site.
@@ -399,13 +449,16 @@ export async function sweepCalendlyBookingGoals(
       }
       // Oldest created first: a booking about to age out of the lookback
       // must never be starved behind newer ones if the cap ever bites.
+      // With a young run, ANY active future-start booking also fires — a
+      // just-enrolled lead may have booked long before this run existed.
       const bookings = listed
         .filter(
           (b): b is RawBooking & { uri: string; created_at: string } =>
             typeof b?.uri === "string" &&
             b.uri.length > 0 &&
             typeof b.created_at === "string" &&
-            bookingCreatedRecently(b.created_at, nowMs)
+            (bookingCreatedRecently(b.created_at, nowMs) ||
+              (hasYoungRun && bookingStartsInFuture(b.start_time, nowMs)))
         )
         .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at));
       result.bookings += bookings.length;
