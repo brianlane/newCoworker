@@ -588,9 +588,14 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
           <p className="text-sm text-parchment/40">No documents match your search.</p>
         ) : (
           visibleFolders.map(([category, docs]) => {
-            // A live search always shows its matches — collapse only
-            // applies while browsing.
-            const isCollapsed = !searching && collapsed.has(category);
+            // A live search always shows its matches, and a folder holding
+            // the OPEN document never collapses over it — collapsing while
+            // editing (or a Move that re-files the open doc into a collapsed
+            // folder) must not make the editor vanish.
+            const isCollapsed =
+              !searching &&
+              collapsed.has(category) &&
+              !docs.some((d) => d.id === openId);
             return (
               <div key={category}>
                 <button
