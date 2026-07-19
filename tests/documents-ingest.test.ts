@@ -100,6 +100,56 @@ describe("ingestDocument (vtt transcript)", () => {
     expect(call.userText).toContain("Dania: We agreed the premium is $1,240 per year.");
     expect(call.userText).not.toContain("-->");
     expect(call.userText).not.toContain("WEBVTT");
+    // The condensed minutes carry the full readable transcript below them so
+    // the owner can read what was said without opening the .vtt.
+    if (res.ok) {
+      expect(res.contentMd).toContain("## Prices\n- Haircut: $40");
+      expect(res.contentMd).toContain("## Transcript");
+      expect(res.contentMd).toContain("Dania: We agreed the premium is $1,240 per year.");
+    }
+  });
+
+  it("clips the appended transcript so content stays within its cap", async () => {
+    const generate = generateOk(GOOD_REPLY);
+    const line = "Dania: All of the terms we discussed on the call are restated here at length.";
+    const cues = Array.from(
+      { length: 400 },
+      (_, i) => `${i + 1}\n00:0${i % 6}:01.000 --> 00:0${i % 6}:04.000\n${line}`
+    ).join("\n\n");
+    const res = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Marathon call",
+        mimeType: "text/vtt",
+        data: Buffer.from(`WEBVTT\n\n${cues}`)
+      },
+      { generate }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.contentMd).toContain("## Transcript");
+      expect(res.contentMd.length).toBeLessThanOrEqual(DOCUMENT_CONTENT_MD_MAX_CHARS);
+    }
+  });
+
+  it("skips the transcript section when the minutes leave no headroom", async () => {
+    // Condensed content that nearly fills the cap: appending would leave
+    // less than the 100-char floor, so the minutes ship without the section.
+    const bigReply = `SUMMARY: Big.\n---\n${"x".repeat(DOCUMENT_CONTENT_MD_MAX_CHARS - 50)}`;
+    const generate = generateOk(bigReply);
+    const vtt = [
+      "WEBVTT",
+      "",
+      "1",
+      "00:00:01.000 --> 00:00:04.000",
+      "Dania: We agreed the premium is $1,240 per year."
+    ].join("\n");
+    const res = await ingestDocument(
+      { businessId: BIZ, title: "Renewal call", mimeType: "text/vtt", data: Buffer.from(vtt) },
+      { generate }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.contentMd).not.toContain("## Transcript");
   });
 
   it("treats a payload-free transcript as empty content", async () => {

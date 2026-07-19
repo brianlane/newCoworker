@@ -200,7 +200,8 @@ export async function ingestDocument(
     const decoded = input.data.toString("utf8").replace(/\u0000/g, "");
     // VTT transcripts become "Speaker: sentence" lines so the condenser
     // reads a meeting, not subtitle cue soup.
-    const asText = input.mimeType === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    const isVtt = input.mimeType === VTT_MIME_TYPE;
+    const asText = isVtt ? vttToPlainText(decoded) : decoded;
     const rawText = asText.trim().slice(0, DOCUMENT_INGEST_MAX_TEXT_CHARS);
     if (rawText.length < 20) return { ok: false, error: "empty_content" };
     const prompt = buildCondensePrompt({
@@ -219,6 +220,17 @@ export async function ingestDocument(
     if (!result.ok) return result;
     const parsed = parseCondensedReply(result.text);
     if (!parsed.contentMd) return { ok: false, error: "empty_content" };
+    if (isVtt) {
+      // Meeting minutes keep the WHOLE readable transcript below the
+      // condensed notes: the owner reads what was actually said without
+      // digging out the .vtt, and the coworker can quote it. The transcript
+      // section is clipped so content_md stays within its cap.
+      const headroom =
+        DOCUMENT_CONTENT_MD_MAX_CHARS - parsed.contentMd.length - "\n\n## Transcript\n\n".length;
+      if (headroom > 100) {
+        parsed.contentMd = `${parsed.contentMd}\n\n## Transcript\n\n${rawText.slice(0, headroom)}`;
+      }
+    }
     return { ok: true, ...parsed };
   }
 

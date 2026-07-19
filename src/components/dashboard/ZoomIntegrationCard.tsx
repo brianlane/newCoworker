@@ -54,7 +54,9 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
   const [meetingId, setMeetingId] = useState("");
   const [importing, setImporting] = useState(false);
   const [importResult, setImportResult] = useState<
-    { kind: "success"; message: string } | { kind: "error"; message: string } | null
+    | { kind: "success"; message: string; docHref: string | null }
+    | { kind: "error"; message: string }
+    | null
   >(null);
 
   const connectHref = `/api/integrations/zoom/connect?businessId=${encodeURIComponent(businessId)}`;
@@ -77,7 +79,7 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
         error?: { message?: string };
         data?: {
           summary?: string | null;
-          document?: { status?: string; error_detail?: string | null };
+          document?: { id?: string; status?: string; error_detail?: string | null };
         };
       } | null;
       if (res.ok && json?.data?.document?.status === "ready") {
@@ -85,8 +87,11 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
         setImportResult({
           kind: "success",
           message: json.data.summary
-            ? `Minutes saved to Documents: ${json.data.summary}`
-            : "Transcript imported — minutes are in your Documents."
+            ? `Minutes saved: ${json.data.summary}`
+            : "Transcript imported — minutes are in your Documents.",
+          docHref: json.data.document.id
+            ? `/dashboard/memory?doc=${encodeURIComponent(json.data.document.id)}`
+            : null
         });
       } else if (res.ok) {
         // 200 with a failed document: the transcript stored but the minutes
@@ -210,6 +215,14 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
                   }`}
                 >
                   {importResult.message}
+                  {importResult.kind === "success" && importResult.docHref ? (
+                    <>
+                      {" "}
+                      <a href={importResult.docHref} className="underline hover:text-parchment">
+                        View minutes &amp; transcript →
+                      </a>
+                    </>
+                  ) : null}
                 </p>
               ) : null}
             </div>
