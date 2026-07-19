@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { systemInstructionForBusiness } from "../../vps/voice-bridge/src/system-instruction";
 import { buildVoiceToolDeclarations } from "../../vps/voice-bridge/src/tool-declarations";
 import { requireGeminiKey, transientBackoffMs } from "./gemini";
@@ -206,174 +206,169 @@ const OPENER =
   "have anything open.";
 
 describe("voice booking flow (live model, real bridge declarations)", () => {
-  let openText = "";
-  let openCalls: RecordedCall[] = [];
-  let openContents: Content[] = [];
-  let pickText = "";
-  let pickCalls: RecordedCall[] = [];
-
-  beforeAll(async () => {
-    // Turn 1: vague ask. The model may look the caller up, find slots, and
-    // offer times — but must NOT book yet.
-    const open = await voiceTurn(
-      [],
-      OPENER,
-      baseRouter({
-        calendar_book_appointment: () => ({
-          ok: true,
-          data: { eventId: "e2e-evt-premature", inviteEmail: null }
-        })
-      })
-    );
-    openText = open.finalText;
-    openCalls = open.calls;
-    openContents = open.contents;
-
-    // Turn 2: the caller says yes to the FIRST offered slot out loud.
-    const pick = await voiceTurn(
-      openContents,
-      `${slotClock(SLOTS[0])} tomorrow works for me, let's book it. My email is ` +
-        "sarah.mitchell@example.com",
-      baseRouter({
-        calendar_book_appointment: () => ({
-          ok: true,
-          data: { eventId: "e2e-evt-1", inviteEmail: null }
-        })
-      })
-    );
-    pickText = pick.finalText;
-    pickCalls = pick.calls;
-  }, 480_000);
-
-  it("never books on the vague ask (the caller has not picked a time)", () => {
-    expect(openText.trim().length).toBeGreaterThan(0);
-    expect(
-      openCalls.filter((c) => c.name === "calendar_book_appointment"),
-      `calls: ${JSON.stringify(openCalls)}`
-    ).toEqual([]);
-  });
-
-  it("books exactly the slot the caller said yes to", () => {
-    const books = pickCalls.filter((c) => c.name === "calendar_book_appointment");
-    expect(books.length, `calls: ${JSON.stringify(pickCalls)}`).toBe(1);
-    expect(new Date(String(books[0].args.startIso)).toISOString()).toBe(SLOTS[0].startIso);
-    expect(String(books[0].args.attendeeName)).toMatch(/sarah/i);
-    expect(pickText.trim().length).toBeGreaterThan(0);
-  });
-
   // NOTE deliberately NOT pinned here: capture_caller_details timing. The
   // instruction's rule is "never let a call with a genuine lead END without
   // having called it" — this harness never ends the call, and the first
   // post-merge main run proved mid-call capture timing is model freedom
   // (it booked + texted without a capture call, which the end-of-call rule
   // does not forbid at that point). A capture pin needs an end_call-shaped
-  // harness; see the never-invent contract below for what IS hard mid-call.
-
-  it("never invents a phone number for the follow-up text", () => {
-    // The instruction: "never invent or guess ... phone numbers", and the
-    // tool contract says texting the CALLER means OMITTING the destination
-    // (it defaults to their ANI, which the model cannot see — the number is
-    // never in the prompt). Sarah dictated no other number in this scenario,
-    // so ANY explicit destination is an invention — the first main run sent
-    // the confirmation text to a made-up +15551234567.
-    for (const call of [...openCalls, ...pickCalls]) {
-      if (call.name !== "send_follow_up_sms" && call.name !== "document_share") continue;
+  // harness; the never-invent contract below is what IS hard mid-call.
+  //
+  // One retried test instead of beforeAll + four tests (the suite-standard
+  // de-flake shape): a marginal draw anywhere in the exchange — the Jul 19
+  // main run drew a pick turn that captured details but never called the
+  // booking tool — must re-roll the WHOLE exchange, and vitest retry cannot
+  // re-run a beforeAll.
+  it(
+    "offers without booking, books exactly the picked slot, invents no numbers, promises no invite",
+    { retry: 1, timeout: 480_000 },
+    async () => {
+      // Turn 1: vague ask. The model may look the caller up, find slots,
+      // and offer times — but must NOT book yet.
+      const open = await voiceTurn(
+        [],
+        OPENER,
+        baseRouter({
+          calendar_book_appointment: () => ({
+            ok: true,
+            data: { eventId: "e2e-evt-premature", inviteEmail: null }
+          })
+        })
+      );
+      expect(open.finalText.trim().length).toBeGreaterThan(0);
       expect(
-        digits(call.args.toE164 ?? call.args.phone ?? ""),
-        `explicit destination on ${JSON.stringify(call)} — no number was dictated, ` +
-          "so the arg must be omitted (it defaults to the caller's ANI)"
-      ).toBe("");
-    }
-  });
+        open.calls.filter((c) => c.name === "calendar_book_appointment"),
+        `turn-1 calls: ${JSON.stringify(open.calls)}`
+      ).toEqual([]);
 
-  it("with inviteEmail null, never promises a calendar invite", async () => {
-    const verdict: JudgeVerdict = await judgeReply(
-      "a phone receptionist that just booked an appointment; the booking result had no " +
-        "invite email, so the caller will NOT receive a calendar invite",
-      pickText,
-      {
-        promises_calendar_invite:
-          "Does the message promise or state the caller will receive a calendar invite, " +
-          "calendar invitation, or calendar email? Offering a TEXT (SMS) confirmation, or " +
-          "simply confirming the appointment time out loud, is false."
+      // Turn 2: the caller says yes to the FIRST offered slot out loud.
+      const pick = await voiceTurn(
+        open.contents,
+        `${slotClock(SLOTS[0])} tomorrow works for me, let's book it. My email is ` +
+          "sarah.mitchell@example.com",
+        baseRouter({
+          calendar_book_appointment: () => ({
+            ok: true,
+            data: { eventId: "e2e-evt-1", inviteEmail: null }
+          })
+        })
+      );
+      const books = pick.calls.filter((c) => c.name === "calendar_book_appointment");
+      if (books.length !== 1) {
+        console.error("pick-turn reply:", pick.finalText);
       }
-    );
-    if (verdict.answers.promises_calendar_invite) {
-      console.error("live reply:", pickText);
-      console.error("judge verdict:", JSON.stringify(verdict));
+      expect(books.length, `pick-turn calls: ${JSON.stringify(pick.calls)}`).toBe(1);
+      expect(new Date(String(books[0].args.startIso)).toISOString()).toBe(SLOTS[0].startIso);
+      expect(String(books[0].args.attendeeName)).toMatch(/sarah/i);
+      expect(pick.finalText.trim().length).toBeGreaterThan(0);
+
+      // The instruction: "never invent or guess ... phone numbers", and the
+      // tool contract says texting the CALLER means OMITTING the destination
+      // (it defaults to their ANI, which the model cannot see — the number
+      // is never in the prompt). Sarah dictated no other number, so ANY
+      // explicit destination is an invention — the first main run sent the
+      // confirmation text to a made-up +15551234567.
+      for (const call of [...open.calls, ...pick.calls]) {
+        if (call.name !== "send_follow_up_sms" && call.name !== "document_share") continue;
+        expect(
+          digits(call.args.toE164 ?? call.args.phone ?? ""),
+          `explicit destination on ${JSON.stringify(call)} — no number was dictated, ` +
+            "so the arg must be omitted (it defaults to the caller's ANI)"
+        ).toBe("");
+      }
+
+      // inviteEmail was null on the booking result: no invite may be promised.
+      const verdict: JudgeVerdict = await judgeReply(
+        "a phone receptionist that just booked an appointment; the booking result had no " +
+          "invite email, so the caller will NOT receive a calendar invite",
+        pick.finalText,
+        {
+          promises_calendar_invite:
+            "Does the message promise or state the caller will receive a calendar invite, " +
+            "calendar invitation, or calendar email? Offering a TEXT (SMS) confirmation, or " +
+            "simply confirming the appointment time out loud, is false."
+        }
+      );
+      if (verdict.answers.promises_calendar_invite) {
+        console.error("live reply:", pick.finalText);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.promises_calendar_invite).toBe(false);
     }
-    expect(verdict.answers.promises_calendar_invite).toBe(false);
-  }, 60_000);
+  );
 });
 
 describe("voice booking failure (live model, real bridge declarations)", () => {
-  let failText = "";
-  let failCalls: RecordedCall[] = [];
-  let verdict: JudgeVerdict;
+  // Same retried single-test shape as the booking-flow suite above: the
+  // whole turn (including whether the model called the booking tool at all
+  // on this draw) re-rolls together on a marginal draw.
+  it(
+    "a failed booking is never spoken of as booked, and no unconfirmed slot is booked",
+    { retry: 1, timeout: 480_000 },
+    async () => {
+      // A scripted offer turn pins which times were presented; the caller
+      // confirms the first, and the booking tool FAILS. The post-failure
+      // re-check drops that slot.
+      const prior: Content[] = [
+        { role: "user", parts: [{ text: OPENER }] },
+        {
+          role: "model",
+          parts: [
+            {
+              text:
+                `Happy to help, Sarah! Tomorrow I have ${slotClock(SLOTS[0])}, ` +
+                `${slotClock(SLOTS[1])}, or ${slotClock(SLOTS[2])} open for a gel ` +
+                "manicure. Which works best?"
+            }
+          ]
+        }
+      ];
+      const fail = await voiceTurn(
+        prior,
+        `${slotClock(SLOTS[0])} works, please book it.`,
+        baseRouter({
+          calendar_book_appointment: () => BOOK_FAILED,
+          calendar_find_slots: () => ({
+            ok: true,
+            data: { slots: SLOTS.slice(1), timezone: "UTC", purpose: "gel manicure" }
+          }),
+          notify_team: () => ({ ok: true, data: { notified: true } })
+        })
+      );
 
-  beforeAll(async () => {
-    // A scripted offer turn pins which times were presented (the live offer
-    // turn above words them its own way); the caller confirms the first,
-    // and the booking tool FAILS. The post-failure re-check drops that slot.
-    const prior: Content[] = [
-      { role: "user", parts: [{ text: OPENER }] },
-      {
-        role: "model",
-        parts: [
-          {
-            text:
-              `Happy to help, Sarah! Tomorrow I have ${slotClock(SLOTS[0])}, ` +
-              `${slotClock(SLOTS[1])}, or ${slotClock(SLOTS[2])} open for a gel ` +
-              "manicure. Which works best?"
-          }
-        ]
+      // The caller explicitly confirmed a slot: the booking tool must have
+      // been attempted, and every attempt must be for THAT slot — a silent
+      // book of a different slot is the stacked-invitations class.
+      const books = fail.calls.filter((c) => c.name === "calendar_book_appointment");
+      if (books.length === 0) {
+        console.error("fail-turn reply:", fail.finalText);
       }
-    ];
-    const fail = await voiceTurn(
-      prior,
-      `${slotClock(SLOTS[0])} works, please book it.`,
-      baseRouter({
-        calendar_book_appointment: () => BOOK_FAILED,
-        calendar_find_slots: () => ({
-          ok: true,
-          data: { slots: SLOTS.slice(1), timezone: "UTC", purpose: "gel manicure" }
-        }),
-        notify_team: () => ({ ok: true, data: { notified: true } })
-      })
-    );
-    failText = fail.finalText;
-    failCalls = fail.calls;
-    // Only the HARD incident contract is judged: no phantom-booked claim.
-    // "Never blame a technical error" is guidance styling, not pinned (see
-    // the messenger suite's failure-fork note — a borderline honest phrasing
-    // drew a judge flake on a post-merge main run).
-    verdict = await judgeReply(
-      "a phone receptionist whose booking attempt just failed, replying to a caller who " +
-        "picked an offered appointment time",
-      failText,
-      {
-        claims_booked:
-          "Does the message state or imply an appointment HAS BEEN booked, scheduled, or " +
-          "confirmed as an accomplished fact? Saying the time is unavailable, offering " +
-          "other times, or saying the team will confirm is false."
+      expect(books.length, `calls: ${JSON.stringify(fail.calls)}`).toBeGreaterThan(0);
+      for (const book of books) {
+        expect(new Date(String(book.args.startIso)).toISOString()).toBe(SLOTS[0].startIso);
       }
-    );
-  }, 480_000);
 
-  it("a failed booking is never spoken of as booked", () => {
-    if (verdict.answers.claims_booked) {
-      console.error("live reply:", failText);
-      console.error("judge verdict:", JSON.stringify(verdict));
+      // Only the HARD incident contract is judged: no phantom-booked claim.
+      // "Never blame a technical error" is guidance styling, not pinned (see
+      // the messenger suite's failure-fork note — a borderline honest
+      // phrasing drew a judge flake on a post-merge main run).
+      const verdict: JudgeVerdict = await judgeReply(
+        "a phone receptionist whose booking attempt just failed, replying to a caller who " +
+          "picked an offered appointment time",
+        fail.finalText,
+        {
+          claims_booked:
+            "Does the message state or imply an appointment HAS BEEN booked, scheduled, or " +
+            "confirmed as an accomplished fact? Saying the time is unavailable, offering " +
+            "other times, or saying the team will confirm is false."
+        }
+      );
+      if (verdict.answers.claims_booked) {
+        console.error("live reply:", fail.finalText);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(fail.finalText.trim().length).toBeGreaterThan(0);
+      expect(verdict.answers.claims_booked).toBe(false);
     }
-    expect(failText.trim().length).toBeGreaterThan(0);
-    expect(verdict.answers.claims_booked).toBe(false);
-  });
-
-  it("never silently books a slot the caller did not confirm", () => {
-    const books = failCalls.filter((c) => c.name === "calendar_book_appointment");
-    expect(books.length, `calls: ${JSON.stringify(failCalls)}`).toBeGreaterThan(0);
-    for (const book of books) {
-      expect(new Date(String(book.args.startIso)).toISOString()).toBe(SLOTS[0].startIso);
-    }
-  });
+  );
 });
