@@ -36,8 +36,16 @@ export function RcsChannelPanel({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  // Local baseline of what the server currently holds, advanced on every
+  // successful save. Comparing against props instead would leave `dirty`
+  // stuck true until a server refresh, so the "Saved." hint could never
+  // show and the Save button would stay armed after a successful write.
+  const [baseline, setBaseline] = useState<{ agentId: string | null; enabled: boolean }>({
+    agentId: initialAgentId,
+    enabled: initialEnabled
+  });
 
-  const dirty = enabled !== initialEnabled || (agentId.trim() || null) !== (initialAgentId ?? null);
+  const dirty = enabled !== baseline.enabled || (agentId.trim() || null) !== baseline.agentId;
   const effectivelyOn = enabled && agentId.trim().length > 0 && tierAllows;
 
   async function save() {
@@ -58,6 +66,7 @@ export function RcsChannelPanel({
       if (!res.ok) {
         setError(json.error?.message ?? "Save failed");
       } else {
+        setBaseline({ agentId: agentId.trim() || null, enabled });
         setSaved(true);
         router.refresh();
       }

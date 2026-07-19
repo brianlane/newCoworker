@@ -677,9 +677,12 @@ export default async function BusinessDetailPage({
           Messaging channel (RCS)
         </h2>
         <RcsChannelPanel
-          // Remount on tenant or settings change so useState re-seeds —
-          // navigation between businesses must never show stale values.
-          key={`${businessId}:${channelSettings.rcsAgentId ?? ""}:${channelSettings.rcsEnabled}`}
+          // Remount on tenant change so useState re-seeds — navigation
+          // between businesses must never show the previous tenant's values.
+          // Deliberately NOT keyed on the settings values: the panel tracks
+          // its own saved baseline, and a value-keyed remount after
+          // router.refresh() would wipe the "Saved." confirmation.
+          key={businessId}
           businessId={businessId}
           initialAgentId={channelSettings.rcsAgentId}
           initialEnabled={channelSettings.rcsEnabled}
