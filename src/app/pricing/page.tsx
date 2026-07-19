@@ -79,7 +79,7 @@ export default async function PricingPage() {
     { label: t("rowMemory"), starter: CHECK, standard: CHECK, enterprise: CHECK },
     { label: t("rowWidget"), starter: DASH, standard: CHECK, enterprise: CHECK },
     { label: t("rowByon"), starter: DASH, standard: CHECK, enterprise: CHECK },
-    { label: t("rowRcs"), starter: DASH, standard: CHECK, enterprise: CHECK },
+    { label: t("rowRcs"), starter: DASH, standard: DASH, enterprise: CHECK },
     { label: t("rowZapier"), starter: DASH, standard: CHECK, enterprise: CHECK },
     { label: t("rowTextsDuringCalls"), starter: DASH, standard: CHECK, enterprise: CHECK },
     { label: t("rowScheduledTexts"), starter: DASH, standard: CHECK, enterprise: CHECK },

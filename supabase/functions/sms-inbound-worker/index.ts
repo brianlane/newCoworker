@@ -1762,7 +1762,7 @@ serve(async (req: Request) => {
     };
     if (idem) headers["Idempotency-Key"] = idem;
 
-    // RCS-first for eligible tenants (Standard+, approved + enabled agent):
+    // RCS-first for eligible tenants (Enterprise, approved + enabled agent):
     // verified-brand reply with Telnyx-side SMS fallback from the tenant's
     // existing number. Resolution is fail-safe (any error → null → plain SMS)
     // and requires a concrete from-number for the fallback leg.

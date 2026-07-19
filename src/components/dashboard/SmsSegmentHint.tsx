@@ -14,7 +14,7 @@ type Props = {
    */
   mode: "verbatim" | "aiflow";
   /**
-   * Channel this composer will send on. "rcs" (Standard+ tenants with an
+   * Channel this composer will send on. "rcs" (Enterprise tenants with an
    * approved agent) is not bound by GSM/UCS-2 segment limits, so the emoji
    * warning softens: the RCS message itself delivers as typed — only the
    * automatic SMS fallback copy (sent to phones without RCS) is affected.

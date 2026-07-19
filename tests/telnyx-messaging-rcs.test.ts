@@ -43,18 +43,18 @@ function makeDb(rows: Record<string, Row>) {
 }
 
 describe("rcsTierAllowed", () => {
-  it("allows standard/enterprise only", () => {
-    expect(rcsTierAllowed("standard")).toBe(true);
+  it("allows enterprise only (single-tenant shared agent + per-agent fees, Jul 2026)", () => {
     expect(rcsTierAllowed("enterprise")).toBe(true);
+    expect(rcsTierAllowed("standard")).toBe(false);
     expect(rcsTierAllowed("starter")).toBe(false);
     expect(rcsTierAllowed(undefined)).toBe(false);
   });
 });
 
 describe("resolveRcsAgentIdForBusiness", () => {
-  it("returns the agent id for an enabled standard tenant", async () => {
+  it("returns the agent id for an enabled enterprise tenant", async () => {
     const db = makeDb({
-      businesses: { data: { tier: "standard" }, error: null },
+      businesses: { data: { tier: "enterprise" }, error: null },
       business_channel_settings: {
         data: { rcs_agent_id: "agent_1", rcs_enabled: true },
         error: null
@@ -72,7 +72,7 @@ describe("resolveRcsAgentIdForBusiness", () => {
     ).toBeNull();
     expect(
       await resolveRcsAgentIdForBusiness(
-        makeDb({ businesses: { data: { tier: "starter" }, error: null } }),
+        makeDb({ businesses: { data: { tier: "standard" }, error: null } }),
         "biz-1"
       )
     ).toBeNull();
@@ -80,7 +80,7 @@ describe("resolveRcsAgentIdForBusiness", () => {
   });
 
   it("returns null on settings error / missing row / disabled / blank agent", async () => {
-    const biz: Row = { data: { tier: "standard" }, error: null };
+    const biz: Row = { data: { tier: "enterprise" }, error: null };
     expect(
       await resolveRcsAgentIdForBusiness(
         makeDb({ businesses: biz, business_channel_settings: { data: null, error: { message: "x" } } }),
@@ -137,7 +137,7 @@ describe("getTelnyxMessagingForBusiness resolveRcs", () => {
         data: { telnyx_messaging_profile_id: "biz_prof", telnyx_sms_from_e164: "+10000000002" },
         error: null
       },
-      businesses: { data: { tier: "standard" }, error: null },
+      businesses: { data: { tier: "enterprise" }, error: null },
       business_channel_settings: {
         data: { rcs_agent_id: "agent_7", rcs_enabled: true },
         error: null
@@ -175,7 +175,7 @@ describe("rcsChannelActiveForBusiness", () => {
   });
 
   const eligibleRows = {
-    businesses: { data: { tier: "standard" }, error: null } as Row,
+    businesses: { data: { tier: "enterprise" }, error: null } as Row,
     business_channel_settings: {
       data: { rcs_agent_id: "agent_9", rcs_enabled: true },
       error: null
@@ -296,6 +296,22 @@ describe("sendTelnyxSms RCS-first", () => {
     );
     expect(warnSpy).toHaveBeenCalled();
     warnSpy.mockRestore();
+  });
+
+  it("honors forceChannel: 'sms' (per-message override skips RCS-first)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "sms_forced_1" } })
+    });
+    const r = await sendTelnyxSms(cfg, "+15550001111", "Plain please", {
+      fetchImpl: fetchMock as typeof fetch,
+      forceChannel: "sms"
+    });
+    expect(r).toEqual({ id: "sms_forced_1", channel: "sms" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0] as [string, RequestInit])[0]).toBe(
+      "https://api.telnyx.com/v2/messages"
+    );
   });
 
   it("stays plain SMS when the agent id is blank or the from-number is missing", async () => {

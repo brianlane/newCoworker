@@ -86,7 +86,7 @@
       "rowMemory": "Lossless permanent memory",
       "rowWidget": "Website chat widget (embed on your site)",
       "rowByon": "Bring your own number (port-in)",
-      "rowRcs": "RCS messaging (verified sender)",
+      "rowRcs": "Branded RCS messaging (your own verified sender)",
       "rowZapier": "Zapier (8,000+ apps) & developer API",
       "rowTextsDuringCalls": "Texts during calls & missed-call auto-text",
       "rowScheduledTexts": "Scheduled texts & message templates",
@@ -314,8 +314,8 @@
           "description": "Customers text your business number and get useful, on-brand replies immediately, day or night."
         },
         "rcs": {
-          "title": "RCS Messaging",
-          "description": "Texts delivered through a Google-verified sender with read receipts and rich formatting, with automatic SMS fallback from your business number."
+          "title": "RCS Messaging (Enterprise)",
+          "description": "Texts delivered through your own Google-verified branded sender with read receipts and rich formatting, with automatic SMS fallback from your business number. Available on the Enterprise plan."
         },
         "duringCalls": {
           "title": "Texts During Calls",
@@ -461,8 +461,8 @@
       "complianceA": "Compliance guardrails are enforced in every conversation, including Fair Housing Act rules for real estate, and Enterprise plans support custom compliance modules for other regulated industries.",
       "billingTitle": "Billing & plans",
       "costQ": "How much does it cost?",
-      "costA": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is custom. Every plan has a 30-day money-back guarantee. See the full breakdown on the <link>pricing page</link>.",
-      "costPlain": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, RCS, Zapier, analytics, and more. Enterprise is custom. Every plan has a 30-day money-back guarantee.",
+      "costA": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee. See the full breakdown on the <link>pricing page</link>.",
+      "costPlain": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee.",
       "upfrontQ": "Why is the full term billed upfront on 12 and 24-month plans?",
       "upfrontA": "Because your plan includes a dedicated private server that we prepay for your whole contract. Billing the term once is what makes the discounted monthly rate possible. Monthly plans are billed month-to-month.",
       "cancelQ": "Can I cancel?",
@@ -1085,8 +1085,8 @@
         "description": "When a caller needs you, your coworker transfers the call to you or your team with full context. No cold handoffs."
       },
       "textingRcs": {
-        "title": "Texting, RCS & Auto-Replies",
-        "description": "Two-way SMS and RCS messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates."
+        "title": "Texting & Auto-Replies",
+        "description": "Two-way SMS messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates. Branded RCS on Enterprise."
       },
       "callSummaries": {
         "title": "AI Call Summaries & Sentiment",
@@ -1520,6 +1520,9 @@
       "languageOwnerSet": "Set by you",
       "languageEnglish": "English",
       "languageSpanish": "Spanish"
+    },
+    "smsComposer": {
+      "sendAsPlainSms": "Send as plain SMS (skip RCS)"
     },
     "trackedLinks": {
       "previewFetch": "preview fetch"

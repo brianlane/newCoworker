@@ -153,7 +153,6 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     `${TIER_LIMITS.standard.smsPerMonth} SMS`,
     concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls, locale),
     es ? "Trae tu propio número telefónico (portabilidad)" : "Bring your own phone number (port-in)",
-    es ? "Mensajería RCS (remitente verificado)" : "RCS messaging (verified sender)",
     es ? "Zapier: conecta 8,000+ apps" : "Zapier: connect 8,000+ apps",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
@@ -214,6 +213,9 @@ function buildEnterpriseFeatures(locale: PlanCopyLocale): string[] {
       ? "SLA + soporte dedicado, prioridad siempre activa"
       : "SLA + dedicated support, priority always on",
     es ? "Módulos de cumplimiento a medida" : "Custom compliance modules",
+    es
+      ? "Mensajería RCS de marca (tu propio remitente verificado por Google)"
+      : "Branded RCS messaging (your own Google-verified sender)",
     es ? "Modelos de razonamiento designados" : "Designated reasoning models",
     es ? "Elección de voces profesionales" : "Choice of professional voices",
     es

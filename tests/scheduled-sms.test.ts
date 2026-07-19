@@ -219,8 +219,9 @@ describe("scheduled SMS dispatch", () => {
     expect(body.from).toBe("+15559990000");
   });
 
-  it("sends RCS-first when the tenant has an approved agent", async () => {
+  it("sends RCS-first when the tenant has an approved agent (enterprise-only)", async () => {
     const { supabase } = makeSupabase({
+      business: { data: { tier: "enterprise" }, error: null },
       channelSettings: { data: { rcs_agent_id: "agent_1", rcs_enabled: true }, error: null }
     });
     const fetchFn = vi.fn().mockResolvedValue({

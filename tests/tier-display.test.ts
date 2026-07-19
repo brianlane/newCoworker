@@ -47,9 +47,15 @@ describe("tier-display", () => {
       expect(STANDARD_FEATURES.some((f) => f.includes("free model fallback"))).toBe(true);
     });
 
-    it("standard advertises the RCS and Zapier perks", () => {
-      expect(STANDARD_FEATURES).toContain("RCS messaging (verified sender)");
+    it("standard advertises Zapier but NOT RCS (Enterprise-only since Jul 2026)", () => {
+      expect(STANDARD_FEATURES.some((f) => f.includes("RCS"))).toBe(false);
       expect(STANDARD_FEATURES.some((f) => f.includes("8,000+"))).toBe(true);
+    });
+
+    it("enterprise advertises branded RCS (own verified sender)", () => {
+      expect(ENTERPRISE_FEATURES).toContain(
+        "Branded RCS messaging (your own Google-verified sender)"
+      );
     });
 
     it("enterprise bullets are the shipped custom/agency set", () => {

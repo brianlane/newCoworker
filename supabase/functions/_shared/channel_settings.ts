@@ -1,13 +1,13 @@
 /**
  * Per-tenant messaging channel resolution (Edge runtime).
  *
- * RCS is a Standard/Enterprise perk: sends go RCS-first (Telnyx
+ * RCS is an Enterprise perk: sends go RCS-first (Telnyx
  * `POST /v2/messages/rcs`, verified-brand sender) with automatic SMS fallback
  * from the tenant's existing number. This helper decides — per business —
  * whether outbound customer messages may use the RCS channel.
  *
  * The gate is deliberately three-way AND:
- *   tier allows (standard/enterprise)  ∧  rcs_enabled  ∧  rcs_agent_id set
+ *   tier allows (enterprise)  ∧  rcs_enabled  ∧  rcs_agent_id set
  * so a tier downgrade, an operator kill switch, or a not-yet-approved agent
  * each independently demote traffic to plain SMS. Any lookup error also
  * resolves to null (fail-safe: SMS always works).
@@ -31,9 +31,18 @@ type ChannelSupabase = {
   };
 };
 
-/** Tiers entitled to the RCS channel. */
+/**
+ * Tiers entitled to the RCS channel.
+ *
+ * Enterprise-only (decided Jul 18 2026): an RCS inbound identifies only the
+ * agent — no recipient DID — so a shared agent cannot route replies for more
+ * than one tenant, and the agent's verified brand replaces the tenant's own
+ * identity on the handset. Tenant RCS requires a dedicated per-tenant agent
+ * (own Google verification, own Telnyx carrier fees) — an Enterprise line
+ * item. Mirror of src/lib/telnyx/messaging.ts.
+ */
 export function rcsTierAllowed(tier: string | null | undefined): boolean {
-  return tier === "standard" || tier === "enterprise";
+  return tier === "enterprise";
 }
 
 /**

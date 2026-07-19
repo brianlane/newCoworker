@@ -6,8 +6,8 @@ Key facts:
 
 - Plans: Starter, Standard, and Enterprise, each with a 30-day money-back guarantee. Current pricing and included usage are listed on the pricing page.
 - Every plan includes a dedicated phone number, a dedicated email address, appointment booking, and lossless permanent memory of the business and its customers.
-- Standard adds bring-your-own-number porting, RCS messaging (verified sender, delivered through New Coworker's Google-verified agent with automatic SMS fallback), Zapier (8,000+ apps), AI call summaries, analytics, scheduled texts, missed-call auto-text, warm handoff transfers, and full browser skills that operate websites like a person.
-- Enterprise adds multi-tenant agency setups, white-label dashboards, SLAs, and custom compliance modules.
+- Standard adds bring-your-own-number porting, Zapier (8,000+ apps), AI call summaries, analytics, scheduled texts, missed-call auto-text, warm handoff transfers, and full browser skills that operate websites like a person.
+- Enterprise adds multi-tenant agency setups, white-label dashboards, SLAs, custom compliance modules, and branded RCS messaging (the business's own Google-verified sender with automatic SMS fallback).
 - Integrations: Zapier, Google Workspace, Microsoft 365, a public REST API, and webhooks.
 - Compliance guardrails (including Fair Housing rules for real estate) are enforced in every conversation.
 

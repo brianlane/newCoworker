@@ -86,7 +86,7 @@
       "rowMemory": "Memoria permanente sin pérdida",
       "rowWidget": "Widget de chat web (para tu sitio)",
       "rowByon": "Trae tu propio número (portabilidad)",
-      "rowRcs": "Mensajería RCS (remitente verificado)",
+      "rowRcs": "Mensajería RCS de marca (tu propio remitente verificado)",
       "rowZapier": "Zapier (8,000+ apps) y API para desarrolladores",
       "rowTextsDuringCalls": "Textos durante llamadas y auto-texto de llamada perdida",
       "rowScheduledTexts": "Textos programados y plantillas de mensajes",
@@ -314,8 +314,8 @@
           "description": "Los clientes escriben a tu número de negocio y reciben respuestas útiles y con tu marca al instante, de día o de noche."
         },
         "rcs": {
-          "title": "Mensajería RCS",
-          "description": "Textos entregados por un remitente verificado por Google con confirmaciones de lectura y formato enriquecido, con respaldo automático de SMS desde tu número."
+          "title": "Mensajería RCS (Enterprise)",
+          "description": "Textos entregados por tu propio remitente de marca verificado por Google con confirmaciones de lectura y formato enriquecido, con respaldo automático de SMS desde tu número. Disponible en el plan Enterprise."
         },
         "duringCalls": {
           "title": "Textos durante llamadas",
@@ -461,8 +461,8 @@
       "complianceA": "Las reglas de cumplimiento se aplican en cada conversación, incluidas las normas de la Fair Housing Act para bienes raíces, y los planes Enterprise admiten módulos de cumplimiento a medida para otras industrias reguladas.",
       "billingTitle": "Facturación y planes",
       "costQ": "¿Cuánto cuesta?",
-      "costA": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, RCS, Zapier, analítica y más. Enterprise es a medida. Todos los planes tienen garantía de devolución de 30 días. Mira el desglose completo en la <link>página de precios</link>.",
-      "costPlain": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, RCS, Zapier, analítica y más. Enterprise es a medida. Todos los planes tienen garantía de devolución de 30 días.",
+      "costA": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días. Mira el desglose completo en la <link>página de precios</link>.",
+      "costPlain": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días.",
       "upfrontQ": "¿Por qué se factura el término completo por adelantado en planes de 12 y 24 meses?",
       "upfrontA": "Porque tu plan incluye un servidor privado dedicado que prepagamos por todo tu contrato. Facturar el término una sola vez es lo que hace posible la tarifa mensual con descuento. Los planes mensuales se facturan mes a mes.",
       "cancelQ": "¿Puedo cancelar?",
@@ -1085,8 +1085,8 @@
         "description": "Cuando alguien necesita hablar contigo, tu coworker transfiere la llamada a ti o a tu equipo con todo el contexto. Sin transferencias en frío."
       },
       "textingRcs": {
-        "title": "Textos, RCS y respuestas automáticas",
-        "description": "SMS y RCS bidireccionales, textos durante llamadas en vivo, auto-texto en llamadas perdidas, más textos programados y plantillas guardadas."
+        "title": "Textos y respuestas automáticas",
+        "description": "SMS bidireccional, textos durante llamadas en vivo, auto-texto en llamadas perdidas, más textos programados y plantillas guardadas. RCS de marca en Enterprise."
       },
       "callSummaries": {
         "title": "Resúmenes de llamadas y sentimiento",
@@ -1520,6 +1520,9 @@
       "languageOwnerSet": "Establecido por ti",
       "languageEnglish": "Inglés",
       "languageSpanish": "Español"
+    },
+    "smsComposer": {
+      "sendAsPlainSms": "Enviar como SMS simple (omitir RCS)"
     },
     "trackedLinks": {
       "previewFetch": "vista previa automática"
