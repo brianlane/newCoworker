@@ -10,6 +10,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.fn() }));
 vi.mock("@/lib/ai-flows/calendly-poll", () => ({
   fetchCalendlyCandidateEvents: vi.fn()
 }));
@@ -18,6 +19,8 @@ import {
   CALENDAR_CREATED_LOOKBACK_MINUTES,
   CALENDAR_END_LOOKBACK_MINUTES,
   CALENDAR_POLL_MAX_EVENTS,
+  CALENDAR_POLL_OWNER_ALERT_EVENT,
+  CALENDAR_POLL_TICK_EVENT,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
   eventCanceledDue,
@@ -27,7 +30,9 @@ import {
   graphTimeIso,
   normalizeGoogleEvent,
   normalizeGraphEvent,
-  pollCalendarTriggers
+  pollCalendarTriggers,
+  shouldRunCalendarPoll,
+  stampCalendarPollTick
 } from "@/lib/ai-flows/calendar-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
@@ -35,6 +40,7 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -81,19 +87,53 @@ const endTrigger = (followMinutes?: number, overrides: Record<string, unknown> =
   ...overrides
 });
 
-/** Chainable service-client stub serving the (paged) ai_flows listing. */
-function dbWithRange(range: ReturnType<typeof vi.fn>) {
+type LogsResult = { data: unknown[] | null; error: { message: string } | null };
+
+/**
+ * Thenable builder for the failure-path system_logs lookbacks
+ * (.select().eq()/.is().gte().limit() awaited). Each from("system_logs")
+ * call consumes the next queued result; the last one repeats.
+ */
+function systemLogsChain(queue: LogsResult[]) {
+  let call = 0;
+  return () => {
+    const result = queue[Math.min(call, queue.length - 1)] ?? { data: [], error: null };
+    call += 1;
+    const chain: Record<string, unknown> = {};
+    for (const m of ["select", "eq", "is", "gte", "limit"]) {
+      chain[m] = vi.fn(() => chain);
+    }
+    chain.then = (resolve: (v: LogsResult) => unknown) => Promise.resolve(result).then(resolve);
+    return chain;
+  };
+}
+
+/**
+ * Chainable service-client stub serving the (paged) ai_flows listing plus
+ * the failure-path system_logs lookbacks (default: no recent rows — every
+ * failure reads as a first failure, owner-alert dedupe finds nothing).
+ */
+function dbWithRange(range: ReturnType<typeof vi.fn>, logsQueue: LogsResult[] = []) {
   const order = vi.fn(() => ({ range }));
   // Listing chain: .select().eq(enabled).or(primary-calendar-or-has-extras).order().range()
   const or = vi.fn(() => ({ order }));
   const eq1 = vi.fn(() => ({ or }));
   const flowsSelect = vi.fn(() => ({ eq: eq1 }));
-  return { from: vi.fn(() => ({ select: flowsSelect })) } as never;
+  const logs = systemLogsChain(logsQueue);
+  return {
+    from: vi.fn((table: string) =>
+      table === "system_logs" ? logs() : { select: flowsSelect }
+    )
+  } as never;
 }
 
 /** Single-page convenience stub (fewer rows than one page ends the loop). */
-function dbWith(rows: unknown[] | null, error: { message: string } | null = null) {
-  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }));
+function dbWith(
+  rows: unknown[] | null,
+  error: { message: string } | null = null,
+  logsQueue: LogsResult[] = []
+) {
+  return dbWithRange(vi.fn().mockResolvedValue({ data: rows, error }), logsQueue);
 }
 
 /** ISO string `minutes` from now (negative = in the past). */
@@ -720,13 +760,15 @@ describe("pollCalendarTriggers", () => {
     expect(endpoint).toContain("/v1.0/me/calendars/shared-cal/events");
   });
 
-  it("event_canceled: a null proxy response reads as not connected (both providers)", async () => {
+  it("event_canceled: a null proxy response reads as a rejected workspace connection (both providers)", async () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce(null as never);
     await pollCalendarTriggers(
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
     expect(recordSystemLog).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("calendar_not_connected") })
+      expect.objectContaining({
+        message: expect.stringContaining("workspace_connection_rejected")
+      })
     );
 
     vi.clearAllMocks();
@@ -737,7 +779,9 @@ describe("pollCalendarTriggers", () => {
       dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })])
     );
     expect(recordSystemLog).toHaveBeenCalledWith(
-      expect.objectContaining({ message: expect.stringContaining("calendar_not_connected") })
+      expect.objectContaining({
+        message: expect.stringContaining("workspace_connection_rejected")
+      })
     );
   });
 
@@ -917,7 +961,9 @@ describe("pollCalendarTriggers", () => {
       return { data: { items: [{ id: "p-ev", summary: "Mine", created: isoIn(-1) }] } };
     }) as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
-    // The primary event still enqueues; the shared failure is logged per-calendar.
+    // The primary event still enqueues; the shared failure logs ONE
+    // aggregated row (never one per source — the escalation lookback counts
+    // rows as failing POLLS).
     expect(res.enqueued).toBe(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({ trigger: expect.objectContaining({ calendar: "primary" }) }),
@@ -926,10 +972,27 @@ describe("pollCalendarTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_calendar_poll_failed",
-        message: expect.stringContaining("shared calendar"),
-        payload: { calendar: "shared" }
+        message: expect.stringContaining("the shared calendar"),
+        payload: { calendars: ["shared"] }
       })
     );
+  });
+
+  it("aggregates BOTH sources failing into a single failure row per poll", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never); // both links dead
+    await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    const failureLogs = vi
+      .mocked(recordSystemLog)
+      .mock.calls.filter(([input]) => input.event === "ai_flow_calendar_poll_failed");
+    expect(failureLogs).toHaveLength(1);
+    expect(failureLogs[0][0]).toMatchObject({
+      message: expect.stringContaining("both calendars"),
+      payload: { calendars: ["primary", "shared"] }
+    });
   });
 
   it("stringifies a non-Error per-calendar fetch failure", async () => {
@@ -949,7 +1012,13 @@ describe("pollCalendarTriggers", () => {
     );
     expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
     expect(nangoProxyForBusiness).not.toHaveBeenCalled();
-    expect(recordSystemLog).not.toHaveBeenCalled();
+    // Only the cadence-tick stamp — no failure/overflow rows.
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+    );
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_overflow" })
+    );
   });
 
   it("watches primary and shared with one query each, tagging the event's calendar", async () => {
@@ -1019,7 +1088,13 @@ describe("pollCalendarTriggers", () => {
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res.enqueued).toBe(0);
-    expect(recordSystemLog).not.toHaveBeenCalled();
+    // A dedupe collision is routine — nothing beyond the cadence-tick stamp.
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: expect.stringContaining("enqueued") })
+    );
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+    );
   });
 
   it("fails closed when a from_matches contact ref cannot be resolved", async () => {
@@ -1060,7 +1135,7 @@ describe("pollCalendarTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_calendar_poll_failed",
-        message: expect.stringContaining("calendar_not_connected")
+        message: expect.stringContaining("workspace_connection_rejected")
       })
     );
   });
@@ -1231,6 +1306,282 @@ describe("pollCalendarTriggers", () => {
     // The second business's failure is isolated from the first's success.
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ businessId: OTHER, event: "ai_flow_calendar_poll_failed" })
+    );
+  });
+});
+
+describe("poll failure escalation + owner alert", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(googleConn);
+    vi.mocked(getSharedCalendar).mockResolvedValue(null);
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue(null as never);
+  });
+
+  it("logs the FIRST failure at warn (a one-off blip stays out of the error feed)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_failed",
+        level: "warn",
+        message: expect.stringContaining("calendar_not_connected")
+      })
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  });
+
+  it("a null lookback payload reads as no prior failures (warn)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: null, error: null }
+      ])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "warn" })
+    );
+  });
+
+  it("logs a REPEAT failure inside the window at error, but one prior is not enough to alert", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }], error: null }
+      ])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "error" })
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  });
+
+  it("alerts the owner on the third consecutive connection failure, marker first", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }, { id: 2 }], error: null }, // failure lookback: 2 priors
+        { data: null, error: null } // 24h alert dedupe: none yet (null payload arm)
+      ])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: CALENDAR_POLL_OWNER_ALERT_EVENT, level: "info" })
+    );
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        kind: "calendar_connection_broken",
+        summary: expect.stringContaining("calendar connection")
+      })
+    );
+  });
+
+  it("dedupes the owner alert to once per day", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }, { id: 2 }], error: null },
+        { data: [{ id: 99 }], error: null } // alerted within the last 24h
+      ])
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: CALENDAR_POLL_OWNER_ALERT_EVENT })
+    );
+  });
+
+  it("a partial-calendar failure (healthy primary, dead shared) never alerts the owner", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockImplementation((async (
+      _biz: string,
+      _link: unknown,
+      cfg: { endpoint: string }
+    ) => {
+      if (cfg.endpoint.includes("shared-cal-x")) return null; // connection-class detail
+      return { data: { items: [] } };
+    }) as never);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }, { id: 2 }], error: null } // 2 priors — third strike
+      ])
+    );
+    // Persistent, so it logs at error — but flows on the primary calendar
+    // kept firing, so "your automations are paused" must NOT go out.
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "error" })
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  });
+
+  it("alerts when EVERY polled calendar fails with a connection-class detail (third strike)", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never); // both dead
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate
+        { data: [{ id: 1 }, { id: 2 }], error: null }, // 2 priors
+        { data: [], error: null } // alert dedupe: none yet
+      ])
+    );
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "calendar_connection_broken" })
+    );
+  });
+
+  it("a persistent NON-connection failure logs error but never alerts the owner", async () => {
+    vi.mocked(resolveCalendarConnection).mockRejectedValueOnce(new Error("provider 500"));
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }, { id: 2 }], error: null }
+      ])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "error" })
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+  });
+
+  it("a failed lookback logs as persistent but NEVER alerts (an assumed count is not evidence)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    // Connection-class failure — exactly the kind that would alert with two
+    // real priors. A lookback read error must not synthesize them.
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: null, error: { message: "logs unavailable" } }
+      ])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed", level: "error" })
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("an alert-dedupe read failure suppresses the dispatch (at-most-once bias)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [], error: null }, // cadence gate: no recent tick
+        { data: [{ id: 1 }, { id: 2 }], error: null },
+        { data: null, error: { message: "logs unavailable" } }
+      ])
+    );
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+});
+
+describe("poll cadence gate (inside pollCalendarTriggers)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(googleConn);
+    vi.mocked(getSharedCalendar).mockResolvedValue(null);
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue(null as never);
+  });
+
+  it("skips the provider calls when a real poll ran inside the interval", async () => {
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [
+        { data: [{ id: 7 }], error: null } // recent cadence tick
+      ])
+    );
+    expect(res).toMatchObject({ flows: 1, businesses: 0, skipped: true });
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(recordSystemLog).not.toHaveBeenCalled();
+  });
+
+  it("a short event_start lead disables the gate — the poll runs every tick", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
+    const res = await pollCalendarTriggers(
+      // leadMinutes 3 < the gate threshold: its due window could fit
+      // entirely between two gated polls, so the gate must stand down.
+      dbWith([flowRow("f-short", startTrigger(3))], null, [
+        { data: [{ id: 7 }], error: null } // recent tick would gate otherwise
+      ])
+    );
+    expect(res.skipped).toBeUndefined();
+    expect(res.businesses).toBe(1);
+    // Short-lead deployments never stamp the marker either.
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: CALENDAR_POLL_TICK_EVENT })
+    );
+  });
+
+  it("a completed gated poll stamps the marker AFTER the work", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { items: [] } } as never);
+    await pollCalendarTriggers(
+      dbWith([flowRow("f1", createdTrigger())], null, [{ data: [], error: null }])
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: null,
+        level: "debug",
+        event: CALENDAR_POLL_TICK_EVENT
+      }),
+      expect.anything()
+    );
+  });
+});
+
+describe("shouldRunCalendarPoll / stampCalendarPollTick", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("runs when no recent poll exists — the marker is NOT written by the check", async () => {
+    const should = await shouldRunCalendarPoll(
+      dbWith([], null, [{ data: null, error: null }]) as never
+    );
+    expect(should).toBe(true);
+    expect(recordSystemLog).not.toHaveBeenCalled();
+  });
+
+  it("skips when a real poll ran inside the interval", async () => {
+    const should = await shouldRunCalendarPoll(
+      dbWith([], null, [{ data: [{ id: 7 }], error: null }]) as never
+    );
+    expect(should).toBe(false);
+  });
+
+  it("fails OPEN when the marker read errors — gate trouble must never stall triggers", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const should = await shouldRunCalendarPoll(
+      dbWith([], null, [{ data: null, error: { message: "denied" } }]) as never
+    );
+    expect(should).toBe(true);
+    errSpy.mockRestore();
+  });
+
+  it("lazily creates a service client when none is supplied", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      dbWith([], null, [{ data: [{ id: 7 }], error: null }]) as never
+    );
+    expect(await shouldRunCalendarPoll()).toBe(false);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+
+  it("stampCalendarPollTick writes the platform-level debug marker", async () => {
+    await stampCalendarPollTick(dbWith([]) as never);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: null,
+        level: "debug",
+        event: CALENDAR_POLL_TICK_EVENT
+      }),
+      expect.anything()
     );
   });
 });

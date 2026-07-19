@@ -24,6 +24,13 @@ type StoredCalendlyConnectionRow = {
   access_token_encrypted: string;
   account_name: string | null;
   account_email: string | null;
+  /**
+   * Cached canonical Calendly user URI for the stored PAT (GET /users/me) —
+   * constant per token, so the calendar-trigger poller reads it instead of
+   * probing /users/me every tick. Null until first resolve; cleared when the
+   * token changes (a new PAT can belong to a different account).
+   */
+  user_uri: string | null;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -47,7 +54,7 @@ export type PublicCalendlyConnectionRow = Omit<
 
 const ALL_COLUMNS =
   "id,business_id,access_token_encrypted,account_name,account_email," +
-  "is_active,created_at,updated_at";
+  "user_uri,is_active,created_at,updated_at";
 
 function toDecryptedRow(row: StoredCalendlyConnectionRow): CalendlyConnectionRow {
   const { access_token_encrypted: encrypted, ...rest } = row;
@@ -109,6 +116,39 @@ export async function getActiveCalendlyConnectionId(
     .maybeSingle();
   if (error) throw new Error(`getActiveCalendlyConnectionId: ${error.message}`);
   return (data as { id: string } | null)?.id ?? null;
+}
+
+/**
+ * Cached user URI of the active direct connection (no token decryption).
+ * Null when not connected or not yet resolved.
+ */
+export async function getActiveCalendlyConnectionUserUri(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<string | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendly_connections")
+    .select("user_uri")
+    .eq("business_id", businessId)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) throw new Error(`getActiveCalendlyConnectionUserUri: ${error.message}`);
+  return (data as { user_uri: string | null } | null)?.user_uri ?? null;
+}
+
+/** Persist a freshly resolved user URI onto the connection row. */
+export async function setCalendlyConnectionUserUri(
+  businessId: string,
+  userUri: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("calendly_connections")
+    .update({ user_uri: userUri, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId);
+  if (error) throw new Error(`setCalendlyConnectionUserUri: ${error.message}`);
 }
 
 /** Dashboard listing shape (no decrypt — masked). Null when not connected. */
@@ -190,7 +230,9 @@ export async function upsertCalendlyConnection(
 
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
-    ...(token ? { access_token_encrypted: encryptIntegrationSecret(token) } : {}),
+    // A new PAT can belong to a different Calendly account — drop the cached
+    // user URI so the next poll re-resolves it against the new token.
+    ...(token ? { access_token_encrypted: encryptIntegrationSecret(token), user_uri: null } : {}),
     ...("accountName" in input ? { account_name: input.accountName ?? null } : {}),
     ...("accountEmail" in input ? { account_email: input.accountEmail ?? null } : {}),
     ...(input.isActive === undefined ? {} : { is_active: input.isActive })

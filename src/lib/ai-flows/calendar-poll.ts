@@ -48,6 +48,7 @@ import {
   type CalendarEventInput
 } from "@/lib/ai-flows/trigger-eval";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,
@@ -94,6 +95,60 @@ export const CALENDAR_POLL_FLOW_PAGE = 100;
  */
 export const CALENDAR_START_HORIZON_BUFFER_MINUTES = 5;
 
+/**
+ * How many PRIOR failures inside the escalation window a connection-class
+ * failure needs before the owner is alerted (i.e. the alert fires on the
+ * third consecutive failing poll — a blip never pings the owner).
+ */
+export const CALENDAR_POLL_ALERT_PRIOR_FAILURES = 2;
+
+/** Marker event for the once-per-day owner alert dedupe. */
+export const CALENDAR_POLL_OWNER_ALERT_EVENT = "ai_flow_calendar_owner_alerted";
+
+/** Failure details that mean "the calendar connection itself is broken". */
+const CONNECTION_FAILURE_DETAILS = [
+  "calendar_not_connected",
+  "calendly_token_rejected",
+  "workspace_connection_rejected"
+] as const;
+
+/**
+ * Minimum spacing between REAL polls. The worker kicks this route every
+ * minute, but the trigger due-windows (15-minute lookbacks; event_start
+ * fires anywhere inside its lead window) make per-minute provider listings
+ * pure waste — one real poll per ~3 minutes has identical trigger behavior
+ * at a third of the Calendly/Google/Microsoft calls. 10s under the nominal
+ * 3 minutes so pg_cron jitter can't make every third tick miss the gate.
+ */
+export const CALENDAR_POLL_MIN_INTERVAL_MS = 3 * 60_000 - 10_000;
+
+/**
+ * The cadence gate only engages when EVERY event_start flow's leadMinutes
+ * exceeds this. An event_start due window is exactly leadMinutes wide
+ * ([start - lead, start)) with no lookback — a window shorter than the
+ * gated interval could fall entirely between two real polls and the
+ * reminder would never fire. Leads above 5 minutes leave comfortable
+ * margin over the ~2m50s interval plus cron jitter; anything at or below
+ * it keeps the poll at the worker's native per-minute cadence.
+ */
+export const CALENDAR_GATE_MIN_START_LEAD_MINUTES = 5;
+
+/** Marker event stamped once per real poll (business_id null, debug level). */
+export const CALENDAR_POLL_TICK_EVENT = "ai_flow_calendar_poll_tick";
+
+/**
+ * Escalation lookback, tied to the REAL poll cadence: exactly wide enough to
+ * hold the two immediately preceding real polls (plus jitter slack), so
+ * "N prior failures inside the window" genuinely means "the last N polls
+ * failed too". A healthy poll between failures leaves a full poll interval
+ * with no failure row, pushing the older failure out of the window — a
+ * recovered connection can never accumulate stale strikes toward the owner
+ * alert (each business logs at most ONE failure row per real poll; see
+ * pollCalendarTriggers' per-business aggregation).
+ */
+export const CALENDAR_POLL_FAILURE_ESCALATION_MS =
+  CALENDAR_POLL_ALERT_PRIOR_FAILURES * CALENDAR_POLL_MIN_INTERVAL_MS + 2 * 60_000;
+
 type CalendarSource = "primary" | "shared";
 
 type CalendarFlow = {
@@ -115,6 +170,8 @@ export type CalendarPollResult = {
   businesses: number;
   events: number;
   enqueued: number;
+  /** True when the cadence gate skipped this tick (a recent poll covered it). */
+  skipped?: boolean;
 };
 
 /** Whether an event_start flow is due for `ev` at `nowMs` (pure, for tests). */
@@ -366,7 +423,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=false`,
       method: "GET"
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("workspace_connection_rejected");
     const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
       .map((e) => normalizeGoogleEvent(e, t.source))
       .filter((e): e is CalendarEventInput => e !== null);
@@ -384,7 +441,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
     method: "GET",
     headers: GRAPH_UTC_HEADERS
   });
-  if (!res) throw new Error("calendar_not_connected");
+  if (!res) throw new Error("workspace_connection_rejected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null);
@@ -409,7 +466,7 @@ async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=true`,
       method: "GET"
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("workspace_connection_rejected");
     const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
       .map((e) => normalizeGoogleEvent(e, t.source))
       .filter((e): e is CalendarEventInput => e !== null && e.cancelled === true);
@@ -425,7 +482,7 @@ async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<
     method: "GET",
     headers: GRAPH_UTC_HEADERS
   });
-  if (!res) throw new Error("calendar_not_connected");
+  if (!res) throw new Error("workspace_connection_rejected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null && e.cancelled === true);
@@ -456,7 +513,7 @@ async function fetchOverlapping(
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}`,
       method: "GET"
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("workspace_connection_rejected");
     const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
       .map((e) => normalizeGoogleEvent(e, t.source))
       .filter((e): e is CalendarEventInput => e !== null);
@@ -473,7 +530,7 @@ async function fetchOverlapping(
     method: "GET",
     headers: GRAPH_UTC_HEADERS
   });
-  if (!res) throw new Error("calendar_not_connected");
+  if (!res) throw new Error("workspace_connection_rejected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null);
@@ -534,6 +591,176 @@ function calendarFlowsFrom(
   return out;
 }
 
+// ── Failure logging with escalation ─────────────────────────────────────────
+
+/** True when the failure detail means the connection itself is broken. */
+function isConnectionFailure(message: string): boolean {
+  return CONNECTION_FAILURE_DETAILS.some((detail) => message.includes(detail));
+}
+
+/**
+ * Record a poll failure with blip-vs-outage escalation, and alert the OWNER
+ * when a connection-class failure persists.
+ *
+ * - First failure inside the escalation window → `warn` (one-off upstream
+ *   blip; stays out of the admin System Errors feed, which is error-only).
+ * - Repeat inside the window → `error`.
+ * - Third consecutive failing poll with a connection-class detail → one
+ *   owner notification per day ("reconnect your calendar"), because a
+ *   revoked grant/PAT otherwise stops every calendar-triggered flow with NO
+ *   owner-facing signal at all. "Consecutive" is real: the window is sized
+ *   to the poll cadence and each business writes at most one failure row per
+ *   real poll, so a recovery in between resets the count.
+ *
+ * All reads/writes are best-effort: log-path trouble degrades toward the
+ * old always-error behavior, never toward silence.
+ */
+async function logCalendarPollFailure(
+  db: SupabaseClient,
+  businessId: string,
+  message: string,
+  payload: Record<string, unknown>,
+  opts: {
+    /**
+     * Whether this failure is evidence the CONNECTION is broken (owner-alert
+     * eligible). Defaults to the message carrying a connection-class detail;
+     * the per-source aggregation passes false when another calendar on the
+     * same connection still polled fine — "reconnect your calendar, your
+     * automations are paused" must never go out while flows keep firing.
+     */
+    connectionBroken?: boolean;
+  } = {}
+): Promise<void> {
+  // Failure-path-only lookback: healthy ticks never pay this query.
+  let priorFailures = 0;
+  let lookbackFailed = false;
+  try {
+    const sinceIso = new Date(Date.now() - CALENDAR_POLL_FAILURE_ESCALATION_MS).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("event", "ai_flow_calendar_poll_failed")
+      .gte("created_at", sinceIso)
+      .limit(CALENDAR_POLL_ALERT_PRIOR_FAILURES);
+    if (error) throw new Error(error.message);
+    priorFailures = (data ?? []).length;
+  } catch (err) {
+    // Lookback failed — LOG as persistent (error, like before this helper
+    // existed) rather than misfiling a real outage as a blip; but never ALERT
+    // off an assumed count — the owner ping needs real evidence of three
+    // failing polls, not a system_logs read hiccup.
+    lookbackFailed = true;
+    console.error("calendar poll failure lookback", err);
+  }
+
+  const persistent = lookbackFailed || priorFailures >= 1;
+  await recordSystemLog({
+    businessId,
+    source: "aiflow",
+    level: persistent ? "error" : "warn",
+    event: "ai_flow_calendar_poll_failed",
+    message,
+    payload
+  });
+
+  const connectionBroken = opts.connectionBroken ?? isConnectionFailure(message);
+  if (!lookbackFailed && priorFailures >= CALENDAR_POLL_ALERT_PRIOR_FAILURES && connectionBroken) {
+    await alertOwnerCalendarBroken(db, businessId);
+  }
+}
+
+/**
+ * Once-per-day owner alert for a persistently broken calendar connection.
+ * The dedupe marker is written BEFORE dispatch (at-most-once semantics — an
+ * alert storm about an outage would be worse than a lost retry; the outage
+ * keeps logging errors either way).
+ */
+async function alertOwnerCalendarBroken(db: SupabaseClient, businessId: string): Promise<void> {
+  try {
+    const sinceIso = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("event", CALENDAR_POLL_OWNER_ALERT_EVENT)
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    if ((data ?? []).length > 0) return;
+
+    await recordSystemLog({
+      businessId,
+      source: "aiflow",
+      level: "info",
+      event: CALENDAR_POLL_OWNER_ALERT_EVENT,
+      message: "Owner alerted: calendar connection persistently failing",
+      payload: {}
+    });
+    await dispatchUrgentNotification({
+      businessId,
+      kind: "calendar_connection_broken",
+      summary: "Your calendar connection stopped working",
+      smsBody:
+        "New Coworker: your calendar connection stopped working, so calendar-triggered " +
+        "automations are paused. Reconnect it on the Integrations page to resume.",
+      emailSubject: "Your calendar connection needs to be reconnected",
+      emailBody:
+        "Your connected calendar stopped accepting our requests, so any automations " +
+        "triggered by calendar events are paused until it is reconnected. Open the " +
+        "Integrations page in your dashboard and reconnect the calendar to resume.",
+      payload: { reason: "calendar_poll_persistent_failure" }
+    });
+  } catch (err) {
+    console.error("calendar poll owner alert", err);
+  }
+}
+
+// ── Poll cadence gate ───────────────────────────────────────────────────────
+
+/**
+ * Should this tick run a REAL poll, or did a recent poll already cover it?
+ * Tracked with a platform-level system_logs marker (no new table); the
+ * caller stamps the marker AFTER a successful poll (stampCalendarPollTick),
+ * so a thrown poll never consumes a cadence slot — the next minute retries.
+ * Two racing kicks could both poll — harmless, the run dedupe keys make
+ * double polling idempotent; this gate is purely a call-volume optimization.
+ * Fails OPEN (poll runs) so gate trouble can never stall calendar triggers.
+ */
+export async function shouldRunCalendarPoll(client?: SupabaseClient): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  try {
+    const sinceIso = new Date(Date.now() - CALENDAR_POLL_MIN_INTERVAL_MS).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .is("business_id", null)
+      .eq("event", CALENDAR_POLL_TICK_EVENT)
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    return (data ?? []).length === 0;
+  } catch (err) {
+    console.error("shouldRunCalendarPoll", err);
+    return true;
+  }
+}
+
+/** Stamp the cadence marker — call only after a poll actually completed. */
+export async function stampCalendarPollTick(client?: SupabaseClient): Promise<void> {
+  await recordSystemLog(
+    {
+      businessId: null,
+      source: "aiflow",
+      level: "debug",
+      event: CALENDAR_POLL_TICK_EVENT,
+      message: "Calendar trigger poll tick",
+      payload: {}
+    },
+    client
+  );
+}
+
 // ── The poll ────────────────────────────────────────────────────────────────
 
 /** Poll every watched calendar once and enqueue runs for due events. */
@@ -569,6 +796,20 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
     enqueued: 0
   };
   if (flows.length === 0) return result;
+
+  // Cadence gate: the worker kicks every minute, but the trigger due-windows
+  // tolerate the wider CALENDAR_POLL_MIN_INTERVAL_MS spacing — EXCEPT an
+  // event_start flow with a lead at or below the gate threshold, whose due
+  // window ([start - lead, start)) could fall entirely between two gated
+  // polls. Any such flow keeps the whole poll at per-minute cadence; the
+  // flow LISTING above always runs (one cheap query), the gate only saves
+  // the provider calls.
+  const gateSafe = flows.every(
+    (f) => f.on !== "event_start" || f.leadMinutes > CALENDAR_GATE_MIN_START_LEAD_MINUTES
+  );
+  if (gateSafe && !(await shouldRunCalendarPoll(db))) {
+    return { ...result, skipped: true };
+  }
 
   const byBusiness = new Map<string, CalendarFlow[]>();
   for (const f of flows) {
@@ -660,6 +901,11 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           });
         }
 
+        // Per-source failures aggregate into ONE failure row after the loop:
+        // the escalation lookback counts rows as consecutive failing POLLS,
+        // so a business watching both calendars must not double-strike in a
+        // single poll when one broken link fails both sources.
+        const sourceFailures: Array<{ source: CalendarSource; message: string }> = [];
         for (const [source, target] of targets) {
         const collected: CalendarEventInput[] = [];
         const seenIds = new Set<string>();
@@ -673,8 +919,8 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
         let overflowed = false;
         // Per-calendar isolation: one calendar failing (e.g. the shared one
         // was deleted on the provider) must not drop the events already
-        // fetched from the other — log and keep going; dedupe keys make the
-        // retry on the next tick benign.
+        // fetched from the other — collect and keep going; dedupe keys make
+        // the retry on the next tick benign.
         try {
           if (group.some((f) => f.on === "event_created" && f.sources.includes(source))) {
             const fetched = await fetchRecentlyCreated(target, createdSinceMs);
@@ -717,14 +963,9 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
             overflowed ||= fetched.overflowed;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await recordSystemLog({
-            businessId,
-            source: "aiflow",
-            level: "error",
-            event: "ai_flow_calendar_poll_failed",
-            message: `Calendar-trigger poll failed for the ${source} calendar: ${message}`,
-            payload: { calendar: source }
+          sourceFailures.push({
+            source,
+            message: err instanceof Error ? err.message : String(err)
           });
         }
         if (overflowed) {
@@ -743,6 +984,26 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
         }
         eventsBySource.set(source, collected);
         result.events += collected.length;
+        }
+        if (sourceFailures.length > 0) {
+          const detail = sourceFailures
+            .map((f) => `${f.source}: ${f.message}`)
+            .join("; ");
+          await logCalendarPollFailure(
+            db,
+            businessId,
+            `Calendar-trigger poll failed for ${sourceFailures.length === 1 ? `the ${sourceFailures[0].source} calendar` : "both calendars"}: ${detail}`,
+            { calendars: sourceFailures.map((f) => f.source) },
+            {
+              // Owner-alert eligible only when EVERY polled calendar failed
+              // with a connection-class detail — one dead shared calendar
+              // beside a healthy primary is not a broken connection, and the
+              // "your automations are paused" alert would be false.
+              connectionBroken:
+                sourceFailures.length === targets.size &&
+                sourceFailures.every((f) => isConnectionFailure(f.message))
+            }
+          );
         }
       }
 
@@ -819,15 +1080,12 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await recordSystemLog({
-        businessId,
-        source: "aiflow",
-        level: "error",
-        event: "ai_flow_calendar_poll_failed",
-        message: `Calendar-trigger poll failed: ${message}`,
-        payload: {}
-      });
+      await logCalendarPollFailure(db, businessId, `Calendar-trigger poll failed: ${message}`, {});
     }
   }
+  // Stamp AFTER the poll completed so a thrown listing never consumes a
+  // cadence slot. Only stamped when the gate applies — a short-lead
+  // deployment polls every minute and would just accumulate unread markers.
+  if (gateSafe) await stampCalendarPollTick(db);
   return result;
 }

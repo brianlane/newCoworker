@@ -10,6 +10,13 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
+// Default (non-injected) user-URI cache deps: empty cache, no-op persist —
+// existing tests keep probing /users/me exactly like before the cache landed.
+vi.mock("@/lib/db/calendly-connections", () => ({
+  getActiveCalendlyConnectionUserUri: vi.fn().mockResolvedValue(null),
+  setCalendlyConnectionUserUri: vi.fn().mockResolvedValue(undefined)
+}));
+
 import {
   CALENDLY_CANCELED_SCAN_BACK_DAYS,
   CALENDLY_CANCELED_SCAN_FORWARD_DAYS,
@@ -318,7 +325,7 @@ describe("fetchCalendlyCandidateEvents", () => {
     });
   });
 
-  it("throws calendar_not_connected when the transport refuses (user probe and listing)", async () => {
+  it("throws calendly_token_rejected when the transport refuses (user probe and listing)", async () => {
     const refuseUser = requestStub({ user: null });
     await expect(
       fetchCalendlyCandidateEvents(
@@ -331,7 +338,7 @@ describe("fetchCalendlyCandidateEvents", () => {
         },
         { request: refuseUser.fn }
       )
-    ).rejects.toThrow("calendar_not_connected");
+    ).rejects.toThrow("calendly_token_rejected");
 
     const emptyUser = requestStub({ user: { data: { resource: {} } } });
     await expect(
@@ -345,7 +352,7 @@ describe("fetchCalendlyCandidateEvents", () => {
         },
         { request: emptyUser.fn }
       )
-    ).rejects.toThrow("calendar_not_connected");
+    ).rejects.toThrow("calendly_token_rejected");
 
     const refuseListing = requestStub({ events: () => null });
     await expect(
@@ -359,7 +366,7 @@ describe("fetchCalendlyCandidateEvents", () => {
         },
         { request: refuseListing.fn }
       )
-    ).rejects.toThrow("calendar_not_connected");
+    ).rejects.toThrow("calendly_token_rejected");
 
     // Non-Error window failures are wrapped into a real Error on rethrow.
     const throwString = requestStub({
@@ -506,5 +513,98 @@ describe("fetchCalendlyCandidateEvents", () => {
     expect(res.overflowed).toBe(true);
     expect(res.events[0].id).toBe("SOON1");
     expect(res.events.map((e) => e.id)).not.toContain("NOSTART");
+  });
+});
+
+describe("user-URI cache", () => {
+  type Req = { endpoint: string; params?: Record<string, string> };
+
+  function requestSpy() {
+    const calls: Req[] = [];
+    const fn = vi.fn(async (_biz: string, _conn: unknown, config: Req) => {
+      calls.push(config);
+      if (config.endpoint === "/users/me") return USER_RES as { data: unknown };
+      if (config.endpoint === "/scheduled_events") return { data: { collection: [] } };
+      return { data: { collection: [] } };
+    });
+    return { fn, calls };
+  }
+
+  const WINDOWS = {
+    createdScan: true,
+    startHorizonMinutes: null,
+    endBackMinutes: null,
+    canceledScan: false
+  };
+
+  it("a cached URI skips the /users/me probe and never re-persists", async () => {
+    const { fn, calls } = requestSpy();
+    const getCachedUserUri = vi.fn().mockResolvedValue("https://api.calendly.com/users/CACHED");
+    const persistUserUri = vi.fn();
+    await fetchCalendlyCandidateEvents(
+      { businessId: BIZ, conn: CONN, nowMs: NOW, windows: WINDOWS, dueFilter: () => false },
+      { request: fn, getCachedUserUri, persistUserUri }
+    );
+    expect(calls.some((c) => c.endpoint === "/users/me")).toBe(false);
+    expect(persistUserUri).not.toHaveBeenCalled();
+    const listing = calls.find((c) => c.endpoint === "/scheduled_events");
+    expect(listing?.params?.user).toBe("https://api.calendly.com/users/CACHED");
+  });
+
+  it("a cache miss probes /users/me and persists the resolved URI", async () => {
+    const { fn, calls } = requestSpy();
+    const getCachedUserUri = vi.fn().mockResolvedValue(null);
+    const persistUserUri = vi.fn().mockResolvedValue(undefined);
+    await fetchCalendlyCandidateEvents(
+      { businessId: BIZ, conn: CONN, nowMs: NOW, windows: WINDOWS, dueFilter: () => false },
+      { request: fn, getCachedUserUri, persistUserUri }
+    );
+    expect(calls.some((c) => c.endpoint === "/users/me")).toBe(true);
+    expect(persistUserUri).toHaveBeenCalledWith(BIZ, "https://api.calendly.com/users/U1");
+  });
+
+  it("a cache read failure degrades to the probe; a persist failure is tolerated (Error and non-Error)", async () => {
+    const { fn, calls } = requestSpy();
+    const getCachedUserUri = vi.fn().mockRejectedValue(new Error("cache read down"));
+    const persistUserUri = vi.fn().mockRejectedValue("cache write down");
+    const res = await fetchCalendlyCandidateEvents(
+      { businessId: BIZ, conn: CONN, nowMs: NOW, windows: WINDOWS, dueFilter: () => false },
+      { request: fn, getCachedUserUri, persistUserUri }
+    );
+    expect(res.events).toEqual([]);
+    expect(calls.some((c) => c.endpoint === "/users/me")).toBe(true);
+    expect(persistUserUri).toHaveBeenCalled();
+
+    // Flipped failure shapes: non-Error cache read, Error persist.
+    const again = requestSpy();
+    const res2 = await fetchCalendlyCandidateEvents(
+      { businessId: BIZ, conn: CONN, nowMs: NOW, windows: WINDOWS, dueFilter: () => false },
+      {
+        request: again.fn,
+        getCachedUserUri: vi.fn().mockRejectedValue("string cache failure"),
+        persistUserUri: vi.fn().mockRejectedValue(new Error("write down"))
+      }
+    );
+    expect(res2.events).toEqual([]);
+    expect(again.calls.some((c) => c.endpoint === "/users/me")).toBe(true);
+  });
+
+  it("Nango-OAuth Calendly connections (no direct row) never touch the cache", async () => {
+    const { fn, calls } = requestSpy();
+    const getCachedUserUri = vi.fn();
+    const persistUserUri = vi.fn();
+    await fetchCalendlyCandidateEvents(
+      {
+        businessId: BIZ,
+        conn: { provider: "calendly" as const, providerConfigKey: "calendly", connectionId: "cx-2" },
+        nowMs: NOW,
+        windows: WINDOWS,
+        dueFilter: () => false
+      },
+      { request: fn, getCachedUserUri, persistUserUri }
+    );
+    expect(getCachedUserUri).not.toHaveBeenCalled();
+    expect(persistUserUri).not.toHaveBeenCalled();
+    expect(calls.some((c) => c.endpoint === "/users/me")).toBe(true);
   });
 });

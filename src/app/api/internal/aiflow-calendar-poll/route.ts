@@ -31,6 +31,10 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
   try {
+    // Cadence gating lives inside pollCalendarTriggers (it needs the flow
+    // list: short event_start leads keep per-minute polling). The booking-
+    // goal sweep below stays per-minute either way: booking → goal-jump
+    // latency is its point.
     const result = await pollCalendarTriggers();
     // Calendly booking → appointment_booked goal sweep rides the same tick
     // (per-business failures already isolate inside; this guard keeps a

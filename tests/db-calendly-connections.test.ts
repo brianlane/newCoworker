@@ -21,8 +21,10 @@ import {
   deleteCalendlyConnection,
   getActiveCalendlyConnection,
   getActiveCalendlyConnectionId,
+  getActiveCalendlyConnectionUserUri,
   getCalendlyConnection,
   getPublicCalendlyConnection,
+  setCalendlyConnectionUserUri,
   toPublicCalendlyConnection,
   upsertCalendlyConnection
 } from "@/lib/db/calendly-connections";
@@ -63,6 +65,7 @@ const STORED = {
   access_token_encrypted: "enc(pat-secret)",
   account_name: "Acme Spa",
   account_email: "owner@acme.com",
+  user_uri: "https://api.calendly.com/users/U1",
   is_active: true,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z"
@@ -261,6 +264,8 @@ describe("upsertCalendlyConnection", () => {
     );
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch).not.toHaveProperty("access_token_encrypted");
+    // No token change → the cached user URI survives.
+    expect(patch).not.toHaveProperty("user_uri");
     expect(patch.account_name).toBe("New Name");
     expect(patch.account_email).toBeNull();
     expect(patch.is_active).toBe(false);
@@ -273,6 +278,9 @@ describe("upsertCalendlyConnection", () => {
     await upsertCalendlyConnection({ businessId: BIZ, accessToken: "new-pat" }, makeDb(c));
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.access_token_encrypted).toBe("enc(new-pat)");
+    // A new PAT can belong to a different account — the cached user URI
+    // must not survive the rotation.
+    expect(patch.user_uri).toBeNull();
     // Identity untouched when the keys are absent from the input.
     expect(patch).not.toHaveProperty("account_name");
     expect(patch).not.toHaveProperty("account_email");
@@ -283,6 +291,56 @@ describe("upsertCalendlyConnection", () => {
     await expect(upsertCalendlyConnection({ businessId: BIZ }, makeDb(c2))).rejects.toThrow(
       /update fail/
     );
+  });
+});
+
+describe("getActiveCalendlyConnectionUserUri / setCalendlyConnectionUserUri", () => {
+  it("returns the cached URI for an active row, null when absent/unset", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: { user_uri: "https://api.calendly.com/users/U1" }, error: null });
+    expect(await getActiveCalendlyConnectionUserUri(BIZ, makeDb(c))).toBe(
+      "https://api.calendly.com/users/U1"
+    );
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+
+    const c2 = chain();
+    c2.maybeSingle.mockResolvedValue({ data: { user_uri: null }, error: null });
+    expect(await getActiveCalendlyConnectionUserUri(BIZ, makeDb(c2))).toBeNull();
+
+    const c3 = chain();
+    c3.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getActiveCalendlyConnectionUserUri(BIZ, makeDb(c3))).toBeNull();
+  });
+
+  it("throws on a read error", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "down" } });
+    await expect(getActiveCalendlyConnectionUserUri(BIZ, makeDb(c))).rejects.toThrow(/down/);
+  });
+
+  it("persists the URI and throws on a write error", async () => {
+    const c = chain({ error: null });
+    await setCalendlyConnectionUserUri(BIZ, "https://api.calendly.com/users/U2", makeDb(c));
+    const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(patch.user_uri).toBe("https://api.calendly.com/users/U2");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+
+    const c2 = chain({ error: { message: "write fail" } });
+    await expect(
+      setCalendlyConnectionUserUri(BIZ, "https://api.calendly.com/users/U2", makeDb(c2))
+    ).rejects.toThrow(/write fail/);
+  });
+
+  it("falls back to the default service client", async () => {
+    defaultClientSpy.mockClear();
+    const c = chain({ error: null });
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await getActiveCalendlyConnectionUserUri(BIZ)).toBeNull();
+    await setCalendlyConnectionUserUri(BIZ, "https://api.calendly.com/users/U3");
+    expect(defaultClientSpy).toHaveBeenCalledTimes(2);
+    // Reset so the shared default-client count test below stays exact.
+    defaultClientSpy.mockClear();
   });
 });
 

@@ -17,6 +17,7 @@ describe("resolveNotificationCategory", () => {
 
   it("maps platform events to system", () => {
     expect(resolveNotificationCategory("byon_port")).toBe("system");
+    expect(resolveNotificationCategory("calendar_connection_broken")).toBe("system");
   });
 
   it("defaults unknown/future kinds to the ungated general category", () => {
