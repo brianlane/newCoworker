@@ -12,8 +12,9 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ExternalLink, Download, Trash2 } from "lucide-react";
+import { ChevronRight, ExternalLink, Download, Trash2 } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import {
@@ -280,9 +281,27 @@ export function DocumentDetail({
 
   const badge = expiryBadge(doc);
   const renewal = renewalBadge(doc);
+  const folder = documentFolder(doc);
 
   return (
     <div className="space-y-4">
+      {/* Breadcrumb reads the LIVE document, so renames and folder moves
+          update the trail immediately (a server-rendered one would go stale). */}
+      <nav className="flex items-center gap-1 text-sm text-parchment/50" aria-label="Breadcrumb">
+        <Link href="/dashboard/documents" className="hover:text-parchment">
+          Documents
+        </Link>
+        <ChevronRight className="h-3.5 w-3.5 text-parchment/30" />
+        <Link
+          href={`/dashboard/documents?folder=${encodeURIComponent(folder)}`}
+          className="hover:text-parchment"
+        >
+          {folder}
+        </Link>
+        <ChevronRight className="h-3.5 w-3.5 text-parchment/30" />
+        <span className="truncate text-parchment/80">{doc.title}</span>
+      </nav>
+
       <Card>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">

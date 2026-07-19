@@ -111,7 +111,12 @@ export async function openOriginalFile(
       return json.error?.message ?? "Could not create the link";
     }
     if (mode === "inline") {
-      window.open(json.data.url, "_blank", "noopener");
+      // window.open returns null when a popup blocker eats the tab — say so
+      // instead of silently succeeding.
+      const opened = window.open(json.data.url, "_blank", "noopener");
+      if (!opened) {
+        return "Your browser blocked the new tab — allow pop-ups for this site and try again.";
+      }
     } else {
       const a = document.createElement("a");
       a.href = json.data.url;

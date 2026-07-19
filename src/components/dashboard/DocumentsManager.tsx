@@ -527,16 +527,32 @@ export function DocumentsManager({
             </div>
           )
         ) : visibleDocs.length === 0 ? (
-          <p className="text-sm text-parchment/40">
-            This folder is empty.{" "}
-            <button
-              type="button"
-              onClick={() => goToFolder(null)}
-              className="text-claw-green hover:underline"
-            >
-              Back to all documents
-            </button>
-          </p>
+          // The audience filter can empty a folder that still has files —
+          // say so instead of claiming the folder itself is empty.
+          audienceFilter !== "all" &&
+          documents.some((d) => documentFolder(d) === folder) ? (
+            <p className="text-sm text-parchment/40">
+              No files in this folder match the audience filter.{" "}
+              <button
+                type="button"
+                onClick={() => setAudienceFilter("all")}
+                className="text-claw-green hover:underline"
+              >
+                Clear the filter
+              </button>
+            </p>
+          ) : (
+            <p className="text-sm text-parchment/40">
+              This folder is empty.{" "}
+              <button
+                type="button"
+                onClick={() => goToFolder(null)}
+                className="text-claw-green hover:underline"
+              >
+                Back to all documents
+              </button>
+            </p>
+          )
         ) : view === "grid" ? (
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {visibleDocs.map((doc) => {

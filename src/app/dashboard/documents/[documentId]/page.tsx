@@ -1,6 +1,4 @@
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { ChevronRight } from "lucide-react";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { getAuthUser } from "@/lib/auth";
 import { getBusinessDocument } from "@/lib/documents/db";
@@ -28,25 +26,10 @@ export default async function DocumentViewPage({
   const document = await getBusinessDocument(businessId, documentId);
   if (!document) notFound();
 
-  const folder = document.category.trim() || "general";
-
   return (
     <div className="space-y-4 max-w-3xl">
-      <nav className="flex items-center gap-1 text-sm text-parchment/50" aria-label="Breadcrumb">
-        <Link href="/dashboard/documents" className="hover:text-parchment">
-          Documents
-        </Link>
-        <ChevronRight className="h-3.5 w-3.5 text-parchment/30" />
-        <Link
-          href={`/dashboard/documents?folder=${encodeURIComponent(folder)}`}
-          className="hover:text-parchment"
-        >
-          {folder}
-        </Link>
-        <ChevronRight className="h-3.5 w-3.5 text-parchment/30" />
-        <span className="truncate text-parchment/80">{document.title}</span>
-      </nav>
-
+      {/* Breadcrumb lives inside DocumentDetail: it tracks live renames and
+          folder moves, which this server render can't see. */}
       <DocumentDetail businessId={businessId} initialDocument={document as DocumentItem} />
     </div>
   );
