@@ -32,6 +32,16 @@ higher renewal rate (`*_RENEWAL_PRICE_ID` via `ensureCommitmentSchedule`)
 unless auto-renew is on or the owner starts a new contract at the contract
 rate.
 
+**RCS is Enterprise-only** (Jul 2026): each tenant needs their own branded
+Telnyx RCS agent ($600 + $100/mo carrier fees, priced cost-plus per deal) —
+a shared agent cannot route inbound replies for more than one tenant. Before
+enabling any new agent, run the **enterprise RCS onboarding e2e runbook** in
+[PRDs/tier-economics-jul-2026.md](PRDs/tier-economics-jul-2026.md) ("RCS:
+Enterprise-only decision" section); it encodes the Telnyx provisioning gotchas
+(null `profile_id`/`webhook_url` silently drops inbound) and the outbound /
+fallback / inbound verification steps. Per-tenant enablement lives on the
+admin business page ("Messaging channel (RCS)" card).
+
 ## Architecture
 
 - Agent runtime: Rowboat

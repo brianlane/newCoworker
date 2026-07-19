@@ -176,6 +176,57 @@ killed the shared-agent-as-Standard-perk model entirely:
   dropped at Telnyx). Testers register via
   `PUT /v2/messaging/rcs/test_number_invite/{agent_id}/{phone}`.
 
+### Enterprise RCS onboarding — e2e test runbook (run per branded agent)
+
+When an Enterprise deal includes branded RCS, every new agent must pass this
+end-to-end checklist before the tenant's `rcs_enabled` flips on. It encodes
+every failure mode hit during the Jul 18 2026 shared-agent testing phase.
+
+1. **Create the tenant's own branded agent** with Telnyx (tenant brand name,
+   logo, Google verification). It starts in the free testing phase; the $600 +
+   $100/mo carrier fees only apply at production provisioning — collect the
+   deal's setup/recurring pricing (floor 2x fees) before submitting the form.
+2. **Patch the agent's plumbing — Telnyx provisions NEITHER field**:
+   `PATCH /v2/messaging/rcs/agents/{agent_id}` with `profile_id` = the
+   TENANT's messaging profile and `webhook_url` =
+   `https://<supabase>/functions/v1/telnyx-sms-inbound`. Skipping this drops
+   every inbound RCS reply silently at Telnyx (no webhook, no telemetry —
+   Telnyx detail records show `received` with nothing forwarded).
+3. **Register a tester**:
+   `PUT /v2/messaging/rcs/test_number_invite/{agent_id}/{phone}` — Verizon
+   handset recommended (AT&T/T-Mobile restrict tester enrollment), RCS-capable
+   (Android or iPhone iOS 18+), and the invite must be ACCEPTED on the phone
+   before delivery works.
+4. **Wire the tenant** from the admin business page "Messaging channel (RCS)"
+   card (agent id + enable; audit-logged via `POST /api/admin/rcs-channel`).
+   The badge must read "RCS-first (SMS fallback)" — it mirrors the full
+   send-time gate (enterprise tier ∧ enabled ∧ agent id ∧ SMS from-number),
+   so a "Plain SMS" badge tells you which precondition is missing.
+5. **Outbound e2e**: dashboard composer → tester number. Verify
+   `sms_outbound_log.channel = 'rcs'`, the RCS badge on the thread, the
+   tenant's verified brand rendering on the handset, and the actual per-msg
+   cost on the Telnyx message record (observed $0.011 vs $0.0065 list —
+   confirm deal margins against reality).
+6. **Fallback e2e**: send to a non-tester number. Telnyx demotes it
+   asynchronously — the message record flips to `type: SMS` sent from the
+   tenant's own DID (our code's re-send branch is only a second net for hard
+   API rejections). Note: VoIP-destination test sends may spam-filter
+   (error 40002); that is the destination, not the channel.
+7. **Inbound e2e**: reply from the tester handset. Verify the job lands with
+   `sms_inbound_jobs.channel = 'rcs'`, the AI reply goes out, and
+   `reply_channel` is populated. If nothing lands, re-check step 2.
+8. **Per-message override**: with RCS on, the composer's "Send as plain SMS
+   (skip RCS)" checkbox must force `channel = 'sms'` for that message.
+9. **NEVER point two tenants at one agent id.** Inbound routing resolves
+   agent → business expecting exactly one `business_channel_settings` row;
+   a duplicate makes every customer reply for BOTH tenants drop as
+   `sms_inbound_rcs_unrouted`.
+10. **Production cutover**: only after 1–9 pass, submit the RCS carrier form
+    (traffic estimates + website traffic) and accept the fees; carrier
+    provisioning takes weeks (`provisioned_carriers` on the agent shows
+    progress). Re-run steps 5–8 once carriers go live, since tester-phase
+    delivery and carrier delivery are different paths.
+
 ## Hardware escalation — how KVM4/KVM8 moves happen (PRs #371 + #372)
 
 Escalation is **manual by design**; the system advises, the operator moves:
