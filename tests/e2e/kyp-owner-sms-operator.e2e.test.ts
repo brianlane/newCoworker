@@ -183,11 +183,14 @@ async function stepWithRetry(
  * Run one owner turn through the model↔tool loop (the engine loop itself is
  * unit-tested; this drives the same call shape with stubbed executions).
  *
- * An empty-final-text turn (the model's last step is thinking-only: no text,
- * no executable calls — observed twice back-to-back on PR #768's CI run
- * after scenario 2's run_aiflow call) is retried whole-turn, bounded: the
- * production inline engine treats that step shape as an error and the job
- * retries, so the harness mirrors it rather than asserting on "".
+ * A COMPLETELY empty turn (no text and no tool calls — a thinking-only
+ * draw) is retried whole-turn, bounded: the production inline engine treats
+ * that shape as an error and the job retries, so the harness mirrors it
+ * rather than asserting on "". Attempts that made tool calls are NEVER
+ * re-rolled (Bugbot on PR #768: a re-roll would discard the recorded
+ * send_sms/run_aiflow a scenario asserts on); the calls-then-empty-text
+ * draw is instead recovered by operatorTurnOnce's per-step empty retry,
+ * which re-requests the same step with the turn's context intact.
  */
 async function operatorTurn(
   prior: GeminiChatContent[],
@@ -201,7 +204,7 @@ async function operatorTurn(
   };
   for (let attempt = 1; attempt <= 3; attempt++) {
     last = await operatorTurnOnce(prior, userText, route);
-    if (last.finalText.trim().length > 0) return last;
+    if (last.finalText.trim().length > 0 || last.calls.length > 0) return last;
   }
   return last;
 }
