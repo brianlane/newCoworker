@@ -8,17 +8,25 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import type { SidebarLayoutItem } from "@/lib/dashboard/sidebar-prefs";
 
-type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
+type Status = { kind: "idle" | "saving" | "resetting" | "success" | "error"; message?: string };
 
 /**
  * Settings → Sidebar (BizBlasts-style): drag rows to reorder the nav and
  * hide pages you never use. The up/down buttons stay as the keyboard- and
  * touch-accessible fallback (HTML5 drag-and-drop doesn't fire on most
  * touch devices). Locked entries (Settings, Notifications) can move but
- * not hide.
+ * not hide. "Reset to default" deletes the saved layout server-side and
+ * restores the untouched catalog order.
  */
-export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLayoutItem[] }) {
+export function SidebarCustomizer({
+  initialLayout,
+  defaultLayout
+}: {
+  initialLayout: SidebarLayoutItem[];
+  defaultLayout: SidebarLayoutItem[];
+}) {
   const tNav = useTranslations("dashboard.nav");
+  const tSettings = useTranslations("dashboard.settings");
   const router = useRouter();
   const [items, setItems] = useState(initialLayout);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
@@ -119,6 +127,26 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
     }
   }
 
+  async function resetToDefault() {
+    setStatus({ kind: "resetting" });
+    try {
+      const res = await fetch("/api/dashboard/sidebar", { method: "DELETE" });
+      const json = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: { message?: string };
+      } | null;
+      if (!res.ok || !json?.ok) {
+        setStatus({ kind: "error", message: json?.error?.message ?? "Reset failed." });
+        return;
+      }
+      setItems(defaultLayout);
+      setStatus({ kind: "success", message: tSettings("sidebarResetSuccess") });
+      router.refresh();
+    } catch {
+      setStatus({ kind: "error", message: "Network error. Please try again." });
+    }
+  }
+
   return (
     <Card>
       <h2 className="text-sm font-semibold text-parchment mb-1">Sidebar</h2>
@@ -201,8 +229,24 @@ export function SidebarCustomizer({ initialLayout }: { initialLayout: SidebarLay
         })}
       </ul>
       <div className="flex items-center gap-3">
-        <Button type="button" size="sm" onClick={() => void save()} loading={status.kind === "saving"}>
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => void save()}
+          loading={status.kind === "saving"}
+          disabled={status.kind === "resetting"}
+        >
           Save sidebar
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          onClick={() => void resetToDefault()}
+          loading={status.kind === "resetting"}
+          disabled={status.kind === "saving"}
+        >
+          {tSettings("sidebarResetButton")}
         </Button>
         {status.kind === "success" && <p className="text-xs text-claw-green">{status.message}</p>}
         {status.kind === "error" && <p className="text-xs text-spark-orange">{status.message}</p>}

@@ -109,3 +109,14 @@ export async function saveSidebarLayout(
     .upsert(rows, { onConflict: "user_id,item_key" });
   if (error) throw new Error(`saveSidebarLayout: ${error.message}`);
 }
+
+/**
+ * Reset the user's sidebar to the default catalog by deleting their stored
+ * rows — a true reset: with no rows, future catalog additions render in
+ * default position instead of being appended after a stale saved order.
+ */
+export async function deleteSidebarLayout(userId: string, client?: SupabaseClient): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("user_sidebar_items").delete().eq("user_id", userId);
+  if (error) throw new Error(`deleteSidebarLayout: ${error.message}`);
+}

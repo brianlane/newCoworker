@@ -107,7 +107,8 @@ export default async function AdminClientsPage() {
               isPaused: !!b.is_paused,
               subscriptionStatus: subscriptionMap.get(b.id)?.status ?? null,
               ownerQuiet: quietOwners.has(b.id),
-              marginCents: marginByBusiness.get(b.id)?.marginCents ?? null
+              marginCents: marginByBusiness.get(b.id)?.marginCents ?? null,
+              pinned: !!b.admin_pinned
             }))}
           />
         </Card>

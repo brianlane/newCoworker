@@ -26,6 +26,11 @@ export type AdminClientRow = {
    * when the margin load failed (column renders as —).
    */
   marginCents: number | null;
+  /**
+   * Admin pin (businesses.admin_pinned): pinned rows always render at the
+   * top of the table, surviving column sorts — see {@link pinRowsFirst}.
+   */
+  pinned: boolean;
 };
 
 /** Sentinel for "no subscription row" in the payment filter. */
@@ -107,6 +112,15 @@ export function sortClientRows(
     if (av > bv) return sign;
     return 0;
   });
+}
+
+/**
+ * Stable partition: pinned rows first, both groups keeping their relative
+ * order. Applied AFTER filter + sort so pinned rows stay on top under any
+ * column sort (filters can still hide them, which is intended).
+ */
+export function pinRowsFirst(rows: AdminClientRow[]): AdminClientRow[] {
+  return [...rows.filter((r) => r.pinned), ...rows.filter((r) => !r.pinned)];
 }
 
 /** The visible rows as spreadsheet-ready CSV (header first). */

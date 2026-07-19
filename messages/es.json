@@ -1503,6 +1503,8 @@
       "teamEnterpriseOnly": "El acceso de equipo, la marca white-label y el soporte dedicado son funciones Enterprise.",
       "teamEnterpriseCta": "Habla con nosotros sobre Enterprise →",
       "sidebarPageBlurb": "Reordena la navegación y oculta páginas que no usas",
+      "sidebarResetButton": "Restablecer por defecto",
+      "sidebarResetSuccess": "Barra lateral restablecida al diseño por defecto.",
       "dangerPageBlurb": "Acciones irreversibles — lee con cuidado",
       "dangerSessions": "Sesiones",
       "dangerSessionsBody": "Cierra tu sesión en todas partes, incluidos otros dispositivos.",

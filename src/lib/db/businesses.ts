@@ -54,6 +54,8 @@ export type BusinessRow = {
   admin_mute_activity?: boolean;
   admin_mute_errors?: boolean;
   admin_mute_alerts?: boolean;
+  /** Pinned to the top of the admin All Clients table (admin-facing only). */
+  admin_pinned?: boolean;
   /**
    * Industry slug chosen during onboarding (e.g. "real_estate"). Drives
    * per-industry behavior such as compliance guardrails and AiFlow example
@@ -363,6 +365,16 @@ export async function setBusinessPaused(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("businesses").update({ is_paused: paused }).eq("id", id);
   if (error) throw new Error(`setBusinessPaused: ${error.message}`);
+}
+
+export async function setBusinessAdminPinned(
+  id: string,
+  pinned: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("businesses").update({ admin_pinned: pinned }).eq("id", id);
+  if (error) throw new Error(`setBusinessAdminPinned: ${error.message}`);
 }
 
 export async function setCustomerChannelsEnabled(
