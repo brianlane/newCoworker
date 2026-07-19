@@ -182,8 +182,31 @@ async function stepWithRetry(
 /**
  * Run one owner turn through the model↔tool loop (the engine loop itself is
  * unit-tested; this drives the same call shape with stubbed executions).
+ *
+ * An empty-final-text turn (the model's last step is thinking-only: no text,
+ * no executable calls — observed twice back-to-back on PR #768's CI run
+ * after scenario 2's run_aiflow call) is retried whole-turn, bounded: the
+ * production inline engine treats that step shape as an error and the job
+ * retries, so the harness mirrors it rather than asserting on "".
  */
 async function operatorTurn(
+  prior: GeminiChatContent[],
+  userText: string,
+  route: ToolRouter
+): Promise<{ finalText: string; calls: GeminiFunctionCall[]; contents: GeminiChatContent[] }> {
+  let last: { finalText: string; calls: GeminiFunctionCall[]; contents: GeminiChatContent[] } = {
+    finalText: "",
+    calls: [],
+    contents: []
+  };
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    last = await operatorTurnOnce(prior, userText, route);
+    if (last.finalText.trim().length > 0) return last;
+  }
+  return last;
+}
+
+async function operatorTurnOnce(
   prior: GeminiChatContent[],
   userText: string,
   route: ToolRouter
@@ -192,7 +215,19 @@ async function operatorTurn(
   const calls: GeminiFunctionCall[] = [];
   let finalText = "";
   for (let step = 0; step < 5; step++) {
-    const result = await stepWithRetry(contents);
+    let result = await stepWithRetry(contents);
+    // Empty completion (no text, no calls): re-request the SAME step,
+    // bounded — the per-completion mirror of the llm-router's empty-
+    // completion retry (#766). Only applies when the turn has produced no
+    // usable text yet; a benign trailing empty after text already landed
+    // just ends the loop.
+    for (
+      let empty = 1;
+      empty <= 2 && !result.text && result.functionCalls.length === 0 && !finalText;
+      empty++
+    ) {
+      result = await stepWithRetry(contents);
+    }
     if (result.text) finalText = result.text;
     if (result.functionCalls.length === 0 || !result.modelContent) break;
     contents.push(result.modelContent);
