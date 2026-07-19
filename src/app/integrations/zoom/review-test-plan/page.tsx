@@ -138,12 +138,13 @@ export default function ZoomReviewTestPlanPage() {
               processing can take a few minutes).
             </p>
             <p>
-              Back on <b>Dashboard → Integrations → Zoom</b>, paste the meeting ID into{" "}
-              <b>Meeting minutes → Import transcript</b>. Expected: the transcript is fetched from
-              your Zoom account and saved to the business&apos;s Documents as meeting minutes (a
-              success note with the generated summary appears on the card). If the meeting was not
-              cloud-recorded with a transcript, an explanatory error is shown instead — nothing is
-              stored.
+              In the Zoom portal open <b>Recordings &amp; Transcripts → your meeting</b> and copy
+              the recording page link. Back on <b>Dashboard → Integrations → Zoom</b>, paste it
+              into <b>Meeting minutes → Import transcript</b> (a scheduled meeting&apos;s numeric
+              ID also works). Expected: the transcript is fetched from your Zoom account and saved
+              to the business&apos;s Documents as meeting minutes (a success note with the
+              generated summary appears on the card). If the meeting was not cloud-recorded with a
+              transcript, an explanatory error is shown instead — nothing is stored.
             </p>
           </Step>
 

@@ -181,14 +181,15 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
             <div className="rounded-lg border border-parchment/10 bg-parchment/[0.02] p-3">
               <p className="text-xs font-semibold text-parchment">Meeting minutes</p>
               <p className="text-[11px] text-parchment/40 mt-1">
-                Paste the meeting ID of a cloud-recorded meeting (with audio transcript
-                on) and your coworker turns the transcript into minutes in Documents.
+                Paste the recording page link (Zoom portal → Recordings &amp; Transcripts →
+                your meeting) — or the meeting ID for scheduled meetings — and your
+                coworker turns the cloud-recording transcript into minutes in Documents.
               </p>
               <div className="mt-2 flex gap-2">
                 <Input
                   value={meetingId}
                   onChange={(e) => setMeetingId(e.target.value)}
-                  placeholder="Meeting ID, e.g. 178 4344 402882"
+                  placeholder="Recording link or meeting ID"
                   className="flex-1"
                 />
                 <Button

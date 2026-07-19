@@ -14,7 +14,7 @@ vi.mock("@/lib/zoom/client", () => ({
   getZoomAccessToken: (...args: unknown[]) => getZoomAccessToken(...args)
 }));
 
-import { fetchZoomMeetingTranscript } from "@/lib/zoom/transcript";
+import { fetchZoomMeetingTranscript, normalizeZoomMeetingRef } from "@/lib/zoom/transcript";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const MEETING = "1784344402882";
@@ -32,7 +32,74 @@ beforeEach(() => {
   getZoomAccessToken.mockResolvedValue("tok-1");
 });
 
+describe("normalizeZoomMeetingRef", () => {
+  it("keeps numeric ids, stripping display spacing", () => {
+    expect(normalizeZoomMeetingRef("876 3018 1550")).toBe("87630181550");
+    expect(normalizeZoomMeetingRef("1784344402882")).toBe("1784344402882");
+  });
+
+  it("URL-encodes a bare meeting UUID once", () => {
+    expect(normalizeZoomMeetingRef("jhqVQlf1RyuEX/1TCRs+Jg==")).toBe(
+      encodeURIComponent("jhqVQlf1RyuEX/1TCRs+Jg==")
+    );
+  });
+
+  it("double-encodes UUIDs starting with / or containing //", () => {
+    const leading = "/ajXp112QmuoKj4854875==";
+    expect(normalizeZoomMeetingRef(leading)).toBe(
+      encodeURIComponent(encodeURIComponent(leading))
+    );
+    const doubled = "abcdefghij//klmnopq==";
+    expect(normalizeZoomMeetingRef(doubled)).toBe(
+      encodeURIComponent(encodeURIComponent(doubled))
+    );
+  });
+
+  it("extracts the UUID from a recording page link", () => {
+    const link =
+      "https://us06web.zoom.us/recording/detail?meeting_id=jhqVQlf1RyuEX%2F1TCRs%2BJg%3D%3D";
+    expect(normalizeZoomMeetingRef(link)).toBe(
+      encodeURIComponent("jhqVQlf1RyuEX/1TCRs+Jg==")
+    );
+  });
+
+  it("rejects non-zoom links, zoom links without meeting_id, and junk", () => {
+    expect(
+      normalizeZoomMeetingRef("https://evil.example.com/?meeting_id=abc==")
+    ).toBeNull();
+    expect(normalizeZoomMeetingRef("https://zoom.us/recording/detail")).toBeNull();
+    expect(normalizeZoomMeetingRef("https://[bad")).toBeNull();
+    expect(normalizeZoomMeetingRef("not a meeting")).toBeNull();
+    expect(normalizeZoomMeetingRef("  ")).toBeNull();
+    expect(normalizeZoomMeetingRef("12345")).toBeNull();
+  });
+});
+
 describe("fetchZoomMeetingTranscript", () => {
+  it("returns not_found for an unreadable meeting reference without calling Zoom", async () => {
+    const fetchImpl = vi.fn();
+    const res = await fetchZoomMeetingTranscript(BIZ, "definitely not a ref!", { fetchImpl });
+    expect(res).toMatchObject({ ok: false, error: "not_found" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(getZoomAccessToken).not.toHaveBeenCalled();
+  });
+
+  it("requests the transcript by encoded UUID when a recording link is pasted", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(200, { can_download: true, download_url: "https://dl.zoom.us/t/1" })
+      )
+      .mockResolvedValueOnce(new Response(VTT, { status: 200 }));
+    const link =
+      "https://us06web.zoom.us/recording/detail?meeting_id=jhqVQlf1RyuEX%2F1TCRs%2BJg%3D%3D";
+    const res = await fetchZoomMeetingTranscript(BIZ, link, { fetchImpl });
+    expect(res.ok).toBe(true);
+    expect(fetchImpl.mock.calls[0][0]).toBe(
+      `https://api.zoom.us/v2/meetings/${encodeURIComponent("jhqVQlf1RyuEX/1TCRs+Jg==")}/transcript`
+    );
+  });
+
   it("returns the VTT when the transcript is downloadable", async () => {
     const fetchImpl = vi
       .fn()
