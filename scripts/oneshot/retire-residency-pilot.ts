@@ -8,13 +8,14 @@
  * cascade never matched it. Nothing external bills or depends on it anymore:
  * no Stripe subscription, no Hostinger box, no Telnyx DID, no auth user.
  *
- * What this removes (in order):
- *   1. Supabase Storage: every encrypted residency DR dump under
- *      business-backups/residency/<businessId>/ (worthless ciphertext once
- *      the `residency_backup_keys` row cascades with the business row).
- *   2. Cloudflare: the orphaned per-tenant tunnel `nc-<businessId>` and its
+ * What this removes (in order — read-only validation of every step happens
+ * first, so a missing credential or API failure aborts with nothing lost):
+ *   1. Cloudflare: the orphaned per-tenant tunnel `nc-<businessId>` and its
  *      CNAMEs (`<id>`, `voice-<id>`, `render-<id>`, `data-<id>`) — no code
  *      path deletes tunnels, so these outlived the box.
+ *   2. Supabase Storage: every encrypted residency DR dump under
+ *      business-backups/residency/<businessId>/ (worthless ciphertext once
+ *      the `residency_backup_keys` row cascades with the business row).
  *   3. Postgres: the `businesses` row — ON DELETE CASCADE fans out to the
  *      config, contact, logs, gateway token, residency backup key, and the
  *      canceled Stripe-less subscription row. `applied_oneshots` /
@@ -78,15 +79,20 @@ async function assertGuards(db: SupabaseClient): Promise<void> {
     throw new Error(`guard: business still points at VPS ${biz.hostinger_vps_id}`);
   }
 
+  // Same predicate as the release-to-pool / adopt-time delete guards
+  // (listBusinessIdsWithStripeLinkedSubscription): a Stripe id on a CANCELED
+  // row is a historical stamp, not live billing — only non-canceled
+  // Stripe-linked rows block the delete.
   const { data: subs, error: subErr } = await db
     .from("subscriptions")
     .select("id, status, stripe_subscription_id")
-    .eq("business_id", BUSINESS_ID);
+    .eq("business_id", BUSINESS_ID)
+    .not("stripe_subscription_id", "is", null)
+    .neq("status", "canceled");
   if (subErr) throw new Error(`subscriptions read failed: ${subErr.message}`);
-  for (const sub of subs ?? []) {
-    if (sub.stripe_subscription_id !== null) {
-      throw new Error(`guard: subscription ${sub.id} is Stripe-linked (${sub.status})`);
-    }
+  if ((subs ?? []).length > 0) {
+    const sub = subs![0];
+    throw new Error(`guard: subscription ${sub.id} is Stripe-linked and not canceled (${sub.status})`);
   }
 
   const { data: inv, error: invErr } = await db
@@ -120,7 +126,20 @@ async function purgeStorageDumps(db: SupabaseClient): Promise<number> {
   return names.length;
 }
 
-async function cleanupCloudflare(): Promise<{ dnsDeleted: number; tunnelDeleted: boolean }> {
+type CloudflareTargets = {
+  token: string;
+  accountId: string;
+  zoneId: string;
+  records: Array<{ id: string; name: string }>;
+  tunnels: Array<{ id: string; name: string }>;
+};
+
+/**
+ * Read-only: validate the Cloudflare env and enumerate exactly what will be
+ * deleted. Runs BEFORE any destructive step so missing credentials or an
+ * API outage abort the script while everything is still intact.
+ */
+async function resolveCloudflareTargets(): Promise<CloudflareTargets> {
   const token = (process.env.CLOUDFLARE_API_TOKEN ?? "").trim();
   const accountId = (process.env.CLOUDFLARE_ACCOUNT_ID ?? "").trim();
   if (!token || !accountId) {
@@ -140,42 +159,50 @@ async function cleanupCloudflare(): Promise<{ dnsDeleted: number; tunnelDeleted:
   const hostnames = ["", "voice-", "render-", "data-"].map(
     (prefix) => `${prefix}${BUSINESS_ID}.${zoneName}`
   );
-  let dnsDeleted = 0;
+  const records: Array<{ id: string; name: string }> = [];
   for (const hostname of hostnames) {
-    const records = await cf<Array<{ id: string; name: string }>>(
+    const found = await cf<Array<{ id: string; name: string }>>(
       token,
       `/zones/${zoneId}/dns_records?type=CNAME&name=${encodeURIComponent(hostname)}`
     );
-    for (const record of records ?? []) {
-      console.log(`${tag} cloudflare DNS: delete CNAME ${record.name} (${record.id})`);
-      if (apply) {
-        await cf(token, `/zones/${zoneId}/dns_records/${record.id}`, { method: "DELETE" });
-      }
-      dnsDeleted++;
-    }
+    records.push(...(found ?? []));
   }
-  if (dnsDeleted === 0) console.log(`${tag} cloudflare DNS: no pilot CNAMEs found.`);
 
   // Tunnel: named nc-<businessId> by the provisioner. is_deleted=false skips
-  // tombstones of previously deleted tunnels. cascade=true tears down any
-  // stale connections/routes (the box was re-imaged, so none should be live).
+  // tombstones of previously deleted tunnels.
   const tunnelName = `nc-${BUSINESS_ID}`;
   const tunnels = await cf<Array<{ id: string; name: string }>>(
     token,
     `/accounts/${accountId}/cfd_tunnel?name=${encodeURIComponent(tunnelName)}&is_deleted=false`
   );
-  let tunnelDeleted = false;
-  for (const tunnel of tunnels ?? []) {
+
+  console.log(
+    `${tag} cloudflare: ${records.length} CNAME(s), ${(tunnels ?? []).length} tunnel(s) named ${tunnelName} to delete.`
+  );
+  return { token, accountId, zoneId, records, tunnels: tunnels ?? [] };
+}
+
+async function cleanupCloudflare(
+  targets: CloudflareTargets
+): Promise<{ dnsDeleted: number; tunnelDeleted: boolean }> {
+  const { token, accountId, zoneId, records, tunnels } = targets;
+  for (const record of records) {
+    console.log(`${tag} cloudflare DNS: delete CNAME ${record.name} (${record.id})`);
+    if (apply) {
+      await cf(token, `/zones/${zoneId}/dns_records/${record.id}`, { method: "DELETE" });
+    }
+  }
+  // cascade=true tears down any stale connections/routes (the box was
+  // re-imaged, so none should be live).
+  for (const tunnel of tunnels) {
     console.log(`${tag} cloudflare tunnel: delete ${tunnel.name} (${tunnel.id})`);
     if (apply) {
       await cf(token, `/accounts/${accountId}/cfd_tunnel/${tunnel.id}?cascade=true`, {
         method: "DELETE"
       });
     }
-    tunnelDeleted = true;
   }
-  if (!tunnelDeleted) console.log(`${tag} cloudflare tunnel: ${tunnelName} not found (already gone).`);
-  return { dnsDeleted, tunnelDeleted };
+  return { dnsDeleted: records.length, tunnelDeleted: tunnels.length > 0 };
 }
 
 async function deleteBusinessRow(db: SupabaseClient): Promise<void> {
@@ -195,9 +222,14 @@ async function main() {
   }
   const db = createClient(url, key, { auth: { persistSession: false } });
 
+  // Read-only phase first (guards + Cloudflare env/target resolution), so a
+  // missing credential or API failure aborts before anything is destroyed.
+  // Destructive order: Cloudflare → storage dumps → DB row, each step only
+  // reached if the previous one fully succeeded.
   await assertGuards(db);
+  const cfTargets = await resolveCloudflareTargets();
+  const cfResult = await cleanupCloudflare(cfTargets);
   const dumpsDeleted = await purgeStorageDumps(db);
-  const cfResult = await cleanupCloudflare();
   await deleteBusinessRow(db);
 
   if (apply) {
