@@ -1,6 +1,7 @@
 /**
  * Business Documents — single-document management.
  *
+ *   GET    /api/dashboard/documents/:documentId  → one row (view page refresh)
  *   PATCH  /api/dashboard/documents/:documentId  → edit metadata / content
  *   DELETE /api/dashboard/documents/:documentId  → remove doc + stored file
  *
@@ -55,6 +56,29 @@ const patchSchema = z.object({
 });
 
 type RouteContext = { params: Promise<{ documentId: string }> };
+
+export async function GET(request: Request, context: RouteContext) {
+  try {
+    const user = await getAuthUser();
+    if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    const { documentId } = await context.params;
+    if (!z.string().uuid().safeParse(documentId).success) {
+      return errorResponse("VALIDATION_ERROR", "Invalid document id");
+    }
+    const businessId = z
+      .string()
+      .uuid()
+      .safeParse(new URL(request.url).searchParams.get("businessId"));
+    if (!businessId.success) return errorResponse("VALIDATION_ERROR", "businessId is required");
+    if (!user.isAdmin) await requireBusinessRole(businessId.data, "view_dashboard");
+
+    const document = await getBusinessDocument(businessId.data, documentId);
+    if (!document) return errorResponse("NOT_FOUND", "Document not found", 404);
+    return successResponse({ document });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}
 
 export async function PATCH(request: Request, context: RouteContext) {
   try {
