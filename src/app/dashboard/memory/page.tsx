@@ -7,7 +7,6 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { Card } from "@/components/ui/Card";
 import { MemoryEditor } from "@/components/dashboard/MemoryEditor";
-import { DocumentsManager } from "@/components/dashboard/DocumentsManager";
 
 export const dynamic = "force-dynamic";
 
@@ -47,21 +46,18 @@ export default async function MemoryPage() {
           <p className="text-parchment/50 text-sm">Memory not initialized. Provision your coworker first.</p>
         </Card>
       ) : (
-        <>
-          <MemoryEditor
-            businessId={businessId!}
-            tier={tier ?? undefined}
-            businessName={business?.name ?? undefined}
-            businessType={business?.business_type ?? undefined}
-            initialSoul={config.soul_md}
-            initialIdentity={config.identity_md}
-            initialMemory={config.memory_md}
-            initialWebsiteUrl={business?.website_url ?? ""}
-            initialWebsiteMd={config.website_md ?? ""}
-            initialCrawlReport={config.website_crawl_report ?? null}
-          />
-          <DocumentsManager businessId={businessId!} />
-        </>
+        <MemoryEditor
+          businessId={businessId!}
+          tier={tier ?? undefined}
+          businessName={business?.name ?? undefined}
+          businessType={business?.business_type ?? undefined}
+          initialSoul={config.soul_md}
+          initialIdentity={config.identity_md}
+          initialMemory={config.memory_md}
+          initialWebsiteUrl={business?.website_url ?? ""}
+          initialWebsiteMd={config.website_md ?? ""}
+          initialCrawlReport={config.website_crawl_report ?? null}
+        />
       )}
     </div>
   );

@@ -1,7 +1,7 @@
 "use client";
 
 /**
- * Business Documents manager (Dashboard → Memory → Documents).
+ * Business Documents manager (Dashboard → Documents).
  *
  * Upload real business documents (price sheets, policies, contracts, SOPs) that
  * every coworker surface answers from and shares on request. Each document
@@ -9,9 +9,16 @@
  * (expired docs go inert to the agent and the daily sweep reminds the
  * owner), an editable agent-facing markdown body, and a list of active
  * share links with one-click revoke.
+ *
+ * The list is a DIRECTORY: categories act as folders (collapsible sections),
+ * searchable and filterable by audience. Zoom transcript imports file
+ * themselves under `meeting` automatically. Title/category are editable in
+ * the expanded panel (category edits re-file the document), and the original
+ * upload is downloadable via a short-lived signed URL.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Folder } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 
@@ -117,9 +124,16 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   // share PII under the wrong panel.
   const [openId, setOpenId] = useState<string | null>(null);
   const openIdRef = useRef<string | null>(null);
+  // Directory view: categories act as folders. Empty set = every folder
+  // open; a live search overrides collapse so matches are never hidden.
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [audienceFilter, setAudienceFilter] = useState<"all" | DocumentItem["audience"]>("all");
   const [draftContent, setDraftContent] = useState("");
   const [draftExpires, setDraftExpires] = useState("");
   const [draftRenewal, setDraftRenewal] = useState("");
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftCategory, setDraftCategory] = useState("");
   const [savingDoc, setSavingDoc] = useState(false);
   // Pickers for linking a document to a contact / assigning a renewal
   // handler. Loaded once on mount; both selects degrade to hidden when the
@@ -255,6 +269,8 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     setDraftContent(doc.content_md);
     setDraftExpires(doc.expires_at ? doc.expires_at.slice(0, 10) : "");
     setDraftRenewal(doc.renewal_date ? doc.renewal_date.slice(0, 10) : "");
+    setDraftTitle(doc.title);
+    setDraftCategory(doc.category);
     setShares([]);
     setSignatureRequests([]);
     setSigName("");
@@ -394,6 +410,35 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     }
   }
 
+  async function downloadOriginal(docId: string) {
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/dashboard/documents/${docId}/download?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { url?: string };
+        error?: { message?: string };
+      };
+      if (!json.ok || !json.data?.url) {
+        setError(json.error?.message ?? "Could not create the download link");
+        return;
+      }
+      // Transient anchor click: the signed URL carries a Content-Disposition
+      // download filename, and the dashboard tab must stay where it is.
+      const a = document.createElement("a");
+      a.href = json.data.url;
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch {
+      setError("Could not create the download link — try again.");
+    }
+  }
+
   async function revokeShare(docId: string, shareId: string) {
     try {
       const res = await fetch(`/api/dashboard/documents/${docId}/shares`, {
@@ -411,6 +456,29 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
       /* leave as-is */
     }
   }
+
+  // Directory view: filter by search + audience, then group by category.
+  const query = search.trim().toLowerCase();
+  const searching = query.length > 0;
+  // The OPEN document always stays in the list: filters narrowing it out
+  // mid-edit (or right after a ?doc= deep link) must not vanish the editor.
+  const filtered = documents.filter(
+    (doc) =>
+      doc.id === openId ||
+      ((audienceFilter === "all" || doc.audience === audienceFilter) &&
+        (!searching ||
+          doc.title.toLowerCase().includes(query) ||
+          doc.summary.toLowerCase().includes(query) ||
+          doc.category.toLowerCase().includes(query)))
+  );
+  const folders = new Map<string, DocumentItem[]>();
+  for (const doc of filtered) {
+    const key = doc.category.trim() || "general";
+    const list = folders.get(key);
+    if (list) list.push(doc);
+    else folders.set(key, [doc]);
+  }
+  const visibleFolders = [...folders.entries()].sort(([a], [b]) => a.localeCompare(b));
 
   return (
     <Card>
@@ -495,14 +563,87 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
         </p>
       ) : null}
 
-      {/* ── List ───────────────────────────────────────────────────────── */}
-      <div className="mt-5 space-y-2">
+      {/* ── Search + filters ──────────────────────────────────────────── */}
+      {documents.length > 0 ? (
+        <div className="mt-5 flex flex-wrap gap-2">
+          <input
+            className={`${inputClass} flex-1 min-w-[12rem]`}
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search documents…"
+            aria-label="Search documents"
+          />
+          <select
+            className={`${inputClass} w-auto`}
+            value={audienceFilter}
+            onChange={(e) => setAudienceFilter(e.target.value as typeof audienceFilter)}
+            aria-label="Filter by audience"
+          >
+            <option value="all">All audiences</option>
+            <option value="clients">Customers</option>
+            <option value="staff">Internal only</option>
+            <option value="both">Customers + internal</option>
+          </select>
+        </div>
+      ) : null}
+
+      {/* ── Directory list (category = folder) ────────────────────────── */}
+      <div className="mt-4 space-y-3">
         {loading ? (
           <p className="text-sm text-parchment/40">Loading documents…</p>
         ) : documents.length === 0 ? (
           <p className="text-sm text-parchment/40">No documents yet.</p>
+        ) : visibleFolders.length === 0 ? (
+          <p className="text-sm text-parchment/40">No documents match your search.</p>
         ) : (
-          documents.map((doc) => {
+          visibleFolders.map(([category, docs]) => {
+            // A live search always shows its matches, and a folder holding
+            // the OPEN document never collapses over it — collapsing while
+            // editing (or a Move that re-files the open doc into a collapsed
+            // folder) must not make the editor vanish.
+            const isCollapsed =
+              !searching &&
+              collapsed.has(category) &&
+              !docs.some((d) => d.id === openId);
+            return (
+              <div key={category}>
+                <button
+                  type="button"
+                  onClick={() => toggleFolder(category)}
+                  aria-expanded={!isCollapsed}
+                  className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-sm font-semibold text-parchment/80 hover:text-parchment"
+                >
+                  {isCollapsed ? (
+                    <ChevronRight className="h-3.5 w-3.5 text-parchment/40" />
+                  ) : (
+                    <ChevronDown className="h-3.5 w-3.5 text-parchment/40" />
+                  )}
+                  <Folder className="h-4 w-4 text-signal-teal/80" />
+                  <span>{category}</span>
+                  <span className="text-xs font-normal text-parchment/35">({docs.length})</span>
+                </button>
+                {!isCollapsed && (
+                  <div className="mt-1 space-y-2 pl-3 sm:pl-5">{docs.map(renderDocument)}</div>
+                )}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </Card>
+  );
+
+  function toggleFolder(category: string) {
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(category)) next.delete(category);
+      else next.add(category);
+      return next;
+    });
+  }
+
+  /** One document row + its expanded editor panel (used inside folders). */
+  function renderDocument(doc: DocumentItem) {
             const badge = expiryBadge(doc);
             const renewal = renewalBadge(doc);
             const linkedContact = doc.contact_id
@@ -560,6 +701,13 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                   </span>
                   <button
                     type="button"
+                    onClick={() => void downloadOriginal(doc.id)}
+                    className="text-[11px] text-parchment/50 hover:text-parchment"
+                  >
+                    Download
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => void removeDocument(doc.id)}
                     className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
                   >
@@ -579,6 +727,53 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                 {open && (
                   <div className="mt-3 space-y-3 border-t border-parchment/10 pt-3">
                     <div className="grid gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className={labelClass}>Title</label>
+                        <div className="flex gap-2">
+                          <input
+                            className={inputClass}
+                            value={draftTitle}
+                            onChange={(e) => setDraftTitle(e.target.value)}
+                            maxLength={200}
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            loading={savingDoc}
+                            disabled={!draftTitle.trim() || draftTitle.trim() === doc.title}
+                            onClick={() => void patchDocument(doc.id, { title: draftTitle.trim() })}
+                          >
+                            Rename
+                          </Button>
+                        </div>
+                      </div>
+                      <div>
+                        <label className={labelClass}>Category (acts as the folder)</label>
+                        <div className="flex gap-2">
+                          <input
+                            className={inputClass}
+                            value={draftCategory}
+                            onChange={(e) => setDraftCategory(e.target.value)}
+                            maxLength={100}
+                            placeholder="meeting / pricing / policies"
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            size="sm"
+                            loading={savingDoc}
+                            disabled={
+                              !draftCategory.trim() || draftCategory.trim() === doc.category
+                            }
+                            onClick={() =>
+                              void patchDocument(doc.id, { category: draftCategory.trim() })
+                            }
+                          >
+                            Move
+                          </Button>
+                        </div>
+                      </div>
                       <div>
                         <label className={labelClass}>Audience</label>
                         <select
@@ -873,9 +1068,5 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                 )}
               </div>
             );
-          })
-        )}
-      </div>
-    </Card>
-  );
+  }
 }

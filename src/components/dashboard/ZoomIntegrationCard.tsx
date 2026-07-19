@@ -90,7 +90,7 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
             ? `Minutes saved: ${json.data.summary}`
             : "Transcript imported — minutes are in your Documents.",
           docHref: json.data.document.id
-            ? `/dashboard/memory?doc=${encodeURIComponent(json.data.document.id)}`
+            ? `/dashboard/documents?doc=${encodeURIComponent(json.data.document.id)}`
             : null
         });
       } else if (res.ok) {
