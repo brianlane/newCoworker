@@ -687,6 +687,9 @@ export default async function BusinessDetailPage({
           initialAgentId={channelSettings.rcsAgentId}
           initialEnabled={channelSettings.rcsEnabled}
           tierAllows={rcsTierAllowed(business.tier)}
+          hasFromNumber={Boolean(
+            telnyxSettings?.telnyx_sms_from_e164 || process.env.TELNYX_SMS_FROM_E164
+          )}
         />
       </Card>
 

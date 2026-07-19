@@ -22,13 +22,20 @@ export function RcsChannelPanel({
   businessId,
   initialAgentId,
   initialEnabled,
-  tierAllows
+  tierAllows,
+  hasFromNumber
 }: {
   businessId: string;
   initialAgentId: string | null;
   initialEnabled: boolean;
   /** Whether the tenant's tier passes rcsTierAllowed (enterprise-only). */
   tierAllows: boolean;
+  /**
+   * Whether a concrete SMS from-number exists (tenant setting or platform
+   * env). sendTelnyxSms requires one for the RCS sms_fallback leg — without
+   * it, sends stay plain SMS regardless of the settings here.
+   */
+  hasFromNumber: boolean;
 }) {
   const router = useRouter();
   const [agentId, setAgentId] = useState(initialAgentId ?? "");
@@ -46,7 +53,9 @@ export function RcsChannelPanel({
   });
 
   const dirty = enabled !== baseline.enabled || (agentId.trim() || null) !== baseline.agentId;
-  const effectivelyOn = enabled && agentId.trim().length > 0 && tierAllows;
+  // Mirrors the full send-time precondition (rcsChannelActiveForBusiness):
+  // tier ∧ enabled ∧ agent id ∧ a concrete from-number for the SMS fallback.
+  const effectivelyOn = enabled && agentId.trim().length > 0 && tierAllows && hasFromNumber;
 
   async function save() {
     setSaving(true);
@@ -97,6 +106,14 @@ export function RcsChannelPanel({
         <p className="rounded-lg border border-spark-orange/30 bg-spark-orange/5 p-2 text-xs text-spark-orange">
           This tenant&apos;s tier is not RCS-eligible (enterprise only) — settings here are
           saved but sends stay plain SMS until the tier allows it.
+        </p>
+      )}
+
+      {!hasFromNumber && (
+        <p className="rounded-lg border border-spark-orange/30 bg-spark-orange/5 p-2 text-xs text-spark-orange">
+          No SMS from-number is configured (tenant setting or platform default) — RCS-first
+          requires one for the SMS fallback leg, so sends stay plain SMS until a DID is
+          assigned.
         </p>
       )}
 
