@@ -38,6 +38,14 @@ describe("SIDEBAR_ITEMS catalog", () => {
       SIDEBAR_ITEMS.find((i) => i.key === "messenger")?.requiresMetaConnection
     ).toBe(true);
   });
+
+  it("places Documents directly below Memory", () => {
+    const keys = SIDEBAR_ITEMS.map((i) => i.key);
+    expect(keys.indexOf("documents")).toBe(keys.indexOf("memory") + 1);
+    expect(SIDEBAR_ITEMS.find((i) => i.key === "documents")?.href).toBe(
+      "/dashboard/documents"
+    );
+  });
 });
 
 describe("filterSidebarItemsForBusiness", () => {
