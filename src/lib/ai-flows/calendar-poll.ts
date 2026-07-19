@@ -96,15 +96,6 @@ export const CALENDAR_POLL_FLOW_PAGE = 100;
 export const CALENDAR_START_HORIZON_BUFFER_MINUTES = 5;
 
 /**
- * A poll failure with no other failure inside this window is a one-off
- * upstream blip (Calendly/Google occasionally 401 or 5xx a single request)
- * and logs at `warn`; a repeat within the window is a real outage and logs
- * at `error` (the admin System Errors feed shows error rows only). Sized to
- * cover several poll ticks at the gated cadence.
- */
-export const CALENDAR_POLL_FAILURE_ESCALATION_MINUTES = 15;
-
-/**
  * How many PRIOR failures inside the escalation window a connection-class
  * failure needs before the owner is alerted (i.e. the alert fires on the
  * third consecutive failing poll — a blip never pings the owner).
@@ -133,6 +124,19 @@ export const CALENDAR_POLL_MIN_INTERVAL_MS = 3 * 60_000 - 10_000;
 
 /** Marker event stamped once per real poll (business_id null, debug level). */
 export const CALENDAR_POLL_TICK_EVENT = "ai_flow_calendar_poll_tick";
+
+/**
+ * Escalation lookback, tied to the REAL poll cadence: exactly wide enough to
+ * hold the two immediately preceding real polls (plus jitter slack), so
+ * "N prior failures inside the window" genuinely means "the last N polls
+ * failed too". A healthy poll between failures leaves a full poll interval
+ * with no failure row, pushing the older failure out of the window — a
+ * recovered connection can never accumulate stale strikes toward the owner
+ * alert (each business logs at most ONE failure row per real poll; see
+ * pollCalendarTriggers' per-business aggregation).
+ */
+export const CALENDAR_POLL_FAILURE_ESCALATION_MS =
+  CALENDAR_POLL_ALERT_PRIOR_FAILURES * CALENDAR_POLL_MIN_INTERVAL_MS + 2 * 60_000;
 
 type CalendarSource = "primary" | "shared";
 
@@ -588,9 +592,12 @@ function isConnectionFailure(message: string): boolean {
  * - First failure inside the escalation window → `warn` (one-off upstream
  *   blip; stays out of the admin System Errors feed, which is error-only).
  * - Repeat inside the window → `error`.
- * - Third consecutive connection failure → one owner notification per day
- *   ("reconnect your calendar"), because a revoked grant/PAT otherwise stops
- *   every calendar-triggered flow with NO owner-facing signal at all.
+ * - Third consecutive failing poll with a connection-class detail → one
+ *   owner notification per day ("reconnect your calendar"), because a
+ *   revoked grant/PAT otherwise stops every calendar-triggered flow with NO
+ *   owner-facing signal at all. "Consecutive" is real: the window is sized
+ *   to the poll cadence and each business writes at most one failure row per
+ *   real poll, so a recovery in between resets the count.
  *
  * All reads/writes are best-effort: log-path trouble degrades toward the
  * old always-error behavior, never toward silence.
@@ -604,9 +611,7 @@ async function logCalendarPollFailure(
   // Failure-path-only lookback: healthy ticks never pay this query.
   let priorFailures = CALENDAR_POLL_ALERT_PRIOR_FAILURES;
   try {
-    const sinceIso = new Date(
-      Date.now() - CALENDAR_POLL_FAILURE_ESCALATION_MINUTES * 60_000
-    ).toISOString();
+    const sinceIso = new Date(Date.now() - CALENDAR_POLL_FAILURE_ESCALATION_MS).toISOString();
     const { data, error } = await db
       .from("system_logs")
       .select("id")
@@ -847,6 +852,11 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           });
         }
 
+        // Per-source failures aggregate into ONE failure row after the loop:
+        // the escalation lookback counts rows as consecutive failing POLLS,
+        // so a business watching both calendars must not double-strike in a
+        // single poll when one broken link fails both sources.
+        const sourceFailures: Array<{ source: CalendarSource; message: string }> = [];
         for (const [source, target] of targets) {
         const collected: CalendarEventInput[] = [];
         const seenIds = new Set<string>();
@@ -860,8 +870,8 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
         let overflowed = false;
         // Per-calendar isolation: one calendar failing (e.g. the shared one
         // was deleted on the provider) must not drop the events already
-        // fetched from the other — log and keep going; dedupe keys make the
-        // retry on the next tick benign.
+        // fetched from the other — collect and keep going; dedupe keys make
+        // the retry on the next tick benign.
         try {
           if (group.some((f) => f.on === "event_created" && f.sources.includes(source))) {
             const fetched = await fetchRecentlyCreated(target, createdSinceMs);
@@ -904,13 +914,10 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
             overflowed ||= fetched.overflowed;
           }
         } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          await logCalendarPollFailure(
-            db,
-            businessId,
-            `Calendar-trigger poll failed for the ${source} calendar: ${message}`,
-            { calendar: source }
-          );
+          sourceFailures.push({
+            source,
+            message: err instanceof Error ? err.message : String(err)
+          });
         }
         if (overflowed) {
           // A full page means this poll may not have covered every candidate
@@ -928,6 +935,17 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
         }
         eventsBySource.set(source, collected);
         result.events += collected.length;
+        }
+        if (sourceFailures.length > 0) {
+          const detail = sourceFailures
+            .map((f) => `${f.source}: ${f.message}`)
+            .join("; ");
+          await logCalendarPollFailure(
+            db,
+            businessId,
+            `Calendar-trigger poll failed for ${sourceFailures.length === 1 ? `the ${sourceFailures[0].source} calendar` : "both calendars"}: ${detail}`,
+            { calendars: sourceFailures.map((f) => f.source) }
+          );
         }
       }
 

@@ -960,7 +960,9 @@ describe("pollCalendarTriggers", () => {
       return { data: { items: [{ id: "p-ev", summary: "Mine", created: isoIn(-1) }] } };
     }) as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
-    // The primary event still enqueues; the shared failure is logged per-calendar.
+    // The primary event still enqueues; the shared failure logs ONE
+    // aggregated row (never one per source — the escalation lookback counts
+    // rows as failing POLLS).
     expect(res.enqueued).toBe(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({ trigger: expect.objectContaining({ calendar: "primary" }) }),
@@ -969,10 +971,27 @@ describe("pollCalendarTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_calendar_poll_failed",
-        message: expect.stringContaining("shared calendar"),
-        payload: { calendar: "shared" }
+        message: expect.stringContaining("the shared calendar"),
+        payload: { calendars: ["shared"] }
       })
     );
+  });
+
+  it("aggregates BOTH sources failing into a single failure row per poll", async () => {
+    vi.mocked(getSharedCalendar).mockResolvedValue({
+      calendarId: "shared-cal-x",
+      conn: googleConn
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never); // both links dead
+    await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    const failureLogs = vi
+      .mocked(recordSystemLog)
+      .mock.calls.filter(([input]) => input.event === "ai_flow_calendar_poll_failed");
+    expect(failureLogs).toHaveLength(1);
+    expect(failureLogs[0][0]).toMatchObject({
+      message: expect.stringContaining("both calendars"),
+      payload: { calendars: ["primary", "shared"] }
+    });
   });
 
   it("stringifies a non-Error per-calendar fetch failure", async () => {
