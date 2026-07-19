@@ -33,6 +33,55 @@ export type ZoomTranscriptResult =
   | { ok: true; vtt: string }
   | { ok: false; error: ZoomTranscriptError; detail: string };
 
+/**
+ * Normalize an owner-pasted meeting reference into the path segment the
+ * transcript endpoint accepts. Zoom's `GET /meetings/{id}/transcript`
+ * resolves ONLY the past-meeting instance UUID for instant/ended meetings —
+ * the numeric meeting id 404s (code 3322) even when the portal shows a
+ * transcript — so owners can paste any of:
+ *
+ *   - the numeric meeting ID ("876 3018 1550"), kept for scheduled meetings;
+ *   - the meeting UUID ("jhqVQlf1RyuEX/1TCRs+Jg==");
+ *   - the recording page link (…zoom.us/recording/detail?meeting_id=<uuid>),
+ *     which carries the exact UUID the endpoint wants.
+ *
+ * Per Zoom's docs, UUIDs beginning with "/" or containing "//" must be
+ * DOUBLE URL-encoded; every UUID needs at least one encoding pass ("+", "/",
+ * "=" are not path-safe). Returns null when the input is none of the above.
+ */
+export function normalizeZoomMeetingRef(raw: string): string | null {
+  const input = raw.trim();
+  if (!input) return null;
+
+  // Recording page / share link: the meeting_id query param is the UUID
+  // (URLSearchParams decodes the %2F / %2B / %3D escapes for us).
+  if (/^https?:\/\//i.test(input)) {
+    try {
+      const url = new URL(input);
+      if (!/(^|\.)zoom\.(us|com)$/i.test(url.hostname)) return null;
+      const uuid = url.searchParams.get("meeting_id")?.trim();
+      return uuid ? encodeUuidSegment(uuid) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Numeric meeting ID, with or without the display spacing.
+  const digits = input.replace(/\s+/g, "");
+  if (/^\d{9,15}$/.test(digits)) return digits;
+
+  // Bare meeting UUID (base64: 20-ish chars, usually "=="-terminated).
+  if (/^[A-Za-z0-9+/=]{16,64}$/.test(input) && /[^0-9]/.test(input)) {
+    return encodeUuidSegment(input);
+  }
+  return null;
+}
+
+function encodeUuidSegment(uuid: string): string {
+  const once = encodeURIComponent(uuid);
+  return uuid.startsWith("/") || uuid.includes("//") ? encodeURIComponent(once) : once;
+}
+
 type TranscriptDeps = {
   /** Injectable token resolver (tests). */
   getToken?: (businessId: string) => Promise<string | null>;
@@ -56,16 +105,27 @@ async function timedFetch(
 
 /**
  * Fetch the cloud-recording transcript (raw WebVTT text) for one of the
- * connected account's meetings. Never throws — every failure returns a
- * typed, owner-presentable result.
+ * connected account's meetings. `meetingRef` is whatever the owner pasted —
+ * numeric ID, UUID, or recording link (see normalizeZoomMeetingRef). Never
+ * throws — every failure returns a typed, owner-presentable result.
  */
 export async function fetchZoomMeetingTranscript(
   businessId: string,
-  meetingId: string,
+  meetingRef: string,
   deps: TranscriptDeps = {}
 ): Promise<ZoomTranscriptResult> {
   const getToken = deps.getToken ?? getZoomAccessToken;
   const fetchImpl = deps.fetchImpl ?? fetch;
+
+  const segment = normalizeZoomMeetingRef(meetingRef);
+  if (!segment) {
+    return {
+      ok: false,
+      error: "not_found",
+      detail:
+        "Could not read that meeting reference — paste the meeting ID, the meeting UUID, or the recording page link from the Zoom portal."
+    };
+  }
 
   let token: string | null;
   try {
@@ -93,7 +153,7 @@ export async function fetchZoomMeetingTranscript(
   try {
     metaRes = await timedFetch(
       fetchImpl,
-      `${ZOOM_API_BASE_URL}/meetings/${encodeURIComponent(meetingId)}/transcript`,
+      `${ZOOM_API_BASE_URL}/meetings/${segment}/transcript`,
       { Authorization: `Bearer ${token}`, Accept: "application/json" }
     );
   } catch {
@@ -115,11 +175,14 @@ export async function fetchZoomMeetingTranscript(
     };
   }
   if (metaRes.status === 404) {
+    // Zoom quirk: for instant/ended meetings the numeric ID often 404s
+    // (code 3322) even though the portal shows a transcript — only the
+    // past-meeting instance UUID resolves. Steer the owner to the link.
     return {
       ok: false,
       error: "not_found",
       detail:
-        "Zoom has no transcript for that meeting. Check the meeting ID, make sure it was cloud-recorded with audio transcript on, and allow a few minutes after the meeting for processing."
+        "Zoom has no transcript under that reference. Make sure the meeting was cloud-recorded with audio transcript on (processing can take a few minutes) — and if it was, paste the recording page LINK from the Zoom portal (Recordings & Transcripts → your meeting) instead of the meeting ID."
     };
   }
   if (!metaRes.ok) {

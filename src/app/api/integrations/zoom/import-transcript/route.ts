@@ -41,13 +41,10 @@ const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  // Zoom meeting ids are numeric (typically 9–11 digits, with longer ids in
-  // the wild — e.g. 13 digits); owners paste them with or without spaces
-  // ("178 4344 402882").
-  meetingId: z
-    .string()
-    .transform((v) => v.replace(/\s+/g, ""))
-    .pipe(z.string().regex(/^\d{9,15}$/, "meetingId must be a Zoom meeting ID")),
+  // Anything normalizeZoomMeetingRef understands: numeric meeting ID,
+  // meeting UUID, or the recording page link. Validated by the lib (an
+  // unreadable reference comes back as a typed not_found with owner copy).
+  meetingId: z.string().trim().min(1).max(500),
   title: z.string().trim().max(200).optional()
 });
 
@@ -87,9 +84,14 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", transcript.detail);
     }
 
-    const title = parsed.data.title || `Zoom meeting ${meetingId} — transcript`;
+    // The pasted reference may be a UUID or a full recording link — neither
+    // is filename/title material. Label with the digits when it's a plain
+    // meeting ID, else a generic marker.
+    const digits = meetingId.replace(/\s+/g, "");
+    const refLabel = /^\d{9,15}$/.test(digits) ? digits : "recording";
+    const title = parsed.data.title || `Zoom meeting ${refLabel} — transcript`;
     const documentId = randomUUID();
-    const storagePath = `${businessId}/${documentId}/zoom-meeting-${meetingId}.vtt`;
+    const storagePath = `${businessId}/${documentId}/zoom-meeting-${refLabel}.vtt`;
     const bytes = Buffer.from(transcript.vtt, "utf8");
     if (bytes.byteLength > MAX_DOCUMENT_BYTES) {
       return errorResponse(

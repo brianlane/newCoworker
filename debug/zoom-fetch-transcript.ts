@@ -4,13 +4,14 @@
  * `cloud_recording:read:meeting_transcript` scope added to the "New Coworker
  * OAuth" Marketplace app on 2026-07-17.
  *
- * GET /meetings/{meetingId}/transcript → { can_download, download_url | 
- * download_restriction_reason }; when downloadable, the VTT is fetched with
- * the same bearer token and written to debug/.tmp-zoom-transcript-<id>.vtt
- * (gitignored via debug/.tmp-*).
+ * Rides the same lib as the dashboard import (fetchZoomMeetingTranscript):
+ * the --meeting value can be the numeric meeting ID, the meeting UUID, or
+ * the recording page link — instant/ended meetings resolve ONLY by UUID
+ * (Zoom 404s the numeric id with code 3322), so prefer the link. The VTT is
+ * written to debug/.tmp-zoom-transcript-<label>.vtt (gitignored).
  *
  * Usage:
- *   tsx debug/zoom-fetch-transcript.ts --meeting <meetingId> [--business <uuid>]
+ *   tsx debug/zoom-fetch-transcript.ts --meeting <id|uuid|link> [--business <uuid>]
  *
  * Defaults to the New Coworker HQ internal tenant. Requires that business to
  * have an ACTIVE direct Zoom connection whose grant includes the transcript
@@ -31,50 +32,24 @@ function argValue(flag: string): string | null {
 }
 
 const businessId = argValue("--business") ?? HQ_BIZ;
-const meetingId = argValue("--meeting");
-if (!meetingId) {
-  console.error("Usage: tsx debug/zoom-fetch-transcript.ts --meeting <meetingId> [--business <uuid>]");
+const meetingRef = argValue("--meeting");
+if (!meetingRef) {
+  console.error(
+    "Usage: tsx debug/zoom-fetch-transcript.ts --meeting <id|uuid|link> [--business <uuid>]"
+  );
   process.exit(1);
 }
 
-const { getZoomAccessToken } = await import("../src/lib/zoom/client.ts");
+const { fetchZoomMeetingTranscript } = await import("../src/lib/zoom/transcript.ts");
 
-const token = await getZoomAccessToken(businessId);
-if (!token) {
-  throw new Error(
-    `business ${businessId} has no active direct Zoom connection — connect (or reconnect) on /dashboard/integrations first`
-  );
+const result = await fetchZoomMeetingTranscript(businessId, meetingRef);
+if (!result.ok) {
+  throw new Error(`${result.error}: ${result.detail}`);
 }
 
-const metaRes = await fetch(
-  `https://api.zoom.us/v2/meetings/${encodeURIComponent(meetingId)}/transcript`,
-  { headers: { Authorization: `Bearer ${token}`, Accept: "application/json" } }
-);
-const metaBody = await metaRes.text();
-if (!metaRes.ok) {
-  throw new Error(`transcript lookup failed (${metaRes.status}): ${metaBody.slice(0, 400)}`);
-}
-const meta = JSON.parse(metaBody) as {
-  can_download?: boolean;
-  download_url?: string;
-  download_restriction_reason?: string;
-};
-console.log("transcript meta:", JSON.stringify(meta, null, 2));
-
-if (!meta.can_download || !meta.download_url) {
-  throw new Error(
-    `transcript not downloadable: ${meta.download_restriction_reason ?? "no reason given"}`
-  );
-}
-
-const dl = await fetch(meta.download_url, {
-  headers: { Authorization: `Bearer ${token}` },
-  redirect: "follow"
-});
-if (!dl.ok) throw new Error(`download failed (${dl.status})`);
-const vtt = await dl.text();
-
-const outPath = path.resolve(process.cwd(), `debug/.tmp-zoom-transcript-${meetingId}.vtt`);
-fs.writeFileSync(outPath, vtt, "utf8");
-console.log(`OK: wrote ${vtt.length} chars to ${outPath}`);
-console.log(`preview:\n${vtt.slice(0, 500)}`);
+const digits = meetingRef.replace(/\s+/g, "");
+const label = /^\d{9,15}$/.test(digits) ? digits : "recording";
+const outPath = path.resolve(process.cwd(), `debug/.tmp-zoom-transcript-${label}.vtt`);
+fs.writeFileSync(outPath, result.vtt, "utf8");
+console.log(`OK: wrote ${result.vtt.length} chars to ${outPath}`);
+console.log(`preview:\n${result.vtt.slice(0, 500)}`);
