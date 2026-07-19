@@ -32,6 +32,9 @@ import { getTierLimits } from "@/lib/plans/limits";
 import { parseEnterpriseLimitsOverride } from "@/lib/plans/enterprise-limits";
 import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEditor";
 import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
+import { RcsChannelPanel } from "@/components/admin/RcsChannelPanel";
+import { getChannelSettings } from "@/lib/db/channel-settings";
+import { rcsTierAllowed } from "@/lib/telnyx/messaging";
 import { PrivacyPanel } from "@/components/admin/PrivacyPanel";
 import { DeletedItemsPanel } from "@/components/admin/DeletedItemsPanel";
 import { SystemLogViewer } from "@/components/admin/SystemLogViewer";
@@ -99,6 +102,12 @@ export default async function BusinessDetailPage({
   // Widget settings for the Web chat card. Best-effort read — the page
   // must render even if the row is missing (owner never enabled it).
   const widgetSettings = await getWidgetSettingsForBusiness(businessId).catch(() => null);
+  // RCS channel wiring for the Messaging channel card. Best-effort — the
+  // page must render even if the read fails (card shows defaults).
+  const channelSettings = await getChannelSettings(businessId).catch(() => ({
+    rcsAgentId: null,
+    rcsEnabled: false
+  }));
 
   if (!business) notFound();
 
@@ -657,6 +666,24 @@ export default async function BusinessDetailPage({
           bridgeStaleAlertMuted={telnyxSettings?.bridge_stale_alert_muted ?? false}
           defaultAreaCode={process.env.TELNYX_DEFAULT_AREA_CODE ?? "602"}
           defaultState={process.env.TELNYX_DEFAULT_STATE ?? "AZ"}
+        />
+      </Card>
+
+      {/* Messaging channel — per-tenant RCS agent + enable switch. Rendered
+          for every tier (with a warning when the tier gate would demote
+          sends) so an operator can stage the wiring before an upgrade. */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Messaging channel (RCS)
+        </h2>
+        <RcsChannelPanel
+          // Remount on tenant or settings change so useState re-seeds —
+          // navigation between businesses must never show stale values.
+          key={`${businessId}:${channelSettings.rcsAgentId ?? ""}:${channelSettings.rcsEnabled}`}
+          businessId={businessId}
+          initialAgentId={channelSettings.rcsAgentId}
+          initialEnabled={channelSettings.rcsEnabled}
+          tierAllows={rcsTierAllowed(business.tier)}
         />
       </Card>
 
