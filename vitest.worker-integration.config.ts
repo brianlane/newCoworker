@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
  *   ROWBOAT_CHAT_URL_TEMPLATE=http://host.docker.internal:8977/chat
  *   ROWBOAT_DEFAULT_PROJECT_ID=itest-project
  *   ROWBOAT_VPS_CHAT_BEARER=itest-rowboat-bearer
+ *   AIFLOW_PLATFORM_URL=http://host.docker.internal:8978
  *   EOF
  *   supabase functions serve --no-verify-jwt --env-file supabase/functions/.env.itest &
  *   ITEST_SERVICE_ROLE_KEY=$(supabase status -o json | jq -r .SERVICE_ROLE_KEY) \
