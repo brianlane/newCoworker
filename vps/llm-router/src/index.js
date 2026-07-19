@@ -96,7 +96,9 @@ import {
   createSignatureCache,
   harvestThoughtSignatures,
   injectThoughtSignatures,
-  createSseSignatureHarvester
+  createSseSignatureHarvester,
+  chatCompletionHasOutput,
+  createSseEmptyCompletionProbe
 } from "./routing.js";
 export {
   pickUpstream,
@@ -111,7 +113,9 @@ export {
   createSignatureCache,
   harvestThoughtSignatures,
   injectThoughtSignatures,
-  createSseSignatureHarvester
+  createSseSignatureHarvester,
+  chatCompletionHasOutput,
+  createSseEmptyCompletionProbe
 };
 
 // Gemini 3.x thought-signature LRU (see routing.js). Process-lifetime by
@@ -248,13 +252,16 @@ async function handleRoutedRequest(req, res) {
 
   const target = buildUpstreamTarget(upstream, requestPath);
 
-  let upstreamResp;
-  try {
-    upstreamResp = await fetch(target.url, {
+  const fetchUpstream = async () =>
+    fetch(target.url, {
       method: "POST",
       headers: target.headers,
       body: bodyBuf
     });
+
+  let upstreamResp;
+  try {
+    upstreamResp = await fetchUpstream();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     writeJson(res, 502, {
@@ -267,26 +274,122 @@ async function handleRoutedRequest(req, res) {
     return;
   }
 
-  // Forward upstream headers, dropping hop-by-hop framing AND the body-encoding
-  // headers (content-encoding/content-length): undici's fetch already decoded
-  // the body we're about to re-stream, so those headers would describe bytes
-  // that no longer exist (see filterUpstreamHeaders). Node re-frames the
-  // decoded body as chunked.
-  res.writeHead(upstreamResp.status, filterUpstreamHeaders(upstreamResp.headers));
+  const forwardOpts = { meterGemini, shimThoughtSignatures, model: parsed?.model };
+
+  // Empty-completion retry (gemini chat only — see routing.js): a stuck
+  // Gemini can return a 200 completion with no content, no tool calls, and
+  // zero output tokens. Forwarding it makes Rowboat's agent loop burn a turn
+  // per empty response. Retry the upstream ONCE; a second empty response
+  // forwards unchanged (Rowboat's runtime fails fast on it with a typed
+  // error). Attempt 1 is forwarded with hold-until-output so nothing reaches
+  // the client until we know the completion has substance.
+  const retryEmptyEligible =
+    upstream === "gemini" && requestPath === "/v1/chat/completions" && upstreamResp.ok;
+  if (retryEmptyEligible) {
+    const first = await forwardUpstreamResponse(upstreamResp, res, {
+      ...forwardOpts,
+      holdUntilOutput: true
+    });
+    if (!first.empty) return;
+    console.warn(
+      `llm-router: empty gemini completion (model=${parsed?.model}, finish_reason=${first.finishReason ?? "unknown"}, 0 output tokens) — retrying once`
+    );
+    // The dropped attempt's prompt tokens were still billed by Google; meter
+    // them so the AI budget stays honest.
+    if (meterGemini && first.usage) reportGeminiSpend(parsed?.model, first.usage);
+    try {
+      upstreamResp = await fetchUpstream();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      writeJson(res, 502, {
+        error: {
+          message: `llm-router upstream error: ${message}`,
+          type: "upstream_error",
+          upstream
+        }
+      });
+      return;
+    }
+  }
+
+  await forwardUpstreamResponse(upstreamResp, res, forwardOpts);
+}
+
+/**
+ * Forward an upstream response to the client, applying the SSE tool-call
+ * index normalizer, usage metering, and thought-signature harvesting.
+ *
+ * With `holdUntilOutput` (empty-completion retry, attempt 1 only) nothing is
+ * written to `res` — not even headers — until the response demonstrably
+ * carries model output (content / tool calls / refusal). If the response
+ * completes without any output, returns `{ empty: true, finishReason, usage }`
+ * with `res` untouched so the caller can retry. In every other case the
+ * response is fully forwarded and `{ empty: false }` is returned.
+ */
+async function forwardUpstreamResponse(upstreamResp, res, opts) {
+  const { meterGemini, shimThoughtSignatures, model, holdUntilOutput = false } = opts;
+
+  const contentType = upstreamResp.headers.get("content-type") || "";
+  const isSse = contentType.includes("text/event-stream");
+
+  const writeHead = () => {
+    // Forward upstream headers, dropping hop-by-hop framing AND the
+    // body-encoding headers (content-encoding/content-length): undici's fetch
+    // already decoded the body we're about to re-stream, so those headers
+    // would describe bytes that no longer exist (see filterUpstreamHeaders).
+    // Node re-frames the decoded body as chunked.
+    res.writeHead(upstreamResp.status, filterUpstreamHeaders(upstreamResp.headers));
+  };
 
   if (!upstreamResp.body) {
+    writeHead();
     res.end();
-    return;
+    return { empty: false };
+  }
+
+  // Non-SSE with hold-until-output: buffer the whole JSON body (single
+  // document, small) and decide before writing anything.
+  if (holdUntilOutput && !isSse) {
+    let bodyText;
+    try {
+      bodyText = await upstreamResp.text();
+    } catch {
+      writeHead();
+      res.end();
+      return { empty: false };
+    }
+    let json = null;
+    try {
+      json = JSON.parse(bodyText);
+    } catch {
+      json = null;
+    }
+    // Unparseable bodies pass through untouched (never retried) — upstream
+    // error shapes must reach the client verbatim.
+    if (json && !chatCompletionHasOutput(json)) {
+      const finishReason = Array.isArray(json.choices)
+        ? (json.choices.find((c) => typeof c?.finish_reason === "string")?.finish_reason ?? null)
+        : null;
+      return { empty: true, finishReason, usage: extractOpenAiUsage(json) };
+    }
+    if (shimThoughtSignatures && json) {
+      harvestThoughtSignatures(json, thoughtSignatureCache);
+    }
+    if (meterGemini && json) {
+      const usage = extractOpenAiUsage(json);
+      if (usage) reportGeminiSpend(model, usage);
+    }
+    writeHead();
+    res.end(bodyText);
+    return { empty: false };
   }
 
   // Stream in chunks using the Web ReadableStream reader. Works for both the
-  // SSE stream case (model=gpt-..., stream:true) and the plain JSON case.
+  // SSE stream case (stream:true) and the plain JSON case.
   //
   // SSE streams get rewritten through the tool-call index normalizer: Gemini
   // omits the REQUIRED `index` on streamed tool_calls deltas, which made
   // Rowboat's AI SDK reject every function call (see routing.js).
-  const contentType = upstreamResp.headers.get("content-type") || "";
-  const isSse = contentType.includes("text/event-stream");
   const normalizer = isSse ? createSseToolCallIndexNormalizer() : null;
   const decoder = isSse ? new TextDecoder("utf-8") : null;
 
@@ -302,7 +405,40 @@ async function handleRoutedRequest(req, res) {
   const jsonDecoder = collectJsonBody ? new TextDecoder("utf-8") : null;
   let jsonBuf = collectJsonBody ? "" : null;
 
+  // Hold-until-output (SSE): decoded text is withheld until the probe sees
+  // real model output, then released through the normal pipeline. An empty
+  // completion is only a couple of chunks, so held memory is tiny; a normal
+  // stream is released at its first content/tool-call chunk, so added latency
+  // is negligible.
+  const probe = holdUntilOutput && isSse ? createSseEmptyCompletionProbe() : null;
+  let held = probe ? [] : null;
+  let headWritten = !probe;
+  if (!probe) writeHead();
+
+  const processText = (text) => {
+    if (usageCollector) usageCollector.collect(text);
+    if (signatureHarvester) signatureHarvester.collect(text);
+    const out = normalizer.transform(text);
+    if (out) res.write(out);
+  };
+
+  const releaseHeld = () => {
+    if (!headWritten) {
+      writeHead();
+      headWritten = true;
+    }
+    if (held) {
+      for (const text of held) processText(text);
+      held = null;
+    }
+  };
+
   const reader = upstreamResp.body.getReader();
+  // When the held stream turns out to be a fully-empty completion we must
+  // return WITHOUT touching res (no headers, no end) so the caller's retry
+  // can forward its own response on the same socket — the finally below
+  // therefore only ends the response when this attempt actually owned it.
+  let returningEmpty = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -310,10 +446,13 @@ async function handleRoutedRequest(req, res) {
       if (!value) continue;
       if (normalizer) {
         const text = decoder.decode(value, { stream: true });
-        if (usageCollector) usageCollector.collect(text);
-        if (signatureHarvester) signatureHarvester.collect(text);
-        const out = normalizer.transform(text);
-        if (out) res.write(out);
+        if (probe && held) {
+          probe.collect(text);
+          held.push(text);
+          if (probe.sawOutput()) releaseHeld();
+        } else {
+          processText(text);
+        }
       } else {
         res.write(Buffer.from(value));
         if (jsonBuf !== null) jsonBuf += jsonDecoder.decode(value, { stream: true });
@@ -321,10 +460,23 @@ async function handleRoutedRequest(req, res) {
     }
     if (normalizer) {
       const tailText = decoder.decode();
-      if (usageCollector) usageCollector.collect(tailText);
-      if (signatureHarvester) signatureHarvester.collect(tailText);
-      const tail = normalizer.transform(tailText) + normalizer.flush();
-      if (tail) res.write(tail);
+      if (probe && held) {
+        probe.collect(tailText);
+        probe.flush();
+        if (!probe.sawOutput()) {
+          // Whole stream ended with no model output: report empty with res
+          // untouched so the caller can retry.
+          returningEmpty = true;
+          return { empty: true, finishReason: probe.finishReason(), usage: probe.usage() };
+        }
+        held.push(tailText);
+        releaseHeld();
+        const tail = normalizer.flush();
+        if (tail) res.write(tail);
+      } else {
+        const tail = normalizer.transform(tailText) + normalizer.flush();
+        if (tail) res.write(tail);
+      }
     }
     if (signatureHarvester) signatureHarvester.flush();
     // Stream completed cleanly — parse the buffered JSON body once for both
@@ -349,14 +501,17 @@ async function handleRoutedRequest(req, res) {
       } else if (jsonParsed) {
         usage = extractOpenAiUsage(jsonParsed);
       }
-      if (usage) reportGeminiSpend(parsed?.model, usage);
+      if (usage) reportGeminiSpend(model, usage);
     }
   } catch (err) {
-    // Client likely disconnected mid-stream. Nothing useful to send, and we
-    // skip metering a turn we couldn't fully observe (never over-counts).
+    // Client likely disconnected mid-stream (or the upstream died). Release
+    // anything held so a truncated attempt degrades exactly like the old
+    // pass-through path, and skip metering a turn we couldn't fully observe.
+    if (probe && held) releaseHeld();
   } finally {
-    res.end();
+    if (!returningEmpty) res.end();
   }
+  return { empty: false };
 }
 
 function handleHealth(_req, res) {

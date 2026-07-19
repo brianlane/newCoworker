@@ -412,6 +412,102 @@ export function createSseSignatureHarvester(cache) {
   };
 }
 
+/**
+ * ── Empty-completion detection (Gemini stuck-model retry) ──────────────────
+ *
+ * Observed live 2026-07-19 (HQ tenant, gemini-2.5-flash): the OpenAI-compat
+ * endpoint can get stuck deterministically returning completions with
+ * finish_reason "stop", ZERO completion tokens, no content, and no tool
+ * calls. Rowboat's agents SDK burned a turn per empty response until "Max
+ * turns (25) exceeded" — an owner-visible dead turn. The router retries the
+ * upstream request ONCE when the whole completion is empty (absorbing
+ * transient blips); a persistent empty response forwards unchanged, where
+ * Rowboat's runtime now fails fast with a typed `model_empty_response` error.
+ */
+
+/**
+ * Whether a parsed chat-completions payload (streamed chunk `choices[].delta`
+ * or full completion `choices[].message`) carries ANY model output: text
+ * content, tool calls, or a refusal. Usage-only terminal chunks and role-only
+ * deltas do not count.
+ */
+export function chatCompletionHasOutput(payload) {
+  if (!payload || !Array.isArray(payload.choices)) return false;
+  for (const choice of payload.choices) {
+    for (const container of [choice?.delta, choice?.message]) {
+      if (!container || typeof container !== "object") continue;
+      if (typeof container.content === "string" && container.content.length > 0) return true;
+      if (Array.isArray(container.tool_calls) && container.tool_calls.length > 0) return true;
+      if (typeof container.refusal === "string" && container.refusal.length > 0) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Stateful line-buffered SSE scanner deciding whether a streamed completion
+ * produced any output. Same chunk-splitting contract as the other SSE
+ * scanners here (buffer to the last newline; `flush()` drains the trailing
+ * unterminated line). Also records the last `finish_reason` and the last
+ * usage object seen, so a dropped empty attempt can still be logged with its
+ * finish reason and metered for its (billed) prompt tokens.
+ */
+export function createSseEmptyCompletionProbe() {
+  let buf = "";
+  let sawOutput = false;
+  let finishReason = null;
+  let usage = null;
+
+  const scanLine = (line) => {
+    const bare = line.endsWith("\r") ? line.slice(0, -1) : line;
+    if (!bare.startsWith("data:")) return;
+    const data = bare.slice(5).trim();
+    if (!data || data === "[DONE]") return;
+    let parsed;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      return;
+    }
+    if (chatCompletionHasOutput(parsed)) sawOutput = true;
+    if (Array.isArray(parsed.choices)) {
+      for (const choice of parsed.choices) {
+        if (typeof choice?.finish_reason === "string" && choice.finish_reason) {
+          finishReason = choice.finish_reason;
+        }
+      }
+    }
+    const u = extractOpenAiUsage(parsed);
+    if (u) usage = u;
+  };
+
+  return {
+    collect(text) {
+      buf += text;
+      const lastNl = buf.lastIndexOf("\n");
+      if (lastNl === -1) return;
+      const complete = buf.slice(0, lastNl);
+      buf = buf.slice(lastNl + 1);
+      for (const line of complete.split("\n")) scanLine(line);
+    },
+    flush() {
+      if (buf) {
+        for (const line of buf.split("\n")) scanLine(line);
+        buf = "";
+      }
+    },
+    sawOutput() {
+      return sawOutput;
+    },
+    finishReason() {
+      return finishReason;
+    },
+    usage() {
+      return usage;
+    }
+  };
+}
+
 // Headers we must NOT copy from the upstream response onto our own response.
 //
 //   - transfer-encoding / connection / keep-alive: hop-by-hop framing that
