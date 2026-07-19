@@ -153,6 +153,21 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     void refresh();
   }, [refresh]);
 
+  // Deep link (?doc=<id>): auto-expand that document once the list loads —
+  // the Zoom transcript import links here so the owner lands on their
+  // minutes instead of hunting the list. One-shot per id.
+  const deepLinkedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (loading || documents.length === 0) return;
+    const wanted = new URLSearchParams(window.location.search).get("doc");
+    if (!wanted || deepLinkedRef.current === wanted) return;
+    const doc = documents.find((d) => d.id === wanted);
+    if (!doc) return;
+    deepLinkedRef.current = wanted;
+    void openDocument(doc);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- openDocument is stable per render and intentionally untracked
+  }, [loading, documents]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -539,7 +554,9 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
                     </span>
                   )}
                   <span className="ml-auto text-[11px] text-parchment/35">
-                    {(doc.byte_size / 1024).toFixed(0)} KB
+                    {doc.byte_size < 1024
+                      ? `${doc.byte_size} B`
+                      : `${(doc.byte_size / 1024).toFixed(0)} KB`}
                   </span>
                   <button
                     type="button"
