@@ -122,6 +122,17 @@ const CONNECTION_FAILURE_DETAILS = [
  */
 export const CALENDAR_POLL_MIN_INTERVAL_MS = 3 * 60_000 - 10_000;
 
+/**
+ * The cadence gate only engages when EVERY event_start flow's leadMinutes
+ * exceeds this. An event_start due window is exactly leadMinutes wide
+ * ([start - lead, start)) with no lookback — a window shorter than the
+ * gated interval could fall entirely between two real polls and the
+ * reminder would never fire. Leads above 5 minutes leave comfortable
+ * margin over the ~2m50s interval plus cron jitter; anything at or below
+ * it keeps the poll at the worker's native per-minute cadence.
+ */
+export const CALENDAR_GATE_MIN_START_LEAD_MINUTES = 5;
+
 /** Marker event stamped once per real poll (business_id null, debug level). */
 export const CALENDAR_POLL_TICK_EVENT = "ai_flow_calendar_poll_tick";
 
@@ -159,6 +170,8 @@ export type CalendarPollResult = {
   businesses: number;
   events: number;
   enqueued: number;
+  /** True when the cadence gate skipped this tick (a recent poll covered it). */
+  skipped?: boolean;
 };
 
 /** Whether an event_start flow is due for `ev` at `nowMs` (pure, for tests). */
@@ -777,6 +790,20 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
   };
   if (flows.length === 0) return result;
 
+  // Cadence gate: the worker kicks every minute, but the trigger due-windows
+  // tolerate the wider CALENDAR_POLL_MIN_INTERVAL_MS spacing — EXCEPT an
+  // event_start flow with a lead at or below the gate threshold, whose due
+  // window ([start - lead, start)) could fall entirely between two gated
+  // polls. Any such flow keeps the whole poll at per-minute cadence; the
+  // flow LISTING above always runs (one cheap query), the gate only saves
+  // the provider calls.
+  const gateSafe = flows.every(
+    (f) => f.on !== "event_start" || f.leadMinutes > CALENDAR_GATE_MIN_START_LEAD_MINUTES
+  );
+  if (gateSafe && !(await shouldRunCalendarPoll(db))) {
+    return { ...result, skipped: true };
+  }
+
   const byBusiness = new Map<string, CalendarFlow[]>();
   for (const f of flows) {
     byBusiness.set(f.business_id, [...(byBusiness.get(f.business_id) ?? []), f]);
@@ -1040,5 +1067,9 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
       await logCalendarPollFailure(db, businessId, `Calendar-trigger poll failed: ${message}`, {});
     }
   }
+  // Stamp AFTER the poll completed so a thrown listing never consumes a
+  // cadence slot. Only stamped when the gate applies — a short-lead
+  // deployment polls every minute and would just accumulate unread markers.
+  if (gateSafe) await stampCalendarPollTick(db);
   return result;
 }

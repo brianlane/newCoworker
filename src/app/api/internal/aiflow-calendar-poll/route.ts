@@ -18,11 +18,7 @@
  */
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import {
-  pollCalendarTriggers,
-  shouldRunCalendarPoll,
-  stampCalendarPollTick
-} from "@/lib/ai-flows/calendar-poll";
+import { pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
 import { sweepCalendlyBookingGoals } from "@/lib/ai-flows/calendly-booking-goals";
 
 // A poll is a few provider list calls per watched calendar; 60s is ample
@@ -35,18 +31,11 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
   try {
-    // The worker kicks every minute, but the trigger due-windows tolerate a
-    // ~3-minute cadence — the gate skips the provider listings on the
-    // in-between ticks (see CALENDAR_POLL_MIN_INTERVAL_MS). The marker is
-    // stamped AFTER the poll completes, so a thrown poll never consumes a
-    // cadence slot (the next minute retries). The booking-goal sweep below
-    // stays per-minute: booking → goal-jump latency is its point.
-    const runPoll = await shouldRunCalendarPoll();
-    let result = null;
-    if (runPoll) {
-      result = await pollCalendarTriggers();
-      await stampCalendarPollTick();
-    }
+    // Cadence gating lives inside pollCalendarTriggers (it needs the flow
+    // list: short event_start leads keep per-minute polling). The booking-
+    // goal sweep below stays per-minute either way: booking → goal-jump
+    // latency is its point.
+    const result = await pollCalendarTriggers();
     // Calendly booking → appointment_booked goal sweep rides the same tick
     // (per-business failures already isolate inside; this guard keeps a
     // sweep-level failure from masking the poll result — bookings stay
@@ -55,9 +44,7 @@ export async function POST(request: Request): Promise<Response> {
       console.error("aiflow-calendar-poll booking-goal sweep", err);
       return null;
     });
-    return successResponse(
-      result ? { ...result, bookingGoals } : { skipped: true, bookingGoals }
-    );
+    return successResponse({ ...result, bookingGoals });
   } catch (err) {
     return handleRouteError(err);
   }
