@@ -1,6 +1,6 @@
 import { getTranslations } from "next-intl/server";
 import { SidebarCustomizer } from "@/components/dashboard/SidebarCustomizer";
-import { getSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
+import { getSidebarLayout, mergeSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
 import { filterSidebarItemsForBusiness } from "@/lib/dashboard/sidebar-items";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
 import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
@@ -28,13 +28,19 @@ export default async function SidebarSettingsPage() {
     metaConnected,
     whatsappConnected
   });
+  // Same connection filter over the untouched catalog — what "Reset to
+  // default" restores in the editor without a round-trip re-render.
+  const defaultLayout = filterSidebarItemsForBusiness(mergeSidebarLayout([]), {
+    metaConnected,
+    whatsappConnected
+  });
 
   return (
     <SettingsPageShell
       title={t("hubSidebarTitle")}
       blurb={t("sidebarPageBlurb")}
     >
-      <SidebarCustomizer initialLayout={layout} />
+      <SidebarCustomizer initialLayout={layout} defaultLayout={defaultLayout} />
     </SettingsPageShell>
   );
 }

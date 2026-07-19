@@ -8,6 +8,7 @@ import {
   listBusinesses,
   listBusinessIdsByOwnerEmail,
   recordWhiteGlovePurchase,
+  setBusinessAdminPinned,
   setBusinessPaused,
   setCustomerChannelsEnabled,
   updateBusinessName,
@@ -370,6 +371,28 @@ describe("db/businesses", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
     await expect(setBusinessPaused("uuid-biz-1", false)).rejects.toThrow("setBusinessPaused");
+  });
+
+  it("setBusinessAdminPinned updates admin_pinned", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setBusinessAdminPinned("uuid-biz-1", true);
+    expect(db.from).toHaveBeenCalledWith("businesses");
+    expect(db.update).toHaveBeenCalledWith({ admin_pinned: true });
+    expect(db.eq).toHaveBeenCalledWith("id", "uuid-biz-1");
+  });
+
+  it("setBusinessAdminPinned uses a provided client and throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    await setBusinessAdminPinned("uuid-biz-1", false, db as never);
+    expect(db.update).toHaveBeenCalledWith({ admin_pinned: false });
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+
+    const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    await expect(setBusinessAdminPinned("uuid-biz-1", true, failing as never)).rejects.toThrow(
+      "setBusinessAdminPinned: fail"
+    );
   });
 
   it("setCustomerChannelsEnabled writes the Safe Mode flag (enabled=true → Safe Mode OFF)", async () => {

@@ -12,6 +12,7 @@ import {
   SIDEBAR_ITEMS
 } from "@/lib/dashboard/sidebar-items";
 import {
+  deleteSidebarLayout,
   getSidebarLayout,
   mergeSidebarLayout,
   saveSidebarLayout
@@ -237,5 +238,36 @@ describe("saveSidebarLayout", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await saveSidebarLayout(USER, [{ key: "chat", visible: true }]);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("deleteSidebarLayout", () => {
+  function deleteDb(error: { message: string } | null = null) {
+    return {
+      from: vi.fn().mockReturnThis(),
+      delete: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockResolvedValue({ error })
+    };
+  }
+
+  it("deletes the user's rows (reset to default catalog)", async () => {
+    const db = deleteDb();
+    await deleteSidebarLayout(USER, db as never);
+    expect(db.from).toHaveBeenCalledWith("user_sidebar_items");
+    expect(db.delete).toHaveBeenCalled();
+    expect(db.eq).toHaveBeenCalledWith("user_id", USER);
+    expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the service client and throws on delete errors", async () => {
+    const db = deleteDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await deleteSidebarLayout(USER);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+
+    const failing = deleteDb({ message: "denied" });
+    await expect(deleteSidebarLayout(USER, failing as never)).rejects.toThrow(
+      "deleteSidebarLayout: denied"
+    );
   });
 });

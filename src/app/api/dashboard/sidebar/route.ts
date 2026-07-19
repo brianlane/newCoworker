@@ -6,7 +6,11 @@
 import { z } from "zod";
 import { getAuthUser } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { getSidebarLayout, saveSidebarLayout } from "@/lib/dashboard/sidebar-prefs";
+import {
+  deleteSidebarLayout,
+  getSidebarLayout,
+  saveSidebarLayout
+} from "@/lib/dashboard/sidebar-prefs";
 
 export const dynamic = "force-dynamic";
 
@@ -14,6 +18,19 @@ export async function GET() {
   try {
     const user = await getAuthUser();
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    const items = await getSidebarLayout(user.userId);
+    return successResponse({ items });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}
+
+/** Reset to the default layout by deleting the user's stored rows. */
+export async function DELETE() {
+  try {
+    const user = await getAuthUser();
+    if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    await deleteSidebarLayout(user.userId);
     const items = await getSidebarLayout(user.userId);
     return successResponse({ items });
   } catch (err) {

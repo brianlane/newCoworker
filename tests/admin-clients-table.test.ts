@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   clientsCsv,
   filterClientRows,
+  pinRowsFirst,
   sortClientRows,
   EMPTY_CLIENTS_FILTERS,
   PAYMENT_NONE,
@@ -21,6 +22,7 @@ function row(overrides: Partial<AdminClientRow> = {}): AdminClientRow {
     subscriptionStatus: "active",
     ownerQuiet: false,
     marginCents: 15000,
+    pinned: false,
     ...overrides
   };
 }
@@ -125,6 +127,38 @@ describe("sortClientRows", () => {
   it("does not mutate the input", () => {
     const input = [...rows];
     sortClientRows(rows, "name", "asc");
+    expect(rows).toEqual(input);
+  });
+});
+
+describe("pinRowsFirst", () => {
+  it("moves pinned rows to the front, keeping each group's relative order", () => {
+    const rows = [
+      row({ id: "a" }),
+      row({ id: "b", pinned: true }),
+      row({ id: "c" }),
+      row({ id: "d", pinned: true })
+    ];
+    expect(pinRowsFirst(rows).map((r) => r.id)).toEqual(["b", "d", "a", "c"]);
+  });
+
+  it("keeps pinned rows on top of a sorted order", () => {
+    const rows = sortClientRows(
+      [
+        row({ id: "zeta", name: "Zeta", pinned: true }),
+        row({ id: "alpha", name: "Alpha" }),
+        row({ id: "mid", name: "Middle" })
+      ],
+      "name",
+      "asc"
+    );
+    expect(pinRowsFirst(rows).map((r) => r.id)).toEqual(["zeta", "alpha", "mid"]);
+  });
+
+  it("is a stable no-op without pinned rows and does not mutate the input", () => {
+    const rows = [row({ id: "a" }), row({ id: "b" })];
+    const input = [...rows];
+    expect(pinRowsFirst(rows).map((r) => r.id)).toEqual(["a", "b"]);
     expect(rows).toEqual(input);
   });
 });

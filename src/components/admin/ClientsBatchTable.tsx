@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Pin } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { Button } from "@/components/ui/Button";
@@ -10,6 +11,7 @@ import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import {
   clientsCsv,
   filterClientRows,
+  pinRowsFirst,
   sortClientRows,
   EMPTY_CLIENTS_FILTERS,
   PAYMENT_NONE,
@@ -66,12 +68,13 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [running, setRunning] = useState<BatchAction | null>(null);
   const [report, setReport] = useState<string | null>(null);
+  const [pinningId, setPinningId] = useState<string | null>(null);
   const [filters, setFilters] = useState<ClientsFilters>(EMPTY_CLIENTS_FILTERS);
   const [sort, setSort] = useState<{ key: ClientsSortKey; dir: ClientsSortDir } | null>(null);
 
   const visibleRows = useMemo(() => {
     const filtered = filterClientRows(rows, filters);
-    return sort ? sortClientRows(filtered, sort.key, sort.dir) : filtered;
+    return pinRowsFirst(sort ? sortClientRows(filtered, sort.key, sort.dir) : filtered);
   }, [rows, filters, sort]);
 
   const statusOptions = useMemo(
@@ -124,6 +127,26 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
     () => visibleRows.filter((r) => selected.has(r.id)),
     [visibleRows, selected]
   );
+
+  async function togglePin(row: ClientRow) {
+    if (pinningId) return;
+    setPinningId(row.id);
+    try {
+      const res = await fetch("/api/admin/pin-client", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId: row.id, pinned: !row.pinned })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      router.refresh();
+    } catch (err) {
+      setReport(
+        `${row.name}: pin failed (${err instanceof Error ? err.message : "error"})`
+      );
+    } finally {
+      setPinningId(null);
+    }
+  }
 
   async function runBatch(action: BatchAction) {
     if (selectedRows.length === 0) return;
@@ -334,9 +357,28 @@ export function ClientsBatchTable({ rows }: { rows: ClientRow[] }) {
                   />
                 </td>
                 <td className="py-3 px-4">
-                  <a href={`/admin/${b.id}`} className="text-parchment font-medium hover:text-signal-teal">
-                    {b.name}
-                  </a>
+                  <span className="inline-flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => void togglePin(b)}
+                      disabled={pinningId !== null}
+                      aria-label={b.pinned ? `Unpin ${b.name}` : `Pin ${b.name} to top`}
+                      title={b.pinned ? "Unpin from top" : "Pin to top"}
+                      className={
+                        b.pinned
+                          ? "text-signal-teal hover:text-signal-teal/70"
+                          : "text-parchment/20 hover:text-parchment/60"
+                      }
+                    >
+                      <Pin
+                        className="h-3.5 w-3.5"
+                        fill={b.pinned ? "currentColor" : "none"}
+                      />
+                    </button>
+                    <a href={`/admin/${b.id}`} className="text-parchment font-medium hover:text-signal-teal">
+                      {b.name}
+                    </a>
+                  </span>
                   <p className="text-xs text-parchment/30 mt-0.5">
                     <LocalDateTime iso={b.createdAt} style="date" />
                   </p>

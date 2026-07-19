@@ -1503,6 +1503,8 @@
       "teamEnterpriseOnly": "Team access, white-label branding, and dedicated support are Enterprise features.",
       "teamEnterpriseCta": "Talk to us about Enterprise →",
       "sidebarPageBlurb": "Reorder the navigation and hide pages you don't use",
+      "sidebarResetButton": "Reset to default",
+      "sidebarResetSuccess": "Sidebar reset to the default layout.",
       "dangerPageBlurb": "Irreversible actions — read carefully",
       "dangerSessions": "Sessions",
       "dangerSessionsBody": "Signs you out everywhere, including other devices.",
