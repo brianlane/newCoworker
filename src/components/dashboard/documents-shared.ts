@@ -110,21 +110,17 @@ export async function openOriginalFile(
     if (!json.ok || !json.data?.url) {
       return json.error?.message ?? "Could not create the link";
     }
-    if (mode === "inline") {
-      // window.open returns null when a popup blocker eats the tab — say so
-      // instead of silently succeeding.
-      const opened = window.open(json.data.url, "_blank", "noopener");
-      if (!opened) {
-        return "Your browser blocked the new tab — allow pop-ups for this site and try again.";
-      }
-    } else {
-      const a = document.createElement("a");
-      a.href = json.data.url;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    }
+    // Both modes use a transient anchor click. NOT window.open: with the
+    // "noopener" feature it returns null BY SPEC even when the tab opens,
+    // so a null-check misreports success as a blocked pop-up — and anchor
+    // clicks aren't subject to pop-up blocking in the first place.
+    const a = document.createElement("a");
+    a.href = json.data.url;
+    a.rel = "noopener";
+    if (mode === "inline") a.target = "_blank";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     return null;
   } catch {
     return "Could not create the link — try again.";
