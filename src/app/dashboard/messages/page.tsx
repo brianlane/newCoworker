@@ -87,7 +87,7 @@ export default async function DashboardMessagesPage() {
   // Every read below keys only on the business id, so one parallel batch
   // replaces what used to be ~5 sequential round-trips:
   // - conversations: the thread list itself.
-  // - rcsEnabled: RCS-first tenants (Standard+, approved agent, concrete
+  // - rcsEnabled: RCS-first tenants (Enterprise, approved agent, concrete
   //   from-number for the SMS fallback — the same precondition sendTelnyxSms
   //   checks) get a softened emoji hint in the composer: the rich message
   //   delivers as typed, only the SMS fallback copy is capped.

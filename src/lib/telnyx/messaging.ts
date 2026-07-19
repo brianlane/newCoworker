@@ -8,15 +8,24 @@ export type TelnyxMessagingConfig = {
   /**
    * Tenant's approved Telnyx RCS agent id. Set only by
    * `getTelnyxMessagingForBusiness(..., { resolveRcs: true })` when the tenant
-   * is RCS-eligible (standard/enterprise tier + rcs_enabled + agent approved).
+   * is RCS-eligible (enterprise tier + rcs_enabled + agent approved).
    * When present, `sendTelnyxSms` goes RCS-first with automatic SMS fallback.
    */
   rcsAgentId?: string | null;
 };
 
-/** Tiers entitled to the RCS channel (mirror of _shared/channel_settings.ts). */
+/**
+ * Tiers entitled to the RCS channel (mirror of _shared/channel_settings.ts).
+ *
+ * Enterprise-only (decided Jul 18 2026 after testing-phase findings): an RCS
+ * inbound carries only the agent id — no recipient DID — so a shared agent
+ * cannot route replies for more than one tenant, and the agent's verified
+ * brand replaces the tenant's own identity on the handset. Tenant RCS
+ * therefore requires a dedicated per-tenant agent (own Google verification,
+ * own Telnyx carrier fees), sold as an Enterprise line item.
+ */
 export function rcsTierAllowed(tier: string | null | undefined): boolean {
-  return tier === "standard" || tier === "enterprise";
+  return tier === "enterprise";
 }
 
 export function readTelnyxMessagingConfig(
@@ -159,6 +168,13 @@ export type SendTelnyxSmsOptions = {
    * consumes one monthly SMS slot like any other outbound message.
    */
   mediaUrls?: string[];
+  /**
+   * Per-message channel override. `"sms"` skips the RCS-first branch even
+   * when the tenant's config carries an approved agent id, so the message
+   * goes out as plain SMS from the tenant's own number (composer "send as
+   * SMS" toggle). Metering is identical on both channels.
+   */
+  forceChannel?: "sms";
 };
 
 type TelnyxMessageResponse = { data?: { id?: string } };
@@ -317,8 +333,14 @@ export async function sendTelnyxSms(
     const rcsAgentId = (config.rcsAgentId ?? "").trim();
     // Media sends bypass RCS-first: the RCS payload here only carries text,
     // so an image would be silently dropped on the rich channel. Plain MMS
-    // delivers it everywhere.
-    if (mediaUrls.length === 0 && rcsAgentId && config.fromE164) {
+    // delivers it everywhere. forceChannel: "sms" is the caller's explicit
+    // per-message opt-out (composer toggle).
+    if (
+      options?.forceChannel !== "sms" &&
+      mediaUrls.length === 0 &&
+      rcsAgentId &&
+      config.fromE164
+    ) {
       const rcsRes = await fetchImpl("https://api.telnyx.com/v2/messages/rcs", {
         method: "POST",
         headers,

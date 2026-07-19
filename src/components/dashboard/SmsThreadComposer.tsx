@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { SmsSegmentHint } from "./SmsSegmentHint";
 
 type Props = {
@@ -19,10 +20,14 @@ type Props = {
  * the new outbound message appears inline.
  */
 export function SmsThreadComposer({ businessId, toE164, rcsEnabled = false }: Props) {
+  const t = useTranslations("dashboard.smsComposer");
   const router = useRouter();
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-message channel override for RCS-first tenants: checked = this
+  // message goes out as plain SMS from the business number.
+  const [forceSms, setForceSms] = useState(false);
 
   const trimmed = text.trim();
 
@@ -34,7 +39,12 @@ export function SmsThreadComposer({ businessId, toE164, rcsEnabled = false }: Pr
       const res = await fetch("/api/dashboard/messages/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, toE164, text })
+        body: JSON.stringify({
+          businessId,
+          toE164,
+          text,
+          ...(rcsEnabled && forceSms ? { forceChannel: "sms" } : {})
+        })
       });
       const json = (await res.json().catch(() => null)) as {
         ok?: boolean;
@@ -88,7 +98,18 @@ export function SmsThreadComposer({ businessId, toE164, rcsEnabled = false }: Pr
           {busy ? "Sending…" : "Send"}
         </button>
       </div>
-      <SmsSegmentHint text={text} mode="verbatim" channel={rcsEnabled ? "rcs" : "sms"} />
+      {rcsEnabled && (
+        <label className="flex items-center gap-2 text-xs text-parchment/60">
+          <input
+            type="checkbox"
+            checked={forceSms}
+            onChange={(e) => setForceSms(e.target.checked)}
+            className="h-3.5 w-3.5 accent-claw-green"
+          />
+          {t("sendAsPlainSms")}
+        </label>
+      )}
+      <SmsSegmentHint text={text} mode="verbatim" channel={rcsEnabled && !forceSms ? "rcs" : "sms"} />
       {error && <p className="text-xs text-red-300">{error}</p>}
     </div>
   );

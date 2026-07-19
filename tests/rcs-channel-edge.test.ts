@@ -174,9 +174,9 @@ describe("telnyxSendSms RCS-first path", () => {
 });
 
 describe("channel_settings.rcsTierAllowed", () => {
-  it("allows standard and enterprise only", () => {
-    expect(rcsTierAllowed("standard")).toBe(true);
+  it("allows enterprise only (single-tenant shared agent + per-agent fees, Jul 2026)", () => {
     expect(rcsTierAllowed("enterprise")).toBe(true);
+    expect(rcsTierAllowed("standard")).toBe(false);
     expect(rcsTierAllowed("starter")).toBe(false);
     expect(rcsTierAllowed(null)).toBe(false);
     expect(rcsTierAllowed(undefined)).toBe(false);
@@ -210,16 +210,17 @@ describe("channel_settings.resolveRcsAgentId", () => {
     error
   });
 
-  it("returns the agent id for an enabled standard tenant (tier passed)", async () => {
+  it("returns the agent id for an enabled enterprise tenant (tier passed)", async () => {
     const db = makeSupabase({
       business_channel_settings: settings({ rcs_agent_id: "agent_9", rcs_enabled: true })
     });
-    expect(await resolveRcsAgentId(db, "biz-1", "standard")).toBe("agent_9");
+    expect(await resolveRcsAgentId(db, "biz-1", "enterprise")).toBe("agent_9");
   });
 
   it("returns null when tier disallows (no settings query needed)", async () => {
     const db = makeSupabase({});
     expect(await resolveRcsAgentId(db, "biz-1", "starter")).toBeNull();
+    expect(await resolveRcsAgentId(db, "biz-1", "standard")).toBeNull();
     expect(await resolveRcsAgentId(db, "biz-1", null)).toBeNull();
   });
 
@@ -249,11 +250,11 @@ describe("channel_settings.resolveRcsAgentId", () => {
       await resolveRcsAgentId(
         makeSupabase({ business_channel_settings: settings(null, { message: "down" }) }),
         "biz-4",
-        "standard"
+        "enterprise"
       )
     ).toBeNull();
     expect(
-      await resolveRcsAgentId(makeSupabase({}), "biz-4", "standard")
+      await resolveRcsAgentId(makeSupabase({}), "biz-4", "enterprise")
     ).toBeNull();
     expect(
       await resolveRcsAgentId(
@@ -261,7 +262,7 @@ describe("channel_settings.resolveRcsAgentId", () => {
           business_channel_settings: settings({ rcs_agent_id: "agent_x", rcs_enabled: false })
         }),
         "biz-4",
-        "standard"
+        "enterprise"
       )
     ).toBeNull();
     expect(
@@ -270,7 +271,7 @@ describe("channel_settings.resolveRcsAgentId", () => {
           business_channel_settings: settings({ rcs_agent_id: "   ", rcs_enabled: true })
         }),
         "biz-4",
-        "standard"
+        "enterprise"
       )
     ).toBeNull();
     expect(
@@ -279,7 +280,7 @@ describe("channel_settings.resolveRcsAgentId", () => {
           business_channel_settings: settings({ rcs_agent_id: null, rcs_enabled: true })
         }),
         "biz-4",
-        "standard"
+        "enterprise"
       )
     ).toBeNull();
   });

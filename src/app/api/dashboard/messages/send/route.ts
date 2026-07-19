@@ -52,7 +52,11 @@ const bodySchema = z.object({
       }
       return result.value;
     }),
-  text: z.string().min(1, "Message can't be empty").max(1600)
+  text: z.string().min(1, "Message can't be empty").max(1600),
+  // Per-message channel override: "sms" makes an RCS-eligible tenant's send
+  // go out as plain SMS from their own number (composer toggle). Omitted =
+  // automatic (RCS-first when eligible).
+  forceChannel: z.enum(["sms"]).optional()
 });
 
 export async function POST(request: Request) {
@@ -61,7 +65,7 @@ export async function POST(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
 
     const json = (await request.json().catch(() => null)) as unknown;
-    const { businessId, toE164, text } = bodySchema.parse(json);
+    const { businessId, toE164, text, forceChannel } = bodySchema.parse(json);
 
     if (!user.isAdmin) await requireBusinessRole(businessId, "operate_messages");
 
@@ -97,14 +101,16 @@ export async function POST(request: Request) {
     }
 
     // resolveRcs: owner-composed messages are customer-facing, so RCS-eligible
-    // tenants (Standard+, agent approved) send RCS-first with SMS fallback.
+    // tenants (Enterprise, agent approved) send RCS-first with SMS fallback —
+    // unless the owner explicitly forced plain SMS for this message.
     const config = await getTelnyxMessagingForBusiness(businessId, db, { resolveRcs: true });
 
     let telnyxMessageId: string;
     let channel: "sms" | "rcs";
     try {
       ({ id: telnyxMessageId, channel } = await sendTelnyxSms(config, toE164, text, {
-        meterBusinessId: businessId
+        meterBusinessId: businessId,
+        ...(forceChannel ? { forceChannel } : {})
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { SmsSegmentHint } from "./SmsSegmentHint";
 
@@ -31,6 +32,7 @@ export function SmsComposeNew({
   templates = [],
   schedulingEnabled = false
 }: Props) {
+  const t = useTranslations("dashboard.smsComposer");
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [to, setTo] = useState("");
@@ -40,6 +42,9 @@ export function SmsComposeNew({
   const [notice, setNotice] = useState<string | null>(null);
   const [scheduleMode, setScheduleMode] = useState(false);
   const [sendAtLocal, setSendAtLocal] = useState("");
+  // Per-message channel override for RCS-first tenants (immediate sends only —
+  // the scheduled path has no override, so the toggle hides in schedule mode).
+  const [forceSms, setForceSms] = useState(false);
 
   const textTrimmed = text.trim();
   // Normalize as the owner types so "(305) 613-3412" enables Send and we both
@@ -94,7 +99,12 @@ export function SmsComposeNew({
       const res = await fetch("/api/dashboard/messages/send", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, toE164, text })
+        body: JSON.stringify({
+          businessId,
+          toE164,
+          text,
+          ...(rcsEnabled && forceSms ? { forceChannel: "sms" } : {})
+        })
       });
       const json = (await res.json().catch(() => null)) as {
         ok?: boolean;
@@ -196,7 +206,23 @@ export function SmsComposeNew({
         disabled={busy}
         className="w-full resize-none rounded-lg border border-parchment/15 bg-deep-ink/60 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-claw-green/60 focus:outline-none disabled:opacity-50"
       />
-      <SmsSegmentHint text={text} mode="verbatim" channel={rcsEnabled ? "rcs" : "sms"} />
+      {rcsEnabled && !scheduleMode && (
+        <label className="flex items-center gap-1.5 text-xs text-parchment/60">
+          <input
+            type="checkbox"
+            checked={forceSms}
+            onChange={(e) => setForceSms(e.target.checked)}
+            disabled={busy}
+            className="accent-claw-green"
+          />
+          {t("sendAsPlainSms")}
+        </label>
+      )}
+      <SmsSegmentHint
+        text={text}
+        mode="verbatim"
+        channel={rcsEnabled && !(forceSms && !scheduleMode) ? "rcs" : "sms"}
+      />
       {schedulingEnabled && (
         <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1.5 text-xs text-parchment/60">

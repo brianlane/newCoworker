@@ -4344,7 +4344,7 @@ async function sendSmsStep(
       // sends off the RCS-first branch (an RCS payload here is text-only).
       ...(action.mediaUrl ? { mediaUrls: [action.mediaUrl] } : {}),
       idempotencyKey: `aiflow:${run.id}:${index}`,
-      // Lead-facing texts go RCS-first for eligible tenants (Standard+,
+      // Lead-facing texts go RCS-first for eligible tenants (Enterprise,
       // approved agent) with Telnyx-side SMS fallback. Internal teammate
       // texts stay plain SMS — the branded business agent shouldn't be the
       // sender identity for roster notifications.

@@ -113,7 +113,7 @@ Two structural leaks closed this week protect these margins:
 | Perk | Marginal cost/tenant | Status |
 | --- | --- | --- |
 | Zapier "8,000+ integrations" | ≈ $0 (webhook egress is noise) | **SHIPPED — PR #364**; Zapier directory review pending |
-| RCS branded messaging | ~$0 fixed | Shipped; carrier approval pending (4–6 wk) |
+| RCS branded messaging | **NOT ~$0 — $600 one-time + $100/mo per agent** (Telnyx, Jul 18 2026) | **Moved to Enterprise-only** — see "RCS: Enterprise-only decision" below |
 | Auto-text on missed calls, scheduled/template SMS, AI call summaries, analytics + spike alerts | ≈ $0 | Shipped — PRs #352–#355 |
 | Extra phone numbers | $1.10 each (sell $5/mo, ~78% margin) | Decided |
 | White-glove onboarding | founder hours ($750 / $2,000 tiers) | Merged — PR #351 |
@@ -141,6 +141,40 @@ Two structural leaks closed this week protect these margins:
   `sms_outbound_log` source constraint (PR #365, applied to prod); Dependabot
   high-severity `form-data` CRLF-injection alert in `zapier/package-lock.json`
   fixed by overriding to ≥ 4.0.6 (PR #366).
+
+## RCS: Enterprise-only decision (Jul 18 2026)
+
+The original "~$0 fixed" cost assumption was wrong, and testing-phase findings
+killed the shared-agent-as-Standard-perk model entirely:
+
+- **Real Telnyx fees**: production provisioning of an RCS agent is a one-time
+  **$600 carrier fee + $100/mo recurring, PER AGENT** (Telnyx compliance email
+  for `new_coworker_jut3q1af_agent`, Jul 2026). The testing phase (registered
+  tester numbers only) is free.
+- **A shared agent is structurally single-tenant.** RCS inbound payloads carry
+  NO recipient DID — only the agent id (`to[].agent_id`), which
+  `telnyx-sms-inbound` resolves against `business_channel_settings` expecting
+  exactly one row. Two tenants on one agent id = every customer reply
+  unroutable (dropped as `sms_inbound_rcs_unrouted`). Not fixable: the
+  disambiguating information does not exist in the payload.
+- **The agent's brand replaces the tenant's identity.** On an RCS handset the
+  thread shows the AGENT's verified name/logo (e.g. "New Coworker"), not the
+  tenant's business name or phone number. Verified on iOS 18 Jul 18 2026.
+- **Decision**: `rcsTierAllowed` = enterprise only (both mirrors); RCS removed
+  from Standard marketing everywhere; sold as a per-tenant **branded agent**
+  Enterprise line item — the tenant's own Google-verified sender — priced
+  cost-plus with a floor of 2x Telnyx fees (suggested list: $1,500 one-time
+  setup + $250/mo). The platform's shared agent stays reserved for our own
+  HQ/platform traffic.
+- **Testing-phase results (HQ tenant, Jul 18 2026)**: outbound RCS-first
+  delivered as true RCS to a Verizon tester (verified sender rendered, cost
+  **$0.011/msg** vs the $0.0065 list rate); Telnyx-side fallback demoted a
+  non-tester send to plain SMS from the tenant's DID automatically; inbound
+  required BOTH `profile_id` AND `webhook_url` set on the agent (Telnyx
+  provisions neither — set them via
+  `PATCH /v2/messaging/rcs/agents/{agent_id}` or inbound replies are silently
+  dropped at Telnyx). Testers register via
+  `PUT /v2/messaging/rcs/test_number_invite/{agent_id}/{phone}`.
 
 ## Hardware escalation — how KVM4/KVM8 moves happen (PRs #371 + #372)
 
@@ -210,5 +244,5 @@ Escalation is **manual by design**; the system advises, the operator moves:
 | Starter caps 100 SMS / 25 min + browser copy + KVM2 standard default | Merged — PR #369; prod migration applied; voice Edge fns redeployed |
 | KVM4 size + admin migrate-size panel + in-flight lease | Merged — PR #371; prod migrations applied |
 | Hardware-escalation advisor cron + ops digest | Merged — PR #372; deployed + scheduled (14:00 UTC daily); smoke-invoked OK |
-| Telnyx RCS agent registration | Awaiting carrier approval |
+| Telnyx RCS agent registration | Testing phase live (HQ tenant, Jul 18 2026); production provisioning DEFERRED ($600 + $100/mo) — Enterprise-only per the RCS decision above |
 | **Starter $19.99 renewal on pricing page + Stripe** | **Remaining** |
