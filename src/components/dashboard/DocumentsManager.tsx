@@ -1,116 +1,157 @@
 "use client";
 
 /**
- * Business Documents manager (Dashboard → Documents).
+ * Business Documents — Drive-style file manager (Dashboard → Documents).
  *
- * Upload real business documents (price sheets, policies, contracts, SOPs) that
- * every coworker surface answers from and shares on request. Each document
- * carries an audience (clients / staff / both), an optional expiration date
- * (expired docs go inert to the agent and the daily sweep reminds the
- * owner), an editable agent-facing markdown body, and a list of active
- * share links with one-click revoke.
- *
- * The list is a DIRECTORY: categories act as folders (collapsible sections),
- * searchable and filterable by audience. Zoom transcript imports file
- * themselves under `meeting` automatically. Title/category are editable in
- * the expanded panel (category edits re-file the document), and the original
- * upload is downloadable via a short-lived signed URL.
+ * Categories act as FOLDERS you navigate into (?folder=<category>, linkable
+ * and back-button friendly), not collapsible sections: the root shows folder
+ * tiles, a folder shows its files as cards (grid) or table rows (list view —
+ * toggle persisted per browser). Each file carries a kebab menu (Open, Open
+ * in browser, Download, Rename, Move to folder, Delete); clicking the card
+ * itself opens the document's own page (/dashboard/documents/<id>) where the
+ * full editor lives (DocumentDetail). Upload opens a modal, pre-filled with
+ * the current folder. Search spans every folder; Zoom transcript imports
+ * file themselves under `meeting` automatically.
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, Folder } from "lucide-react";
+import { useRouter } from "next/navigation";
+import {
+  Captions,
+  ChevronRight,
+  Download,
+  ExternalLink,
+  File,
+  FileSpreadsheet,
+  FileText,
+  Folder,
+  FolderInput,
+  LayoutGrid,
+  List,
+  MoreVertical,
+  Pencil,
+  Trash2,
+  Upload,
+  X,
+  type LucideIcon
+} from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
+import {
+  AUDIENCE_LABELS,
+  documentFolder,
+  expiryBadge,
+  formatByteSize,
+  inputClass,
+  labelClass,
+  openOriginalFile,
+  renewalBadge,
+  type DocumentItem
+} from "@/components/dashboard/documents-shared";
 
-type DocumentItem = {
-  id: string;
+const VIEW_MODE_KEY = "documents-view-mode";
+
+function mimeIcon(mime: string): LucideIcon {
+  if (mime === "application/pdf") return File;
+  if (mime === "text/vtt") return Captions;
+  if (mime === "text/csv") return FileSpreadsheet;
+  return FileText;
+}
+
+/** One badge row shared by grid cards and table rows. */
+function StatusBadges({ doc }: { doc: DocumentItem }) {
+  const badge = expiryBadge(doc);
+  const renewal = renewalBadge(doc);
+  return (
+    <>
+      {doc.status !== "ready" && (
+        <span
+          className={`rounded border px-1.5 py-0.5 text-[10px] ${
+            doc.status === "failed"
+              ? "border-spark-orange/50 text-spark-orange"
+              : "border-parchment/20 text-parchment/50"
+          }`}
+        >
+          {doc.status === "failed" ? "Ingest failed" : "Processing"}
+        </span>
+      )}
+      {badge && (
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${badge.tone}`}>
+          {badge.text}
+        </span>
+      )}
+      {renewal && (
+        <span className={`rounded border px-1.5 py-0.5 text-[10px] ${renewal.tone}`}>
+          {renewal.text}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** Minimal centered modal (the repo has no shared dialog component). */
+function Modal({
+  title,
+  onClose,
+  children
+}: {
   title: string;
-  category: string;
-  audience: "clients" | "staff" | "both";
-  mime_type: string;
-  byte_size: number;
-  content_md: string;
-  summary: string;
-  status: "processing" | "ready" | "failed";
-  error_detail: string | null;
-  expires_at: string | null;
-  contact_id: string | null;
-  renewal_date: string | null;
-  assigned_employee_id: string | null;
-  record_fields: Record<string, string> | null;
-  created_at: string;
-};
-
-type ContactOption = { id: string; customerE164: string; displayName: string | null };
-
-type MemberOption = { id: string; name: string };
-
-type ShareItem = {
-  id: string;
-  shared_with: string;
-  channel: string;
-  expires_at: string;
-  revoked_at: string | null;
-  access_count: number;
-  created_at: string;
-};
-
-type SignatureRequestItem = {
-  id: string;
-  signer_name: string;
-  signer_email: string;
-  signer_phone: string;
-  status: "sent" | "viewed" | "signed" | "void";
-  signature_name: string | null;
-  signed_at: string | null;
-  expires_at: string;
-  created_at: string;
-};
-
-const inputClass =
-  "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
-const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
-
-const AUDIENCE_LABELS: Record<DocumentItem["audience"], string> = {
-  clients: "Customers",
-  staff: "Internal only",
-  both: "Customers + internal"
-};
-
-function expiryBadge(doc: DocumentItem): { text: string; tone: string } | null {
-  if (!doc.expires_at) return null;
-  const ms = Date.parse(doc.expires_at);
-  if (!Number.isFinite(ms)) return null;
-  const days = Math.ceil((ms - Date.now()) / 86_400_000);
-  if (days <= 0) return { text: "Expired", tone: "text-spark-orange border-spark-orange/50" };
-  if (days <= 7) {
-    return { text: `Expires in ${days}d`, tone: "text-spark-orange border-spark-orange/40" };
-  }
-  return {
-    text: `Expires ${doc.expires_at.slice(0, 10)}`,
-    tone: "text-parchment/50 border-parchment/20"
-  };
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label={title}
+    >
+      <div
+        className="w-full max-w-lg rounded-xl border border-parchment/15 bg-deep-ink p-5 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-parchment">{title}</h3>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-parchment/50 hover:text-parchment"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
 }
 
-function renewalBadge(doc: DocumentItem): { text: string; tone: string } | null {
-  if (!doc.renewal_date) return null;
-  const ms = Date.parse(doc.renewal_date);
-  if (!Number.isFinite(ms)) return null;
-  const days = Math.ceil((ms - Date.now()) / 86_400_000);
-  if (days <= 0) return { text: "Renewal overdue", tone: "text-spark-orange border-spark-orange/50" };
-  if (days <= 30) {
-    return { text: `Renews in ${days}d`, tone: "text-spark-orange border-spark-orange/40" };
-  }
-  return {
-    text: `Renews ${doc.renewal_date.slice(0, 10)}`,
-    tone: "text-parchment/50 border-parchment/20"
-  };
-}
-
-export function DocumentsManager({ businessId }: { businessId: string }) {
+export function DocumentsManager({
+  businessId,
+  folder
+}: {
+  businessId: string;
+  /** Current folder from the page's ?folder= search param; null = root. */
+  folder: string | null;
+}) {
+  const router = useRouter();
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [audienceFilter, setAudienceFilter] = useState<"all" | DocumentItem["audience"]>("all");
+  const [view, setView] = useState<"grid" | "list">("grid");
+  // Kebab menu: id of the document whose menu is open.
+  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Small modals driving the existing PATCH route.
+  const [renameTarget, setRenameTarget] = useState<DocumentItem | null>(null);
+  const [moveTarget, setMoveTarget] = useState<DocumentItem | null>(null);
+  const [modalValue, setModalValue] = useState("");
+  const [modalSaving, setModalSaving] = useState(false);
+  // Upload modal state.
+  const [uploadOpen, setUploadOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadAudience, setUploadAudience] = useState<DocumentItem["audience"]>("both");
   const [uploadTitle, setUploadTitle] = useState("");
@@ -118,35 +159,17 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
   const [uploadExpires, setUploadExpires] = useState("");
   const [uploadRenewal, setUploadRenewal] = useState("");
   const fileRef = useRef<HTMLInputElement | null>(null);
-  // Per-document expanded panel state. The ref mirrors openId so async
-  // fetches can verify the SAME document is still expanded before applying
-  // results — a slow response must never show another document's signer or
-  // share PII under the wrong panel.
-  const [openId, setOpenId] = useState<string | null>(null);
-  const openIdRef = useRef<string | null>(null);
-  // Directory view: categories act as folders. Empty set = every folder
-  // open; a live search overrides collapse so matches are never hidden.
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState("");
-  const [audienceFilter, setAudienceFilter] = useState<"all" | DocumentItem["audience"]>("all");
-  const [draftContent, setDraftContent] = useState("");
-  const [draftExpires, setDraftExpires] = useState("");
-  const [draftRenewal, setDraftRenewal] = useState("");
-  const [draftTitle, setDraftTitle] = useState("");
-  const [draftCategory, setDraftCategory] = useState("");
-  const [savingDoc, setSavingDoc] = useState(false);
-  // Pickers for linking a document to a contact / assigning a renewal
-  // handler. Loaded once on mount; both selects degrade to hidden when the
-  // directory fetch fails or comes back empty.
-  const [contacts, setContacts] = useState<ContactOption[]>([]);
-  const [members, setMembers] = useState<MemberOption[]>([]);
-  const [shares, setShares] = useState<ShareItem[]>([]);
-  // Signature requests for the open document + the request form.
-  const [signatureRequests, setSignatureRequests] = useState<SignatureRequestItem[]>([]);
-  const [sigName, setSigName] = useState("");
-  const [sigRecipient, setSigRecipient] = useState("");
-  const [sigMessage, setSigMessage] = useState("");
-  const [sigSending, setSigSending] = useState(false);
+
+  // View-mode preference survives reloads (read after mount so SSR and the
+  // first client render agree).
+  useEffect(() => {
+    const stored = window.localStorage.getItem(VIEW_MODE_KEY);
+    if (stored === "list" || stored === "grid") setView(stored);
+  }, []);
+  function switchView(next: "grid" | "list") {
+    setView(next);
+    window.localStorage.setItem(VIEW_MODE_KEY, next);
+  }
 
   const refresh = useCallback(async () => {
     try {
@@ -167,65 +190,18 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     void refresh();
   }, [refresh]);
 
-  // Deep link (?doc=<id>): auto-expand that document once the list loads —
-  // the Zoom transcript import links here so the owner lands on their
-  // minutes instead of hunting the list. One-shot per id.
-  const deepLinkedRef = useRef<string | null>(null);
+  // Any click outside a kebab closes it (each menu stops propagation).
   useEffect(() => {
-    if (loading || documents.length === 0) return;
-    const wanted = new URLSearchParams(window.location.search).get("doc");
-    if (!wanted || deepLinkedRef.current === wanted) return;
-    const doc = documents.find((d) => d.id === wanted);
-    if (!doc) return;
-    deepLinkedRef.current = wanted;
-    void openDocument(doc);
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- openDocument is stable per render and intentionally untracked
-  }, [loading, documents]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        // 200 is MAX_LIST_LIMIT on the customers API — a larger value fails
-        // validation and would hide the picker entirely.
-        const res = await fetch(
-          `/api/dashboard/customers?businessId=${encodeURIComponent(businessId)}&limit=200`,
-          { cache: "no-store" }
-        );
-        const json = (await res.json()) as {
-          ok: boolean;
-          data?: { customers?: ContactOption[] };
-        };
-        if (!cancelled && json.ok && json.data?.customers) setContacts(json.data.customers);
-      } catch {
-        /* contact picker stays hidden */
-      }
-      try {
-        const res = await fetch(
-          `/api/dashboard/employees?businessId=${encodeURIComponent(businessId)}`,
-          { cache: "no-store" }
-        );
-        const json = (await res.json()) as { ok: boolean; data?: { members?: MemberOption[] } };
-        if (!cancelled && json.ok && json.data?.members) setMembers(json.data.members);
-      } catch {
-        /* assignee picker stays hidden */
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [businessId]);
-
-  function contactLabel(option: ContactOption): string {
-    return option.displayName?.trim()
-      ? `${option.displayName} (${option.customerE164})`
-      : option.customerE164;
-  }
+    if (!menuFor) return;
+    const close = () => setMenuFor(null);
+    window.addEventListener("click", close);
+    return () => window.removeEventListener("click", close);
+  }, [menuFor]);
 
   async function upload() {
     const file = fileRef.current?.files?.[0];
     if (!file) {
-      setError("Pick a file first (PDF, text, markdown, or CSV).");
+      setError("Pick a file first (PDF, text, markdown, CSV, or .vtt).");
       return;
     }
     setError(null);
@@ -250,6 +226,7 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
       setUploadExpires("");
       setUploadRenewal("");
       if (fileRef.current) fileRef.current.value = "";
+      setUploadOpen(false);
       await refresh();
     } catch {
       setError("Upload failed — try again.");
@@ -258,133 +235,31 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
     }
   }
 
-  async function openDocument(doc: DocumentItem) {
-    if (openId === doc.id) {
-      setOpenId(null);
-      openIdRef.current = null;
-      return;
-    }
-    setOpenId(doc.id);
-    openIdRef.current = doc.id;
-    setDraftContent(doc.content_md);
-    setDraftExpires(doc.expires_at ? doc.expires_at.slice(0, 10) : "");
-    setDraftRenewal(doc.renewal_date ? doc.renewal_date.slice(0, 10) : "");
-    setDraftTitle(doc.title);
-    setDraftCategory(doc.category);
-    setShares([]);
-    setSignatureRequests([]);
-    setSigName("");
-    setSigRecipient("");
-    setSigMessage("");
-    try {
-      const res = await fetch(
-        `/api/dashboard/documents/${doc.id}/shares?businessId=${encodeURIComponent(businessId)}`,
-        { cache: "no-store" }
-      );
-      const json = (await res.json()) as { ok: boolean; data?: { shares?: ShareItem[] } };
-      // Only apply if this document is STILL the expanded one (see openIdRef).
-      if (openIdRef.current === doc.id && json.ok && json.data?.shares) {
-        setShares(json.data.shares);
-      }
-    } catch {
-      /* shares panel stays empty */
-    }
-    await refreshSignatureRequests(doc.id);
-  }
-
-  async function refreshSignatureRequests(docId: string) {
-    try {
-      const res = await fetch(
-        `/api/dashboard/documents/${docId}/signature-requests?businessId=${encodeURIComponent(businessId)}`,
-        { cache: "no-store" }
-      );
-      const json = (await res.json()) as {
-        ok: boolean;
-        data?: { requests?: SignatureRequestItem[] };
-      };
-      // Only apply if this document is STILL the expanded one — a slow
-      // response must not render another document's signers.
-      if (openIdRef.current === docId && json.ok && json.data?.requests) {
-        setSignatureRequests(json.data.requests);
-      }
-    } catch {
-      /* signatures panel stays empty */
-    }
-  }
-
-  async function requestSignature(docId: string) {
-    const recipient = sigRecipient.trim();
-    if (!sigName.trim() || !recipient) {
-      setError("Enter the signer's name and their phone (+1…) or email.");
-      return;
-    }
-    const isEmail = recipient.includes("@");
-    if (!isEmail && !/^\+[1-9]\d{6,14}$/.test(recipient)) {
-      setError("Phone must be E.164 (e.g. +16025550147) — or use an email address.");
-      return;
-    }
-    setError(null);
-    setSigSending(true);
-    try {
-      const res = await fetch(`/api/dashboard/documents/${docId}/signature-requests`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          businessId,
-          signerName: sigName.trim(),
-          ...(isEmail ? { email: recipient } : { phone: recipient }),
-          ...(sigMessage.trim() ? { message: sigMessage.trim() } : {})
-        })
-      });
-      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
-      if (!json.ok) {
-        setError(json.error?.message ?? "Could not send the signature request");
-        return;
-      }
-      setSigName("");
-      setSigRecipient("");
-      setSigMessage("");
-      await refreshSignatureRequests(docId);
-    } catch {
-      setError("Could not send the signature request — try again.");
-    } finally {
-      setSigSending(false);
-    }
-  }
-
-  async function voidSignatureRequest(docId: string, requestId: string) {
-    try {
-      const res = await fetch(`/api/dashboard/documents/${docId}/signature-requests`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, requestId })
-      });
-      const json = (await res.json()) as { ok: boolean };
-      if (json.ok) await refreshSignatureRequests(docId);
-    } catch {
-      /* leave as-is */
-    }
-  }
-
   async function patchDocument(docId: string, patch: Record<string, unknown>) {
-    setSavingDoc(true);
+    const res = await fetch(`/api/dashboard/documents/${docId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ businessId, ...patch })
+    });
+    const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+    if (!json.ok) throw new Error(json.error?.message ?? "Save failed");
+    await refresh();
+  }
+
+  async function submitModal() {
+    const target = renameTarget ?? moveTarget;
+    const value = modalValue.trim();
+    if (!target || !value) return;
+    setModalSaving(true);
     setError(null);
     try {
-      const res = await fetch(`/api/dashboard/documents/${docId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, ...patch })
-      });
-      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
-      if (!json.ok) {
-        setError(json.error?.message ?? "Save failed");
-        return;
-      }
-      await refresh();
-    } catch {
-      setError("Save failed — try again.");
+      await patchDocument(target.id, renameTarget ? { title: value } : { category: value });
+      setRenameTarget(null);
+      setMoveTarget(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed — try again.");
     } finally {
-      setSavingDoc(false);
+      setModalSaving(false);
     }
   }
 
@@ -403,670 +278,479 @@ export function DocumentsManager({ businessId }: { businessId: string }) {
         setError(json.error?.message ?? "Delete failed");
         return;
       }
-      if (openId === docId) setOpenId(null);
       await refresh();
     } catch {
       setError("Delete failed — try again.");
     }
   }
 
-  async function downloadOriginal(docId: string) {
+  async function openFile(docId: string, mode: "inline" | "attachment") {
     setError(null);
-    try {
-      const res = await fetch(
-        `/api/dashboard/documents/${docId}/download?businessId=${encodeURIComponent(businessId)}`,
-        { cache: "no-store" }
-      );
-      const json = (await res.json()) as {
-        ok: boolean;
-        data?: { url?: string };
-        error?: { message?: string };
-      };
-      if (!json.ok || !json.data?.url) {
-        setError(json.error?.message ?? "Could not create the download link");
-        return;
-      }
-      // Transient anchor click: the signed URL carries a Content-Disposition
-      // download filename, and the dashboard tab must stay where it is.
-      const a = document.createElement("a");
-      a.href = json.data.url;
-      a.rel = "noopener";
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-    } catch {
-      setError("Could not create the download link — try again.");
-    }
+    const failure = await openOriginalFile(businessId, docId, mode);
+    if (failure) setError(failure);
   }
 
-  async function revokeShare(docId: string, shareId: string) {
-    try {
-      const res = await fetch(`/api/dashboard/documents/${docId}/shares`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, shareId })
-      });
-      const json = (await res.json()) as { ok: boolean };
-      if (json.ok) {
-        setShares((prev) =>
-          prev.map((s) => (s.id === shareId ? { ...s, revoked_at: new Date().toISOString() } : s))
-        );
-      }
-    } catch {
-      /* leave as-is */
-    }
+  function goToFolder(category: string | null) {
+    router.push(
+      category
+        ? `/dashboard/documents?folder=${encodeURIComponent(category)}`
+        : "/dashboard/documents"
+    );
   }
 
-  // Directory view: filter by search + audience, then group by category.
+  // ── Derived views ────────────────────────────────────────────────────
   const query = search.trim().toLowerCase();
   const searching = query.length > 0;
-  // The OPEN document always stays in the list: filters narrowing it out
-  // mid-edit (or right after a ?doc= deep link) must not vanish the editor.
   const filtered = documents.filter(
     (doc) =>
-      doc.id === openId ||
-      ((audienceFilter === "all" || doc.audience === audienceFilter) &&
-        (!searching ||
-          doc.title.toLowerCase().includes(query) ||
-          doc.summary.toLowerCase().includes(query) ||
-          doc.category.toLowerCase().includes(query)))
+      (audienceFilter === "all" || doc.audience === audienceFilter) &&
+      (!searching ||
+        doc.title.toLowerCase().includes(query) ||
+        doc.summary.toLowerCase().includes(query) ||
+        doc.category.toLowerCase().includes(query))
   );
   const folders = new Map<string, DocumentItem[]>();
   for (const doc of filtered) {
-    const key = doc.category.trim() || "general";
+    const key = documentFolder(doc);
     const list = folders.get(key);
     if (list) list.push(doc);
     else folders.set(key, [doc]);
   }
-  const visibleFolders = [...folders.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const folderTiles = [...folders.entries()].sort(([a], [b]) => a.localeCompare(b));
+  // Searching shows a flat, cross-folder result set; otherwise the current
+  // folder's files (root shows tiles only).
+  const visibleDocs = searching
+    ? filtered
+    : folder
+      ? (folders.get(folder) ?? [])
+      : [];
+
+  function kebab(doc: DocumentItem) {
+    const open = menuFor === doc.id;
+    return (
+      <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+        <button
+          type="button"
+          aria-label={`Actions for ${doc.title}`}
+          aria-expanded={open}
+          onClick={() => setMenuFor(open ? null : doc.id)}
+          className="rounded p-1 text-parchment/50 hover:bg-parchment/10 hover:text-parchment"
+        >
+          <MoreVertical className="h-4 w-4" />
+        </button>
+        {open && (
+          <div className="absolute right-0 z-40 mt-1 w-44 rounded-lg border border-parchment/15 bg-deep-ink py-1 shadow-xl">
+            {(
+              [
+                {
+                  label: "Open",
+                  icon: FileText,
+                  act: () => router.push(`/dashboard/documents/${doc.id}`)
+                },
+                {
+                  label: "Open in browser",
+                  icon: ExternalLink,
+                  act: () => void openFile(doc.id, "inline")
+                },
+                {
+                  label: "Download",
+                  icon: Download,
+                  act: () => void openFile(doc.id, "attachment")
+                },
+                {
+                  label: "Rename",
+                  icon: Pencil,
+                  act: () => {
+                    setModalValue(doc.title);
+                    setRenameTarget(doc);
+                  }
+                },
+                {
+                  label: "Move to folder",
+                  icon: FolderInput,
+                  act: () => {
+                    setModalValue(documentFolder(doc));
+                    setMoveTarget(doc);
+                  }
+                }
+              ] as { label: string; icon: LucideIcon; act: () => void }[]
+            ).map(({ label, icon: Icon, act }) => (
+              <button
+                key={label}
+                type="button"
+                onClick={() => {
+                  setMenuFor(null);
+                  act();
+                }}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-parchment/80 hover:bg-parchment/10"
+              >
+                <Icon className="h-3.5 w-3.5 text-parchment/50" />
+                {label}
+              </button>
+            ))}
+            <button
+              type="button"
+              onClick={() => {
+                setMenuFor(null);
+                void removeDocument(doc.id);
+              }}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-spark-orange/90 hover:bg-parchment/10"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   return (
     <Card>
-      <h2 className="text-lg font-semibold text-parchment">Documents</h2>
-      <p className="mt-1 text-sm text-parchment/50">
-        Upload price sheets, policies, contracts, or internal SOPs. Your coworker answers questions
-        from them and can text/email customers an expiring link on request. Internal-only
-        documents never reach customers, and expired documents stop being quoted or shared
-        automatically.
-      </p>
-
-      {/* ── Upload ─────────────────────────────────────────────────────── */}
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        <div>
-          <label className={labelClass}>
-            File (PDF, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
-          </label>
-          <input
-            ref={fileRef}
-            type="file"
-            accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
-            className="block w-full text-sm text-parchment/70 file:mr-3 file:rounded-md file:border-0 file:bg-signal-teal/20 file:px-3 file:py-1.5 file:text-sm file:text-signal-teal"
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Title (optional — defaults to the file name)</label>
-          <input
-            className={inputClass}
-            value={uploadTitle}
-            onChange={(e) => setUploadTitle(e.target.value)}
-            placeholder="Summer price list"
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Category (optional)</label>
-          <input
-            className={inputClass}
-            value={uploadCategory}
-            onChange={(e) => setUploadCategory(e.target.value)}
-            placeholder="pricing / policies / contracts"
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Who can the coworker use it with?</label>
-          <select
-            className={inputClass}
-            value={uploadAudience}
-            onChange={(e) => setUploadAudience(e.target.value as DocumentItem["audience"])}
+      {/* ── Toolbar ────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          className={`${inputClass} flex-1 min-w-[12rem]`}
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search documents…"
+          aria-label="Search documents"
+        />
+        <select
+          className={`${inputClass} w-auto`}
+          value={audienceFilter}
+          onChange={(e) => setAudienceFilter(e.target.value as typeof audienceFilter)}
+          aria-label="Filter by audience"
+        >
+          <option value="all">All audiences</option>
+          <option value="clients">Customers</option>
+          <option value="staff">Internal only</option>
+          <option value="both">Customers + internal</option>
+        </select>
+        <div className="flex rounded-md border border-parchment/15">
+          <button
+            type="button"
+            aria-label="Grid view"
+            aria-pressed={view === "grid"}
+            onClick={() => switchView("grid")}
+            className={`rounded-l-md p-2 ${view === "grid" ? "bg-parchment/10 text-parchment" : "text-parchment/40 hover:text-parchment"}`}
           >
-            <option value="both">Customers + internal</option>
-            <option value="clients">Customers</option>
-            <option value="staff">Internal only (never shown to customers)</option>
-          </select>
+            <LayoutGrid className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            aria-label="List view"
+            aria-pressed={view === "list"}
+            onClick={() => switchView("list")}
+            className={`rounded-r-md p-2 ${view === "list" ? "bg-parchment/10 text-parchment" : "text-parchment/40 hover:text-parchment"}`}
+          >
+            <List className="h-4 w-4" />
+          </button>
         </div>
-        <div>
-          <label className={labelClass}>Expires (optional)</label>
-          <input
-            type="date"
-            className={inputClass}
-            value={uploadExpires}
-            onChange={(e) => setUploadExpires(e.target.value)}
-          />
-        </div>
-        <div>
-          <label className={labelClass}>Renewal date (optional — reminds ahead)</label>
-          <input
-            type="date"
-            className={inputClass}
-            value={uploadRenewal}
-            onChange={(e) => setUploadRenewal(e.target.value)}
-          />
-        </div>
-        <div className="flex items-end">
-          <Button type="button" variant="primary" size="sm" onClick={upload} loading={uploading}>
-            Upload document
-          </Button>
-        </div>
+        <Button
+          type="button"
+          variant="primary"
+          size="sm"
+          onClick={() => {
+            setUploadCategory(folder ?? "");
+            setUploadOpen(true);
+          }}
+        >
+          <Upload className="mr-1.5 h-3.5 w-3.5" />
+          Upload
+        </Button>
       </div>
+
+      {/* ── Breadcrumb ─────────────────────────────────────────────────── */}
+      <nav className="mt-4 flex items-center gap-1 text-sm" aria-label="Breadcrumb">
+        <button
+          type="button"
+          onClick={() => goToFolder(null)}
+          className={folder ? "text-parchment/50 hover:text-parchment" : "font-semibold text-parchment"}
+        >
+          Documents
+        </button>
+        {folder && (
+          <>
+            <ChevronRight className="h-3.5 w-3.5 text-parchment/30" />
+            <span className="font-semibold text-parchment">{folder}</span>
+          </>
+        )}
+        {searching && (
+          <span className="ml-2 text-xs text-parchment/40">
+            search results across all folders
+          </span>
+        )}
+      </nav>
+
       {error ? (
         <p className="mt-2 text-xs text-spark-orange" role="alert">
           {error}
         </p>
       ) : null}
 
-      {/* ── Search + filters ──────────────────────────────────────────── */}
-      {documents.length > 0 ? (
-        <div className="mt-5 flex flex-wrap gap-2">
-          <input
-            className={`${inputClass} flex-1 min-w-[12rem]`}
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search documents…"
-            aria-label="Search documents"
-          />
-          <select
-            className={`${inputClass} w-auto`}
-            value={audienceFilter}
-            onChange={(e) => setAudienceFilter(e.target.value as typeof audienceFilter)}
-            aria-label="Filter by audience"
-          >
-            <option value="all">All audiences</option>
-            <option value="clients">Customers</option>
-            <option value="staff">Internal only</option>
-            <option value="both">Customers + internal</option>
-          </select>
-        </div>
-      ) : null}
-
-      {/* ── Directory list (category = folder) ────────────────────────── */}
-      <div className="mt-4 space-y-3">
+      {/* ── Content ────────────────────────────────────────────────────── */}
+      <div className="mt-4">
         {loading ? (
           <p className="text-sm text-parchment/40">Loading documents…</p>
         ) : documents.length === 0 ? (
-          <p className="text-sm text-parchment/40">No documents yet.</p>
-        ) : visibleFolders.length === 0 ? (
+          <p className="text-sm text-parchment/40">
+            No documents yet — upload price sheets, policies, contracts, SOPs, or meeting
+            transcripts and your coworker answers from them.
+          </p>
+        ) : searching && visibleDocs.length === 0 ? (
           <p className="text-sm text-parchment/40">No documents match your search.</p>
-        ) : (
-          visibleFolders.map(([category, docs]) => {
-            // A live search always shows its matches, and a folder holding
-            // the OPEN document never collapses over it — collapsing while
-            // editing (or a Move that re-files the open doc into a collapsed
-            // folder) must not make the editor vanish.
-            const isCollapsed =
-              !searching &&
-              collapsed.has(category) &&
-              !docs.some((d) => d.id === openId);
-            return (
-              <div key={category}>
+        ) : !searching && !folder ? (
+          // Root: folder tiles.
+          folderTiles.length === 0 ? (
+            <p className="text-sm text-parchment/40">No documents match the current filter.</p>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {folderTiles.map(([category, docs]) => (
                 <button
+                  key={category}
                   type="button"
-                  onClick={() => toggleFolder(category)}
-                  aria-expanded={!isCollapsed}
-                  className="flex w-full items-center gap-1.5 rounded-md px-1 py-1 text-left text-sm font-semibold text-parchment/80 hover:text-parchment"
+                  onClick={() => goToFolder(category)}
+                  className="flex items-center gap-2.5 rounded-lg border border-parchment/10 bg-parchment/[0.03] px-3 py-3 text-left hover:border-signal-teal/40 transition-colors"
                 >
-                  {isCollapsed ? (
-                    <ChevronRight className="h-3.5 w-3.5 text-parchment/40" />
-                  ) : (
-                    <ChevronDown className="h-3.5 w-3.5 text-parchment/40" />
-                  )}
-                  <Folder className="h-4 w-4 text-signal-teal/80" />
-                  <span>{category}</span>
-                  <span className="text-xs font-normal text-parchment/35">({docs.length})</span>
+                  <Folder className="h-5 w-5 shrink-0 text-signal-teal/80" />
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-parchment">
+                      {category}
+                    </span>
+                    <span className="block text-[11px] text-parchment/40">
+                      {docs.length} {docs.length === 1 ? "file" : "files"}
+                    </span>
+                  </span>
                 </button>
-                {!isCollapsed && (
-                  <div className="mt-1 space-y-2 pl-3 sm:pl-5">{docs.map(renderDocument)}</div>
-                )}
-              </div>
-            );
-          })
+              ))}
+            </div>
+          )
+        ) : visibleDocs.length === 0 ? (
+          <p className="text-sm text-parchment/40">
+            This folder is empty.{" "}
+            <button
+              type="button"
+              onClick={() => goToFolder(null)}
+              className="text-claw-green hover:underline"
+            >
+              Back to all documents
+            </button>
+          </p>
+        ) : view === "grid" ? (
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {visibleDocs.map((doc) => {
+              const Icon = mimeIcon(doc.mime_type);
+              return (
+                <div
+                  key={doc.id}
+                  role="link"
+                  tabIndex={0}
+                  onClick={() => router.push(`/dashboard/documents/${doc.id}`)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") router.push(`/dashboard/documents/${doc.id}`);
+                  }}
+                  className="cursor-pointer rounded-lg border border-parchment/10 bg-parchment/[0.03] p-3 hover:border-signal-teal/40 transition-colors"
+                >
+                  <div className="flex items-start gap-2.5">
+                    <Icon className="mt-0.5 h-5 w-5 shrink-0 text-signal-teal/70" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-parchment">{doc.title}</p>
+                      <p className="mt-0.5 text-[11px] text-parchment/40">
+                        {formatByteSize(doc.byte_size)} · {doc.created_at.slice(0, 10)}
+                        {searching ? ` · ${documentFolder(doc)}` : ""}
+                      </p>
+                    </div>
+                    {kebab(doc)}
+                  </div>
+                  <div className="mt-2 flex flex-wrap items-center gap-1">
+                    <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[10px] text-parchment/50">
+                      {AUDIENCE_LABELS[doc.audience]}
+                    </span>
+                    <StatusBadges doc={doc} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm">
+              <thead>
+                <tr className="border-b border-parchment/10 text-[11px] uppercase tracking-wider text-parchment/40">
+                  <th className="py-2 pr-3 font-medium">Name</th>
+                  <th className="py-2 pr-3 font-medium">Folder</th>
+                  <th className="py-2 pr-3 font-medium">Audience</th>
+                  <th className="py-2 pr-3 font-medium">Size</th>
+                  <th className="py-2 pr-3 font-medium">Created</th>
+                  <th className="py-2 font-medium" aria-label="Actions" />
+                </tr>
+              </thead>
+              <tbody>
+                {visibleDocs.map((doc) => {
+                  const Icon = mimeIcon(doc.mime_type);
+                  return (
+                    <tr
+                      key={doc.id}
+                      onClick={() => router.push(`/dashboard/documents/${doc.id}`)}
+                      className="cursor-pointer border-b border-parchment/5 last:border-0 hover:bg-parchment/[0.04]"
+                    >
+                      <td className="py-2 pr-3">
+                        <span className="flex items-center gap-2 text-parchment">
+                          <Icon className="h-4 w-4 shrink-0 text-signal-teal/70" />
+                          <span className="truncate font-medium">{doc.title}</span>
+                          <StatusBadges doc={doc} />
+                        </span>
+                      </td>
+                      <td className="py-2 pr-3 text-parchment/50">{documentFolder(doc)}</td>
+                      <td className="py-2 pr-3 text-parchment/50">
+                        {AUDIENCE_LABELS[doc.audience]}
+                      </td>
+                      <td className="py-2 pr-3 text-parchment/50">
+                        {formatByteSize(doc.byte_size)}
+                      </td>
+                      <td className="py-2 pr-3 text-parchment/50">{doc.created_at.slice(0, 10)}</td>
+                      <td className="py-2 text-right">{kebab(doc)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
+
+      {/* ── Rename / Move modal ────────────────────────────────────────── */}
+      {(renameTarget || moveTarget) && (
+        <Modal
+          title={renameTarget ? "Rename document" : "Move to folder"}
+          onClose={() => {
+            setRenameTarget(null);
+            setMoveTarget(null);
+          }}
+        >
+          <label className={labelClass}>
+            {renameTarget ? "New title" : "Folder (category) — new names create the folder"}
+          </label>
+          <input
+            className={inputClass}
+            value={modalValue}
+            onChange={(e) => setModalValue(e.target.value)}
+            maxLength={renameTarget ? 200 : 100}
+            placeholder={renameTarget ? undefined : "meeting / pricing / policies"}
+            autoFocus
+          />
+          <div className="mt-4 flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => {
+                setRenameTarget(null);
+                setMoveTarget(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              loading={modalSaving}
+              disabled={!modalValue.trim()}
+              onClick={() => void submitModal()}
+            >
+              {renameTarget ? "Rename" : "Move"}
+            </Button>
+          </div>
+        </Modal>
+      )}
+
+      {/* ── Upload modal ───────────────────────────────────────────────── */}
+      {uploadOpen && (
+        <Modal title="Upload document" onClose={() => setUploadOpen(false)}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <label className={labelClass}>
+                File (PDF, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
+              </label>
+              <input
+                ref={fileRef}
+                type="file"
+                accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
+                className="block w-full text-sm text-parchment/70 file:mr-3 file:rounded-md file:border-0 file:bg-signal-teal/20 file:px-3 file:py-1.5 file:text-sm file:text-signal-teal"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Title (optional — defaults to the file name)</label>
+              <input
+                className={inputClass}
+                value={uploadTitle}
+                onChange={(e) => setUploadTitle(e.target.value)}
+                placeholder="Summer price list"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Folder (category, optional)</label>
+              <input
+                className={inputClass}
+                value={uploadCategory}
+                onChange={(e) => setUploadCategory(e.target.value)}
+                placeholder="pricing / policies / contracts"
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Who can the coworker use it with?</label>
+              <select
+                className={inputClass}
+                value={uploadAudience}
+                onChange={(e) => setUploadAudience(e.target.value as DocumentItem["audience"])}
+              >
+                <option value="both">Customers + internal</option>
+                <option value="clients">Customers</option>
+                <option value="staff">Internal only (never shown to customers)</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>Expires (optional)</label>
+              <input
+                type="date"
+                className={inputClass}
+                value={uploadExpires}
+                onChange={(e) => setUploadExpires(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className={labelClass}>Renewal date (optional — reminds ahead)</label>
+              <input
+                type="date"
+                className={inputClass}
+                value={uploadRenewal}
+                onChange={(e) => setUploadRenewal(e.target.value)}
+              />
+            </div>
+          </div>
+          {error ? (
+            <p className="mt-2 text-xs text-spark-orange" role="alert">
+              {error}
+            </p>
+          ) : null}
+          <div className="mt-4 flex justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setUploadOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={() => void upload()}
+              loading={uploading}
+            >
+              Upload document
+            </Button>
+          </div>
+        </Modal>
+      )}
     </Card>
   );
-
-  function toggleFolder(category: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(category)) next.delete(category);
-      else next.add(category);
-      return next;
-    });
-  }
-
-  /** One document row + its expanded editor panel (used inside folders). */
-  function renderDocument(doc: DocumentItem) {
-            const badge = expiryBadge(doc);
-            const renewal = renewalBadge(doc);
-            const linkedContact = doc.contact_id
-              ? contacts.find((c) => c.id === doc.contact_id)
-              : undefined;
-            const open = openId === doc.id;
-            return (
-              <div key={doc.id} className="rounded-md border border-parchment/10 p-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => void openDocument(doc)}
-                    className="text-sm font-medium text-parchment hover:text-signal-teal"
-                  >
-                    {doc.title}
-                  </button>
-                  <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
-                    {doc.category}
-                  </span>
-                  <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
-                    {AUDIENCE_LABELS[doc.audience]}
-                  </span>
-                  {doc.status !== "ready" && (
-                    <span
-                      className={`rounded border px-1.5 py-0.5 text-[11px] ${
-                        doc.status === "failed"
-                          ? "border-spark-orange/50 text-spark-orange"
-                          : "border-parchment/20 text-parchment/50"
-                      }`}
-                    >
-                      {doc.status === "failed" ? "Ingest failed" : "Processing"}
-                    </span>
-                  )}
-                  {badge && (
-                    <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
-                      {badge.text}
-                    </span>
-                  )}
-                  {renewal && (
-                    <span className={`rounded border px-1.5 py-0.5 text-[11px] ${renewal.tone}`}>
-                      {renewal.text}
-                    </span>
-                  )}
-                  {doc.contact_id && (
-                    <span className="rounded border border-signal-teal/40 px-1.5 py-0.5 text-[11px] text-signal-teal/90">
-                      {/* The picker list is capped at the API's 200-contact page;
-                          a linked contact beyond it still shows as linked. */}
-                      {linkedContact ? contactLabel(linkedContact) : "Linked contact"}
-                    </span>
-                  )}
-                  <span className="ml-auto text-[11px] text-parchment/35">
-                    {doc.byte_size < 1024
-                      ? `${doc.byte_size} B`
-                      : `${(doc.byte_size / 1024).toFixed(0)} KB`}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => void downloadOriginal(doc.id)}
-                    className="text-[11px] text-parchment/50 hover:text-parchment"
-                  >
-                    Download
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void removeDocument(doc.id)}
-                    className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
-                  >
-                    Delete
-                  </button>
-                </div>
-                {doc.summary && !open ? (
-                  <p className="mt-1 text-xs text-parchment/45">{doc.summary}</p>
-                ) : null}
-                {doc.status === "failed" && doc.error_detail ? (
-                  <p className="mt-1 text-xs text-spark-orange/80">
-                    Could not read this file ({doc.error_detail}). You can paste the content
-                    manually below.
-                  </p>
-                ) : null}
-
-                {open && (
-                  <div className="mt-3 space-y-3 border-t border-parchment/10 pt-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div>
-                        <label className={labelClass}>Title</label>
-                        <div className="flex gap-2">
-                          <input
-                            className={inputClass}
-                            value={draftTitle}
-                            onChange={(e) => setDraftTitle(e.target.value)}
-                            maxLength={200}
-                          />
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            loading={savingDoc}
-                            disabled={!draftTitle.trim() || draftTitle.trim() === doc.title}
-                            onClick={() => void patchDocument(doc.id, { title: draftTitle.trim() })}
-                          >
-                            Rename
-                          </Button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className={labelClass}>Category (acts as the folder)</label>
-                        <div className="flex gap-2">
-                          <input
-                            className={inputClass}
-                            value={draftCategory}
-                            onChange={(e) => setDraftCategory(e.target.value)}
-                            maxLength={100}
-                            placeholder="meeting / pricing / policies"
-                          />
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            loading={savingDoc}
-                            disabled={
-                              !draftCategory.trim() || draftCategory.trim() === doc.category
-                            }
-                            onClick={() =>
-                              void patchDocument(doc.id, { category: draftCategory.trim() })
-                            }
-                          >
-                            Move
-                          </Button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className={labelClass}>Audience</label>
-                        <select
-                          className={inputClass}
-                          value={doc.audience}
-                          onChange={(e) => void patchDocument(doc.id, { audience: e.target.value })}
-                        >
-                          <option value="both">Customers + internal</option>
-                          <option value="clients">Customers</option>
-                          <option value="staff">Internal only</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className={labelClass}>Expires</label>
-                        <div className="flex gap-2">
-                          <input
-                            type="date"
-                            className={inputClass}
-                            value={draftExpires}
-                            onChange={(e) => setDraftExpires(e.target.value)}
-                          />
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            loading={savingDoc}
-                            onClick={() =>
-                              void patchDocument(doc.id, {
-                                expiresAt: draftExpires ? draftExpires : null
-                              })
-                            }
-                          >
-                            Set
-                          </Button>
-                        </div>
-                      </div>
-                      <div>
-                        <label className={labelClass}>
-                          Renewal date (reminds ahead — the document stays active)
-                        </label>
-                        <div className="flex gap-2">
-                          <input
-                            type="date"
-                            className={inputClass}
-                            value={draftRenewal}
-                            onChange={(e) => setDraftRenewal(e.target.value)}
-                          />
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            loading={savingDoc}
-                            onClick={() =>
-                              void patchDocument(doc.id, {
-                                renewalDate: draftRenewal ? draftRenewal : null
-                              })
-                            }
-                          >
-                            Set
-                          </Button>
-                        </div>
-                      </div>
-                      {contacts.length > 0 && (
-                        <div>
-                          <label className={labelClass}>Linked contact (policy holder)</label>
-                          <select
-                            className={inputClass}
-                            value={doc.contact_id ?? ""}
-                            onChange={(e) =>
-                              void patchDocument(doc.id, {
-                                contactId: e.target.value ? e.target.value : null
-                              })
-                            }
-                          >
-                            <option value="">— not linked —</option>
-                            {/* A linked contact beyond the 200-contact picker
-                                page keeps its own option so the select never
-                                misreports the doc as unlinked. */}
-                            {doc.contact_id && !contacts.some((c) => c.id === doc.contact_id) && (
-                              <option value={doc.contact_id}>Linked contact (kept)</option>
-                            )}
-                            {contacts.map((c) => (
-                              <option key={c.id} value={c.id}>
-                                {contactLabel(c)}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                      {doc.record_fields && Object.keys(doc.record_fields).length > 0 && (
-                        <div>
-                          <label className={labelClass}>
-                            Record fields (captured by your workflows)
-                          </label>
-                          <div className="flex flex-wrap gap-1.5">
-                            {Object.entries(doc.record_fields).map(([key, value]) => (
-                              <span
-                                key={key}
-                                className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/60"
-                              >
-                                <span className="text-parchment/40">{key}:</span> {value}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      {members.length > 0 && (
-                        <div>
-                          <label className={labelClass}>Renewal handled by</label>
-                          <select
-                            className={inputClass}
-                            value={doc.assigned_employee_id ?? ""}
-                            onChange={(e) =>
-                              void patchDocument(doc.id, {
-                                assignedEmployeeId: e.target.value ? e.target.value : null
-                              })
-                            }
-                          >
-                            <option value="">— unassigned —</option>
-                            {members.map((m) => (
-                              <option key={m.id} value={m.id}>
-                                {m.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      )}
-                    </div>
-                    <div>
-                      <label className={labelClass}>
-                        What the coworker knows from this document (editable)
-                      </label>
-                      <textarea
-                        className={`${inputClass} min-h-40 font-mono text-xs`}
-                        value={draftContent}
-                        onChange={(e) => setDraftContent(e.target.value)}
-                      />
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          loading={savingDoc}
-                          onClick={() => void patchDocument(doc.id, { contentMd: draftContent })}
-                        >
-                          Save content
-                        </Button>
-                        {/* The export builds from SAVED, ready content — the
-                            route rejects processing/failed/empty docs, and with
-                            unsaved edits the link would silently ship an older
-                            deck, so both gate the control. */}
-                        {doc.status === "ready" && (doc.content_md ?? "").trim().length > 0 ? (
-                          draftContent === (doc.content_md ?? "") ? (
-                            <a
-                              href={`/api/dashboard/documents/${doc.id}/pptx?businessId=${encodeURIComponent(businessId)}`}
-                              className="inline-flex items-center rounded-md border border-parchment/20 px-3 py-1.5 text-xs text-parchment hover:bg-parchment/10 transition-colors"
-                              title="Headings become slides, bullets become bullets"
-                            >
-                              Download as PowerPoint
-                            </a>
-                          ) : (
-                            <span
-                              className="inline-flex items-center rounded-md border border-parchment/10 px-3 py-1.5 text-xs text-parchment/40 cursor-not-allowed"
-                              title="Save your content edits first — the export uses saved content"
-                            >
-                              Download as PowerPoint (save first)
-                            </span>
-                          )
-                        ) : null}
-                      </div>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Signatures</label>
-                      {signatureRequests.length === 0 ? (
-                        <p className="text-xs text-parchment/40">
-                          No signature requests yet. Send one below for a legal sign-off.
-                        </p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {signatureRequests.map((r) => {
-                            const dead =
-                              r.status === "void" ||
-                              (r.status !== "signed" && Date.parse(r.expires_at) <= Date.now());
-                            return (
-                              <li
-                                key={r.id}
-                                className="flex flex-wrap items-center gap-2 text-xs text-parchment/60"
-                              >
-                                <span className="text-parchment/80">{r.signer_name}</span>
-                                <span className="text-parchment/35">
-                                  {r.signer_phone || r.signer_email}
-                                </span>
-                                {r.status === "signed" ? (
-                                  <span className="rounded border border-signal-teal/50 px-1.5 py-0.5 text-signal-teal">
-                                    Signed {r.signed_at?.slice(0, 10)} as {r.signature_name}
-                                  </span>
-                                ) : dead ? (
-                                  <span className="text-parchment/35">
-                                    {r.status === "void" ? "voided" : "expired"}
-                                  </span>
-                                ) : (
-                                  <>
-                                    <span className="rounded border border-parchment/20 px-1.5 py-0.5">
-                                      {r.status === "viewed" ? "Viewed" : "Sent"}
-                                    </span>
-                                    <button
-                                      type="button"
-                                      onClick={() => void voidSignatureRequest(doc.id, r.id)}
-                                      className="text-spark-orange/80 hover:text-spark-orange"
-                                    >
-                                      Void
-                                    </button>
-                                  </>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                      <div className="mt-2 grid gap-2 sm:grid-cols-3">
-                        <input
-                          className={inputClass}
-                          value={sigName}
-                          onChange={(e) => setSigName(e.target.value)}
-                          placeholder="Signer's name"
-                        />
-                        <input
-                          className={inputClass}
-                          value={sigRecipient}
-                          onChange={(e) => setSigRecipient(e.target.value)}
-                          placeholder="+16025550147 or email"
-                        />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          loading={sigSending}
-                          onClick={() => void requestSignature(doc.id)}
-                        >
-                          Request signature
-                        </Button>
-                        <input
-                          className={`${inputClass} sm:col-span-3`}
-                          value={sigMessage}
-                          onChange={(e) => setSigMessage(e.target.value)}
-                          placeholder="Optional note shown above the document"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Share links</label>
-                      {shares.length === 0 ? (
-                        <p className="text-xs text-parchment/40">
-                          No links yet. Ask your coworker to share this document, or use it in an
-                          AiFlow.
-                        </p>
-                      ) : (
-                        <ul className="space-y-1">
-                          {shares.map((s) => {
-                            const dead =
-                              Boolean(s.revoked_at) || Date.parse(s.expires_at) <= Date.now();
-                            return (
-                              <li
-                                key={s.id}
-                                className="flex flex-wrap items-center gap-2 text-xs text-parchment/60"
-                              >
-                                <span>{s.shared_with || "(link)"}</span>
-                                <span className="text-parchment/35">via {s.channel}</span>
-                                <span className="text-parchment/35">
-                                  opened {s.access_count}×
-                                </span>
-                                {dead ? (
-                                  <span className="text-parchment/35">
-                                    {s.revoked_at ? "revoked" : "expired"}
-                                  </span>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    onClick={() => void revokeShare(doc.id, s.id)}
-                                    className="text-spark-orange/80 hover:text-spark-orange"
-                                  >
-                                    Revoke
-                                  </button>
-                                )}
-                              </li>
-                            );
-                          })}
-                        </ul>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-  }
 }

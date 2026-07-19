@@ -1,10 +1,14 @@
 /**
- * Business Documents — download the original uploaded file.
+ * Business Documents — access the original uploaded file.
  *
  *   GET /api/dashboard/documents/:documentId/download?businessId=…
  *     → { url } — a short-lived signed URL on the private `business-docs`
  *       bucket with a Content-Disposition download filename (same pattern
  *       as the email-attachments route). Read-only, so view-as is allowed.
+ *
+ *   `?disposition=inline` signs WITHOUT the download filename so the
+ *   browser renders the file in place (PDF viewer, plain text for
+ *   .vtt/.md/.csv) — the "Open in browser" action.
  */
 
 import { z } from "zod";
@@ -41,11 +45,16 @@ export async function GET(request: Request, context: RouteContext) {
     const doc = await getBusinessDocument(businessId.data, documentId);
     if (!doc) return errorResponse("NOT_FOUND", "Document not found", 404);
 
+    const inline = new URL(request.url).searchParams.get("disposition") === "inline";
     const filename = doc.storage_path.split("/").pop() || "document";
     const db = await createSupabaseServiceClient();
     const { data, error } = await db.storage
       .from(BUSINESS_DOCS_BUCKET)
-      .createSignedUrl(doc.storage_path, SIGNED_URL_TTL_S, { download: filename });
+      .createSignedUrl(
+        doc.storage_path,
+        SIGNED_URL_TTL_S,
+        inline ? undefined : { download: filename }
+      );
     if (error || !data?.signedUrl) {
       logger.warn("documents/download: signed url failed", {
         businessId: businessId.data,
