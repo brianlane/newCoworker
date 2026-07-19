@@ -434,6 +434,11 @@ async function forwardUpstreamResponse(upstreamResp, res, opts) {
   };
 
   const reader = upstreamResp.body.getReader();
+  // When the held stream turns out to be a fully-empty completion we must
+  // return WITHOUT touching res (no headers, no end) so the caller's retry
+  // can forward its own response on the same socket — the finally below
+  // therefore only ends the response when this attempt actually owned it.
+  let returningEmpty = false;
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -461,6 +466,7 @@ async function forwardUpstreamResponse(upstreamResp, res, opts) {
         if (!probe.sawOutput()) {
           // Whole stream ended with no model output: report empty with res
           // untouched so the caller can retry.
+          returningEmpty = true;
           return { empty: true, finishReason: probe.finishReason(), usage: probe.usage() };
         }
         held.push(tailText);
@@ -503,7 +509,7 @@ async function forwardUpstreamResponse(upstreamResp, res, opts) {
     // pass-through path, and skip metering a turn we couldn't fully observe.
     if (probe && held) releaseHeld();
   } finally {
-    res.end();
+    if (!returningEmpty) res.end();
   }
   return { empty: false };
 }
