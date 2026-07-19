@@ -23,7 +23,6 @@ import {
   CALENDAR_POLL_TICK_EVENT,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
-  claimCalendarPollTick,
   eventCanceledDue,
   eventCreatedDue,
   eventEndDue,
@@ -31,7 +30,9 @@ import {
   graphTimeIso,
   normalizeGoogleEvent,
   normalizeGraphEvent,
-  pollCalendarTriggers
+  pollCalendarTriggers,
+  shouldRunCalendarPoll,
+  stampCalendarPollTick
 } from "@/lib/ai-flows/calendar-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
@@ -1388,9 +1389,11 @@ describe("poll failure escalation + owner alert", () => {
     expect(dispatchUrgentNotification).not.toHaveBeenCalled();
   });
 
-  it("a failed lookback assumes persistent (error level) rather than misfiling an outage", async () => {
+  it("a failed lookback logs as persistent but NEVER alerts (an assumed count is not evidence)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    vi.mocked(resolveCalendarConnection).mockRejectedValueOnce(new Error("provider 500"));
+    // Connection-class failure — exactly the kind that would alert with two
+    // real priors. A lookback read error must not synthesize them.
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(null);
     await pollCalendarTriggers(
       dbWith([flowRow("f1", createdTrigger())], null, [
         { data: null, error: { message: "logs unavailable" } }
@@ -1417,37 +1420,30 @@ describe("poll failure escalation + owner alert", () => {
   });
 });
 
-describe("claimCalendarPollTick", () => {
+describe("shouldRunCalendarPoll / stampCalendarPollTick", () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it("claims the tick and stamps the marker when no recent poll exists", async () => {
-    const claimed = await claimCalendarPollTick(
+  it("runs when no recent poll exists — the marker is NOT written by the check", async () => {
+    const should = await shouldRunCalendarPoll(
       dbWith([], null, [{ data: null, error: null }]) as never
     );
-    expect(claimed).toBe(true);
-    expect(recordSystemLog).toHaveBeenCalledWith(
-      expect.objectContaining({
-        businessId: null,
-        level: "debug",
-        event: CALENDAR_POLL_TICK_EVENT
-      })
-    );
+    expect(should).toBe(true);
+    expect(recordSystemLog).not.toHaveBeenCalled();
   });
 
-  it("skips when a real poll ran inside the interval (no marker written)", async () => {
-    const claimed = await claimCalendarPollTick(
+  it("skips when a real poll ran inside the interval", async () => {
+    const should = await shouldRunCalendarPoll(
       dbWith([], null, [{ data: [{ id: 7 }], error: null }]) as never
     );
-    expect(claimed).toBe(false);
-    expect(recordSystemLog).not.toHaveBeenCalled();
+    expect(should).toBe(false);
   });
 
   it("fails OPEN when the marker read errors — gate trouble must never stall triggers", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    const claimed = await claimCalendarPollTick(
+    const should = await shouldRunCalendarPoll(
       dbWith([], null, [{ data: null, error: { message: "denied" } }]) as never
     );
-    expect(claimed).toBe(true);
+    expect(should).toBe(true);
     errSpy.mockRestore();
   });
 
@@ -1455,7 +1451,19 @@ describe("claimCalendarPollTick", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
       dbWith([], null, [{ data: [{ id: 7 }], error: null }]) as never
     );
-    expect(await claimCalendarPollTick()).toBe(false);
+    expect(await shouldRunCalendarPoll()).toBe(false);
     expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+
+  it("stampCalendarPollTick writes the platform-level debug marker", async () => {
+    await stampCalendarPollTick(dbWith([]) as never);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: null,
+        level: "debug",
+        event: CALENDAR_POLL_TICK_EVENT
+      }),
+      expect.anything()
+    );
   });
 });

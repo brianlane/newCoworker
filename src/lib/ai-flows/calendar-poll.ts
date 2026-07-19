@@ -609,7 +609,8 @@ async function logCalendarPollFailure(
   payload: Record<string, unknown>
 ): Promise<void> {
   // Failure-path-only lookback: healthy ticks never pay this query.
-  let priorFailures = CALENDAR_POLL_ALERT_PRIOR_FAILURES;
+  let priorFailures = 0;
+  let lookbackFailed = false;
   try {
     const sinceIso = new Date(Date.now() - CALENDAR_POLL_FAILURE_ESCALATION_MS).toISOString();
     const { data, error } = await db
@@ -622,12 +623,15 @@ async function logCalendarPollFailure(
     if (error) throw new Error(error.message);
     priorFailures = (data ?? []).length;
   } catch (err) {
-    // Lookback failed — assume persistent (log at error, like before this
-    // helper existed) rather than misfiling a real outage as a blip.
+    // Lookback failed — LOG as persistent (error, like before this helper
+    // existed) rather than misfiling a real outage as a blip; but never ALERT
+    // off an assumed count — the owner ping needs real evidence of three
+    // failing polls, not a system_logs read hiccup.
+    lookbackFailed = true;
     console.error("calendar poll failure lookback", err);
   }
 
-  const persistent = priorFailures >= 1;
+  const persistent = lookbackFailed || priorFailures >= 1;
   await recordSystemLog({
     businessId,
     source: "aiflow",
@@ -637,7 +641,11 @@ async function logCalendarPollFailure(
     payload
   });
 
-  if (priorFailures >= CALENDAR_POLL_ALERT_PRIOR_FAILURES && isConnectionFailure(message)) {
+  if (
+    !lookbackFailed &&
+    priorFailures >= CALENDAR_POLL_ALERT_PRIOR_FAILURES &&
+    isConnectionFailure(message)
+  ) {
     await alertOwnerCalendarBroken(db, businessId);
   }
 }
@@ -691,14 +699,15 @@ async function alertOwnerCalendarBroken(db: SupabaseClient, businessId: string):
 // ── Poll cadence gate ───────────────────────────────────────────────────────
 
 /**
- * Claim this tick as a REAL poll, or report that a recent poll already
- * covered it. Tracked with a platform-level system_logs marker (no new
- * table); two racing kicks could both claim — harmless, the run dedupe keys
- * make double polling idempotent, this gate is purely a call-volume
- * optimization. Fails OPEN (poll runs) so gate trouble can never stall
- * calendar triggers.
+ * Should this tick run a REAL poll, or did a recent poll already cover it?
+ * Tracked with a platform-level system_logs marker (no new table); the
+ * caller stamps the marker AFTER a successful poll (stampCalendarPollTick),
+ * so a thrown poll never consumes a cadence slot — the next minute retries.
+ * Two racing kicks could both poll — harmless, the run dedupe keys make
+ * double polling idempotent; this gate is purely a call-volume optimization.
+ * Fails OPEN (poll runs) so gate trouble can never stall calendar triggers.
  */
-export async function claimCalendarPollTick(client?: SupabaseClient): Promise<boolean> {
+export async function shouldRunCalendarPoll(client?: SupabaseClient): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
   try {
     const sinceIso = new Date(Date.now() - CALENDAR_POLL_MIN_INTERVAL_MS).toISOString();
@@ -710,20 +719,26 @@ export async function claimCalendarPollTick(client?: SupabaseClient): Promise<bo
       .gte("created_at", sinceIso)
       .limit(1);
     if (error) throw new Error(error.message);
-    if ((data ?? []).length > 0) return false;
-    await recordSystemLog({
+    return (data ?? []).length === 0;
+  } catch (err) {
+    console.error("shouldRunCalendarPoll", err);
+    return true;
+  }
+}
+
+/** Stamp the cadence marker — call only after a poll actually completed. */
+export async function stampCalendarPollTick(client?: SupabaseClient): Promise<void> {
+  await recordSystemLog(
+    {
       businessId: null,
       source: "aiflow",
       level: "debug",
       event: CALENDAR_POLL_TICK_EVENT,
       message: "Calendar trigger poll tick",
       payload: {}
-    });
-    return true;
-  } catch (err) {
-    console.error("claimCalendarPollTick", err);
-    return true;
-  }
+    },
+    client
+  );
 }
 
 // ── The poll ────────────────────────────────────────────────────────────────
