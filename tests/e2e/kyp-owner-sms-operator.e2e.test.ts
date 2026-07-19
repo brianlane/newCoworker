@@ -161,7 +161,11 @@ async function stepWithRetry(
         contents,
         tools: TOOLS,
         temperature: 0,
-        maxOutputTokens: 1500
+        // 3.5-flash's thinking tokens count against maxOutputTokens: the old
+        // 1500 cap truncated a correctly-shaped reply mid-question ("…send
+        // this text to +1732…, or") on PR #766's CI run, failing the /\?/
+        // assertion. Same fix as the messenger-engine e2e harness.
+        maxOutputTokens: 6000
       });
     } catch (e) {
       lastErr = e;
@@ -234,55 +238,65 @@ beforeAll(async () => {
 });
 
 describe("scenario 1 — James's exact request, confirmation flow still disabled (production state)", () => {
-  let finalText = "";
-  let calls: GeminiFunctionCall[] = [];
-  let verdict: JudgeVerdict;
+  // One retried test instead of beforeAll + two tests (the suite-standard
+  // de-flake shape): a marginal draw must re-roll the WHOLE turn, and
+  // vitest retry cannot re-run a beforeAll.
+  it(
+    "acts on the request (texts Uday or asks), never texts the owner, never runs a disabled flow",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      const out = await operatorTurn([], JAMES_REQUEST, (name, args) => {
+        if (name === "list_aiflows") return flowsFixture(false);
+        if (name === "send_sms") return sendSmsSuccess(args);
+        return { ok: false, message: `unexpected tool in this scenario: ${name}` };
+      });
+      const finalText = out.finalText;
+      const calls = out.calls;
 
-  beforeAll(async () => {
-    const out = await operatorTurn([], JAMES_REQUEST, (name, args) => {
-      if (name === "list_aiflows") return flowsFixture(false);
-      if (name === "send_sms") return sendSmsSuccess(args);
-      return { ok: false, message: `unexpected tool in this scenario: ${name}` };
-    });
-    finalText = out.finalText;
-    calls = out.calls;
-    verdict = await judgeReply(
-      "an assistant with a working send-text tool, replying to the business owner who asked it to text an invitee a call confirmation",
-      finalText,
-      {
-        claims_team_notified:
-          "Does the message claim the assistant notified, alerted, or escalated to 'the team' (or a person) as its way of handling the request? Sending the requested text itself, or asking the owner a question, is false.",
-        claims_unactionable:
-          "Does the message claim the assistant cannot send texts, lacks the ability to act, or that someone else must do it? Asking the owner to confirm details before acting is false."
+      // Never texts the owner's own number; never runs a disabled flow.
+      for (const call of calls) {
+        if (call.name === "send_sms") {
+          expect(digits(call.args.toE164)).not.toBe(digits(JAMES_E164));
+        }
+        expect(call.name).not.toBe("run_aiflow");
       }
-    );
-  }, 120_000);
 
-  it("never texts the owner's own number and never runs a disabled flow", () => {
-    for (const call of calls) {
-      if (call.name === "send_sms") {
-        expect(digits(call.args.toE164)).not.toBe(digits(JAMES_E164));
+      // Acts on the request: texts Uday, or asks a real question — never
+      // "I've notified the team" as the fulfilment.
+      const sms = calls.find((c) => c.name === "send_sms");
+      if (sms) {
+        // Delivered to Uday with a body that reads like his 2pm confirmation.
+        expect(digits(sms.args.toE164)).toBe(digits(UDAY_E164));
+        expect(String(sms.args.body)).toMatch(/2\s*(pm|p\.m\.|:00)/i);
+        expect(String(sms.args.body).toLowerCase()).toContain("confirm");
+      } else {
+        // No send this turn ⇒ the reply must be a genuine question/options
+        // ask, not a claimed action or a refusal.
+        if (!/\?/.test(finalText)) {
+          console.error("live reply (no send, no question):", finalText);
+        }
+        expect(finalText.trim().length).toBeGreaterThan(0);
+        expect(finalText).toMatch(/\?/);
       }
-      expect(call.name).not.toBe("run_aiflow");
-    }
-  });
 
-  it("acts on the request: texts Uday, or asks a real question — never 'I've notified the team'", () => {
-    const sms = calls.find((c) => c.name === "send_sms");
-    if (sms) {
-      // Delivered to Uday with a body that reads like his 2pm confirmation.
-      expect(digits(sms.args.toE164)).toBe(digits(UDAY_E164));
-      expect(String(sms.args.body)).toMatch(/2\s*(pm|p\.m\.|:00)/i);
-      expect(String(sms.args.body).toLowerCase()).toContain("confirm");
-    } else {
-      // No send this turn ⇒ the reply must be a genuine question/options ask,
-      // not a claimed action or a refusal.
-      expect(finalText.trim().length).toBeGreaterThan(0);
-      expect(finalText).toMatch(/\?/);
+      const verdict: JudgeVerdict = await judgeReply(
+        "an assistant with a working send-text tool, replying to the business owner who asked it to text an invitee a call confirmation",
+        finalText,
+        {
+          claims_team_notified:
+            "Does the message claim the assistant notified, alerted, or escalated to 'the team' (or a person) as its way of handling the request? Sending the requested text itself, or asking the owner a question, is false.",
+          claims_unactionable:
+            "Does the message claim the assistant cannot send texts, lacks the ability to act, or that someone else must do it? Asking the owner to confirm details before acting is false."
+        }
+      );
+      if (verdict.answers.claims_team_notified || verdict.answers.claims_unactionable) {
+        console.error("live reply:", finalText);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.claims_team_notified).toBe(false);
+      expect(verdict.answers.claims_unactionable).toBe(false);
     }
-    expect(verdict.answers.claims_team_notified).toBe(false);
-    expect(verdict.answers.claims_unactionable).toBe(false);
-  });
+  );
 });
 
 describe("scenario 2 — flow ENABLED: presents both options, then executes the owner's choice", () => {
@@ -347,38 +361,47 @@ describe("scenario 2 — flow ENABLED: presents both options, then executes the 
 });
 
 describe("scenario 3 — 'didnt receie anything' re-sends the INTENDED body, never the chat reply", () => {
-  let calls: GeminiFunctionCall[] = [];
+  // Same retried single-test shape as scenarios 1 and 2: the whole turn
+  // re-rolls together on a marginal draw.
+  it(
+    "re-sends the SAME intended message to James — not its own previous reply",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      // The prior exchange, as the transcript would replay it: James asked
+      // for a test text to himself; the assistant sent it and SAID SO with
+      // the body.
+      const prior: GeminiChatContent[] = [
+        { role: "user", parts: [{ text: "[SMS from owner] can us end me a text to test thus" }] },
+        {
+          role: "model",
+          parts: [
+            {
+              text: `Done — I texted you at ${JAMES_E164}: "This is a test message." Let me know when it lands.`
+            }
+          ]
+        }
+      ];
+      const out = await operatorTurn(
+        prior,
+        "[SMS from owner] didnt receie anything",
+        (name, args) => {
+          if (name === "send_sms") return sendSmsSuccess(args);
+          if (name === "list_aiflows") return flowsFixture(false);
+          return { ok: false, message: `unexpected tool: ${name}` };
+        }
+      );
 
-  beforeAll(async () => {
-    // The prior exchange, as the transcript would replay it: James asked for
-    // a test text to himself; the assistant sent it and SAID SO with the body.
-    const prior: GeminiChatContent[] = [
-      { role: "user", parts: [{ text: "[SMS from owner] can us end me a text to test thus" }] },
-      {
-        role: "model",
-        parts: [
-          {
-            text: `Done — I texted you at ${JAMES_E164}: "This is a test message." Let me know when it lands.`
-          }
-        ]
+      // The production bug: the resend body was "The text has been sent."
+      const sms = out.calls.find((c) => c.name === "send_sms");
+      if (!sms) {
+        console.error("live reply (no resend):", out.finalText);
       }
-    ];
-    const out = await operatorTurn(prior, "[SMS from owner] didnt receie anything", (name, args) => {
-      if (name === "send_sms") return sendSmsSuccess(args);
-      if (name === "list_aiflows") return flowsFixture(false);
-      return { ok: false, message: `unexpected tool: ${name}` };
-    });
-    calls = out.calls;
-  }, 120_000);
-
-  it("re-sends the SAME intended message to James — not its own previous reply", () => {
-    // The production bug: the resend body was "The text has been sent."
-    const sms = calls.find((c) => c.name === "send_sms");
-    expect(sms).toBeDefined();
-    expect(digits(sms!.args.toE164)).toBe(digits(JAMES_E164));
-    const body = String(sms!.args.body);
-    expect(body.toLowerCase()).toContain("test message");
-    expect(body.toLowerCase()).not.toContain("has been sent");
-    expect(body.toLowerCase()).not.toContain("i texted you");
-  });
+      expect(sms, `calls: ${JSON.stringify(out.calls)}`).toBeDefined();
+      expect(digits(sms!.args.toE164)).toBe(digits(JAMES_E164));
+      const body = String(sms!.args.body);
+      expect(body.toLowerCase()).toContain("test message");
+      expect(body.toLowerCase()).not.toContain("has been sent");
+      expect(body.toLowerCase()).not.toContain("i texted you");
+    }
+  );
 });
