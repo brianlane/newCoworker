@@ -30,7 +30,14 @@
  */
 
 import { calendlyRequest, type CalendlyRequestConfig } from "@/lib/calendar-tools/calendly";
-import type { ResolvedVoiceConnection } from "@/lib/voice-tools/connections";
+import {
+  getActiveCalendlyConnectionUserUri,
+  setCalendlyConnectionUserUri
+} from "@/lib/db/calendly-connections";
+import {
+  CALENDLY_DIRECT_KEY,
+  type ResolvedVoiceConnection
+} from "@/lib/voice-tools/connections";
 import type { CalendarEventInput } from "@/lib/ai-flows/trigger-eval";
 import { logger } from "@/lib/logger";
 
@@ -252,13 +259,24 @@ export type CalendlyPollDeps = {
     conn: ResolvedVoiceConnection,
     config: CalendlyRequestConfig
   ) => Promise<{ data: unknown } | null>;
+  /** Injectable user-URI cache reads/writes (tests). */
+  getCachedUserUri?: (businessId: string) => Promise<string | null>;
+  persistUserUri?: (businessId: string, userUri: string) => Promise<void>;
 };
 
 /**
  * List + normalize + due-filter + invitee-enrich this business's Calendly
- * candidate events for one poll tick. Throws `calendar_not_connected` when
- * the transport refuses (matching the workspace fetchers' contract); the
- * caller's per-business isolation turns that into a system log.
+ * candidate events for one poll tick. Throws `calendly_token_rejected` when
+ * the transport refuses — Calendly answered 401/403 for a connection we
+ * RESOLVED moments earlier, which is a rejected token (possibly a transient
+ * upstream blip), not a missing connection; the caller's per-business
+ * isolation turns that into a system log with escalation semantics.
+ *
+ * The connected account's user URI is a constant per PAT, so it is CACHED on
+ * the connection row (direct connections): only a cache miss pays the
+ * GET /users/me probe, saving ~1,440 Calendly calls/day per tenant and
+ * removing the per-tick dependency that once produced a false
+ * "not connected" admin error.
  *
  * `dueFilter` is the poller's own due logic (mode windows over the flow
  * group) so enrichment — one invitees call per event — is spent on events
@@ -274,16 +292,51 @@ export async function fetchCalendlyCandidateEvents(
   },
   deps: CalendlyPollDeps = {}
 ): Promise<CalendlyFetch> {
-  /* c8 ignore next -- production default; tests inject */
+  /* c8 ignore next 3 -- production defaults; tests inject */
   const request = deps.request ?? calendlyRequest;
+  const getCachedUserUri = deps.getCachedUserUri ?? getActiveCalendlyConnectionUserUri;
+  const persistUserUri = deps.persistUserUri ?? setCalendlyConnectionUserUri;
   const { businessId, conn, nowMs, windows } = args;
 
-  const userRes = await request(businessId, conn, { endpoint: "/users/me", method: "GET" });
-  if (!userRes) throw new Error("calendar_not_connected");
-  const userUri = (userRes.data as { resource?: { uri?: string } })?.resource?.uri;
-  if (typeof userUri !== "string" || userUri.length === 0) {
-    throw new Error("calendar_not_connected");
+  // The cache only exists for the dashboard-PAT row; Nango-OAuth Calendly
+  // connections have no calendly_connections row to cache on.
+  const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY;
+  let userUri: string | null = null;
+  if (cacheable) {
+    try {
+      userUri = await getCachedUserUri(businessId);
+    } catch (err) {
+      // Cache read trouble degrades to the uncached probe, never fails the poll.
+      logger.warn("calendly poll: user-uri cache read failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
+  if (!userUri) {
+    const userRes = await request(businessId, conn, { endpoint: "/users/me", method: "GET" });
+    if (!userRes) throw new Error("calendly_token_rejected");
+    const resolved = (userRes.data as { resource?: { uri?: string } })?.resource?.uri;
+    if (typeof resolved !== "string" || resolved.length === 0) {
+      throw new Error("calendly_token_rejected");
+    }
+    userUri = resolved;
+    if (cacheable) {
+      try {
+        await persistUserUri(businessId, userUri);
+      } catch (err) {
+        // Best-effort: a failed cache write just means the next tick probes again.
+        logger.warn("calendly poll: user-uri cache write failed", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  }
+
+  // Narrowed for the listing closure: the block above either resolved a
+  // non-empty URI or threw.
+  const listUserUri: string = userUri;
 
   const collected: CalendarEventInput[] = [];
   const seen = new Set<string>();
@@ -297,13 +350,13 @@ export async function fetchCalendlyCandidateEvents(
       endpoint: "/scheduled_events",
       method: "GET",
       params: {
-        user: userUri,
+        user: listUserUri,
         sort: "start_time:asc",
         count: String(CALENDLY_POLL_PAGE_COUNT),
         ...params
       }
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("calendly_token_rejected");
     const items = ((res.data as { collection?: RawScheduledEvent[] })?.collection ?? [])
       .map(normalizeCalendlyEvent)
       .filter((e): e is CalendarEventInput => e !== null);
@@ -318,8 +371,8 @@ export async function fetchCalendlyCandidateEvents(
   // Per-window isolation (workspace-path parity): one window's failure must
   // not drop the events earlier windows already collected — log and keep
   // going; dedupe keys make the retry on the next tick benign. Only when
-  // EVERY window failed and nothing was collected does the not-connected
-  // contract fire, so the poller's business-level log still says why.
+  // EVERY window failed and nothing was collected does the failure propagate
+  // (with its specific detail), so the poller's business-level log says why.
   let windowFailure: unknown = null;
   const listSafely = async (label: string, params: Record<string, string>): Promise<void> => {
     try {

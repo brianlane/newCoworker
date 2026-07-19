@@ -48,6 +48,7 @@ import {
   type CalendarEventInput
 } from "@/lib/ai-flows/trigger-eval";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,
@@ -93,6 +94,45 @@ export const CALENDAR_POLL_FLOW_PAGE = 100;
  * what is read, not what fires.
  */
 export const CALENDAR_START_HORIZON_BUFFER_MINUTES = 5;
+
+/**
+ * A poll failure with no other failure inside this window is a one-off
+ * upstream blip (Calendly/Google occasionally 401 or 5xx a single request)
+ * and logs at `warn`; a repeat within the window is a real outage and logs
+ * at `error` (the admin System Errors feed shows error rows only). Sized to
+ * cover several poll ticks at the gated cadence.
+ */
+export const CALENDAR_POLL_FAILURE_ESCALATION_MINUTES = 15;
+
+/**
+ * How many PRIOR failures inside the escalation window a connection-class
+ * failure needs before the owner is alerted (i.e. the alert fires on the
+ * third consecutive failing poll — a blip never pings the owner).
+ */
+export const CALENDAR_POLL_ALERT_PRIOR_FAILURES = 2;
+
+/** Marker event for the once-per-day owner alert dedupe. */
+export const CALENDAR_POLL_OWNER_ALERT_EVENT = "ai_flow_calendar_owner_alerted";
+
+/** Failure details that mean "the calendar connection itself is broken". */
+const CONNECTION_FAILURE_DETAILS = [
+  "calendar_not_connected",
+  "calendly_token_rejected",
+  "workspace_connection_rejected"
+] as const;
+
+/**
+ * Minimum spacing between REAL polls. The worker kicks this route every
+ * minute, but the trigger due-windows (15-minute lookbacks; event_start
+ * fires anywhere inside its lead window) make per-minute provider listings
+ * pure waste — one real poll per ~3 minutes has identical trigger behavior
+ * at a third of the Calendly/Google/Microsoft calls. 10s under the nominal
+ * 3 minutes so pg_cron jitter can't make every third tick miss the gate.
+ */
+export const CALENDAR_POLL_MIN_INTERVAL_MS = 3 * 60_000 - 10_000;
+
+/** Marker event stamped once per real poll (business_id null, debug level). */
+export const CALENDAR_POLL_TICK_EVENT = "ai_flow_calendar_poll_tick";
 
 type CalendarSource = "primary" | "shared";
 
@@ -366,7 +406,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=false`,
       method: "GET"
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("workspace_connection_rejected");
     const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
       .map((e) => normalizeGoogleEvent(e, t.source))
       .filter((e): e is CalendarEventInput => e !== null);
@@ -384,7 +424,7 @@ async function fetchRecentlyCreated(t: FetchTarget, sinceMs: number): Promise<Ca
     method: "GET",
     headers: GRAPH_UTC_HEADERS
   });
-  if (!res) throw new Error("calendar_not_connected");
+  if (!res) throw new Error("workspace_connection_rejected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null);
@@ -409,7 +449,7 @@ async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}&showDeleted=true`,
       method: "GET"
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("workspace_connection_rejected");
     const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
       .map((e) => normalizeGoogleEvent(e, t.source))
       .filter((e): e is CalendarEventInput => e !== null && e.cancelled === true);
@@ -425,7 +465,7 @@ async function fetchRecentlyCancelled(t: FetchTarget, sinceMs: number): Promise<
     method: "GET",
     headers: GRAPH_UTC_HEADERS
   });
-  if (!res) throw new Error("calendar_not_connected");
+  if (!res) throw new Error("workspace_connection_rejected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null && e.cancelled === true);
@@ -456,7 +496,7 @@ async function fetchOverlapping(
         `&maxResults=${CALENDAR_POLL_MAX_EVENTS}`,
       method: "GET"
     });
-    if (!res) throw new Error("calendar_not_connected");
+    if (!res) throw new Error("workspace_connection_rejected");
     const items = ((res.data as { items?: GoogleEvent[] })?.items ?? [])
       .map((e) => normalizeGoogleEvent(e, t.source))
       .filter((e): e is CalendarEventInput => e !== null);
@@ -473,7 +513,7 @@ async function fetchOverlapping(
     method: "GET",
     headers: GRAPH_UTC_HEADERS
   });
-  if (!res) throw new Error("calendar_not_connected");
+  if (!res) throw new Error("workspace_connection_rejected");
   const items = ((res.data as { value?: GraphEvent[] })?.value ?? [])
     .map((e) => normalizeGraphEvent(e, t.source))
     .filter((e): e is CalendarEventInput => e !== null);
@@ -532,6 +572,153 @@ function calendarFlowsFrom(
     }
   }
   return out;
+}
+
+// ── Failure logging with escalation ─────────────────────────────────────────
+
+/** True when the failure detail means the connection itself is broken. */
+function isConnectionFailure(message: string): boolean {
+  return CONNECTION_FAILURE_DETAILS.some((detail) => message.includes(detail));
+}
+
+/**
+ * Record a poll failure with blip-vs-outage escalation, and alert the OWNER
+ * when a connection-class failure persists.
+ *
+ * - First failure inside the escalation window → `warn` (one-off upstream
+ *   blip; stays out of the admin System Errors feed, which is error-only).
+ * - Repeat inside the window → `error`.
+ * - Third consecutive connection failure → one owner notification per day
+ *   ("reconnect your calendar"), because a revoked grant/PAT otherwise stops
+ *   every calendar-triggered flow with NO owner-facing signal at all.
+ *
+ * All reads/writes are best-effort: log-path trouble degrades toward the
+ * old always-error behavior, never toward silence.
+ */
+async function logCalendarPollFailure(
+  db: SupabaseClient,
+  businessId: string,
+  message: string,
+  payload: Record<string, unknown>
+): Promise<void> {
+  // Failure-path-only lookback: healthy ticks never pay this query.
+  let priorFailures = CALENDAR_POLL_ALERT_PRIOR_FAILURES;
+  try {
+    const sinceIso = new Date(
+      Date.now() - CALENDAR_POLL_FAILURE_ESCALATION_MINUTES * 60_000
+    ).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("event", "ai_flow_calendar_poll_failed")
+      .gte("created_at", sinceIso)
+      .limit(CALENDAR_POLL_ALERT_PRIOR_FAILURES);
+    if (error) throw new Error(error.message);
+    priorFailures = (data ?? []).length;
+  } catch (err) {
+    // Lookback failed — assume persistent (log at error, like before this
+    // helper existed) rather than misfiling a real outage as a blip.
+    console.error("calendar poll failure lookback", err);
+  }
+
+  const persistent = priorFailures >= 1;
+  await recordSystemLog({
+    businessId,
+    source: "aiflow",
+    level: persistent ? "error" : "warn",
+    event: "ai_flow_calendar_poll_failed",
+    message,
+    payload
+  });
+
+  if (priorFailures >= CALENDAR_POLL_ALERT_PRIOR_FAILURES && isConnectionFailure(message)) {
+    await alertOwnerCalendarBroken(db, businessId);
+  }
+}
+
+/**
+ * Once-per-day owner alert for a persistently broken calendar connection.
+ * The dedupe marker is written BEFORE dispatch (at-most-once semantics — an
+ * alert storm about an outage would be worse than a lost retry; the outage
+ * keeps logging errors either way).
+ */
+async function alertOwnerCalendarBroken(db: SupabaseClient, businessId: string): Promise<void> {
+  try {
+    const sinceIso = new Date(Date.now() - 24 * 60 * 60_000).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("event", CALENDAR_POLL_OWNER_ALERT_EVENT)
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    if ((data ?? []).length > 0) return;
+
+    await recordSystemLog({
+      businessId,
+      source: "aiflow",
+      level: "info",
+      event: CALENDAR_POLL_OWNER_ALERT_EVENT,
+      message: "Owner alerted: calendar connection persistently failing",
+      payload: {}
+    });
+    await dispatchUrgentNotification({
+      businessId,
+      kind: "calendar_connection_broken",
+      summary: "Your calendar connection stopped working",
+      smsBody:
+        "New Coworker: your calendar connection stopped working, so calendar-triggered " +
+        "automations are paused. Reconnect it on the Integrations page to resume.",
+      emailSubject: "Your calendar connection needs to be reconnected",
+      emailBody:
+        "Your connected calendar stopped accepting our requests, so any automations " +
+        "triggered by calendar events are paused until it is reconnected. Open the " +
+        "Integrations page in your dashboard and reconnect the calendar to resume.",
+      payload: { reason: "calendar_poll_persistent_failure" }
+    });
+  } catch (err) {
+    console.error("calendar poll owner alert", err);
+  }
+}
+
+// ── Poll cadence gate ───────────────────────────────────────────────────────
+
+/**
+ * Claim this tick as a REAL poll, or report that a recent poll already
+ * covered it. Tracked with a platform-level system_logs marker (no new
+ * table); two racing kicks could both claim — harmless, the run dedupe keys
+ * make double polling idempotent, this gate is purely a call-volume
+ * optimization. Fails OPEN (poll runs) so gate trouble can never stall
+ * calendar triggers.
+ */
+export async function claimCalendarPollTick(client?: SupabaseClient): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  try {
+    const sinceIso = new Date(Date.now() - CALENDAR_POLL_MIN_INTERVAL_MS).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .is("business_id", null)
+      .eq("event", CALENDAR_POLL_TICK_EVENT)
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    if ((data ?? []).length > 0) return false;
+    await recordSystemLog({
+      businessId: null,
+      source: "aiflow",
+      level: "debug",
+      event: CALENDAR_POLL_TICK_EVENT,
+      message: "Calendar trigger poll tick",
+      payload: {}
+    });
+    return true;
+  } catch (err) {
+    console.error("claimCalendarPollTick", err);
+    return true;
+  }
 }
 
 // ── The poll ────────────────────────────────────────────────────────────────
@@ -718,14 +905,12 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          await recordSystemLog({
+          await logCalendarPollFailure(
+            db,
             businessId,
-            source: "aiflow",
-            level: "error",
-            event: "ai_flow_calendar_poll_failed",
-            message: `Calendar-trigger poll failed for the ${source} calendar: ${message}`,
-            payload: { calendar: source }
-          });
+            `Calendar-trigger poll failed for the ${source} calendar: ${message}`,
+            { calendar: source }
+          );
         }
         if (overflowed) {
           // A full page means this poll may not have covered every candidate
@@ -819,14 +1004,7 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await recordSystemLog({
-        businessId,
-        source: "aiflow",
-        level: "error",
-        event: "ai_flow_calendar_poll_failed",
-        message: `Calendar-trigger poll failed: ${message}`,
-        payload: {}
-      });
+      await logCalendarPollFailure(db, businessId, `Calendar-trigger poll failed: ${message}`, {});
     }
   }
   return result;

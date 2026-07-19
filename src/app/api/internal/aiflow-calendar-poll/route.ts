@@ -18,7 +18,7 @@
  */
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
+import { claimCalendarPollTick, pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
 import { sweepCalendlyBookingGoals } from "@/lib/ai-flows/calendly-booking-goals";
 
 // A poll is a few provider list calls per watched calendar; 60s is ample
@@ -31,7 +31,12 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
   try {
-    const result = await pollCalendarTriggers();
+    // The worker kicks every minute, but the trigger due-windows tolerate a
+    // ~3-minute cadence — the gate skips the provider listings on the
+    // in-between ticks (see CALENDAR_POLL_MIN_INTERVAL_MS). The booking-goal
+    // sweep below stays per-minute: booking → goal-jump latency is its point.
+    const runPoll = await claimCalendarPollTick();
+    const result = runPoll ? await pollCalendarTriggers() : null;
     // Calendly booking → appointment_booked goal sweep rides the same tick
     // (per-business failures already isolate inside; this guard keeps a
     // sweep-level failure from masking the poll result — bookings stay
@@ -40,7 +45,9 @@ export async function POST(request: Request): Promise<Response> {
       console.error("aiflow-calendar-poll booking-goal sweep", err);
       return null;
     });
-    return successResponse({ ...result, bookingGoals });
+    return successResponse(
+      result ? { ...result, bookingGoals } : { skipped: true, bookingGoals }
+    );
   } catch (err) {
     return handleRouteError(err);
   }
