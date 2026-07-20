@@ -30,10 +30,12 @@ import {
   exchangeForLongLivedToken,
   fetchLead,
   flattenLeadFields,
+  deriveWhatsAppRegistrationPin,
   getInstagramContainerStatus,
   getInstagramMediaPermalink,
   getLinkedInstagramAccount,
   getMessengerProfile,
+  registerWhatsAppPhoneNumber,
   getMetaAppId,
   getMetaAppSecret,
   getUserName,
@@ -610,6 +612,47 @@ describe("WABA subscription", () => {
 
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
     await expect(unsubscribeWabaFromApp("waba-9", "biz-tok")).resolves.toBeUndefined();
+  });
+});
+
+describe("WhatsApp phone registration", () => {
+  it("deriveWhatsAppRegistrationPin is a deterministic 6-digit PIN with no leading zero", () => {
+    const prev = process.env.INTEGRATIONS_ENCRYPTION_KEY;
+    try {
+      process.env.INTEGRATIONS_ENCRYPTION_KEY = "unit-test-secret";
+      const a = deriveWhatsAppRegistrationPin("1267081729812869");
+      const b = deriveWhatsAppRegistrationPin("1267081729812869");
+      const other = deriveWhatsAppRegistrationPin("9999999999999999");
+      expect(a).toBe(b); // stable across reconnects → idempotent re-register
+      expect(a).toMatch(/^[1-9]\d{5}$/);
+      expect(other).toMatch(/^[1-9]\d{5}$/);
+      expect(a).not.toBe(other);
+
+      // Missing key still yields a valid PIN (the `?? ""` fallback branch).
+      delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
+      expect(deriveWhatsAppRegistrationPin("1267081729812869")).toMatch(/^[1-9]\d{5}$/);
+    } finally {
+      if (prev === undefined) delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
+      else process.env.INTEGRATIONS_ENCRYPTION_KEY = prev;
+    }
+  });
+
+  it("registerWhatsAppPhoneNumber POSTs the register payload and requires success:true", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: true }));
+    await registerWhatsAppPhoneNumber("phone-9", "biz-tok", "123456");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(init.method).toBe("POST");
+    expect(new URL(url).pathname).toBe("/v25.0/phone-9/register");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer biz-tok");
+    expect(JSON.parse(init.body as string)).toEqual({
+      messaging_product: "whatsapp",
+      pin: "123456"
+    });
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { success: false }));
+    await expect(registerWhatsAppPhoneNumber("phone-9", "biz-tok", "123456")).rejects.toThrow(
+      /not confirmed/
+    );
   });
 });
 
