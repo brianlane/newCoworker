@@ -5,9 +5,8 @@ vi.mock("@/lib/webchat/db", () => ({
   getWebchatSessionById: vi.fn(),
   updateWebchatSessionContact: vi.fn()
 }));
-vi.mock("@/lib/customer-memory/db", () => ({
-  linkCustomerEmail: vi.fn(),
-  recordInteractionAndIncrement: vi.fn()
+vi.mock("@/lib/customer-memory/capture-contact", () => ({
+  ensureCapturedContact: vi.fn()
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
@@ -22,10 +21,7 @@ import {
   getWebchatSessionById,
   updateWebchatSessionContact
 } from "@/lib/webchat/db";
-import {
-  linkCustomerEmail,
-  recordInteractionAndIncrement
-} from "@/lib/customer-memory/db";
+import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -34,8 +30,7 @@ const SESSION = "22222222-2222-4222-8222-222222222222";
 const mockLog = vi.mocked(insertCoworkerLog);
 const mockGetSession = vi.mocked(getWebchatSessionById);
 const mockMerge = vi.mocked(updateWebchatSessionContact);
-const mockLink = vi.mocked(linkCustomerEmail);
-const mockRollup = vi.mocked(recordInteractionAndIncrement);
+const mockEnsure = vi.mocked(ensureCapturedContact);
 
 const sessionRow = {
   id: SESSION,
@@ -53,6 +48,7 @@ const sessionRow = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockLog.mockResolvedValue({} as never);
+  mockEnsure.mockResolvedValue({ created: true });
 });
 
 describe("captureWebchatLead", () => {
@@ -228,64 +224,23 @@ describe("captureWebchatLead", () => {
     );
   });
 
-  it("rolls a coercible phone up to a webchat contact and links the email", async () => {
+  it("promotes a coercible phone to a webchat contact (rollup + email link + contact_created)", async () => {
     const out = await captureWebchatLead(BIZ, {
       name: "Ada",
       phone: "(555) 123-4567",
       email: "ada@example.com"
     });
     expect(out.ok).toBe(true);
-    expect(mockRollup).toHaveBeenCalledWith(BIZ, "+15551234567", "webchat", {
-      displayName: "Ada"
+    expect(mockEnsure).toHaveBeenCalledWith(BIZ, {
+      e164: "+15551234567",
+      name: "Ada",
+      email: "ada@example.com",
+      channel: "webchat"
     });
-    expect(mockLink).toHaveBeenCalledWith(BIZ, "+15551234567", "ada@example.com");
   });
 
-  it("survives a contact-rollup failure (Error and non-Error shapes)", async () => {
-    mockRollup.mockRejectedValueOnce(new Error("rollup boom"));
-    const out = await captureWebchatLead(BIZ, { phone: "5551234567" });
-    expect(out.ok).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "webchat lead-capture: contact rollup failed",
-      expect.objectContaining({ error: "rollup boom" })
-    );
-
-    mockRollup.mockRejectedValueOnce("rollup str boom");
-    const outStr = await captureWebchatLead(BIZ, { phone: "5551234567" });
-    expect(outStr.ok).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "webchat lead-capture: contact rollup failed",
-      expect.objectContaining({ error: "rollup str boom" })
-    );
-  });
-
-  it("skips rollup+link without a coercible phone, and the link without an email, surviving a link failure", async () => {
+  it("skips contact promotion without a coercible phone (failure modes live in ensureCapturedContact)", async () => {
     await captureWebchatLead(BIZ, { phone: "12", email: "a@b.com" });
-    expect(mockRollup).not.toHaveBeenCalled();
-    await captureWebchatLead(BIZ, { phone: "(555) 123-4567" });
-    expect(mockLink).not.toHaveBeenCalled();
-
-    mockLink.mockRejectedValueOnce(new Error("link boom"));
-    const out = await captureWebchatLead(BIZ, {
-      phone: "5551234567",
-      email: "a@b.com"
-    });
-    expect(out.ok).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "webchat lead-capture: linkCustomerEmail failed",
-      expect.objectContaining({ error: "link boom" })
-    );
-
-    // Non-Error rejection shape.
-    mockLink.mockRejectedValueOnce("link str boom");
-    const outStr = await captureWebchatLead(BIZ, {
-      phone: "5551234567",
-      email: "a@b.com"
-    });
-    expect(outStr.ok).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "webchat lead-capture: linkCustomerEmail failed",
-      expect.objectContaining({ error: "link str boom" })
-    );
+    expect(mockEnsure).not.toHaveBeenCalled();
   });
 });

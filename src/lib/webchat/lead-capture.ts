@@ -22,10 +22,7 @@ import {
   getWebchatSessionById,
   updateWebchatSessionContact
 } from "@/lib/webchat/db";
-import {
-  linkCustomerEmail,
-  recordInteractionAndIncrement
-} from "@/lib/customer-memory/db";
+import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import { logger } from "@/lib/logger";
 
@@ -142,31 +139,17 @@ export async function captureWebchatLead(
   // Cross-channel contact rollup: a visitor who left a usable phone number
   // becomes (or bumps) a contact profile with last_channel='webchat', the
   // same way a texter or caller would — so the owner's Contacts page shows
-  // web leads alongside everyone else. Best-effort, like the merges above.
+  // web leads alongside everyone else, the email links to the same profile,
+  // and a brand-new lead fires the `contact_created` AiFlow trigger.
+  // Best-effort inside ensureCapturedContact, like the merges above.
   const e164 = coerceOwnerPhoneToE164(phone);
   if (e164) {
-    try {
-      await recordInteractionAndIncrement(businessId, e164, "webchat", {
-        displayName: name
-      });
-    } catch (err) {
-      logger.warn("webchat lead-capture: contact rollup failed", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-    // Email link: future inbound mail from this address rolls up to the same
-    // phone-keyed profile — same linking the voice capture tool does.
-    if (email) {
-      try {
-        await linkCustomerEmail(businessId, e164, email);
-      } catch (err) {
-        logger.warn("webchat lead-capture: linkCustomerEmail failed", {
-          businessId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
+    await ensureCapturedContact(businessId, {
+      e164,
+      name,
+      email,
+      channel: "webchat"
+    });
   }
 
   return { ok: true, data: { logId } };

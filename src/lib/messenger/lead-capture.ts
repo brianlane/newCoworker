@@ -22,10 +22,7 @@ import {
   getMessengerConversationById,
   updateMessengerConversationContact
 } from "@/lib/messenger/db";
-import {
-  linkCustomerEmail,
-  recordInteractionAndIncrement
-} from "@/lib/customer-memory/db";
+import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import { logger } from "@/lib/logger";
 
@@ -118,29 +115,16 @@ export async function captureMessengerLead(
 
   // Cross-channel contact rollup: a usable phone number becomes (or bumps)
   // a contact profile with last_channel='messenger' — from then on SMS
-  // follow-ups work outside the 24h window. Best-effort, like webchat.
+  // follow-ups work outside the 24h window — and a brand-new lead fires the
+  // `contact_created` AiFlow trigger. Best-effort, like webchat.
   const e164 = coerceOwnerPhoneToE164(phone);
   if (e164) {
-    try {
-      await recordInteractionAndIncrement(businessId, e164, channel, {
-        displayName: name
-      });
-    } catch (err) {
-      logger.warn("messenger lead-capture: contact rollup failed", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-    if (email) {
-      try {
-        await linkCustomerEmail(businessId, e164, email);
-      } catch (err) {
-        logger.warn("messenger lead-capture: linkCustomerEmail failed", {
-          businessId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
+    await ensureCapturedContact(businessId, {
+      e164,
+      name,
+      email,
+      channel
+    });
   }
 
   return { ok: true, data: { logId } };

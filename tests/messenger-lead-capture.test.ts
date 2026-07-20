@@ -2,7 +2,7 @@
  * Tests for the Messenger lead-capture core
  * (src/lib/messenger/lead-capture.ts): actionable-content gate,
  * conversation-ref validation (cross-tenant refs dropped), best-effort
- * merges, and the cross-channel contact rollup.
+ * merges, and the cross-channel contact promotion.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -23,17 +23,10 @@ vi.mock("@/lib/messenger/db", () => ({
     updateContactMock(id, contact)
 }));
 
-const recordInteractionMock = vi.fn();
-const linkEmailMock = vi.fn();
-vi.mock("@/lib/customer-memory/db", () => ({
-  recordInteractionAndIncrement: (
-    businessId: string,
-    e164: string,
-    channel: string,
-    opts: unknown
-  ) => recordInteractionMock(businessId, e164, channel, opts),
-  linkCustomerEmail: (businessId: string, e164: string, email: string) =>
-    linkEmailMock(businessId, e164, email)
+const ensureCapturedContactMock = vi.fn();
+vi.mock("@/lib/customer-memory/capture-contact", () => ({
+  ensureCapturedContact: (businessId: string, input: unknown) =>
+    ensureCapturedContactMock(businessId, input)
 }));
 
 vi.mock("@/lib/telnyx/assign-did", () => ({
@@ -52,8 +45,7 @@ beforeEach(() => {
   insertCoworkerLogMock.mockReset().mockResolvedValue(undefined);
   getConversationMock.mockReset();
   updateContactMock.mockReset().mockResolvedValue(undefined);
-  recordInteractionMock.mockReset().mockResolvedValue(undefined);
-  linkEmailMock.mockReset().mockResolvedValue(undefined);
+  ensureCapturedContactMock.mockReset().mockResolvedValue({ created: true });
 });
 
 describe("captureMessengerLead", () => {
@@ -84,10 +76,12 @@ describe("captureMessengerLead", () => {
       name: "Jane Doe",
       phone: "555-123-4567"
     });
-    expect(recordInteractionMock).toHaveBeenCalledWith(BIZ, "+15551234567", "messenger", {
-      displayName: "Jane Doe"
+    expect(ensureCapturedContactMock).toHaveBeenCalledWith(BIZ, {
+      e164: "+15551234567",
+      name: "Jane Doe",
+      email: "jane@x.com",
+      channel: "messenger"
     });
-    expect(linkEmailMock).toHaveBeenCalledWith(BIZ, "+15551234567", "jane@x.com");
   });
 
   it("drops a cross-tenant conversation ref but still logs the lead", async () => {
@@ -118,11 +112,9 @@ describe("captureMessengerLead", () => {
     expect(res3.ok).toBe(true);
   });
 
-  it("degrades silently when merges and rollups fail (lead already logged)", async () => {
+  it("degrades silently when the conversation merge fails (lead already logged)", async () => {
     getConversationMock.mockResolvedValue({ id: CONV_ID, business_id: BIZ });
     updateContactMock.mockRejectedValue(new Error("merge fail"));
-    recordInteractionMock.mockRejectedValue("rollup string fail");
-    linkEmailMock.mockRejectedValue(new Error("link fail"));
 
     const res = await captureMessengerLead(BIZ, {
       phone: "5551234567",
@@ -130,11 +122,12 @@ describe("captureMessengerLead", () => {
       sessionRef: CONV_ID
     });
     expect(res.ok).toBe(true);
+    // Contact promotion still runs — its own failures are swallowed inside
+    // ensureCapturedContact, so the capture surface never needs a guard.
+    expect(ensureCapturedContactMock).toHaveBeenCalledTimes(1);
 
-    // Error-shaped merge failures and non-Error rollup failures both log.
+    // Non-Error merge failure shape.
     updateContactMock.mockRejectedValue("merge string fail");
-    recordInteractionMock.mockRejectedValue(new Error("rollup fail"));
-    linkEmailMock.mockRejectedValue("link string fail");
     const res2 = await captureMessengerLead(BIZ, {
       phone: "5551234567",
       email: "j@x.com",
@@ -143,31 +136,32 @@ describe("captureMessengerLead", () => {
     expect(res2.ok).toBe(true);
   });
 
-  it("tags the rollup channel per platform (whatsapp vs messenger default)", async () => {
+  it("tags the promotion channel per platform (whatsapp vs messenger default)", async () => {
     await captureMessengerLead(
       BIZ,
       { name: "Jane", phone: "5551234567" },
       { channel: "whatsapp" }
     );
-    expect(recordInteractionMock).toHaveBeenCalledWith(BIZ, "+15551234567", "whatsapp", {
-      displayName: "Jane"
+    expect(ensureCapturedContactMock).toHaveBeenCalledWith(BIZ, {
+      e164: "+15551234567",
+      name: "Jane",
+      email: null,
+      channel: "whatsapp"
     });
 
-    recordInteractionMock.mockClear();
+    ensureCapturedContactMock.mockClear();
     await captureMessengerLead(BIZ, { name: "Jane", phone: "5551234567" });
-    expect(recordInteractionMock).toHaveBeenCalledWith(BIZ, "+15551234567", "messenger", {
-      displayName: "Jane"
+    expect(ensureCapturedContactMock).toHaveBeenCalledWith(BIZ, {
+      e164: "+15551234567",
+      name: "Jane",
+      email: null,
+      channel: "messenger"
     });
   });
 
-  it("skips the rollup for uncoercible phones and the email link when absent", async () => {
+  it("skips the contact promotion for uncoercible phones", async () => {
     const res = await captureMessengerLead(BIZ, { name: "Jane", phone: "12" });
     expect(res.ok).toBe(true);
-    expect(recordInteractionMock).not.toHaveBeenCalled();
-
-    const res2 = await captureMessengerLead(BIZ, { phone: "5551234567" });
-    expect(res2.ok).toBe(true);
-    expect(recordInteractionMock).toHaveBeenCalled();
-    expect(linkEmailMock).not.toHaveBeenCalled();
+    expect(ensureCapturedContactMock).not.toHaveBeenCalled();
   });
 });
