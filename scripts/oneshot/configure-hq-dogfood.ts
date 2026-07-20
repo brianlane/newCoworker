@@ -3,17 +3,21 @@
  * at the HQ tenant and make owner alerting real (the "HQ works for New
  * Coworker" dogfooding plan, config half):
  *
- *   1. businesses.contact_form_sink → TRUE for HQ (public /contact
- *      submissions also enqueue webhook flow events; PR #773). Audit-logged
- *      to coworker_logs exactly like the admin card's route.
- *   2. businesses.aiflow_protect_staff_contacts → TRUE (the flow-test
- *      harness had turned it off; the default posture protects staff rows.
- *      flow-test-setup.ts re-disables it when the harness needs to).
- *   3. notification_preferences upsert: urgent SMS + email to Brian
+ *   1. business_telnyx_settings.forward_to_e164 → Brian's cell when empty
+ *      (notify_owner texts this number; voice transfer_to_owner rings it).
+ *      FIRST deliberately: the sink below starts feeding flows whose
+ *      notify_owner step reads this — enabling the sink before the forward
+ *      number exists would let a run finish with no owner text.
+ *   2. notification_preferences upsert: urgent SMS + email to Brian
  *      (+1 602 686 6672 / newcoworkerteam@gmail.com), and
  *      aiflow_failure_alerts ON so a dead HQ automation is never silent.
- *   4. business_telnyx_settings.forward_to_e164 → Brian's cell when empty
- *      (notify_owner texts this number; voice transfer_to_owner rings it).
+ *   3. businesses.aiflow_protect_staff_contacts → TRUE (the flow-test
+ *      harness had turned it off; the default posture protects staff rows.
+ *      flow-test-setup.ts re-disables it when the harness needs to).
+ *   4. businesses.contact_form_sink → TRUE for HQ (public /contact
+ *      submissions also enqueue webhook flow events; PR #773) — LAST, once
+ *      every downstream notification target is in place. Audit-logged to
+ *      coworker_logs exactly like the admin card's route.
  *
  * Usage:
  *   npx tsx scripts/oneshot/configure-hq-dogfood.ts          # dry-run
@@ -78,7 +82,39 @@ if (!APPLY) {
   process.exit(0);
 }
 
-// ---------------------------------------------------------------- 1. sink
+// ---------------------------------------------------------------- 1. forward number
+// FIRST: notify_owner (the triage flows' owner text) sends ONLY to
+// business_telnyx_settings.forward_to_e164 — this must exist before the sink
+// starts feeding runs, or an early run finishes with no owner text.
+if (!telnyx?.forward_to_e164) {
+  await upsertBusinessTelnyxSettings(
+    { businessId: HQ_BUSINESS_ID, forwardToE164: BRIAN_E164 },
+    db
+  );
+  console.log("[config] forward_to_e164 =", BRIAN_E164);
+} else {
+  console.log("[config] forward_to_e164 already set — leaving", telnyx.forward_to_e164);
+}
+
+// ---------------------------------------------------------------- 2. owner alerts
+await updateNotificationPreferences(
+  HQ_BUSINESS_ID,
+  {
+    sms_urgent: true,
+    email_urgent: true,
+    aiflow_failure_alerts: true,
+    phone_number: BRIAN_E164,
+    alert_email: BRIAN_EMAIL
+  },
+  db
+);
+console.log("[config] notification_preferences: urgent SMS+email → Brian, aiflow failure alerts ON");
+
+// ---------------------------------------------------------------- 3. staff protection
+await setAiflowStaffProtection(HQ_BUSINESS_ID, true, db);
+console.log("[config] aiflow_protect_staff_contacts = true");
+
+// ---------------------------------------------------------------- 4. sink (last)
 await setContactFormSink(HQ_BUSINESS_ID, true, db);
 try {
   await insertCoworkerLog({
@@ -97,35 +133,6 @@ try {
   console.error("[config] sink audit log failed (non-fatal):", e);
 }
 console.log("[config] contact_form_sink = true");
-
-// ---------------------------------------------------------------- 2. staff protection
-await setAiflowStaffProtection(HQ_BUSINESS_ID, true, db);
-console.log("[config] aiflow_protect_staff_contacts = true");
-
-// ---------------------------------------------------------------- 3. owner alerts
-await updateNotificationPreferences(
-  HQ_BUSINESS_ID,
-  {
-    sms_urgent: true,
-    email_urgent: true,
-    aiflow_failure_alerts: true,
-    phone_number: BRIAN_E164,
-    alert_email: BRIAN_EMAIL
-  },
-  db
-);
-console.log("[config] notification_preferences: urgent SMS+email → Brian, aiflow failure alerts ON");
-
-// ---------------------------------------------------------------- 4. forward number
-if (!telnyx?.forward_to_e164) {
-  await upsertBusinessTelnyxSettings(
-    { businessId: HQ_BUSINESS_ID, forwardToE164: BRIAN_E164 },
-    db
-  );
-  console.log("[config] forward_to_e164 =", BRIAN_E164);
-} else {
-  console.log("[config] forward_to_e164 already set — leaving", telnyx.forward_to_e164);
-}
 
 await recordOneshotApplied(db, {
   scriptPath: process.argv[1] ?? "configure-hq-dogfood.ts",
