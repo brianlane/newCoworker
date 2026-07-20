@@ -3,10 +3,14 @@
  * One-shot: seed the "Clever Cue Text" AiFlow for a single tenant.
  *
  * Clever's "Cue" texts arrive on a dedicated number (314-907-1456) and just need
- * a "Y" confirmation back. This flow suppresses the AI assistant's normal reply
- * and auto-replies "Y" straight to the sender — nothing else.
+ * a "Y" confirmation back. This flow suppresses the AI assistant's normal reply,
+ * auto-replies "Y" straight to the sender, and arms a short expected-call window
+ * so the concierge's follow-up call (from a ROTATING number pool — see the
+ * Jul 20 2026 missed transfer from +18609926975) bridges straight to the
+ * assigned agent instead of the AI answering.
  *
  *   inbound (314-907-1456)  ->  suppress default reply  ->  reply "Y" to sender
+ *                            ->  arm 20-min expected-call window to Dave
  *
  * Validated through the SAME parseAiFlowDefinition the dashboard + CRUD API use.
  * Dry-run by default; idempotent unless --force.
@@ -19,9 +23,11 @@
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
- *   AIFLOW_CLEVER_CUE_FROM     (default "3149071456")
- *   AIFLOW_CLEVER_CUE_REPLY    (default "Y")
- *   AIFLOW_CLEVER_CUE_KEYWORD  (default "LIVE TRANSFER")
+ *   AIFLOW_CLEVER_CUE_FROM            (default "3149071456")
+ *   AIFLOW_CLEVER_CUE_REPLY           (default "Y")
+ *   AIFLOW_CLEVER_CUE_KEYWORD         (default "LIVE TRANSFER")
+ *   AIFLOW_CLEVER_CUE_TRANSFER_TO     (default "+16025245719" — Dave)
+ *   AIFLOW_CLEVER_CUE_WINDOW_MINUTES  (default "20")
  */
 import { createClient } from "@supabase/supabase-js";
 import {
@@ -50,7 +56,13 @@ function parseArgs(argv: readonly string[]): Args {
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 
-function buildDefinition(opts: { from: string; reply: string; keyword: string }): unknown {
+function buildDefinition(opts: {
+  from: string;
+  reply: string;
+  keyword: string;
+  transferTo: string;
+  windowMinutes: number;
+}): unknown {
   return {
     version: 1,
     trigger: {
@@ -68,7 +80,18 @@ function buildDefinition(opts: { from: string; reply: string; keyword: string })
         { type: "contains", value: opts.keyword, caseInsensitive: true }
       ]
     },
-    steps: [{ id: "cue", type: "send_sms", to: "{{trigger.from}}", body: opts.reply }],
+    steps: [
+      { id: "cue", type: "send_sms", to: "{{trigger.from}}", body: opts.reply },
+      // The concierge's live-transfer call arrives minutes later from a
+      // rotating number no per-caller rule can enumerate; the armed window
+      // bridges that next unmatched call straight to the assigned agent.
+      {
+        id: "arm_transfer",
+        type: "arm_voice_transfer",
+        toE164: opts.transferTo,
+        windowMinutes: opts.windowMinutes
+      }
+    ],
     options: { suppressDefaultReply: true }
   };
 }
@@ -93,7 +116,9 @@ async function main(): Promise<void> {
   const definitionInput = buildDefinition({
     from: process.env.AIFLOW_CLEVER_CUE_FROM ?? "3149071456",
     reply: process.env.AIFLOW_CLEVER_CUE_REPLY ?? "Y",
-    keyword: process.env.AIFLOW_CLEVER_CUE_KEYWORD ?? "LIVE TRANSFER"
+    keyword: process.env.AIFLOW_CLEVER_CUE_KEYWORD ?? "LIVE TRANSFER",
+    transferTo: process.env.AIFLOW_CLEVER_CUE_TRANSFER_TO ?? "+16025245719",
+    windowMinutes: Number(process.env.AIFLOW_CLEVER_CUE_WINDOW_MINUTES ?? "20")
   });
 
   let definition;
