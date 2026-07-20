@@ -265,4 +265,14 @@ describe("telnyx-voice-inbound expected-transfer claim (contract)", () => {
     );
     expect(handler).toContain("voice_expected_transfer_matched");
   });
+
+  it("re-opens the window when the transfer fails, keyed to this call's claim stamp", () => {
+    // A refused answer/bridge must not burn the one-shot window: the release
+    // clears consumption ONLY where consumed_call_control_id matches this
+    // call, so a newer re-arm is never clobbered.
+    expect(handler).toMatch(
+      /\.update\(\{ consumed_at: null, consumed_call_control_id: null \}\)\s*\.eq\("business_id", businessId\)\s*\.eq\("consumed_call_control_id", callControlId\)/
+    );
+    expect(handler).toMatch(/body\.path !== "caller_transfer"/);
+  });
 });

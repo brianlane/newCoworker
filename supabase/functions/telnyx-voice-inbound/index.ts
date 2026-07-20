@@ -882,7 +882,26 @@ serve(async (req: Request) => {
         message: `Expected-call window claimed by ${fromE164Informational || "an unknown caller"}; transferring to ${claimed.to_e164}`,
         payload: { call_control_id: callControlId, from: fromE164Informational, to: claimed.to_e164 }
       });
-      return await runBlindTransfer(claimed.to_e164, (claimed.whisper ?? "").trim());
+      const transferRes = await runBlindTransfer(claimed.to_e164, (claimed.whisper ?? "").trim());
+      // A refused answer/bridge must not burn the one-shot window — the
+      // concierge may retry within the armed period, and that retry should
+      // still reach a human. Re-open the window on failure (keyed to OUR
+      // claim stamp, so a newer re-arm is never clobbered); the conditional
+      // claim above still guarantees at most one transfer at a time.
+      try {
+        const body = (await transferRes.clone().json()) as { path?: string };
+        if (body.path !== "caller_transfer") {
+          const { error: releaseErr } = await supabase
+            .from("voice_expected_transfers")
+            .update({ consumed_at: null, consumed_call_control_id: null })
+            .eq("business_id", businessId)
+            .eq("consumed_call_control_id", callControlId);
+          if (releaseErr) console.error("voice_expected_transfers release", releaseErr);
+        }
+      } catch (e) {
+        console.error("voice_expected_transfers release", e);
+      }
+      return transferRes;
     }
   }
 
