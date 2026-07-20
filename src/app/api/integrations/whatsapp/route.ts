@@ -30,8 +30,10 @@ import {
   type WhatsAppTemplatesState
 } from "@/lib/db/whatsapp-connections";
 import {
+  deriveWhatsAppRegistrationPin,
   exchangeEmbeddedSignupCode,
   fetchWhatsAppTemplateStatuses,
+  registerWhatsAppPhoneNumber,
   registerWhatsAppTemplates,
   whatsappTemplateStateKey,
   subscribeWabaToApp,
@@ -138,6 +140,27 @@ export async function POST(request: Request) {
     // Subscribe FIRST: if Meta refuses, nothing is stored and the owner
     // can retry the popup — we never store an unsubscribed connection.
     await subscribeWabaToApp(body.wabaId, accessToken);
+
+    // Put the number on the Cloud API so it can actually send/receive —
+    // Embedded Signup verifies the number but leaves it unregistered, so
+    // without this the number stays `NOT_APPLICABLE` and consumers see
+    // "invite on WhatsApp". Best-effort like template registration: a
+    // failure (e.g. a number with a pre-existing two-step PIN we don't
+    // control) must not block storing an otherwise-good connection, but it
+    // is logged loudly so it can be finished manually.
+    try {
+      await registerWhatsAppPhoneNumber(
+        body.phoneNumberId,
+        accessToken,
+        deriveWhatsAppRegistrationPin(body.phoneNumberId)
+      );
+    } catch (err) {
+      logger.warn("whatsapp connect: phone registration failed; number needs manual /register", {
+        businessId: body.businessId,
+        phoneNumberId: body.phoneNumberId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
 
     // Stock utility templates (owner alerts + out-of-window follow-ups).
     // Registration failures degrade to window-only sends, never block

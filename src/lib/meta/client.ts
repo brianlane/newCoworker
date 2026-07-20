@@ -688,6 +688,44 @@ export async function exchangeEmbeddedSignupCode(code: string): Promise<string> 
   return token;
 }
 
+/**
+ * Deterministic 6-digit Cloud API registration PIN for a phone number.
+ *
+ * The `/register` call sets (or must match) the number's two-step
+ * verification PIN. Deriving it from a server secret + the phone number id
+ * means a reconnect re-registers with the SAME PIN — idempotent, no stored
+ * secret, no "PIN mismatch" on the second connect. Mapped to 100000–999999
+ * so it is always six digits with no leading zero and never all-zero.
+ */
+export function deriveWhatsAppRegistrationPin(phoneNumberId: string): string {
+  const secret = process.env.INTEGRATIONS_ENCRYPTION_KEY ?? "";
+  const digest = createHmac("sha256", secret).update(`wa-register:${phoneNumberId}`).digest();
+  const n = digest.readUInt32BE(0) % 900000;
+  return String(100000 + n);
+}
+
+/**
+ * Register a phone number on the Cloud API so it can send and receive.
+ * Embedded Signup verifies the number but does NOT put it on the Cloud
+ * API — until this runs, `platform_type` stays `NOT_APPLICABLE` and
+ * consumers see "invite on WhatsApp". Idempotent: re-registering an
+ * already-registered number with the same derived PIN succeeds.
+ */
+export async function registerWhatsAppPhoneNumber(
+  phoneNumberId: string,
+  token: string,
+  pin: string
+): Promise<void> {
+  const payload = (await graphRequest(
+    `/${phoneNumberId}/register`,
+    {},
+    { method: "POST", bearerToken: token, jsonBody: { messaging_product: "whatsapp", pin } }
+  )) as { success?: unknown } | null;
+  if (payload?.success !== true) {
+    throw new MetaApiError("request_failed", "WhatsApp phone registration was not confirmed");
+  }
+}
+
 /** Subscribe our app to the WABA's webhooks (inbound message delivery). */
 export async function subscribeWabaToApp(wabaId: string, token: string): Promise<void> {
   const payload = await graphRequest(
