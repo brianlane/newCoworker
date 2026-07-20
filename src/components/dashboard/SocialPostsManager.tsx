@@ -25,6 +25,7 @@ export type SocialPostItem = {
   publish_at: string | null;
   published_at: string | null;
   ig_media_id: string | null;
+  ig_permalink: string | null;
   error_detail: string | null;
   created_at: string;
 };
@@ -353,9 +354,21 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
               return (
                 <li key={p.id} className="py-2.5">
                   <div className="flex flex-wrap items-center gap-2">
-                    <span className="max-w-[18rem] truncate text-sm text-parchment/90">
-                      {p.caption.trim() || p.media_url}
-                    </span>
+                    {p.ig_permalink ? (
+                      <a
+                        href={p.ig_permalink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="max-w-[18rem] truncate text-sm text-signal-teal hover:underline"
+                        title="View the post on Instagram"
+                      >
+                        {p.caption.trim() || p.media_url}
+                      </a>
+                    ) : (
+                      <span className="max-w-[18rem] truncate text-sm text-parchment/90">
+                        {p.caption.trim() || p.media_url}
+                      </span>
+                    )}
                     <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
                       {badge.text}
                     </span>

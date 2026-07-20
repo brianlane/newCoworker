@@ -32,6 +32,8 @@ export type SocialPostRow = {
   /** Publish step 1's container id — persisted before media_publish. */
   ig_creation_id: string | null;
   ig_media_id: string | null;
+  /** The live post's public URL — fetched best-effort after publishing. */
+  ig_permalink: string | null;
   error_detail: string | null;
   created_at: string;
   updated_at: string;
@@ -96,6 +98,7 @@ export type SocialPostPatch = Partial<
     | "published_at"
     | "ig_creation_id"
     | "ig_media_id"
+    | "ig_permalink"
     | "error_detail"
   >
 >;

@@ -57,8 +57,11 @@ const STARTED_RESUMABLE = new Date(
 const createContainer = vi.fn();
 const publishMedia = vi.fn();
 const containerStatus = vi.fn();
+const mediaPermalink = vi.fn();
 const loadConnection = vi.fn();
 const sleep = vi.fn(async () => {});
+
+const PERMALINK = "https://www.instagram.com/p/TEST123/";
 
 // The sweep only reads client/now from deps; the db mock is never dialed.
 const db = {} as never;
@@ -76,6 +79,7 @@ function post(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     published_at: null,
     ig_creation_id: null,
     ig_media_id: null,
+    ig_permalink: null,
     error_detail: null,
     created_at: "2026-07-17T00:00:00Z",
     updated_at: "2026-07-17T00:00:00Z",
@@ -108,6 +112,7 @@ function deps() {
     createContainer,
     publishMedia,
     containerStatus,
+    mediaPermalink,
     loadConnection,
     sleep,
     now: () => NOW
@@ -124,6 +129,7 @@ beforeEach(() => {
   createContainer.mockResolvedValue("container-1");
   containerStatus.mockResolvedValue("FINISHED");
   publishMedia.mockResolvedValue("media-9");
+  mediaPermalink.mockResolvedValue(PERMALINK);
 });
 
 describe("processSocialPostSweep — publish", () => {
@@ -158,6 +164,9 @@ describe("processSocialPostSweep — publish", () => {
     expect(containerStatus).toHaveBeenCalledWith("container-1", "page-tok");
     expect(sleep).not.toHaveBeenCalled();
     expect(publishMedia).toHaveBeenCalledWith("ig-1", "page-tok", "container-1");
+    // The live post's permalink is fetched with the media id and stamped
+    // alongside it, so the dashboard can link straight to the post.
+    expect(mediaPermalink).toHaveBeenCalledWith("media-9", "page-tok");
     // The outcome stamp is a GUARDED transition from `publishing`, so a
     // concurrent resolver can never flip a settled row (Bugbot db659cb1).
     expect(transition).toHaveBeenCalledWith(
@@ -168,8 +177,23 @@ describe("processSocialPostSweep — publish", () => {
         status: "published",
         published_at: NOW.toISOString(),
         ig_media_id: "media-9",
+        ig_permalink: PERMALINK,
         error_detail: null
       },
+      db
+    );
+  });
+
+  it("publishes with a null permalink when the permalink lookup returns nothing", async () => {
+    listDue.mockResolvedValue([post()]);
+    mediaPermalink.mockResolvedValue(null);
+    const result = await processSocialPostSweep(deps());
+    expect(result).toMatchObject({ published: 1, failed: 0 });
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      "publishing",
+      expect.objectContaining({ status: "published", ig_permalink: null }),
       db
     );
   });
@@ -500,6 +524,7 @@ describe("processSocialPostSweep — in-flight resolution", () => {
         status: "published",
         published_at: NOW.toISOString(),
         ig_media_id: "media-9",
+        ig_permalink: PERMALINK,
         error_detail: null
       },
       db

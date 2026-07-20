@@ -377,6 +377,28 @@ export async function publishInstagramMedia(
   return id;
 }
 
+/**
+ * A published media's public URL (`GET /{media_id}?fields=permalink`) —
+ * what the dashboard links "view the post" to. Best-effort: a missing or
+ * malformed permalink returns null rather than failing a publish that
+ * already succeeded.
+ */
+export async function getInstagramMediaPermalink(
+  mediaId: string,
+  pageToken: string
+): Promise<string | null> {
+  try {
+    const payload = await graphRequest(`/${mediaId}`, {
+      fields: "permalink",
+      access_token: pageToken
+    });
+    const permalink = (payload as { permalink?: unknown } | null)?.permalink;
+    return typeof permalink === "string" && permalink.startsWith("https://") ? permalink : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Best-effort unsubscribe on disconnect — never throws. */
 export async function unsubscribePage(pageId: string, pageToken: string): Promise<void> {
   try {
