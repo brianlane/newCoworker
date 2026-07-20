@@ -172,6 +172,27 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
               args.inputChars ?? 0,
               args.outputChars ?? 0
             );
+    // Ledger detail for gemini_spend_events (admin day/surface/model views).
+    // Estimated turns carry their chars/4 token guesses so the views stay
+    // comparable across pricing sources; overrides (per-image pricing) have
+    // no meaningful token counts.
+    const pricingSource: "exact" | "estimate" | "override" =
+      args.costMicrosOverride !== undefined ? "override" : args.usage ? "exact" : "estimate";
+    const ledgerTokens = args.usage
+      ? {
+          promptTokens: Math.max(0, Math.round(args.usage.promptTokens)),
+          outputTokens: Math.max(0, Math.round(args.usage.outputTokens)),
+          promptAudioTokens: Math.max(0, Math.round(args.usage.promptAudioTokens ?? 0)),
+          outputAudioTokens: Math.max(0, Math.round(args.usage.outputAudioTokens ?? 0))
+        }
+      : {
+          promptTokens:
+            pricingSource === "estimate" ? Math.round(Math.max(0, args.inputChars ?? 0) / 4) : 0,
+          outputTokens:
+            pricingSource === "estimate" ? Math.round(Math.max(0, args.outputChars ?? 0) / 4) : 0,
+          promptAudioTokens: 0,
+          outputAudioTokens: 0
+        };
     const isSettle = typeof args.callControlId === "string" && args.callControlId.length > 0;
     // Plain path skips zero-cost writes; a settle must still run to release the
     // reservation the inbound gate placed even when the call cost nothing.
@@ -217,13 +238,27 @@ export async function meterGeminiSpendForBusiness(args: MeterGeminiSpendArgs): P
           p_period_start: periodStart,
           p_call_control_id: args.callControlId,
           p_actual_micros: costMicros,
-          p_cap_micros: capMicros
+          p_cap_micros: capMicros,
+          p_model: args.model,
+          p_surface: args.surface,
+          p_prompt_tokens: ledgerTokens.promptTokens,
+          p_output_tokens: ledgerTokens.outputTokens,
+          p_prompt_audio_tokens: ledgerTokens.promptAudioTokens,
+          p_output_audio_tokens: ledgerTokens.outputAudioTokens,
+          p_pricing_source: pricingSource
         })
       : await db.rpc("owner_chat_record_spend", {
           p_business_id: args.businessId,
           p_period_start: periodStart,
           p_cost_micros: costMicros,
-          p_cap_micros: capMicros
+          p_cap_micros: capMicros,
+          p_model: args.model,
+          p_surface: args.surface,
+          p_prompt_tokens: ledgerTokens.promptTokens,
+          p_output_tokens: ledgerTokens.outputTokens,
+          p_prompt_audio_tokens: ledgerTokens.promptAudioTokens,
+          p_output_audio_tokens: ledgerTokens.outputAudioTokens,
+          p_pricing_source: pricingSource
         });
     if (error) throw new Error(error.message);
 

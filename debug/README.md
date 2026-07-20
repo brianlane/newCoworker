@@ -27,6 +27,13 @@ shared, reusable bits they depend on live in tested modules:
 
 Run from the repo root, e.g. `tsx debug/<script>.ts`.
 
+> 💸 **`GOOGLE_API_KEY` on the laptop must be the INTERNAL project's key** —
+> anything here that calls Gemini directly (bench-\*, classify-probe, the
+> local e2e suite) is engineering spend, not tenant traffic, and bills the
+> `newcoworker-internal` GCP project so AI Studio's per-project view keeps
+> product vs engineering spend separable. Tenant boxes and Vercel carry the
+> production key. See [docs/GEMINI-SPEND.md](../docs/GEMINI-SPEND.md).
+
 ## Internal test tenant: New Coworker (HQ, internal)
 
 All smoke/e2e-style scripts default to the **New Coworker (HQ, internal)**

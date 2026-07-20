@@ -423,6 +423,14 @@ jobs:
   # and the suite could never run, and a job-level skip would leave a
   # "skipped" check that blocks the strict auto-merge evaluation. The live
   # suite still covers dependency bumps on the push-to-main run post-merge.
+  #
+  # Spend guard (Jul 2026): PRs whose ENTIRE diff sits on a safe-path
+  # allowlist (docs, admin-only UI, marketing pages, app-UI i18n catalogs,
+  # operator scripts, non-e2e tests, repo meta) skip the paid model calls —
+  # every step after the decision no-ops and the job reports SUCCESS (never
+  # a "skipped" check, which the merge policy treats as blocking). One file
+  # off the list, any doubt, or any error listing files → the full suite
+  # runs. Push-to-main runs always execute. See .github/scripts/e2e-safe-paths.sh.
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest
@@ -442,12 +450,26 @@ jobs:
         if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v7
 
+      # Spend guard: sets skip=true ONLY when every changed file is on the
+      # safe-path allowlist. Fails open (skip=false) on any listing error.
+      # Push events never run this step, so its output is empty there and
+      # the `!= 'true'` conditions below keep every step running.
+      - name: Decide whether the diff can affect AI behavior
+        id: aiskip
+        if: >-
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.user.login != 'dependabot[bot]'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash .github/scripts/e2e-safe-paths.sh "${{ github.repository }}" "${{ github.event.pull_request.number }}"
+
       # Push events (post-merge main) skip the PR-shaped gate: Bugbot/Vercel/
       # threads exist on the PR, which already enforced all of this pre-merge.
       - name: Wait for every other check to pass and all threads to resolve
         if: >-
           github.event_name == 'pull_request' &&
-          github.event.pull_request.user.login != 'dependabot[bot]'
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          steps.aiskip.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
@@ -456,18 +478,24 @@ jobs:
         run: bash .github/scripts/e2e-gate.sh
 
       - name: Setup Node.js
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          steps.aiskip.outputs.skip != 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          steps.aiskip.outputs.skip != 'true'
         run: npm ci
 
       - name: Run live e2e suite
-        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        if: >-
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          steps.aiskip.outputs.skip != 'true'
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |

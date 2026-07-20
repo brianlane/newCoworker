@@ -3403,29 +3403,43 @@ async function meterAiFlowSpend(
   inputChars: number,
   outputChars: number,
   /** Exact billed cost from usageMetadata when available; overrides the estimate. */
-  exactCostMicros: number | null = null
+  exactCostMicros: number | null = null,
+  /** Ledger detail for gemini_spend_events (admin day/surface/model views). */
+  ledger?: {
+    promptTokens?: number;
+    outputTokens?: number;
+    pricingSource?: "exact" | "estimate" | "override";
+  }
 ): Promise<void> {
   if (!AIFLOW_SPEND_METERING_ENABLED) return;
   try {
     const spend = supabase as unknown as SpendSupabase;
     const periodStart = await resolveChatPeriodStart(spend, run.business_id);
+    const isExact = exactCostMicros !== null && exactCostMicros > 0;
     // No exact usageMetadata tokens — estimate from text length (~4 chars/token)
     // and price with the same per-model table as the exact path above. Pass the
     // fractional chars/4 (no per-side rounding) so geminiCostMicrosFromTokens'
     // single trailing Math.ceil rounds once, avoiding an overcount on short text.
-    const costMicros =
-      exactCostMicros !== null && exactCostMicros > 0
-        ? exactCostMicros
-        : geminiCostMicrosFromTokens(
-            GEMINI_MODEL,
-            Math.max(0, inputChars) / 4,
-            Math.max(0, outputChars) / 4
-          );
+    const costMicros = isExact
+      ? exactCostMicros
+      : geminiCostMicrosFromTokens(
+          GEMINI_MODEL,
+          Math.max(0, inputChars) / 4,
+          Math.max(0, outputChars) / 4
+        );
     const { data, error } = await supabase.rpc("owner_chat_record_spend", {
       p_business_id: run.business_id,
       p_period_start: periodStart,
       p_cost_micros: costMicros,
-      p_cap_micros: CHAT_SPEND_CAP_MICROS
+      p_cap_micros: CHAT_SPEND_CAP_MICROS,
+      // Ledger event params (observability only — the fuse math above is
+      // untouched). Estimated turns carry their chars/4 token guesses so the
+      // admin views stay comparable across pricing sources.
+      p_model: GEMINI_MODEL,
+      p_surface: `aiflow_${surface}`,
+      p_prompt_tokens: Math.round(ledger?.promptTokens ?? Math.max(0, inputChars) / 4),
+      p_output_tokens: Math.round(ledger?.outputTokens ?? Math.max(0, outputChars) / 4),
+      p_pricing_source: ledger?.pricingSource ?? (isExact ? "exact" : "estimate")
     });
     if (error) throw new Error(error.message);
     const row = (Array.isArray(data) ? data[0] : data) as
@@ -3554,7 +3568,15 @@ async function geminiJsonForPrompt(
     promptTokens + outputTokens > 0
       ? geminiCostMicrosFromTokens(GEMINI_MODEL, promptTokens, outputTokens)
       : null;
-  await meterAiFlowSpend(supabase, run, surface, prompt.length, text.length, exactCostMicros);
+  await meterAiFlowSpend(
+    supabase,
+    run,
+    surface,
+    prompt.length,
+    text.length,
+    exactCostMicros,
+    exactCostMicros !== null ? { promptTokens, outputTokens, pricingSource: "exact" } : undefined
+  );
   return text;
 }
 
@@ -3911,7 +3933,8 @@ async function generateImageStep(
         "generate_image",
         0,
         0,
-        geminiCostMicrosFromTokens(GEMINI_MODEL, promptTokens, outputTokens)
+        geminiCostMicrosFromTokens(GEMINI_MODEL, promptTokens, outputTokens),
+        { promptTokens, outputTokens, pricingSource: "exact" }
       );
     }
     return { kind: "fail", error: "generate_image: the model returned no image" };
@@ -3946,7 +3969,9 @@ async function generateImageStep(
   // be retried — metering before the last failure point could bill twice for
   // one intended image. Google bills per generated image — the flat list
   // price, not token math.
-  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, flatCostMicros);
+  await meterAiFlowSpend(supabase, run, "generate_image", 0, 0, flatCostMicros, {
+    pricingSource: "override"
+  });
 
   scope.vars[action.saveAs] = signed.signedUrl;
   appendActionTaken(scope, "generated an image");

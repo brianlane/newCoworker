@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { listBusinesses } from "@/lib/db/businesses";
 import { getTranslations } from "next-intl/server";
 import {
@@ -5,6 +6,8 @@ import {
   type BusinessMonthUsage
 } from "@/lib/db/usage";
 import { listTelnyxCostDaily } from "@/lib/db/platform-costs";
+import { listGeminiSpendDaily } from "@/lib/db/gemini-spend";
+import { geminiMicrosByBusinessInWindow } from "@/lib/admin/gemini-usage-view";
 import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
 import { getTierLimits } from "@/lib/plans/limits";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
@@ -66,6 +69,17 @@ export default async function AdminUsagePage({
   });
   const telnyx = telnyxMicrosByBusinessInWindow(telnyxRows, window);
 
+  // Gemini spend from the day-keyed ledger (gemini_spend_events), summed over
+  // the SELECTED calendar month — works for historical months too, unlike the
+  // period-keyed fuse rows. The fuse still drives Util % below.
+  const geminiRows = await listGeminiSpendDaily(window.startYmd).catch((err: unknown) => {
+    logger.error("admin usage: gemini ledger read failed", {
+      message: err instanceof Error ? err.message : String(err)
+    });
+    return [];
+  });
+  const geminiMonthByBusiness = geminiMicrosByBusinessInWindow(geminiRows, window);
+
   const rows = businesses
     .map((business) => {
       const usage = usageByBusiness.get(business.id);
@@ -83,6 +97,7 @@ export default async function AdminUsagePage({
         callsMade: usage?.callsMade ?? 0,
         peakConcurrentCalls: usage?.peakConcurrentCalls ?? 0,
         aiSpendMicros,
+        geminiMonthMicros: geminiMonthByBusiness.get(business.id) ?? 0,
         aiCapMicros,
         includedVoiceMinutes: limits.voiceIncludedSecondsPerStripePeriod / 60,
         smsCap: limits.smsPerMonth,
@@ -103,9 +118,7 @@ export default async function AdminUsagePage({
   const fleetVoice = rows.reduce((sum, r) => sum + r.voiceMinutes, 0);
   const fleetSms = rows.reduce((sum, r) => sum + r.smsSent, 0);
   const fleetCalls = rows.reduce((sum, r) => sum + r.callsMade, 0);
-  const fleetAiMicros = margins
-    ? [...margins.aiSpendMicrosByBusiness.values()].reduce((sum, v) => sum + v, 0)
-    : null;
+  const fleetGeminiMonthMicros = rows.reduce((sum, r) => sum + r.geminiMonthMicros, 0);
 
   return (
     <div className="space-y-6">
@@ -149,12 +162,14 @@ export default async function AdminUsagePage({
           <p className="text-xs text-parchment/30 mt-1">fleet-wide · {selected}</p>
         </Card>
         <Card>
-          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Gemini Chat</p>
+          <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Gemini</p>
           <p className="text-3xl font-bold text-parchment">
-            {fleetAiMicros !== null ? money(fleetAiMicros / 10_000) : "—"}
+            {money(fleetGeminiMonthMicros / 10_000)}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
-            {fleetAiMicros !== null ? "current periods, metered" : "current month only"}
+            <Link href="/admin/gemini" className="hover:text-signal-teal">
+              metered ledger · {selected} · details →
+            </Link>
           </p>
         </Card>
       </div>
@@ -163,7 +178,7 @@ export default async function AdminUsagePage({
       <Card>
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
           Per Tenant · {selected}
-          {!isCurrentMonth && " (AI spend + margin shown for the current month only)"}
+          {!isCurrentMonth && " (Util % + margin shown for the current month only)"}
         </h2>
         {rows.length === 0 ? (
           <p className="text-sm text-parchment/40 text-center py-4">No businesses.</p>
@@ -217,13 +232,13 @@ export default async function AdminUsagePage({
                     <td className="py-2 text-right text-parchment/70">{row.callsMade}</td>
                     <td className="py-2 text-right text-parchment/70">{row.peakConcurrentCalls}</td>
                     <td className="py-2 text-right text-parchment/70">
-                      {row.aiSpendMicros !== null ? (
-                        <>
-                          {money(row.aiSpendMicros / 10_000)}
-                          <span className="text-parchment/30"> / {money(row.aiCapMicros / 10_000)}</span>
-                        </>
-                      ) : (
-                        "—"
+                      {money(row.geminiMonthMicros / 10_000)}
+                      {row.aiSpendMicros !== null && (
+                        <span className="text-parchment/30">
+                          {" "}
+                          · {money(row.aiSpendMicros / 10_000)} / {money(row.aiCapMicros / 10_000)}{" "}
+                          period
+                        </span>
                       )}
                     </td>
                     <td className="py-2 text-right">
@@ -260,9 +275,12 @@ export default async function AdminUsagePage({
           </div>
         )}
         <p className="text-xs text-parchment/30 mt-3">
-          Util % blends voice/SMS/AI against the tier&apos;s caps (the tier-economics canvas
-          methodology). Telnyx cost is the synced invoice actual for the month; &quot;—&quot; means
-          the sync has no rows for that window.
+          AI spend is the day-keyed metered ledger summed over {selected} (collecting since the
+          ledger shipped, Jul 2026 — see /admin/gemini for the daily breakdown); the dimmer
+          &quot;period&quot; figure is the current Stripe-period fuse total vs cap. Util % blends
+          voice/SMS/AI against the tier&apos;s caps (the tier-economics canvas methodology). Telnyx
+          cost is the synced invoice actual for the month; &quot;—&quot; means the sync has no rows
+          for that window.
         </p>
       </Card>
     </div>

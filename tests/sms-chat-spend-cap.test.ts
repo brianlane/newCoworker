@@ -33,6 +33,16 @@ describe("geminiCostMicrosFromTokens", () => {
     expect(geminiCostMicrosFromTokens("gemini-99-ultra", 1000, 100)).toBe(
       Math.ceil(1000 * DEFAULT_GEMINI_PRICE_PER_1M.in + 100 * DEFAULT_GEMINI_PRICE_PER_1M.out)
     );
+    // The default IS the priciest deployed tier (gemini-3.5-flash) — lockstep
+    // with src/lib/billing/ai-spend-meter.ts. It was $0.5/$3.0 until Jul 2026,
+    // a 3x undercount for any unknown/unlisted model.
+    expect(DEFAULT_GEMINI_PRICE_PER_1M).toEqual({ in: 1.5, out: 9.0 });
+  });
+
+  it("prices gemini-3.5-flash from its own entry (present since Jul 2026)", () => {
+    expect(geminiCostMicrosFromTokens("gemini-3.5-flash", 1000, 100)).toBe(
+      Math.ceil(1000 * 1.5 + 100 * 9.0)
+    );
   });
 
   it("prices the (voice-path, defensively listed) 3.1 models in the flash tier, not the default", () => {
