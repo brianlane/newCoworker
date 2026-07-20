@@ -229,6 +229,32 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(rows[0].reply_preview).not.toMatch(/reasoning|\{"intent"|\u27E6|\u27E7/);
   });
 
+  it("an iMessage tapback gets NO AI reply — logged and counted, never answered", async () => {
+    const { biz } = await seedLeadWithContext("IT tapback suppress");
+    // NO scripted Rowboat reply: the suppression must fire before any model
+    // call, so an unexpected /chat would fail loudly on the empty script.
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "Liked \u201CGreat, looking forward to it!\u201D");
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    // No Rowboat turn, no outbound: the job closes as suppressed.
+    expect(rowboat.calls.length).toBe(callsBefore);
+    const job = await getSmsJob(db, jobId);
+    expect(job.status).toBe("done");
+    expect(job.last_error).toBe("suppressed_tapback");
+    expect(job.rowboat_reply_cached).toBeNull();
+    expect(job.customer_e164).toBe(LEAD);
+
+    // Still a real interaction: the contact's counters were bumped.
+    const { data: contact } = await db
+      .from("contacts")
+      .select("total_interaction_count")
+      .eq("business_id", biz)
+      .eq("customer_e164", LEAD)
+      .single();
+    expect((contact as { total_interaction_count: number }).total_interaction_count).toBe(1);
+  });
+
   it("a dead-lettered customer message pages the owner (silence is never the end state)", async () => {
     const { biz } = await seedLeadWithContext("IT dead-letter page");
     // Seeded one claim away from the attempt ceiling (claim increments to
