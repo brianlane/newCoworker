@@ -167,6 +167,12 @@ export async function proxy(request: NextRequest) {
     // email fallback). It sends no Origin header, so CSRF would 403 every send.
     // Same rationale as the exemptions above.
     pathname !== "/api/aiflows/send-owner-email" &&
+    // /api/vps/posture is the box → platform security-posture heartbeat,
+    // authenticated solely by a gateway-token bearer bound to the businessId
+    // (verifyGatewayTokenForBusiness) — heartbeat.sh POSTs it via curl with
+    // no Origin header, so CSRF was 403ing every fleet posture report. Same
+    // rationale as the /api/voice/tools exemption above.
+    pathname !== "/api/vps/posture" &&
     // /api/email/inbound is the per-tenant AI mailbox webhook authenticated
     // solely by `Authorization: Bearer EMAIL_INBOUND_SECRET` (assertEmailInboundAuth)
     // — the Cloudflare Email Worker POSTs every inbound message here with no Origin
