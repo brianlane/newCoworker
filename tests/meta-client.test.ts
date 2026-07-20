@@ -31,6 +31,7 @@ import {
   fetchLead,
   flattenLeadFields,
   getInstagramContainerStatus,
+  getInstagramMediaPermalink,
   getLinkedInstagramAccount,
   getMessengerProfile,
   getMetaAppId,
@@ -366,6 +367,31 @@ describe("Instagram content publishing", () => {
 
     fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
     expect(await getInstagramContainerStatus("c1", "page-tok")).toBe("");
+  });
+
+  it("reads a published media's permalink", async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { permalink: "https://www.instagram.com/p/ABC/" })
+    );
+    expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBe(
+      "https://www.instagram.com/p/ABC/"
+    );
+    const [url] = fetchMock.mock.calls[0] as [string];
+    const parsed = new URL(url);
+    expect(parsed.pathname).toBe("/v25.0/media-9");
+    expect(parsed.searchParams.get("fields")).toBe("permalink");
+  });
+
+  it("permalink lookups return null on absent, malformed, or failing responses", async () => {
+    // Absent field.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBeNull();
+    // Not an https URL.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { permalink: "javascript:alert(1)" }));
+    expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBeNull();
+    // Graph error — swallowed, never thrown past a successful publish.
+    fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: { message: "boom" } }));
+    expect(await getInstagramMediaPermalink("media-9", "page-tok")).toBeNull();
   });
 });
 

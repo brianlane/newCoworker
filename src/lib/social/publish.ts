@@ -33,6 +33,7 @@ import { getMetaConnection, type MetaConnectionRow } from "@/lib/db/meta-connect
 import {
   createInstagramMediaContainer,
   getInstagramContainerStatus,
+  getInstagramMediaPermalink,
   publishInstagramMedia
 } from "@/lib/meta/client";
 import { GENERATED_IMAGES_BUCKET, normalizeImageRef } from "@/lib/image-tools/handlers";
@@ -118,6 +119,7 @@ export type SocialSweepDeps = {
   createContainer?: typeof createInstagramMediaContainer;
   publishMedia?: typeof publishInstagramMedia;
   containerStatus?: typeof getInstagramContainerStatus;
+  mediaPermalink?: typeof getInstagramMediaPermalink;
   loadConnection?: typeof getMetaConnection;
   now?: () => Date;
   /** Injectable readiness-poll delay (tests run instantly). */
@@ -127,7 +129,12 @@ export type SocialSweepDeps = {
 type GraphDeps = Required<
   Pick<
     SocialSweepDeps,
-    "createContainer" | "publishMedia" | "containerStatus" | "loadConnection" | "sleep"
+    | "createContainer"
+    | "publishMedia"
+    | "containerStatus"
+    | "mediaPermalink"
+    | "loadConnection"
+    | "sleep"
   >
 >;
 
@@ -173,6 +180,7 @@ async function publishOne(
 ): Promise<PublishOutcome> {
   let failure = "";
   let igMediaId = "";
+  let igPermalink: string | null = null;
   let unsettled = false;
   try {
     const connection: MetaConnectionRow | null = await deps.loadConnection(
@@ -226,6 +234,9 @@ async function publishOne(
               connection.pageToken,
               creationId
             );
+            // Best-effort (never throws): the live post's public URL, so
+            // the dashboard can link straight to it.
+            igPermalink = await deps.mediaPermalink(igMediaId, connection.pageToken);
           } catch (err) {
             // AMBIGUOUS: the error may have surfaced after Meta published
             // (timeout, dropped response). Stamping failed here would invite
@@ -264,6 +275,7 @@ async function publishOne(
     status: "published",
     published_at: nowIso,
     ig_media_id: igMediaId,
+    ig_permalink: igPermalink,
     error_detail: null
   });
   return won ? { kind: "published" } : { kind: "lost" };
@@ -323,10 +335,12 @@ async function resolveInFlightPost(
             );
             return "waiting";
           }
+          const igPermalink = await deps.mediaPermalink(igMediaId, connection.pageToken);
           const won = await stampOutcome(db, post, {
             status: "published",
             published_at: nowIso,
             ig_media_id: igMediaId,
+            ig_permalink: igPermalink,
             error_detail: null
           });
           return won ? "published" : "lost";
@@ -380,11 +394,19 @@ export async function processSocialPostSweep(
   const createContainer = deps.createContainer ?? createInstagramMediaContainer;
   const publishMedia = deps.publishMedia ?? publishInstagramMedia;
   const containerStatus = deps.containerStatus ?? getInstagramContainerStatus;
+  const mediaPermalink = deps.mediaPermalink ?? getInstagramMediaPermalink;
   const loadConnection = deps.loadConnection ?? getMetaConnection;
   const now = deps.now ?? (() => new Date());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   /* c8 ignore stop */
-  const graph: GraphDeps = { createContainer, publishMedia, containerStatus, loadConnection, sleep };
+  const graph: GraphDeps = {
+    createContainer,
+    publishMedia,
+    containerStatus,
+    mediaPermalink,
+    loadConnection,
+    sleep
+  };
 
   const result: SocialSweepResult = {
     promoted: 0,
