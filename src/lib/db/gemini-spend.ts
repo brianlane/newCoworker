@@ -1,6 +1,6 @@
 /**
  * Accessors for the Gemini spend observability tables
- * (migration 20260720004922_gemini_spend_ledger.sql):
+ * (migration 20260815010000_gemini_spend_ledger.sql):
  *
  *   - `gemini_spend_daily`  — roll-up VIEW over the append-only
  *     `gemini_spend_events` ledger (one row per metered Gemini call,
