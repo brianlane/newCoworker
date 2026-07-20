@@ -176,17 +176,25 @@ export function buildGeminiTenantBreakdown(
   return tenants;
 }
 
-/** businessId → summed metered cost (micro-USD) for rows inside the window. */
+/**
+ * businessId → summed metered cost (micro-USD) for rows inside [start, end).
+ * `hasRows` distinguishes "the ledger has data for this window and this
+ * tenant spent $0" from "no ledger data at all" (pre-ledger months) — same
+ * shape as telnyxMicrosByBusinessInWindow, so the Usage page can render
+ * "—" instead of a misleading $0.00.
+ */
 export function geminiMicrosByBusinessInWindow(
   rows: GeminiSpendDailyRow[],
   window: { startYmd: string; endYmdExclusive: string }
-): Map<string, number> {
+): { byBusiness: Map<string, number>; hasRows: boolean } {
   const byBusiness = new Map<string, number>();
+  let hasRows = false;
   for (const row of rows) {
     if (row.day < window.startYmd || row.day >= window.endYmdExclusive) continue;
+    hasRows = true;
     byBusiness.set(row.business_id, (byBusiness.get(row.business_id) ?? 0) + row.cost_micros);
   }
-  return byBusiness;
+  return { byBusiness, hasRows };
 }
 
 export type GeminiReconciliation = {

@@ -465,11 +465,16 @@ jobs:
 
       # Push events (post-merge main) skip the PR-shaped gate: Bugbot/Vercel/
       # threads exist on the PR, which already enforced all of this pre-merge.
+      #
+      # Deliberately NOT conditioned on the spend guard: the gate is free
+      # (GitHub API polling) and it is what makes this job the merge bar —
+      # a safe-path skip must only save the PAID model calls below, never
+      # let the job go green while other checks fail or threads sit
+      # unresolved.
       - name: Wait for every other check to pass and all threads to resolve
         if: >-
           github.event_name == 'pull_request' &&
-          github.event.pull_request.user.login != 'dependabot[bot]' &&
-          steps.aiskip.outputs.skip != 'true'
+          github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}

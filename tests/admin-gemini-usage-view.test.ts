@@ -162,8 +162,8 @@ describe("buildGeminiTenantBreakdown", () => {
 });
 
 describe("geminiMicrosByBusinessInWindow", () => {
-  it("sums per business inside [start, end)", () => {
-    const byBusiness = geminiMicrosByBusinessInWindow(
+  it("sums per business inside [start, end) and reports hasRows", () => {
+    const result = geminiMicrosByBusinessInWindow(
       [
         spendRow({ day: "2026-07-01", cost_micros: 5 }),
         spendRow({ day: "2026-07-19", cost_micros: 7 }),
@@ -173,8 +173,18 @@ describe("geminiMicrosByBusinessInWindow", () => {
       ],
       { startYmd: "2026-07-01", endYmdExclusive: "2026-07-20" }
     );
-    expect(byBusiness.get("biz-1")).toBe(12);
-    expect(byBusiness.get("biz-2")).toBe(3);
+    expect(result.hasRows).toBe(true);
+    expect(result.byBusiness.get("biz-1")).toBe(12);
+    expect(result.byBusiness.get("biz-2")).toBe(3);
+  });
+
+  it("reports hasRows=false when the window has no ledger rows (pre-ledger months)", () => {
+    const result = geminiMicrosByBusinessInWindow([spendRow({ day: "2026-07-19" })], {
+      startYmd: "2026-06-01",
+      endYmdExclusive: "2026-07-01"
+    });
+    expect(result.hasRows).toBe(false);
+    expect(result.byBusiness.size).toBe(0);
   });
 });
 

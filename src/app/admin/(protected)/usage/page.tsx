@@ -78,7 +78,7 @@ export default async function AdminUsagePage({
     });
     return [];
   });
-  const geminiMonthByBusiness = geminiMicrosByBusinessInWindow(geminiRows, window);
+  const gemini = geminiMicrosByBusinessInWindow(geminiRows, window);
 
   const rows = businesses
     .map((business) => {
@@ -97,7 +97,9 @@ export default async function AdminUsagePage({
         callsMade: usage?.callsMade ?? 0,
         peakConcurrentCalls: usage?.peakConcurrentCalls ?? 0,
         aiSpendMicros,
-        geminiMonthMicros: geminiMonthByBusiness.get(business.id) ?? 0,
+        // Null = the ledger has no rows in this window at all (pre-ledger
+        // months) — rendered as "—", not a misleading $0.00.
+        geminiMonthMicros: gemini.hasRows ? (gemini.byBusiness.get(business.id) ?? 0) : null,
         aiCapMicros,
         includedVoiceMinutes: limits.voiceIncludedSecondsPerStripePeriod / 60,
         smsCap: limits.smsPerMonth,
@@ -118,7 +120,9 @@ export default async function AdminUsagePage({
   const fleetVoice = rows.reduce((sum, r) => sum + r.voiceMinutes, 0);
   const fleetSms = rows.reduce((sum, r) => sum + r.smsSent, 0);
   const fleetCalls = rows.reduce((sum, r) => sum + r.callsMade, 0);
-  const fleetGeminiMonthMicros = rows.reduce((sum, r) => sum + r.geminiMonthMicros, 0);
+  const fleetGeminiMonthMicros = gemini.hasRows
+    ? rows.reduce((sum, r) => sum + (r.geminiMonthMicros ?? 0), 0)
+    : null;
 
   return (
     <div className="space-y-6">
@@ -164,7 +168,7 @@ export default async function AdminUsagePage({
         <Card>
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Gemini</p>
           <p className="text-3xl font-bold text-parchment">
-            {money(fleetGeminiMonthMicros / 10_000)}
+            {fleetGeminiMonthMicros !== null ? money(fleetGeminiMonthMicros / 10_000) : "—"}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             <Link href="/admin/gemini" className="hover:text-signal-teal">
@@ -232,7 +236,7 @@ export default async function AdminUsagePage({
                     <td className="py-2 text-right text-parchment/70">{row.callsMade}</td>
                     <td className="py-2 text-right text-parchment/70">{row.peakConcurrentCalls}</td>
                     <td className="py-2 text-right text-parchment/70">
-                      {money(row.geminiMonthMicros / 10_000)}
+                      {row.geminiMonthMicros !== null ? money(row.geminiMonthMicros / 10_000) : "—"}
                       {row.aiSpendMicros !== null && (
                         <span className="text-parchment/30">
                           {" "}
@@ -276,8 +280,9 @@ export default async function AdminUsagePage({
         )}
         <p className="text-xs text-parchment/30 mt-3">
           AI spend is the day-keyed metered ledger summed over {selected} (collecting since the
-          ledger shipped, Jul 2026 — see /admin/gemini for the daily breakdown); the dimmer
-          &quot;period&quot; figure is the current Stripe-period fuse total vs cap. Util % blends
+          ledger shipped, Jul 2026 — &quot;—&quot; means no ledger rows exist for that window; see
+          /admin/gemini for the daily breakdown); the dimmer &quot;period&quot; figure is the
+          current Stripe-period fuse total vs cap. Util % blends
           voice/SMS/AI against the tier&apos;s caps (the tier-economics canvas methodology). Telnyx
           cost is the synced invoice actual for the month; &quot;—&quot; means the sync has no rows
           for that window.
