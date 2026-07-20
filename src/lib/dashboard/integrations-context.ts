@@ -23,6 +23,10 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
+import {
+  getMcpConnectorStatus,
+  type McpConnectorStatus
+} from "@/lib/mcp/connector-status";
 import type { IntegrationSlug, IntegrationStatus } from "@/lib/integrations/registry";
 
 export type IntegrationsContext = {
@@ -39,6 +43,12 @@ export type IntegrationsContext = {
   zoomConnection: Awaited<ReturnType<typeof getPublicZoomConnection>>;
   apiKeys: Awaited<ReturnType<typeof listApiKeys>>;
   activeHooks: Awaited<ReturnType<typeof listWebhookSubscriptions>>;
+  /**
+   * The SIGNED-IN USER's Claude connector status (user-scoped, not business-
+   * scoped — the MCP bearer belongs to the login). Null = never connected,
+   * or the best-effort read failed.
+   */
+  mcpConnectorStatus: McpConnectorStatus | null;
 };
 
 /**
@@ -81,7 +91,10 @@ export async function loadIntegrationsContext(
     // Never load key metadata for non-owners — the key routes refuse
     // managers, so don't server-render it into their HTML either.
     apiKeys: businessId && canManageApiKeys ? await listApiKeys(businessId) : [],
-    activeHooks: businessId ? await listWebhookSubscriptions(businessId) : []
+    activeHooks: businessId ? await listWebhookSubscriptions(businessId) : [],
+    // Best-effort: a status-read failure must not take the page down — the
+    // card just falls back to the instructions-only state.
+    mcpConnectorStatus: await getMcpConnectorStatus(user.userId).catch(() => null)
   };
 }
 
@@ -138,8 +151,10 @@ export function computeIntegrationStatuses(
       keyCount > 0
         ? { state: "connected", label: keyCount === 1 ? "1 key" : `${keyCount} keys` }
         : { state: "disconnected", label: "No keys" },
-    // Purely informational — the connector authenticates with the owner's
-    // own login on Claude's side, so there is no stored connection here.
-    claude: { state: "disconnected", label: "Available" }
+    // User-scoped (the MCP bearer belongs to the login): connected once the
+    // signed-in user's Claude has made an authenticated request.
+    claude: ctx.mcpConnectorStatus
+      ? connected
+      : { state: "disconnected", label: "Available" }
   };
 }

@@ -1242,6 +1242,11 @@
       "settings": "Configuración",
       "notifications": "Notificaciones"
     },
+    "integrationsClaude": {
+      "connectedBadge": "Conectado",
+      "lastUsed": "Claude usó este conector por última vez",
+      "firstConnected": "conectado por primera vez"
+    },
     "home": {
       "title": "Tu Coworker de IA",
       "subtitle": "Monitorea y administra a tu empleado digital",

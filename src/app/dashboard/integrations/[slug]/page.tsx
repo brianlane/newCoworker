@@ -116,6 +116,7 @@ function IntegrationBody({
       return (
         <ClaudeConnectorCard
           mcpUrl={`${(process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "")}/api/mcp`}
+          status={ctx.mcpConnectorStatus}
         />
       );
   }

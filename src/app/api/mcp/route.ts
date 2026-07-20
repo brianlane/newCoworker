@@ -15,6 +15,7 @@
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { verifySupabaseAccessToken } from "@/lib/mcp/auth";
+import { recordMcpConnectorSeen } from "@/lib/mcp/connector-status";
 import { registerMcpTools } from "@/lib/mcp/registry";
 
 export const dynamic = "force-dynamic";
@@ -34,6 +35,10 @@ const verifyToken = async (
   if (!bearerToken) return undefined;
   const user = await verifySupabaseAccessToken(bearerToken);
   if (!user) return undefined;
+  // Connection-status stamp: the first authenticated request is the moment
+  // the connector provably works end to end (OAuth alone can succeed while
+  // the edge blocks Anthropic's POSTs). Debounced inside; never throws.
+  await recordMcpConnectorSeen(user.userId);
   return {
     token: bearerToken,
     clientId: user.userId,
