@@ -214,15 +214,28 @@ export default async function AdminGeminiPage({
                     .map((s) => `\n${nameOf(s.businessId)}: ${microsToMoney(s.costMicros)}`)
                     .join("")}`}
                 >
-                  {point.segments.map((segment) => (
+                  {/* Visibility floor applies ONCE to the whole column (not per
+                      segment — per-segment floors would compound and inflate
+                      days with many small tenants); segments then split the
+                      column exactly proportionally. */}
+                  {point.costMicros > 0 && (
                     <div
-                      key={segment.businessId}
-                      className={`w-full ${segmentClassByBusiness.get(segment.businessId) ?? "bg-parchment/25"}`}
+                      className="w-full flex flex-col"
                       style={{
-                        height: `${Math.max((segment.costMicros / series.maxMicros) * 100, 1)}%`
+                        height: `${Math.max((point.costMicros / series.maxMicros) * 100, 1.5)}%`
                       }}
-                    />
-                  ))}
+                    >
+                      {point.segments.map((segment) => (
+                        <div
+                          key={segment.businessId}
+                          className={`w-full ${segmentClassByBusiness.get(segment.businessId) ?? "bg-parchment/25"}`}
+                          style={{
+                            height: `${(segment.costMicros / point.costMicros) * 100}%`
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
