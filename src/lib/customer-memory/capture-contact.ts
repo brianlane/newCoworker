@@ -31,6 +31,19 @@ import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+/**
+ * Source tag stamped on a NEWLY created contact so CRM views and AiFlow
+ * `contact_created` trigger conditions can scope to the capture surface
+ * (the event windowText carries a `tags:` line). Capture surfaces only —
+ * other channels create contacts through their own paths.
+ */
+export const CAPTURE_SOURCE_TAGS: Partial<Record<CustomerMemoryChannel, string>> = {
+  voice: "Voice Capture",
+  webchat: "Webchat Lead",
+  messenger: "Messenger Lead",
+  whatsapp: "WhatsApp Lead"
+};
+
 export type CapturedContactInput = {
   /** Normalized E.164 — callers coerce/validate before calling. */
   e164: string;
@@ -130,6 +143,26 @@ export async function ensureCapturedContact(
 
   if (existedBefore || !rolledUp) return { created: false };
 
+  // Source tag on the NEW row only (never touch an existing contact's tags):
+  // lets the owner's CRM views and `contact_created` flow conditions single
+  // out capture-sourced leads. Best-effort — the tag is a nice-to-have.
+  const sourceTag = CAPTURE_SOURCE_TAGS[input.channel];
+  if (sourceTag) {
+    try {
+      const { error: tagErr } = await db
+        .from("contacts")
+        .update({ tags: [sourceTag], updated_at: new Date().toISOString() })
+        .eq("business_id", businessId)
+        .eq("customer_e164", input.e164);
+      if (tagErr) throw new Error(tagErr.message);
+    } catch (err) {
+      logger.warn("capture-contact: source tag failed", {
+        businessId,
+        error: errText(err)
+      });
+    }
+  }
+
   // contact_created triggers: a lead the AI just captured may start flows
   // watching for new contacts (the demo-caller / web-lead follow-ups).
   // Timestamped dedupe like the dashboard add: a deleted-then-recaptured
@@ -140,7 +173,8 @@ export async function ensureCapturedContact(
     contact: {
       e164: input.e164,
       ...(name ? { name } : {}),
-      ...(email ? { email } : {})
+      ...(email ? { email } : {}),
+      ...(sourceTag ? { tags: [sourceTag] } : {})
     },
     dedupeKey: `ce:created:${input.e164}:${Date.now()}`
   });

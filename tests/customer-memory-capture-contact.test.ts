@@ -29,17 +29,30 @@ const mockFire = vi.mocked(fireContactEvent);
 
 type PrecheckResult = { data: unknown; error: unknown };
 
-/** Chainable fake for `.from("contacts").select().eq().or().maybeSingle()`. */
-function fakeDb(precheck: PrecheckResult | Error) {
+/**
+ * Chainable fake for the two contact queries the module runs:
+ *   - `.from("contacts").select().eq().or().maybeSingle()` (existence check)
+ *   - `.from("contacts").update().eq().eq()` (source tag on the new row)
+ */
+function fakeDb(
+  precheck: PrecheckResult | Error,
+  opts: { tagError?: { message: string } | null } = {}
+) {
   const maybeSingle =
     precheck instanceof Error
       ? vi.fn().mockRejectedValue(precheck)
       : vi.fn().mockResolvedValue(precheck);
   const or = vi.fn().mockReturnValue({ maybeSingle });
-  const eq = vi.fn().mockReturnValue({ or });
-  const select = vi.fn().mockReturnValue({ eq });
-  const from = vi.fn().mockReturnValue({ select });
-  return { client: { from } as never, from, eq, or };
+  const selectEq = vi.fn().mockReturnValue({ or });
+  const select = vi.fn().mockReturnValue({ eq: selectEq });
+  const updateCalls: Array<Record<string, unknown>> = [];
+  const update = vi.fn((patch: Record<string, unknown>) => {
+    updateCalls.push(patch);
+    const eq2 = vi.fn().mockResolvedValue({ error: opts.tagError ?? null });
+    return { eq: vi.fn().mockReturnValue({ eq: eq2 }) };
+  });
+  const from = vi.fn().mockReturnValue({ select, update });
+  return { client: { from } as never, from, eq: selectEq, or, update, updateCalls };
 }
 
 beforeEach(() => {
@@ -50,8 +63,8 @@ beforeEach(() => {
 });
 
 describe("ensureCapturedContact", () => {
-  it("creates a new contact (rollup) and fires contact_created with name + email", async () => {
-    const { client, eq, or } = fakeDb({ data: null, error: null });
+  it("creates a new contact (rollup + source tag) and fires contact_created with name + email + tag", async () => {
+    const { client, eq, or, updateCalls } = fakeDb({ data: null, error: null });
     mockClientFactory.mockResolvedValue(client);
 
     const out = await ensureCapturedContact(BIZ, {
@@ -75,19 +88,27 @@ describe("ensureCapturedContact", () => {
       client
     );
     expect(mockLink).toHaveBeenCalledWith(BIZ, PHONE, "ada@example.com", client);
+    expect(updateCalls).toEqual([
+      expect.objectContaining({ tags: ["Voice Capture"] })
+    ]);
     expect(mockFire).toHaveBeenCalledTimes(1);
     const [firedBiz, event] = mockFire.mock.calls[0];
     expect(firedBiz).toBe(BIZ);
     expect(event).toMatchObject({
       kind: "contact_created",
-      contact: { e164: PHONE, name: "Ada Lovelace", email: "ada@example.com" }
+      contact: {
+        e164: PHONE,
+        name: "Ada Lovelace",
+        email: "ada@example.com",
+        tags: ["Voice Capture"]
+      }
     });
     expect(event.dedupeKey).toMatch(
       new RegExp(`^ce:created:\\${PHONE}:\\d+$`)
     );
   });
 
-  it("fires a bare event (no name/email keys) for a phone-only new lead", async () => {
+  it("fires a bare event (no name/email keys) with the channel's source tag", async () => {
     const { client } = fakeDb({ data: null, error: null });
     mockClientFactory.mockResolvedValue(client);
 
@@ -106,6 +127,33 @@ describe("ensureCapturedContact", () => {
       client
     );
     expect(mockLink).not.toHaveBeenCalled();
+    const [, event] = mockFire.mock.calls[0];
+    expect(event.contact).toEqual({ e164: PHONE, tags: ["Webchat Lead"] });
+  });
+
+  it("survives a source-tag write failure (warn; event still fires with the tag)", async () => {
+    const { client } = fakeDb(
+      { data: null, error: null },
+      { tagError: { message: "tag denied" } }
+    );
+    mockClientFactory.mockResolvedValue(client);
+
+    const out = await ensureCapturedContact(BIZ, { e164: PHONE, channel: "voice" });
+    expect(out).toEqual({ created: true });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "capture-contact: source tag failed",
+      expect.objectContaining({ error: "tag denied" })
+    );
+    expect(mockFire).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips the tag write (and event tags) for channels without a source tag", async () => {
+    const { client, update } = fakeDb({ data: null, error: null });
+    mockClientFactory.mockResolvedValue(client);
+
+    const out = await ensureCapturedContact(BIZ, { e164: PHONE, channel: "dashboard" });
+    expect(out).toEqual({ created: true });
+    expect(update).not.toHaveBeenCalled();
     const [, event] = mockFire.mock.calls[0];
     expect(event.contact).toEqual({ e164: PHONE });
   });
