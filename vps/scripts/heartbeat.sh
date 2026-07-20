@@ -93,11 +93,18 @@ report_posture() {
   fi
 
   # Only SSH may listen publicly — everything else binds loopback / the
-  # docker bridge behind the outbound tunnel.
+  # docker bridge behind the outbound tunnel. Whitelist:
+  #   - ALL of 127.0.0.0/8 and [::1], not just 127.0.0.1 — systemd-resolved's
+  #     DNS stub listens on 127.0.0.53/127.0.0.54:53 (with %iface suffixes),
+  #     which is loopback and was false-positiving every fleet report.
+  #   - Host Ollama on :11434 — bootstrap.sh deliberately binds it to
+  #     0.0.0.0 so the dockerised llm-router can reach it via the docker
+  #     bridge; UFW's INPUT default-deny (a host service, not a Docker
+  #     published port) blocks it externally, verified 2026-07-20.
   local listeners
   listeners="$(ss -H -tlnp 2>/dev/null | awk '{print $4}' \
-    | grep -Ev '^(127\.0\.0\.1|\[?::1\]?):' \
-    | grep -Ev ':22$' | sort -u | tr '\n' ' ' | sed 's/"/ /g')"
+    | grep -Ev '^(127\.|\[?::1\]?[%:])' \
+    | grep -Ev ':(22|11434)$' | sort -u | tr '\n' ' ' | sed 's/"/ /g')"
   if [[ -z "${listeners// /}" ]]; then
     add_check public_listeners true "only SSH listening publicly"
   else
