@@ -11,6 +11,8 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
 import { runProductionPlatformCostSync } from "@/lib/admin/cost-sync-runner";
+import { runProductionGeminiBilledSync } from "@/lib/admin/gemini-billed-sync-runner";
+import type { GeminiBilledSyncStatus } from "@/lib/admin/gemini-billed-sync";
 
 // Same ceiling as the internal cron route — a 90-day Telnyx backfill pages
 // through thousands of MDRs and Hostinger can take 10-30s per call.
@@ -28,7 +30,15 @@ export async function POST(request: Request) {
     const raw = await request.text();
     const body = bodySchema.parse(raw.trim().length > 0 ? JSON.parse(raw) : {});
     const status = await runProductionPlatformCostSync({ telnyxRange: body.telnyxRange });
-    return successResponse({ status });
+    // Gemini billed actuals ride Sync-now too — best-effort, and a recorded
+    // skip (not a failure) until the BigQuery export setup is done.
+    let geminiBilled: GeminiBilledSyncStatus | null = null;
+    try {
+      geminiBilled = await runProductionGeminiBilledSync();
+    } catch {
+      geminiBilled = null;
+    }
+    return successResponse({ status, geminiBilled });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");

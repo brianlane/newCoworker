@@ -211,7 +211,14 @@ describe("meterGeminiSpendForBusiness", () => {
       p_business_id: "biz-1",
       p_period_start: "2026-05-29T21:33:49+00:00",
       p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
-      p_cap_micros: 15_000_000
+      p_cap_micros: 15_000_000,
+      p_model: "gemini-3-flash-preview",
+      p_surface: "website_ingest",
+      p_prompt_tokens: 10_000,
+      p_output_tokens: 1_000,
+      p_prompt_audio_tokens: 0,
+      p_output_audio_tokens: 0,
+      p_pricing_source: "exact"
     });
   });
 
@@ -232,12 +239,15 @@ describe("meterGeminiSpendForBusiness", () => {
       client: db as never
     });
 
-    expect(db.rpc).toHaveBeenCalledWith("owner_chat_record_spend", {
-      p_business_id: "biz-1",
-      p_period_start: "2026-09-29T21:33:49.000Z",
-      p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
-      p_cap_micros: 10_000_000
-    });
+    expect(db.rpc).toHaveBeenCalledWith(
+      "owner_chat_record_spend",
+      expect.objectContaining({
+        p_business_id: "biz-1",
+        p_period_start: "2026-09-29T21:33:49.000Z",
+        p_cost_micros: Math.ceil(10_000 * 0.5 + 1_000 * 3.0),
+        p_cap_micros: 10_000_000
+      })
+    );
   });
 
   it("settles a live-voice reservation (owner_chat_ai_settle) when callControlId is set", async () => {
@@ -261,7 +271,14 @@ describe("meterGeminiSpendForBusiness", () => {
       p_period_start: "2026-05-29T21:33:49+00:00",
       p_call_control_id: "v3:call-1",
       p_actual_micros: Math.ceil(5_000 * 3.0 + 8_000 * 12.0),
-      p_cap_micros: 10_000_000
+      p_cap_micros: 10_000_000,
+      p_model: "gemini-3.1-flash-live-preview",
+      p_surface: "vps_voice_live",
+      p_prompt_tokens: 5_000,
+      p_output_tokens: 8_000,
+      p_prompt_audio_tokens: 5_000,
+      p_output_audio_tokens: 8_000,
+      p_pricing_source: "exact"
     });
     expect(db.rpc).not.toHaveBeenCalledWith("owner_chat_record_spend", expect.anything());
   });
@@ -317,6 +334,12 @@ describe("meterGeminiSpendForBusiness", () => {
     expect(String(args.p_period_start)).toMatch(/^\d{4}-\d{2}-01T00:00:00\.000Z$/);
     expect(args.p_cost_micros).toBe(Math.ceil(1000 * 0.3 + 100 * 2.5));
     expect(args.p_cap_micros).toBe(10_000_000);
+    // Estimated turns ledger their chars/4 token guesses, tagged 'estimate'.
+    expect(args.p_pricing_source).toBe("estimate");
+    expect(args.p_prompt_tokens).toBe(1000);
+    expect(args.p_output_tokens).toBe(100);
+    expect(args.p_prompt_audio_tokens).toBe(0);
+    expect(args.p_output_audio_tokens).toBe(0);
   });
 
   it("defaults missing inputChars/outputChars to 0 and skips the zero-cost write", async () => {
@@ -483,6 +506,25 @@ describe("meterGeminiSpendForBusiness", () => {
     });
     const call = db.rpc.mock.calls.find((c) => c[0] === "owner_chat_record_spend");
     expect((call![1] as Record<string, unknown>).p_cost_micros).toBe(34_000);
+    // Overrides tag 'override'; the reported usage tokens still ledger.
+    expect((call![1] as Record<string, unknown>).p_pricing_source).toBe("override");
+    expect((call![1] as Record<string, unknown>).p_prompt_tokens).toBe(999_999);
+  });
+
+  it("ledgers zero tokens on an override without usage (per-image pricing)", async () => {
+    const db = stubDb({ creditResult: { data: 0, error: null } });
+    await meterGeminiSpendForBusiness({
+      businessId: "biz-1",
+      model: "gemini-3.1-flash-lite-image",
+      surface: "generate_image",
+      costMicrosOverride: 33_999.2,
+      client: db as never
+    });
+    const call = db.rpc.mock.calls.find((c) => c[0] === "owner_chat_record_spend");
+    const args = call![1] as Record<string, unknown>;
+    expect(args.p_pricing_source).toBe("override");
+    expect(args.p_prompt_tokens).toBe(0);
+    expect(args.p_output_tokens).toBe(0);
   });
 
   it("clamps a negative costMicrosOverride to zero and skips the write", async () => {

@@ -40,9 +40,16 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
   // thought_signature on tool calls (see deploy-client.sh SMS_CHAT_MODEL).
   "gemini-3.1-flash-lite": { in: 0.25, out: 1.5 },
   "gemini-3.1-flash": { in: 0.5, out: 3.0 },
-  "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 }
+  "gemini-3.1-flash-live-preview": { in: 0.5, out: 3.0 },
+  // Gemini 3.5 Flash (GA May 2026) — the voice `voice_task` Rowboat model.
+  // Missing here until Jul 2026: an AIFLOW_EXTRACT_MODEL/SMS pin to 3.5-flash
+  // would have priced at the old $0.5/$3.0 default, a 3x undercount.
+  "gemini-3.5-flash": { in: 1.5, out: 9.0 }
 };
-export const DEFAULT_GEMINI_PRICE_PER_1M = { in: 0.5, out: 3.0 };
+// Unknown model → the priciest tier we deploy (gemini-3.5-flash), so the
+// fuse never undercounts. Must stay in lockstep with
+// src/lib/billing/ai-spend-meter.ts's DEFAULT_GEMINI_PRICE_PER_1M.
+export const DEFAULT_GEMINI_PRICE_PER_1M = { in: 1.5, out: 9.0 };
 
 // Tier-derived shared spend cap. Starter gets a lower included AI budget ($5)
 // than Standard/Enterprise ($10). Kept as a pure helper so the SMS worker (and

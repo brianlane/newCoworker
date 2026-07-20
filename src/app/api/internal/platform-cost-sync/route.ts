@@ -18,6 +18,9 @@ import { logger } from "@/lib/logger";
 import { runProductionPlatformCostSync } from "@/lib/admin/cost-sync-runner";
 import { runProductionMarginAlert } from "@/lib/admin/margin-alert-runner";
 import type { MarginAlertRunResult } from "@/lib/admin/margin-alert";
+import { runProductionGeminiBilledSync } from "@/lib/admin/gemini-billed-sync-runner";
+import type { GeminiBilledSyncStatus } from "@/lib/admin/gemini-billed-sync";
+import { pruneGeminiSpendEvents } from "@/lib/db/gemini-spend";
 
 // Telnyx MDR paging over a 90-day backfill plus the Hostinger list can take
 // minutes on slow vendor days; same ceiling as vps-billing-posture.
@@ -61,7 +64,35 @@ export async function POST(request: Request): Promise<Response> {
       });
     }
 
-    return successResponse({ status, marginAlert });
+    // Gemini billed actuals (Cloud Billing BigQuery export) ride the same
+    // daily sync — best-effort like the margin alert, and a recorded skip
+    // (not a failure) until the operator finishes the one-time setup.
+    let geminiBilled: GeminiBilledSyncStatus | null = null;
+    try {
+      geminiBilled = await runProductionGeminiBilledSync();
+      logger.info("gemini billed sync complete", {
+        ok: geminiBilled.ok,
+        configured: geminiBilled.configured,
+        rows: geminiBilled.rows,
+        error: geminiBilled.error
+      });
+    } catch (err) {
+      logger.warn("gemini billed sync failed", {
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    // Ledger retention rides the daily sync too (best-effort).
+    try {
+      const pruned = await pruneGeminiSpendEvents();
+      if (pruned > 0) logger.info("gemini spend events pruned", { pruned });
+    } catch (err) {
+      logger.warn("gemini spend events prune failed", {
+        message: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    return successResponse({ status, marginAlert, geminiBilled });
   } catch (err) {
     if (err instanceof z.ZodError) {
       return errorResponse("VALIDATION_ERROR", err.issues[0]?.message ?? "Invalid body");

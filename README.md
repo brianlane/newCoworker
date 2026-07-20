@@ -723,6 +723,16 @@ System-level, per-business budget gates apply to ALL relevant traffic regardless
 tenant's monthly pool via the same `daily_usage.sms_sent` ledger the quota UI
 reads. Traffic classes differ only in what happens AT the cap:
 
+**Gemini spend observability** (Jul 2026): every metered Gemini call also
+lands in the day-keyed `gemini_spend_events` ledger (written inside the
+`owner_chat_record_spend` / `owner_chat_ai_settle` RPCs — surface, model,
+tokens, cost, pricing source), powering `/admin/gemini` (daily per-tenant
+breakdown, today/7d/month/90d) and a metered-vs-billed reconciliation
+against the Cloud Billing BigQuery export. CI e2e + `debug/` scripts bill a
+SEPARATE internal GCP project so AI Studio's per-project view splits
+engineering spend from tenant spend natively. Setup + runbook:
+[docs/GEMINI-SPEND.md](docs/GEMINI-SPEND.md).
+
 - **Customer-facing sends** (AI replies, composer, tools, AiFlow customer
   texts, missed-call auto-texts, scheduled texts): `try_reserve_sms_outbound_slot`
   — hard stop at the cap after the purchased-bonus spill, exactly as before.
