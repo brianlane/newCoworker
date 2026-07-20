@@ -90,7 +90,7 @@
     "@tybys/wasm-util": "^0.10.1"
   },
   "overrides": {
-    "axios": "^1.16.0",
+    "axios": "^1.18.1",
     "postcss": "^8.5.10"
   }
 }
