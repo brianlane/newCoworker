@@ -79,6 +79,7 @@ function post(overrides: Partial<SocialPostRow> = {}): SocialPostRow {
     published_at: null,
     ig_creation_id: null,
     ig_media_id: null,
+    ig_permalink: null,
     error_detail: null,
     created_at: "2026-07-17T00:00:00Z",
     updated_at: "2026-07-17T00:00:00Z",
