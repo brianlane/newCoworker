@@ -59,6 +59,7 @@ import {
   type CustomerLanguage
 } from "../_shared/customer_language.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { isTapbackText } from "../_shared/sms_tapback.ts";
 // Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
 // against the tenant pool like all traffic but never refused (Jul 14 2026).
 import {
@@ -722,6 +723,51 @@ serve(async (req: Request) => {
         }
       }
       await telemetryRecord(supabase, "sms_worker_suppressed_ai_flow", {
+        job_id: job.id,
+        business_id: job.business_id
+      });
+      processed += 1;
+      continue;
+    }
+
+    // iMessage tapback (Liked/Loved/… “…”) rendered over SMS: a reaction, not
+    // a message — never generate an AI reply to one, platform-wide (a Like
+    // answered with "Glad to hear it!" reads as bot noise; KYP 2026-07-20).
+    // Runs AFTER the Safe-Mode/AiFlow gates (a paused tenant's owner forward
+    // and a flow that consumed the text already happened) and BEFORE the
+    // contact reply-mode branch. Customer jobs only, and only when the
+    // inbound carries no photo (a photo with a tapback-shaped caption is a
+    // real message). The inbound is still logged + counted below, exactly
+    // like the contact-suppress branch — only the generated reply is skipped.
+    if (!job.staff_kind && inboundImages.length === 0 && isTapbackText(userText)) {
+      await supabase.rpc("complete_sms_inbound_job", {
+        p_job_id: job.id,
+        p_status: "done",
+        p_telnyx_outbound_message_id: null,
+        p_rowboat_conversation_id: null,
+        p_last_error: "suppressed_tapback"
+      });
+      await clearJobReplyCache(supabase, job.id);
+      // Same bookkeeping as the other suppression branches: the tapback is a
+      // real customer interaction, so stamp the sender and bump the counters.
+      const { error: stampErr } = await supabase
+        .from("sms_inbound_jobs")
+        .update({ customer_e164: fromE164 })
+        .eq("id", job.id)
+        .is("customer_e164", null);
+      if (stampErr) {
+        console.error("tapback customer_e164 stamp", stampErr);
+      }
+      const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+        p_business_id: job.business_id,
+        p_customer_e164: fromE164,
+        p_channel: "sms",
+        p_display_name: null
+      });
+      if (memErr) {
+        console.error("record_customer_interaction (tapback sms)", memErr);
+      }
+      await telemetryRecord(supabase, "sms_worker_suppressed_tapback", {
         job_id: job.id,
         business_id: job.business_id
       });

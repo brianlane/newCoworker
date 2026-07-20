@@ -314,7 +314,7 @@
           "description": "Customers text your business number and get useful, on-brand replies immediately, day or night."
         },
         "rcs": {
-          "title": "RCS Messaging (Enterprise)",
+          "title": "RCS Messaging",
           "description": "Texts delivered through your own Google-verified branded sender with read receipts and rich formatting, with automatic SMS fallback from your business number. Available on the Enterprise plan."
         },
         "duringCalls": {

@@ -314,7 +314,7 @@
           "description": "Los clientes escriben a tu número de negocio y reciben respuestas útiles y con tu marca al instante, de día o de noche."
         },
         "rcs": {
-          "title": "Mensajería RCS (Enterprise)",
+          "title": "Mensajería RCS",
           "description": "Textos entregados por tu propio remitente de marca verificado por Google con confirmaciones de lectura y formato enriquecido, con respaldo automático de SMS desde tu número. Disponible en el plan Enterprise."
         },
         "duringCalls": {
