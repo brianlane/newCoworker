@@ -1242,6 +1242,11 @@
       "settings": "Settings",
       "notifications": "Notifications"
     },
+    "integrationsClaude": {
+      "connectedBadge": "Connected",
+      "lastUsed": "Claude last used this connector",
+      "firstConnected": "first connected"
+    },
     "home": {
       "title": "Your AI Coworker",
       "subtitle": "Monitor and manage your digital employee",

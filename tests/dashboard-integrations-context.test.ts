@@ -26,6 +26,7 @@ vi.mock("@/lib/db/whatsapp-connections", () => ({ getPublicWhatsAppConnection: v
 vi.mock("@/lib/db/zoom-connections", () => ({ getPublicZoomConnection: vi.fn() }));
 vi.mock("@/lib/db/api-keys", () => ({ listApiKeys: vi.fn() }));
 vi.mock("@/lib/db/webhook-subscriptions", () => ({ listWebhookSubscriptions: vi.fn() }));
+vi.mock("@/lib/mcp/connector-status", () => ({ getMcpConnectorStatus: vi.fn() }));
 
 import {
   computeIntegrationStatuses,
@@ -46,6 +47,7 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
+import { getMcpConnectorStatus } from "@/lib/mcp/connector-status";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const USER = { userId: "u1", email: "o@o.com", isAdmin: false };
@@ -82,6 +84,7 @@ beforeEach(() => {
   vi.mocked(getPublicZoomConnection).mockResolvedValue(null);
   vi.mocked(listApiKeys).mockResolvedValue([]);
   vi.mocked(listWebhookSubscriptions).mockResolvedValue([]);
+  vi.mocked(getMcpConnectorStatus).mockResolvedValue(null);
 });
 
 describe("loadIntegrationsContext", () => {
@@ -115,6 +118,21 @@ describe("loadIntegrationsContext", () => {
     expect(getPublicZoomConnection).toHaveBeenCalledWith(BIZ);
     expect(listApiKeys).toHaveBeenCalledWith(BIZ);
     expect(listWebhookSubscriptions).toHaveBeenCalledWith(BIZ);
+    expect(getMcpConnectorStatus).toHaveBeenCalledWith(USER.userId);
+  });
+
+  it("loads the signed-in user's MCP connector status (user-scoped) and tolerates a read failure", async () => {
+    const status = {
+      firstConnectedAt: "2026-07-18T00:00:00Z",
+      lastSeenAt: "2026-07-19T00:00:00Z"
+    };
+    vi.mocked(getMcpConnectorStatus).mockResolvedValue(status);
+    const ctx = await loadIntegrationsContext("/dashboard/integrations");
+    expect(ctx.mcpConnectorStatus).toEqual(status);
+
+    vi.mocked(getMcpConnectorStatus).mockRejectedValue(new Error("status down"));
+    const degraded = await loadIntegrationsContext("/dashboard/integrations");
+    expect(degraded.mcpConnectorStatus).toBeNull();
   });
 
   it("never loads API key metadata for a manager (no manage_billing)", async () => {
@@ -180,6 +198,7 @@ describe("computeIntegrationStatuses", () => {
       zoomConnection: null,
       apiKeys: [],
       activeHooks: [],
+      mcpConnectorStatus: null,
       ...overrides
     } as IntegrationsContext;
   }
@@ -273,5 +292,17 @@ describe("computeIntegrationStatuses", () => {
       baseCtx({ apiKeys: [{ id: "k1" }, { id: "k2" }] as never })
     );
     expect(many["zapier-api"]).toEqual({ state: "connected", label: "2 keys" });
+  });
+
+  it("marks the Claude connector connected once the user's Claude has made a request", () => {
+    const connected = computeIntegrationStatuses(
+      baseCtx({
+        mcpConnectorStatus: {
+          firstConnectedAt: "2026-07-18T00:00:00Z",
+          lastSeenAt: "2026-07-19T00:00:00Z"
+        }
+      })
+    );
+    expect(connected.claude).toEqual({ state: "connected", label: "Connected" });
   });
 });
