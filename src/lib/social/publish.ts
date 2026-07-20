@@ -35,6 +35,7 @@ import {
   getInstagramContainerStatus,
   publishInstagramMedia
 } from "@/lib/meta/client";
+import { GENERATED_IMAGES_BUCKET, normalizeImageRef } from "@/lib/image-tools/handlers";
 import { logger } from "@/lib/logger";
 import {
   listDueScheduledPosts,
@@ -66,6 +67,36 @@ export const SOCIAL_PUBLISH_RESUME_GRACE_MINUTES = 2;
  */
 export const CONTAINER_READY_ATTEMPTS = 4;
 export const CONTAINER_READY_DELAY_MS = 4000;
+
+/**
+ * Signed-URL lifetime for UPLOADED post images. Meta downloads the image
+ * while the container prepares — minutes, not hours — but a slow fetch
+ * retried across a couple of sweep beats must not outlive the link.
+ */
+export const UPLOADED_MEDIA_SIGNED_URL_TTL_S = 60 * 60;
+
+/**
+ * The URL Meta downloads for a post: uploaded images (stored as a
+ * `/api/dashboard/images/<biz>/<file>` ref in the private generated-images
+ * bucket) are signed fresh at publish time, so a post scheduled weeks out
+ * never carries a rotted link; plain https URLs pass through untouched.
+ * Returns null when signing an uploaded ref fails.
+ */
+async function mediaUrlForMeta(db: SupabaseClient, post: SocialPostRow): Promise<string | null> {
+  const ref = normalizeImageRef(post.business_id, post.media_url);
+  if (!ref) return post.media_url;
+  const { data, error } = await db.storage
+    .from(GENERATED_IMAGES_BUCKET)
+    .createSignedUrl(ref, UPLOADED_MEDIA_SIGNED_URL_TTL_S);
+  if (error || !data?.signedUrl) {
+    logger.warn("social-post-sweep: signing uploaded media failed", {
+      postId: post.id,
+      error: error?.message ?? "no url"
+    });
+    return null;
+  }
+  return data.signedUrl;
+}
 
 export type SocialSweepResult = {
   promoted: number;
@@ -158,10 +189,17 @@ async function publishOne(
       failure =
         "The Facebook connection is missing its page credential — reconnect on the Integrations page, then re-schedule.";
     } else {
+      const imageUrl = await mediaUrlForMeta(db, post);
+      if (!imageUrl) {
+        // Falls through to the shared failure stamping below.
+        throw new Error(
+          "The uploaded image could not be read from storage — re-upload it and re-schedule."
+        );
+      }
       const creationId = await deps.createContainer(
         connection.instagram_account_id,
         connection.pageToken,
-        post.media_url,
+        imageUrl,
         post.caption
       );
       // Persist the container BEFORE publishing: if anything after this
