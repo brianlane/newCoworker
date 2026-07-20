@@ -9,9 +9,10 @@
  *
  *   1. every static string key passed to a translator exists in en.json
  *      under one of that variable's bound namespaces, and
- *   2. for the common indirect idiom — a `labelKey: "..."` table resolved
- *      through a translator (`t(item.labelKey)`) — every labelKey literal in
- *      that file exists under the calling translator's namespace.
+ *   2. for the common indirect idiom — a `*Key: "..."` table resolved
+ *      through a translator (`t(item.labelKey)`, `t(descKey)`, ...) — every
+ *      literal declared for that property name in the file exists under the
+ *      calling translator's namespace(s).
  *
  * Dynamic keys (template literals like t(`${key}.title`)) cannot be checked
  * statically and are skipped. Cross-file labelKey catalogs are asserted
@@ -79,6 +80,7 @@ function scanFile(path: string): Finding[] {
 
   const file = relative(ROOT, path);
   const findings: Finding[] = [];
+  const keyPropNamespaces = new Map<string, Set<string>>();
 
   for (const [varName, namespaces] of bindings) {
     const nsList = [...namespaces];
@@ -95,17 +97,28 @@ function scanFile(path: string): Finding[] {
       }
     }
 
-    // 2. Indirect labelKey tables: if this translator is ever called with a
-    // `labelKey` expression (t(item.labelKey), t(labelKey)), every
-    // labelKey literal declared in this file must resolve under its
-    // namespace(s).
-    const labelKeyCallRe = new RegExp(`\\b${varName}\\(\\s*[\\w.]*\\blabelKey\\b\\s*\\)`);
-    if (labelKeyCallRe.test(source)) {
-      for (const match of source.matchAll(/\blabelKey:\s*["']([\w.-]+)["']/g)) {
-        const key = match[1];
-        if (!nsList.some((ns) => catalogHas(`${ns}.${key}`))) {
-          findings.push({ file, key, namespaces: nsList });
-        }
+    // 2. Indirect key tables: when this translator is called with an
+    // expression whose final identifier ends in "Key" (t(item.labelKey),
+    // t(descKey), t(topicDef.subjectKey, {...})), record that property name
+    // so every `<name>: "literal"` declared in this file gets checked.
+    const keyPropCallRe = new RegExp(`\\b${varName}\\(\\s*(?:[\\w$]+\\.)*(\\w*Key)\\b`, "g");
+    for (const match of source.matchAll(keyPropCallRe)) {
+      const propName = match[1];
+      if (!keyPropNamespaces.has(propName)) keyPropNamespaces.set(propName, new Set());
+      for (const ns of nsList) keyPropNamespaces.get(propName)!.add(ns);
+    }
+  }
+
+  // A property name may be resolved through more than one translator in the
+  // file, so a literal passes if it resolves under ANY namespace bound to
+  // any translator that consumes that property.
+  for (const [propName, namespaces] of keyPropNamespaces) {
+    const nsList = [...namespaces];
+    const literalRe = new RegExp(`\\b${propName}:\\s*["']([\\w.-]+)["']`, "g");
+    for (const match of source.matchAll(literalRe)) {
+      const key = match[1];
+      if (!nsList.some((ns) => catalogHas(`${ns}.${key}`))) {
+        findings.push({ file, key, namespaces: nsList });
       }
     }
   }
