@@ -3,14 +3,15 @@
 /**
  * Instagram posts manager (Dashboard → Marketing).
  *
- * Compose a post (caption + public image URL), leave it as a draft or
- * schedule it, and watch the per-minute sweep publish it through the
+ * Compose a post (caption + an image — uploaded from the device, or a
+ * public image URL for the link-minded), publish it now, schedule it, or
+ * leave it as a draft; the per-minute sweep publishes through the
  * Instagram Graph API. Renders a connect prompt when the business has no
  * linked Instagram professional account — publishing rides the same Meta
  * connection as Lead Ads and DMs.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
@@ -54,11 +55,16 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Composer.
+  // Composer. The image is an uploaded ref (preferred) or a pasted URL —
+  // whichever the owner set last wins, and each clears the other.
   const [caption, setCaption] = useState("");
   const [mediaUrl, setMediaUrl] = useState("");
+  const [uploadedName, setUploadedName] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  const [showUrlInput, setShowUrlInput] = useState(false);
   const [publishAt, setPublishAt] = useState("");
   const [saving, setSaving] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -92,14 +98,49 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
     void refresh();
   }, [refresh]);
 
-  async function create(asDraft: boolean) {
+  async function uploadImage(file: File) {
+    setError(null);
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.set("businessId", businessId);
+      form.set("file", file);
+      const res = await fetch("/api/dashboard/images", { method: "POST", body: form });
+      const json = (await res.json()) as {
+        ok: boolean;
+        data?: { imageUrl?: string };
+        error?: { message?: string };
+      };
+      if (!json.ok || !json.data?.imageUrl) {
+        setError(json.error?.message ?? "Could not upload the image — try again.");
+        return;
+      }
+      setMediaUrl(json.data.imageUrl);
+      setUploadedName(file.name);
+      setShowUrlInput(false);
+    } catch {
+      setError("Could not upload the image — try again.");
+    } finally {
+      setUploading(false);
+      // Same-file re-selection must re-fire onChange.
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  async function create(mode: "schedule" | "now" | "draft") {
     if (!mediaUrl.trim()) {
-      setError("Add the image URL (Instagram posts need an image).");
+      setError("Add an image — Instagram posts need one.");
       return;
     }
-    if (!asDraft && !publishAt) {
-      setError("Pick a publish time (or save as a draft).");
-      return;
+    if (mode === "schedule") {
+      if (!publishAt) {
+        setError('Pick a publish time — or use "Publish now" or save a draft.');
+        return;
+      }
+      if (new Date(publishAt).getTime() < Date.now() - 60_000) {
+        setError('That time is in the past — pick a future time, or use "Publish now".');
+        return;
+      }
     }
     setError(null);
     setSaving(true);
@@ -111,7 +152,8 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
           businessId,
           mediaUrl: mediaUrl.trim(),
           ...(caption.trim() ? { caption: caption.trim() } : {}),
-          ...(!asDraft && publishAt ? { publishAt: new Date(publishAt).toISOString() } : {})
+          ...(mode === "schedule" ? { publishAt: new Date(publishAt).toISOString() } : {}),
+          ...(mode === "now" ? { publishNow: true } : {})
         })
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
@@ -121,6 +163,7 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
       }
       setCaption("");
       setMediaUrl("");
+      setUploadedName(null);
       setPublishAt("");
       await refreshEverywhere();
     } catch {
@@ -168,14 +211,50 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
       {igConnected ? (
         <div className="mt-3 space-y-3">
           <div>
-            <label className={labelClass}>Image URL (public https link — Instagram fetches it)</label>
+            <label className={labelClass}>Post image (JPEG, PNG, or WebP)</label>
             <input
-              className={inputClass}
-              value={mediaUrl}
-              onChange={(e) => setMediaUrl(e.target.value)}
-              placeholder="https://…/photo.jpg"
-              maxLength={2000}
+              ref={fileInputRef}
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) void uploadImage(file);
+              }}
             />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                loading={uploading}
+                onClick={() => fileInputRef.current?.click()}
+              >
+                {uploadedName ? "Change image" : "Upload an image"}
+              </Button>
+              {uploadedName ? (
+                <span className="max-w-[14rem] truncate text-xs text-claw-green">
+                  ✓ {uploadedName}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  className="text-xs text-parchment/50 underline hover:text-parchment"
+                  onClick={() => setShowUrlInput((v) => !v)}
+                >
+                  or paste an image link
+                </button>
+              )}
+            </div>
+            {showUrlInput && !uploadedName && (
+              <input
+                className={`${inputClass} mt-2`}
+                value={mediaUrl}
+                onChange={(e) => setMediaUrl(e.target.value)}
+                placeholder="https://…/photo.jpg (must be publicly reachable)"
+                maxLength={2000}
+              />
+            )}
           </div>
           <div>
             <label className={labelClass}>Caption</label>
@@ -189,7 +268,7 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <div>
-              <label className={labelClass}>Publish at</label>
+              <label className={labelClass}>Publish at (leave empty to publish now)</label>
               <input
                 type="datetime-local"
                 className={inputClass}
@@ -199,13 +278,41 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="primary" size="sm" loading={saving} onClick={() => void create(false)}>
-              Schedule post
-            </Button>
-            <Button type="button" variant="secondary" size="sm" loading={saving} onClick={() => void create(true)}>
+            {publishAt ? (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                loading={saving}
+                onClick={() => void create("schedule")}
+              >
+                Schedule post
+              </Button>
+            ) : (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                loading={saving}
+                onClick={() => void create("now")}
+              >
+                Publish now
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              loading={saving}
+              onClick={() => void create("draft")}
+            >
               Save as draft
             </Button>
           </div>
+          <p className="text-[11px] text-parchment/40">
+            &ldquo;Publish now&rdquo; posts within about a minute. Scheduled posts publish at
+            their set time.
+          </p>
         </div>
       ) : (
         // No composer without a linked IG account — but existing drafts and

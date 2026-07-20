@@ -174,6 +174,49 @@ describe("processSocialPostSweep — publish", () => {
     );
   });
 
+  it("signs an UPLOADED image ref at publish time and hands Meta the signed URL", async () => {
+    const uploadedRef = `${BIZ}/22222222-2222-4222-8222-222222222222.jpg`;
+    const createSignedUrl = vi.fn(async () => ({
+      data: { signedUrl: "https://storage.test/signed.jpg" },
+      error: null
+    }));
+    const storageDb = {
+      storage: { from: vi.fn(() => ({ createSignedUrl })) }
+    } as never;
+    listDue.mockResolvedValue([post({ media_url: `/api/dashboard/images/${uploadedRef}` })]);
+    const result = await processSocialPostSweep({ ...deps(), client: storageDb });
+    expect(result).toMatchObject({ promoted: 1, published: 1, failed: 0 });
+    expect(createSignedUrl).toHaveBeenCalledWith(uploadedRef, expect.any(Number));
+    expect(createContainer).toHaveBeenCalledWith(
+      "ig-1",
+      "page-tok",
+      "https://storage.test/signed.jpg",
+      "Spring special!"
+    );
+  });
+
+  it("fails (not throws) a post whose uploaded image cannot be signed", async () => {
+    const uploadedRef = `${BIZ}/22222222-2222-4222-8222-222222222222.jpg`;
+    const createSignedUrl = vi.fn(async () => ({ data: null, error: { message: "gone" } }));
+    const storageDb = {
+      storage: { from: vi.fn(() => ({ createSignedUrl })) }
+    } as never;
+    listDue.mockResolvedValue([post({ media_url: `/api/dashboard/images/${uploadedRef}` })]);
+    const result = await processSocialPostSweep({ ...deps(), client: storageDb });
+    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 1 });
+    expect(createContainer).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      "publishing",
+      expect.objectContaining({
+        status: "failed",
+        error_detail: expect.stringContaining("could not be read from storage")
+      }),
+      storageDb
+    );
+  });
+
   it("counts nothing when a concurrent resolver settled the row first (lost outcome stamp)", async () => {
     listDue.mockResolvedValue([post()]);
     // Claim wins; the outcome transition loses (row no longer `publishing`).
