@@ -150,6 +150,13 @@ export function simulateTestAction(
     }
     case "notify_owner":
       return { simulated: "notify_owner", message: action.message };
+    case "notify_lead_owner":
+      return {
+        simulated: "notify_lead_owner",
+        message: action.message,
+        ...(action.phone ? { lead_phone: action.phone } : {}),
+        ...(action.name ? { lead_name: action.name } : {})
+      };
     case "http_call":
       return {
         simulated: "http_call",

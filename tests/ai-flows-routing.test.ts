@@ -69,6 +69,22 @@ describe("parseRouting", () => {
     expect(parseRouting({ auto_assigned: false }).auto_assigned).toBe(false);
   });
 
+  it("keeps well-typed owner-direct nudge fields and drops malformed ones", () => {
+    const good = parseRouting({ owner_direct: true, owner_nudges: 1, owner_direct_done: true });
+    expect(good.owner_direct).toBe(true);
+    expect(good.owner_nudges).toBe(1);
+    expect(good.owner_direct_done).toBe(true);
+
+    const bad = parseRouting({
+      owner_direct: "yes",
+      owner_nudges: "1",
+      owner_direct_done: 1
+    });
+    expect(bad.owner_direct).toBeUndefined();
+    expect(bad.owner_nudges).toBeUndefined();
+    expect(bad.owner_direct_done).toBeUndefined();
+  });
+
   it("preserves unknown/legacy keys at runtime so persisting never drops data", () => {
     const parsed = parseRouting({ offered: "+15550001111", some_future_key: { x: 1 } });
     expect((parsed as Record<string, unknown>).some_future_key).toEqual({ x: 1 });

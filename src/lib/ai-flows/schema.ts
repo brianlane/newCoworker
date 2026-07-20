@@ -39,6 +39,12 @@ export const FLOW_STEP_TYPES = [
   "send_email",
   "approval_gate",
   "notify_owner",
+  // Notify whoever the lead BELONGS to: the contact's owning employee
+  // (contacts.owner_employee_id, set when a teammate claims) when there is
+  // one, else the business owner. Resolution keys on a phone var first,
+  // then a name var (unique display-name match), and always falls back to
+  // the owner — a forwarded message is never dropped.
+  "notify_lead_owner",
   "http_call",
   "sleep",
   "wait_for_reply",
@@ -847,6 +853,18 @@ const nonBranchStepMembers = [
     message: z.string().min(1).max(1000),
     when: whenSchema.optional()
   }),
+  // Text whoever the lead BELONGS to (e.g. forward a realtor.com reply relay):
+  // the contact's owning employee when one is on record, else the business
+  // owner. phoneVar (preferred) / nameVar locate the contact; both optional —
+  // with neither resolvable the message still reaches the business owner.
+  z.object({
+    id: stepId,
+    type: z.literal("notify_lead_owner"),
+    message: z.string().min(1).max(1000),
+    phoneVar: varName.optional(),
+    nameVar: varName.optional(),
+    when: whenSchema.optional()
+  }),
   z.object({
     id: stepId,
     type: z.literal("http_call"),
@@ -1003,6 +1021,11 @@ const nonBranchStepMembers = [
     // fields are both-or-neither (validateDefinitionSemantics).
     ownerDirectWhen: whenSchema.optional(),
     ownerDirectTemplate: z.string().min(1).max(1600).optional(),
+    // Keep-for-owner nudges: after the ownerDirect alert, the run parks and
+    // the owner gets an ALL-CAPS reminder at 10 minutes and a final one at
+    // 30 minutes unless they reply "1" (which acks and stops the nudges).
+    // Only meaningful alongside ownerDirectWhen (validateDefinitionSemantics).
+    ownerDirectNudges: z.boolean().optional(),
     // Owner-first routing for repeat leads: when the lead's contact already
     // has an owning employee, offer them first, then the normal cascade.
     preferContactOwner: z.boolean().optional(),
@@ -1320,7 +1343,15 @@ export const aiFlowDefinitionSchema = z.object({
       stopOnResponse: z.boolean().optional(),
       // GHL "allow re-entry": explicitly false blocks enrolling a contact
       // who already has a run of this flow. Default (undefined) = allowed.
-      allowReentry: z.boolean().optional()
+      allowReentry: z.boolean().optional(),
+      // Post-extraction lead dedupe: when true, a run whose extracted lead
+      // identity (vars.lead_phone / vars.lead_email, contact-expanded) plus
+      // property (vars.lead_address, when both runs have one) matches an
+      // earlier non-failed run of this flow is canceled BEFORE its first
+      // communication step. Complements allowReentry, which keys on the
+      // trigger SENDER and can't see relay texts (e.g. realtor.com's
+      // notifications arrive with an empty/shared sender). Default off.
+      dedupeLeadRuns: z.boolean().optional()
     })
     .optional()
 });
@@ -1394,6 +1425,8 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "share_document":
       return [step.to, (step.messageTemplate ?? "").replace(SHARE_URL_TOKEN_RE, "")];
     case "notify_owner":
+      return [step.message];
+    case "notify_lead_owner":
       return [step.message];
     case "approval_gate":
       return [step.prompt];
@@ -1890,6 +1923,20 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       );
     }
 
+    // notify_lead_owner locates the contact via vars an EARLIER step produced.
+    if (step.type === "notify_lead_owner") {
+      for (const [field, varRef] of [
+        ["phoneVar", step.phoneVar],
+        ["nameVar", step.nameVar]
+      ] as const) {
+        if (varRef && !vars.has(varRef) && !ENGINE_VARS.has(varRef)) {
+          issues.push(
+            `Step "${step.id}" ${field} references {{vars.${varRef}}} which no earlier step produces.`
+          );
+        }
+      }
+    }
+
     // place_ai_call: the callee var must exist (same scope rule as
     // wait_for_reply.phoneVar); the post-call summary needs exactly one
     // recipient source; a transfer needs exactly one target source.
@@ -2172,6 +2219,12 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       ) {
         issues.push(
           `Step "${step.id}" has an ownerDirectWhen condition on {{vars.${step.ownerDirectWhen.var}}} which no earlier step produces.`
+        );
+      }
+      // Nudges only exist on the keep-for-owner path.
+      if (step.ownerDirectNudges && !step.ownerDirectWhen) {
+        issues.push(
+          `Step "${step.id}" sets ownerDirectNudges without ownerDirectWhen (nudges only apply to the keep-for-owner alert).`
         );
       }
     }

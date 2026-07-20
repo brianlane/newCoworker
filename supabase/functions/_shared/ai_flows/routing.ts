@@ -118,6 +118,25 @@ export type OfferRouting = {
    */
   auto_assigned?: boolean;
   /**
+   * Keep-for-owner nudge park (ownerDirectNudges): this awaiting_agent park
+   * is the OWNER acknowledging a high-value alert, NOT a teammate offer. The
+   * worker's owner-direct resume handler consumes every event on such a run
+   * (a "1" is an ack that stops the reminders, never a claim), and the
+   * roster escalation loop is never entered. Set: worker when it parks the
+   * owner-direct alert. Never cleared (owner_direct_done marks completion).
+   */
+  owner_direct?: boolean;
+  /**
+   * How many owner-direct reminders have gone out (0 → the 10-minute nudge
+   * is next; 1 → the 30-minute final nudge is next). Set: worker.
+   */
+  owner_nudges?: number;
+  /**
+   * Permanent "the owner-direct park finished" marker (acked or nudges
+   * exhausted). Set: worker on finalize. Never cleared.
+   */
+  owner_direct_done?: boolean;
+  /**
    * LEGACY (pre-universal-digits). No longer set anywhere; the worker scrubs
    * them from stored runs on retire/claim so old stamps can't linger.
    * @deprecated
@@ -138,7 +157,7 @@ const STRING_FIELDS = [
   "pass_reason",
   "route_step_id"
 ] as const;
-const NUMBER_FIELDS = ["step_index", "route_step_index"] as const;
+const NUMBER_FIELDS = ["step_index", "route_step_index", "owner_nudges"] as const;
 const LAST_EVENTS: readonly string[] = ["claim", "reject", "timeout", "unclaim"];
 
 /**
@@ -181,6 +200,12 @@ export function parseRouting(raw: unknown): OfferRouting {
   if ("late_claimed" in out && typeof out.late_claimed !== "boolean") delete out.late_claimed;
   if ("auto_assigned" in out && typeof out.auto_assigned !== "boolean") {
     delete out.auto_assigned;
+  }
+  if ("owner_direct" in out && typeof out.owner_direct !== "boolean") {
+    delete out.owner_direct;
+  }
+  if ("owner_direct_done" in out && typeof out.owner_direct_done !== "boolean") {
+    delete out.owner_direct_done;
   }
   return out as OfferRouting;
 }

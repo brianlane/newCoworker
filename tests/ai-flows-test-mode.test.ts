@@ -203,6 +203,28 @@ describe("simulateTestAction", () => {
 
     expect(
       simulateTestAction(
+        {
+          kind: "notify_lead_owner",
+          message: "m",
+          phone: "480-274-0963",
+          name: "Jennifer Phillips"
+        } as StepAction,
+        scope()
+      )
+    ).toEqual({
+      simulated: "notify_lead_owner",
+      message: "m",
+      lead_phone: "480-274-0963",
+      lead_name: "Jennifer Phillips"
+    });
+
+    // Locators are optional — the simulation mirrors the action shape.
+    expect(
+      simulateTestAction({ kind: "notify_lead_owner", message: "m" } as StepAction, scope())
+    ).toEqual({ simulated: "notify_lead_owner", message: "m" });
+
+    expect(
+      simulateTestAction(
         { kind: "http_call", label: "crm", method: "POST", path: "/x", body: "{}" } as StepAction,
         scope()
       )

@@ -115,6 +115,7 @@ import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_
 import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
 import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
+import { duplicateLeadRunExists, flowDedupesLeadRuns } from "../_shared/ai_flows/reentry.ts";
 import {
   birthdayDedupeKey,
   birthdayDue,
@@ -697,6 +698,72 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       continue;
     }
+    // Post-extraction lead-dedupe gate (options.dedupeLeadRuns, once per run,
+    // before the FIRST outward touch): if an EARLIER non-failed run of this
+    // flow already handled the same person (extracted lead_phone/lead_email,
+    // contact-expanded) — and, when both runs carry a lead_address, the same
+    // property — this run is a re-trigger of a lead someone already owns
+    // (realtor.com "Repeat inquiry" relays, Jennifer Phillips Jul 19 2026).
+    // Cancel it before it emails/texts anyone or re-offers the lead to the
+    // team. Fails OPEN on lookup trouble; test runs are never gated.
+    if (
+      COMM_STEP_TYPES.has(step.type) &&
+      !scope.testMode &&
+      scope.vars[LEAD_DEDUPE_VAR] !== "1" &&
+      flowDedupesLeadRuns(def) &&
+      // A step whose `when` guard is unmet skips inside runStep anyway —
+      // don't spend the lookup on a message that won't send.
+      (!step.when || evaluateStepCondition(step.when, scope))
+    ) {
+      // The marker rides scope.vars into every later context persist, so
+      // later comm steps never re-pay the check.
+      scope.vars[LEAD_DEDUPE_VAR] = "1";
+      const isDuplicate = await duplicateLeadRunExists(
+        supabase,
+        run.business_id,
+        run.flow_id,
+        run.id,
+        {
+          phone: scope.vars.lead_phone,
+          email: scope.vars.lead_email,
+          address: scope.vars.lead_address
+        }
+      );
+      if (isDuplicate) {
+        appendActionTaken(
+          scope,
+          "skipped — duplicate of an earlier run for this lead (nothing sent)"
+        );
+        // Record this and every remaining step as skipped so the dashboard
+        // run view shows exactly what the dedupe saved the lead/team from.
+        for (let i = index; i < flat.length; i += 1) {
+          await recordStep(supabase, run, i, flat[i].step, "skipped", {
+            skipped: "duplicate_lead"
+          });
+        }
+        await updateRun(supabase, run.id, {
+          status: "canceled",
+          last_error: "duplicate lead: an earlier run of this flow already handled this person",
+          claimed_at: null,
+          context: buildContext(scope, approval, routing)
+        });
+        await telemetryRecord(supabase, "ai_flow_run_skipped_duplicate_lead", {
+          run_id: run.id,
+          business_id: run.business_id,
+          flow_id: run.flow_id
+        });
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_run_skipped_duplicate_lead",
+          message:
+            "Run canceled before any send: an earlier run of this flow already handled the same lead",
+          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+        });
+        return;
+      }
+    }
     // Pre-send Calendly booking gate (once per run, before the FIRST outward
     // touch, only in flows watching appointment_booked): a lead who already
     // holds an upcoming booking must get ZERO texts — greeting included, the
@@ -890,14 +957,20 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // to the next agent at the deadline rather than stranding the lead — so we
       // log and stop instead of unwinding the durable parked state.
       try {
-        await sendOfferSms(
-          supabase,
-          run,
-          outcome.e164,
-          outcome.offerText,
-          outcome.idempotencyKey,
-          outcome.mediaUrls
-        );
+        if (outcome.operational) {
+          // Owner-direct alert/nudge: owner traffic rides the operational
+          // (never refused) path, same as every other owner notice.
+          await sendOwnerSms(supabase, run, outcome.offerText, outcome.idempotencyKey);
+        } else {
+          await sendOfferSms(
+            supabase,
+            run,
+            outcome.e164,
+            outcome.offerText,
+            outcome.idempotencyKey,
+            outcome.mediaUrls
+          );
+        }
       } catch (e) {
         console.error("route_to_team offer send failed after park", e);
         await systemLog(supabase, {
@@ -1149,6 +1222,13 @@ const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
  */
 const BOOKING_PRECHECK_VAR = "__booking_precheck";
 
+/**
+ * Marker var: the post-extraction lead-dedupe gate (options.dedupeLeadRuns)
+ * already ran for this run — later comm steps and re-claims never re-pay the
+ * lookup. Stamped whether or not a duplicate was found.
+ */
+const LEAD_DEDUPE_VAR = "__lead_dedupe";
+
 /** The pre-send gate must answer well inside a tick; beyond this, fail open. */
 const BOOKING_PRECHECK_TIMEOUT_MS = 8_000;
 
@@ -1247,6 +1327,7 @@ const COMM_STEP_TYPES = new Set<string>([
   "send_whatsapp",
   "send_email",
   "notify_owner",
+  "notify_lead_owner",
   "route_to_team",
   "share_document",
   // An outbound AI phone call is the most intrusive contact of all — it must
@@ -1277,6 +1358,10 @@ type StepOutcome =
       idempotencyKey: string;
       // Signed screenshot URL(s) to ride along as MMS media, when configured.
       mediaUrls?: string[];
+      // Owner-direct nudge park: the recipient is the OWNER, so the send goes
+      // through the operational owner-SMS path (metered, never refused)
+      // instead of the customer-facing offer path.
+      operational?: boolean;
     }
   // Quiet hours: this step (and the rest of the run) must wait until
   // resumeAtMs. executeRun re-queues the run with earliest_claim_at so the
@@ -1422,6 +1507,8 @@ async function runStep(
       return runAgentStep(scope, run, action);
     case "notify_owner":
       return notifyOwnerStep(supabase, run, action);
+    case "notify_lead_owner":
+      return notifyLeadOwnerStep(supabase, run, scope, action);
     case "http_call":
       return httpCallStep(run, scope, action);
     case "await_approval":
@@ -5177,6 +5264,155 @@ async function notifyOwnerStep(
   return { kind: "ok", result: { notified: null } };
 }
 
+/**
+ * notify_lead_owner: text whoever this lead BELONGS to. Resolution order:
+ *   1. contact matched by the resolved phone (alias-aware), else by a UNIQUE
+ *      display-name match (realtor.com reply relays carry only a name);
+ *   2. that contact's owning employee (contacts.owner_employee_id — stamped
+ *      when a teammate claims the lead) with an active roster row + phone;
+ *   3. otherwise the business owner (the Jennifer Phillips case: owner-direct
+ *      kept the lead, so no employee owns the contact).
+ * Every resolution failure falls DOWN this ladder, never out — a forwarded
+ * lead reply must reach someone. The decision is recorded on the step result
+ * so run history shows who was picked and why.
+ */
+async function notifyLeadOwnerStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "notify_lead_owner" }>
+): Promise<StepOutcome> {
+  // --- locate the contact -------------------------------------------------
+  let contactId: string | null = null;
+  let ownerEmployeeId: string | null = null;
+  let matchedBy: "phone" | "name" | null = null;
+  const phoneE164 = action.phone
+    ? isE164(action.phone)
+      ? action.phone
+      : normalizeNanpToE164(action.phone)
+    : null;
+  try {
+    if (phoneE164) {
+      const { data } = await supabase
+        .from("contacts")
+        .select("id, owner_employee_id")
+        .eq("business_id", run.business_id)
+        .or(`customer_e164.eq.${phoneE164},alias_e164s.cs.{${phoneE164}}`)
+        .limit(1)
+        .maybeSingle();
+      const row = data as { id?: string; owner_employee_id?: string | null } | null;
+      if (row?.id) {
+        contactId = row.id;
+        ownerEmployeeId = row.owner_employee_id ?? null;
+        matchedBy = "phone";
+      }
+    }
+    if (!contactId && action.name) {
+      // Name matching requires EXACTLY one hit — two "John Smith"s means we
+      // cannot know whose lead this is, so it goes to the business owner.
+      const { data } = await supabase
+        .from("contacts")
+        .select("id, owner_employee_id")
+        .eq("business_id", run.business_id)
+        .ilike("display_name", action.name.replace(/[%_\\]/g, "\\$&"))
+        .limit(2);
+      const rows = (data ?? []) as Array<{ id: string; owner_employee_id?: string | null }>;
+      if (rows.length === 1) {
+        contactId = rows[0].id;
+        ownerEmployeeId = rows[0].owner_employee_id ?? null;
+        matchedBy = "name";
+      }
+    }
+  } catch (e) {
+    console.error("notify_lead_owner contact lookup", e);
+  }
+
+  // --- resolve the owning employee ----------------------------------------
+  let member: { id: string; name: string; phone: string } | null = null;
+  if (ownerEmployeeId) {
+    try {
+      const { data } = await supabase
+        .from("ai_flow_team_members")
+        .select("id, name, phone_e164, active")
+        .eq("business_id", run.business_id)
+        .eq("id", ownerEmployeeId)
+        .maybeSingle();
+      const m = data as
+        | { id?: string; name?: string; phone_e164?: string | null; active?: boolean }
+        | null;
+      if (m?.id && m.active && m.phone_e164?.trim()) {
+        member = { id: m.id, name: m.name ?? "", phone: m.phone_e164.trim() };
+      }
+    } catch (e) {
+      console.error("notify_lead_owner member lookup", e);
+    }
+  }
+
+  await telemetryRecord(supabase, "ai_flow_notify_lead_owner", {
+    run_id: run.id,
+    business_id: run.business_id,
+    target: member ? "contact_owner" : "business_owner",
+    matched_by: matchedBy
+  });
+
+  if (member) {
+    const cfg = await messagingConfig(supabase, run.business_id);
+    if (cfg) {
+      const text = prepareSmsBody(action.message);
+      // Operational teammate traffic, like owner notices: metered, never
+      // refused — a forwarded lead reply must not be dropped at the cap.
+      const send = await sendOperationalSms(supabase, run.business_id, {
+        apiKey: cfg.apiKey,
+        messagingProfileId: cfg.profile,
+        fromE164: cfg.from,
+        toE164: member.phone,
+        text,
+        idempotencyKey: `aiflow-lead-owner:${run.id}`
+      });
+      if (!send.ok) throw new Error(`notify_lead_owner telnyx ${send.status}`);
+      await logOutboundSms(supabase, run, {
+        to: member.phone,
+        from: cfg.from || null,
+        body: text,
+        source: "agent_offer"
+      });
+    }
+    appendActionTaken(
+      scope,
+      `forwarded the message to ${member.name || member.phone} — they own this lead`
+    );
+    return {
+      kind: "ok",
+      result: {
+        target: "contact_owner",
+        member_id: member.id,
+        notified: member.phone,
+        matched_by: matchedBy,
+        ...(cfg ? {} : { note: "messaging not configured; send skipped" })
+      }
+    };
+  }
+
+  // Business-owner fallback: same delivery as notify_owner.
+  const outcome = await notifyOwnerStep(supabase, run, {
+    kind: "notify_owner",
+    message: action.message
+  });
+  appendActionTaken(
+    scope,
+    contactId
+      ? "forwarded the message to the owner — no teammate owns this lead"
+      : "forwarded the message to the owner — the lead's contact could not be resolved"
+  );
+  const base = outcome.kind === "ok" ? (outcome.result ?? {}) : {};
+  return outcome.kind === "ok"
+    ? {
+        ...outcome,
+        result: { ...base, target: "business_owner", matched_by: matchedBy }
+      }
+    : outcome;
+}
+
 async function httpCallStep(
   run: RunRow,
   scope: Scope,
@@ -5494,6 +5730,16 @@ async function routeToTeamStep(
     : [];
   routing.tried = tried;
 
+  // Owner-direct nudge park resume: this run's awaiting_agent state is the
+  // OWNER acknowledging a high-value keep-for-owner alert, not a teammate
+  // offer. Every event (the owner's "1" ack, a "2", or a nudge timeout) is
+  // consumed HERE — the claim/reject/escalation machinery below must never
+  // run for it, or the $1M+ lead it deliberately kept from the team would
+  // fall into the roster loop.
+  if (routing.owner_direct === true) {
+    return ownerDirectResume(supabase, run, scope, action, routing);
+  }
+
   // Dynamic pin (agentRef): resolve the referenced roster member's CURRENT name
   // and pin to it (stable across renames). agentRef is always an employee
   // (enforced at author time); an unresolved ref pins to a sentinel so the offer
@@ -5693,7 +5939,6 @@ async function routeToTeamStep(
     scope.vars.claimed_agent_phone = "none";
     scope.vars.claimed_agent_eta_minutes = "0";
     const body = renderTemplate(action.ownerDirectTemplate, scope);
-    await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
     appendActionTaken(
       scope,
       `kept for the owner (${action.ownerDirectWhen.var} matched the keep-for-owner rule) — not offered to the team`
@@ -5704,6 +5949,29 @@ async function routeToTeamStep(
       var: action.ownerDirectWhen.var,
       value: String(scope.vars[action.ownerDirectWhen.var] ?? "")
     });
+    // Nudge mode (ownerDirectNudges): park on the OWNER's forward number so
+    // the alert can be re-sent as ALL-CAPS reminders at 10 and 30 minutes
+    // unless the owner replies "1" (an ack, never a claim — see
+    // ownerDirectResume). Falls back to today's fire-and-forget alert when
+    // no forward number is configured (nothing to park on).
+    if (action.ownerDirectNudges) {
+      const forward = await ownerForwardE164(supabase, run.business_id);
+      if (forward) {
+        routing.owner_direct = true;
+        routing.owner_nudges = 0;
+        routing.offered = forward;
+        routing.offered_name = "owner";
+        return {
+          kind: "pause_agent",
+          e164: forward,
+          respondByMs: OWNER_DIRECT_NUDGE_1_MINUTES * 60_000,
+          offerText: body,
+          idempotencyKey: `aiflow-owner-direct:${run.id}`,
+          operational: true
+        };
+      }
+    }
+    await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
     return { kind: "ok", result: { routed: "owner_direct" } };
   }
 
@@ -6413,6 +6681,121 @@ async function alertSmsCapOnce(
  * configured forward number. No-op when the owner has no forward number set —
  * there is nowhere to route, so we log rather than throw and stall the run.
  */
+/** Owner-direct nudge cadence: first reminder at 10 min, final at 30 min. */
+const OWNER_DIRECT_NUDGE_1_MINUTES = 10;
+const OWNER_DIRECT_NUDGE_2_MINUTES = 30;
+
+/** The owner's SMS forward number (business_telnyx_settings), or null. */
+async function ownerForwardE164(supabase: Supabase, businessId: string): Promise<string | null> {
+  const { data } = await supabase
+    .from("business_telnyx_settings")
+    .select("forward_to_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const forward = (data as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
+  return forward.trim() || null;
+}
+
+/**
+ * ALL-CAPS owner reminder for an unacknowledged keep-for-owner alert. The
+ * framing lines are uppercase (per Amy's ask); the alert body keeps its
+ * original casing because it carries case-sensitive short links
+ * (rltr.pro/XKVuC) and names that uppercasing would corrupt.
+ */
+function ownerDirectNudgeText(alertBody: string, minutes: number, final: boolean): string {
+  const head = final
+    ? `FINAL REMINDER — ${minutes} MINUTES: HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`
+    : `REMINDER — ${minutes} MINUTES: HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`;
+  return `${head}\n${alertBody}\nREPLY "1" TO STOP THESE REMINDERS.`;
+}
+
+/**
+ * Resume an owner-direct nudge park (routing.owner_direct): the ONLY events
+ * that can arrive are the owner's reply ("1" ack via the claim path, "2" via
+ * the reject path) or a nudge timeout from the escalation sweep. A reply —
+ * any reply — acknowledges the alert and stops the reminders; claimed_agent
+ * stays "none" throughout (the owner acking is NOT a teammate claim, so
+ * claim-gated later steps still skip). Timeouts send the 10-minute reminder
+ * (re-park for 20 more) and then the 30-minute final reminder, after which
+ * the flow simply continues.
+ */
+async function ownerDirectResume(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting
+): Promise<StepOutcome> {
+  const event = routing.last_event;
+  const isLate = routing.late_claim === true;
+  const forward = typeof routing.offered === "string" ? routing.offered : "";
+  delete routing.last_event;
+  delete routing.reply_from;
+  delete routing.pass_reason;
+  delete routing.claim_timeframe;
+  delete routing.late_claim;
+
+  const finalize = (): void => {
+    delete routing.offered;
+    delete routing.offered_name;
+    // Without step_index the late-claim matcher skips this run entirely, so
+    // a stray owner "1" hours later can never re-open it as a "claim".
+    delete routing.step_index;
+    routing.owner_direct_done = true;
+  };
+
+  if (event === "claim" || event === "reject") {
+    finalize();
+    appendActionTaken(scope, "owner acknowledged the high-value alert — reminders stopped");
+    await telemetryRecord(supabase, "ai_flow_owner_direct_ack", {
+      run_id: run.id,
+      business_id: run.business_id,
+      via: event
+    });
+    return {
+      kind: "ok",
+      result: { routed: "owner_direct", acked: true },
+      // A "1" that arrives AFTER the park finished re-opens the run via the
+      // late-claim rewind; ack it without replaying the steps after the
+      // route step (they already ran).
+      ...(isLate ? { endRun: true } : {})
+    };
+  }
+
+  // Timeout: send the next reminder, or finish after the final one.
+  const alertBody = action.ownerDirectTemplate
+    ? renderTemplate(action.ownerDirectTemplate, scope)
+    : "";
+  const nudges = typeof routing.owner_nudges === "number" ? routing.owner_nudges : 0;
+  if (nudges === 0 && forward) {
+    routing.owner_nudges = 1;
+    routing.offered = forward; // keep the reply match key across the re-park
+    return {
+      kind: "pause_agent",
+      e164: forward,
+      respondByMs: (OWNER_DIRECT_NUDGE_2_MINUTES - OWNER_DIRECT_NUDGE_1_MINUTES) * 60_000,
+      offerText: ownerDirectNudgeText(alertBody, OWNER_DIRECT_NUDGE_1_MINUTES, false),
+      idempotencyKey: `aiflow-owner-nudge-1:${run.id}`,
+      operational: true
+    };
+  }
+  finalize();
+  if (forward) {
+    await sendOwnerSms(
+      supabase,
+      run,
+      ownerDirectNudgeText(alertBody, OWNER_DIRECT_NUDGE_2_MINUTES, true),
+      `aiflow-owner-nudge-2:${run.id}`
+    );
+  }
+  appendActionTaken(scope, "owner did not acknowledge the high-value alert after two reminders");
+  await telemetryRecord(supabase, "ai_flow_owner_direct_nudges_exhausted", {
+    run_id: run.id,
+    business_id: run.business_id
+  });
+  return { kind: "ok", result: { routed: "owner_direct", nudges: 2 } };
+}
+
 async function sendOwnerSms(
   supabase: Supabase,
   run: RunRow,

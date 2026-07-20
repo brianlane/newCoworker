@@ -366,6 +366,10 @@ export type StepAction =
       skipReason?: string;
     }
   | { kind: "notify_owner"; message: string }
+  // Text whoever the lead belongs to: the contact's owning employee when one
+  // is on record, else the business owner. phone/name are the RESOLVED var
+  // values (not var names) the worker locates the contact with.
+  | { kind: "notify_lead_owner"; message: string; phone?: string; name?: string }
   | { kind: "await_approval"; prompt: string }
   | {
       kind: "http_call";
@@ -400,6 +404,9 @@ export type StepAction =
       ownerDirectWhen?: StepCondition;
       /** Passed UNRENDERED like the other route templates (worker renders it). */
       ownerDirectTemplate?: string;
+      /** ALL-CAPS 10/30-minute owner reminders on the keep-for-owner alert,
+       * acked (stopped) by the owner replying "1". */
+      ownerDirectNudges?: boolean;
       /** Offer the lead's owning employee (contacts.owner_employee_id) first. */
       preferContactOwner?: boolean;
     }
@@ -1059,6 +1066,27 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       if (!message) return { ok: false, error: "notify_owner: message is empty after templating" };
       return { ok: true, action: { kind: "notify_owner", message } };
     }
+    case "notify_lead_owner": {
+      const message = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
+      if (!message) {
+        return { ok: false, error: "notify_lead_owner: message is empty after templating" };
+      }
+      const readVar = (name?: string): string => {
+        const v = name ? scope.vars?.[name] : undefined;
+        return typeof v === "string" ? v.trim() : "";
+      };
+      const phone = readVar(step.phoneVar);
+      const name = readVar(step.nameVar);
+      return {
+        ok: true,
+        action: {
+          kind: "notify_lead_owner",
+          message,
+          ...(phone ? { phone } : {}),
+          ...(name ? { name } : {})
+        }
+      };
+    }
     case "approval_gate": {
       return {
         ok: true,
@@ -1108,7 +1136,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(ownerDirect
             ? {
                 ownerDirectWhen: step.ownerDirectWhen,
-                ownerDirectTemplate: step.ownerDirectTemplate!.trim()
+                ownerDirectTemplate: step.ownerDirectTemplate!.trim(),
+                ...(step.ownerDirectNudges === true ? { ownerDirectNudges: true } : {})
               }
             : {})
         }
