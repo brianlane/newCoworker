@@ -13,7 +13,13 @@ services:
   voice-bridge:
     build: .
     ports:
-      - "${VOICE_BRIDGE_PUBLISH_PORT:-8090}:8090"
+      # Loopback-only publish: cloudflared (host process) forwards the
+      # voice-<biz> tunnel hostname to 127.0.0.1:8090, and sibling containers
+      # reach the bridge via rowboat_default DNS — nothing needs a public
+      # bind. Without the 127.0.0.1 prefix Docker's iptables rules bypass
+      # UFW's default-deny entirely and the bridge is internet-reachable
+      # (confirmed on the whole fleet, 2026-07-20 posture audit).
+      - "127.0.0.1:${VOICE_BRIDGE_PUBLISH_PORT:-8090}:8090"
     env_file:
       - .env
     restart: unless-stopped
