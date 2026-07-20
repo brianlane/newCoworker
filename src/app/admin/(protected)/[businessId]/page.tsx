@@ -34,6 +34,8 @@ import { EnterpriseLimitsEditor } from "@/components/admin/EnterpriseLimitsEdito
 import { ResidencyPanel } from "@/components/admin/ResidencyPanel";
 import { RcsChannelPanel } from "@/components/admin/RcsChannelPanel";
 import { getChannelSettings } from "@/lib/db/channel-settings";
+import { ContactFormSinkPanel } from "@/components/admin/ContactFormSinkPanel";
+import { getContactFormSinkBusinessId } from "@/lib/db/contact-form-sink";
 import { rcsTierAllowed } from "@/lib/telnyx/messaging";
 import { PrivacyPanel } from "@/components/admin/PrivacyPanel";
 import { DeletedItemsPanel } from "@/components/admin/DeletedItemsPanel";
@@ -108,6 +110,11 @@ export default async function BusinessDetailPage({
     rcsAgentId: null,
     rcsEnabled: false
   }));
+  // Platform contact-form sink designation. Best-effort — defaults to "no
+  // sink anywhere" when the read fails so the page still renders.
+  const contactFormSinkBusinessId = await getContactFormSinkBusinessId().catch(
+    () => null
+  );
 
   if (!business) notFound();
 
@@ -690,6 +697,23 @@ export default async function BusinessDetailPage({
           hasFromNumber={Boolean(
             telnyxSettings?.telnyx_sms_from_e164 || process.env.TELNYX_SMS_FROM_E164
           )}
+        />
+      </Card>
+
+      {/* Platform contact-form sink — which business (at most one) receives
+          public /contact submissions as webhook AiFlow events. Only the HQ
+          dogfood tenant should normally hold this. */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Contact form (platform)
+        </h2>
+        <ContactFormSinkPanel
+          // Remount on tenant change so useState re-seeds (see the RCS card
+          // note above for why this is keyed on businessId only).
+          key={businessId}
+          businessId={businessId}
+          initialEnabled={contactFormSinkBusinessId === businessId}
+          currentSinkBusinessId={contactFormSinkBusinessId}
         />
       </Card>
 

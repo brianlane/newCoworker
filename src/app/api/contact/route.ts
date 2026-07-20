@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { logger } from "@/lib/logger";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { getContactFormSinkBusinessId } from "@/lib/db/contact-form-sink";
+import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import {
   rateLimitDurable,
   rateLimitIdentifierFromRequest
@@ -11,7 +13,11 @@ export const runtime = "nodejs";
 /**
  * Public contact-form endpoint for /contact. Unauthenticated by design, so
  * it is IP rate-limited and honeypot-protected; the submission is delivered
- * to the CONTACT_EMAIL inbox via Resend.
+ * to the CONTACT_EMAIL inbox via Resend, and — when an admin has designated
+ * a contact-form sink business (the internal HQ tenant) — ALSO enqueued as
+ * a webhook-channel AiFlow event (source "contact_form") so the company's
+ * own coworker triages it. The flow event is strictly additive/best-effort:
+ * no sink or any failure leaves the email-only behavior untouched.
  */
 
 const MAX_NAME = 120;
@@ -136,6 +142,36 @@ export async function POST(request: Request) {
       { error: "We couldn't send your message. Please try again." },
       { status: 502 }
     );
+  }
+
+  // Feed the platform sink tenant's AiFlows (HQ dogfooding). After the email
+  // deliberately: the notification mail is the critical path, and a retried
+  // submission after an email failure re-digests to the SAME dedupe key, so
+  // this can never double-enqueue. Best-effort — a sink/flow failure never
+  // turns a delivered submission into a user-facing error.
+  try {
+    const sinkBusinessId = await getContactFormSinkBusinessId();
+    if (sinkBusinessId) {
+      const result = await processWebhookFlowEvent(sinkBusinessId, {
+        source: "contact_form",
+        data: {
+          name: payload.name,
+          email: payload.email,
+          business_name: payload.businessName,
+          subject: payload.subject,
+          message: payload.message
+        }
+      });
+      logger.info("contact form flow event enqueued", {
+        sinkBusinessId,
+        enqueued: result.enqueued,
+        flowsMatched: result.flowsMatched
+      });
+    }
+  } catch (err) {
+    logger.warn("contact form flow event failed", {
+      error: err instanceof Error ? err.message : String(err)
+    });
   }
 
   logger.info("contact form submission delivered", { toEmail });
