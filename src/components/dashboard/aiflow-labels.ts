@@ -32,6 +32,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   send_email: "Send an email",
   approval_gate: "Ask me to approve first",
   notify_owner: "Notify me",
+  notify_lead_owner: "Notify the lead's owner",
   http_call: "Call another service (API)",
   branch: "Branch (if / else paths)",
   goal: "Goal (skip ahead when reached)",
@@ -70,6 +71,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   send_email: "Sends an email. You can reuse details earlier steps found.",
   approval_gate: "Pauses and texts you to approve before continuing.",
   notify_owner: "Sends you a quick update without pausing the workflow.",
+  notify_lead_owner:
+    "Texts whoever the lead belongs to: the teammate who owns the contact (e.g. because they claimed the lead), or you when no one does. Great for forwarding a lead's reply to the right person.",
   http_call: "Sends data to another connected service through its API.",
   sleep:
     "Pauses the workflow (for a number of minutes, or until a time of day) and then continues with the next step. Nothing is sent while waiting.",

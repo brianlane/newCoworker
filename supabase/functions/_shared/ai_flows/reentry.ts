@@ -27,6 +27,7 @@
  *     drip pacing) — the flow's dedupe key still collapses true duplicates.
  */
 import { isTestModeTrigger } from "./test_mode.ts";
+import { isE164, normalizeNanpToE164 } from "./engine.ts";
 
 // Minimal structural client (matches the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -164,6 +165,103 @@ export async function hasPriorRunForLead(
     );
   } catch (e) {
     console.error("hasPriorRunForLead", e);
+    return false;
+  }
+}
+
+/** True when this definition opts in to post-extraction lead dedupe. */
+export function flowDedupesLeadRuns(def: unknown): boolean {
+  const options = (def as { options?: { dedupeLeadRuns?: unknown } } | null | undefined)?.options;
+  return options?.dedupeLeadRuns === true;
+}
+
+/** Case-insensitive, whitespace-collapsed form for address equality. */
+function normalizeAddress(raw: unknown): string {
+  return typeof raw === "string" ? raw.trim().replace(/\s+/g, " ").toLowerCase() : "";
+}
+
+/**
+ * Post-extraction lead dedupe (options.dedupeLeadRuns): does an EARLIER
+ * non-failed, non-test run of this flow exist for the same person — and,
+ * when both runs carry a property address, the same property?
+ *
+ * This is the gate the sender-keyed re-entry check cannot provide for
+ * lead-source relay texts (realtor.com's "New inquiry"/"Repeat inquiry"
+ * notifications arrive with an empty or shared sender): identity comes from
+ * the run's OWN extracted vars instead. Person keys are the extracted
+ * phone (raw + E.164-normalized) and email, contact-expanded like
+ * hasPriorRunForLead. Failed/canceled prior runs never block (a repeat
+ * inquiry is how a failed first run recovers), and a lookup failure fails
+ * OPEN — a duplicate follow-up is recoverable, a dropped lead is not.
+ */
+export async function duplicateLeadRunExists(
+  supabase: AnyClient,
+  businessId: string,
+  flowId: string,
+  currentRunId: string,
+  lead: { phone?: unknown; email?: unknown; address?: unknown }
+): Promise<boolean> {
+  const phoneRaw = typeof lead.phone === "string" ? lead.phone.trim() : "";
+  const phoneE164 = phoneRaw
+    ? isE164(phoneRaw)
+      ? phoneRaw
+      : normalizeNanpToE164(phoneRaw)
+    : null;
+  const email = typeof lead.email === "string" ? lead.email.trim() : "";
+  const keys = normalizeKeys([phoneRaw, phoneE164, email]);
+  if (keys.length === 0) return false;
+  try {
+    // Only runs created strictly BEFORE this one count — otherwise two
+    // near-simultaneous runs for the same lead could each see the other and
+    // BOTH cancel, dropping the lead. An exact created_at tie means neither
+    // blocks (fail open, both proceed — the recoverable direction).
+    const { data: selfRow, error: selfErr } = await supabase
+      .from("ai_flow_runs")
+      .select("created_at")
+      .eq("id", currentRunId)
+      .maybeSingle();
+    const createdAt = (selfRow as { created_at?: string | null } | null)?.created_at;
+    if (selfErr || !createdAt) {
+      if (selfErr) console.error("reentry: duplicate-lead self lookup", selfErr);
+      return false;
+    }
+    const allKeys = await expandIdentityKeys(supabase, businessId, keys);
+    const identityFilter = allKeys
+      .flatMap((key) => IDENTITY_PATHS.map((path) => `${path}.eq.${key}`))
+      .join(",");
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("id, status, context")
+      .eq("flow_id", flowId)
+      .neq("id", currentRunId)
+      .lt("created_at", createdAt)
+      .not("status", "in", "(failed,canceled)")
+      .or(identityFilter)
+      // Chained .or groups AND together (same trick as hasPriorRunForLead):
+      // (identity match) AND (not a test run).
+      .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
+      .limit(PRIOR_RUN_SCAN);
+    if (error) {
+      console.error("reentry: duplicate-lead lookup", error);
+      return false;
+    }
+    const currentAddress = normalizeAddress(lead.address);
+    const rows = (data ?? []) as Array<{ context?: Record<string, unknown> | null }>;
+    return rows.some((row) => {
+      // Defense in depth: the query already excluded test runs.
+      if (isTestModeTrigger(row.context?.trigger as Record<string, unknown> | undefined)) {
+        return false;
+      }
+      if (!currentAddress) return true;
+      const priorAddress = normalizeAddress(
+        (row.context?.vars as Record<string, unknown> | undefined)?.lead_address
+      );
+      // A prior run with no address can't prove a different property —
+      // the person match stands. Differing addresses = a NEW lead.
+      return !priorAddress || priorAddress === currentAddress;
+    });
+  } catch (e) {
+    console.error("duplicateLeadRunExists", e);
     return false;
   }
 }

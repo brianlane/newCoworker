@@ -1329,6 +1329,80 @@ describe("planStep: notify_owner", () => {
   });
 });
 
+describe("planStep: notify_lead_owner", () => {
+  it("templates the message and resolves the locator var VALUES", () => {
+    const step: FlowStep = {
+      id: "f",
+      type: "notify_lead_owner",
+      phoneVar: "lead_phone",
+      nameVar: "lead_name",
+      message: "Reply from {{vars.lead_name}}: {{vars.full_message}}"
+    };
+    expect(
+      planStep(step, {
+        vars: {
+          lead_phone: "480-274-0963",
+          lead_name: "Jennifer Phillips",
+          full_message: "I have a few questions before we would like to tour the property"
+        }
+      })
+    ).toEqual({
+      ok: true,
+      action: {
+        kind: "notify_lead_owner",
+        message:
+          "Reply from Jennifer Phillips: I have a few questions before we would like to tour the property",
+        phone: "480-274-0963",
+        name: "Jennifer Phillips"
+      }
+    });
+  });
+
+  it("omits empty/absent locators so the worker falls back cleanly", () => {
+    const step: FlowStep = {
+      id: "f",
+      type: "notify_lead_owner",
+      phoneVar: "lead_phone",
+      message: "hello"
+    };
+    const r = planStep(step, { vars: { lead_phone: "   " } });
+    expect(r).toEqual({ ok: true, action: { kind: "notify_lead_owner", message: "hello" } });
+  });
+
+  it("fails when the message resolves empty", () => {
+    const step: FlowStep = { id: "f", type: "notify_lead_owner", message: "{{vars.x}}" };
+    expect(planStep(step, { vars: {} })).toEqual({
+      ok: false,
+      error: "notify_lead_owner: message is empty after templating"
+    });
+  });
+});
+
+describe("planStep: route_to_team ownerDirectNudges passthrough", () => {
+  const base = {
+    id: "r",
+    type: "route_to_team",
+    offerTemplate: "offer",
+    ownerFallbackTemplate: "fallback",
+    ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+    ownerDirectTemplate: "kept for you"
+  } as const;
+
+  it("carries ownerDirectNudges only when explicitly true", () => {
+    const withNudges = planStep({ ...base, ownerDirectNudges: true } as FlowStep, { vars: {} });
+    expect(
+      withNudges.ok &&
+        withNudges.action.kind === "route_to_team" &&
+        withNudges.action.ownerDirectNudges
+    ).toBe(true);
+
+    const without = planStep({ ...base } as FlowStep, { vars: {} });
+    expect(
+      without.ok && without.action.kind === "route_to_team" && "ownerDirectNudges" in without.action
+    ).toBe(false);
+  });
+});
+
 describe("planStep: approval_gate", () => {
   it("returns an await_approval action with templated prompt", () => {
     const step: FlowStep = { id: "a", type: "approval_gate", prompt: "Send to {{vars.seller_phone}}?" };

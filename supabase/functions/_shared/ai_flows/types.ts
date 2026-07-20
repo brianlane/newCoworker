@@ -695,6 +695,18 @@ export type FlowStep =
     }
   | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
   | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
+  // Text whoever the lead BELONGS to: the contact's owning employee
+  // (contacts.owner_employee_id — set when a teammate claims) when one is on
+  // record, else the business owner. phoneVar (preferred) / nameVar locate
+  // the contact; unresolvable → business owner (a forward is never dropped).
+  | {
+      id: string;
+      type: "notify_lead_owner";
+      message: string;
+      phoneVar?: string;
+      nameVar?: string;
+      when?: StepCondition;
+    }
   | {
       id: string;
       type: "route_to_team";
@@ -750,6 +762,15 @@ export type FlowStep =
       ownerDirectWhen?: StepCondition;
       /** Owner SMS for the keep-for-owner branch. Required with ownerDirectWhen. */
       ownerDirectTemplate?: string;
+      /**
+       * Keep-for-owner nudges: after the ownerDirect alert the run parks
+       * (awaiting_agent on the owner's forward number) and the owner gets an
+       * ALL-CAPS reminder at 10 minutes and a final one at 30 minutes,
+       * unless they reply "1" (ack — stops the nudges). claimed_agent stays
+       * "none" throughout; the owner's "1" is an acknowledgement, never a
+       * claim. Only meaningful alongside ownerDirectWhen.
+       */
+      ownerDirectNudges?: boolean;
       /**
        * Owner-first routing for repeat leads: when the lead's contact row
        * (matched by the inbound phone) already has an owning employee
@@ -1204,6 +1225,18 @@ export type AiFlowOptions = {
    * allowed, today's behavior.
    */
   allowReentry?: boolean;
+  /**
+   * Post-extraction lead dedupe: when true, the worker cancels a run before
+   * its FIRST communication step if the extracted lead identity
+   * (vars.lead_phone / vars.lead_email, contact-expanded) — plus the
+   * property (vars.lead_address) when both runs carry one — matches an
+   * earlier non-failed, non-test run of the SAME flow. Complements
+   * allowReentry (sender-keyed, enqueue-time), which cannot see lead-source
+   * relay texts that arrive with an empty or shared sender (realtor.com's
+   * "New inquiry"/"Repeat inquiry" notifications). Fails open on lookup
+   * errors. Default off.
+   */
+  dedupeLeadRuns?: boolean;
 };
 
 /**

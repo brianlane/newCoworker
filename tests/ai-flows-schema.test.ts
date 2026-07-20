@@ -571,16 +571,17 @@ describe("goal step (GHL-style Goal Events)", () => {
   });
 });
 
-describe("flow options: stopOnResponse / allowReentry", () => {
-  it("round-trips both booleans through parseAiFlowDefinition", () => {
+describe("flow options: stopOnResponse / allowReentry / dedupeLeadRuns", () => {
+  it("round-trips the booleans through parseAiFlowDefinition", () => {
     const def = parseAiFlowDefinition({
       version: 1,
       trigger: { channel: "sms", conditions: [] },
       steps: [{ id: "s1", type: "send_sms", to: "{{trigger.from}}", body: "hi" }],
-      options: { stopOnResponse: true, allowReentry: false }
+      options: { stopOnResponse: true, allowReentry: false, dedupeLeadRuns: true }
     });
     expect(def.options?.stopOnResponse).toBe(true);
     expect(def.options?.allowReentry).toBe(false);
+    expect(def.options?.dedupeLeadRuns).toBe(true);
   });
 
   it("both stay optional (omitted options parse unchanged)", () => {
@@ -590,6 +591,115 @@ describe("flow options: stopOnResponse / allowReentry", () => {
       steps: [{ id: "s1", type: "send_sms", to: "{{trigger.from}}", body: "hi" }]
     });
     expect(def.options).toBeUndefined();
+  });
+});
+
+describe("notify_lead_owner step", () => {
+  const flowWith = (step: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "sms", conditions: [] },
+    steps: [
+      {
+        id: "s1",
+        type: "extract_text",
+        fields: [
+          { name: "lead_phone", description: "phone" },
+          { name: "lead_name", description: "name" },
+          { name: "full_message", description: "their full reply" }
+        ]
+      },
+      step
+    ]
+  });
+
+  it("parses with phoneVar/nameVar produced by an earlier step and templated message", () => {
+    const def = parseAiFlowDefinition(
+      flowWith({
+        id: "fwd",
+        type: "notify_lead_owner",
+        phoneVar: "lead_phone",
+        nameVar: "lead_name",
+        message: "Reply from {{vars.lead_name}}: {{vars.full_message}}"
+      })
+    );
+    expect(def.steps[1]).toMatchObject({ type: "notify_lead_owner", phoneVar: "lead_phone" });
+  });
+
+  it("both locator vars are optional (owner fallback still delivers)", () => {
+    parseAiFlowDefinition(
+      flowWith({ id: "fwd", type: "notify_lead_owner", message: "{{trigger.windowText}}" })
+    );
+  });
+
+  it("rejects a phoneVar or nameVar no earlier step produces", () => {
+    for (const bad of [
+      { phoneVar: "mystery_phone" },
+      { nameVar: "mystery_name" }
+    ]) {
+      try {
+        parseAiFlowDefinition(
+          flowWith({ id: "fwd", type: "notify_lead_owner", message: "hi", ...bad })
+        );
+        expect.unreachable("expected validation to fail");
+      } catch (e) {
+        expect(e).toBeInstanceOf(AiFlowValidationError);
+        expect((e as AiFlowValidationError).issues.join("\n")).toMatch(
+          /which no earlier step produces/
+        );
+      }
+    }
+  });
+
+  it("rejects a message referencing an unproduced var (template scope check)", () => {
+    expect(() =>
+      parseAiFlowDefinition(
+        flowWith({ id: "fwd", type: "notify_lead_owner", message: "{{vars.never_made}}" })
+      )
+    ).toThrow();
+  });
+});
+
+describe("route_to_team ownerDirectNudges", () => {
+  const routed = (route: Record<string, unknown>) => ({
+    version: 1,
+    trigger: { channel: "sms", conditions: [] },
+    steps: [
+      {
+        id: "s1",
+        type: "extract_text",
+        fields: [{ name: "price_band", description: "over_1m or under_1m" }]
+      },
+      {
+        id: "route",
+        type: "route_to_team",
+        offerTemplate: "New lead",
+        ownerFallbackTemplate: "Back to you",
+        ...route
+      }
+    ]
+  });
+
+  it("parses alongside the keep-for-owner rule", () => {
+    const def = parseAiFlowDefinition(
+      routed({
+        ownerDirectWhen: { var: "price_band", equals: "over_1m" },
+        ownerDirectTemplate: "HIGH-VALUE kept for you",
+        ownerDirectNudges: true
+      })
+    );
+    expect(def.steps[1]).toMatchObject({ ownerDirectNudges: true });
+  });
+
+  it("rejects nudges without the keep-for-owner rule (nothing to nudge about)", () => {
+    try {
+      parseAiFlowDefinition(routed({ ownerDirectNudges: true }));
+      expect.unreachable("expected validation to fail");
+    } catch (e) {
+      expect(e).toBeInstanceOf(AiFlowValidationError);
+      expect((e as AiFlowValidationError).issues.join("\n")).toMatch(
+        /ownerDirectNudges without ownerDirectWhen/
+      );
+    }
   });
 });
 

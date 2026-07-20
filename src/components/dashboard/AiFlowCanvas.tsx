@@ -89,6 +89,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   send_email: "comm",
   approval_gate: "wait",
   notify_owner: "comm",
+  notify_lead_owner: "comm",
   http_call: "read",
   sleep: "wait",
   wait_for_reply: "wait",
@@ -131,6 +132,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   send_email: <Send className="h-4 w-4" />,
   approval_gate: <ShieldCheck className="h-4 w-4" />,
   notify_owner: <Bell className="h-4 w-4" />,
+  notify_lead_owner: <Users className="h-4 w-4" />,
   http_call: <Webhook className="h-4 w-4" />,
   sleep: <Timer className="h-4 w-4" />,
   wait_for_reply: <Hourglass className="h-4 w-4" />,
@@ -186,6 +188,12 @@ function stepSubtitle(step: FlowStep): string {
       return `to ${step.to}`;
     case "notify_owner":
       return step.message;
+    case "notify_lead_owner":
+      return step.phoneVar
+        ? `lead by phone {{vars.${step.phoneVar}}}`
+        : step.nameVar
+          ? `lead by name {{vars.${step.nameVar}}}`
+          : "the lead's owner";
     case "approval_gate":
       return step.prompt;
     case "sleep":

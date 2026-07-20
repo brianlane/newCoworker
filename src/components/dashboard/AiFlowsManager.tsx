@@ -468,6 +468,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, prompt: "Send this message?" };
     case "notify_owner":
       return { id, type, message: "" };
+    case "notify_lead_owner":
+      return { id, type, message: "", phoneVar: examples.contactVar };
     case "http_call":
       return { id, type, label: "", method: "POST", path: "", bodyTemplate: "", saveAs: "" };
     case "route_to_team":
