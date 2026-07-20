@@ -549,6 +549,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
         notifyE164: "",
         saveAs: "call_outcome"
       };
+    case "arm_voice_transfer":
+      return { id, type, toE164: "", windowMinutes: 20 };
     case "goal":
       return { id, type, label: "Appointment booked", events: [{ kind: "appointment_booked" }] };
     case "math":
@@ -752,6 +754,15 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
   if (step.type === "ring_handoff" || step.type === "voice_transfer") {
     const toE164 = step.toRef ? undefined : step.toE164?.trim() || undefined;
     return { ...step, toE164 };
+  }
+  // arm_voice_transfer: same ref-wins + blank-drop rules as voice_transfer,
+  // plus a blank whisper is dropped (an empty string fails min(1)-when-present).
+  if (step.type === "arm_voice_transfer") {
+    return {
+      ...step,
+      toE164: step.toRef ? undefined : step.toE164?.trim() || undefined,
+      whisper: step.whisper?.trim() || undefined
+    };
   }
   // voice_ai_intake: same ref-wins rule for the notify number, plus drop blank
   // capture-detail rows (the editor leaves an empty input when you click
@@ -4917,6 +4928,39 @@ function StepFields({
           people={people}
           onChangeText={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
           onChangeRef={(ref) => patchStep(index, { toRef: ref, toE164: undefined })}
+        />
+        <Field
+          label="Say this to the caller first (optional)"
+          value={step.whisper ?? ""}
+          onChange={(v) => patchStep(index, { whisper: v.trim() ? v : undefined })}
+          help="A short message played to the caller before they're connected, e.g. 'Connecting you now.'"
+        />
+      </div>
+    );
+  }
+  if (step.type === "arm_voice_transfer") {
+    return (
+      <div className="space-y-2">
+        <ContactRefPicker
+          label="Send the expected call to (E.164, e.g. +16025551234)"
+          placeholder="+16025551234"
+          textValue={step.toE164 ?? ""}
+          refValue={step.toRef}
+          people={people}
+          onChangeText={(v) => patchStep(index, { toE164: v.trim() ? v.trim() : undefined })}
+          onChangeRef={(ref) => patchStep(index, { toRef: ref, toE164: undefined })}
+          help="For the window below, the next incoming call that doesn't match your per-caller call routing connects straight to this person instead of the AI."
+        />
+        <Field
+          label="Window (minutes)"
+          value={String(step.windowMinutes ?? 20)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              windowMinutes: Number.isFinite(n) && n > 0 ? Math.min(120, Math.round(n)) : undefined
+            });
+          }}
+          help="How long to expect the call (1-120 minutes; default 20). One window connects one call."
         />
         <Field
           label="Say this to the caller first (optional)"

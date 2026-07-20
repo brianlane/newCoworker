@@ -845,6 +845,47 @@ serve(async (req: Request) => {
     }
   }
 
+  // Armed expected-transfer window (§voice_expected_transfers): an AiFlow's
+  // arm_voice_transfer step (e.g. after confirming a Clever live-transfer cue
+  // with "Y") arms a short window during which the NEXT inbound call that
+  // matched no per-caller routing above bridges straight to the target — the
+  // concierge calls from a rotating number pool no fromE164 rule can cover.
+  // The claim is a single conditional UPDATE (unexpired + unconsumed →
+  // consumed), so concurrent calls can never both take one window. No caller-
+  // number gate: the whole point is that the caller is unpredictable (and the
+  // window is minutes long). A claim failure must not strand the caller — log
+  // and fall through to the normal (AI) path.
+  {
+    const { data: windowRow, error: windowErr } = await supabase
+      .from("voice_expected_transfers")
+      .update({ consumed_at: new Date().toISOString(), consumed_call_control_id: callControlId })
+      .eq("business_id", businessId)
+      .is("consumed_at", null)
+      .gt("expires_at", new Date().toISOString())
+      .select("to_e164, whisper")
+      .maybeSingle();
+    if (windowErr) {
+      console.error("voice_expected_transfers claim", windowErr);
+    }
+    const claimed = windowRow as { to_e164?: string; whisper?: string | null } | null;
+    if (claimed?.to_e164) {
+      await telemetryRecord(supabase, "voice_expected_transfer_matched", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        from: fromE164Informational ?? null
+      });
+      await systemLog(supabase, {
+        businessId,
+        source: "voice",
+        level: "info",
+        event: "voice_expected_transfer_matched",
+        message: `Expected-call window claimed by ${fromE164Informational || "an unknown caller"}; transferring to ${claimed.to_e164}`,
+        payload: { call_control_id: callControlId, from: fromE164Informational, to: claimed.to_e164 }
+      });
+      return await runBlindTransfer(claimed.to_e164, (claimed.whisper ?? "").trim());
+    }
+  }
+
   // Missed-call spike alert (Standard/Enterprise perk): once the tenant's
   // refused-call count (`voice_call_blocked` system_logs rows) crosses the
   // daily threshold, tell the owner — callers hearing "line busy" is

@@ -94,6 +94,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   sleep: "wait",
   wait_for_reply: "wait",
   place_ai_call: "voice",
+  arm_voice_transfer: "voice",
   branch: "branch",
   goal: "goal",
   math: "read",
@@ -137,6 +138,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   sleep: <Timer className="h-4 w-4" />,
   wait_for_reply: <Hourglass className="h-4 w-4" />,
   place_ai_call: <Phone className="h-4 w-4" />,
+  arm_voice_transfer: <Phone className="h-4 w-4" />,
   branch: <GitBranch className="h-4 w-4" />,
   goal: <Flag className="h-4 w-4" />,
   math: <Calculator className="h-4 w-4" />,
@@ -265,6 +267,10 @@ function stepSubtitle(step: FlowStep): string {
     case "place_ai_call": {
       const transferTo = step.transfer?.toRef?.label ?? step.transfer?.toE164;
       return `calls {{vars.${step.toVar}}}${transferTo ? ` · can transfer to ${transferTo}` : ""}`;
+    }
+    case "arm_voice_transfer": {
+      const target = step.toRef?.label ?? step.toE164 ?? "";
+      return `next call → ${target} · for ${formatDurationMinutes(step.windowMinutes ?? 20)}`;
     }
   }
 }

@@ -157,6 +157,15 @@ export function simulateTestAction(
         ...(action.phone ? { lead_phone: action.phone } : {}),
         ...(action.name ? { lead_name: action.name } : {})
       };
+    case "arm_voice_transfer":
+      // No window row is written (a test run must never hijack a real inbound
+      // call); report what would be armed.
+      return {
+        simulated: "arm_voice_transfer",
+        ...(action.toE164 ? { to: action.toE164 } : {}),
+        ...(action.toRef ? { to_ref: `${action.toRef.source}:${action.toRef.id}` } : {}),
+        window_minutes: action.windowMinutes
+      };
     case "http_call":
       return {
         simulated: "http_call",

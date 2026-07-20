@@ -54,6 +54,12 @@ export const FLOW_STEP_TYPES = [
   // itself is placed through the same origination edge function as
   // outbound_call, with identical budget metering.
   "place_ai_call",
+  // Arm a short-lived "expect a live-transfer call" window: while armed, an
+  // inbound call that matches NO per-caller voice routing bridges straight to
+  // the configured number instead of the AI (telnyx-voice-inbound consumes the
+  // window). Built for referral services (e.g. Clever) whose concierges call
+  // from a rotating number pool right after an SMS cue is confirmed.
+  "arm_voice_transfer",
   "branch",
   "goal",
   "math",
@@ -969,6 +975,27 @@ const nonBranchStepMembers = [
     saveAs: varName.optional(),
     when: whenSchema.optional()
   }),
+  // Arm a short-lived "expect a live-transfer call" window: the worker upserts
+  // the business's voice_expected_transfers row, and while it is unexpired and
+  // unconsumed, telnyx-voice-inbound bridges any inbound call that matched NO
+  // per-caller voice routing straight to the target (no AI conversation), then
+  // consumes the window — one arming transfers exactly one call. Built for
+  // referral services (e.g. Clever) whose concierges call from a rotating
+  // number pool minutes after an SMS cue is confirmed. Exactly one of
+  // toE164 / toRef (enforced in validateDefinitionSemantics).
+  z.object({
+    id: stepId,
+    type: z.literal("arm_voice_transfer"),
+    /** Destination the expected call is bridged to. */
+    toE164: e164.optional(),
+    /** Dynamic target: a saved employee/contact resolved at execution time. */
+    toRef: contactRefSchema.optional(),
+    /** How long the window stays armed. Default 20 minutes. */
+    windowMinutes: z.number().int().min(1).max(120).optional(),
+    /** Optional short greeting spoken to the caller before the bridge. */
+    whisper: z.string().min(1).max(300).optional(),
+    when: whenSchema.optional()
+  }),
   // GHL-style Goal Event checkpoint: when a watched external milestone lands
   // for the run's lead (replied / appointment booked / tag added / claimed),
   // the run fast-forwards to this step and everything in between is skipped
@@ -1481,6 +1508,9 @@ function templateStringsForStep(step: FlowStep): string[] {
     // there is nothing to template-check on the step itself. Nested arm steps
     // are walked separately.
     case "branch":
+    // arm_voice_transfer carries literal numbers/refs and a whisper string —
+    // no templates.
+    case "arm_voice_transfer":
     // Voice steps carry no `{{vars.x}}` templates (phone numbers + a persona
     // string captured live), so there is nothing to scope-check here.
     case "ring_handoff":
@@ -1967,6 +1997,18 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
               : `Step "${step.id}" sets both transfer.toE164 and transfer.toRef; use only one.`
           );
         }
+      }
+    }
+
+    // arm_voice_transfer: the expected call needs exactly one target source.
+    if (step.type === "arm_voice_transfer") {
+      const targets = [Boolean(step.toE164), Boolean(step.toRef)].filter(Boolean).length;
+      if (targets !== 1) {
+        issues.push(
+          targets === 0
+            ? `Step "${step.id}" arms a transfer window with no target; set toE164 or pick a saved contact (toRef).`
+            : `Step "${step.id}" sets both toE164 and toRef; use only one.`
+        );
       }
     }
 

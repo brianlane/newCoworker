@@ -40,6 +40,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   sleep: "Wait before continuing",
   wait_for_reply: "Wait for their reply",
   place_ai_call: "Call them (AI talks, can live-transfer)",
+  arm_voice_transfer: "Expect a call (send it to a person)",
   route_to_team: "Hand off to team/employees",
   browse_action: "Do something on a web page (click / type)",
   recall_url: "Recall a saved link from an earlier run",
@@ -80,6 +81,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Pauses until the person texts back (or the wait times out). Their reply is saved so later steps can branch on it - if they don't reply in time, the saved reply is empty, which lets you send a follow-up nudge.",
   place_ai_call:
     "Places a phone call to a number an earlier step found; the AI opens with your script and, if you configure a transfer, connects them live to a person (texting that person a heads-up first). The workflow pauses until the call ends and saves the outcome (transferred / answered / no_answer) so later steps can branch on it. Uses your voice minutes.",
+  arm_voice_transfer:
+    "For a short window after this step runs, the next incoming call that doesn't match your per-caller call routing is connected straight to the person you pick instead of the AI answering. Use it when a referral service texts you a cue and then calls from an unpredictable number minutes later (one window connects one call).",
   branch:
     "Splits the workflow into paths: each path has a condition (checked top to bottom, first match wins) and its own steps; no match runs the \"none matched\" path.",
   goal:

@@ -370,6 +370,16 @@ export type StepAction =
   // is on record, else the business owner. phone/name are the RESOLVED var
   // values (not var names) the worker locates the contact with.
   | { kind: "notify_lead_owner"; message: string; phone?: string; name?: string }
+  // Arm the business's voice_expected_transfers window (see the FlowStep doc).
+  // toRef passes through UNRESOLVED — the worker resolves the person's CURRENT
+  // number at execution time (same late-binding rule as route_to_team.agentRef).
+  | {
+      kind: "arm_voice_transfer";
+      toE164?: string;
+      toRef?: ContactRef;
+      windowMinutes: number;
+      whisper?: string;
+    }
   | { kind: "await_approval"; prompt: string }
   | {
       kind: "http_call";
@@ -1470,6 +1480,23 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           kind: "goal",
           label: step.label,
           reachedVia: typeof via === "string" && via ? via : "passed_inline"
+        }
+      };
+    }
+    case "arm_voice_transfer": {
+      // The authoring validator enforces exactly one of toE164/toRef; clamp the
+      // window to the schema's bounds so a hand-written row can't park a
+      // permanent hijack.
+      const windowMinutes = Math.min(120, Math.max(1, Math.round(step.windowMinutes ?? 20)));
+      const whisper = step.whisper?.trim();
+      return {
+        ok: true,
+        action: {
+          kind: "arm_voice_transfer",
+          ...(step.toE164 ? { toE164: step.toE164 } : {}),
+          ...(step.toRef ? { toRef: step.toRef } : {}),
+          windowMinutes,
+          ...(whisper ? { whisper } : {})
         }
       };
     }

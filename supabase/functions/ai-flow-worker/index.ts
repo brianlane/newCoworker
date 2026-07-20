@@ -1509,6 +1509,8 @@ async function runStep(
       return notifyOwnerStep(supabase, run, action);
     case "notify_lead_owner":
       return notifyLeadOwnerStep(supabase, run, scope, action);
+    case "arm_voice_transfer":
+      return armVoiceTransferStep(supabase, run, scope, action);
     case "http_call":
       return httpCallStep(run, scope, action);
     case "await_approval":
@@ -5411,6 +5413,66 @@ async function notifyLeadOwnerStep(
         result: { ...base, target: "business_owner", matched_by: matchedBy }
       }
     : outcome;
+}
+
+/**
+ * arm_voice_transfer: upsert the business's voice_expected_transfers window so
+ * telnyx-voice-inbound bridges the next unmatched inbound call straight to the
+ * target instead of the AI answering. One row per business (PK business_id):
+ * re-arming extends the window and resets consumption — the latest cue wins.
+ * An unresolvable toRef FAILS the step (silently arming nothing would strand
+ * the very call this step exists to catch).
+ */
+async function armVoiceTransferStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "arm_voice_transfer" }>
+): Promise<StepOutcome> {
+  let toE164 = action.toE164 ?? "";
+  let targetLabel = toE164;
+  if (action.toRef) {
+    const resolved = await resolveContactRef(supabase, run.business_id, action.toRef);
+    if (!resolved) {
+      return {
+        kind: "fail",
+        error: `arm_voice_transfer: ${action.toRef.source} reference could not be resolved (removed or no phone)`
+      };
+    }
+    toE164 = resolved.phone;
+    targetLabel = resolved.name || resolved.phone;
+  }
+  if (!toE164) {
+    return { kind: "fail", error: "arm_voice_transfer: no target number" };
+  }
+  const expiresAt = new Date(Date.now() + action.windowMinutes * 60_000).toISOString();
+  const { error } = await supabase.from("voice_expected_transfers").upsert(
+    {
+      business_id: run.business_id,
+      to_e164: toE164,
+      whisper: action.whisper ?? null,
+      expires_at: expiresAt,
+      armed_by_flow_id: run.flow_id,
+      consumed_at: null,
+      consumed_call_control_id: null
+    },
+    { onConflict: "business_id" }
+  );
+  if (error) throw new Error(`arm_voice_transfer upsert: ${error.message}`);
+  await telemetryRecord(supabase, "ai_flow_voice_transfer_armed", {
+    run_id: run.id,
+    business_id: run.business_id,
+    flow_id: run.flow_id,
+    window_minutes: action.windowMinutes
+  });
+  appendActionTaken(
+    scope,
+    `armed a ${action.windowMinutes}-minute expected-call window to ${targetLabel}`
+  );
+  return {
+    kind: "ok",
+    result: { to: toE164, window_minutes: action.windowMinutes, expires_at: expiresAt }
+  };
 }
 
 async function httpCallStep(

@@ -1119,6 +1119,30 @@ export type FlowStep =
       saveAs?: string;
       when?: StepCondition;
     }
+  | {
+      id: string;
+      /**
+       * Arm a short-lived "expect a live-transfer call" window: the worker
+       * upserts the business's voice_expected_transfers row, and while it is
+       * unexpired and unconsumed, telnyx-voice-inbound bridges any inbound
+       * call that matched NO per-caller voice routing straight to the target
+       * (no AI conversation), then consumes the window — one arming transfers
+       * exactly one call. Built for referral services (e.g. Clever) whose
+       * concierges call from a rotating number pool minutes after an SMS cue
+       * is confirmed. A BATCH step (runs on the async worker), not a voice
+       * step — it typically sits in an SMS-triggered flow.
+       */
+      type: "arm_voice_transfer";
+      /** Exactly one of toE164 / toRef (validated at author time). */
+      toE164?: string;
+      /** Dynamic target: a saved employee/contact resolved at execution time. */
+      toRef?: ContactRef;
+      /** How long the window stays armed. Default 20 minutes. */
+      windowMinutes?: number;
+      /** Optional short greeting spoken to the caller before the bridge. */
+      whisper?: string;
+      when?: StepCondition;
+    }
   // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook
   // state machine, NOT the async ai-flow-worker). Only valid under a VoiceTrigger. ──
   | {
