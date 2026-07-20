@@ -224,7 +224,7 @@ describe("arm_voice_transfer: test mode", () => {
 
 describe("voice_expected_transfers migration (contract)", () => {
   const migration = readFileSync(
-    join(repoRoot, "supabase/migrations/20260720152334_voice_expected_transfers.sql"),
+    join(repoRoot, "supabase/migrations/20260816152334_voice_expected_transfers.sql"),
     "utf8"
   );
 
