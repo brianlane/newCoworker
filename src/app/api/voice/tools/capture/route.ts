@@ -11,6 +11,8 @@ import { insertCoworkerLog } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { linkCustomerEmail } from "@/lib/customer-memory/db";
+import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { logger } from "@/lib/logger";
 
 /** Structural E.164 guard — only link the profile when we have a real number. */
@@ -92,13 +94,35 @@ export async function POST(request: Request) {
       log_payload: logPayload
     });
 
-    // Cross-channel link: when the caller shares an email, attach it to their
-    // profile (keyed by the real caller E.164) so future inbound mail from that
-    // address rolls up to this same contact and feeds their rolling summary.
-    // Best-effort — never fail the capture over a link write.
-    if (args.email && envelope.callerE164 && E164_RE.test(envelope.callerE164)) {
+    // Promote the captured lead to a contact: creates the row when new (so
+    // the Contacts page shows callers the AI captured), links the email, and
+    // fires the `contact_created` AiFlow trigger for genuinely new leads.
+    // Prefer the number the caller ASKED to be reached at; fall back to the
+    // trusted caller id. Best-effort inside ensureCapturedContact — never
+    // fails the capture mid-call.
+    const trustedCallerE164 =
+      envelope.callerE164 && E164_RE.test(envelope.callerE164)
+        ? envelope.callerE164
+        : null;
+    const contactE164 = coerceOwnerPhoneToE164(args.phone) ?? trustedCallerE164;
+    if (contactE164) {
+      await ensureCapturedContact(envelope.businessId, {
+        e164: contactE164,
+        name: args.name ?? null,
+        email: args.email ?? null,
+        channel: "voice"
+      });
+    }
+
+    // Cross-channel link: when the caller shares an email but asked to be
+    // reached at a DIFFERENT number, also attach the email to the profile
+    // keyed by the real caller id so future inbound mail from that address
+    // rolls up to the contact the call itself created. (When the numbers
+    // match, ensureCapturedContact already linked it.) Best-effort — never
+    // fail the capture over a link write.
+    if (args.email && trustedCallerE164 && trustedCallerE164 !== contactE164) {
       try {
-        await linkCustomerEmail(envelope.businessId, envelope.callerE164, args.email);
+        await linkCustomerEmail(envelope.businessId, trustedCallerE164, args.email);
       } catch (err) {
         logger.warn("voice-tools/capture: linkCustomerEmail failed", {
           error: err instanceof Error ? err.message : String(err)
