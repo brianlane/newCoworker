@@ -197,24 +197,35 @@ describe("processSocialPostSweep — publish", () => {
 
   it("fails (not throws) a post whose uploaded image cannot be signed", async () => {
     const uploadedRef = `${BIZ}/22222222-2222-4222-8222-222222222222.jpg`;
-    const createSignedUrl = vi.fn(async () => ({ data: null, error: { message: "gone" } }));
-    const storageDb = {
-      storage: { from: vi.fn(() => ({ createSignedUrl })) }
-    } as never;
-    listDue.mockResolvedValue([post({ media_url: `/api/dashboard/images/${uploadedRef}` })]);
-    const result = await processSocialPostSweep({ ...deps(), client: storageDb });
-    expect(result).toMatchObject({ promoted: 1, published: 0, failed: 1 });
-    expect(createContainer).not.toHaveBeenCalled();
-    expect(transition).toHaveBeenCalledWith(
-      BIZ,
-      "p-1",
-      "publishing",
-      expect.objectContaining({
-        status: "failed",
-        error_detail: expect.stringContaining("could not be read from storage")
-      }),
-      storageDb
-    );
+    // A storage error, and the no-error-no-URL shape, both dead-end the same way.
+    for (const signResult of [
+      { data: null, error: { message: "gone" } },
+      { data: null, error: null }
+    ]) {
+      vi.clearAllMocks();
+      listInFlight.mockResolvedValue([]);
+      transition.mockResolvedValue(true);
+      patch.mockResolvedValue(undefined);
+      loadConnection.mockResolvedValue(connection());
+      const createSignedUrl = vi.fn(async () => signResult);
+      const storageDb = {
+        storage: { from: vi.fn(() => ({ createSignedUrl })) }
+      } as never;
+      listDue.mockResolvedValue([post({ media_url: `/api/dashboard/images/${uploadedRef}` })]);
+      const result = await processSocialPostSweep({ ...deps(), client: storageDb });
+      expect(result).toMatchObject({ promoted: 1, published: 0, failed: 1 });
+      expect(createContainer).not.toHaveBeenCalled();
+      expect(transition).toHaveBeenCalledWith(
+        BIZ,
+        "p-1",
+        "publishing",
+        expect.objectContaining({
+          status: "failed",
+          error_detail: expect.stringContaining("could not be read from storage")
+        }),
+        storageDb
+      );
+    }
   });
 
   it("counts nothing when a concurrent resolver settled the row first (lost outcome stamp)", async () => {
