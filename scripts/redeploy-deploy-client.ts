@@ -133,7 +133,13 @@ function buildDeployEnvPrefix(
     ["TELNYX_SMS_FROM_E164", process.env.TELNYX_SMS_FROM_E164 ?? ""],
     ["STREAM_URL_SIGNING_SECRET", process.env.STREAM_URL_SIGNING_SECRET ?? ""],
     ["BRIDGE_MEDIA_WSS_ORIGIN", bridgeMediaWssOrigin],
-    ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
+    // Tenant boxes get the PRODUCTION Gemini key. Since the Jul 2026 key
+    // split (docs/GEMINI-SPEND.md), the laptop .env's GOOGLE_API_KEY is the
+    // INTERNAL engineering key (CI/debug/e2e spend) and the tenant key lives
+    // in GOOGLE_API_KEY_TENANTS — prefer it so a fleet redeploy can never
+    // stamp the internal key onto a customer box (which would misattribute
+    // tenant spend as engineering spend in AI Studio).
+    ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY_TENANTS ?? process.env.GOOGLE_API_KEY ?? ""],
     ["GEMINI_LIVE_MODEL", modelOverrides?.geminiLiveModel ?? process.env.GEMINI_LIVE_MODEL ?? ""],
     // Prebuilt Gemini Live voice (enterprise voice picker); blank = default.
     ["VOICE_NAME", modelOverrides?.voiceName ?? process.env.VOICE_NAME ?? ""],

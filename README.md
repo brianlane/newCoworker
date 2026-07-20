@@ -729,9 +729,10 @@ lands in the day-keyed `gemini_spend_events` ledger (written inside the
 tokens, cost, pricing source), powering `/admin/gemini` (daily per-tenant
 breakdown, today/7d/month/90d) and a metered-vs-billed reconciliation
 against the Cloud Billing BigQuery export. CI e2e + `debug/` scripts bill a
-SEPARATE internal GCP project so AI Studio's per-project view splits
-engineering spend from tenant spend natively. Setup + runbook:
-[docs/GEMINI-SPEND.md](docs/GEMINI-SPEND.md).
+SEPARATE `internal-ci-debug` API key (AI Studio → Spend splits per key;
+Google's new-user model restriction blocks a separate project while the
+fleet runs Gemini 2.5 models) so engineering spend stays separable from
+tenant spend. Setup + runbook: [docs/GEMINI-SPEND.md](docs/GEMINI-SPEND.md).
 
 - **Customer-facing sends** (AI replies, composer, tools, AiFlow customer
   texts, missed-call auto-texts, scheduled texts): `try_reserve_sms_outbound_slot`
