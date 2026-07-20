@@ -136,6 +136,16 @@ describe("listGeminiBilledDaily", () => {
     expect(calls[0].ops).toContainEqual({ method: "gte", args: ["day", "2026-06-14"] });
   });
 
+  it("pages through full pages and concatenates", async () => {
+    const fullPage = Array.from({ length: 1000 }, (_, i) => ({ ...BILLED_ROW, id: i + 1 }));
+    const { client } = mockClient([
+      { data: fullPage, error: null },
+      { data: [{ ...BILLED_ROW, id: 1001 }], error: null }
+    ]);
+    const rows = await listGeminiBilledDaily("2026-06-14", client);
+    expect(rows).toHaveLength(1001);
+  });
+
   it("handles null data and throws on error", async () => {
     const empty = mockClient([{ data: null, error: null }]);
     expect(await listGeminiBilledDaily("2026-06-14", empty.client)).toEqual([]);

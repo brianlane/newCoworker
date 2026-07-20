@@ -27,8 +27,13 @@ export const GEMINI_BILLED_SYNC_STATUS_KEY = "gemini_billed_sync_status";
 /** Default Cloud Billing `service.description` for Gemini API spend. */
 export const DEFAULT_GEMINI_BILLING_SERVICE = "Generative Language API";
 
-/** Rolling sync window: billed data lags up to ~24h, 35 days covers a month view. */
-export const BILLED_SYNC_WINDOW_DAYS = 35;
+/**
+ * Rolling sync window: must cover the WIDEST admin range (/admin/gemini's
+ * 90-day view) plus lag headroom, so every billed day the UI can show is
+ * rewritten on every sync — a narrower window would freeze older in-range
+ * days at their last synced value while the metered side stays live.
+ */
+export const BILLED_SYNC_WINDOW_DAYS = 95;
 
 export type GeminiBilledSyncStatus = {
   lastSyncAt: string;

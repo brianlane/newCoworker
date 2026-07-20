@@ -66,8 +66,8 @@ reconciliation card below tells you if the production side ever drifts.
 Google has **no API that returns Gemini API spend**; the supported path is
 the Cloud Billing export to BigQuery. The daily platform-cost sync then
 pulls billed cost per UTC day + project into `gemini_billed_daily`
-(rolling 35-day window) and the /admin/gemini reconciliation card compares
-it to the metered ledger.
+(rolling 95-day window, covering the widest admin range) and the
+/admin/gemini reconciliation card compares it to the metered ledger.
 
 1. Cloud console → **Billing → Billing export → BigQuery export** → enable
    **Standard usage cost** into a dataset (create one, e.g.

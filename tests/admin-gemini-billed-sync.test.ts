@@ -111,9 +111,9 @@ describe("billedRowsFromQuery", () => {
 });
 
 describe("billedWindowStartDayUtc", () => {
-  it("returns the UTC day the default window back", () => {
-    expect(BILLED_SYNC_WINDOW_DAYS).toBe(35);
-    expect(billedWindowStartDayUtc(NOW)).toBe("2026-06-14");
+  it("returns the UTC day the default window back (covers the 90-day admin view)", () => {
+    expect(BILLED_SYNC_WINDOW_DAYS).toBe(95);
+    expect(billedWindowStartDayUtc(NOW)).toBe("2026-04-15");
     expect(billedWindowStartDayUtc(NOW, 7)).toBe("2026-07-12");
   });
 });
@@ -132,9 +132,9 @@ describe("runGeminiBilledSync", () => {
       ok: true,
       rows: 1,
       error: null,
-      windowStartDay: "2026-06-14"
+      windowStartDay: "2026-04-15"
     });
-    expect(deps.replaceGeminiBilledWindow).toHaveBeenCalledWith("2026-06-14", [
+    expect(deps.replaceGeminiBilledWindow).toHaveBeenCalledWith("2026-04-15", [
       { day: "2026-07-18", gcp_project_id: "prod", cost_micros: 2_500_000 }
     ]);
     expect(deps.recordStatus).toHaveBeenCalledWith(status);

@@ -91,20 +91,31 @@ export async function replaceGeminiBilledWindow(
   if (error) throw new Error(`replaceGeminiBilledWindow: ${error.message}`);
 }
 
-/** All billed rows with `day >= sinceDay`, oldest first. */
+/**
+ * All billed rows with `day >= sinceDay`, oldest first. Paged in 1000-row
+ * chunks for the same silent-PostgREST-cap reason as listGeminiSpendDaily.
+ */
 export async function listGeminiBilledDaily(
   sinceDay: string,
   client?: SupabaseClient
 ): Promise<GeminiBilledDailyRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("gemini_billed_daily")
-    .select()
-    .gte("day", sinceDay)
-    .order("day", { ascending: true })
-    .order("gcp_project_id", { ascending: true });
-  if (error) throw new Error(`listGeminiBilledDaily: ${error.message}`);
-  return (data ?? []) as GeminiBilledDailyRow[];
+  const pageSize = 1000;
+  const all: GeminiBilledDailyRow[] = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("gemini_billed_daily")
+      .select()
+      .gte("day", sinceDay)
+      .order("day", { ascending: true })
+      .order("gcp_project_id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`listGeminiBilledDaily: ${error.message}`);
+    const rows = (data ?? []) as GeminiBilledDailyRow[];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
 }
 
 /**
