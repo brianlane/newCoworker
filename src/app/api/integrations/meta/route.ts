@@ -124,8 +124,13 @@ export async function POST(request: Request) {
 
     // Conversions API dataset (best-effort — tokens missing the
     // post-App-Review ads scopes return null and the Conversion Leads
-    // feedback loop stays dark until a reconnect discovers one).
-    const datasetId = await getOrCreatePageDataset(page.id, page.accessToken);
+    // feedback loop stays dark until a reconnect discovers one). A
+    // discovery hiccup on a reconnect that re-picks the SAME Page falls
+    // back to the stored dataset (the pending row keeps it), so a tenant
+    // with a working feedback loop can never lose it to one failed call.
+    const datasetId =
+      (await getOrCreatePageDataset(page.id, page.accessToken)) ??
+      (connection.page_id === page.id ? connection.dataset_id : null);
 
     let row;
     try {

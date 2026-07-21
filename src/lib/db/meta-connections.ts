@@ -192,8 +192,13 @@ export class MetaConnectionValidationError extends Error {
 
 /**
  * OAuth callback landing: create (or reset) the business's connection as
- * `pending` with a fresh long-lived user token. Any previously connected
- * Page is cleared — reconnecting restarts the picker.
+ * `pending` with a fresh long-lived user token. Reconnecting restarts the
+ * picker (tokens cleared, status pending), but the previously connected
+ * Page's identity + discovered dataset are KEPT as last-known values: if
+ * the owner re-picks the same Page and dataset discovery hiccups, the
+ * activation reuses the stored dataset instead of silently losing the
+ * Conversion Leads feedback loop. Picking a different Page overwrites all
+ * of it.
  */
 export async function savePendingMetaConnection(
   input: { businessId: string; userToken: string; accountName: string | null },
@@ -215,13 +220,12 @@ export async function savePendingMetaConnection(
   const fields = {
     status: "pending" as const,
     user_token_encrypted: encryptIntegrationSecret(token),
-    page_id: null,
-    page_name: null,
+    // page_id / page_name / dataset_id deliberately NOT cleared (see above);
+    // the page token always is — a pending row must never be able to send.
     page_token_encrypted: null,
     account_name: input.accountName,
     instagram_account_id: null,
     instagram_username: null,
-    dataset_id: null,
     is_active: true
   };
 
