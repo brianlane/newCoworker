@@ -6447,6 +6447,14 @@ async function routeBroadcastStep(
       const idx = live.indexOf(replyFrom);
       if (idx >= 0) live.splice(idx, 1);
     }
+    // A pass from the teammate whose CLAIM was still pending (they claimed,
+    // then texted "2" before the worker ran) arrives via the single-offer
+    // webhook path — routing.offered is still stamped from their claim.
+    // Clear it: a broadcast run must never re-park with a live single-offer
+    // pointer, or that passer would keep matching `offered == sender` and
+    // could claim a lead they just passed on.
+    delete routing.offered;
+    delete routing.offered_name;
     routing.offered_all = live;
     if (live.length > 0) {
       // Someone can still claim: re-park for the REMAINING shared deadline.

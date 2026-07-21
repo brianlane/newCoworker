@@ -696,11 +696,19 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
   prevRouting.last_event = "reject";
   prevRouting.reply_from = from;
   prevRouting.pass_reason = timeframe;
-  // Broadcast: retire just this passer — the offer stays live for the rest
+  // Broadcast run (offered_all present — regardless of which lookup shape
+  // matched): retire just this passer; the offer stays live for the rest
   // (the worker re-parks with the remaining shared deadline, or falls back
-  // to the owner when this was the last offeree).
-  if (found.broadcast) {
+  // to the owner when this was the last offeree). A passer who had a still-
+  // pending claim (offered stamped to them) is retracting it — clear the
+  // pointer so their pass never blocks a competing offeree's "1" and they
+  // can't re-claim the lead they just passed on.
+  if ((prevRouting.offered_all ?? []).length > 0) {
     prevRouting.offered_all = (prevRouting.offered_all ?? []).filter((p) => p !== from);
+    if (prevRouting.offered === from) {
+      delete prevRouting.offered;
+      delete prevRouting.offered_name;
+    }
   }
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
   // Same optimistic revision gate as the claim paths: if a first-to-claim
@@ -2003,11 +2011,18 @@ serve(async (req: Request) => {
             prevRouting.offered = from;
             prevRouting.offered_name = prevRouting.offered_names?.[from] ?? "";
           }
-          if (isBroadcast && !claimed) {
-            // Retire just this passer; the offer stays live for the rest.
+          // Broadcast run (offered_all present — even when this sender
+          // matched via a pending-claim `offered` stamp): a pass retires just
+          // this passer, and a passer retracting a still-pending claim loses
+          // the `offered` pointer so they can't re-claim what they passed on.
+          if (!claimed && (prevRouting.offered_all ?? []).length > 0) {
             prevRouting.offered_all = (prevRouting.offered_all ?? []).filter(
               (p) => p !== from
             );
+            if (prevRouting.offered === from) {
+              delete prevRouting.offered;
+              delete prevRouting.offered_name;
+            }
           }
           // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed
           // by the worker) belongs to THAT reply — a bare digit carries none, so

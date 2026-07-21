@@ -244,6 +244,51 @@ describe("broadcast route_to_team offers (real worker)", () => {
     expect(steps.find((s) => s.step_type === "update_contact")?.status).toBe("skipped");
   });
 
+  it("a claim-then-pass clears the claimer's pointer — they can't re-claim the re-parked broadcast", async () => {
+    const { runId } = await seedBroadcastRun("IT broadcast claim-then-pass");
+    await tickWorker();
+
+    // Amy claims, then passes BEFORE the worker consumes the claim. The pass
+    // rides the single-offer webhook path (her claim stamped routing.offered),
+    // which does NOT touch offered_all — mirror that exact shape.
+    await broadcastClaimLikeWebhook(runId, AMY);
+    {
+      const run = await getRun(db, runId);
+      const routing = routingOf(run);
+      routing.last_event = "reject";
+      routing.reply_from = AMY;
+      delete routing.pass_reason;
+      const { data, error } = await db
+        .from("ai_flow_runs")
+        .update({
+          status: "queued",
+          awaiting_agent_e164: null,
+          respond_by_at: null,
+          context: { ...run.context, routing },
+          updated_at: new Date().toISOString()
+        })
+        .eq("id", runId)
+        .eq("revision", run.revision)
+        .in("status", ["awaiting_agent", "queued"])
+        .select("id");
+      if (error || (data ?? []).length === 0) {
+        throw new Error(`pass-after-claim mirror: ${error?.message ?? "no row updated"}`);
+      }
+    }
+    await tickWorker();
+
+    // The broadcast re-parks for Dave alone, and Amy's stale claim pointer is
+    // gone — routing.offered must never survive a broadcast reject, or she
+    // could live-claim the lead she just passed on.
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("awaiting_agent");
+    const routing = routingOf(run);
+    expect(routing.offered).toBeUndefined();
+    expect(routing.offered_name).toBeUndefined();
+    expect(routing.offered_all).toEqual([DAVE]);
+    expect(routing.tried).toEqual([AMY]);
+  });
+
   it("a lapsed shared deadline retires every remaining offeree and falls back to the owner", async () => {
     const { runId } = await seedBroadcastRun("IT broadcast timeout");
     await tickWorker();
