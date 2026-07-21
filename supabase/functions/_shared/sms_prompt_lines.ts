@@ -91,6 +91,23 @@ export const SMS_TIMEZONE_LINE =
   "they share the business's timezone.";
 
 /**
+ * Staff-turn pointer at the notification-settings tool (KYP, Jul 20 2026:
+ * James texted "let me know when clients text back" and the assistant
+ * PROMISED alerts no feature backed — an empty promise until an operator
+ * flipped the toggle by hand). Staff preamble only: the tool itself is
+ * enable-only on the SMS surface, and this line keeps the model from
+ * promising instead of acting.
+ */
+export const SMS_STAFF_NOTIFICATION_SETTINGS_LINE =
+  "Notification settings: when this teammate asks to be alerted or notified " +
+  "about something (e.g. told the moment clients text back), call " +
+  "update_notification_preferences to turn the matching alert ON — never " +
+  "just promise alerts, and never claim a setting changed unless the tool " +
+  "succeeded this conversation. Over text you can only turn alerts ON; " +
+  "turning alerts off or changing the alert phone/email is done from the " +
+  "dashboard under Settings, then Notifications.";
+
+/**
  * Conversation quality (from tenant feedback: repeated acknowledgements
  * and re-asking for a name the lead already gave; Derek's thread also hit
  * the verbatim-repetition failure this guards): reuse what is known, vary

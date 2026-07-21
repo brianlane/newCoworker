@@ -43,6 +43,8 @@ import {
   startAiFlowForContactTool,
   startAiflowForContactArgsSchema
 } from "@/lib/ai-flows/agent-start-flow";
+import { applyNotificationPreferenceToggles } from "@/lib/notifications/preferences-tool";
+import { updateNotificationPreferencesArgsSchema } from "@/lib/dashboard-chat/action-tools";
 import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
@@ -366,6 +368,28 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
       return await startAiFlowForContactTool(businessId, parsed.data);
+    }
+    // Notification toggles from the texting surface — ENABLE-ONLY here: the
+    // SMS Coworker serves customers and staff with the same agent, so a
+    // prompt-injected customer must never be able to silence the owner's
+    // alerts (see rowboat-gates.ts). The shared core owns the whitelist and
+    // the enable-only refusal wording.
+    case "update_notification_preferences": {
+      const parsed = updateNotificationPreferencesArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      const result = await applyNotificationPreferenceToggles(businessId, parsed.data, {
+        enableOnly: true
+      });
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        data: {
+          ...result.data,
+          note: "Confirm to the teammate exactly which alerts were turned on."
+        }
+      };
     }
     case "document_share": {
       const parsed = documentShareArgsSchema.safeParse(args);

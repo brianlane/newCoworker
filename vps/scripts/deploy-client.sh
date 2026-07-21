@@ -722,7 +722,8 @@ WORKFLOW_JSON=$(jq -nc \
         "notify_team",
         "generate_image",
         "document_share",
-        "start_aiflow_for_contact"
+        "start_aiflow_for_contact",
+        "update_notification_preferences"
       ]
     },
     {
@@ -756,7 +757,8 @@ WORKFLOW_JSON=$(jq -nc \
         "notify_team",
         "generate_image",
         "document_share",
-        "start_aiflow_for_contact"
+        "start_aiflow_for_contact",
+        "update_notification_preferences"
       ]
     },
     {
@@ -1053,6 +1055,69 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["message"]
+      }
+    },
+    {
+      name: "update_notification_preferences",
+      description: "Turn owner alert toggles ON. Use ONLY when the texter is the business owner or a teammate (your context says so — Team SMS mode) and they explicitly ask to be alerted about something, e.g. customer_reply_alerts to be texted the moment a client texts the business. ENABLE-ONLY over text: you can never turn alerts off or change the alert phone/email — that is done from the dashboard under Settings then Notifications; say so when asked. Never call this for a customer. After success, confirm exactly which alerts were turned on.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          customer_reply_alerts: {
+            type: "boolean",
+            description: "Text the owner the moment a client texts the business, with a preview. true only."
+          },
+          aiflow_failure_alerts: {
+            type: "boolean",
+            description: "Alert the owner when a lead-intake automation fails permanently. true only."
+          },
+          sms_urgent: {
+            type: "boolean",
+            description: "Deliver urgent alerts by text message. true only."
+          },
+          whatsapp_urgent: {
+            type: "boolean",
+            description: "Deliver urgent alerts on WhatsApp. true only."
+          },
+          email_urgent: {
+            type: "boolean",
+            description: "Deliver urgent alerts by email. true only."
+          },
+          email_digest: {
+            type: "boolean",
+            description: "Send the daily email digest. true only."
+          },
+          email_digest_weekly: {
+            type: "boolean",
+            description: "Send the weekly email digest. true only."
+          },
+          dashboard_alerts: {
+            type: "boolean",
+            description: "Show alerts on the dashboard. true only."
+          },
+          sms_warm_transfer: {
+            type: "boolean",
+            description: "Text the owner and recipient on every voice warm transfer. true only."
+          },
+          image_limit_alerts: {
+            type: "boolean",
+            description: "Alert the owner when a coworker hits its image generation limit. true only."
+          },
+          category_leads: {
+            type: "boolean",
+            description: "Include new-lead alerts. true only."
+          },
+          category_team: {
+            type: "boolean",
+            description: "Include team-notify alerts. true only."
+          },
+          category_system: {
+            type: "boolean",
+            description: "Include platform and system alerts. true only."
+          }
+        },
+        required: []
       }
     },
     {

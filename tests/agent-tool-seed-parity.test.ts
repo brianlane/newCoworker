@@ -46,7 +46,12 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // Inline-only by design (same posture as create_aiflow, which the seed
   // never carries): edits run the platform compile pipeline, which the
   // Rowboat worker fallback cannot host.
-  edit_aiflow: null
+  edit_aiflow: null,
+  // INLINE-ONLY by design: the dashboard settings-mutation tool is declared
+  // only where the authed caller's manage_settings role is verified per turn
+  // (the inline Gemini path). The Rowboat OwnerCoworker fallback carries no
+  // caller role, so it deliberately gets no dashboard_ twin.
+  update_notification_preferences: null
 };
 
 const WEBCHAT_CANONICAL = [

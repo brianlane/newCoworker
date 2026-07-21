@@ -32,7 +32,8 @@ const ALL_ON: ActionToolGates = {
   list_aiflows: true,
   run_aiflow: true,
   edit_aiflow: true,
-  generate_image: true
+  generate_image: true,
+  update_notification_preferences: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -212,7 +213,8 @@ describe("declarations & naming", () => {
       list_aiflows: false,
       run_aiflow: false,
       edit_aiflow: false,
-      generate_image: false
+      generate_image: false,
+      update_notification_preferences: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -224,8 +226,77 @@ describe("declarations & naming", () => {
   it("isActionToolName distinguishes action tools from everything else", () => {
     expect(isActionToolName("send_sms")).toBe(true);
     expect(isActionToolName("calendar_book_appointment")).toBe(true);
+    expect(isActionToolName("update_notification_preferences")).toBe(true);
     expect(isActionToolName("create_aiflow")).toBe(false);
     expect(isActionToolName("")).toBe(false);
+  });
+});
+
+describe("update_notification_preferences", () => {
+  it("is declared with owner-consent guidance and gated off cleanly", () => {
+    const decls = actionToolDeclarations(ALL_ON);
+    const decl = decls.find((d) => d.name === "update_notification_preferences");
+    expect(decl?.description).toMatch(/explicitly asks/i);
+    expect(decl?.description).toMatch(/notification|alert/i);
+    // Recipients are NOT parameters — booleans only.
+    const props = Object.keys(
+      (decl?.parameters as { properties: Record<string, unknown> }).properties
+    );
+    expect(props).toContain("customer_reply_alerts");
+    expect(props).not.toContain("phone_number");
+    expect(props).not.toContain("alert_email");
+
+    const gatedOff = actionToolDeclarations({ ...ALL_ON, update_notification_preferences: false });
+    expect(gatedOff.map((d) => d.name)).not.toContain("update_notification_preferences");
+  });
+
+  it("applies toggles through the shared core (full control on the dashboard surface)", async () => {
+    const applyNotificationToggles = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        updated: { customer_reply_alerts: true },
+        settings: { customer_reply_alerts: true }
+      }
+    }));
+    const res = (await executeActionTool(
+      BIZ,
+      {
+        name: "update_notification_preferences",
+        args: { customer_reply_alerts: true, email_digest: false }
+      },
+      { applyNotificationToggles: applyNotificationToggles as never }
+    )) as { ok: boolean; note?: string };
+    expect(applyNotificationToggles).toHaveBeenCalledWith(BIZ, {
+      customer_reply_alerts: true,
+      email_digest: false
+    });
+    expect(res.ok).toBe(true);
+    expect(res.note).toMatch(/tell the owner/i);
+  });
+
+  it("passes core refusals through and rejects invalid args without touching the core", async () => {
+    const applyNotificationToggles = vi.fn(async () => ({
+      ok: false as const,
+      detail: "unknown_toggle:phone_number",
+      message: "Only these toggles exist: …"
+    }));
+    const refused = (await executeActionTool(
+      BIZ,
+      { name: "update_notification_preferences", args: { phone_number: "+1555" } },
+      { applyNotificationToggles: applyNotificationToggles as never }
+    )) as { ok: boolean; detail?: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toBe("unknown_toggle:phone_number");
+
+    const untouched = vi.fn();
+    const invalid = (await executeActionTool(
+      BIZ,
+      { name: "update_notification_preferences", args: { customer_reply_alerts: "yes" } },
+      { applyNotificationToggles: untouched as never }
+    )) as { ok: boolean; message?: string };
+    expect(invalid.ok).toBe(false);
+    expect(invalid.message).toContain("invalid_args");
+    expect(untouched).not.toHaveBeenCalled();
   });
 });
 
