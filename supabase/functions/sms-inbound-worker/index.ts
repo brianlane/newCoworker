@@ -1198,7 +1198,12 @@ serve(async (req: Request) => {
       // reschedule received?" honestly instead of denying what it can't see.
       // Best-effort; null when the tenant has no calendar or the lookup
       // refused, which keeps the preamble byte-identical to pre-feature.
-      const bookingLine = await fetchContactBookingLine(job.business_id, fromE164);
+      // Skipped entirely on cached re-sends (Telnyx retries) — no Rowboat
+      // turn runs there, so the preamble is never used and the platform
+      // round-trip would be pure added latency.
+      const bookingLine = (job.rowboat_reply_cached ?? "").trim()
+        ? null
+        : await fetchContactBookingLine(job.business_id, fromE164);
       const bookingStatus = bookingLine ? `Booking status: ${bookingLine}` : null;
       // AiFlow context bridge: when an automation recently handled this
       // texter (asked them a question, collected their details), the model
