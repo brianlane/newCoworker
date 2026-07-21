@@ -232,11 +232,14 @@ describe("contactBookingContextForPhone", () => {
     expect(out.status).toBe("booked");
     expect(out.line).toContain('"Free Strategy Call"');
     expect(out.line).toContain(FUTURE);
-    // The listing was narrowed by the contact's email.
+    // The listing was narrowed by the contact's email, and its window floors
+    // at NOW — a past-start active event must never shadow the upcoming slot.
     const listCall = request.mock.calls.find(
       (c) => (c[2] as Cfg).endpoint === "/scheduled_events"
     );
     expect((listCall?.[2] as Cfg).params?.invitee_email).toBe("tim@trustyourtalent.ca");
+    const minStart = Date.parse((listCall?.[2] as Cfg).params?.min_start_time ?? "");
+    expect(Math.abs(minStart - Date.now())).toBeLessThan(60_000);
   });
 
   it("reports a replacement slot (old_invitee) as rescheduled", async () => {
@@ -265,6 +268,9 @@ describe("contactBookingContextForPhone", () => {
   });
 
   it("a matched active booking whose start already passed falls through to the canceled scan", async () => {
+    // Defense in depth behind the now-floored listing window: a provider
+    // answering boundary/past starts anyway must still not be reported as
+    // an upcoming booking.
     const request = calendlyFake(
       {
         active: [event("EV1", PAST, "Strategy Call")],
@@ -283,6 +289,12 @@ describe("contactBookingContextForPhone", () => {
     );
     expect(out.status).toBe("canceled");
     expect(out.line).toContain("has not rebooked");
+    // The canceled scan's window reaches back for recent cancels.
+    const cancelCall = request.mock.calls.find(
+      (c) => (c[2] as Cfg).endpoint === "/scheduled_events" && (c[2] as Cfg).params?.status === "canceled"
+    );
+    const minStart = Date.parse((cancelCall?.[2] as Cfg).params?.min_start_time ?? "");
+    expect(Date.now() - minStart).toBeGreaterThan(6 * 24 * 60 * 60_000);
   });
 
   it("a canceled invitee flagged rescheduled reads as rescheduled-away", async () => {

@@ -55,14 +55,22 @@ function noShowDefinition() {
   };
 }
 
-/** Enqueue an event_end run the way the calendar poller does (Tim's shape). */
+/**
+ * Enqueue an event_end run the way the calendar poller does (Tim's shape),
+ * including the poller's `cal:<eventId>:end:<endIso>` dedupe key — the
+ * authoritative marker the gate uses to know WHICH trigger fired.
+ * `withDedupeKey: false` models manual replays / older rows (the gate then
+ * falls back to the flow definition).
+ */
 async function enqueueNoShowRun(
   db: SupabaseClient,
   flowId: string,
   businessId: string,
   lead: string,
-  event: { startsAt?: string; endsAt: string }
+  event: { startsAt?: string; endsAt: string },
+  opts: { withDedupeKey?: boolean } = {}
 ): Promise<string> {
+  const eventId = `EV-${flowId.slice(0, 8)}`;
   return enqueueRun(
     db,
     flowId,
@@ -74,13 +82,16 @@ async function enqueueNoShowRun(
         `invitee name: Tim Tsai\ninvitee no-show: yes`,
       url: null,
       from: "",
-      event_id: `EV-${flowId.slice(0, 8)}`,
+      event_id: eventId,
       event_title: EVENT_TITLE,
       calendar: "primary",
       ...(event.startsAt ? { starts_at: event.startsAt } : {}),
       ends_at: event.endsAt
     },
-    { invitee_phone: lead, invitee_first_name: "Tim" }
+    { invitee_phone: lead, invitee_first_name: "Tim" },
+    opts.withDedupeKey === false
+      ? {}
+      : { dedupe_key: `cal:${eventId}:end:${event.endsAt}` }
   );
 }
 
@@ -220,6 +231,75 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
 
     // The send was ATTEMPTED: with no Telnyx config in the harness the step
     // fails with the config error — proof the guard let it through.
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("failed");
+    expect(run.last_error).toContain("Telnyx messaging is not configured");
+  });
+
+  it("a run with no dedupe key on a pure event_end flow still suppresses (definition fallback)", async () => {
+    const biz = await seedBusiness(db, "IT event-end no-dedupe fallback");
+    const lead = "+17805550206";
+    await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
+    const flowId = await createFlow(db, biz, noShowDefinition());
+    await seedInboundActivity(db, biz, lead, minutesAgo(142));
+    const runId = await enqueueNoShowRun(
+      db,
+      flowId,
+      biz,
+      lead,
+      { startsAt: minutesAgo(150), endsAt: minutesAgo(120) },
+      { withDedupeKey: false }
+    );
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    const recovery = (await getSteps(db, runId)).find((s) => s.step_index === 0);
+    expect((recovery?.result as { skipped?: string })?.skipped).toBe("event_end_thread_active");
+  });
+
+  it("an event_start run of a mixed-trigger flow is NEVER stood down (reminders still send)", async () => {
+    const biz = await seedBusiness(db, "IT event-start not gated");
+    const lead = "+17805550207";
+    await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
+    // One flow, two calendar triggers: a pre-call reminder (event_start) and
+    // the no-show recovery (event_end). The reminder run must send even when
+    // the thread is active — suppressing it would kill legitimate reminders
+    // (Bugbot Medium on PR #795).
+    const def = noShowDefinition() as Record<string, unknown> & {
+      triggers?: unknown[];
+    };
+    def.triggers = [
+      { channel: "calendar", on: "event_start", leadMinutes: 150, calendar: "primary", conditions: [] }
+    ];
+    const flowId = await createFlow(db, biz, def);
+    // The lead texted recently — thread is "active" by the gate's measure.
+    await seedInboundActivity(db, biz, lead, minutesAgo(30));
+    const startsAt = new Date(Date.now() + 60 * 60_000).toISOString();
+    const eventId = `EV-${flowId.slice(0, 8)}`;
+    const runId = await enqueueRun(
+      db,
+      flowId,
+      biz,
+      {
+        channel: "calendar",
+        windowText: `title: ${EVENT_TITLE}\nstarts: ${startsAt}\ninvitee no-show: yes`,
+        url: null,
+        from: "",
+        event_id: eventId,
+        event_title: EVENT_TITLE,
+        calendar: "primary",
+        starts_at: startsAt
+      },
+      { invitee_phone: lead, invitee_first_name: "Tim" },
+      // The poller's event_start dedupe key carries NO ":end:" segment.
+      { dedupe_key: `cal:${eventId}:${startsAt}` }
+    );
+
+    await tickWorker();
+
+    // The send was ATTEMPTED (Telnyx-config failure), not skipped.
     const run = await getRun(db, runId);
     expect(run.status).toBe("failed");
     expect(run.last_error).toContain("Telnyx messaging is not configured");

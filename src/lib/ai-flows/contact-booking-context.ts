@@ -47,7 +47,9 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const BOOKING_CONTEXT_EVENT_SCAN = 25;
 /** Per-lookup cap on invitee fetches (both listings combined). */
 export const BOOKING_CONTEXT_INVITEE_FETCH_CAP = 10;
-/** How far back the scan reaches — recent cancels/reschedules only. */
+/** How far back the CANCELED scan reaches — recent cancels/reschedules only.
+ * (The active scan floors at NOW: only upcoming bookings are reported, and a
+ * past-start active event must never shadow the real upcoming slot.) */
 export const BOOKING_CONTEXT_BACK_DAYS = 7;
 /** How far ahead an upcoming booking may start and still be reported. */
 export const BOOKING_CONTEXT_HORIZON_DAYS = 90;
@@ -165,15 +167,17 @@ async function scanForMatch(args: {
   ids: { phoneDigits: string[]; email: string | null };
   budget: { remaining: number };
   nowMs: number;
+  /** Window floor for listed event STARTS (active: now — upcoming only). */
+  minStartMs: number;
 }): Promise<{ event: ListedEvent; invitee: ListedInvitee } | null> {
-  const { businessId, conn, request, userUri, status, ids, budget, nowMs } = args;
+  const { businessId, conn, request, userUri, status, ids, budget, nowMs, minStartMs } = args;
   const dayMs = 24 * 60 * 60_000;
   const params: Record<string, string> = {
     user: userUri,
     status,
     sort: "start_time:asc",
     count: String(BOOKING_CONTEXT_EVENT_SCAN),
-    min_start_time: new Date(nowMs - BOOKING_CONTEXT_BACK_DAYS * dayMs).toISOString(),
+    min_start_time: new Date(minStartMs).toISOString(),
     max_start_time: new Date(nowMs + BOOKING_CONTEXT_HORIZON_DAYS * dayMs).toISOString()
   };
   if (ids.email) params.invitee_email = ids.email;
@@ -247,6 +251,9 @@ export async function contactBookingContextForPhone(
     const budget = { remaining: BOOKING_CONTEXT_INVITEE_FETCH_CAP };
 
     // Upcoming active booking first — the strongest, most actionable state.
+    // The listing floor is NOW so an older still-active event (earlier today,
+    // yesterday) can never shadow the contact's real upcoming slot (Bugbot
+    // Medium on PR #795: first match wins, and past starts sort first).
     const active = await scanForMatch({
       businessId,
       conn,
@@ -255,7 +262,8 @@ export async function contactBookingContextForPhone(
       status: "active",
       ids,
       budget,
-      nowMs
+      nowMs,
+      minStartMs: nowMs
     });
     if (active && Date.parse(active.event.start_time) > nowMs) {
       // `old_invitee` marks this booking as the REPLACEMENT slot of a
@@ -280,7 +288,8 @@ export async function contactBookingContextForPhone(
       status: "canceled",
       ids,
       budget,
-      nowMs
+      nowMs,
+      minStartMs: nowMs - BOOKING_CONTEXT_BACK_DAYS * 24 * 60 * 60_000
     });
     if (canceled) {
       return {

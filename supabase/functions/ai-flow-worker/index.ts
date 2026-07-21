@@ -850,7 +850,10 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         // The marker rides scope.vars into every later context persist, so
         // re-claims and later sends never re-pay the check.
         scope.vars[EVENT_END_THREAD_VAR] = "1";
-        if (await threadActiveSince(supabase, run.business_id, target, sinceIso)) {
+        if (
+          (await runFiredByEventEnd(supabase, run, def)) &&
+          (await threadActiveSince(supabase, run.business_id, target, sinceIso))
+        ) {
           appendActionTaken(
             scope,
             "skipped the follow-up text — the conversation was already active after the appointment (nothing sent)"
@@ -1399,6 +1402,46 @@ function flowHasEventEndTrigger(def: AiFlowDefinition): boolean {
   return flowTriggers(def).some(
     (t) => t.channel === "calendar" && (t as { on?: string }).on === "event_end"
   );
+}
+
+/** Whether EVERY calendar trigger on the flow is event_end (no ambiguity). */
+function flowCalendarTriggersAllEventEnd(def: AiFlowDefinition): boolean {
+  const calendar = flowTriggers(def).filter((t) => t.channel === "calendar");
+  return (
+    calendar.length > 0 && calendar.every((t) => (t as { on?: string }).on === "event_end")
+  );
+}
+
+/**
+ * Whether THIS run was enqueued by an event_end firing. The run context does
+ * not record which trigger fired, but the calendar poller's dedupe key does
+ * (`cal:<eventId>:end:<endIso>` — see calendarDedupeKey in
+ * src/lib/ai-flows/calendar-poll.ts), so that is authoritative. A run with
+ * no dedupe key (manual replays, older rows) falls back to the definition:
+ * unambiguous only when EVERY calendar trigger is event_end — a flow also
+ * watching event_start/event_created must never have those runs' reminders
+ * or cancel texts stood down by this gate (Bugbot Medium on PR #795).
+ * Fails CLOSED (not an event_end run) on lookup trouble.
+ */
+async function runFiredByEventEnd(
+  supabase: Supabase,
+  run: RunRow,
+  def: AiFlowDefinition
+): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("dedupe_key")
+      .eq("id", run.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const key = (data as { dedupe_key?: string | null } | null)?.dedupe_key ?? "";
+    if (key) return key.startsWith("cal:") && key.includes(":end:");
+    return flowCalendarTriggersAllEventEnd(def);
+  } catch (e) {
+    console.error("event_end gate dedupe-key lookup failed (gate skipped)", e);
+    return false;
+  }
 }
 
 /**
