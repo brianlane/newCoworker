@@ -71,7 +71,22 @@ describe("api/internal/contact-booking-context route", () => {
       status: "rescheduled",
       line: "This contact has an upcoming booking…"
     });
-    expect(contactBookingContextForPhone).toHaveBeenCalledWith(BIZ, PHONE);
+    expect(contactBookingContextForPhone).toHaveBeenCalledWith(BIZ, PHONE, {}, undefined, null);
+  });
+
+  it("passes the caller's business timezone through so the line renders local (KYP/Ayanna)", async () => {
+    vi.mocked(contactBookingContextForPhone).mockResolvedValue({ status: "none", line: null });
+    const res = await POST(
+      req({ businessId: BIZ, phone: PHONE, timezone: "America/Toronto" })
+    );
+    expect(res.status).toBe(200);
+    expect(contactBookingContextForPhone).toHaveBeenCalledWith(
+      BIZ,
+      PHONE,
+      {},
+      undefined,
+      "America/Toronto"
+    );
   });
 
   it("maps a thrown lookup failure to the standard error contract", async () => {

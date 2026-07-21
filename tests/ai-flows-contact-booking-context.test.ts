@@ -172,13 +172,27 @@ describe("inviteeMatchesContact", () => {
 });
 
 describe("bookingContextLine", () => {
-  const ev = { name: "Free Strategy Call", startIso: FUTURE };
+  const ev = { name: "Free Strategy Call", startIso: "2026-07-23T18:00:00Z" };
+
+  it("renders the start business-local WITH a named timezone — never a raw UTC ISO (KYP/Ayanna Jul 20 2026)", () => {
+    // A raw "2026-07-23T18:00:00Z" invites the model to misconvert silently;
+    // timezone-less times are the defect class that no-showed Ayanna.
+    expect(bookingContextLine("booked", ev, { timezone: "America/Toronto" })).toBe(
+      'This contact has an upcoming booking: "Free Strategy Call" starting Thu, Jul 23, 2026, 2:00 PM EDT.'
+    );
+    // No timezone on file → honest UTC labeling, still never a bare ISO.
+    expect(bookingContextLine("booked", ev)).toBe(
+      'This contact has an upcoming booking: "Free Strategy Call" starting Thu, Jul 23, 2026, 6:00 PM UTC.'
+    );
+    expect(bookingContextLine("booked", ev, { timezone: "  " })).toContain("6:00 PM UTC");
+    // An unrecognized timezone string falls back to the raw ISO rather than throwing.
+    expect(bookingContextLine("booked", ev, { timezone: "Mars/Olympus" })).toContain(ev.startIso);
+  });
 
   it("booked / rescheduled / canceled / rescheduled-away wordings", () => {
-    expect(bookingContextLine("booked", ev)).toBe(
-      `This contact has an upcoming booking: "Free Strategy Call" starting ${FUTURE}.`
+    expect(bookingContextLine("rescheduled", ev, { timezone: "America/Toronto" })).toContain(
+      "they RESCHEDULED it"
     );
-    expect(bookingContextLine("rescheduled", ev)).toContain("they RESCHEDULED it");
     expect(bookingContextLine("canceled", ev)).toContain("CANCELED");
     expect(bookingContextLine("canceled", ev)).toContain("has not rebooked");
     expect(bookingContextLine("canceled", ev, { rescheduledAway: true })).toContain(
@@ -218,7 +232,7 @@ describe("contactBookingContextForPhone", () => {
     expect(out.status).toBe("none");
   });
 
-  it("reports an upcoming active booking as booked (email-narrowed listing)", async () => {
+  it("reports an upcoming active booking as booked (email-narrowed listing, business-local time)", async () => {
     const request = calendlyFake(
       { active: [event("EV1", FUTURE, "Free Strategy Call")] },
       { EV1: [{ status: "active", email: "tim@trustyourtalent.ca" }] }
@@ -227,11 +241,16 @@ describe("contactBookingContextForPhone", () => {
       BIZ,
       PHONE,
       deps({ request }),
-      fakeDb([CONTACT_ROW])
+      fakeDb([CONTACT_ROW]),
+      "America/Toronto"
     );
     expect(out.status).toBe("booked");
     expect(out.line).toContain('"Free Strategy Call"');
-    expect(out.line).toContain(FUTURE);
+    // Business-local rendering with a named timezone, never the raw ISO.
+    expect(out.line).not.toContain(FUTURE);
+    expect(out.line).toMatch(
+      /starting [A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{4}, \d{1,2}:\d{2} (AM|PM) E[DS]T\.$/
+    );
     // The listing was narrowed by the contact's email, and its window floors
     // at NOW — a past-start active event must never shadow the upcoming slot.
     const listCall = request.mock.calls.find(

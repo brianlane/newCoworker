@@ -163,8 +163,15 @@ describe("AI-reply short links (real worker, fake Rowboat + fake Telnyx)", () =>
 describe("booking-status preamble (real worker, scripted platform answer)", () => {
   it("injects the platform's booking-status line into the Rowboat system preamble (fails pre-fix)", async () => {
     const biz = await seedSendableBusiness("IT booking context");
+    // The business timezone must ride the lookup so the platform renders the
+    // booking start business-local (KYP/Ayanna timezone incident).
+    const { error: tzErr } = await db
+      .from("businesses")
+      .update({ timezone: "America/Toronto" })
+      .eq("id", biz);
+    if (tzErr) throw new Error(tzErr.message);
     const LINE =
-      'This contact has an upcoming booking: "KYP Ads Free Strategy Call" starting 2026-07-23T18:00:00Z (they rescheduled it from an earlier time).';
+      'This contact has an upcoming booking: "KYP Ads Free Strategy Call" starting Thu, Jul 23, 2026, 2:00 PM EDT (they rescheduled it from an earlier time).';
     app.scriptBookingContext(LINE);
     rowboat.scriptReply("Yes Tim — I see you moved our call to Thursday. See you then!");
     const callsBefore = rowboat.calls.length;
@@ -178,6 +185,7 @@ describe("booking-status preamble (real worker, scripted platform answer)", () =
     expect(ctxCall.authorization).toBe("Bearer itest-cron-secret");
     expect(ctxCall.body.businessId).toBe(biz);
     expect(ctxCall.body.phone).toBe(LEAD);
+    expect(ctxCall.body.timezone).toBe("America/Toronto");
 
     // ...and the answered line rode into the system preamble verbatim.
     expect(rowboat.calls.length).toBe(callsBefore + 1);

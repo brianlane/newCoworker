@@ -31,18 +31,26 @@ export const runtime = "nodejs";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  phone: z.string().trim().min(4).max(20)
+  phone: z.string().trim().min(4).max(20),
+  /** Business timezone so the booking start renders local (KYP/Ayanna). */
+  timezone: z.string().trim().min(1).max(64).nullish()
 });
 
 export async function POST(request: Request): Promise<Response> {
   try {
-    const { businessId, phone } = bodySchema.parse(await request.json());
+    const { businessId, phone, timezone } = bodySchema.parse(await request.json());
     // The gateway check needs the businessId from the body, so both auth
     // arms run after parsing; the zod errors below reveal nothing sensitive.
     if (!assertCronAuth(request) && !(await verifyGatewayTokenForBusiness(request, businessId))) {
       return errorResponse("FORBIDDEN", "Invalid bearer", 403);
     }
-    const result = await contactBookingContextForPhone(businessId, phone);
+    const result = await contactBookingContextForPhone(
+      businessId,
+      phone,
+      {},
+      undefined,
+      timezone ?? null
+    );
     return successResponse(result);
   } catch (err) {
     return handleRouteError(err);

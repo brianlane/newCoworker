@@ -49,10 +49,12 @@ import {
 import { loadContactTimeline } from "../_shared/contact_context.ts";
 import { loadRecentSmsTranscript } from "../_shared/sms_transcript.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
+import { sendCustomerReplyAlert } from "../_shared/customer_reply_alert.ts";
 import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
-  SMS_IDENTITY_LINE
+  SMS_IDENTITY_LINE,
+  SMS_TIMEZONE_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import {
   customerLanguageLine,
@@ -197,7 +199,8 @@ const BOOKING_CONTEXT_TIMEOUT_MS = 5_000;
 /** One texter's booking-status preamble line from the platform, or null. */
 async function fetchContactBookingLine(
   businessId: string,
-  phone: string
+  phone: string,
+  timezone: string | null
 ): Promise<string | null> {
   const base = (
     Deno.env.get("AIFLOW_PLATFORM_URL") ??
@@ -215,7 +218,7 @@ async function fetchContactBookingLine(
         "Content-Type": "application/json",
         Authorization: `Bearer ${secret}`
       },
-      body: JSON.stringify({ businessId, phone }),
+      body: JSON.stringify({ businessId, phone, timezone }),
       signal: AbortSignal.timeout(BOOKING_CONTEXT_TIMEOUT_MS)
     });
     if (!res.ok) {
@@ -627,6 +630,17 @@ serve(async (req: Request) => {
             p_last_error: "paused"
           });
           await clearJobReplyCache(supabase, job.id);
+          // A paused tenant's client texts are otherwise dropped silently —
+          // the one state where an opted-in owner most needs the page
+          // (Bugbot Medium, PR #802). Same helper, same gates and dedupe.
+          await sendCustomerReplyAlert(supabase, {
+            businessId: job.business_id,
+            contactE164: fromE164,
+            inboundPreview: userText.slice(0, 200),
+            jobId: job.id,
+            notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+            bearer: serviceKey
+          });
           await telemetryRecord(supabase, "sms_worker_killswitch", {
             job_id: job.id,
             business_id: job.business_id,
@@ -657,6 +671,16 @@ serve(async (req: Request) => {
               p_last_error: "safe_mode_missing_telnyx_env"
             });
             await clearJobReplyCache(supabase, job.id);
+            // The Safe-Mode forward could not even be attempted, so the
+            // owner never saw this text — page them if they opted in.
+            await sendCustomerReplyAlert(supabase, {
+              businessId: job.business_id,
+              contactE164: fromE164,
+              inboundPreview: userText.slice(0, 200),
+              jobId: job.id,
+              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+              bearer: serviceKey
+            });
             processed += 1;
             continue;
           }
@@ -789,6 +813,26 @@ serve(async (req: Request) => {
           continue;
         }
       }
+    }
+
+    // Opt-in "client replied" owner alert (KYP, Jul 20 2026): deterministic,
+    // fired the moment a claimed job is identified as a customer inbound —
+    // BEFORE the reply branches, so flow-suppressed inbounds, tapbacks, and
+    // bare "1" replies alert too. Runs AFTER the kill-switch/Safe-Mode gate
+    // (a Safe-Mode forward already put the text on the owner's phone
+    // verbatim). Gated on notification_preferences.customer_reply_alerts
+    // (default false), deduped per job across retry claims, per-contact
+    // coalesced, forward_owner contacts skipped inside the helper.
+    // Best-effort: never touches the reply pipeline.
+    if (!job.staff_kind) {
+      await sendCustomerReplyAlert(supabase, {
+        businessId: job.business_id,
+        contactE164: fromE164,
+        inboundPreview: userText.slice(0, 200),
+        jobId: job.id,
+        notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+        bearer: serviceKey
+      });
     }
 
     // AiFlow suppression: a matched flow with options.suppressDefaultReply owns
@@ -1152,6 +1196,10 @@ serve(async (req: Request) => {
         "Do NOT use the customer CRM tools (customer_lookup_by_phone, customer_set_display_name, customer_append_pinned_note) on this texter.",
         identityLine,
         groundedActionsLine,
+        // Staff ask the assistant to compose outbound customer texts, so the
+        // timezone rule applies here too (the Ayanna "3:00 PM" confirmation
+        // was owner-initiated).
+        SMS_TIMEZONE_LINE,
         dateLine
       ];
       customerPreamble = staffLines.join("\n\n");
@@ -1251,7 +1299,7 @@ serve(async (req: Request) => {
       const cachedResend = (job.rowboat_reply_cached ?? "").trim().length > 0;
       const bookingLine = cachedResend
         ? null
-        : await fetchContactBookingLine(job.business_id, fromE164);
+        : await fetchContactBookingLine(job.business_id, fromE164, businessTimezone);
       const bookingStatus = bookingLine ? `Booking status: ${bookingLine}` : null;
       // Agent-invocable flows discovery ("Automations you may start") — the
       // visibility half of the start_aiflow_for_contact gate. Null (and a
@@ -1308,7 +1356,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, dateLine, phoneLine, languageLine]
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, agentFlowsBlock, contactTimeline, flowContext]

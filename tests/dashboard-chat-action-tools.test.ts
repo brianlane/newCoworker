@@ -55,6 +55,7 @@ function happyDeps(overrides: Partial<ActionToolDeps> = {}): ActionToolDeps {
     reschedule: vi.fn(async () => ({ ok: true, data: { eventId: "e1" } })),
     cancel: vi.fn(async () => ({ ok: true, data: { canceled: true } })),
     createDb: vi.fn(async () => insertResult({ error: null })) as never,
+    recordContactInteraction: vi.fn(async () => ({}) as never),
     ...overrides
   };
 }
@@ -140,6 +141,60 @@ describe("send_whatsapp", () => {
       { sendWhatsApp: vi.fn(async () => ({ ok: false as const, reason: "send_failed" as const })) }
     )) as { message?: string };
     expect(failed.message).toContain("whatsapp_send_failed");
+  });
+
+  it("upserts the recipient as a contact after a successful delivery (whatsapp channel)", async () => {
+    const deps = happyDeps({
+      sendWhatsApp: vi.fn(async () => ({
+        ok: true as const,
+        via: "text" as const,
+        messageId: "wamid-3"
+      }))
+    });
+    await executeActionTool(
+      BIZ,
+      {
+        name: "send_whatsapp",
+        args: { toE164: "+13127310559", body: "Hello!", contactName: "Ayanna" }
+      },
+      deps
+    );
+    expect(deps.recordContactInteraction).toHaveBeenCalledWith(
+      BIZ,
+      "+13127310559",
+      "whatsapp",
+      { displayName: "Ayanna" },
+      expect.anything()
+    );
+
+    // A failed delivery never upserts.
+    const failedDeps = happyDeps({
+      sendWhatsApp: vi.fn(async () => ({ ok: false as const, reason: "send_failed" as const }))
+    });
+    await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+13127310559", body: "x" } },
+      failedDeps
+    );
+    expect(failedDeps.recordContactInteraction).not.toHaveBeenCalled();
+
+    // And a failed upsert never fails the delivered message.
+    const upsertDown = happyDeps({
+      sendWhatsApp: vi.fn(async () => ({
+        ok: true as const,
+        via: "text" as const,
+        messageId: "wamid-4"
+      })),
+      recordContactInteraction: vi.fn(async () => {
+        throw new Error("rollup down");
+      }) as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+13127310559", body: "x" } },
+      upsertDown
+    );
+    expect(res).toMatchObject({ ok: true, messageId: "wamid-4" });
   });
 });
 
@@ -297,6 +352,8 @@ describe("send_sms", () => {
       ok: false,
       message: expect.stringContaining("sms_quota_blocked")
     });
+    // No send → no contact upsert.
+    expect(quota.recordContactInteraction).not.toHaveBeenCalled();
 
     const generic = happyDeps({
       sendSms: vi.fn(async () => {
@@ -307,6 +364,60 @@ describe("send_sms", () => {
       ok: false,
       message: expect.stringContaining("sms_send_failed")
     });
+  });
+
+  it("upserts the recipient as a contact after a successful send (outbound-first numbers must exist)", async () => {
+    // KYP/Ayanna, Jul 20 2026: a number the owner texted twice had NO contact
+    // row, so the assistant told James "I don't have any record of Ayanna"
+    // hours after texting her for him.
+    const deps = happyDeps();
+    await executeActionTool(BIZ, { name: "send_sms", args: ARGS }, deps);
+    expect(deps.recordContactInteraction).toHaveBeenCalledWith(
+      BIZ,
+      "+15145188192",
+      "sms",
+      { displayName: null },
+      expect.anything()
+    );
+  });
+
+  it("passes the optional contactName through to the upsert", async () => {
+    const deps = happyDeps();
+    await executeActionTool(
+      BIZ,
+      { name: "send_sms", args: { ...ARGS, contactName: "  Ayanna  " } },
+      deps
+    );
+    expect(deps.recordContactInteraction).toHaveBeenCalledWith(
+      BIZ,
+      "+15145188192",
+      "sms",
+      { displayName: "Ayanna" },
+      expect.anything()
+    );
+  });
+
+  it("a failed contact upsert never fails the sent message (returned rejection AND thrown string)", async () => {
+    for (const recordContactInteraction of [
+      vi.fn(async () => {
+        throw new Error("rollup down");
+      }),
+      vi.fn(async () => {
+        throw "rollup string blast";
+      })
+    ]) {
+      const deps = happyDeps({ recordContactInteraction: recordContactInteraction as never });
+      const res = await executeActionTool(BIZ, { name: "send_sms", args: ARGS }, deps);
+      expect(res).toMatchObject({ ok: true, messageId: "msg-1" });
+    }
+  });
+
+  it("declares the timezone rule on outbound message bodies (KYP/Ayanna Jul 20 2026)", () => {
+    const decls = actionToolDeclarations(ALL_ON);
+    const sms = decls.find((d) => d.name === "send_sms");
+    const whatsapp = decls.find((d) => d.name === "send_whatsapp");
+    expect(sms?.description).toMatch(/timezone/i);
+    expect(whatsapp?.description).toMatch(/timezone/i);
   });
 });
 

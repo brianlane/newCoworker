@@ -23,10 +23,60 @@ import { rateLimit } from "@/lib/rate-limit";
 // pace, below anything that could drain a monthly SMS pool in one hour.
 const MCP_SMS_SEND_RATE = { interval: 60 * 1000, maxRequests: 60 };
 
+// Every clock time in a message body carries a named timezone (KYP/Ayanna
+// Jul 20 2026: a "3:00 PM" confirmation with no timezone went to a
+// Central-time lead about an Eastern-time call — a plausible no-show cause).
+const MCP_TIMEZONE_RULE =
+  ' If the message mentions a clock time, always include the timezone (e.g. "1:00 PM Eastern", never a bare "1:00 PM"), and when the recipient is known to be in a different timezone, give the time in THEIR timezone too.';
+
+const CONTACT_NAME_ARG = z
+  .string()
+  .trim()
+  .min(1)
+  .max(120)
+  .optional()
+  .describe(
+    "The recipient's name, when known — files them as a contact so the send is never to an invisible number. An existing contact's name is never overwritten."
+  );
+
+/**
+ * Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20 2026:
+ * a number the owner texted twice via this connector had NO contact row, so
+ * the assistant later denied any record of her). Rollup only — deliberately
+ * NOT the capture path's contact_created event, so an owner-initiated
+ * outbound never triggers lead-follow-up automations. Best-effort: a failed
+ * upsert never fails a message that already went out.
+ */
+async function upsertRecipientContact(
+  businessId: string,
+  to: string,
+  channel: "sms" | "whatsapp",
+  contactName: string | null | undefined,
+  db: Awaited<ReturnType<typeof createSupabaseServiceClient>>
+): Promise<void> {
+  try {
+    const { recordInteractionAndIncrement } = await import("@/lib/customer-memory/db");
+    await recordInteractionAndIncrement(
+      businessId,
+      to,
+      channel,
+      { displayName: contactName?.trim() || null },
+      db
+    );
+  } catch (err) {
+    const { logger } = await import("@/lib/logger");
+    logger.warn(`mcp ${channel === "sms" ? "sms" : "whatsapp"}: contact upsert failed`, {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 export const sendSmsTool = defineMcpTool({
   name: "send_sms",
   description:
-    "Send a text message to a customer from the business's phone number. Counts against the business's monthly SMS quota exactly like a dashboard send; the message appears in the owner's Text history.",
+    "Send a text message to a customer from the business's phone number. Counts against the business's monthly SMS quota exactly like a dashboard send; the message appears in the owner's Text history." +
+    MCP_TIMEZONE_RULE,
   schema: {
     business_id: z
       .string()
@@ -34,7 +84,8 @@ export const sendSmsTool = defineMcpTool({
       .optional()
       .describe("Business to send from. Optional when the account has exactly one business."),
     to: z.string().describe("Recipient phone number (any common format)."),
-    text: z.string().min(1).max(1600).describe("Message body (1600 chars max).")
+    text: z.string().min(1).max(1600).describe("Message body (1600 chars max)."),
+    contact_name: CONTACT_NAME_ARG
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -85,6 +136,8 @@ export const sendSmsTool = defineMcpTool({
       });
     }
 
+    await upsertRecipientContact(businessId, to, "sms", args.contact_name, db);
+
     return { sent: true, to, message_id: telnyxMessageId, channel };
   }
 });
@@ -92,7 +145,8 @@ export const sendSmsTool = defineMcpTool({
 export const sendWhatsAppTool = defineMcpTool({
   name: "send_whatsapp",
   description:
-    "Send a WhatsApp message to a customer from the business's connected WhatsApp Business number. Inside the recipient's 24-hour conversation window the text goes out as written; outside it, an approved template carries the message (Meta bills the business per template message). Fails with guidance when WhatsApp isn't connected.",
+    "Send a WhatsApp message to a customer from the business's connected WhatsApp Business number. Inside the recipient's 24-hour conversation window the text goes out as written; outside it, an approved template carries the message (Meta bills the business per template message). Fails with guidance when WhatsApp isn't connected." +
+    MCP_TIMEZONE_RULE,
   schema: {
     business_id: z
       .string()
@@ -100,7 +154,8 @@ export const sendWhatsAppTool = defineMcpTool({
       .optional()
       .describe("Business to send from. Optional when the account has exactly one business."),
     to: z.string().describe("Recipient phone number (any common format)."),
-    text: z.string().min(1).max(1600).describe("Message body (1600 chars max).")
+    text: z.string().min(1).max(1600).describe("Message body (1600 chars max)."),
+    contact_name: CONTACT_NAME_ARG
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -137,6 +192,9 @@ export const sendWhatsAppTool = defineMcpTool({
         )
       );
     }
+
+    const db = await createSupabaseServiceClient();
+    await upsertRecipientContact(businessId, to, "whatsapp", args.contact_name, db);
 
     return { sent: true, to, message_id: delivered.messageId, via: delivered.via };
   }

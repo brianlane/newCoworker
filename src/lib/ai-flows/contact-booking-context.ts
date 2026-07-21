@@ -131,13 +131,39 @@ export function inviteeMatchesContact(
   );
 }
 
+/**
+ * The booking start rendered business-local WITH a named timezone — a raw
+ * UTC ISO invites the model to misconvert silently, and timezone-less times
+ * are the defect class that no-showed a Central-time lead told "3:00 PM"
+ * for an Eastern-time call (KYP/Ayanna, Jul 20 2026). No timezone on file
+ * degrades to honest UTC labeling; an unrecognized timezone string falls
+ * back to the raw ISO rather than throwing.
+ */
+function formatBookingStartLocal(startIso: string, timezone: string | null | undefined): string {
+  const tz = (timezone ?? "").trim() || "UTC";
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short"
+    }).format(new Date(startIso));
+  } catch {
+    return startIso;
+  }
+}
+
 /** The preamble line for each non-none status (exported for the route tests). */
 export function bookingContextLine(
   status: Exclude<ContactBookingStatus, "none">,
   event: { name: string; startIso: string },
-  opts: { rescheduledAway?: boolean } = {}
+  opts: { rescheduledAway?: boolean; timezone?: string | null } = {}
 ): string {
-  const what = `"${event.name}" starting ${event.startIso}`;
+  const what = `"${event.name}" starting ${formatBookingStartLocal(event.startIso, opts.timezone)}`;
   if (status === "booked") {
     return `This contact has an upcoming booking: ${what}.`;
   }
@@ -227,7 +253,9 @@ export async function contactBookingContextForPhone(
   businessId: string,
   phoneE164: string,
   deps: ContactBookingContextDeps = {},
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  /** Business timezone for rendering the booking start local (null = UTC). */
+  timezone?: string | null
 ): Promise<ContactBookingContext> {
   const request = deps.request ?? calendlyRequest;
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
@@ -274,10 +302,11 @@ export async function contactBookingContextForPhone(
       const status = active.invitee.old_invitee ? "rescheduled" : "booked";
       return {
         status,
-        line: bookingContextLine(status, {
-          name: active.event.name,
-          startIso: active.event.start_time
-        })
+        line: bookingContextLine(
+          status,
+          { name: active.event.name, startIso: active.event.start_time },
+          { timezone }
+        )
       };
     }
 
@@ -300,7 +329,7 @@ export async function contactBookingContextForPhone(
         line: bookingContextLine(
           "canceled",
           { name: canceled.event.name, startIso: canceled.event.start_time },
-          { rescheduledAway: canceled.invitee.rescheduled === true }
+          { rescheduledAway: canceled.invitee.rescheduled === true, timezone }
         )
       };
     }

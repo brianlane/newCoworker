@@ -74,6 +74,23 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "follow up — never pretend it worked.";
 
 /**
+ * Times carry timezones, always (KYP, Jul 20 2026): a "3:00 PM"
+ * confirmation with no timezone went to a Mountain-time lead about an
+ * Eastern-time call the same morning another lead had to ask "What time
+ * zone is that?" — timezone-less times plausibly cause the very no-shows
+ * the confirmations exist to prevent. Injected on every SMS turn, customer
+ * AND staff (the staff assistant composes outbound customer texts on the
+ * owner's behalf).
+ */
+export const SMS_TIMEZONE_LINE =
+  "Times and timezones: whenever you tell anyone a clock time (an " +
+  "appointment, a call, a deadline), always name the timezone — say " +
+  '"2:00 PM Eastern", never a bare "2:00 PM". If you know the person is ' +
+  "in a different timezone than the business, give the time in THEIR " +
+  "timezone (named), optionally alongside the business's. Never assume " +
+  "they share the business's timezone.";
+
+/**
  * Conversation quality (from tenant feedback: repeated acknowledgements
  * and re-asking for a name the lead already gave; Derek's thread also hit
  * the verbatim-repetition failure this guards): reuse what is known, vary

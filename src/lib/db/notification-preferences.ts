@@ -25,6 +25,12 @@ export type NotificationPreferencesRow = {
    * fails permanently (dead-letter), so a dead automation is never silent.
    */
   aiflow_failure_alerts: boolean;
+  /**
+   * Opt-in (default false): notify the owner when a customer texts the
+   * business (per-contact coalescing; forward_owner contacts excluded).
+   * KYP feedback, Jul 20 2026 — "let me know when clients text back".
+   */
+  customer_reply_alerts: boolean;
   /** Category filter: new-lead captures (see lib/notifications/categories.ts). */
   category_leads: boolean;
   /** Category filter: team-notify pings. */
@@ -126,6 +132,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "sms_warm_transfer"
     | "image_limit_alerts"
     | "aiflow_failure_alerts"
+    | "customer_reply_alerts"
     | "category_leads"
     | "category_team"
     | "category_system"
@@ -147,6 +154,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   sms_warm_transfer: true,
   image_limit_alerts: true,
   aiflow_failure_alerts: false,
+  customer_reply_alerts: false,
   category_leads: true,
   category_team: true,
   category_system: true,
@@ -249,6 +257,7 @@ export async function updateNotificationPreferences(
     "sms_warm_transfer",
     "image_limit_alerts",
     "aiflow_failure_alerts",
+    "customer_reply_alerts",
     "category_leads",
     "category_team",
     "category_system",
@@ -280,7 +289,8 @@ export async function updateNotificationPreferences(
       patch.dashboard_alerts === true ||
       patch.sms_warm_transfer === true ||
       patch.image_limit_alerts === true ||
-      patch.aiflow_failure_alerts === true);
+      patch.aiflow_failure_alerts === true ||
+      patch.customer_reply_alerts === true);
   if (reSubscribed) {
     update.unsubscribed_at = null;
   }
