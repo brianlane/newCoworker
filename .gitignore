@@ -41,6 +41,10 @@ supabase/.temp/
 # Misc
 *.tsbuildinfo
 .testconvo
+# Root-level one-off scratch scripts written by agent chats (e.g.
+# .sandbox-testlead.local.mts, .backfill-permalink.local.mts) — local-only
+# by convention, never committed.
+.*.local.mts
 test-results/
 .vercel
 debug/.bench-*.json

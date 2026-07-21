@@ -22,6 +22,14 @@ check_ollama() {
   curl -sf --max-time 5 http://127.0.0.1:11434/api/tags > /dev/null 2>&1
 }
 
+# KVM1 boxes ship no local model and no ollama.service at all — checking
+# (and "restarting") Ollama there failed every 2-minute tick forever,
+# spamming the log and tripping the failure counter for a service the box
+# was never supposed to have.
+ollama_unit_exists() {
+  systemctl cat ollama.service > /dev/null 2>&1
+}
+
 ALL_OK=true
 
 # Check Rowboat
@@ -31,8 +39,8 @@ if ! check_rowboat; then
   ALL_OK=false
 fi
 
-# Check Ollama
-if ! check_ollama; then
+# Check Ollama (only on boxes that ship a local model)
+if ollama_unit_exists && ! check_ollama; then
   log "Ollama unhealthy. Restarting..."
   systemctl restart ollama || true
   ALL_OK=false
