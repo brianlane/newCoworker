@@ -584,6 +584,17 @@ serve(async (req: Request) => {
             p_last_error: "paused"
           });
           await clearJobReplyCache(supabase, job.id);
+          // A paused tenant's client texts are otherwise dropped silently —
+          // the one state where an opted-in owner most needs the page
+          // (Bugbot Medium, PR #802). Same helper, same gates and dedupe.
+          await sendCustomerReplyAlert(supabase, {
+            businessId: job.business_id,
+            contactE164: fromE164,
+            inboundPreview: userText.slice(0, 200),
+            jobId: job.id,
+            notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+            bearer: serviceKey
+          });
           await telemetryRecord(supabase, "sms_worker_killswitch", {
             job_id: job.id,
             business_id: job.business_id,
@@ -614,6 +625,16 @@ serve(async (req: Request) => {
               p_last_error: "safe_mode_missing_telnyx_env"
             });
             await clearJobReplyCache(supabase, job.id);
+            // The Safe-Mode forward could not even be attempted, so the
+            // owner never saw this text — page them if they opted in.
+            await sendCustomerReplyAlert(supabase, {
+              businessId: job.business_id,
+              contactE164: fromE164,
+              inboundPreview: userText.slice(0, 200),
+              jobId: job.id,
+              notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
+              bearer: serviceKey
+            });
             processed += 1;
             continue;
           }

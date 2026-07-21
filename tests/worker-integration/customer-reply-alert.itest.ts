@@ -134,6 +134,25 @@ describe("customer reply alerts (opt-in, real worker + real notifications functi
     expect(job.last_error).toBe("suppressed_tapback");
   });
 
+  it("a PAUSED tenant's client text still pages — silence is exactly when the owner needs it", async () => {
+    const biz = await seedOptedInBusiness("IT reply-alert paused");
+    const { error } = await db.from("businesses").update({ is_paused: true }).eq("id", biz);
+    if (error) throw new Error(error.message);
+    // No scripted Rowboat reply: a paused tenant's job dead-letters before
+    // any model call, so an unexpected /chat fails loudly on the empty script.
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "Are you still open?");
+    await tickSmsWorker();
+
+    const job = await getSmsJob(db, jobId);
+    expect(job.status).toBe("dead_letter");
+    expect(job.last_error).toBe("paused");
+
+    const rows = await alertRows(biz);
+    const dashboard = rows.find((r) => r.delivery_channel === "dashboard");
+    expect(dashboard?.status).toBe("sent");
+    expect(dashboard?.summary).toContain("texted back");
+  });
+
   it("staff texts never alert (the owner texting the assistant is not a client reply)", async () => {
     const biz = await seedOptedInBusiness("IT reply-alert staff");
     const { error } = await db.from("sms_inbound_jobs").insert({

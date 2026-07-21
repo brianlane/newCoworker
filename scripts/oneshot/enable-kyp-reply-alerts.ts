@@ -29,13 +29,23 @@ const KYP_BUSINESS_ID = "056034a7-e84c-444d-8d15-747eeb1fa899";
 
 type Args = { apply: boolean; businessId: string };
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function parseArgs(argv: readonly string[]): Args {
   const args: Args = { apply: false, businessId: KYP_BUSINESS_ID };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--apply") args.apply = true;
-    else if (a === "--business-id") args.businessId = argv[++i] ?? KYP_BUSINESS_ID;
-    else {
+    else if (a === "--business-id") {
+      // Validate the value so `--business-id --apply` reports a missing
+      // value instead of storing "--apply" as the id (Bugbot Low, PR #802).
+      const value = argv[++i] ?? "";
+      if (!UUID_RE.test(value)) {
+        console.error(`--business-id requires a UUID, got: ${value || "(nothing)"}`);
+        process.exit(2);
+      }
+      args.businessId = value;
+    } else {
       console.error(`Unknown argument: ${a}`);
       process.exit(2);
     }
