@@ -37,10 +37,19 @@ if (!src.page_id || !src.page_token_encrypted) {
 
 const { data: dst, error: dstErr } = await db
   .from("meta_connections")
-  .select("id")
+  .select("id, page_id, page_name")
   .eq("business_id", toBiz)
   .maybeSingle();
 if (dstErr) throw new Error(`destination row: ${dstErr.message}`);
+// Refuse to clobber: if the destination already claims a DIFFERENT Page,
+// overwriting it would silently drop that tenant's live claim while its
+// Meta-side subscription keeps delivering events no row routes.
+if (dst?.page_id && dst.page_id !== src.page_id) {
+  throw new Error(
+    `destination business already claims page ${dst.page_id} "${dst.page_name ?? ""}" — ` +
+      `move that claim off first (or disconnect it) instead of overwriting`
+  );
+}
 
 const moved = {
   status: "active" as const,

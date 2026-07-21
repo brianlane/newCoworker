@@ -28,6 +28,13 @@ async function main(): Promise<void> {
     idempotencyKey: crypto.randomUUID()
   });
   console.log(`sent id=${result.id} channel=${result.channel}`);
+  if (result.channel !== "sms") {
+    throw new Error(
+      `expected the RCS leg to be rejected and the send to fall back to plain SMS, ` +
+        `but channel=${result.channel} — fallback did NOT happen`
+    );
+  }
+  console.log("PASS: RCS leg rejected, delivered as plain SMS");
 }
 
 main().catch((e) => {

@@ -19,13 +19,14 @@ if (!businessId || !pageId) {
 }
 
 async function main() {
-  const { getMetaConnection, activateMetaConnection } = await import(
+  const { getMetaConnection, getMetaPageClaim, activateMetaConnection } = await import(
     "../src/lib/db/meta-connections.ts"
   );
   const {
     META_GRAPH_BASE_URL,
     subscribePageToLeadgen,
-    getLinkedInstagramAccount
+    getLinkedInstagramAccount,
+    unsubscribePage
   } = await import("../src/lib/meta/client.ts");
 
   const conn = await getMetaConnection(businessId);
@@ -59,14 +60,30 @@ async function main() {
   const instagram = await getLinkedInstagramAccount(page.access_token, page.id!);
   console.log(`linked instagram: ${instagram ? `${instagram.id} (@${instagram.username})` : "none"}`);
 
-  const row = await activateMetaConnection({
-    businessId,
-    pageId: page.id!,
-    pageName: page.name ?? null,
-    pageToken: page.access_token,
-    instagramAccountId: instagram?.id ?? null,
-    instagramUsername: instagram?.username ?? null
-  });
+  let row;
+  try {
+    row = await activateMetaConnection({
+      businessId,
+      pageId: page.id!,
+      pageName: page.name ?? null,
+      pageToken: page.access_token,
+      instagramAccountId: instagram?.id ?? null,
+      instagramUsername: instagram?.username ?? null
+    });
+  } catch (err) {
+    // Mirror POST /api/integrations/meta: a failed activation must not leave
+    // a dangling subscription delivering events no row routes. Only
+    // unsubscribe if no OTHER tenant claims the Page (the subscription is a
+    // single app<->page edge shared by whoever holds it).
+    const claim = await getMetaPageClaim(page.id!).catch(() => null);
+    if (!claim || claim.business_id === businessId) {
+      await unsubscribePage(page.id!, page.access_token);
+      console.error("activation failed — rolled back the page subscription");
+    } else {
+      console.error("activation failed — page kept subscribed (another tenant claims it)");
+    }
+    throw err;
+  }
   console.log(
     `activated: status=${row.status} page=${row.page_id} "${row.page_name}" ig=${row.instagram_username ?? "-"}`
   );
