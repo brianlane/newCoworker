@@ -307,7 +307,12 @@ fi
 
 systemctl daemon-reload
 systemctl enable ollama
-systemctl start ollama
+# `restart`, NOT `start`: on an adoption-pool re-bootstrap the service is
+# already running, and `start` is a silent no-op — the refreshed drop-in
+# above (OLLAMA_HOST etc.) never reached the live process, leaving Ollama
+# loopback-bound and the llm-router fallback broken (Amy/Truly/KYP drift,
+# July 2026). `restart` applies the config; on a fresh box it just starts.
+systemctl restart ollama
 
 # Hardware-aware model pulls
 log "Pre-pulling AI models for VPS_SIZE=${VPS_SIZE} (background)..."
