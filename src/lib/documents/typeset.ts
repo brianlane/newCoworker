@@ -366,7 +366,10 @@ function drawRunsBlock(
 }
 
 function drawTable(cursor: PdfCursor, fonts: PdfFonts, rows: InlineRun[][][]): void {
-  const columns = Math.max(...rows.map((row) => row.length));
+  // Floor at 1: marked always parses tables with >=1 header cell, but a
+  // zero-column row set must never divide the usable width by 0/-Infinity
+  // (non-finite coordinates corrupt the PDF).
+  const columns = Math.max(1, ...rows.map((row) => row.length));
   const colWidth = USABLE_WIDTH / columns;
   const cellPad = 4;
   const cellTextWidth = colWidth - cellPad * 2;
