@@ -175,7 +175,10 @@ async function scanForMatch(args: {
   const params: Record<string, string> = {
     user: userUri,
     status,
-    sort: "start_time:asc",
+    // First match wins, so the sort decides WHICH booking is reported:
+    // active → soonest upcoming slot; canceled → the most RECENT slot (the
+    // cancellation the preamble should describe, not a week-old one).
+    sort: status === "active" ? "start_time:asc" : "start_time:desc",
     count: String(BOOKING_CONTEXT_EVENT_SCAN),
     min_start_time: new Date(minStartMs).toISOString(),
     max_start_time: new Date(nowMs + BOOKING_CONTEXT_HORIZON_DAYS * dayMs).toISOString()

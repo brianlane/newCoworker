@@ -289,12 +289,19 @@ describe("contactBookingContextForPhone", () => {
     );
     expect(out.status).toBe("canceled");
     expect(out.line).toContain("has not rebooked");
-    // The canceled scan's window reaches back for recent cancels.
+    // The canceled scan's window reaches back for recent cancels, and lists
+    // latest-slot-first so the MOST RECENT cancellation is the one reported.
     const cancelCall = request.mock.calls.find(
       (c) => (c[2] as Cfg).endpoint === "/scheduled_events" && (c[2] as Cfg).params?.status === "canceled"
     );
     const minStart = Date.parse((cancelCall?.[2] as Cfg).params?.min_start_time ?? "");
     expect(Date.now() - minStart).toBeGreaterThan(6 * 24 * 60 * 60_000);
+    expect((cancelCall?.[2] as Cfg).params?.sort).toBe("start_time:desc");
+    // The active scan keeps soonest-upcoming-first.
+    const activeCall = request.mock.calls.find(
+      (c) => (c[2] as Cfg).endpoint === "/scheduled_events" && (c[2] as Cfg).params?.status === "active"
+    );
+    expect((activeCall?.[2] as Cfg).params?.sort).toBe("start_time:asc");
   });
 
   it("a canceled invitee flagged rescheduled reads as rescheduled-away", async () => {
