@@ -30,7 +30,7 @@ export type RecordedPrecheckCall = {
 
 export type RecordedBookingContextCall = {
   authorization: string | null;
-  body: { businessId?: string; phone?: string };
+  body: { businessId?: string; phone?: string; timezone?: string | null };
 };
 
 export type RecordedTelnyxSend = {

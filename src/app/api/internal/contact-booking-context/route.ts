@@ -24,7 +24,9 @@ export const runtime = "nodejs";
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
-  phone: z.string().trim().min(4).max(20)
+  phone: z.string().trim().min(4).max(20),
+  /** Business timezone so the booking start renders local (KYP/Ayanna). */
+  timezone: z.string().trim().min(1).max(64).nullish()
 });
 
 export async function POST(request: Request): Promise<Response> {
@@ -32,8 +34,14 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
   try {
-    const { businessId, phone } = bodySchema.parse(await request.json());
-    const result = await contactBookingContextForPhone(businessId, phone);
+    const { businessId, phone, timezone } = bodySchema.parse(await request.json());
+    const result = await contactBookingContextForPhone(
+      businessId,
+      phone,
+      {},
+      undefined,
+      timezone ?? null
+    );
     return successResponse(result);
   } catch (err) {
     return handleRouteError(err);

@@ -46,6 +46,9 @@ describe("db/notification-preferences", () => {
     expect(row.image_limit_alerts).toBe(true);
     // Opt-in by design: failed-run alerts stay silent until the owner asks.
     expect(row.aiflow_failure_alerts).toBe(false);
+    // Opt-in by design: client-reply pages stay silent until the owner asks
+    // (KYP, Jul 20 2026 — enabled per tenant, never fleet-wide by default).
+    expect(row.customer_reply_alerts).toBe(false);
     expect(row.category_leads).toBe(true);
     expect(row.category_team).toBe(true);
     expect(row.category_system).toBe(true);
@@ -769,6 +772,37 @@ describe("db/notification-preferences", () => {
     expect(row.aiflow_failure_alerts).toBe(true);
     expect(updateChain.update).toHaveBeenCalledWith(
       expect.objectContaining({ aiflow_failure_alerts: true, unsubscribed_at: null })
+    );
+  });
+
+  it("updateNotificationPreferences: enabling customer_reply_alerts persists and re-subscribes", async () => {
+    const startingPrefs = {
+      ...PREFS,
+      customer_reply_alerts: false,
+      unsubscribed_at: "2026-05-01T00:00:00Z"
+    };
+    const selectChain = {
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: startingPrefs, error: null })
+    };
+    const updateChain = {
+      update: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      single: vi.fn().mockResolvedValue({
+        data: { ...startingPrefs, customer_reply_alerts: true, unsubscribed_at: null },
+        error: null
+      })
+    };
+    const db = {
+      from: vi.fn().mockReturnValueOnce(selectChain).mockReturnValueOnce(updateChain)
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const row = await updateNotificationPreferences("biz-1", { customer_reply_alerts: true });
+    expect(row.customer_reply_alerts).toBe(true);
+    expect(updateChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({ customer_reply_alerts: true, unsubscribed_at: null })
     );
   });
 

@@ -42,6 +42,7 @@ import {
   runAiflowToolArgsSchema
 } from "@/lib/ai-flows/manual-run-tool";
 import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
+import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { logger } from "@/lib/logger";
 
@@ -91,10 +92,26 @@ export type ActionToolGates = {
   generate_image: boolean;
 };
 
+// Every clock time in an outbound body carries a named timezone (KYP/Ayanna
+// Jul 20 2026: a "3:00 PM" confirmation with no timezone went to a
+// Central-time lead about an Eastern-time call — a plausible no-show cause).
+const OUTBOUND_TIMEZONE_RULE =
+  ' If the body mentions a clock time, always name the timezone (e.g. "1:00 PM Eastern", never a bare "1:00 PM"), and when the recipient is known to be in a different timezone, give the time in THEIR timezone too.';
+
+// Outbound-first recipients must exist as contacts (KYP/Ayanna: a number the
+// owner texted twice had no contact row, so the assistant later denied any
+// record of her). Optional — the send never depends on it.
+const CONTACT_NAME_PARAM = {
+  type: "string",
+  description:
+    "The recipient's name, when the owner mentioned one — files them as a contact so the send is never to an invisible number. An existing contact's name is never overwritten."
+} as const;
+
 const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
   name: "send_sms",
   description:
-    "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a text to be sent. Never invent recipients or bodies — send exactly what the owner asked for, and when re-sending after a delivery complaint, send the SAME intended message again (never your own previous chat reply). After the tool returns, tell the owner the exact body that was sent.",
+    "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a text to be sent. Never invent recipients or bodies — send exactly what the owner asked for, and when re-sending after a delivery complaint, send the SAME intended message again (never your own previous chat reply). After the tool returns, tell the owner the exact body that was sent." +
+    OUTBOUND_TIMEZONE_RULE,
   parameters: {
     type: "object",
     properties: {
@@ -105,7 +122,8 @@ const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
       body: {
         type: "string",
         description: "Plain-text message body, at most 1600 characters."
-      }
+      },
+      contactName: CONTACT_NAME_PARAM
     },
     required: ["toE164", "body"]
   }
@@ -114,7 +132,8 @@ const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
 const SEND_WHATSAPP_DECLARATION: GeminiFunctionDeclaration = {
   name: "send_whatsapp",
   description:
-    "Send a WhatsApp message from the business's connected WhatsApp number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a WHATSAPP message (texting is send_sms). Never invent recipients or bodies. If the recipient hasn't messaged the business on WhatsApp in the last 24 hours, the message is delivered through an approved template; the tool result says which. After the tool returns, tell the owner the exact body that was sent.",
+    "Send a WhatsApp message from the business's connected WhatsApp number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a WHATSAPP message (texting is send_sms). Never invent recipients or bodies. If the recipient hasn't messaged the business on WhatsApp in the last 24 hours, the message is delivered through an approved template; the tool result says which. After the tool returns, tell the owner the exact body that was sent." +
+    OUTBOUND_TIMEZONE_RULE,
   parameters: {
     type: "object",
     properties: {
@@ -125,7 +144,8 @@ const SEND_WHATSAPP_DECLARATION: GeminiFunctionDeclaration = {
       body: {
         type: "string",
         description: "Plain-text message body, at most 1600 characters."
-      }
+      },
+      contactName: CONTACT_NAME_PARAM
     },
     required: ["toE164", "body"]
   }
@@ -278,12 +298,14 @@ export function actionToolDeclarations(gates: ActionToolGates): GeminiFunctionDe
 
 const sendSmsArgsSchema = z.object({
   toE164: z.string().min(5).max(32),
-  body: z.string().min(1).max(1600)
+  body: z.string().min(1).max(1600),
+  contactName: z.string().max(120).optional()
 });
 
 const sendWhatsAppArgsSchema = z.object({
   toE164: z.string().min(5).max(32),
-  body: z.string().min(1).max(1600)
+  body: z.string().min(1).max(1600),
+  contactName: z.string().max(120).optional()
 });
 
 const findSlotsArgsSchema = z.object({
@@ -399,6 +421,7 @@ export type ActionToolDeps = {
   listFlows?: typeof listAiFlows;
   enqueueFlowRun?: typeof enqueueAiFlowRun;
   generateImage?: typeof generateImageForDashboard;
+  recordContactInteraction?: typeof recordInteractionAndIncrement;
 };
 
 /**
@@ -423,7 +446,36 @@ export async function executeActionTool(
   const listFlows = deps.listFlows ?? listAiFlows;
   const enqueueFlowRun = deps.enqueueFlowRun ?? enqueueAiFlowRun;
   const generateImage = deps.generateImage ?? generateImageForDashboard;
+  const recordContactInteraction = deps.recordContactInteraction ?? recordInteractionAndIncrement;
   /* c8 ignore stop */
+
+  // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
+  // 2026: a number the owner texted twice had NO contact row, so the
+  // assistant told James "I don't have any record of Ayanna" hours after
+  // texting her for him). Rollup only — deliberately NOT ensureCapturedContact,
+  // so an owner-initiated outbound never fires contact_created lead-follow-up
+  // automations. Best-effort: a failed upsert never fails a sent message.
+  const upsertRecipientContact = async (
+    toPhone: string,
+    channel: "sms" | "whatsapp",
+    contactName: string | undefined
+  ): Promise<void> => {
+    try {
+      const db = await createDb();
+      await recordContactInteraction(
+        businessId,
+        toPhone,
+        channel,
+        { displayName: contactName?.trim() || null },
+        db as never
+      );
+    } catch (err) {
+      logger.warn(`dashboard-chat ${channel === "sms" ? "send_sms" : "send_whatsapp"}: contact upsert failed`, {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  };
 
   try {
     switch (call.name) {
@@ -498,6 +550,7 @@ export async function executeActionTool(
             error: logErr instanceof Error ? logErr.message : String(logErr)
           });
         }
+        await upsertRecipientContact(toPhone, "sms", parsed.data.contactName);
         return {
           ok: true,
           messageId,
@@ -541,6 +594,7 @@ export async function executeActionTool(
             message: "whatsapp_send_failed — the message did NOT go out. Tell the owner honestly."
           };
         }
+        await upsertRecipientContact(normalized.value, "whatsapp", parsed.data.contactName);
         return {
           ok: true,
           messageId: delivered.messageId,

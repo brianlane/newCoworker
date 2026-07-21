@@ -52,6 +52,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [aiflowFailureAlerts, setAiflowFailureAlerts] = useState(
     initial.aiflow_failure_alerts ?? false
   );
+  const [customerReplyAlerts, setCustomerReplyAlerts] = useState(
+    initial.customer_reply_alerts ?? false
+  );
   const [categoryLeads, setCategoryLeads] = useState(initial.category_leads ?? true);
   const [categoryTeam, setCategoryTeam] = useState(initial.category_team ?? true);
   const [categorySystem, setCategorySystem] = useState(initial.category_system ?? true);
@@ -75,6 +78,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setSmsWarmTransfer(initial.sms_warm_transfer);
     setImageLimitAlerts(initial.image_limit_alerts);
     setAiflowFailureAlerts(initial.aiflow_failure_alerts ?? false);
+    setCustomerReplyAlerts(initial.customer_reply_alerts ?? false);
     setCategoryLeads(initial.category_leads ?? true);
     setCategoryTeam(initial.category_team ?? true);
     setCategorySystem(initial.category_system ?? true);
@@ -95,6 +99,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setSmsWarmTransfer(prefs.sms_warm_transfer);
     setImageLimitAlerts(prefs.image_limit_alerts);
     setAiflowFailureAlerts(prefs.aiflow_failure_alerts ?? false);
+    setCustomerReplyAlerts(prefs.customer_reply_alerts ?? false);
     setCategoryLeads(prefs.category_leads ?? true);
     setCategoryTeam(prefs.category_team ?? true);
     setCategorySystem(prefs.category_system ?? true);
@@ -123,6 +128,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           sms_warm_transfer: smsWarmTransfer,
           image_limit_alerts: imageLimitAlerts,
           aiflow_failure_alerts: aiflowFailureAlerts,
+          customer_reply_alerts: customerReplyAlerts,
           category_leads: categoryLeads,
           category_team: categoryTeam,
           category_system: categorySystem,
@@ -165,6 +171,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           sms_warm_transfer: false,
           image_limit_alerts: false,
           aiflow_failure_alerts: false,
+          customer_reply_alerts: false,
           unsubscribed_at: "now"
         })
       });
@@ -258,6 +265,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Alert you when a lead-intake AiFlow run fails permanently, so a dead automation is never silent. Off unless you opt in."
           checked={aiflowFailureAlerts}
           onChange={setAiflowFailureAlerts}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Client reply alerts"
+          description="Alert you the moment a client texts your business number, with a preview of what they said. At most one alert per client every few minutes. Off unless you opt in."
+          checked={customerReplyAlerts}
+          onChange={setCustomerReplyAlerts}
           disabled={loading || unsubscribing}
         />
       </div>

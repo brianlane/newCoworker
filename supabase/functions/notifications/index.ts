@@ -276,6 +276,10 @@ serve(async (req: Request) => {
   // lead-intake automation died — say which lead and why, not a raw task_type.
   const aiflowLeadLabel = String(record.log_payload?.lead_label ?? "a lead");
   const aiflowReason = String(record.log_payload?.reason ?? "").trim();
+  // Customer reply alerts (opt-in, _shared/customer_reply_alert.ts): a
+  // client texted back — say who and what they said (KYP, Jul 20 2026).
+  const replyLabel = String(record.log_payload?.contact_label ?? "A contact");
+  const replyPreview = String(record.log_payload?.inbound_preview ?? "").trim();
   const summary =
     record.task_type === "sms_cap_reached"
       ? "Monthly SMS limit reached; outbound texting is paused. Buy an SMS pack from Billing to resume."
@@ -287,7 +291,9 @@ serve(async (req: Request) => {
             ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? ` — ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
             : record.task_type === "aiflow_run_failed"
               ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? ` — ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
-              : `URGENT ${record.task_type}`;
+              : record.task_type === "sms_customer_reply"
+                ? `${replyLabel} texted back${replyPreview ? `: "${replyPreview}"` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
+                : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
   // `https://example.com//dashboard` if the env var was set with one.
@@ -312,10 +318,12 @@ serve(async (req: Request) => {
     summary,
     logId: record.id,
     taskType: record.task_type,
-    // Needs-human escalations stamp the contact so the escalation module's
-    // recent-page dedupe (payload->>contactE164) can find prior pages for
-    // untaggable contacts — see _shared/needs_human.ts.
-    ...(record.task_type === "sms_needs_human" && record.log_payload?.contact_e164
+    // Needs-human escalations and customer-reply alerts stamp the contact so
+    // their per-contact dedupe/coalesce lookups (payload->>contactE164) can
+    // find prior pages — see _shared/needs_human.ts and
+    // _shared/customer_reply_alert.ts.
+    ...((record.task_type === "sms_needs_human" || record.task_type === "sms_customer_reply") &&
+    record.log_payload?.contact_e164
       ? { contactE164: String(record.log_payload.contact_e164) }
       : {}),
     // AiFlow failure alerts stamp the run so the alert module's per-run
