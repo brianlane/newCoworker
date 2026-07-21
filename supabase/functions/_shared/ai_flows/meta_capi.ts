@@ -45,15 +45,15 @@ export async function recordStageChangeForMeta(
     const tag = input.tag.trim();
     if (!tag || !input.contactE164) return false;
 
-    // Only businesses with a CAPI-ready connection accumulate outbox rows.
+    // Only businesses with a Meta connection accumulate outbox rows — but
+    // deliberately ANY connection row (paused, mid-reconnect, dataset not
+    // yet discovered): readiness is the DRAIN's per-tick check, so a stage
+    // move during a pause still uploads once the connection returns inside
+    // the 7-day window. Businesses with no connection at all stay row-free.
     const { data: connection, error: connErr } = await supabase
       .from("meta_connections")
       .select("id")
       .eq("business_id", businessId)
-      .eq("status", "active")
-      .eq("is_active", true)
-      .eq("capi_enabled", true)
-      .not("dataset_id", "is", null)
       .maybeSingle();
     if (connErr) {
       console.error("meta_capi: connection lookup", connErr);

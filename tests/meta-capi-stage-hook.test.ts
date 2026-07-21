@@ -52,7 +52,7 @@ beforeEach(() => {
 });
 
 describe("recordStageChangeForMeta", () => {
-  it("inserts one outbox row when the connection is CAPI-ready and the tag is a stage", async () => {
+  it("inserts one outbox row when the business has a Meta connection and the tag is a stage", async () => {
     const { db, calls } = makeDb([
       { data: { id: "conn-1" }, error: null }, // meta_connections
       STAGES, // pipeline_stages listing (case/whitespace-insensitive match)
@@ -80,7 +80,10 @@ describe("recordStageChangeForMeta", () => {
     expect(calls.some((c) => c.name === "insert")).toBe(true);
   });
 
-  it("skips (false) without touching stages when no CAPI-ready connection exists", async () => {
+  it("skips (false) without touching stages when the business has no Meta connection at all", async () => {
+    // Readiness (paused / dataset pending) is deliberately NOT checked here
+    // — the drain re-checks per tick, so a stage move during a pause still
+    // uploads once the connection returns inside the 7-day window.
     const { db, calls } = makeDb([{ data: null, error: null }]);
     expect(await recordStageChangeForMeta(db, BIZ, INPUT)).toBe(false);
     expect(calls.some((c) => c.table === "pipeline_stages")).toBe(false);
