@@ -82,7 +82,19 @@ report_posture() {
     add_check ufw_active false "ufw inactive or missing"
   fi
 
-  if sshd -T 2>/dev/null | grep -qi "^passwordauthentication no"; then
+  # `sshd -T` occasionally produces no output (transient — observed twice on
+  # HQ while the effective config was verifiably correct), which the old
+  # check misread as "allows password auth". Retry, and when the probe never
+  # answers, say THAT instead of inventing a config finding.
+  local sshd_effective="" sshd_try
+  for sshd_try in 1 2 3; do
+    sshd_effective="$(sshd -T 2>/dev/null | grep -i '^passwordauthentication' || true)"
+    [[ -n "$sshd_effective" ]] && break
+    sleep 2
+  done
+  if [[ -z "$sshd_effective" ]]; then
+    add_check ssh_password_auth_disabled false "sshd -T probe failed (no output after 3 tries)"
+  elif grep -qi "no" <<< "$sshd_effective"; then
     add_check ssh_password_auth_disabled true "password auth off"
   else
     add_check ssh_password_auth_disabled false "sshd allows password auth"
