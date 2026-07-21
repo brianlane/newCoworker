@@ -448,11 +448,17 @@ describe("shouldEscalateToHuman (the worker's escalation decision)", () => {
 });
 
 describe("REASONING_PROMPT_INSTRUCTION handoff wording (Truly 2026-07-20)", () => {
-  it("tells the model a person-request is ALWAYS a handoff, even after offering to book", () => {
-    // The live failure mode: the model offered "schedule a call with a
-    // broker" and concluded the person-request was handled. The instruction
-    // must forbid that reading explicitly.
-    expect(REASONING_PROMPT_INSTRUCTION).toMatch(/ALWAYS true/);
-    expect(REASONING_PROMPT_INSTRUCTION).toMatch(/even if you offered/i);
+  it("keeps the original handoff spec byte-stable — misses are fixed in code, not wording", () => {
+    // Live probes showed rewording the handoff spec does NOT flip the flag
+    // on "speak to a representative" turns but DOES perturb the reply
+    // itself (the Juhu re-ask regression). The spec is pinned verbatim so a
+    // well-meaning "clarification" can't silently change live replies; the
+    // deterministic isHumanRequestIntent backstop owns the person-request
+    // case. See the module doc on REASONING_PROMPT_INSTRUCTION.
+    expect(REASONING_PROMPT_INSTRUCTION).toContain(
+      '"handoff":<true ONLY when a human must take this conversation over or follow up — ' +
+        "they asked for a person, you could not answer or do what they needed, or the topic " +
+        "is outside what you know. A booking or question you fully handled is NOT a handoff. Else false>"
+    );
   });
 });

@@ -66,17 +66,24 @@ function trailerCutIndex(line: string): number {
 /**
  * Appended to the model's per-turn instructions. Kept terse: the trailer is
  * machine-read, and a long spec would crowd the actual conversation prompt.
+ *
+ * DO NOT reword the handoff spec to fix classification misses. Live probes
+ * (2026-07-20, temperature 0) showed the wording is chaotically coupled to
+ * the REPLY itself — inserting even a short parenthetical made the model
+ * re-ask an already-answered intake question in the Juhu replay scenario
+ * (tests/e2e/sms-duplicate-replies.e2e.test.ts) — while the handoff flag on
+ * a "speak to a representative" turn stayed false under every variant
+ * probed. Deterministic misclassification fixes belong in
+ * `isHumanRequestIntent` below, which the worker consults independently of
+ * the model's flag.
  */
 export const REASONING_PROMPT_INSTRUCTION =
   `\n\nAfter your reply, on its own final line, append exactly: ` +
   `${REASONING_MARKER}{"intent":"<the texter's goal, snake_case, max 5 words>",` +
   `"why":"<one short sentence: why you replied this way>",` +
   `"handoff":<true ONLY when a human must take this conversation over or follow up — ` +
-  `they asked for a person/representative/human (ALWAYS true then, even if you offered ` +
-  `to schedule or book a call for them), you could not answer or do what they needed, ` +
-  `or the topic is outside what you know. A booking or question you fully handled is ` +
-  `NOT a handoff — but asking to talk to a person is never "handled" by a booking offer. ` +
-  `Else false>}` +
+  `they asked for a person, you could not answer or do what they needed, or the topic ` +
+  `is outside what you know. A booking or question you fully handled is NOT a handoff. Else false>}` +
   ` — this line is stripped before the texter sees your message; never mention it.`;
 
 export type ReplyReasoning = {
