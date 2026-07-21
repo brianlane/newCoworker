@@ -105,7 +105,7 @@ describe("startAiFlowForContactTool refusal matrix", () => {
     const d = deps({ listFlows: vi.fn().mockResolvedValue([]) });
     const out = await startAiFlowForContactTool(BIZ, { flow: "nope", phone: PHONE }, d);
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.message).toContain("No automation matches");
+    if (!out.ok) expect(out.message).toContain("No automation you may start matches");
     expect(d.enqueueFlowRun).not.toHaveBeenCalled();
   });
 
@@ -123,7 +123,7 @@ describe("startAiFlowForContactTool refusal matrix", () => {
     if (!out.ok) expect(out.message).toContain("matches 2");
   });
 
-  it("refuses a disabled flow", async () => {
+  it("a disabled flow is INVISIBLE — same generic refusal as an unknown name", async () => {
     const d = deps({ listFlows: vi.fn().mockResolvedValue([flowRow({ enabled: false })]) });
     const out = await startAiFlowForContactTool(
       BIZ,
@@ -131,13 +131,15 @@ describe("startAiFlowForContactTool refusal matrix", () => {
       d
     );
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.message).toContain("DISABLED");
+    // The refusal must not confirm the flow exists (name-enumeration guard).
+    if (!out.ok) expect(out.message).toContain("No automation you may start matches");
   });
 
-  it("refuses a flow the owner has NOT flagged agentInvocable (the key gate)", async () => {
+  it("an unflagged flow is INVISIBLE — refusal text never leaks owner-only names", async () => {
     const d = deps({
       listFlows: vi.fn().mockResolvedValue([
         flowRow({
+          name: "Secret owner-only winback",
           definition: {
             version: 1,
             trigger: { channel: "manual" },
@@ -149,12 +151,43 @@ describe("startAiFlowForContactTool refusal matrix", () => {
     });
     const out = await startAiFlowForContactTool(
       BIZ,
-      { flow: "Rebook follow-up", phone: PHONE },
+      // A guessed partial ref that WOULD match the owner-only flow by name.
+      { flow: "winback", phone: PHONE },
       d
     );
     expect(out.ok).toBe(false);
-    if (!out.ok) expect(out.message).toContain("has not allowed");
+    if (!out.ok) {
+      expect(out.message).toContain("No automation you may start matches");
+      expect(out.message).not.toContain("Secret owner-only winback");
+    }
     expect(d.enqueueFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("ambiguity messages can only ever name agent-invocable flows", async () => {
+    const d = deps({
+      listFlows: vi
+        .fn()
+        .mockResolvedValue([
+          flowRow({ id: "f1", name: "Rebook follow-up A" }),
+          flowRow({ id: "f2", name: "Rebook follow-up B" }),
+          flowRow({
+            id: "f3",
+            name: "Rebook secret internal",
+            definition: {
+              version: 1,
+              trigger: { channel: "manual" },
+              steps: [{ id: "s1", type: "notify_owner", message: "x" }],
+              options: {}
+            }
+          })
+        ])
+    });
+    const out = await startAiFlowForContactTool(BIZ, { flow: "rebook", phone: PHONE }, d);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.message).toContain("matches 2");
+      expect(out.message).not.toContain("Rebook secret internal");
+    }
   });
 
   it("refuses voice flows (they run on the call path)", async () => {

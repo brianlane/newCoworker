@@ -69,7 +69,14 @@ export async function startAiFlowForContactTool(
       hasActiveRunForLead(await createSupabaseServiceClient(), biz, flowId, phone));
   /* c8 ignore stop */
 
-  const flows = await listFlows(businessId);
+  // The key gate FIRST: resolution only ever sees enabled flows the owner
+  // flagged agentInvocable. Everything else is invisible — a guessed or
+  // partial ref that would hit an owner-only automation gets the same
+  // generic "no match" refusal, so refusal text can never leak flow names
+  // beyond the preamble's own list (Bugbot Medium on PR #799).
+  const flows = (await listFlows(businessId)).filter(
+    (f) => f.enabled && f.definition?.options?.agentInvocable === true
+  );
   const ref = args.flow.trim();
   const refLc = ref.toLowerCase();
   // Resolve: exact id → exact name → unique substring (manual-run-tool
@@ -83,8 +90,8 @@ export async function startAiFlowForContactTool(
     return {
       ok: false,
       message:
-        `No automation matches "${ref}". Only use the exact names listed in your ` +
-        `"Automations you may start" context — never invent one. If none fits, just reply normally.`
+        `No automation you may start matches "${ref}". Only use the exact names listed in your ` +
+        `"Automations you may start" context — never invent one. If none fits (or the list is absent), just reply normally.`
     };
   }
   if (matches.length > 1) {
@@ -97,22 +104,6 @@ export async function startAiFlowForContactTool(
     };
   }
   const flow = matches[0];
-  if (!flow.enabled) {
-    return {
-      ok: false,
-      message: `"${flow.name}" is DISABLED and cannot be started. Reply to the customer normally.`
-    };
-  }
-  // The key gate: the owner must have flagged this flow for agent
-  // enrollment. Without it the customer-facing surface stays barred.
-  if (flow.definition?.options?.agentInvocable !== true) {
-    return {
-      ok: false,
-      message:
-        `The owner has not allowed the texting coworker to start "${flow.name}". ` +
-        `Only automations listed in your "Automations you may start" context can be started. Reply normally.`
-    };
-  }
   if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {
     return {
       ok: false,
