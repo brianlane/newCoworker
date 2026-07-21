@@ -136,6 +136,16 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   // enrollment is never restarted (loop guard in the core). Deliberately NO
   // webchat twin: the anonymous surface must not start automations at all.
   start_aiflow_for_contact: { agentKey: "sms", toolKey: "start_aiflow_for_contact" },
+  // Notification toggles from the texting surface (KYP, Jul 20 2026: "let
+  // me know when clients text back"). ENABLE-ONLY at dispatch — the SMS
+  // Coworker serves customers and staff alike, so a prompt-injected
+  // customer must never be able to SILENCE the owner's alerts; the worst
+  // outcome is extra noise. Full control lives on identity-verified
+  // surfaces (dashboard inline chat, MCP). No webchat or dashboard_ twin.
+  update_notification_preferences: {
+    agentKey: "sms",
+    toolKey: "update_notification_preferences"
+  },
   ...Object.fromEntries(
     Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
       name,

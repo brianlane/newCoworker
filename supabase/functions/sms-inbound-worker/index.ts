@@ -54,6 +54,7 @@ import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE,
+  SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
   SMS_TIMEZONE_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import {
@@ -1200,6 +1201,9 @@ serve(async (req: Request) => {
         // timezone rule applies here too (the Ayanna "3:00 PM" confirmation
         // was owner-initiated).
         SMS_TIMEZONE_LINE,
+        // "Let me know when clients text back" flips the toggle instead of
+        // becoming an empty promise (KYP, Jul 20 2026).
+        SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
         dateLine
       ];
       customerPreamble = staffLines.join("\n\n");

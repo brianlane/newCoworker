@@ -116,7 +116,7 @@ function fakeDb(queues: Record<string, QueuedResult[]>) {
         return Promise.resolve({ data: r.data ?? null, error: r.error ?? null });
       };
       const chain: Record<string, (...args: unknown[]) => unknown> = {};
-      for (const m of ["select", "eq", "filter", "order", "in", "or"]) {
+      for (const m of ["select", "eq", "gte", "filter", "order", "in", "or"]) {
         chain[m] = (...args: unknown[]) => {
           rec.calls.push({ name: m, args });
           return chain;
@@ -326,20 +326,73 @@ describe("sweepCalendlyBookingGoals", () => {
   it("logs a per-business failure when the runs check errors — other tenants unaffected", async () => {
     const { db } = fakeDb({
       ai_flows: [{ data: [goalFlowRow("f1", BIZ), goalFlowRow("f2", BIZ2)] }],
-      ai_flow_runs: [{ error: { message: "runs down" } }, { data: [] }]
+      ai_flow_runs: [{ error: { message: "runs down" } }, { data: [] }],
+      // Empty escalation lookback → this is a FIRST failure (a blip): warn,
+      // out of the error-only System Errors feed.
+      system_logs: [{ data: [] }]
     });
     const result = await sweepCalendlyBookingGoals(db, deps());
     expect(result.businesses).toBe(2);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: BIZ,
-        level: "error",
+        level: "warn",
         event: "ai_flow_booking_goal_sweep_failed",
         message: expect.stringContaining("runs down")
       })
     );
     // BIZ2 was still processed (its empty runs check just skipped it).
     expect(vi.mocked(recordSystemLog).mock.calls).toHaveLength(1);
+  });
+
+  it("escalates a REPEAT failure inside the window to error (blip-vs-outage)", async () => {
+    const { db, chains } = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ error: { message: "runs down again" } }],
+      // A prior failure row inside the escalation lookback: the last tick
+      // failed too — this is an outage, not a blip.
+      system_logs: [{ data: [{ id: "log-1" }] }]
+    });
+    await sweepCalendlyBookingGoals(db, deps());
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        level: "error",
+        event: "ai_flow_booking_goal_sweep_failed"
+      })
+    );
+    // The lookback queried THIS business's own failure event, time-bounded.
+    const lookback = chains.find((c) => c.table === "system_logs");
+    expect(lookback?.calls.find((c) => c.name === "eq" && c.args[0] === "event")?.args[1]).toBe(
+      "ai_flow_booking_goal_sweep_failed"
+    );
+    expect(lookback?.calls.some((c) => c.name === "gte" && c.args[0] === "created_at")).toBe(true);
+  });
+
+  it("a failed or thrown escalation lookback fails toward ERROR (never misfiles an outage)", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const errored = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ error: { message: "runs down" } }],
+      system_logs: [{ error: { message: "logs down" } }]
+    });
+    await sweepCalendlyBookingGoals(errored.db, deps());
+    expect(recordSystemLog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ level: "error", event: "ai_flow_booking_goal_sweep_failed" })
+    );
+
+    vi.mocked(recordSystemLog).mockClear();
+    const thrown = fakeDb({
+      ai_flows: [{ data: [goalFlowRow("f1")] }],
+      ai_flow_runs: [{ error: { message: "runs down" } }],
+      system_logs: [{ reject: new Error("logs exploded") }]
+    });
+    await sweepCalendlyBookingGoals(thrown.db, deps());
+    expect(recordSystemLog).toHaveBeenLastCalledWith(
+      expect.objectContaining({ level: "error", event: "ai_flow_booking_goal_sweep_failed" })
+    );
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 
   it("treats a refused /users/me (or one without a uri) as not connected", async () => {

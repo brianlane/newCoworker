@@ -45,6 +45,10 @@ import {
   friendlyFlowSummary
 } from "@/components/dashboard/aiflow-labels";
 import { getAiFlowExampleCopy, type AiFlowExampleCopy } from "@/lib/ai-flows/examples";
+import {
+  variablesPaletteGroups,
+  type VariablePaletteEntry
+} from "@/lib/ai-flows/variables-palette";
 import { documentReceiptTemplate, reviewRequestTemplate } from "@/lib/ai-flows/templates";
 import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
 import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard";
@@ -1666,8 +1670,9 @@ export function AiFlowsManager({
           <section className="space-y-3">
             <p className="text-[11px] text-parchment/40">
               Click the trigger or a step to configure it; use the + between steps to add one.
-              Tip: type something like {`{{vars.${examples.tipVar}}}`} in a message to reuse a
-              detail an earlier step found.
+              Each step&apos;s panel lists the variables you can use — e.g.{" "}
+              {`{{vars.${examples.tipVar}}}`}, or {"{{vars.lead_name.first}}"} for just a first
+              name.
             </p>
             <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
               <AiFlowCanvas
@@ -1701,6 +1706,13 @@ export function AiFlowsManager({
                 <p className="text-[11px] text-parchment/40">
                   {STEP_TYPE_HELP[selectedStep.type]}
                 </p>
+                {!VOICE_STEP_TYPE_SET.has(selectedStep.type) && (
+                  <VariablesPalette
+                    steps={editor.steps}
+                    stepId={selectedStep.id}
+                    channels={[editor.channel, ...editor.extraTriggers.map((t) => t.channel)]}
+                  />
+                )}
                 {selectedStep.type === "branch" ? (
                   <BranchFields
                     step={selectedStep}
@@ -2398,9 +2410,10 @@ export function AiFlowsManager({
         <section className="space-y-3">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">Steps</h3>
           <p className="text-[11px] text-parchment/40">
-            Steps run top to bottom. Tip: type something like {`{{vars.${examples.tipVar}}}`} to reuse a
-            detail an earlier step found, or {"{{trigger.url}}"} for the link from the text that
-            started the workflow.
+            Steps run top to bottom. Each step lists the variables you can use — e.g.{" "}
+            {`{{vars.${examples.tipVar}}}`} to reuse a detail an earlier step found,{" "}
+            {"{{vars.lead_name.first}}"} for just a first name, or {"{{trigger.url}}"} for the link
+            from the text that started the workflow.
           </p>
           {editor.steps.map((step, i) => (
             <div key={step.id} className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-2">
@@ -2442,6 +2455,13 @@ export function AiFlowsManager({
                 </div>
               </div>
               <p className="text-[11px] text-parchment/40">{STEP_TYPE_HELP[step.type]}</p>
+              {!VOICE_STEP_TYPE_SET.has(step.type) && (
+                <VariablesPalette
+                  steps={editor.steps}
+                  stepId={step.id}
+                  channels={[editor.channel, ...editor.extraTriggers.map((t) => t.channel)]}
+                />
+              )}
               <StepFields
                 step={step}
                 index={i}
@@ -2997,6 +3017,82 @@ function RecipientListField({
           ))}
         </select>
       )}
+    </div>
+  );
+}
+
+/**
+ * "Variables you can use" — placeholder discoverability for the step editor.
+ * The scope math (trigger fields per channel, earlier-step vars, name-part
+ * variants) lives in src/lib/ai-flows/variables-palette.ts under the
+ * coverage gate; this renders the chips and copies a clicked placeholder to
+ * the clipboard for pasting into any template field.
+ */
+function VariablesPalette({
+  steps,
+  stepId,
+  channels
+}: {
+  steps: FlowStep[];
+  stepId: string;
+  channels: string[];
+}) {
+  const [copied, setCopied] = useState<string | null>(null);
+  const groups = variablesPaletteGroups({ steps, stepId, channels });
+  const copy = (placeholder: string) => {
+    try {
+      void navigator.clipboard.writeText(placeholder);
+      setCopied(placeholder);
+      window.setTimeout(() => setCopied((c) => (c === placeholder ? null : c)), 1200);
+    } catch {
+      /* clipboard blocked — the chip still shows the exact placeholder to retype */
+    }
+  };
+  const chip = (text: string, key: string, hint?: string) => (
+    <button
+      key={key}
+      type="button"
+      onClick={() => copy(text)}
+      title={hint ? `${hint} — click to copy` : "Click to copy"}
+      className="rounded border border-parchment/15 bg-deep-ink/40 px-1.5 py-0.5 font-mono text-[10px] text-parchment/70 hover:border-signal-teal/60 hover:text-parchment"
+    >
+      {copied === text ? "Copied!" : text}
+    </button>
+  );
+  const section = (title: string, entries: VariablePaletteEntry[], empty?: string) =>
+    entries.length === 0 && !empty ? null : (
+      <div className="space-y-1">
+        <p className="text-[10px] uppercase tracking-wider text-parchment/30">{title}</p>
+        {entries.length === 0 ? (
+          <p className="text-[10px] text-parchment/35">{empty}</p>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {entries.flatMap((e) => [
+              chip(e.placeholder, e.placeholder, e.hint),
+              ...(e.nameParts
+                ? [
+                    chip(e.nameParts.first, e.nameParts.first, "first name only"),
+                    chip(e.nameParts.last, e.nameParts.last, "last name only")
+                  ]
+                : [])
+            ])}
+          </div>
+        )}
+      </div>
+    );
+  return (
+    <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-2 space-y-2">
+      <p className="text-[11px] text-parchment/50">
+        Variables you can use in this step&apos;s text fields — click one to copy it, then paste it
+        where the value should appear.
+      </p>
+      {section("From the trigger", groups.trigger)}
+      {section(
+        "From earlier steps",
+        groups.earlier,
+        'No variables yet — add a "read details" step above this one to capture things like the lead\'s name and phone.'
+      )}
+      {section("Always available", groups.always)}
     </div>
   );
 }

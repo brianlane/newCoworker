@@ -18,8 +18,12 @@ import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import {
+  FLOW_COMPILE_THINKING_LEVEL,
   compileAiFlowFromDescription,
-  invalidDraftMessage
+  editAiFlowDefinition,
+  flowCompileModel,
+  invalidDraftMessage,
+  invalidEditMessage
 } from "@/lib/ai-flows/compile-service";
 import type { BusinessDocumentRow } from "@/lib/documents/db";
 
@@ -139,6 +143,10 @@ describe("compileAiFlowFromDescription — configuration & happy path", () => {
     if (res.ok) expect(res.definition.steps).toHaveLength(1);
     expect(generate).toHaveBeenCalledTimes(1);
     expect(generate.mock.calls[0][0].userText).toContain("none on file");
+    // Pinned model at maximum reasoning: 3.5 Flash's DEFAULT thinking level
+    // is medium, so the call must set it explicitly.
+    expect(generate.mock.calls[0][0].model).toBe("gemini-3.5-flash");
+    expect(generate.mock.calls[0][0].thinkingLevel).toBe(FLOW_COMPILE_THINKING_LEVEL);
     expect(meter).toHaveBeenCalledWith(
       expect.objectContaining({ businessId: BIZ, surface: "aiflow_compile" })
     );
@@ -554,5 +562,242 @@ describe("invalidDraftMessage", () => {
     const msg = invalidDraftMessage(["trigger.channel: bad value"]);
     expect(msg).toContain("needs a tweak");
     expect(msg).toContain("• ");
+  });
+});
+
+describe("invalidEditMessage / flowCompileModel", () => {
+  it("says the flow was NOT changed and bullets the issues", () => {
+    const msg = invalidEditMessage(["trigger.channel: bad value"]);
+    expect(msg).toContain("NOT changed");
+    expect(msg).toContain("• ");
+  });
+  it("flowCompileModel honors the env override and defaults to gemini-3.5-flash", () => {
+    process.env.AIFLOW_COMPILE_MODEL = "gemini-custom";
+    expect(flowCompileModel()).toBe("gemini-custom");
+    delete process.env.AIFLOW_COMPILE_MODEL;
+    expect(flowCompileModel()).toBe("gemini-3.5-flash");
+  });
+});
+
+// The current definition every edit test starts from.
+const CURRENT_DEFINITION = {
+  version: 1,
+  trigger: { channel: "manual" },
+  steps: [{ id: "s1", type: "notify_owner", message: "original" }]
+};
+
+function editArgs(instructions = "change the message to 'updated'") {
+  return {
+    businessId: BIZ,
+    flowName: "Lead follow-up",
+    currentDefinition: CURRENT_DEFINITION,
+    instructions
+  };
+}
+
+describe("editAiFlowDefinition — configuration & happy path", () => {
+  it("reports not_configured without an API key", async () => {
+    delete process.env.GOOGLE_API_KEY;
+    const res = await editAiFlowDefinition(editArgs(), {
+      generate: vi.fn(),
+      fetchDocuments: noDocs
+    });
+    expect(res).toMatchObject({ ok: false, error: "not_configured" });
+  });
+
+  it("edits a valid definition first try: current JSON + instructions in the prompt, metered, max reasoning", async () => {
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: true, warnings: [] });
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain('"Lead follow-up"');
+    expect(call.userText).toContain(JSON.stringify(CURRENT_DEFINITION));
+    expect(call.userText).toContain("Requested changes:");
+    expect(call.userText).toContain("change the message to 'updated'");
+    expect(call.model).toBe("gemini-3.5-flash");
+    expect(call.thinkingLevel).toBe(FLOW_COMPILE_THINKING_LEVEL);
+    expect(meter).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: BIZ, surface: "aiflow_compile" })
+    );
+  });
+
+  it("offers document/agent bindings to the edit prompt (degrading on read failures)", async () => {
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res = await editAiFlowDefinition(editArgs(), {
+      generate,
+      fetchDocuments: vi.fn(async () => [readyDoc()]),
+      fetchAgents: vi.fn(async () => {
+        throw new Error("agents db down");
+      })
+    });
+    expect(res.ok).toBe(true);
+    const userText = generate.mock.calls[0][0].userText;
+    expect(userText).toContain(DOC_ID);
+    expect(userText).toContain("none saved");
+  });
+});
+
+describe("editAiFlowDefinition — failure classes", () => {
+  it("meters a billed-but-empty first call then rethrows", async () => {
+    const generate = vi.fn(async () => {
+      throw new GeminiEmptyError({ promptTokens: 500, outputTokens: 100 });
+    });
+    await expect(
+      editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs })
+    ).rejects.toThrow("gemini_empty");
+    expect(meter).toHaveBeenCalledWith(expect.objectContaining({ outputChars: 0 }));
+  });
+
+  it("rethrows transport errors unmetered", async () => {
+    const generate = vi.fn(async () => {
+      throw new Error("gemini_http_500");
+    });
+    await expect(
+      editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs })
+    ).rejects.toThrow("gemini_http_500");
+    expect(meter).not.toHaveBeenCalled();
+  });
+
+  it("classifies unparseable output — refused with 'not changed', logged", async () => {
+    const generate = vi.fn(async () => ({ text: "total garbage no json", usage: null }));
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: false, error: "unparseable" });
+    if (!res.ok) expect(res.message).toContain("not changed");
+    expect(systemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "aiflow_edit_failed" })
+    );
+  });
+
+  it("rethrows a NON-validation error from the DB-backed document check", async () => {
+    const withDoc = JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "share_document",
+          documentId: DOC_ID,
+          to: "+15551230000",
+          via: "sms",
+          messageTemplate: "Here: {{share_url}}"
+        }
+      ]
+    });
+    const fetchDocuments = vi
+      .fn<() => Promise<BusinessDocumentRow[]>>()
+      .mockResolvedValueOnce([readyDoc()])
+      .mockRejectedValue(new Error("db exploded"));
+    const generate = generateSeq(withDoc);
+    await expect(
+      editAiFlowDefinition(editArgs(), { generate, fetchDocuments })
+    ).rejects.toThrow("db exploded");
+  });
+});
+
+describe("editAiFlowDefinition — self-repair, NO salvage", () => {
+  it("repairs an invalid first edit on the second model call (usage may be absent)", async () => {
+    const generate = vi
+      .fn<(p: GeminiGenerateTextParams) => Promise<{ text: string; usage: { promptTokens: number; outputTokens: number } | null }>>()
+      .mockResolvedValueOnce({ text: INVALID_DEFINITION_JSON, usage: null })
+      .mockResolvedValueOnce({ text: VALID_DEFINITION_JSON, usage: null });
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: true, warnings: [] });
+    expect(generate).toHaveBeenCalledTimes(2);
+    const repairText = generate.mock.calls[1][0].userText;
+    expect(repairText).toContain("FAILED validation");
+    expect(repairText).toContain('Edit the existing automation "Lead follow-up"');
+    expect(repairText).toContain("Requested changes: change the message to 'updated'");
+  });
+
+  it("REFUSES a salvageable-but-invalid edit instead of salvaging (live flow untouched)", async () => {
+    // The same double-invalid sequence that compile SALVAGES (bad step
+    // dropped, warnings surfaced) must refuse on the edit path — an applied
+    // salvage would silently drop live steps with no review.
+    const generate = generateSeq(INVALID_DEFINITION_JSON, INVALID_DEFINITION_JSON);
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: false, error: "invalid" });
+    if (!res.ok) {
+      expect(res.message).toContain("NOT changed");
+      expect(res.issues.length).toBeGreaterThan(0);
+    }
+    expect(systemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "aiflow_edit_failed",
+        message: expect.stringContaining("edit refused")
+      })
+    );
+    expect(systemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "aiflow_compile_salvaged" })
+    );
+  });
+
+  it("refuses when the repair output is unparseable (original issues surface)", async () => {
+    const generate = generateSeq(INVALID_DEFINITION_JSON, "garbage");
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: false, error: "invalid" });
+  });
+
+  it("meters a billed-but-empty repair call then refuses", async () => {
+    const generate = vi
+      .fn<(p: GeminiGenerateTextParams) => Promise<{ text: string; usage: { promptTokens: number; outputTokens: number } | null }>>()
+      .mockResolvedValueOnce({
+        text: INVALID_DEFINITION_JSON,
+        usage: { promptTokens: 100, outputTokens: 50 }
+      })
+      .mockRejectedValueOnce(new GeminiEmptyError({ promptTokens: 200, outputTokens: 30 }));
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: false, error: "invalid" });
+    expect(meter).toHaveBeenCalledWith(
+      expect.objectContaining({ usage: { promptTokens: 200, outputTokens: 30 }, outputChars: 0 })
+    );
+  });
+
+  it("logs a transient repair failure and still refuses (Error and non-Error throws)", async () => {
+    const generate = vi
+      .fn<(p: GeminiGenerateTextParams) => Promise<{ text: string; usage: { promptTokens: number; outputTokens: number } | null }>>()
+      .mockResolvedValueOnce({
+        text: INVALID_DEFINITION_JSON,
+        usage: { promptTokens: 100, outputTokens: 50 }
+      })
+      .mockRejectedValueOnce(new Error("gemini_http_503"));
+    const res = await editAiFlowDefinition(editArgs(), { generate, fetchDocuments: noDocs });
+    expect(res).toMatchObject({ ok: false, error: "invalid" });
+
+    const generate2 = vi
+      .fn<(p: GeminiGenerateTextParams) => Promise<{ text: string; usage: { promptTokens: number; outputTokens: number } | null }>>()
+      .mockResolvedValueOnce({
+        text: INVALID_DEFINITION_JSON,
+        usage: { promptTokens: 100, outputTokens: 50 }
+      })
+      .mockRejectedValueOnce("string failure");
+    const res2 = await editAiFlowDefinition(editArgs(), {
+      generate: generate2,
+      fetchDocuments: noDocs
+    });
+    expect(res2).toMatchObject({ ok: false, error: "invalid" });
+  });
+
+  it("share_document bindings are validated against the DB (repair fed the issue)", async () => {
+    const withBadDoc = JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "share_document",
+          documentId: "99999999-9999-4999-8999-999999999999",
+          to: "+15551230000",
+          via: "sms",
+          messageTemplate: "Here: {{share_url}}"
+        }
+      ]
+    });
+    const generate = generateSeq(withBadDoc, VALID_DEFINITION_JSON);
+    const res = await editAiFlowDefinition(editArgs(), {
+      generate,
+      fetchDocuments: vi.fn(async () => [readyDoc()])
+    });
+    expect(res.ok).toBe(true);
+    expect(generate.mock.calls[1][0].userText).toContain("FAILED validation");
   });
 });

@@ -66,7 +66,7 @@ const OWNER_SMS_TAIL_MESSAGES = 12;
 // (same convention as sms_prompt_lines.ts / the exported OWNER_PREAMBLE).
 export const SMS_SURFACE_BLOCK = `THIS CONVERSATION IS OVER SMS. You are texting with the OWNER on their own phone (identity verified by the platform from their number — do not ask them to prove who they are). Everything in OWNER MODE applies here exactly as on the dashboard.
 - Keep replies SHORT and plain-text: no markdown, no bullets unless truly needed, well under ${SMS_REPLY_MAX_CHARS} characters.
-- You HAVE working tools on this surface (texting, calendar, running automations). Use them per your rules; never claim you can't act just because this is SMS.
+- You HAVE working tools on this surface (texting, calendar, running automations, editing automations). Use them per your rules; never claim you can't act just because this is SMS.
 - When you need a decision (e.g. presenting options), ask ONE clear question and wait for their reply.`;
 
 export async function POST(request: Request) {
@@ -106,6 +106,8 @@ export async function POST(request: Request) {
       calRescheduleEnabled,
       calCancelEnabled,
       runAiflowEnabled,
+      editAiflowEnabled,
+      notificationPrefsToolEnabled,
       integrationsLine,
       businessContextBlock
     ] = await Promise.all([
@@ -117,6 +119,8 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
+      isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
+      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
       buildIntegrationsStatusLine(body.businessId),
       buildBusinessContextBlock(body.businessId)
     ]);
@@ -195,10 +199,19 @@ export async function POST(request: Request) {
         calendar_cancel_appointment: calCancelEnabled,
         list_aiflows: runAiflowEnabled,
         run_aiflow: runAiflowEnabled,
+        // Edits apply in place with full validation — no builder step
+        // needed, so the SMS surface gets the tool too (unlike the
+        // draft-card creation tools below).
+        edit_aiflow: editAiflowEnabled,
         // The dashboard image tool returns an inline /api/dashboard/images
         // URL + markdown — there is nowhere to render that over SMS (the
         // texting coworker's MMS path is a different tool). Off by design.
-        generate_image: false
+        generate_image: false,
+        // FULL toggle control: the texter is the verified OWNER (identity
+        // established server-side from their number before this route is
+        // called), and owners always pass manage_settings — "let me know
+        // when clients text back" flips the toggle right from this thread.
+        update_notification_preferences: notificationPrefsToolEnabled
       }
     });
 

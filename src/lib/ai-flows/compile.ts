@@ -132,6 +132,11 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "email, and {{trigger.event_title}} / {{trigger.starts_at}} /",
   "{{trigger.ends_at}} are also available). {{vars.actions_taken}}",
   "is engine-provided (a running summary of sends/routing) and always available.",
+  "Any string variable holding a full name can be addressed by its parts:",
+  "{{vars.lead_name.first}} is the first word and {{vars.lead_name.last}} is the",
+  'rest ("" when the value is a single word) — same for trigger fields, e.g.',
+  "{{trigger.full_name.first}}. Use .first for greetings when the user asks to",
+  "address people by first name.",
   "{{vars.group_lead_phone}} is engine-provided on group-text triggers: the lead's",
   "number — the one thread participant besides the sender and the business's own",
   "numbers. Only filled when a from_matches condition pins the sender (a known",
@@ -387,6 +392,42 @@ export function buildFlowAdaptUserText(input: {
     lines.push("", `Additional instructions: ${input.instructions.trim()}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * User text for editing an EXISTING flow in place (the chat `edit_aiflow`
+ * tool). Unlike adapt — which rewrites a library template for a new business
+ * — an edit must be surgical: the model gets the current definition plus the
+ * owner's requested change and must return the full updated definition,
+ * copying everything the owner did not ask to change verbatim (ids included)
+ * so an applied edit never churns untouched steps.
+ */
+export function buildFlowEditUserText(input: {
+  currentName: string;
+  currentDefinitionJson: string;
+  instructions: string;
+  documents?: CompileDocumentOption[];
+  agents?: CompileAgentOption[];
+}): string {
+  return [
+    `Edit the business's EXISTING AiFlow automation named "${input.currentName}".`,
+    "Apply ONLY the requested changes below and return the FULL updated JSON",
+    "definition (same schema contract; output only the JSON object). Copy every",
+    'part the request does not mention VERBATIM — same step "id" values, same',
+    "wording, same order. Never drop, rewrite, or renumber untouched steps, and",
+    "never invent connection/document/agent uuids that are not in the current",
+    "definition or the lists below.",
+    "",
+    "Current definition:",
+    input.currentDefinitionJson,
+    "",
+    buildAvailableDocumentsBlock(input.documents ?? []),
+    "",
+    buildAvailableAgentsBlock(input.agents ?? []),
+    "",
+    "Requested changes:",
+    input.instructions.trim()
+  ].join("\n");
 }
 
 /**

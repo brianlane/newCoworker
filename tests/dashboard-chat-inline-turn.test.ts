@@ -537,7 +537,9 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     calendar_cancel_appointment: true,
     list_aiflows: true,
     run_aiflow: true,
-    generate_image: true
+    edit_aiflow: true,
+    generate_image: true,
+    update_notification_preferences: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -555,7 +557,9 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       "calendar_cancel_appointment",
       "list_aiflows",
       "run_aiflow",
-      "generate_image"
+      "edit_aiflow",
+      "generate_image",
+      "update_notification_preferences"
     ]);
   });
 
@@ -855,6 +859,91 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     });
     expect(res2.ok).toBe(true);
     if (res2.ok) expect(res2.content).toContain("Automation run started — it can be watched");
+  });
+
+  it("a successful edit_aiflow is side-effect pinned — wrap-up failure keeps ok:true with the update note", async () => {
+    // The update is persisted to the live flow the moment the core returns
+    // ok; a worker-fallback rerun would re-apply it.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      flowId: "flow-1",
+      flowName: "Lead follow-up"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "Lead follow-up", instructions: "tweak" })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain('Automation "Lead follow-up" was updated as requested');
+    }
+
+    // Nameless result (defensive arm): the note still lands, without quotes.
+    const namelessTool = vi.fn(async () => ({ ok: true, flowId: "flow-1" }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("edit_aiflow", { flow: "Lead follow-up", instructions: "tweak" })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: namelessTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) expect(res2.content).toContain("Automation was updated as requested");
+  });
+
+  it("a successful update_notification_preferences is side-effect pinned — wrap-up failure keeps ok:true with the changes", async () => {
+    // Bugbot Medium (PR #805): the toggle write persists the moment the core
+    // returns ok, and the worker fallback deliberately does NOT declare this
+    // tool — a post-write bounce would answer "I can't change settings"
+    // about a change that already happened.
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      updated: { customer_reply_alerts: true, email_digest: false },
+      settings: { customer_reply_alerts: true, email_digest: false }
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("update_notification_preferences", {
+          customer_reply_alerts: true,
+          email_digest: false
+        })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain(
+        "Notification settings were changed: customer_reply_alerts ON, email_digest OFF"
+      );
+    }
+
+    // Defensive arm: a result without the updated map still notes the change.
+    const namelessTool = vi.fn(async () => ({ ok: true }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("update_notification_preferences", { customer_reply_alerts: true })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: namelessTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) expect(res2.content).toContain("Notification settings were changed.");
   });
 
   it("stops starting new steps once budgetMs is exhausted — fails fast when nothing committed", async () => {

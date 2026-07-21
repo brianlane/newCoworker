@@ -96,6 +96,60 @@ export const BOOKING_GOAL_INVITEE_FETCH_CAP = 100;
  */
 export const BOOKING_GOAL_RUN_STATUSES = ["queued", "awaiting_reply", "awaiting_call"] as const;
 
+/**
+ * Blip-vs-outage escalation lookback for sweep failures (the sweep-scoped
+ * twin of the calendar poller's logCalendarPollFailure): exactly wide
+ * enough to hold the two previous ~1/min sweep ticks plus cron-jitter
+ * slack, so "a prior failure inside the window" genuinely means "the last
+ * tick(s) failed too". A healthy tick between failures writes no row and
+ * pushes the older failure out of the window.
+ */
+export const BOOKING_SWEEP_FAILURE_ESCALATION_MS = 2 * 60_000 + 90_000;
+
+/**
+ * Record one per-business sweep failure with blip-vs-outage escalation:
+ * the FIRST failure inside the window logs `warn` (a one-off upstream blip
+ * — e.g. a single 2 AM "Calendly API timed out" — stays out of the admin
+ * System Errors feed, which is error-only); a repeat inside the window
+ * logs `error`. A failed/thrown lookback fails TOWARD `error` so a real
+ * outage is never misfiled as a blip. No owner-alert arm: the calendar
+ * poller polls the SAME Calendly connection every minute and already owns
+ * the "reconnect your calendar" escalation for persistent connection
+ * failures.
+ */
+async function logBookingSweepFailure(
+  db: SupabaseClient,
+  businessId: string,
+  message: string
+): Promise<void> {
+  // Failure-path-only lookback: healthy ticks never pay this query.
+  let priorFailures = 0;
+  let lookbackFailed = false;
+  try {
+    const sinceIso = new Date(Date.now() - BOOKING_SWEEP_FAILURE_ESCALATION_MS).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("event", "ai_flow_booking_goal_sweep_failed")
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    priorFailures = (data ?? []).length;
+  } catch (err) {
+    lookbackFailed = true;
+    console.error("booking goal sweep: failure lookback", err);
+  }
+  await recordSystemLog({
+    businessId,
+    source: "aiflow",
+    level: lookbackFailed || priorFailures >= 1 ? "error" : "warn",
+    event: "ai_flow_booking_goal_sweep_failed",
+    message,
+    payload: {}
+  });
+}
+
 type GoalStep = Extract<FlowStep, { type: "goal" }>;
 
 /**
@@ -523,14 +577,11 @@ export async function sweepCalendlyBookingGoals(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await recordSystemLog({
+      await logBookingSweepFailure(
+        db,
         businessId,
-        source: "aiflow",
-        level: "error",
-        event: "ai_flow_booking_goal_sweep_failed",
-        message: `Calendly booking-goal sweep failed: ${message}`,
-        payload: {}
-      });
+        `Calendly booking-goal sweep failed: ${message}`
+      );
     }
   }
   return result;
