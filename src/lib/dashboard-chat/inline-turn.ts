@@ -238,7 +238,13 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // A generated image is stored, metered against the AI budget, and burns
   // one of the 3 per-conversation slots the moment the core returns ok —
   // a worker-fallback rerun would bill and consume a slot all over again.
-  "generate_image"
+  "generate_image",
+  // Notification toggles persist the moment the core returns ok. The worker
+  // fallback deliberately does NOT declare this tool (no caller role on that
+  // path), so a post-write model failure falling back would produce a reply
+  // claiming the change is impossible — contradicting a write that already
+  // happened (Bugbot Medium on PR #805).
+  "update_notification_preferences"
 ]);
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
@@ -286,6 +292,16 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
     return typeof r.data?.markdown === "string"
       ? `The image was generated:\n\n${r.data.markdown}`
       : "The image was generated — it's saved with this conversation.";
+  }
+  if (name === "update_notification_preferences") {
+    const updated = (r as { updated?: unknown }).updated;
+    const changes =
+      updated && typeof updated === "object"
+        ? Object.entries(updated as Record<string, boolean>)
+            .map(([key, value]) => `${key} ${value ? "ON" : "OFF"}`)
+            .join(", ")
+        : "";
+    return `Notification settings were changed${changes ? `: ${changes}` : ""}.`;
   }
   return "The appointment was canceled.";
 }
