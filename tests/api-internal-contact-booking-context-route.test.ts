@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/cron-auth", () => ({ assertCronAuth: vi.fn() }));
+vi.mock("@/lib/rowboat/gateway-token", () => ({
+  verifyGatewayTokenForBusiness: vi.fn()
+}));
 vi.mock("@/lib/ai-flows/contact-booking-context", () => ({
   contactBookingContextForPhone: vi.fn()
 }));
 
 import { POST } from "@/app/api/internal/contact-booking-context/route";
 import { assertCronAuth } from "@/lib/cron-auth";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { contactBookingContextForPhone } from "@/lib/ai-flows/contact-booking-context";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -24,13 +28,28 @@ describe("api/internal/contact-booking-context route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(assertCronAuth).mockReturnValue(true);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(false);
   });
 
-  it("403 without the cron bearer", async () => {
+  it("403 when NEITHER the cron bearer nor a tenant-bound gateway token authorizes", async () => {
     vi.mocked(assertCronAuth).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(false);
     const res = await POST(req({ businessId: BIZ, phone: PHONE }));
     expect(res.status).toBe(403);
     expect(contactBookingContextForPhone).not.toHaveBeenCalled();
+  });
+
+  it("accepts a per-tenant gateway bearer bound to the businessId (voice-bridge caller)", async () => {
+    vi.mocked(assertCronAuth).mockReturnValue(false);
+    vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
+    vi.mocked(contactBookingContextForPhone).mockResolvedValue({
+      status: "booked",
+      line: "This contact has an upcoming booking."
+    });
+    const res = await POST(req({ businessId: BIZ, phone: PHONE }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).data.status).toBe("booked");
+    expect(verifyGatewayTokenForBusiness).toHaveBeenCalledWith(expect.anything(), BIZ);
   });
 
   it("400 on a malformed body (non-uuid business, too-short phone)", async () => {

@@ -27,6 +27,7 @@ import {
 import { composeIntakeLeadSms } from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
 import { loadVoiceContactTimeline } from "./contact-context.js";
+import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
 
@@ -1501,6 +1502,21 @@ function main(): void {
               undefined;
           }
 
+          // Booking-status line (booking-context.ts): the caller's live
+          // Calendly state, fetched from the platform with this box's own
+          // gateway bearer. Same trusted-number + staff gates; fail-open —
+          // a platform hiccup only costs the line, never the call.
+          let bookingStatusNote: string | undefined;
+          if (trustedFromE164 && !callerIsStaff) {
+            const bookingLine = await loadVoiceBookingLine({
+              appBaseUrl: process.env.APP_BASE_URL,
+              gatewayToken: process.env.ROWBOAT_GATEWAY_TOKEN,
+              businessId,
+              phone: trustedFromE164
+            });
+            if (bookingLine) bookingStatusNote = `Booking status: ${bookingLine}`;
+          }
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -1526,6 +1542,7 @@ function main(): void {
             customerMemorySummary,
             flowContextNote,
             recentInteractionsNote,
+            bookingStatusNote,
             callerIdentity,
             intake,
             recordDiag

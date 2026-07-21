@@ -313,6 +313,14 @@ export type GeminiBridgeOptions = {
    */
   recentInteractionsNote?: string;
   /**
+   * Optional booking-status line (booking-context.ts loadVoiceBookingLine):
+   * the caller's live Calendly state fetched from the platform, so a
+   * reschedule/cancel made on calendly.com is visible on the call. Clipped
+   * in system-instruction.ts to VOICE_BOOKING_STATUS_MAX_CHARS. Undefined =
+   * no booking context — the prompt is identical to the pre-feature shape.
+   */
+  bookingStatusNote?: string;
+  /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
    * script to an internal-assistant persona — same intent as the SMS worker's
@@ -989,7 +997,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.callerIdentity,
             hasEndCall,
             opts.flowContextNote,
-            opts.recentInteractionsNote
+            opts.recentInteractionsNote,
+            opts.bookingStatusNote
           ),
       tools: toolsForSession
     },

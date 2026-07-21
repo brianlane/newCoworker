@@ -751,6 +751,54 @@ tenant spend. Setup + runbook: [docs/GEMINI-SPEND.md](docs/GEMINI-SPEND.md).
   alert must outrun the cap it reports; Safe Mode exists so a paused AI never
   silently eats customer texts. Failed sends release the counted slot.
 
+## Coworker tools — the parity contract (REQUIRED for every new tool)
+
+A coworker "tool" must be wired into EVERY layer for the surface it belongs
+to, or some tenants' workers silently lack it (the send_whatsapp /
+scheduling-tools / inline-generate_image gaps of Jun–Jul 2026). The
+`tests/agent-tool-seed-parity.test.ts` CI test enforces this: it EXECUTES the
+Rowboat workflow seed's jq program straight out of
+[vps/scripts/deploy-client.sh](vps/scripts/deploy-client.sh) (so a seed typo
+or stray apostrophe fails the PR, not the next tenant provision) and pins
+registry ↔ seed ↔ dispatcher ↔ voice-bridge lockstep. **When it fails on
+your PR, it is telling you a layer below is missing — do not weaken the
+test.** Checklist for a new tool:
+
+1. **Registry** ([src/lib/agent-tools/registry.ts](src/lib/agent-tools/registry.ts)):
+   add the tool under its surface(s) — this is the Settings → Coworker tools
+   toggle and the statement of "should have".
+2. **Rowboat seed** ([vps/scripts/deploy-client.sh](vps/scripts/deploy-client.sh)
+   `WORKFLOW_JSON`): add the workflow-level declaration AND the name to the
+   right agents' `tools` lists (bare name = texting coworker, `dashboard_`
+   twin = dashboard coworker, Local twins mirror exactly). Descriptions must
+   be **apostrophe-free** (the bash heredoc single-quotes the jq program) and
+   use `isWebhook: $toolsAreReal`.
+3. **Dispatcher** ([src/lib/agent-tools/rowboat-gates.ts](src/lib/agent-tools/rowboat-gates.ts)
+   `TOOL_GATES` + a handler case in
+   [src/app/api/rowboat/tool-call/route.ts](src/app/api/rowboat/tool-call/route.ts)):
+   unknown names fail closed, so a seeded tool without a gate is dead.
+4. **Inline dashboard path** (when the dashboard has the tool):
+   [src/lib/dashboard-chat/action-tools.ts](src/lib/dashboard-chat/action-tools.ts) —
+   put shared logic in `src/lib/**` cores (e.g.
+   [src/lib/ai-flows/manual-run-tool.ts](src/lib/ai-flows/manual-run-tool.ts))
+   so the inline and Rowboat paths cannot drift.
+5. **Voice tools** ride
+   [vps/voice-bridge/src/tool-declarations.ts](vps/voice-bridge/src/tool-declarations.ts)
+   + `/api/voice/tools/*` adapters and ship with a voice-bridge redeploy
+   (not the workflow seed).
+6. **Retrofit live boxes after merge** — the seed only reaches NEW
+   provisions: `tsx debug/reseed-agent-tool-parity.ts --all` (report-only
+   audit), then `--all --apply` (additive, idempotent, never removes). It
+   also flags boxes needing a full redeploy and stale voice bridges.
+
+Deliberate exemptions (also encoded in the parity test): dashboard
+`send_email` is fulfilled by the chat-worker email adapter, `memory_capture`
+is Rowboat's `owner_append_business_memory`, and the **webchat surface is a
+frozen 5-tool allowlist** (anonymous internet — never add side-effect tools
+there). AiFlow STEP types (`route_to_team`, `place_ai_call`, …) are engine
+features in the shared `ai-flow-worker`, not per-tenant tools — they need
+none of this.
+
 ## Internationalization (i18n) — REQUIRED for every new feature
 
 The product ships in **English and Spanish** (next-intl). Any new user-facing

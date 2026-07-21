@@ -9,12 +9,19 @@
  * (KYP / Tim Tsai, Jul 20 2026). Non-Calendly tenants answer none after a
  * cheap connection lookup.
  *
- * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape as the
- * other /api/internal/* endpoints. Everything inside fails open (status
- * none, line null); the worker treats any error as "no booking context".
+ * Auth, two accepted callers (mirrors /api/internal/meter-gemini-spend):
+ *   - `Authorization: Bearer <INTERNAL_CRON_SECRET>` — the sms-inbound-worker
+ *     and other platform edge callers;
+ *   - a per-tenant gateway bearer bound to the posted businessId
+ *     (`verifyGatewayTokenForBusiness`) — the voice bridge, which holds only
+ *     its own box's token, so one tenant's bridge can never read another
+ *     tenant's booking state.
+ * Everything inside fails open (status none, line null); callers treat any
+ * error as "no booking context".
  */
 import { z } from "zod";
 import { assertCronAuth } from "@/lib/cron-auth";
+import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { contactBookingContextForPhone } from "@/lib/ai-flows/contact-booking-context";
 
@@ -30,11 +37,13 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request): Promise<Response> {
-  if (!assertCronAuth(request)) {
-    return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
-  }
   try {
     const { businessId, phone, timezone } = bodySchema.parse(await request.json());
+    // The gateway check needs the businessId from the body, so both auth
+    // arms run after parsing; the zod errors below reveal nothing sensitive.
+    if (!assertCronAuth(request) && !(await verifyGatewayTokenForBusiness(request, businessId))) {
+      return errorResponse("FORBIDDEN", "Invalid bearer", 403);
+    }
     const result = await contactBookingContextForPhone(
       businessId,
       phone,

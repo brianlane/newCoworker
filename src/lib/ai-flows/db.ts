@@ -276,6 +276,13 @@ export type EnqueueAiFlowRunInput = {
   flowId: string;
   /** Becomes the run's `context.trigger` (what {{trigger.x}} renders from). */
   trigger: Record<string, unknown>;
+  /**
+   * Seed vars for `context.vars` (what {{vars.x}} renders from before any
+   * extraction step runs). Used by callers that already KNOW the lead's
+   * identity — e.g. the texting coworker's start_aiflow_for_contact seeds
+   * lead_phone so send steps work without an extract_text step.
+   */
+  vars?: Record<string, unknown>;
   /** Exactly-once key per (flow, dedupeKey); null skips deduplication. */
   dedupeKey?: string | null;
   /**
@@ -371,7 +378,10 @@ export async function enqueueAiFlowRun(
       flow_id: input.flowId,
       business_id: input.businessId,
       status: "queued",
-      context: { trigger: input.trigger },
+      context: {
+        trigger: input.trigger,
+        ...(input.vars && Object.keys(input.vars).length > 0 ? { vars: input.vars } : {})
+      },
       current_step: 0,
       dedupe_key: input.dedupeKey ?? null,
       ...(earliestClaimAt ? { earliest_claim_at: earliestClaimAt } : {})

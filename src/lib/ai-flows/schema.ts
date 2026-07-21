@@ -1384,7 +1384,12 @@ export const aiFlowDefinitionSchema = z.object({
       // communication step. Complements allowReentry, which keys on the
       // trigger SENDER and can't see relay texts (e.g. realtor.com's
       // notifications arrive with an empty/shared sender). Default off.
-      dedupeLeadRuns: z.boolean().optional()
+      dedupeLeadRuns: z.boolean().optional(),
+      // Owner opt-in for the texting coworker's start_aiflow_for_contact
+      // tool: when true, the SMS model may enroll the CURRENT texter into
+      // this flow. Default off — the customer-facing surface stays barred
+      // from every flow the owner has not explicitly flagged.
+      agentInvocable: z.boolean().optional()
     })
     .optional()
 });

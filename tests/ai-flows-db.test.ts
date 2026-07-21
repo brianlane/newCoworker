@@ -381,6 +381,24 @@ describe("enqueueAiFlowRun", () => {
     );
   });
 
+  it("seeds context.vars when the caller supplies vars (agent enrollments)", async () => {
+    const { db, builder } = makeDb({ single: RUN_ROW });
+    await enqueueAiFlowRun({ ...input, vars: { lead_phone: "+17808039935" } }, db as never);
+    expect(builder.insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: { trigger: input.trigger, vars: { lead_phone: "+17808039935" } }
+      })
+    );
+  });
+
+  it("an EMPTY vars object is omitted — context stays byte-identical to pre-feature", async () => {
+    const { db, builder } = makeDb({ single: RUN_ROW });
+    await enqueueAiFlowRun({ ...input, vars: {} }, db as never);
+    expect(builder.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ context: { trigger: input.trigger } })
+    );
+  });
+
   it("passes earliestClaimAt through as earliest_claim_at (drip release)", async () => {
     const { db, builder } = makeDb({ single: RUN_ROW });
     const at = "2026-07-10T21:00:00.000Z";

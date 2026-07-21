@@ -142,6 +142,8 @@ type EditorState = {
   stopOnResponse: boolean;
   /** Uncheck to enroll each contact at most once (GHL "allow re-entry"). */
   allowReentry: boolean;
+  /** Let the texting coworker enroll the customer it's texting with. */
+  agentInvocable: boolean;
   channel: FlowTrigger["channel"];
   correlationWindowMinutes: number;
   conditions: TriggerCondition[];
@@ -208,6 +210,7 @@ function emptyEditor(): EditorState {
     captureStepScreenshots: false,
     stopOnResponse: false,
     allowReentry: true,
+    agentInvocable: false,
     channel: "sms",
     correlationWindowMinutes: 10,
     conditions: [{ type: "has_url" }],
@@ -400,6 +403,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     stopOnResponse: def.options?.stopOnResponse ?? false,
     allowReentry: def.options?.allowReentry ?? true,
+    agentInvocable: def.options?.agentInvocable ?? false,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -420,6 +424,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     stopOnResponse: def.options?.stopOnResponse ?? false,
     allowReentry: def.options?.allowReentry ?? true,
+    agentInvocable: def.options?.agentInvocable ?? false,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -867,7 +872,8 @@ function toDefinition(s: EditorState): AiFlowDefinition {
       suppressDefaultReply: s.suppressDefaultReply,
       captureStepScreenshots: s.captureStepScreenshots,
       stopOnResponse: s.stopOnResponse,
-      allowReentry: s.allowReentry
+      allowReentry: s.allowReentry,
+      agentInvocable: s.agentInvocable
     }
   };
 }
@@ -1514,6 +1520,7 @@ export function AiFlowsManager({
         captureStepScreenshots: e?.captureStepScreenshots ?? def.options?.captureStepScreenshots ?? false,
         stopOnResponse: def.options?.stopOnResponse ?? false,
         allowReentry: def.options?.allowReentry ?? true,
+        agentInvocable: def.options?.agentInvocable ?? false,
         ...triggerToEditorFields(def.trigger),
         extraTriggers: def.triggers ?? [],
         editingTriggerIndex: 0,
@@ -2572,6 +2579,21 @@ export function AiFlowsManager({
               Uncheck to enroll each contact at most once — a lead who already ran this
               flow won&apos;t be re-enrolled when it triggers for them again. Test runs
               never count.
+            </p>
+          </div>
+          <div>
+            <label className="flex items-center gap-2 text-sm text-parchment/70">
+              <input
+                type="checkbox"
+                checked={editor.agentInvocable}
+                onChange={(ev) => setEditor({ ...editor, agentInvocable: ev.target.checked })}
+              />
+              Texting coworker may enroll customers in this flow
+            </label>
+            <p className="mt-1 pl-6 text-[11px] text-parchment/40">
+              When a conversation clearly calls for it, your texting coworker can put the
+              customer it&apos;s texting with into this flow (never anyone else, and never
+              someone already in it). Leave unchecked to keep this flow owner-started only.
             </p>
           </div>
           <label className="flex items-center gap-2 text-sm text-parchment/70">
