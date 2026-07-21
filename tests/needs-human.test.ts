@@ -377,18 +377,25 @@ describe("escalateToHuman", () => {
       expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(1);
     });
 
-    it("toggle ON but the tag write fails: pages the owner immediately (fail-safe)", async () => {
+    it("toggle ON but the tag write fails: pages the owner, then RETRIES the tag (never tag-less)", async () => {
+      // A transiently failed team-first tag write must not leave a paged
+      // owner with an untagged contact (no open/closed dedupe, no hooks) —
+      // the post-page block re-attempts it (Bugbot, PR #801).
       const err = vi.spyOn(console, "error").mockImplementation(() => {});
       const fetchFn = okFetch();
       const { db, calls } = makeDb([
         { data: contactRow() },
         toggleOn,
-        { data: null, error: { message: "boom" } } // tag update fails
+        { data: null, error: { message: "boom" } }, // team-first tag write fails
+        { data: null }, // post-page tag retry (ok)
+        { data: [] }, // goal runs
+        { data: [] } // flows page
       ]);
       expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      // No hooks after a failed write (nothing to react to).
-      expect(calls.filter((c) => c.table === "ai_flow_runs")).toHaveLength(0);
+      const updates = calls.filter((c) => c.table === "contacts" && c.name === "update");
+      expect(updates).toHaveLength(2);
+      expect((updates[1].args[0] as { tags: string[] }).tags).toContain(NEEDS_HUMAN_TAG);
       err.mockRestore();
     });
 

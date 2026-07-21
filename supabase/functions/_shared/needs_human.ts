@@ -231,10 +231,8 @@ export async function escalateToHuman(
     // fall through to the page below — silence is never the end state.
     // Untaggable contacts (no row, tag cap) never consult the toggle: the
     // tag is the open/closed state the whole feature hangs off.
-    let stateAttempted = false;
     let teamFirstTagWritten = false;
     if (canCarryTag && contact?.id && (await teamFirstEnabled(supabase, input.businessId))) {
-      stateAttempted = true;
       const opened = await openNeedsHumanState(
         supabase,
         input,
@@ -243,10 +241,13 @@ export async function escalateToHuman(
       );
       teamFirstTagWritten = opened.tagOk;
       if (opened.tagOk && opened.enqueued > 0) return "team_offered";
-      // Fall through to the direct page. A failed tag write is NOT retried
-      // here: the page below is the alert that matters, and the next
-      // escalated turn re-attempts the tag (same semantics as the legacy
-      // failed-write path).
+      // Fall through to the direct page. A FAILED tag write is retried by
+      // the post-page block below (Bugbot, PR #801): the write may have
+      // failed transiently, and without the tag the open/closed dedupe is
+      // unarmed. If that retry succeeds and enqueues the flow, the roster
+      // is offered even though the owner was just paged — a one-off double
+      // notification in a rare failure case, preferred over a tag-less
+      // escalation.
     }
 
     // Dedupe 2 (ONLY for contacts that cannot carry the tag — no CRM row, or
@@ -345,9 +346,10 @@ export async function escalateToHuman(
     }
 
     // 2) Open the needs-human state (contacts with tag headroom only —
-    // untaggable contacts were deduped against the history above; a
-    // team-first attempt above already tried, successfully or not).
-    if (canCarryTag && contact?.id && !stateAttempted) {
+    // untaggable contacts were deduped against the history above). A
+    // team-first attempt that already WROTE the tag is not repeated; one
+    // whose write FAILED gets the same retry the legacy path would.
+    if (canCarryTag && contact?.id && !teamFirstTagWritten) {
       await openNeedsHumanState(
         supabase,
         input,
