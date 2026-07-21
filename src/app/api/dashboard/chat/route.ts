@@ -731,7 +731,8 @@ export async function POST(request: Request) {
       calCancelEnabled,
       runAiflowEnabled,
       editAiflowEnabled,
-      generateImageEnabled
+      generateImageEnabled,
+      notificationPrefsToolEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
@@ -741,8 +742,25 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
-      isAgentToolEnabled(body.businessId, "dashboard", "generate_image")
+      isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
+      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences")
     ]);
+    // Settings mutation needs more than chat access: the tool is declared
+    // only when THIS caller passes manage_settings (manager+, the same
+    // matrix as the notifications settings page). Chat itself only requires
+    // operate_messages, which staff hold — a staff teammate must never be
+    // handed a settings-mutation tool. FAILS CLOSED on any lookup error.
+    const canManageSettings = user.isAdmin
+      ? true
+      : await (async () => {
+          if (!user.email) return false;
+          const [{ getBusinessRoleForEmail }, { can }] = await Promise.all([
+            import("@/lib/db/business-members"),
+            import("@/lib/authz/policy")
+          ]);
+          const role = await getBusinessRoleForEmail(body.businessId, user.email);
+          return role != null && can(role, "manage_settings");
+        })().catch(() => false);
     const actionToolGates = {
       send_sms: smsToolEnabled,
       // Declared only when a WhatsApp integration is actually connected —
@@ -759,7 +777,8 @@ export async function POST(request: Request) {
       list_aiflows: runAiflowEnabled,
       run_aiflow: runAiflowEnabled,
       edit_aiflow: editAiflowEnabled,
-      generate_image: generateImageEnabled
+      generate_image: generateImageEnabled,
+      update_notification_preferences: notificationPrefsToolEnabled && canManageSettings
     };
 
     // Two message arrays:
