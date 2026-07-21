@@ -10,7 +10,7 @@ vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi
 import type { GeminiGenerateTextParams } from "@/lib/gemini-generate-content";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
-import { AGENT_INPUT_MAX_TEXT_CHARS } from "@/lib/agents/core";
+import { AGENT_INPUT_MAX_TEXT_CHARS, AGENT_OUTPUT_MAX_CHARS } from "@/lib/agents/core";
 import { DOCX_MIME_TYPE } from "@/lib/documents/docx";
 import { executeAgentRun, type AgentRunInput } from "@/lib/agents/run";
 import { Document, Packer, Paragraph, TextRun } from "docx";
@@ -268,6 +268,18 @@ describe("executeAgentRun (pdf_retypeset)", () => {
       error: "unsupported_type",
       detail: "re-typesetting needs a PDF or Word source document"
     });
+  });
+
+  it("refuses an over-cap HTML reply instead of clipping it mid-markup", async () => {
+    const huge = `<!DOCTYPE html><html><body>${"x".repeat(AGENT_OUTPUT_MAX_CHARS)}</body></html>`;
+    const res = await executeAgentRun(retypesetInput(), { generate: generateOk(huge) });
+    expect(res).toMatchObject({ ok: false, error: "output_too_large" });
+    if (!res.ok) expect(res.detail).toContain(`max ${AGENT_OUTPUT_MAX_CHARS}`);
+  });
+
+  it("maps a blank re-typeset reply to empty_content", async () => {
+    const res = await executeAgentRun(retypesetInput(), { generate: generateOk("   ") });
+    expect(res).toEqual({ ok: false, error: "empty_content" });
   });
 });
 

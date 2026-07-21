@@ -23,12 +23,14 @@ import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 import {
   AGENT_INPUT_MAX_TEXT_CHARS,
+  AGENT_OUTPUT_MAX_CHARS,
   AGENT_RUN_MAX_FILES,
   AGENT_RUN_SYSTEM_PROMPT,
   buildAgentRunPrompt,
   buildOutputFilename,
   normalizeAgentOutput,
   resolveOutputTarget,
+  stripWholeReplyFence,
   type AgentOutputFormat,
   type AgentPromptTextSection
 } from "./core";
@@ -103,6 +105,7 @@ export type AgentRunResult =
         | "unsupported_type"
         | "empty_content"
         | "too_many_files"
+        | "output_too_large"
         | "model_unavailable"
         | "model_failed";
       detail?: string;
@@ -235,14 +238,27 @@ export async function executeAgentRun(
       inputChars,
       outputChars: text.length
     });
-    const normalized = normalizeAgentOutput(text);
-    if (!normalized) return { ok: false, error: "empty_content" };
-    // Re-typeset artifacts are sanitized (scripts/external refs stripped —
-    // the sidecar also disables JS and denies network) and guaranteed to be
-    // a full HTML document so the byte renderers can sniff them.
-    const outputMd = isRetypeset
-      ? ensureHtmlDocument(sanitizeRetypesetHtml(normalized))
-      : normalized;
+    let outputMd: string;
+    if (isRetypeset) {
+      // HTML must never be hard-clipped (a mid-tag cut renders a broken
+      // PDF with no visible failure): an over-cap reply is an explicit
+      // error instead. Then sanitize (scripts/external refs stripped — the
+      // sidecar also disables JS and denies network) and guarantee a full
+      // HTML document so the byte renderers can sniff it.
+      const unclipped = stripWholeReplyFence(text);
+      if (unclipped.length > AGENT_OUTPUT_MAX_CHARS) {
+        return {
+          ok: false,
+          error: "output_too_large",
+          detail: `${unclipped.length} chars (max ${AGENT_OUTPUT_MAX_CHARS})`
+        };
+      }
+      if (!unclipped) return { ok: false, error: "empty_content" };
+      outputMd = ensureHtmlDocument(sanitizeRetypesetHtml(unclipped));
+    } else {
+      outputMd = normalizeAgentOutput(text);
+      if (!outputMd) return { ok: false, error: "empty_content" };
+    }
     return {
       ok: true,
       outputMd,

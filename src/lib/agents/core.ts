@@ -202,13 +202,16 @@ export function buildAgentRunPrompt(args: {
 
 /**
  * Strip a whole-reply code fence if the model wrapped its output in one
- * despite the system prompt, then clip to the artifact cap. Inner fences
- * (legitimate markdown) are untouched — only a fence enclosing the entire
- * reply is removed.
+ * despite the system prompt. Inner fences (legitimate markdown) are
+ * untouched — only a fence enclosing the entire reply is removed.
  */
-export function normalizeAgentOutput(raw: string): string {
-  let text = raw.trim();
+export function stripWholeReplyFence(raw: string): string {
+  const text = raw.trim();
   const fence = /^```[a-z0-9_-]*\n([\s\S]*)\n```$/i.exec(text);
-  if (fence) text = fence[1].trim();
-  return text.slice(0, AGENT_OUTPUT_MAX_CHARS);
+  return fence ? fence[1].trim() : text;
+}
+
+/** Fence-strip then clip to the artifact cap. */
+export function normalizeAgentOutput(raw: string): string {
+  return stripWholeReplyFence(raw).slice(0, AGENT_OUTPUT_MAX_CHARS);
 }

@@ -46,6 +46,7 @@ const RUN_ERROR_MESSAGES: Record<string, string> = {
   unsupported_type: "Only PDF, Word (.docx), plain text, markdown, or CSV attachments are supported",
   empty_content: "An attachment has no readable content",
   too_many_files: `A run can carry at most ${AGENT_RUN_MAX_FILES} files`,
+  output_too_large: "The re-typeset result was too large — try a shorter source document",
   model_unavailable: "The AI service is not configured — try again later",
   model_failed: "The AI call failed — try again"
 };
