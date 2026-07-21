@@ -76,6 +76,18 @@ vi.mock("@/lib/notifications/dispatch", () => ({
   dispatchUrgentNotification: vi.fn()
 }));
 
+// Run-automations tools: the SHARED cores are mocked (their behavior is
+// pinned in tests/ai-flows-manual-run-tool.test.ts); the real zod schema is
+// kept so the route's arg validation is exercised for real.
+vi.mock("@/lib/ai-flows/manual-run-tool", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai-flows/manual-run-tool")>();
+  return {
+    runAiflowToolArgsSchema: actual.runAiflowToolArgsSchema,
+    listAiFlowsTool: vi.fn(),
+    runAiFlowTool: vi.fn()
+  };
+});
+
 import { POST } from "@/app/api/rowboat/tool-call/route";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
@@ -92,6 +104,7 @@ import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { listAiFlowsTool, runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -844,5 +857,97 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     const res = await POST(makeRequest(content));
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: false, detail: "internal_error" });
+  });
+});
+
+describe("POST /api/rowboat/tool-call run-automations tools", () => {
+  it("dashboard_list_aiflows: gated on the dashboard run_aiflow toggle, returns the shared core's listing", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(listAiFlowsTool).mockResolvedValue({
+      ok: true,
+      flows: [{ id: "f1", name: "HomeLight Referral", enabled: true, trigger: "sms" }],
+      note: "offer it"
+    });
+    const content = makeContent("dashboard_list_aiflows", {});
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(body.flows).toEqual([
+      { id: "f1", name: "HomeLight Referral", enabled: true, trigger: "sms" }
+    ]);
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(BIZ, "dashboard", "run_aiflow");
+    expect(vi.mocked(listAiFlowsTool)).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("dashboard_run_aiflow: enqueues through the shared core and relays its result", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(runAiFlowTool).mockResolvedValue({
+      ok: true,
+      runId: "run-1",
+      flowName: "HomeLight Referral",
+      note: "Run enqueued"
+    });
+    const content = makeContent("dashboard_run_aiflow", {
+      flow: "HomeLight Referral",
+      input: "lead: Pat +15551230000"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: true, runId: "run-1", flowName: "HomeLight Referral" });
+    expect(vi.mocked(runAiFlowTool)).toHaveBeenCalledWith(BIZ, {
+      flow: "HomeLight Referral",
+      input: "lead: Pat +15551230000"
+    });
+  });
+
+  it("dashboard_run_aiflow: honest refusals from the core pass through", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(runAiFlowTool).mockResolvedValue({
+      ok: false,
+      message: '"Nightly digest" is DISABLED, so it cannot be run.'
+    });
+    const content = makeContent("dashboard_run_aiflow", { flow: "Nightly digest" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.message).toMatch(/DISABLED/);
+  });
+
+  it("dashboard_run_aiflow: rejects invalid args before touching the core", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    const content = makeContent("dashboard_run_aiflow", { flow: "" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(runAiFlowTool)).not.toHaveBeenCalled();
+  });
+
+  it("both names are gated off together by the single run_aiflow toggle", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    for (const [name, toolArgs] of [
+      ["dashboard_list_aiflows", {}],
+      ["dashboard_run_aiflow", { flow: "x" }]
+    ] as const) {
+      const content = makeContent(name, toolArgs);
+      vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+      const res = await POST(makeRequest(content));
+      expect((await res.json()).detail, name).toBe("tool_disabled");
+      expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(BIZ, "dashboard", "run_aiflow");
+    }
+    expect(vi.mocked(listAiFlowsTool)).not.toHaveBeenCalled();
+    expect(vi.mocked(runAiFlowTool)).not.toHaveBeenCalled();
+  });
+
+  it("the BARE names stay unknown (customers must never reach these tools)", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    for (const name of ["list_aiflows", "run_aiflow"]) {
+      const content = makeContent(name, { flow: "x" });
+      vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+      const res = await POST(makeRequest(content));
+      expect(await res.json(), name).toEqual({ ok: false, detail: "unknown_tool" });
+    }
   });
 });

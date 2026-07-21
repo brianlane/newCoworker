@@ -774,6 +774,7 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_customer_append_pinned_note",
         "owner_append_business_memory",
         "send_sms",
+        "send_whatsapp",
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
@@ -784,7 +785,9 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_document_share",
         "dashboard_document_update",
         "dashboard_document_set_expiration",
-        "dashboard_document_request_signature"
+        "dashboard_document_request_signature",
+        "dashboard_list_aiflows",
+        "dashboard_run_aiflow"
       ]
     },
     {
@@ -810,6 +813,7 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_customer_append_pinned_note",
         "owner_append_business_memory",
         "send_sms",
+        "send_whatsapp",
         "dashboard_business_knowledge_lookup",
         "dashboard_calendar_find_slots",
         "dashboard_calendar_book_appointment",
@@ -820,7 +824,9 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_document_share",
         "dashboard_document_update",
         "dashboard_document_set_expiration",
-        "dashboard_document_request_signature"
+        "dashboard_document_request_signature",
+        "dashboard_list_aiflows",
+        "dashboard_run_aiflow"
       ]
     },
     {
@@ -949,6 +955,25 @@ WORKFLOW_JSON=$(jq -nc \
     {
       name: "send_sms",
       description: "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks in dashboard chat for a text to be sent. Never invent recipients.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          toE164: {
+            type: "string",
+            description: "Recipient phone in E.164, e.g. +15551234567."
+          },
+          body: {
+            type: "string",
+            description: "Plain-text message body, at most 1600 characters."
+          }
+        },
+        required: ["toE164", "body"]
+      }
+    },
+    {
+      name: "send_whatsapp",
+      description: "Send a WhatsApp message from the business connected WhatsApp number to any phone number. Use ONLY when the owner explicitly asks in dashboard chat for a WHATSAPP message (texting is send_sms). Never invent recipients or bodies. If the recipient has not messaged the business on WhatsApp in the last 24 hours, the message is delivered through an approved template; the tool result says which.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1420,6 +1445,39 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["document", "signerName"]
+      }
+    },
+    # Run-automations tools (dashboard surface only — customers must never
+    # enumerate or start the owner automations). Same dispatcher cores as the
+    # inline dashboard path; both names share the single run_aiflow Settings
+    # toggle.
+    {
+      name: "dashboard_list_aiflows",
+      description: "List this business AiFlow automations (id, name, enabled, what starts them). Use it to check whether an automation already exists for what the owner is asking — when one matches, OFFER it as an option alongside doing the action directly, and let the owner choose.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {},
+        required: []
+      }
+    },
+    {
+      name: "dashboard_run_aiflow",
+      description: "Run one of the business ENABLED AiFlow automations now (a manual run). Use ONLY after the owner explicitly chooses to run it in this conversation. flow is the flow id or its exact-enough name; input is the context text handed to the flow (contact details, notes — whatever the owner supplied). Disabled flows cannot be run — tell the owner to review and enable them at /dashboard/aiflows first.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          flow: {
+            type: "string",
+            description: "Flow id (uuid) or name (case-insensitive match)."
+          },
+          input: {
+            type: "string",
+            description: "Context text passed to the flow as its manual-run input, at most 4000 characters."
+          }
+        },
+        required: ["flow"]
       }
     },
     # Website chat widget surface (WebchatCoworker/-Local). Same dispatcher

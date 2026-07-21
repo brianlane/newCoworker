@@ -5,7 +5,12 @@ import { NextResponse } from "next/server";
 import { resolveRowboatWebhookClaims } from "@/lib/rowboat/webhook-jwt";
 import { resolveBusinessIdForRowboatProject } from "@/lib/db/vps-gateway-tokens";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
-import type { AgentKey } from "@/lib/agent-tools/registry";
+import {
+  CUSTOMER_TOOL_SURFACES,
+  TOOL_GATES,
+  baseToolKey,
+  toolSurface
+} from "@/lib/agent-tools/rowboat-gates";
 import {
   appendCustomerPinnedNote,
   lookupCustomerByPhone,
@@ -25,11 +30,15 @@ import {
   requestDocumentSignatureTool,
   setDocumentExpirationTool,
   shareDocumentTool,
-  updateDocumentTool,
-  type DocumentToolSurface
+  updateDocumentTool
 } from "@/lib/documents/tool-handlers";
 import { captureWebchatLead } from "@/lib/webchat/lead-capture";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
+import {
+  listAiFlowsTool,
+  runAiFlowTool,
+  runAiflowToolArgsSchema
+} from "@/lib/ai-flows/manual-run-tool";
 import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
@@ -277,122 +286,10 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
   return null;
 }
 
-/**
- * toolName → the Settings → Coworker tools toggle that gates it, plus the
- * channel recorded on customer interactions and the stamp on pinned notes.
- * The `dashboard_`-prefixed names are the dashboard coworker's declarations
- * of the same underlying tools (see deploy-client.sh workflow seed).
- */
-const CUSTOMER_TOOL_SURFACES: Record<
-  string,
-  { agentKey: AgentKey; channel: "sms" | "dashboard"; stamp: string }
-> = {
-  customer_lookup_by_phone: { agentKey: "sms", channel: "sms", stamp: "text" },
-  customer_set_display_name: { agentKey: "sms", channel: "sms", stamp: "text" },
-  customer_append_pinned_note: { agentKey: "sms", channel: "sms", stamp: "text" },
-  dashboard_customer_lookup_by_phone: { agentKey: "dashboard", channel: "dashboard", stamp: "dashboard" },
-  dashboard_customer_set_display_name: { agentKey: "dashboard", channel: "dashboard", stamp: "dashboard" },
-  dashboard_customer_append_pinned_note: { agentKey: "dashboard", channel: "dashboard", stamp: "dashboard" }
-};
-
-/** Strips the surface prefix: dashboard_customer_lookup_by_phone → customer_lookup_by_phone. */
-function baseToolKey(name: string): string {
-  if (name.startsWith("dashboard_")) return name.slice("dashboard_".length);
-  if (name.startsWith("webchat_")) return name.slice("webchat_".length);
-  return name;
-}
-
-/** Which coworker surface a declared tool name belongs to (by its prefix). */
-function toolSurface(name: string): DocumentToolSurface {
-  if (name.startsWith("dashboard_")) return "dashboard";
-  if (name.startsWith("webchat_")) return "webchat";
-  return "sms";
-}
-
-const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }> = {
-  send_sms: { agentKey: "dashboard", toolKey: "send_sms" },
-  send_whatsapp: { agentKey: "dashboard", toolKey: "send_whatsapp" },
-  // Marketplace parity (all tools on all workers): the texting coworker
-  // declares the bare names, the dashboard coworker its `dashboard_` twins —
-  // same cores, separate Settings toggles.
-  send_email: { agentKey: "sms", toolKey: "send_email" },
-  // Texting-coworker escalation channel (same rationale as the voice twin in
-  // /api/voice/tools/notify-team): without it the SMS assistant has NO path
-  // to staff and can only promise follow-ups nobody hears about. Deliberately
-  // NOT given a webchat_ twin (anonymous surface must not page the team).
-  notify_team: { agentKey: "sms", toolKey: "notify_team" },
-  generate_image: { agentKey: "sms", toolKey: "generate_image" },
-  dashboard_generate_image: { agentKey: "dashboard", toolKey: "generate_image" },
-  business_knowledge_lookup: { agentKey: "sms", toolKey: "business_knowledge_lookup" },
-  calendar_find_slots: { agentKey: "sms", toolKey: "calendar_find_slots" },
-  calendar_book_appointment: { agentKey: "sms", toolKey: "calendar_book_appointment" },
-  // Appointment lifecycle beyond the initial booking (Truly Issue 4): a
-  // reschedule updates the EXISTING provider event and a cancel deletes it —
-  // never a second event plus a lingering original. No webchat twins: the
-  // anonymous surface must not mutate the owner's calendar.
-  calendar_reschedule_appointment: {
-    agentKey: "sms",
-    toolKey: "calendar_reschedule_appointment"
-  },
-  calendar_cancel_appointment: { agentKey: "sms", toolKey: "calendar_cancel_appointment" },
-  dashboard_business_knowledge_lookup: {
-    agentKey: "dashboard",
-    toolKey: "business_knowledge_lookup"
-  },
-  dashboard_calendar_find_slots: { agentKey: "dashboard", toolKey: "calendar_find_slots" },
-  dashboard_calendar_book_appointment: {
-    agentKey: "dashboard",
-    toolKey: "calendar_book_appointment"
-  },
-  dashboard_calendar_reschedule_appointment: {
-    agentKey: "dashboard",
-    toolKey: "calendar_reschedule_appointment"
-  },
-  dashboard_calendar_cancel_appointment: {
-    agentKey: "dashboard",
-    toolKey: "calendar_cancel_appointment"
-  },
-  // Website chat widget (anonymous internet surface): info + lead gen ONLY.
-  // This is the COMPLETE `webchat_*` allowlist — the WebchatCoworker agent
-  // seed declares exactly these names, and because TOOL_GATES doubles as the
-  // dispatch allowlist, no webchat-prefixed name can ever resolve to SMS,
-  // email, call, or image-generation fulfilment. Keep it that way: when new
-  // side-effect tools land on other surfaces, do NOT mint webchat_ twins.
-  webchat_business_knowledge_lookup: {
-    agentKey: "webchat",
-    toolKey: "business_knowledge_lookup"
-  },
-  webchat_capture_lead: { agentKey: "webchat", toolKey: "capture_lead" },
-  webchat_calendar_find_slots: { agentKey: "webchat", toolKey: "calendar_find_slots" },
-  webchat_calendar_book_appointment: {
-    agentKey: "webchat",
-    toolKey: "calendar_book_appointment"
-  },
-  // Business documents: share exists on every Rowboat surface (webchat's
-  // twin is inline-only — the handler never sends SMS/email for webchat);
-  // list/update/set-expiration are dashboard-only by design (customers must
-  // never mutate business knowledge), so no sms/webchat names exist for
-  // them and unknown names fail closed.
-  document_share: { agentKey: "sms", toolKey: "document_share" },
-  dashboard_document_share: { agentKey: "dashboard", toolKey: "document_share" },
-  webchat_document_share: { agentKey: "webchat", toolKey: "document_share" },
-  dashboard_document_list: { agentKey: "dashboard", toolKey: "document_list" },
-  dashboard_document_update: { agentKey: "dashboard", toolKey: "document_update" },
-  dashboard_document_set_expiration: {
-    agentKey: "dashboard",
-    toolKey: "document_set_expiration"
-  },
-  dashboard_document_request_signature: {
-    agentKey: "dashboard",
-    toolKey: "document_request_signature"
-  },
-  ...Object.fromEntries(
-    Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
-      name,
-      { agentKey: surface.agentKey, toolKey: baseToolKey(name) }
-    ])
-  )
-};
+// TOOL_GATES (the dispatch allowlist), the customer-tool surface map, and
+// the name-prefix helpers moved to src/lib/agent-tools/rowboat-gates.ts so
+// the seed-parity CI test can import them (a Next route module may only
+// export HTTP handlers). Semantics unchanged.
 
 async function dispatch(businessId: string, name: string, args: unknown): Promise<ToolResult> {
   const surface = CUSTOMER_TOOL_SURFACES[name];
@@ -441,6 +338,20 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
     }
     case "document_list": {
       return listDocumentsTool(businessId);
+    }
+    // Run-automations tools (dashboard_ names only — see TOOL_GATES): the
+    // SAME cores as the inline dashboard path, so the Rowboat fallback path
+    // resolves flows, refuses disabled/voice flows, and enqueues manual runs
+    // byte-identically.
+    case "list_aiflows": {
+      return await listAiFlowsTool(businessId);
+    }
+    case "run_aiflow": {
+      const parsed = runAiflowToolArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await runAiFlowTool(businessId, parsed.data);
     }
     case "document_share": {
       const parsed = documentShareArgsSchema.safeParse(args);
