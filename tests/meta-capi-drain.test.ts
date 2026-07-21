@@ -300,7 +300,11 @@ describe("drainMetaCapiEvents", () => {
       lead_submissions: [{ data: { leadgen_id: "1993202861289031", email: null }, error: null }]
     });
     expect((await drainMetaCapiEvents(db as never)).deferred).toBe(1);
-    expect(updates[0].fields).toMatchObject({ attempts: 1, last_error: "build boom" });
+    expect(updates[0].fields).toEqual({
+      status: "pending",
+      claimed_at: null,
+      last_error: "build boom"
+    });
   });
 
   it("skips leads with no Meta-identified submission (phone AND email misses)", async () => {
@@ -422,11 +426,12 @@ describe("drainMetaCapiEvents", () => {
       });
       const summary = await drainMetaCapiEvents(db as never);
       expect(summary.deferred).toBe(1);
-      // The claim is released (back to pending) with one attempt recorded.
-      expect(updates[0].fields).toMatchObject({
+      // The claim is released (back to pending) WITHOUT burning an upload
+      // attempt — flaky reads must never eat the Graph retry budget.
+      expect(updates[0].fields).toEqual({
         status: "pending",
         claimed_at: null,
-        attempts: 1
+        last_error: expect.stringContaining("read down")
       });
     }
   });

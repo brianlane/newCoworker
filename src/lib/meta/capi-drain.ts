@@ -249,11 +249,13 @@ export async function drainMetaCapiEvents(
         });
       }
     } catch (err) {
-      // Resolution is a DB read — treat as transient and retry next tick.
+      // Resolution is a DB read — transient. Release the claim WITHOUT
+      // burning an attempt: `attempts` counts real Graph uploads only, so
+      // a flaky read spell can never eat the upload retry budget (the
+      // 7-day expiry still bounds how long a row can wait).
       await markRow(db, row.id, {
         status: "pending",
         claimed_at: null,
-        attempts: row.attempts + 1,
         last_error: err instanceof Error ? err.message : String(err)
       });
       summary.deferred += 1;
