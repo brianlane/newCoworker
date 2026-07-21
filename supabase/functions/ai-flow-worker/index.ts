@@ -817,6 +817,84 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         continue;
       }
     }
+    // Event_end thread-activity gate (once per run, before the first
+    // lead-facing text, only in flows triggered by a calendar event_end —
+    // the no-show-recovery / post-appointment follow-up class): if the
+    // recipient's thread has ANY activity since the appointment STARTED —
+    // they texted in, or anyone (owner, AI worker, another flow) texted
+    // them — the conversation is live, and a canned follow-up would re-send
+    // what the thread already handled (KYP Jul 20 2026: the no-show flow
+    // texted a rebook link 2h23m after the lead had said "will have to
+    // rebook" and the AI had already answered with one). The run stands
+    // down entirely: every remaining step is recorded skipped and the run
+    // completes with an honest note. Anchored to the event's START because
+    // mid-appointment texts ("running late", "have to rebook") are exactly
+    // the live-conversation signal this gate exists for. Fails OPEN on
+    // lookup trouble; test runs are never gated.
+    if (
+      step.type === "send_sms" &&
+      !scope.testMode &&
+      scope.trigger.channel === "calendar" &&
+      flowHasEventEndTrigger(def) &&
+      // A step whose `when` guard is unmet skips inside runStep anyway.
+      (!step.when || evaluateStepCondition(step.when, scope))
+    ) {
+      // Anchored at the event's START (fallback: end minus a margin) so a
+      // mid-appointment text still suppresses — see eventEndActivityAnchorIso.
+      const sinceIso = eventEndActivityAnchorIso(scope.trigger);
+      const target = renderTemplate(step.to ?? "", scope).trim();
+      // Only a concrete lead number is gated — teammate/group/agent sends
+      // are internal notifications with their own semantics. The marker is
+      // per RECIPIENT, so an earlier send to a different number (a teammate
+      // heads-up before the invitee text) never consumes the invitee's gate.
+      const markerVar = `${EVENT_END_THREAD_VAR}:${target}`;
+      if (sinceIso && isE164(target) && scope.vars[markerVar] !== "1") {
+        // Markers ride scope.vars into every later context persist, so
+        // re-claims and repeat sends never re-pay the checks.
+        scope.vars[markerVar] = "1";
+        if (scope.vars[EVENT_END_RUN_VAR] !== "1" && scope.vars[EVENT_END_RUN_VAR] !== "0") {
+          scope.vars[EVENT_END_RUN_VAR] = (await runFiredByEventEnd(supabase, run, def))
+            ? "1"
+            : "0";
+        }
+        if (
+          scope.vars[EVENT_END_RUN_VAR] === "1" &&
+          (await threadActiveSince(supabase, run.business_id, target, sinceIso))
+        ) {
+          appendActionTaken(
+            scope,
+            "skipped the follow-up text — the conversation was already active after the appointment (nothing sent)"
+          );
+          // Record this and every remaining step as skipped so the run view
+          // shows exactly what the live thread saved the lead from.
+          for (let i = index; i < flat.length; i += 1) {
+            await recordStep(supabase, run, i, flat[i].step, "skipped", {
+              skipped: EVENT_END_THREAD_SKIP
+            });
+          }
+          await updateRun(supabase, run.id, {
+            status: "done",
+            claimed_at: null,
+            context: buildContext(scope, approval, routing)
+          });
+          await telemetryRecord(supabase, "ai_flow_run_skipped_thread_active", {
+            run_id: run.id,
+            business_id: run.business_id,
+            flow_id: run.flow_id
+          });
+          await systemLog(supabase, {
+            businessId: run.business_id,
+            source: "aiflow",
+            level: "info",
+            event: "ai_flow_run_skipped_thread_active",
+            message:
+              "Post-appointment follow-up skipped: the contact's conversation was already active after the event, so nothing was sent",
+            payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, contact: target }
+          });
+          return;
+        }
+      }
+    }
     let outcome: StepOutcome;
     try {
       outcome = await runStep(supabase, run, step, index, scope, approval, routing);
@@ -1292,6 +1370,141 @@ const BOOKING_PRECHECK_VAR = "__booking_precheck";
  * lookup. Stamped whether or not a duplicate was found.
  */
 const LEAD_DEDUPE_VAR = "__lead_dedupe";
+
+/**
+ * Marker var PREFIX for the event_end thread-activity gate: stamped per
+ * RECIPIENT (`__event_end_thread_check:<e164>`), not per run — a flow that
+ * texts a teammate before the invitee must still gate the invitee's send
+ * (Bugbot Medium on PR #795, round 6). Re-claims and repeat sends to the
+ * same number never re-pay the lookup.
+ */
+const EVENT_END_THREAD_VAR = "__event_end_thread_check";
+
+/**
+ * Run-level cache of runFiredByEventEnd ("1"/"0") so multi-recipient flows
+ * pay the dedupe-key lookup once.
+ */
+const EVENT_END_RUN_VAR = "__event_end_run";
+
+/** Skip reason recorded on steps suppressed by the thread-activity gate. */
+const EVENT_END_THREAD_SKIP = "event_end_thread_active";
+
+/**
+ * Anchor fallback when the trigger carries no starts_at: assume the
+ * appointment ran at most this long before its end, so mid-appointment
+ * texts ("running late", "have to rebook" — the incident's exact shape)
+ * still count as thread activity. Erring early only widens suppression to
+ * a conversation active shortly BEFORE the appointment, which is equally a
+ * live thread the canned follow-up must not talk over.
+ */
+const EVENT_END_ANCHOR_FALLBACK_MS = 2 * 60 * 60_000;
+
+/**
+ * The thread-activity anchor for an event_end run: the event's start when
+ * known, else its end minus the fallback margin. Empty string when the
+ * trigger carries no usable timestamp (gate skipped).
+ */
+function eventEndActivityAnchorIso(trigger: Record<string, unknown>): string {
+  const startsAt = typeof trigger.starts_at === "string" ? trigger.starts_at : "";
+  if (startsAt) return startsAt;
+  const endsAt = typeof trigger.ends_at === "string" ? trigger.ends_at : "";
+  const endMs = Date.parse(endsAt);
+  if (!Number.isFinite(endMs)) return "";
+  return new Date(endMs - EVENT_END_ANCHOR_FALLBACK_MS).toISOString();
+}
+
+/** Whether any of the flow's triggers is a calendar event_end trigger. */
+function flowHasEventEndTrigger(def: AiFlowDefinition): boolean {
+  return flowTriggers(def).some(
+    (t) => t.channel === "calendar" && (t as { on?: string }).on === "event_end"
+  );
+}
+
+/** Whether EVERY calendar trigger on the flow is event_end (no ambiguity). */
+function flowCalendarTriggersAllEventEnd(def: AiFlowDefinition): boolean {
+  const calendar = flowTriggers(def).filter((t) => t.channel === "calendar");
+  return (
+    calendar.length > 0 && calendar.every((t) => (t as { on?: string }).on === "event_end")
+  );
+}
+
+/**
+ * Whether THIS run was enqueued by an event_end firing. The run context does
+ * not record which trigger fired, but the calendar poller's dedupe key does
+ * (`cal:<eventId>:end:<endIso>` — see calendarDedupeKey in
+ * src/lib/ai-flows/calendar-poll.ts), so that is authoritative. A run with
+ * no dedupe key (manual replays, older rows) falls back to the definition:
+ * unambiguous only when EVERY calendar trigger is event_end — a flow also
+ * watching event_start/event_created must never have those runs' reminders
+ * or cancel texts stood down by this gate (Bugbot Medium on PR #795).
+ * Fails CLOSED (not an event_end run) on lookup trouble.
+ */
+async function runFiredByEventEnd(
+  supabase: Supabase,
+  run: RunRow,
+  def: AiFlowDefinition
+): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("dedupe_key")
+      .eq("id", run.id)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const key = (data as { dedupe_key?: string | null } | null)?.dedupe_key ?? "";
+    if (key) return key.startsWith("cal:") && key.includes(":end:");
+    return flowCalendarTriggersAllEventEnd(def);
+  } catch (e) {
+    console.error("event_end gate dedupe-key lookup failed (gate skipped)", e);
+    return false;
+  }
+}
+
+/**
+ * Whether the contact's SMS thread has activity SINCE `sinceIso` — an inbound
+ * text from them (sms_inbound_jobs), an AI auto-reply delivered to them (the
+ * reply lives on the inbound job row, NOT in sms_outbound_log — a text from
+ * before the anchor whose reply landed after it still counts), or any other
+ * outbound to them (sms_outbound_log: owner/dashboard/MCP/flow sends). Fails
+ * OPEN (false) on lookup trouble: a DB hiccup must never mute a follow-up
+ * that should send.
+ */
+async function threadActiveSince(
+  supabase: Supabase,
+  businessId: string,
+  contactE164: string,
+  sinceIso: string
+): Promise<boolean> {
+  try {
+    const { data: inbound, error: inErr } = await supabase
+      .from("sms_inbound_jobs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("customer_e164", contactE164)
+      // Inbound after the anchor, OR a job whose delivered AI reply
+      // (assistant_reply_text is stamped at delivery, moving updated_at)
+      // landed after it. updated_at moves on other transitions too, which
+      // only errs toward suppressing a canned text over a live-ish thread.
+      .or(
+        `created_at.gt.${sinceIso},and(updated_at.gt.${sinceIso},assistant_reply_text.not.is.null)`
+      )
+      .limit(1);
+    if (inErr) throw new Error(`inbound lookup: ${inErr.message}`);
+    if (((inbound ?? []) as unknown[]).length > 0) return true;
+    const { data: outbound, error: outErr } = await supabase
+      .from("sms_outbound_log")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("to_e164", contactE164)
+      .gt("created_at", sinceIso)
+      .limit(1);
+    if (outErr) throw new Error(`outbound lookup: ${outErr.message}`);
+    return ((outbound ?? []) as unknown[]).length > 0;
+  } catch (e) {
+    console.error("event_end thread-activity lookup failed (sending as normal)", e);
+    return false;
+  }
+}
 
 /** The pre-send gate must answer well inside a tick; beyond this, fail open. */
 const BOOKING_PRECHECK_TIMEOUT_MS = 8_000;

@@ -17,6 +17,9 @@ import { fileURLToPath } from "node:url";
  *   ROWBOAT_DEFAULT_PROJECT_ID=itest-project
  *   ROWBOAT_VPS_CHAT_BEARER=itest-rowboat-bearer
  *   AIFLOW_PLATFORM_URL=http://host.docker.internal:8978
+ *   NEXT_PUBLIC_APP_URL=https://ncw.example
+ *   TELNYX_API_KEY=itest-telnyx-key
+ *   TELNYX_API_BASE=http://host.docker.internal:8978
  *   EOF
  *   supabase functions serve --no-verify-jwt --env-file supabase/functions/.env.itest &
  *   ITEST_SERVICE_ROLE_KEY=$(supabase status -o json | jq -r .SERVICE_ROLE_KEY) \

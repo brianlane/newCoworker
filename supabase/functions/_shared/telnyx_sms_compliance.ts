@@ -71,6 +71,21 @@ export function isSpanishComplianceKeyword(normalizedUpper: string): boolean {
   );
 }
 
+/**
+ * Telnyx REST base. Overridable ONLY so the worker-integration suite can
+ * point sends at a local fake and assert delivered bodies; production leaves
+ * it unset and always hits the real host. Runtime-agnostic (Deno on the
+ * edge, Node under Vitest) — same pattern as gateway_token.ts.
+ */
+export function telnyxApiBase(): string {
+  const g = globalThis as {
+    Deno?: { env: { get(name: string): string | undefined } };
+    process?: { env?: Record<string, string | undefined> };
+  };
+  const raw = g.Deno ? g.Deno.env.get("TELNYX_API_BASE") : g.process?.env?.TELNYX_API_BASE;
+  return (raw ?? "https://api.telnyx.com").replace(/\/+$/, "");
+}
+
 export async function telnyxSendSms(params: {
   apiKey: string;
   messagingProfileId: string;
@@ -114,6 +129,7 @@ export async function telnyxSendSms(params: {
   rcsAgentId?: string | null;
 }): Promise<{ ok: boolean; status: number; body: string; channel: "sms" | "rcs" }> {
   const fetchImpl = params.fetchImpl ?? fetch;
+  const apiBase = telnyxApiBase();
   const headers: Record<string, string> = {
     Authorization: `Bearer ${params.apiKey}`,
     "Content-Type": "application/json"
@@ -138,7 +154,7 @@ export async function telnyxSendSms(params: {
       // carriers without RCS. Telnyx caps fallback text at 3072 chars.
       sms_fallback: { from: fromTrimmed, text: params.text.slice(0, 3072) }
     };
-    const res = await fetchImpl("https://api.telnyx.com/v2/messages/rcs", {
+    const res = await fetchImpl(`${apiBase}/v2/messages/rcs`, {
       method: "POST",
       headers,
       body: JSON.stringify(rcsBody)
@@ -179,7 +195,7 @@ export async function telnyxSendSms(params: {
   };
   if (fromTrimmed) body.from = fromTrimmed;
   if (hasMedia) body.media_urls = params.mediaUrls;
-  const res = await fetchImpl("https://api.telnyx.com/v2/messages", {
+  const res = await fetchImpl(`${apiBase}/v2/messages`, {
     method: "POST",
     headers,
     body: JSON.stringify(body)
