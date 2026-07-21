@@ -60,6 +60,14 @@ import {
 } from "../_shared/customer_language.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { isTapbackText } from "../_shared/sms_tapback.ts";
+// Tracked short links for AI replies — the same rewrite AiFlow sends get, so
+// one customer thread never mixes raw booking URLs with /s/<code> links
+// (KYP Jul 20 2026) and AI-reply link clicks land in the same analytics.
+import {
+  deleteShortLinks,
+  shortenSmsBodyUrls,
+  type ShortenedLink
+} from "../_shared/sms_short_links.ts";
 // Operational sends (Safe-Mode forwards, owner reply prompts) are METERED
 // against the tenant pool like all traffic but never refused (Jul 14 2026).
 import {
@@ -82,6 +90,13 @@ import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
+// Telnyx REST base. Overridable ONLY so the worker-integration suite can
+// point sends at its local fake and assert the delivered body; production
+// deployments leave it unset and always hit the real host.
+const TELNYX_API_BASE = (Deno.env.get("TELNYX_API_BASE") ?? "https://api.telnyx.com").replace(
+  /\/+$/,
+  ""
+);
 // Hard ceiling on a single Rowboat /chat call. A hung business VPS would otherwise
 // keep the worker blocked for the full platform invocation timeout (and stall every
 // other claimed job in the batch). Retries are handled by bounded `attempt_count`.
@@ -170,6 +185,54 @@ async function callOwnerOperatorTurn(args: {
   }
 }
 
+// --- Booking-status context (customer calendar state in the preamble) ------
+// Calendly bookings/reschedules/cancels happen off-platform, so without this
+// the model confidently denied a reschedule it could not see (KYP / Tim Tsai,
+// Jul 20 2026). Best-effort with a short timeout: any trouble answers null
+// and the reply proceeds with no booking line — never blocks or delays past
+// the cap. Non-Calendly tenants answer none after one cheap lookup.
+const BOOKING_CONTEXT_TIMEOUT_MS = 5_000;
+
+/** One texter's booking-status preamble line from the platform, or null. */
+async function fetchContactBookingLine(
+  businessId: string,
+  phone: string
+): Promise<string | null> {
+  const base = (
+    Deno.env.get("AIFLOW_PLATFORM_URL") ??
+    Deno.env.get("NEXT_PUBLIC_APP_URL") ??
+    ""
+  )
+    .trim()
+    .replace(/\/$/, "");
+  const secret = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+  if (!base || !secret) return null;
+  try {
+    const res = await fetch(`${base}/api/internal/contact-booking-context`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${secret}`
+      },
+      body: JSON.stringify({ businessId, phone }),
+      signal: AbortSignal.timeout(BOOKING_CONTEXT_TIMEOUT_MS)
+    });
+    if (!res.ok) {
+      console.error("contact booking context answered", res.status);
+      await res.body?.cancel();
+      return null;
+    }
+    const payload = (await res.json().catch(() => null)) as {
+      data?: { line?: string | null };
+    } | null;
+    const line = payload?.data?.line;
+    return typeof line === "string" && line.trim() ? line.trim() : null;
+  } catch (e) {
+    console.error("contact booking context unreachable", e);
+    return null;
+  }
+}
+
 // --- SMS chat spend cap (shared fuse with owner-dashboard chat) -------------
 // Inbound SMS now runs on Gemini (the `Coworker` agent was repointed off local
 // Qwen). Gemini bills per token, so SMS shares the SAME monthly fuse as owner
@@ -202,7 +265,7 @@ const SMS_CHAT_LOCAL_AGENT = (Deno.env.get("SMS_CHAT_LOCAL_AGENT") ?? "CoworkerL
 /** Best-effort: Telnyx list-messages filter may vary by API version — safe to return null. */
 async function telnyxTryRecoverOutboundMessageId(apiKey: string, idem: string): Promise<string | null> {
   const tag = `${NCW_IDEM_TAG_PREFIX}${idem}`;
-  const url = new URL("https://api.telnyx.com/v2/messages");
+  const url = new URL(`${TELNYX_API_BASE}/v2/messages`);
   url.searchParams.set("page[size]", "5");
   url.searchParams.set("filter[tags][in]", tag);
   const res = await fetch(url.toString(), { headers: { Authorization: `Bearer ${apiKey}` } });
@@ -571,7 +634,7 @@ serve(async (req: Request) => {
           if (idem) fwdHeaders["Idempotency-Key"] = idem;
 
           try {
-            const fwdRes = await fetch("https://api.telnyx.com/v2/messages", {
+            const fwdRes = await fetch(`${TELNYX_API_BASE}/v2/messages`, {
               method: "POST",
               headers: fwdHeaders,
               body: JSON.stringify(fwdBody)
@@ -1130,6 +1193,13 @@ serve(async (req: Request) => {
         memoryRow == null
           ? null
           : buildCustomerPreambleForEdge(memoryRow as unknown as EdgeCustomerMemoryRow);
+      // Booking-status line: the texter's Calendly state (upcoming booking,
+      // reschedule, recent cancel) so the model can answer "was my
+      // reschedule received?" honestly instead of denying what it can't see.
+      // Best-effort; null when the tenant has no calendar or the lookup
+      // refused, which keeps the preamble byte-identical to pre-feature.
+      const bookingLine = await fetchContactBookingLine(job.business_id, fromE164);
+      const bookingStatus = bookingLine ? `Booking status: ${bookingLine}` : null;
       // AiFlow context bridge: when an automation recently handled this
       // texter (asked them a question, collected their details), the model
       // must continue THAT conversation, not restart intake. Production
@@ -1181,7 +1251,7 @@ serve(async (req: Request) => {
       const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
-      customerPreamble = [dateAndPhoneLines, memoryPreamble, contactTimeline, flowContext]
+      customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, contactTimeline, flowContext]
         .filter((part): part is string => Boolean(part))
         .join("\n\n");
       // Decision-engine capture (PRD Ch. 6): ask the model to end its reply
@@ -1215,6 +1285,13 @@ serve(async (req: Request) => {
 
     let convId: string | undefined;
     let reply = (job.rowboat_reply_cached ?? "").trim();
+    // Short links minted for THIS attempt's fresh reply (empty on cached
+    // re-sends — their links were minted when the reply was first cached).
+    // Non-delivery terminal paths delete these so no live /s/<code> redirect
+    // survives for a reply nobody received; a cached re-send that later
+    // dead-letters can leak its earlier attempt's rows (codes aren't in
+    // memory anymore), which is harmless — the redirect target is real.
+    let shortenedLinks: ShortenedLink[] = [];
 
     try {
       // Owner-operator turn: the OWNER texting their own line gets the
@@ -1399,6 +1476,26 @@ serve(async (req: Request) => {
           // it like an empty assistant reply (throw → retry/dead-letter)
           // rather than caching/sending an empty SMS.
           throw new Error("rowboat_empty_assistant_after_reasoning_strip");
+        }
+        // Tracked short links, AI-reply surface: rewrite long URLs in the
+        // customer-facing reply to /s/<code> redirects BEFORE the reply is
+        // cached — the cache is what a Telnyx retry re-delivers, so the
+        // shortened text and its link rows stay identical across attempts.
+        // Without this, one thread mixed raw booking URLs (AI replies) with
+        // tracked short links (AiFlow texts) and AI-reply clicks were
+        // invisible to the flow-funnel analytics (KYP, Jul 20 2026). Staff
+        // and owner turns keep raw URLs — tracking is for lead engagement.
+        // Strictly fail-safe: any trouble leaves the original URL in place.
+        if (!isStaff) {
+          const shortened = await shortenSmsBodyUrls(supabase, {
+            businessId: job.business_id,
+            text: reply,
+            source: "sms_auto_reply",
+            baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+            toE164: fromE164
+          });
+          reply = shortened.text;
+          shortenedLinks = shortened.links;
         }
         // Persist the decision record best-effort: a failure here (or a model
         // that ignored the trailer instruction) never touches the reply path.
@@ -1609,6 +1706,10 @@ serve(async (req: Request) => {
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       const deadLetter = job.attempt_count >= MAX_ATTEMPTS;
+      // Links minted this attempt are orphaned either way: the only throw
+      // AFTER shortening is a failed reply-cache write, so no cached text
+      // references these codes and a retry re-runs Rowboat + re-shortens.
+      await deleteShortLinks(supabase, shortenedLinks);
       if (deadLetter) {
         await supabase.rpc("complete_sms_inbound_job", {
           p_job_id: job.id,
@@ -1689,6 +1790,8 @@ serve(async (req: Request) => {
         p_last_error: "missing_telnyx_messaging_env"
       });
       await clearJobReplyCache(supabase, job.id);
+      // The reply (and its tracked links) will never be delivered.
+      await deleteShortLinks(supabase, shortenedLinks);
       await systemLog(supabase, {
         businessId: job.business_id,
         source: "sms_worker",
@@ -1718,6 +1821,8 @@ serve(async (req: Request) => {
         p_last_error: "suppressed_opt_out"
       });
       await clearJobReplyCache(supabase, job.id);
+      // Suppressed reply → its tracked links must not stay live.
+      await deleteShortLinks(supabase, shortenedLinks);
       await telemetryRecord(supabase, "sms_worker_suppressed_opt_out", {
         job_id: job.id,
         business_id: job.business_id
@@ -1744,6 +1849,7 @@ serve(async (req: Request) => {
         p_last_error: `sms_reserve:${reserveErr.message}`.slice(0, 2000)
       });
       await clearJobReplyCache(supabase, job.id);
+      await deleteShortLinks(supabase, shortenedLinks);
       processed += 1;
       continue;
     }
@@ -1759,6 +1865,7 @@ serve(async (req: Request) => {
         p_last_error: reserve?.reason ?? "monthly_sms_limit"
       });
       await clearJobReplyCache(supabase, job.id);
+      await deleteShortLinks(supabase, shortenedLinks);
       await systemLog(supabase, {
         businessId: job.business_id,
         source: "sms_worker",
@@ -1825,7 +1932,7 @@ serve(async (req: Request) => {
     try {
       let sentViaRcs = false;
       if (rcsAgentId) {
-        const rcsRes = await fetch("https://api.telnyx.com/v2/messages/rcs", {
+        const rcsRes = await fetch(`${TELNYX_API_BASE}/v2/messages/rcs`, {
           method: "POST",
           headers,
           body: JSON.stringify({
@@ -1865,7 +1972,7 @@ serve(async (req: Request) => {
         }
       }
       if (!sentViaRcs) {
-        const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
+        const smsRes = await fetch(`${TELNYX_API_BASE}/v2/messages`, {
           method: "POST",
           headers,
           body: JSON.stringify(msgBody)
@@ -1951,6 +2058,10 @@ serve(async (req: Request) => {
           p_last_error: msg.slice(0, 2000)
         });
         await clearJobReplyCache(supabase, job.id);
+        // Retries exhausted — the shortened reply is never going out.
+        // (Transient failures below keep the links: the cached shortened
+        // text is exactly what the retry re-delivers.)
+        await deleteShortLinks(supabase, shortenedLinks);
       } else {
         await supabase
           .from("sms_inbound_jobs")

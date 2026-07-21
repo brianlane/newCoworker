@@ -1,0 +1,417 @@
+/**
+ * Contact booking context (src/lib/ai-flows/contact-booking-context.ts): the
+ * SMS agent's "booking status" line — connection gating, contact-identifier
+ * resolution, the active/canceled Calendly scans (email-narrowed, capped,
+ * fail-open), the rescheduled/canceled classification, and line wording.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+}));
+vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
+vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
+vi.mock("@/lib/voice-tools/connections", () => ({
+  resolveCalendarConnection: vi.fn(),
+  isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft",
+  CALENDLY_DIRECT_KEY: "calendly-direct"
+}));
+vi.mock("@/lib/calendar-tools/calendly", () => ({ calendlyRequest: vi.fn() }));
+vi.mock("@/lib/db/calendly-connections", () => ({
+  getActiveCalendlyConnectionUserUri: vi.fn(),
+  setCalendlyConnectionUserUri: vi.fn()
+}));
+vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/db/contact-emails", () => ({ findContactsByEmails: vi.fn() }));
+vi.mock("@/lib/calendly/webhook-subscriptions", () => ({
+  ensureCalendlyWebhookSubscription: vi.fn()
+}));
+vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
+vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
+
+import {
+  BOOKING_CONTEXT_INVITEE_FETCH_CAP,
+  bookingContextLine,
+  contactBookingContextForPhone,
+  contactIdentifiers,
+  inviteeMatchesContact,
+  type ContactBookingContextDeps
+} from "@/lib/ai-flows/contact-booking-context";
+import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
+
+const BIZ = "11111111-1111-4111-8111-111111111111";
+const PHONE = "+17808039935";
+const CONN = {
+  provider: "calendly" as const,
+  providerConfigKey: "calendly-direct",
+  connectionId: "cx-1"
+};
+const USER_URI = "https://api.calendly.com/users/U1";
+const FUTURE = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+const PAST = new Date(Date.now() - 60 * 60_000).toISOString();
+
+type QueuedResult = { data?: unknown; error?: { message: string } | null };
+
+/** Minimal chainable contacts fake (same shape as the precheck suite's). */
+function fakeDb(rows: QueuedResult[], opts: { throwOn?: boolean } = {}) {
+  return {
+    from() {
+      const chain: Record<string, (...args: unknown[]) => unknown> = {};
+      for (const m of ["select", "eq", "or", "limit"]) chain[m] = () => chain;
+      chain.maybeSingle = () => {
+        // Thrown as a bare string so the String(err) logging arm is covered.
+        if (opts.throwOn) throw "contacts exploded";
+        const r = rows.shift() ?? { data: null, error: null };
+        return Promise.resolve({ data: r.data ?? null, error: r.error ?? null });
+      };
+      return chain;
+    }
+  } as never;
+}
+
+const CONTACT_ROW = {
+  data: {
+    customer_e164: PHONE,
+    alias_e164s: ["+15145550000"],
+    email: " Tim@TrustYourTalent.CA "
+  }
+};
+
+function deps(overrides: Partial<ContactBookingContextDeps> = {}): ContactBookingContextDeps {
+  return {
+    request: vi.fn().mockResolvedValue(null),
+    resolveConnection: vi.fn().mockResolvedValue(CONN),
+    getCachedUserUri: vi.fn().mockResolvedValue(USER_URI),
+    persistUserUri: vi.fn().mockResolvedValue(undefined),
+    ...overrides
+  };
+}
+
+type Cfg = { endpoint: string; params?: Record<string, string> };
+
+/**
+ * A Calendly transport answering the events listing per status and each
+ * event's invitees. `events` maps status → listing collection; `invitees`
+ * maps event uuid → invitee collection (undefined = refuse that fetch).
+ */
+function calendlyFake(
+  events: Partial<Record<"active" | "canceled", unknown[]>>,
+  invitees: Record<string, unknown[] | undefined> = {}
+) {
+  return vi.fn(async (_b: string, _c: unknown, config: Cfg) => {
+    if (config.endpoint === "/scheduled_events") {
+      const status = config.params?.status as "active" | "canceled";
+      return { data: { collection: events[status] ?? [] } };
+    }
+    const m = config.endpoint.match(/^\/scheduled_events\/(.+)\/invitees$/);
+    if (m) {
+      const list = invitees[decodeURIComponent(m[1])];
+      if (list === undefined) return null; // refused fetch → fail open
+      return { data: { collection: list } };
+    }
+    throw new Error(`unexpected endpoint ${config.endpoint}`);
+  });
+}
+
+const event = (uuid: string, startIso: string, name?: string) => ({
+  uri: `https://api.calendly.com/scheduled_events/${uuid}`,
+  start_time: startIso,
+  ...(name !== undefined ? { name } : {})
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("contactIdentifiers", () => {
+  it("unions the seed phone with the contact row's numbers and lowercases the email", async () => {
+    const out = await contactIdentifiers(fakeDb([CONTACT_ROW]), BIZ, PHONE);
+    expect(out.phoneDigits).toEqual(["17808039935", "15145550000"]);
+    expect(out.email).toBe("tim@trustyourtalent.ca");
+  });
+
+  it("degrades to phone-only on a contacts read error (and on a thrown read)", async () => {
+    const errored = await contactIdentifiers(
+      fakeDb([{ error: { message: "boom" } }]),
+      BIZ,
+      PHONE
+    );
+    expect(errored).toEqual({ phoneDigits: ["17808039935"], email: null });
+    const thrown = await contactIdentifiers(fakeDb([], { throwOn: true }), BIZ, PHONE);
+    expect(thrown).toEqual({ phoneDigits: ["17808039935"], email: null });
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a contact email without an @ and blank alias numbers", async () => {
+    const out = await contactIdentifiers(
+      fakeDb([{ data: { customer_e164: "", alias_e164s: [""], email: "none" } }]),
+      BIZ,
+      PHONE
+    );
+    expect(out).toEqual({ phoneDigits: ["17808039935"], email: null });
+  });
+});
+
+describe("inviteeMatchesContact", () => {
+  const ids = { phoneDigits: ["17808039935"], email: "tim@trustyourtalent.ca" };
+
+  it("matches by email case-insensitively", () => {
+    expect(inviteeMatchesContact({ email: "TIM@trustyourtalent.ca" }, ids)).toBe(true);
+  });
+
+  it("matches the SMS-reminder phone country-code-tolerantly", () => {
+    expect(inviteeMatchesContact({ text_reminder_number: "(780) 803-9935" }, ids)).toBe(true);
+  });
+
+  it("no identifiers on the invitee → no match", () => {
+    expect(inviteeMatchesContact({}, ids)).toBe(false);
+    expect(inviteeMatchesContact({ email: "other@x.com" }, ids)).toBe(false);
+  });
+});
+
+describe("bookingContextLine", () => {
+  const ev = { name: "Free Strategy Call", startIso: FUTURE };
+
+  it("booked / rescheduled / canceled / rescheduled-away wordings", () => {
+    expect(bookingContextLine("booked", ev)).toBe(
+      `This contact has an upcoming booking: "Free Strategy Call" starting ${FUTURE}.`
+    );
+    expect(bookingContextLine("rescheduled", ev)).toContain("they RESCHEDULED it");
+    expect(bookingContextLine("canceled", ev)).toContain("CANCELED");
+    expect(bookingContextLine("canceled", ev)).toContain("has not rebooked");
+    expect(bookingContextLine("canceled", ev, { rescheduledAway: true })).toContain(
+      "rescheduled their"
+    );
+  });
+});
+
+describe("contactBookingContextForPhone", () => {
+  it("answers none for a non-Calendly (or absent) connection — default deps path", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(null);
+    expect(await contactBookingContextForPhone(BIZ, PHONE)).toEqual({
+      status: "none",
+      line: null
+    });
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "google",
+      providerConfigKey: "google",
+      connectionId: "cx-g"
+    } as never);
+    expect(await contactBookingContextForPhone(BIZ, PHONE)).toEqual({
+      status: "none",
+      line: null
+    });
+  });
+
+  it("answers none when the texter yields no identifiers at all", async () => {
+    const d = deps();
+    const out = await contactBookingContextForPhone(BIZ, "+", d, fakeDb([{ data: null }]));
+    expect(out.status).toBe("none");
+    expect(d.request).not.toHaveBeenCalled();
+  });
+
+  it("answers none when the user URI cannot be resolved", async () => {
+    const d = deps({ getCachedUserUri: vi.fn().mockResolvedValue(null) });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
+    expect(out.status).toBe("none");
+  });
+
+  it("reports an upcoming active booking as booked (email-narrowed listing)", async () => {
+    const request = calendlyFake(
+      { active: [event("EV1", FUTURE, "Free Strategy Call")] },
+      { EV1: [{ status: "active", email: "tim@trustyourtalent.ca" }] }
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"Free Strategy Call"');
+    expect(out.line).toContain(FUTURE);
+    // The listing was narrowed by the contact's email.
+    const listCall = request.mock.calls.find(
+      (c) => (c[2] as Cfg).endpoint === "/scheduled_events"
+    );
+    expect((listCall?.[2] as Cfg).params?.invitee_email).toBe("tim@trustyourtalent.ca");
+  });
+
+  it("reports a replacement slot (old_invitee) as rescheduled", async () => {
+    const request = calendlyFake(
+      { active: [event("EV1", FUTURE)] },
+      {
+        EV1: [
+          {
+            status: "active",
+            text_reminder_number: "780-803-9935",
+            old_invitee: "https://api.calendly.com/scheduled_events/OLD/invitees/I0"
+          }
+        ]
+      }
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      // No contact row → phone-only matching (also covers the null-row path).
+      fakeDb([{ data: null }])
+    );
+    expect(out.status).toBe("rescheduled");
+    // Default event name when Calendly omits one.
+    expect(out.line).toContain('"Appointment"');
+  });
+
+  it("a matched active booking whose start already passed falls through to the canceled scan", async () => {
+    const request = calendlyFake(
+      {
+        active: [event("EV1", PAST, "Strategy Call")],
+        canceled: [event("EV2", PAST, "Strategy Call")]
+      },
+      {
+        EV1: [{ status: "active", email: "tim@trustyourtalent.ca" }],
+        EV2: [{ status: "canceled", email: "tim@trustyourtalent.ca", rescheduled: false }]
+      }
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("canceled");
+    expect(out.line).toContain("has not rebooked");
+  });
+
+  it("a canceled invitee flagged rescheduled reads as rescheduled-away", async () => {
+    const request = calendlyFake(
+      { active: [], canceled: [event("EV2", PAST, "Strategy Call")] },
+      { EV2: [{ status: "canceled", email: "tim@trustyourtalent.ca", rescheduled: true }] }
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("canceled");
+    expect(out.line).toContain("their new time was not found");
+  });
+
+  it("skips malformed listings, refused invitee fetches, and non-matching invitees", async () => {
+    const request = calendlyFake(
+      {
+        active: [
+          { start_time: FUTURE }, // no uri → filtered
+          { uri: "https://api.calendly.com/scheduled_events/EV0" }, // no start → filtered
+          event("EV1", FUTURE), // invitee fetch refused
+          event("EV2", FUTURE), // wrong person
+          event("EV3", FUTURE, "Kept Call") // the real match
+        ],
+        canceled: []
+      },
+      {
+        EV1: undefined,
+        EV2: [{ status: "active", email: "someone-else@x.com" }],
+        EV3: [{ status: "active", text_reminder_number: "+1 780 803 9935" }]
+      }
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"Kept Call"');
+  });
+
+  it("a refused events listing answers none (fail open)", async () => {
+    const request = vi.fn().mockResolvedValue(null);
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("none");
+  });
+
+  it("tolerates listings and invitee responses without a collection", async () => {
+    const request = vi.fn(async (_b: string, _c: unknown, config: Cfg) => {
+      if (config.endpoint === "/scheduled_events") {
+        return config.params?.status === "active"
+          ? { data: {} } // no collection key at all
+          : { data: { collection: [event("EC1", PAST)] } };
+      }
+      return { data: {} }; // invitee response without a collection
+    });
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("none");
+  });
+
+  it("stops at the invitee-fetch budget across both scans", async () => {
+    // More active events than the whole budget, none matching: the canceled
+    // scan must get ZERO invitee fetches (its listing still happens).
+    const activeEvents = Array.from({ length: BOOKING_CONTEXT_INVITEE_FETCH_CAP + 2 }, (_, i) =>
+      event(`EA${i}`, FUTURE)
+    );
+    const inviteeMap: Record<string, unknown[]> = {};
+    for (let i = 0; i < activeEvents.length; i += 1) {
+      inviteeMap[`EA${i}`] = [{ status: "active", email: "someone-else@x.com" }];
+    }
+    inviteeMap.EC0 = [{ status: "canceled", email: "tim@trustyourtalent.ca" }];
+    const request = calendlyFake(
+      { active: activeEvents, canceled: [event("EC0", PAST)] },
+      inviteeMap
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("none");
+    const inviteeFetches = request.mock.calls.filter((c) =>
+      (c[2] as Cfg).endpoint.includes("/invitees")
+    );
+    expect(inviteeFetches).toHaveLength(BOOKING_CONTEXT_INVITEE_FETCH_CAP);
+  });
+
+  it("builds its own service client when none is injected", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(fakeDb([CONTACT_ROW]) as never);
+    const request = calendlyFake(
+      { active: [event("EV1", FUTURE, "Own-client Call")] },
+      { EV1: [{ status: "active", email: "tim@trustyourtalent.ca" }] }
+    );
+    const out = await contactBookingContextForPhone(BIZ, PHONE, deps({ request }));
+    expect(out.status).toBe("booked");
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers none (and warns) when the lookup throws — Error and bare-string shapes", async () => {
+    const d = deps({ resolveConnection: vi.fn().mockRejectedValue(new Error("nango down")) });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([]));
+    expect(out).toEqual({ status: "none", line: null });
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      "contact booking context: lookup failed (answering none)",
+      expect.objectContaining({ businessId: BIZ, error: "nango down" })
+    );
+    const d2 = deps({ resolveConnection: vi.fn().mockRejectedValue("nango string") });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d2, fakeDb([]))).toEqual({
+      status: "none",
+      line: null
+    });
+    expect(vi.mocked(logger.warn)).toHaveBeenLastCalledWith(
+      "contact booking context: lookup failed (answering none)",
+      expect.objectContaining({ error: "nango string" })
+    );
+  });
+});

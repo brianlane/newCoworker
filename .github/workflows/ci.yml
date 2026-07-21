@@ -209,6 +209,15 @@ jobs:
             # (port 8978) for the worker's pre-send booking precheck; the
             # per-tick email/calendar poll kicks answer 200 there too.
             echo "AIFLOW_PLATFORM_URL=http://${GW}:8978"
+            # sms-reply-short-links suite: the shortener needs a base URL
+            # (short by design so bare-domain URLs still shorten in tests),
+            # and the fake app doubles as the Telnyx API so the DELIVERED
+            # reply body is assertable. Businesses that seed no
+            # business_telnyx_settings profile still dead-letter at
+            # missing_telnyx_messaging_env (no global profile id is set).
+            echo "NEXT_PUBLIC_APP_URL=https://ncw.example"
+            echo "TELNYX_API_KEY=itest-telnyx-key"
+            echo "TELNYX_API_BASE=http://${GW}:8978"
           } > supabase/functions/.env.itest
           # --no-verify-jwt mirrors production: every function is deployed
           # with verify_jwt = false (see supabase/config.toml) because they

@@ -113,9 +113,10 @@ export function leadIdentifiersFromContext(context: Record<string, unknown> | nu
 /**
  * Resolve the connected account's user URI, preferring the cached value on
  * the direct-PAT connection row (poller parity — saves the /users/me probe).
- * Null when the transport refuses.
+ * Null when the transport refuses. Exported for the contact-booking-context
+ * lookup (same transport, same cache).
  */
-async function resolveUserUri(
+export async function resolveCalendlyUserUri(
   businessId: string,
   conn: ResolvedVoiceConnection,
   request: NonNullable<BookingPrecheckDeps["request"]>,
@@ -202,7 +203,7 @@ export async function bookingPrecheckForRun(
   const { phones, emails } = leadIdentifiersFromContext(run.context);
   if (phones.length === 0 && emails.length === 0) return none("no_lead_identifiers");
 
-  const userUri = await resolveUserUri(
+  const userUri = await resolveCalendlyUserUri(
     businessId,
     conn,
     request,
