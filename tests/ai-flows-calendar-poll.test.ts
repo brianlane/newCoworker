@@ -1714,18 +1714,32 @@ describe("shouldRunCalendarPoll / stampCalendarPollTick", () => {
 
 describe("fireCalendarTriggersForPushedEvent", () => {
   /**
-   * Fake service client for the pushed-event path: one business-scoped
-   * ai_flows listing (.select().eq().eq().or().limit() awaited). Any other
-   * table read (the from_matches ref resolution) throws off the incomplete
-   * chain, exercising the fail-closed ref arm.
+   * Fake service client for the pushed-event path: the business-scoped,
+   * PAGED ai_flows listing (.select().eq().eq().or().order().range()
+   * awaited; each call consumes the next queued page). Any other table read
+   * (the from_matches ref resolution) throws off the incomplete chain,
+   * exercising the fail-closed ref arm.
    */
-  function pushedDb(rows: unknown[] | null, error: { message: string } | null = null) {
-    const limit = vi.fn().mockResolvedValue({ data: rows, error });
-    const or = vi.fn(() => ({ limit }));
+  function pushedPagesDb(
+    pages: Array<{ data: unknown[] | null; error?: { message: string } | null }>
+  ) {
+    let call = 0;
+    const range = vi.fn(() => {
+      const r = pages[Math.min(call, pages.length - 1)] ?? { data: [], error: null };
+      call += 1;
+      return Promise.resolve({ data: r.data, error: r.error ?? null });
+    });
+    const order = vi.fn(() => ({ range }));
+    const or = vi.fn(() => ({ order }));
     const eq2 = vi.fn(() => ({ or }));
     const eq1 = vi.fn(() => ({ eq: eq2 }));
     const select = vi.fn(() => ({ eq: eq1 }));
     return { from: vi.fn(() => ({ select })) } as never;
+  }
+
+  /** Single-page convenience (fewer rows than one page ends the loop). */
+  function pushedDb(rows: unknown[] | null, error: { message: string } | null = null) {
+    return pushedPagesDb([{ data: rows, error }]);
   }
 
   beforeEach(() => {
@@ -1854,5 +1868,38 @@ describe("fireCalendarTriggersForPushedEvent", () => {
     );
     expect(enqueued).toBe(0);
     expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("pages the flow listing so a 100+-flow tenant loses nothing", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      flowRow(`f-${String(i).padStart(3, "0")}`, createdTrigger())
+    );
+    const page2 = [flowRow("f-100", createdTrigger())];
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      pushedPagesDb([{ data: page1 }, { data: page2 }]),
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(101);
+  });
+
+  it("keeps the flows already listed when a LATER page fails", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      flowRow(`f-${String(i).padStart(3, "0")}`, createdTrigger())
+    );
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      pushedPagesDb([{ data: page1 }, { data: null, error: { message: "later page" } }]),
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(100);
+    expect(errSpy).toHaveBeenCalledWith(
+      "fireCalendarTriggersForPushedEvent flow listing page",
+      "later page"
+    );
+    errSpy.mockRestore();
   });
 });

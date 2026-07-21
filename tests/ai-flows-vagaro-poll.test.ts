@@ -226,6 +226,45 @@ describe("fetchVagaroCandidateEvents", () => {
     });
   });
 
+  it("lets the canceled window's version replace a stale non-canceled duplicate", async () => {
+    const active = appt({ id: "appt-x" });
+    const canceled = appt({
+      id: "appt-x",
+      cancelled: true,
+      status: "cancelled",
+      updatedIso: "2026-07-21T11:59:00.000Z"
+    });
+    const d = deps({
+      list: vi
+        .fn()
+        // created window: the appointment still listed as standing.
+        .mockResolvedValueOnce([active])
+        // canceled window: the SAME appointment, now canceled — twice, so a
+        // canceled duplicate of an already-canceled entry is also exercised.
+        .mockResolvedValueOnce([canceled, canceled])
+    });
+    const res = await fetchVagaroCandidateEvents(
+      {
+        businessId: BIZ,
+        nowMs: NOW,
+        windows: {
+          createdScan: true,
+          startHorizonMinutes: null,
+          endBackMinutes: null,
+          canceledScan: true
+        },
+        dueFilter: () => true
+      },
+      d
+    );
+    expect(res.events).toHaveLength(1);
+    expect(res.events[0]).toMatchObject({
+      id: "appt-x",
+      cancelled: true,
+      updatedIso: "2026-07-21T11:59:00.000Z"
+    });
+  });
+
   it("applies the due filter and flags a full page as overflow", async () => {
     const fullPage = Array.from({ length: VAGARO_POLL_MAX_EVENTS }, (_, i) =>
       appt({ id: `appt-${i}` })

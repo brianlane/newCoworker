@@ -154,7 +154,7 @@ export async function fetchVagaroCandidateEvents(
   if (!conn) throw new Error("calendar_not_connected");
 
   const collected: CalendarEventInput[] = [];
-  const seen = new Set<string>();
+  const indexById = new Map<string, number>();
   let overflowed = false;
   const iso = (ms: number) => new Date(ms).toISOString();
   const minuteMs = 60_000;
@@ -164,8 +164,19 @@ export async function fetchVagaroCandidateEvents(
     overflowed ||= items.length >= VAGARO_POLL_MAX_EVENTS;
     for (const item of items) {
       const ev = vagaroAppointmentToCalendarEvent(item);
-      if (seen.has(ev.id)) continue;
-      seen.add(ev.id);
+      const existingIdx = indexById.get(ev.id);
+      if (existingIdx !== undefined) {
+        // The canceled window runs LAST and is the only listing that carries
+        // cancellations — a canceled version must replace the stale
+        // non-canceled row an earlier window already collected, or
+        // event_canceled never becomes due from the poll (Bugbot on PR #810)
+        // and the other modes keep treating the appointment as standing.
+        if (ev.cancelled && !collected[existingIdx].cancelled) {
+          collected[existingIdx] = ev;
+        }
+        continue;
+      }
+      indexById.set(ev.id, collected.length);
       collected.push(ev);
     }
   };

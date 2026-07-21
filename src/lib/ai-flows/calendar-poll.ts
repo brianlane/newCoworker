@@ -791,18 +791,33 @@ export async function fireCalendarTriggersForPushedEvent(
   ev: CalendarEventInput,
   nowMs: number
 ): Promise<number> {
-  const { data, error } = await db
-    .from("ai_flows")
-    .select("id, business_id, definition")
-    .eq("business_id", businessId)
-    .eq("enabled", true)
-    .or("definition->trigger->>channel.eq.calendar,definition->triggers.not.is.null")
-    .limit(CALENDAR_POLL_FLOW_PAGE);
-  if (error) throw new Error(`fireCalendarTriggersForPushedEvent: ${error.message}`);
+  // Paged like pollCalendarTriggers' listing so a business with more than
+  // one page of calendar-capable flows never silently loses the tail
+  // (Bugbot on PR #810). A LATER page failing keeps the flows already in
+  // hand — the minute poll re-observes with the same dedupe keys.
+  const flowRows: Array<{ id: string; business_id: string; definition: unknown }> = [];
+  for (let offset = 0; ; offset += CALENDAR_POLL_FLOW_PAGE) {
+    const { data, error } = await db
+      .from("ai_flows")
+      .select("id, business_id, definition")
+      .eq("business_id", businessId)
+      .eq("enabled", true)
+      .or("definition->trigger->>channel.eq.calendar,definition->triggers.not.is.null")
+      .order("id", { ascending: true })
+      .range(offset, offset + CALENDAR_POLL_FLOW_PAGE - 1);
+    if (error) {
+      if (flowRows.length === 0) {
+        throw new Error(`fireCalendarTriggersForPushedEvent: ${error.message}`);
+      }
+      console.error("fireCalendarTriggersForPushedEvent flow listing page", error.message);
+      break;
+    }
+    const batch = (data ?? []) as typeof flowRows;
+    flowRows.push(...batch);
+    if (batch.length < CALENDAR_POLL_FLOW_PAGE) break;
+  }
   const mode = ev.cancelled ? "event_canceled" : "event_created";
-  const flows = calendarFlowsFrom(
-    (data ?? []) as Array<{ id: string; business_id: string; definition: unknown }>
-  ).filter((f) => f.on === mode);
+  const flows = calendarFlowsFrom(flowRows).filter((f) => f.on === mode);
 
   let enqueued = 0;
   for (const flow of flows) {
