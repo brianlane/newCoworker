@@ -145,6 +145,48 @@ export async function GET(request: Request) {
     }
     const contacts = [...contactsByPrimary.values()];
 
+    // 2b) Supplemental submissions for the contacts themselves: a pipeline
+    //     lead whose stored submission is OLDER than the newest-300 window
+    //     must still show its answers, so fetch the freshest rows matching
+    //     any contact identifier too (duplicates are fine — the fold keeps
+    //     the newest per lead).
+    const contactPhones = [
+      ...new Set(
+        contacts.flatMap((c) => [c.customer_e164, ...(c.alias_e164s ?? [])])
+      )
+    ].filter((p) => /^\+\d+$/.test(p));
+    if (contactPhones.length > 0) {
+      const { data, error } = await db
+        .from("lead_submissions")
+        .select("source, leadgen_id, fields, phone_e164, email, created_at")
+        .eq("business_id", businessId)
+        .in("phone_e164", contactPhones)
+        .order("created_at", { ascending: false })
+        .limit(MAX_SUBMISSIONS);
+      if (error) throw new Error(`leads-data: contact submissions: ${error.message}`);
+      submissions.push(...((data ?? []) as LeadSubmissionRow[]));
+    }
+    const contactEmails = [
+      ...new Set(
+        contacts
+          .map((c) => c.email?.trim().toLowerCase())
+          .filter((e): e is string => !!e)
+      )
+    ];
+    if (contactEmails.length > 0) {
+      const { data, error } = await db
+        .from("lead_submissions")
+        .select("source, leadgen_id, fields, phone_e164, email, created_at")
+        .eq("business_id", businessId)
+        .in("email", contactEmails)
+        .order("created_at", { ascending: false })
+        .limit(MAX_SUBMISSIONS);
+      if (error) {
+        throw new Error(`leads-data: contact submissions by email: ${error.message}`);
+      }
+      submissions.push(...((data ?? []) as LeadSubmissionRow[]));
+    }
+
     // 3) Roster names for owner badges.
     const { data: memberData } = await db
       .from("ai_flow_team_members")

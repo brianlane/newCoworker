@@ -43,8 +43,13 @@ create table if not exists public.meta_capi_events (
   -- One event per (lead, stage) transition burst — a drag back and forth
   -- re-fires because the stamp differs; an exact redelivery does not.
   dedupe_key text not null,
+  -- 'sending' is the drain's in-flight claim (flipped atomically from
+  -- 'pending' so overlapping drain invocations never double-upload); a
+  -- crashed drain's claim goes stale and is reclaimed after a timeout.
   status text not null default 'pending'
-    check (status in ('pending', 'sent', 'failed', 'skipped', 'expired')),
+    check (status in ('pending', 'sending', 'sent', 'failed', 'skipped', 'expired')),
+  -- When the in-flight claim was taken (stale-claim reclaim cutoff).
+  claimed_at timestamptz,
   attempts integer not null default 0,
   last_error text,
   sent_at timestamptz,
@@ -57,10 +62,13 @@ comment on table public.meta_capi_events is
 create unique index if not exists uq_meta_capi_events_dedupe
   on public.meta_capi_events (business_id, dedupe_key);
 
--- The drain scans pending rows oldest-first.
+-- The drain scans pending rows oldest-first, and reclaims stale claims.
 create index if not exists idx_meta_capi_events_pending
   on public.meta_capi_events (status, created_at)
   where status = 'pending';
+create index if not exists idx_meta_capi_events_sending
+  on public.meta_capi_events (claimed_at)
+  where status = 'sending';
 
 alter table public.meta_capi_events enable row level security;
 -- No policies: service_role bypasses RLS; anon/authenticated get an

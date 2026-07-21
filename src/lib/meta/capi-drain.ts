@@ -31,6 +31,12 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const CAPI_DRAIN_BATCH = 50;
 /** Upload attempts before a row is marked failed (it expires at 7d anyway). */
 export const CAPI_MAX_ATTEMPTS = 10;
+/**
+ * An in-flight `sending` claim older than this is presumed crashed and
+ * reclaimed. Well past the route's maxDuration, so a live drain can never
+ * have its rows stolen mid-upload.
+ */
+export const CAPI_CLAIM_STALE_MS = 10 * 60 * 1000;
 
 type OutboxRow = {
   id: string;
@@ -129,9 +135,23 @@ export async function drainMetaCapiEvents(
     deferred: 0
   };
 
+  // Reclaim stale in-flight claims from a crashed drain (best-effort).
+  {
+    const { error: reclaimErr } = await db
+      .from("meta_capi_events")
+      .update({ status: "pending", claimed_at: null })
+      .eq("status", "sending")
+      .lt("claimed_at", new Date(Date.now() - CAPI_CLAIM_STALE_MS).toISOString());
+    if (reclaimErr) {
+      logger.warn("meta capi drain: stale-claim reclaim failed", {
+        error: reclaimErr.message
+      });
+    }
+  }
+
   const { data, error } = await db
     .from("meta_capi_events")
-    .select("id, business_id, contact_e164, event_name, event_time, dedupe_key, attempts")
+    .select("id")
     .eq("status", "pending")
     .order("created_at", { ascending: true })
     .limit(CAPI_DRAIN_BATCH);
@@ -139,7 +159,23 @@ export async function drainMetaCapiEvents(
     logger.warn("meta capi drain: batch read failed", { error: error.message });
     return summary;
   }
-  const rows = (data ?? []) as OutboxRow[];
+  const candidateIds = ((data ?? []) as Array<{ id: string }>).map((r) => r.id);
+  if (candidateIds.length === 0) return summary;
+
+  // Atomic claim: only rows still `pending` flip to `sending`, so
+  // overlapping drain invocations (long tick, manual replay) can never
+  // upload the same row twice — each processes only the rows it won.
+  const { data: claimedData, error: claimErr } = await db
+    .from("meta_capi_events")
+    .update({ status: "sending", claimed_at: new Date().toISOString() })
+    .eq("status", "pending")
+    .in("id", candidateIds)
+    .select("id, business_id, contact_e164, event_name, event_time, dedupe_key, attempts");
+  if (claimErr) {
+    logger.warn("meta capi drain: claim failed", { error: claimErr.message });
+    return summary;
+  }
+  const rows = (claimedData ?? []) as OutboxRow[];
   summary.claimed = rows.length;
   if (rows.length === 0) return summary;
 
@@ -161,7 +197,7 @@ export async function drainMetaCapiEvents(
   for (const row of rows) {
     const eventTimeMs = Date.parse(row.event_time);
     if (Number.isFinite(eventTimeMs) && Date.now() - eventTimeMs > CAPI_EVENT_MAX_AGE_MS) {
-      await markRow(db, row.id, { status: "expired" });
+      await markRow(db, row.id, { status: "expired", claimed_at: null });
       summary.expired += 1;
       continue;
     }
@@ -177,10 +213,14 @@ export async function drainMetaCapiEvents(
       !connection.pageToken
     ) {
       // Often temporary (paused connection, mid-reconnect, lookup error):
-      // leave the row pending — it retries every tick until the connection
-      // comes back or the 7-day window expires it. attempts is reserved
-      // for real upload tries, so waiting here never burns the cap.
-      await markRow(db, row.id, { last_error: "no capi-ready meta connection" });
+      // release the claim back to pending — it retries every tick until
+      // the connection comes back or the 7-day window expires it. attempts
+      // is reserved for real upload tries, so waiting never burns the cap.
+      await markRow(db, row.id, {
+        status: "pending",
+        claimed_at: null,
+        last_error: "no capi-ready meta connection"
+      });
       summary.deferred += 1;
       continue;
     }
@@ -202,6 +242,8 @@ export async function drainMetaCapiEvents(
     } catch (err) {
       // Resolution is a DB read — treat as transient and retry next tick.
       await markRow(db, row.id, {
+        status: "pending",
+        claimed_at: null,
         attempts: row.attempts + 1,
         last_error: err instanceof Error ? err.message : String(err)
       });
@@ -211,6 +253,7 @@ export async function drainMetaCapiEvents(
     if (!submission || !body) {
       await markRow(db, row.id, {
         status: "skipped",
+        claimed_at: null,
         last_error: "no meta lead identifiers for this contact"
       });
       summary.skipped += 1;
@@ -219,8 +262,13 @@ export async function drainMetaCapiEvents(
 
     try {
       await sendConversionLeadBody(connection.dataset_id, connection.pageToken, body);
+      // If THIS update fails, the row stays `sending` and is retried only
+      // after the stale-claim window — and the re-upload carries the same
+      // event_id (the dedupe key), which Meta deduplicates server-side, so
+      // a lost bookkeeping write can never double-count a conversion.
       await markRow(db, row.id, {
         status: "sent",
+        claimed_at: null,
         sent_at: new Date().toISOString(),
         last_error: null
       });
@@ -229,10 +277,20 @@ export async function drainMetaCapiEvents(
       const attempts = row.attempts + 1;
       const message = err instanceof Error ? err.message : String(err);
       if (attempts >= CAPI_MAX_ATTEMPTS) {
-        await markRow(db, row.id, { status: "failed", attempts, last_error: message });
+        await markRow(db, row.id, {
+          status: "failed",
+          claimed_at: null,
+          attempts,
+          last_error: message
+        });
         summary.failed += 1;
       } else {
-        await markRow(db, row.id, { attempts, last_error: message });
+        await markRow(db, row.id, {
+          status: "pending",
+          claimed_at: null,
+          attempts,
+          last_error: message
+        });
         summary.deferred += 1;
       }
     }
