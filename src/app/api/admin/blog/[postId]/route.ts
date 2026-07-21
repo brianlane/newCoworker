@@ -66,6 +66,12 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
       body.slug = normalized;
     }
 
+    // A published post stays published: re-drafting or re-scheduling it
+    // would re-run the publish fan-out (subscriber email + Instagram
+    // cross-post) for the same post. Field edits remain allowed.
+    if (body.status !== undefined && post.status === "published") {
+      return errorResponse("CONFLICT", "Published posts cannot go back to draft or scheduled");
+    }
     // Scheduling requires a time; un-scheduling clears it.
     if (body.status === "scheduled" && !body.scheduled_for && !post.scheduled_for) {
       return errorResponse("VALIDATION_ERROR", "A scheduled post needs a publish time");

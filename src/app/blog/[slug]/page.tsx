@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import { JsonLd } from "@/components/marketing/JsonLd";
 import { BlogPostCard } from "@/components/marketing/BlogPostCard";
 import { BlogShareButtons } from "@/components/marketing/BlogShareButtons";
 import { BlogSubscribeForm } from "@/components/marketing/BlogSubscribeForm";
@@ -127,10 +128,7 @@ export default async function BlogPostPage({
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
-      <script
-        type="application/ld+json"
-        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
-      />
+      <JsonLd data={jsonLd} />
 
       <article className="mx-auto max-w-3xl px-6 pb-16 pt-14">
         <nav className="mb-8 text-sm">

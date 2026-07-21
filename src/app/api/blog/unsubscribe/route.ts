@@ -11,7 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { unsubscribeBlogSubscriberByToken } from "@/lib/blog/db";
-import { rateLimit } from "@/lib/rate-limit";
+import { rateLimit, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -22,7 +22,12 @@ async function unsubscribe(request: Request): Promise<boolean> {
   const url = new URL(request.url);
   const token = (url.searchParams.get("token") ?? "").trim();
   if (!token || token.length > 128) return false;
-  const limiter = rateLimit("blog-unsubscribe", RATE);
+  // Per-client bucket: a post-publish wave of unsubscribes must not share
+  // one global quota (later valid tokens would be refused).
+  const limiter = rateLimit(
+    `blog-unsubscribe:${rateLimitIdentifierFromRequest(request)}`,
+    RATE
+  );
   if (!limiter.success) return false;
   try {
     return await unsubscribeBlogSubscriberByToken(token);

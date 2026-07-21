@@ -181,9 +181,70 @@ describe("fetchMergedPrsFromGithub", () => {
       },
       { number: 4, title: "Null-ish fields", body: "", labels: [], authorLogin: "" }
     ]);
+    // A short page is the last page — no second fetch.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toContain("repos/owner/repo/pulls");
+    expect(url).toContain("page=1");
     expect(init.headers.Authorization).toBe("Bearer gh-token");
+  });
+
+  function fullPage(startNumber: number, mergedAt: string | null) {
+    return Array.from({ length: 100 }, (_, i) => ({
+      number: startNumber + i,
+      title: `PR ${startNumber + i}`,
+      body: null,
+      merged_at: mergedAt,
+      labels: [],
+      user: null,
+      base: { ref: "main" }
+    }));
+  }
+
+  it("pages past a full first page so busy weeks are not undercounted", async () => {
+    vi.stubEnv("GITHUB_DIGEST_REPO", "owner/repo");
+    vi.stubEnv("GITHUB_DIGEST_TOKEN", "gh-token");
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => fullPage(1, "2026-07-15T10:00:00Z")
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => fullPage(101, "2026-07-16T10:00:00Z").slice(0, 20)
+      });
+    const prs = await fetchMergedPrsFromGithub(SINCE, UNTIL, fetchImpl as never);
+    expect(prs).toHaveLength(120);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(fetchImpl.mock.calls[1][0]).toContain("page=2");
+  });
+
+  it("stops paging once a full page has no in-window merges", async () => {
+    vi.stubEnv("GITHUB_DIGEST_REPO", "owner/repo");
+    vi.stubEnv("GITHUB_DIGEST_TOKEN", "gh-token");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      // Full page, but everything merged before the window (or unmerged).
+      json: async () => [
+        ...fullPage(1, "2026-06-01T10:00:00Z").slice(0, 50),
+        ...fullPage(51, null).slice(0, 50)
+      ]
+    });
+    const prs = await fetchMergedPrsFromGithub(SINCE, UNTIL, fetchImpl as never);
+    expect(prs).toEqual([]);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("caps at the page limit even when every page stays recent", async () => {
+    vi.stubEnv("GITHUB_DIGEST_REPO", "owner/repo");
+    vi.stubEnv("GITHUB_DIGEST_TOKEN", "gh-token");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => fullPage(1, "2026-07-15T10:00:00Z")
+    });
+    await fetchMergedPrsFromGithub(SINCE, UNTIL, fetchImpl as never);
+    expect(fetchImpl).toHaveBeenCalledTimes(5);
   });
 });
 
@@ -427,6 +488,29 @@ describe("runWeeklyDigest", () => {
     const [sinceIso, untilIso] = fetchMergedPrs.mock.calls[0] ?? [];
     expect(untilIso).toBe(NOW.toISOString());
     expect(sinceIso).toBe("2026-07-13T15:00:00.000Z");
+  });
+
+  it("treats an insert lost to a concurrent run as already_exists", async () => {
+    const findExisting = vi
+      .fn()
+      .mockResolvedValueOnce(null) // pre-insert probe
+      .mockResolvedValueOnce({ id: "winner" } as never); // post-race re-check
+    const insertPost = vi
+      .fn()
+      .mockRejectedValue(new Error('duplicate key value violates unique constraint "uq_blog_posts_digest_week"'));
+    const result = await runWeeklyDigest(
+      deps({ findExisting, insertPost: insertPost as never }) as never
+    );
+    expect(result.outcome).toBe("already_exists");
+    expect(result.mergedCount).toBe(11);
+  });
+
+  it("rethrows a genuine insert failure (no concurrent winner)", async () => {
+    const findExisting = vi.fn().mockResolvedValue(null);
+    const insertPost = vi.fn().mockRejectedValue(new Error("db down"));
+    await expect(
+      runWeeklyDigest(deps({ findExisting, insertPost: insertPost as never }) as never)
+    ).rejects.toThrow("db down");
   });
 
   it("honors digest_as_draft and digest_include_image=false", async () => {

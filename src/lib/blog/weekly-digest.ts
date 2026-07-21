@@ -107,9 +107,16 @@ type GithubPullResponse = Array<{
 
 export type FetchMergedPrs = (sinceIso: string, untilIso: string) => Promise<MergedPr[]>;
 
+/** Page cap for the merged-PR listing: 5 x 100 comfortably covers the
+ * busiest week to date (~60 merges) with a wide safety margin. */
+export const GITHUB_PR_PAGE_LIMIT = 5;
+
 /**
- * PRs merged into main inside the window, newest first. One 100-item page
- * is plenty: the busiest week to date merged ~60.
+ * PRs merged into main inside the window. Pages through the closed-PR
+ * listing (sorted by `updated` desc) so a busy week is never undercounted
+ * by a single-page fetch; paging stops early once a whole page falls
+ * outside the window (a closed PR's `updated_at` is >= its `merged_at`,
+ * so anything merged in-window sits in the still-recent pages).
  */
 export async function fetchMergedPrsFromGithub(
   sinceIso: string,
@@ -121,31 +128,40 @@ export async function fetchMergedPrsFromGithub(
   if (!repo || !token) {
     throw new Error("weekly-digest: GITHUB_DIGEST_REPO / GITHUB_DIGEST_TOKEN not configured");
   }
-  const url =
-    `https://api.github.com/repos/${repo}/pulls` +
-    `?state=closed&base=main&sort=updated&direction=desc&per_page=100`;
-  const response = await fetchImpl(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-      Accept: "application/vnd.github+json",
-      "X-GitHub-Api-Version": "2022-11-28"
+  const merged: MergedPr[] = [];
+  for (let page = 1; page <= GITHUB_PR_PAGE_LIMIT; page++) {
+    const url =
+      `https://api.github.com/repos/${repo}/pulls` +
+      `?state=closed&base=main&sort=updated&direction=desc&per_page=100&page=${page}`;
+    const response = await fetchImpl(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28"
+      }
+    });
+    if (!response.ok) {
+      throw new Error(`weekly-digest: GitHub list PRs failed (${response.status})`);
     }
-  });
-  if (!response.ok) {
-    throw new Error(`weekly-digest: GitHub list PRs failed (${response.status})`);
+    const pulls = (await response.json()) as GithubPullResponse;
+    for (const p of pulls) {
+      if (p.merged_at !== null && p.merged_at >= sinceIso && p.merged_at < untilIso) {
+        merged.push({
+          number: p.number,
+          title: p.title,
+          body: p.body ?? "",
+          labels: p.labels.map((l) => l.name),
+          authorLogin: p.user?.login ?? ""
+        });
+      }
+    }
+    // Short page = last page; a page with zero in-window merges means the
+    // rest of the (updated-desc) listing is older still.
+    if (pulls.length < 100) break;
+    const anyRecent = pulls.some((p) => p.merged_at !== null && p.merged_at >= sinceIso);
+    if (!anyRecent) break;
   }
-  const pulls = (await response.json()) as GithubPullResponse;
-  return pulls
-    .filter(
-      (p) => p.merged_at !== null && p.merged_at >= sinceIso && p.merged_at < untilIso
-    )
-    .map((p) => ({
-      number: p.number,
-      title: p.title,
-      body: p.body ?? "",
-      labels: p.labels.map((l) => l.name),
-      authorLogin: p.user?.login ?? ""
-    }));
+  return merged;
 }
 
 // --------------------------------------------------------------------------
@@ -380,9 +396,11 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   /* c8 ignore stop */
 
   const nowDate = now();
-  // The digest covers the week that just ENDED — key it by last Monday's
-  // ISO week so a Monday-morning run summarizes the prior 7 days.
-  const weekKey = isoWeekKey(new Date(nowDate.getTime() - 24 * 60 * 60 * 1000));
+  // The digest covers the week that just ENDED — key it by the ISO week of
+  // (now − 7 days). Stable across retries any day of the current week: a
+  // Monday run and a Wednesday re-run both key the same prior week, so the
+  // digest_week idempotency probe actually catches the duplicate.
+  const weekKey = isoWeekKey(new Date(nowDate.getTime() - 7 * 24 * 60 * 60 * 1000));
   const base: Omit<WeeklyDigestResult, "outcome"> = {
     weekKey,
     mergedCount: 0,
@@ -415,23 +433,35 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
     ? await generateImage(draft, weekKey)
     : null;
 
-  const post: BlogPostRow = await insertPost(
-    {
-      slug: `what-we-shipped-${weekKey.toLowerCase()}`,
-      title: draft.title,
-      excerpt: draft.excerpt,
-      content: draft.content,
-      category: "platform-updates",
-      source: "weekly_digest",
-      digest_week: weekKey,
-      featured_image_path: imagePath,
-      featured_image_alt: imagePath ? draft.title : null,
-      ...(settings.digest_as_draft
-        ? { status: "draft" as const }
-        : { status: "scheduled" as const, scheduled_for: nowDate.toISOString() })
-    },
-    db
-  );
+  let post: BlogPostRow;
+  try {
+    post = await insertPost(
+      {
+        slug: `what-we-shipped-${weekKey.toLowerCase()}`,
+        title: draft.title,
+        excerpt: draft.excerpt,
+        content: draft.content,
+        category: "platform-updates",
+        source: "weekly_digest",
+        digest_week: weekKey,
+        featured_image_path: imagePath,
+        featured_image_alt: imagePath ? draft.title : null,
+        ...(settings.digest_as_draft
+          ? { status: "draft" as const }
+          : { status: "scheduled" as const, scheduled_for: nowDate.toISOString() })
+      },
+      db
+    );
+  } catch (err) {
+    // Two overlapping runs can both pass the findExisting probe; the loser
+    // hits the unique digest_week/slug constraint. That is the idempotency
+    // working, not a failure — report it as already_exists.
+    if (await findExisting(weekKey, db)) {
+      logger.info("weekly-digest: lost the insert race to a concurrent run", { weekKey });
+      return { ...base, mergedCount: merged.length, outcome: "already_exists" };
+    }
+    throw err;
+  }
 
   logger.info("weekly-digest: post created", {
     postId: post.id,
