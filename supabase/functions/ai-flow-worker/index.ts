@@ -276,7 +276,11 @@ class StepDiagnosticError extends Error {
     if (result && Object.keys(result).length > 0) this.result = result;
   }
 }
-const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
+// gemini-3.5-flash-lite (GA Jul 21 2026): extraction results feed live sends
+// (lead names/phones templated into texts), so the quality jump over
+// 2.5-flash-lite is worth the higher list price on this low-volume,
+// per-run surface ($0.30/$2.50 vs $0.10/$0.40 per 1M).
+const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-3.5-flash-lite";
 
 // AiFlow Gemini/Rowboat usage meters into the SAME owner_chat_model_spend pool
 // (and the same cap env var) as dashboard chat + SMS, so one fuse covers every
@@ -3925,7 +3929,17 @@ async function geminiJsonForPrompt(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, responseMimeType: "application/json" }
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        // Structured extraction/classify needs no chain-of-thought, and
+        // Gemini 3 thinking tokens BILL as output — "minimal" keeps the
+        // spend on the answer (same posture as knowledge lookups). Gated on
+        // the family: Gemini 2.5 rejects thinkingLevel.
+        ...(/^gemini-3/i.test(GEMINI_MODEL)
+          ? { thinkingConfig: { thinkingLevel: "minimal" } }
+          : {})
+      }
     })
   });
   if (!res.ok) throw new Error(`gemini ${res.status}`);

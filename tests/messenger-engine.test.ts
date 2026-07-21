@@ -214,6 +214,16 @@ describe("messengerEngineModel", () => {
 });
 
 describe("runMessengerGeminiTurn", () => {
+  it("omits thinkingLevel for a non-Gemini-3 model override (2.5 rejects it)", async () => {
+    const deps = makeDeps({
+      env: { GOOGLE_API_KEY: "k", MESSENGER_GEMINI_ENGINE_MODEL: "gemini-2.5-flash" }
+    });
+    await runMessengerGeminiTurn(ARGS, deps);
+    const step = vi.mocked(deps.chatStep).mock.calls[0][0];
+    expect(step.model).toBe("gemini-2.5-flash");
+    expect(step.thinkingLevel).toBeUndefined();
+  });
+
   it("throws messenger_engine_no_key without a Google key (GEMINI_API_KEY accepted)", async () => {
     const deps = makeDeps({ env: {} });
     await expect(runMessengerGeminiTurn(ARGS, deps)).rejects.toThrow(
@@ -293,6 +303,9 @@ describe("runMessengerGeminiTurn", () => {
     ]);
     expect(step.tools).toBe(WEBCHAT_TOOL_DECLARATIONS);
     expect(step.model).toBe(MESSENGER_ENGINE_DEFAULT_MODEL);
+    // Gemini 3 default: thinking constrained to "low" so dynamic reasoning
+    // can't eat the (default 1500) output cap into an empty step.
+    expect(step.thinkingLevel).toBe("low");
 
     expect(deps.meter).toHaveBeenCalledTimes(1);
     expect(vi.mocked(deps.meter).mock.calls[0][0]).toMatchObject({

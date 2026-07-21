@@ -79,6 +79,15 @@ describe("geminiChatStep", () => {
     expect(body.generationConfig).toEqual({ temperature: 0.7, maxOutputTokens: 99 });
   });
 
+  it("threads thinkingLevel into generationConfig.thinkingConfig when set", async () => {
+    fetchMock.mockResolvedValueOnce(
+      okResponse({ candidates: [{ content: { parts: [{ text: "ok" }] } }] })
+    );
+    await geminiChatStep({ ...BASE, thinkingLevel: "low" });
+    const body = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(body.generationConfig.thinkingConfig).toEqual({ thinkingLevel: "low" });
+  });
+
   it("extracts functionCall parts and coerces malformed args to {}", async () => {
     fetchMock.mockResolvedValueOnce(
       okResponse({

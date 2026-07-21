@@ -32,13 +32,13 @@
 #                               voice picker). Blank keeps the model default.
 #   GEMINI_ROWBOAT_MODEL     — optional; Gemini model used by Rowboat's voice_task
 #                               agent via the llm-router sidecar. Defaults to
-#                               gemini-3.1-flash.
+#                               gemini-3.6-flash.
 #   OWNER_CHAT_MODEL         — optional; model for the OwnerCoworker (owner
 #                               dashboard chat) agent. Defaults to
-#                               gemini-2.5-flash-lite; degrades to OLLAMA_MODEL
+#                               gemini-3.5-flash-lite; degrades to OLLAMA_MODEL
 #                               on a keyless host.
 #   SMS_CHAT_MODEL           — optional; model for the Coworker (inbound SMS)
-#                               agent. Defaults to gemini-2.5-flash-lite (shares
+#                               agent. Defaults to gemini-3.5-flash-lite (shares
 #                               the owner-chat spend cap; falls back to the
 #                               CoworkerLocal/Qwen twin once tripped); degrades
 #                               to OLLAMA_MODEL on a keyless host.
@@ -257,10 +257,12 @@ fi
 # container serve both the SMS dispatcher agent (Ollama) and the voice_task
 # agent (Gemini).
 LLM_ROUTER_PORT="${LLM_ROUTER_PORT:-11435}"
-# gemini-3.5-flash: verified live on the Gemini API (2026-07-15). The old
-# default "gemini-3.1-flash" does NOT exist on the API (404 on both
-# :generateContent and the OpenAI-compat route the llm-router uses).
-GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.5-flash"
+# gemini-3.6-flash (GA 2026-07-21): replaces 3.5-flash — better agentic/tool
+# work, $7.50/1M output (vs 9.00), ~17% fewer output tokens. Verify any new
+# id live on BOTH :generateContent and the OpenAI-compat route the llm-router
+# uses before changing this default — the old "gemini-3.1-flash" default did
+# NOT exist on the API (404 on both) and broke voice turns fleet-wide.
+GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.6-flash"
 
 # Owner-dashboard chat model (OwnerCoworker agent only — SMS's Coworker agent
 # stays on the local Ollama model for $0 marginal cost). The owner surface
@@ -272,19 +274,22 @@ GEMINI_ROWBOAT_MODEL_DEFAULT="gemini-3.5-flash"
 # correct vs ~100s+ on qwen, for ~$0.0003/turn (see debug/bench-* + the
 # dashboard-chat-model-benchmark canvas). Override to a local tag (e.g.
 # qwen3:4b-instruct) to fall back to fully-local owner chat.
-# Default bumped 2.5-flash-lite → 2.5-flash after the 2026-07-15 KYP Ads
-# owner-chat session: the lite model answered "yeah" with a business-hours
+# Default history: 2.5-flash-lite → 2.5-flash after the 2026-07-15 KYP Ads
+# owner-chat session (the lite model answered "yeah" with a business-hours
 # non-sequitur, contradicted itself about the tenant's live Calendly
 # connection within four turns, answered the owner's own decision checklist
-# on his behalf (inventing policy + telling him to text his own number), and
-# on an SMS resend passed its previous CHAT reply as the message body — the
-# same context-blindness class as the 2026-07-14 Truly incident that bumped
-# SMS_CHAT_MODEL below ($0.30/$2.50 per 1M, priced in
-# _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts). Gemini 3.x
-# is usable on this path since the llm-router thought-signature shim
-# (PR #683) but stays non-default on cost/latency — see the SMS_CHAT_MODEL
-# note for the measurements.
-OWNER_CHAT_MODEL_DEFAULT="gemini-2.5-flash"
+# on his behalf, and on an SMS resend passed its previous CHAT reply as the
+# message body — the same context-blindness class as the 2026-07-14 Truly
+# incident that bumped SMS_CHAT_MODEL below). Bumped again 2.5-flash →
+# gemini-3.5-flash-lite (GA 2026-07-21): SAME list price ($0.30/$2.50 per
+# 1M, priced in _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts),
+# far stronger context-following and 350 tok/s. Gemini 3.x is usable on this
+# path since the llm-router thought-signature shim (PR #683, verified live
+# 2026-07-16). Note: 3.x thinking tokens bill as output, so per-turn cost
+# can run above 2.5-flash despite the identical list price — watch
+# /admin/gemini after a default change and prefer a lower thinking level
+# over reverting the model.
+OWNER_CHAT_MODEL_DEFAULT="gemini-3.5-flash-lite"
 OWNER_CHAT_MODEL=${OWNER_CHAT_MODEL:-${OWNER_CHAT_MODEL_DEFAULT}}
 
 # Safety fallback: a gemini-* OwnerCoworker model is only reachable when
@@ -313,26 +318,28 @@ esac
 # local model routinely took >20s for the first SMS reply. Gemini bills per
 # token, so the SMS Edge worker shares the owner-chat $10/period fuse and
 # falls back to the `CoworkerLocal` (Qwen) twin once the COMBINED spend trips
-# the cap. Default bumped 2.5-flash-lite → 2.5-flash after the 2026-07-14
-# Truly incident: 2.5-flash-lite ignored a system preamble that contained the
-# exact answer context and replied context-blind ("I need a bit more context"
-# to a lead's renewal date); 2.5-flash reads the same prompt correctly
-# ($0.30/$2.50 per 1M, priced in _shared/chat_spend_cap.ts +
-# src/lib/billing/ai-spend-meter.ts). Gemini 3.x models are USABLE on this
-# path since PR #683: the llm-router round-trips thought_signature on tool
-# calls (Rowboat's AI SDK drops it; the router re-injects cached/placeholder
-# signatures), verified live 2026-07-16 with zero 400s on multi-turn
-# gemini-3.5-flash tool calling. 2.5-flash stays the DEFAULT on cost +
-# latency, not capability: measured on identical SMS probes, 3.5-flash ran
-# ~$0.026/turn at 8-13s vs 2.5-flash ~$0.004/turn at 2-4s (~7x cost, list
-# $1.50/$9.00 vs $0.30/$2.50 per 1M with thinking billed as output) for
-# marginal quality gain — a poor trade against the shared $10/period AI
-# budget. Override SMS_CHAT_MODEL=gemini-3.5-flash per tenant when the
-# quality trade is worth it. Same keyless safety fallback as
-# OWNER_CHAT_MODEL: a gemini-* tag needs GOOGLE_API_KEY (the llm-router 503s
-# gemini-* without one), so degrade to the local tag on a keyless host.
-# Override SMS_CHAT_MODEL to a local tag to keep SMS fully local.
-SMS_CHAT_MODEL_DEFAULT="gemini-2.5-flash"
+# the cap. Default history: 2.5-flash-lite → 2.5-flash after the 2026-07-14
+# Truly incident (the lite model ignored a system preamble containing the
+# exact answer context and replied context-blind). Bumped again 2.5-flash →
+# gemini-3.5-flash-lite (GA 2026-07-21): SAME list price ($0.30/$2.50 per
+# 1M, priced in _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts),
+# significantly stronger agentic/context behavior, and 350 tok/s — unlike
+# the earlier 3.5-flash trade (~$0.026/turn at 8-13s vs 2.5-flash
+# ~$0.004/turn at 2-4s on identical probes, a poor deal at $1.50/$9.00
+# list), Flash-Lite keeps the price while fixing the quality tier. Gemini
+# 3.x models are USABLE on this path since PR #683: the llm-router
+# round-trips thought_signature on tool calls (Rowboat's AI SDK drops it;
+# the router re-injects cached/placeholder signatures), verified live
+# 2026-07-16 with zero 400s on multi-turn tool calling. Note: 3.x thinking
+# tokens bill as output, so per-turn cost can drift above 2.5-flash despite
+# the identical list price — watch /admin/gemini after rollout and prefer a
+# lower thinking level over reverting the model. Override
+# SMS_CHAT_MODEL=gemini-3.6-flash per tenant when a flagship-quality trade
+# is worth it. Same keyless safety fallback as OWNER_CHAT_MODEL: a gemini-*
+# tag needs GOOGLE_API_KEY (the llm-router 503s gemini-* without one), so
+# degrade to the local tag on a keyless host. Override SMS_CHAT_MODEL to a
+# local tag to keep SMS fully local.
+SMS_CHAT_MODEL_DEFAULT="gemini-3.5-flash-lite"
 SMS_CHAT_MODEL=${SMS_CHAT_MODEL:-${SMS_CHAT_MODEL_DEFAULT}}
 case "${SMS_CHAT_MODEL}" in
   gemini-*)
@@ -2127,7 +2134,10 @@ if [[ -f "${CHAT_WORKER_DEST}/docker-compose.yml" ]]; then
     # ~50s. A gemini-* model needs GOOGLE_API_KEY (the router 503s gemini-*
     # without one), so on a keyless host degrade capture to the local Ollama tag
     # — same fallback policy as OWNER_CHAT_MODEL above.
-    MEMORY_CAPTURE_MODEL_DEFAULT="gemini-2.5-flash-lite"
+    # gemini-3.5-flash-lite (GA 2026-07-21): captured rules become durable
+    # memory — same quality-tier bump as the platform capture default
+    # (src/lib/dashboard-chat/memory-capture.ts).
+    MEMORY_CAPTURE_MODEL_DEFAULT="gemini-3.5-flash-lite"
     MEMORY_CAPTURE_MODEL="${MEMORY_CAPTURE_MODEL:-${MEMORY_CAPTURE_MODEL_DEFAULT}}"
     # Match the worker's OWN gemini detection (extractOwnerRule uses
     # /^gemini[-_.]/i — case-insensitive, with -, _, or . as the separator), so

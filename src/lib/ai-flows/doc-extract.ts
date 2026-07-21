@@ -53,7 +53,9 @@ export {
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 type GeminiCall = (params: GeminiGenerateTextParams) => Promise<GeminiGenerateTextResult>;
 
-const DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview";
+// gemini-3.5-flash-lite (GA Jul 21 2026): cheaper AND stronger than the old
+// gemini-3-flash-preview default for structured document extraction.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 export type DocExtractField = { name: string; description?: string };
 

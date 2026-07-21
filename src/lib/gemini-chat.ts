@@ -51,6 +51,15 @@ export type GeminiChatStepParams = {
   tools: GeminiFunctionDeclaration[];
   temperature?: number;
   maxOutputTokens?: number;
+  /**
+   * Gemini 3 reasoning budget (`thinkingConfig.thinkingLevel`). Gemini 3
+   * models default to dynamic (medium+) thinking which BILLS as output and
+   * counts against `maxOutputTokens` — under a small cap the hidden
+   * reasoning can consume the whole budget and yield an empty step. Only
+   * valid on Gemini 3 models (Gemini 2.5 rejects it); callers gate on the
+   * model family.
+   */
+  thinkingLevel?: "minimal" | "low" | "medium" | "high";
   signal?: AbortSignal;
 };
 
@@ -107,7 +116,10 @@ export async function geminiChatStep(params: GeminiChatStepParams): Promise<Gemi
         : {}),
       generationConfig: {
         temperature: params.temperature ?? 0.2,
-        maxOutputTokens: params.maxOutputTokens ?? 1500
+        maxOutputTokens: params.maxOutputTokens ?? 1500,
+        ...(params.thinkingLevel
+          ? { thinkingConfig: { thinkingLevel: params.thinkingLevel } }
+          : {})
       }
     })
   });

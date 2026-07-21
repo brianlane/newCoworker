@@ -300,6 +300,11 @@ export function buildExtractionRequestBodyOpenAI(model, ownerMessage, opts = {})
     model,
     stream: false,
     temperature: 0,
+    // Gemini 3 models default to dynamic thinking that bills as output —
+    // a strict JSON classification needs none of it. `reasoning_effort` is
+    // the OpenAI-compat mapping of the thinking level; gated on the family
+    // so a 2.5/local override keeps its byte-identical body.
+    ...(/^gemini-3/i.test(model) ? { reasoning_effort: "low" } : {}),
     response_format: { type: "json_schema", json_schema: MEMORY_EXTRACTION_JSON_SCHEMA },
     messages: [
       { role: "system", content: OWNER_MEMORY_SYSTEM_PROMPT },

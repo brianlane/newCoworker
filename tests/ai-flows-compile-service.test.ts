@@ -145,7 +145,7 @@ describe("compileAiFlowFromDescription — configuration & happy path", () => {
     expect(generate.mock.calls[0][0].userText).toContain("none on file");
     // Pinned model at maximum reasoning: 3.5 Flash's DEFAULT thinking level
     // is medium, so the call must set it explicitly.
-    expect(generate.mock.calls[0][0].model).toBe("gemini-3.5-flash");
+    expect(generate.mock.calls[0][0].model).toBe("gemini-3.6-flash");
     expect(generate.mock.calls[0][0].thinkingLevel).toBe(FLOW_COMPILE_THINKING_LEVEL);
     expect(meter).toHaveBeenCalledWith(
       expect.objectContaining({ businessId: BIZ, surface: "aiflow_compile" })
@@ -571,11 +571,11 @@ describe("invalidEditMessage / flowCompileModel", () => {
     expect(msg).toContain("NOT changed");
     expect(msg).toContain("• ");
   });
-  it("flowCompileModel honors the env override and defaults to gemini-3.5-flash", () => {
+  it("flowCompileModel honors the env override and defaults to gemini-3.6-flash", () => {
     process.env.AIFLOW_COMPILE_MODEL = "gemini-custom";
     expect(flowCompileModel()).toBe("gemini-custom");
     delete process.env.AIFLOW_COMPILE_MODEL;
-    expect(flowCompileModel()).toBe("gemini-3.5-flash");
+    expect(flowCompileModel()).toBe("gemini-3.6-flash");
   });
 });
 
@@ -614,7 +614,7 @@ describe("editAiFlowDefinition — configuration & happy path", () => {
     expect(call.userText).toContain(JSON.stringify(CURRENT_DEFINITION));
     expect(call.userText).toContain("Requested changes:");
     expect(call.userText).toContain("change the message to 'updated'");
-    expect(call.model).toBe("gemini-3.5-flash");
+    expect(call.model).toBe("gemini-3.6-flash");
     expect(call.thinkingLevel).toBe(FLOW_COMPILE_THINKING_LEVEL);
     expect(meter).toHaveBeenCalledWith(
       expect.objectContaining({ businessId: BIZ, surface: "aiflow_compile" })

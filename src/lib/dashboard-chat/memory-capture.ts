@@ -193,7 +193,11 @@ export function fitBulletsToPayload(bullets: string[], maxChars = BULLETS_MAX_CH
   return kept;
 }
 
-const DEFAULT_CAPTURE_MODEL = "gemini-3.1-flash-lite";
+// gemini-3.5-flash-lite (GA Jul 21 2026): captured rules become DURABLE
+// memory the coworker acts on for months, so the quality jump over
+// 3.1-flash-lite is worth the small list-price bump ($0.30/$2.50 vs
+// $0.25/$1.50 per 1M) on this low-volume surface.
+const DEFAULT_CAPTURE_MODEL = "gemini-3.5-flash-lite";
 
 function resolveModel(): string {
   const configured = (process.env.MEMORY_CAPTURE_MODEL ?? "").trim();

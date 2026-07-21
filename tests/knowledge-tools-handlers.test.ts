@@ -111,7 +111,7 @@ describe("lookupBusinessKnowledge", () => {
     expect(meter).toHaveBeenCalledOnce();
     expect(meter.mock.calls[0][0]).toMatchObject({
       businessId: BIZ,
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       surface: "knowledge_lookup",
       usage: { promptTokens: 900, outputTokens: 20 },
       outputChars: "Open 9-5 weekdays.".length
@@ -253,8 +253,8 @@ describe("lookupBusinessKnowledge", () => {
     const result = await lookupBusinessKnowledge(BIZ, "hours?");
     expect(result).toEqual({ ok: true, data: { answer: "fallback answer" } });
     expect(gemini.mock.calls[0][0].model).toBe("gemini-9.9-nonexistent");
-    expect(gemini.mock.calls[1][0].model).toBe("gemini-3-flash-preview");
-    expect(meter.mock.calls[0][0].model).toBe("gemini-3-flash-preview");
+    expect(gemini.mock.calls[1][0].model).toBe("gemini-3.5-flash-lite");
+    expect(meter.mock.calls[0][0].model).toBe("gemini-3.5-flash-lite");
   });
 
   it("does NOT retry when the default model itself 404s", async () => {
@@ -293,7 +293,7 @@ describe("lookupBusinessKnowledge", () => {
     expect(meter).toHaveBeenCalledOnce();
     expect(meter.mock.calls[0][0]).toMatchObject({
       businessId: BIZ,
-      model: "gemini-3-flash-preview",
+      model: "gemini-3.5-flash-lite",
       surface: "knowledge_lookup",
       usage: { promptTokens: 800, outputTokens: 200 },
       outputChars: 0

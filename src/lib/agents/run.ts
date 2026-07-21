@@ -45,7 +45,9 @@ export const AGENT_TEXT_MIME_TYPES = [
 ] as const;
 export const AGENT_PDF_MIME_TYPE = "application/pdf";
 
-const DEFAULT_AGENT_MODEL = "gemini-3.5-flash";
+// gemini-3.6-flash (GA Jul 21 2026): better document/knowledge work than
+// 3.5-flash at a lower output price ($7.50/1M vs 9.00).
+const DEFAULT_AGENT_MODEL = "gemini-3.6-flash";
 
 function resolveModel(): string {
   const configured = (process.env.AGENT_RUN_MODEL ?? "").trim();

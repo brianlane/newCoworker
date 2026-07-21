@@ -190,13 +190,14 @@ const MEMORY_CAPTURE_GEMINI_BASE_URL = (
   "https://generativelanguage.googleapis.com/v1beta/openai"
 ).replace(/\/+$/, "");
 const GOOGLE_API_KEY = (process.env.GOOGLE_API_KEY || "").trim();
-// Extraction model. Defaults to Gemini (gemini-2.5-flash-lite) called directly:
-// a functional, ~sub-second classification (measured ~870ms) that uses ZERO
+// Extraction model. Defaults to Gemini (gemini-3.5-flash-lite, GA
+// 2026-07-21 — captured rules become durable memory, so the quality tier
+// matters) called directly: a functional, fast classification that uses ZERO
 // local CPU, so it can't starve the latency-sensitive Gemini chat turns. The
 // CPU-bound local qwen path it replaces always timed out (~30s) AND inflated
 // concurrent owner turns from ~7s to ~50s. Override to a local Ollama tag
 // (e.g. qwen3:4b-instruct) to run capture fully locally on a keyless host.
-const MEMORY_CAPTURE_MODEL = (process.env.MEMORY_CAPTURE_MODEL || "gemini-2.5-flash-lite").trim();
+const MEMORY_CAPTURE_MODEL = (process.env.MEMORY_CAPTURE_MODEL || "gemini-3.5-flash-lite").trim();
 const MEMORY_CAPTURE_TIMEOUT_MS = intEnv("MEMORY_CAPTURE_TIMEOUT_MS", 30 * 1000);
 // Platform adapter that persists owner rules. Authenticated with the same
 // ROWBOAT_GATEWAY_TOKEN the voice/SMS tool adapters use (verifyRowboatGatewayToken).

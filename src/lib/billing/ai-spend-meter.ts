@@ -53,7 +53,14 @@ export const GEMINI_PRICES_PER_1M: Record<string, GeminiPricePer1M> = {
   "gemini-3.1-flash-live-preview": { in: 0.75, out: 4.5, audioIn: 3.0, audioOut: 12.0 },
   // Gemini 3.5 Flash (GA May 2026). Output price includes thinking tokens, so
   // a medium/high reasoning compile is billed entirely at this rate.
-  "gemini-3.5-flash": { in: 1.5, out: 9.0 }
+  "gemini-3.5-flash": { in: 1.5, out: 9.0 },
+  // Gemini 3.5 Flash-Lite (GA Jul 21 2026): the tenant chat + mid-tier
+  // default after the 3.6 migration — same list price as gemini-2.5-flash,
+  // far stronger model. Thinking tokens bill as output here too.
+  "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
+  // Gemini 3.6 Flash (GA Jul 21 2026): replaces 3.5-flash as the flagship
+  // default — $7.50/1M output (vs 9.00) and ~17% fewer output tokens.
+  "gemini-3.6-flash": { in: 1.5, out: 7.5 }
 };
 
 /** Unknown model → assume the priciest tier we deploy (never undercount a fuse). */

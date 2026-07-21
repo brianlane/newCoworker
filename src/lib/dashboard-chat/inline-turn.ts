@@ -161,16 +161,20 @@ const KNOWLEDGE_TOOL: GeminiFunctionDeclaration = {
 /** Bound on model↔tool round-trips per turn. */
 const MAX_TOOL_STEPS = 4;
 
-const DEFAULT_INLINE_MODEL = "gemini-3.5-flash";
+// gemini-3.6-flash (GA Jul 21 2026): beats 3.5-flash on agentic/tool-loop
+// work with $7.50/1M output (vs 9.00) and ~17% fewer output tokens.
+const DEFAULT_INLINE_MODEL = "gemini-3.6-flash";
 /**
  * Same 404 safety net as knowledge-tools/handlers.ts: a configured (or
  * newly defaulted) model id that Google has retired/renamed must degrade to
  * a known-live id instead of killing the whole inline path — a dead inline
  * path silently demotes text turns to the worker and hard-fails attachment
  * turns (exactly what shipped when the default was `gemini-3.1-flash`, an
- * id that does not exist on the Gemini API).
+ * id that does not exist on the Gemini API). The fallback deliberately sits
+ * on a GA id from a DIFFERENT family than the primary (a "-preview" id can
+ * itself be retired).
  */
-const INLINE_FALLBACK_MODEL = "gemini-3-flash-preview";
+const INLINE_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
 function resolveModel(): string {
   const configured = (process.env.DASHBOARD_CHAT_MODEL ?? "").trim();
@@ -547,8 +551,19 @@ export async function runInlineChatTurn(
         maxOutputTokens: 4000,
         signal: controller.signal
       };
+      // Gemini 3 dynamic thinking bills as output and counts against the
+      // 4000-token cap — "low" keeps tool-choice reasoning while protecting
+      // the cap and owner-facing latency (same posture as the messenger
+      // engine; the heavyweight reasoning lives in the compile pipeline at
+      // thinking HIGH, not in this loop). Computed per model because the
+      // 404 fallback can swap families mid-turn; Gemini 2.5 rejects it.
+      const stepFor = (m: string) => ({
+        ...stepParams,
+        model: m,
+        ...(/^gemini-3/i.test(m) ? { thinkingLevel: "low" as const } : {})
+      });
       try {
-        result = await chatStep({ ...stepParams, model });
+        result = await chatStep(stepFor(model));
       } catch (err) {
         // Retired/renamed model id: degrade to the known-live fallback for
         // the REST of the turn instead of failing the whole inline path
@@ -564,7 +579,7 @@ export async function runInlineChatTurn(
           to: INLINE_FALLBACK_MODEL
         });
         model = INLINE_FALLBACK_MODEL;
-        result = await chatStep({ ...stepParams, model });
+        result = await chatStep(stepFor(model));
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

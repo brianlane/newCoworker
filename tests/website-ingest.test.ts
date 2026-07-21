@@ -2258,7 +2258,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toBe("gemini-3-flash-preview");
+    expect(seen[0]).toBe("gemini-3.5-flash-lite");
   });
 
   it("coerces legacy GEMINI_ROWBOAT_MODEL gemini-1.5-* to the supported default", async () => {
@@ -2284,7 +2284,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toBe("gemini-3-flash-preview");
+    expect(seen[0]).toBe("gemini-3.5-flash-lite");
   });
 
   it("coerces legacy GEMINI_ROWBOAT_MODEL models/gemini-1.5-* to the supported default", async () => {
@@ -2310,7 +2310,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toBe("gemini-3-flash-preview");
+    expect(seen[0]).toBe("gemini-3.5-flash-lite");
   });
 
   it("falls back to default when env is only a bare models/ prefix after strip", async () => {
@@ -2336,7 +2336,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       lookup: publicLookup as never
     });
     expect(res.ok).toBe(true);
-    expect(seen[0]).toBe("gemini-3-flash-preview");
+    expect(seen[0]).toBe("gemini-3.5-flash-lite");
   });
 
   it("prefers GEMINI_SUMMARY_MODEL over GEMINI_ROWBOAT_MODEL when both are set", async () => {
@@ -2399,7 +2399,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
       expect(meterSpy).toHaveBeenCalledOnce();
       expect(meterSpy.mock.calls[0][0]).toMatchObject({
         businessId: "biz-meter-1",
-        model: "gemini-3-flash-preview",
+        model: "gemini-3.5-flash-lite",
         surface: "website_ingest",
         usage: { promptTokens: 2000, outputTokens: 300 }
       });
@@ -2432,7 +2432,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     });
     vi.stubGlobal("fetch", geminiFetch);
 
-    // Default model is gemini-3-flash-preview → thinking pinned to minimal.
+    // Default model is gemini-3.5-flash-lite → thinking pinned to minimal.
     const res1 = await ingestWebsite("https://example.com/", {
       fetchImpl: pageFetchImpl(),
       lookup: publicLookup as never
@@ -2524,12 +2524,12 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     expect(res.ok).toBe(true);
     expect(spy).toHaveBeenCalledWith(
       "website-ingest: coercing legacy Gemini model id for summarizer",
-      expect.objectContaining({ from: "gemini-pro", to: "gemini-3-flash-preview" })
+      expect.objectContaining({ from: "gemini-pro", to: "gemini-3.5-flash-lite" })
     );
     spy.mockRestore();
   });
 
-  it("retries with gemini-3-flash-preview when the configured summarizer model returns HTTP 404", async () => {
+  it("retries with gemini-3.5-flash-lite when the configured summarizer model returns HTTP 404", async () => {
     process.env.GOOGLE_API_KEY = "test-key";
     process.env.GEMINI_SUMMARY_MODEL = "some-custom-unstable-model";
     delete process.env.GEMINI_ROWBOAT_MODEL;
@@ -2557,7 +2557,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     });
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.websiteMd).toMatch(/retried/);
-    expect(models).toEqual(["some-custom-unstable-model", "gemini-3-flash-preview"]);
+    expect(models).toEqual(["some-custom-unstable-model", "gemini-3.5-flash-lite"]);
   });
 
   it("treats a non-Error rejection from Gemini before remapping fails as unknown ingest detail", async () => {
@@ -2610,7 +2610,7 @@ describe("defaultGeminiSummarize (via ingestWebsite)", () => {
     if (!res.ok) expect(res.detail).toBe("summarizer_empty");
   });
 
-  it("does not retry a second HTTP 404 when already using gemini-3-flash-preview", async () => {
+  it("does not retry a second HTTP 404 when already using gemini-3.5-flash-lite", async () => {
     process.env.GOOGLE_API_KEY = "test-key";
     delete process.env.GEMINI_SUMMARY_MODEL;
     delete process.env.GEMINI_ROWBOAT_MODEL;

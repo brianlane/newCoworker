@@ -131,13 +131,24 @@ describe("runInlineChatTurn — plain turns", () => {
     );
   });
 
-  it("defaults to a model that exists on the Gemini API (gemini-3.5-flash)", async () => {
+  it("defaults to a model that exists on the Gemini API (gemini-3.6-flash)", async () => {
     // Regression pin: the launch default was gemini-3.1-flash, an id that
     // does not exist on the API — every inline turn 404'd, silently
     // demoting text turns to the worker and hard-failing attachment turns.
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
     await runInlineChatTurn(baseArgs(), { chatStep });
-    expect(chatStep.mock.calls[0][0].model).toBe("gemini-3.5-flash");
+    expect(chatStep.mock.calls[0][0].model).toBe("gemini-3.6-flash");
+    // Gemini 3: thinking constrained to "low" so dynamic reasoning can't
+    // eat the 4000-token cap on tool-loop turns.
+    expect(chatStep.mock.calls[0][0].thinkingLevel).toBe("low");
+  });
+
+  it("omits thinkingLevel for a non-Gemini-3 model override (2.5 rejects it)", async () => {
+    process.env.DASHBOARD_CHAT_MODEL = "gemini-2.5-flash";
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs(), { chatStep });
+    expect(chatStep.mock.calls[0][0].model).toBe("gemini-2.5-flash");
+    expect(chatStep.mock.calls[0][0].thinkingLevel).toBeUndefined();
   });
 
   it("declares the knowledge tool by default and omits it when the toggle is off", async () => {
@@ -164,16 +175,16 @@ describe("runInlineChatTurn — plain turns", () => {
     expect(res).toMatchObject({ ok: true, content: "Drafted." });
     expect(chatStep.mock.calls.map((c) => c[0].model)).toEqual([
       "gemini-9.9-retired",
-      "gemini-3-flash-preview",
+      "gemini-3.5-flash-lite",
       // Later steps of the SAME turn keep the fallback — no re-404 per step.
-      "gemini-3-flash-preview"
+      "gemini-3.5-flash-lite"
     ]);
     // Metering reflects the model that actually answered.
-    expect(meter.mock.calls[0][0]).toMatchObject({ model: "gemini-3-flash-preview" });
+    expect(meter.mock.calls[0][0]).toMatchObject({ model: "gemini-3.5-flash-lite" });
   });
 
   it("does NOT retry when the fallback model itself 404s", async () => {
-    process.env.DASHBOARD_CHAT_MODEL = "gemini-3-flash-preview";
+    process.env.DASHBOARD_CHAT_MODEL = "gemini-3.5-flash-lite";
     const chatStep = vi.fn(async () => {
       throw new Error("gemini_http_404:gone");
     });

@@ -44,7 +44,13 @@ export const GEMINI_PRICES_PER_1M: Record<string, { in: number; out: number }> =
   // Gemini 3.5 Flash (GA May 2026) — the voice `voice_task` Rowboat model.
   // Missing here until Jul 2026: an AIFLOW_EXTRACT_MODEL/SMS pin to 3.5-flash
   // would have priced at the old $0.5/$3.0 default, a 3x undercount.
-  "gemini-3.5-flash": { in: 1.5, out: 9.0 }
+  "gemini-3.5-flash": { in: 1.5, out: 9.0 },
+  // GA Jul 21 2026 — the tenant chat + mid-tier default after the 3.6
+  // migration (same list price as gemini-2.5-flash).
+  "gemini-3.5-flash-lite": { in: 0.3, out: 2.5 },
+  // GA Jul 21 2026 — replaces 3.5-flash as the flagship default (cheaper
+  // output AND ~17% fewer output tokens).
+  "gemini-3.6-flash": { in: 1.5, out: 7.5 }
 };
 // Unknown model → the priciest tier we deploy (gemini-3.5-flash), so the
 // fuse never undercounts. Must stay in lockstep with

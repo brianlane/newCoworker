@@ -87,8 +87,13 @@ export const WEBSITE_INGEST_SITEMAP_MAX_BYTES = 500_000;
 export const WEBSITE_INGEST_SITEMAP_MAX_CHILDREN = 5;
 export const WEBSITE_INGEST_MAX_SUMMARY_CHARS = BUSINESS_CONFIG_WEBSITE_MD_MAX_CHARS;
 
-/** Used when env omits `GEMINI_SUMMARY_MODEL`, or carries a Gemini id unsupported on `:generateContent`. */
-const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3-flash-preview";
+/**
+ * Used when env omits `GEMINI_SUMMARY_MODEL`, or carries a Gemini id
+ * unsupported on `:generateContent`. gemini-3.5-flash-lite (GA Jul 21
+ * 2026): cheaper and stronger than the old gemini-3-flash-preview default,
+ * and a GA id rather than a preview.
+ */
+const WEBSITE_SUMMARY_GEMINI_MODEL_DEFAULT = "gemini-3.5-flash-lite";
 
 /**
  * Website summarization runs on the Next/Vercel host. Prefer a dedicated summary
