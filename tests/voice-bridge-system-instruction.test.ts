@@ -24,6 +24,8 @@ type BuildArgs = {
   callerIdentity?: CallerIdentity;
   hasEndCall?: boolean;
   flowContext?: string;
+  recentInteractions?: string;
+  bookingStatusNote?: string;
 };
 
 function build(args: BuildArgs = {}): string {
@@ -36,7 +38,9 @@ function build(args: BuildArgs = {}): string {
     "America/New_York",
     args.callerIdentity,
     args.hasEndCall ?? false,
-    args.flowContext
+    args.flowContext,
+    args.recentInteractions,
+    args.bookingStatusNote
   );
 }
 
@@ -147,5 +151,30 @@ describe("AiFlow flow-context block", () => {
     // Timestamp caveat again: assert the instruction still ENDS at the
     // persona's final line (the whitespace blob was never appended).
     expect(build({ flowContext: "  \n " }).endsWith("Default to en when unclear.")).toBe(true);
+  });
+});
+
+describe("booking-status note", () => {
+  const NOTE =
+    'Booking status: this caller has an upcoming booking: "Free Strategy Call" starting 2026-07-23T18:00:00Z.';
+
+  it("appears for customer callers so reschedule questions get informed answers", () => {
+    const text = build({ bookingStatusNote: NOTE });
+    expect(text).toContain(NOTE);
+  });
+
+  it("never reaches a staff call, and whitespace adds nothing", () => {
+    expect(
+      build({ callerIdentity: { kind: "owner", name: "Brian" }, bookingStatusNote: NOTE })
+    ).not.toContain("Booking status:");
+    expect(build({ bookingStatusNote: "   " })).not.toContain("Booking status:");
+  });
+
+  it("lands after the recent-interactions timeline (freshest literal context order)", () => {
+    const text = build({
+      recentInteractions: "RECENT-TIMELINE-SENTINEL",
+      bookingStatusNote: NOTE
+    });
+    expect(text.indexOf(NOTE)).toBeGreaterThan(text.indexOf("RECENT-TIMELINE-SENTINEL"));
   });
 });
