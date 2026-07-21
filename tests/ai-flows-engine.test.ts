@@ -32,6 +32,7 @@ import {
   pickRosterAgent,
   renderTemplate,
   resolvePath,
+  resolvePlaceholder,
   safeRegexTest,
   senderPinnedByFromMatches
 } from "../supabase/functions/_shared/ai_flows/engine";
@@ -236,6 +237,55 @@ describe("resolvePath", () => {
   });
   it("returns undefined for a missing key", () => {
     expect(resolvePath(scope, "missing")).toBeUndefined();
+  });
+});
+
+describe("resolvePlaceholder — .first/.last name parts", () => {
+  const scope = {
+    vars: { lead_name: "Mary Jane de la Cruz", solo: "Cher", padded: "  Ana  Cruz ", n: 5 },
+    trigger: { full_name: "James Kyp" }
+  };
+  it("splits any string value: first word vs the remainder", () => {
+    expect(resolvePlaceholder(scope, "vars.lead_name.first")).toBe("Mary");
+    expect(resolvePlaceholder(scope, "vars.lead_name.last")).toBe("Jane de la Cruz");
+    expect(resolvePlaceholder(scope, "trigger.full_name.first")).toBe("James");
+    expect(resolvePlaceholder(scope, "trigger.full_name.last")).toBe("Kyp");
+  });
+  it("trims before splitting", () => {
+    expect(resolvePlaceholder(scope, "vars.padded.first")).toBe("Ana");
+    expect(resolvePlaceholder(scope, "vars.padded.last")).toBe("Cruz");
+  });
+  it("a single-word value is all .first and empty .last", () => {
+    expect(resolvePlaceholder(scope, "vars.solo.first")).toBe("Cher");
+    expect(resolvePlaceholder(scope, "vars.solo.last")).toBe("");
+  });
+  it("an empty/whitespace value yields empty parts", () => {
+    expect(resolvePlaceholder({ vars: { blank: "  " } }, "vars.blank.first")).toBe("");
+  });
+  it("a direct hit wins — real object properties are never shadowed", () => {
+    const s = { vars: { name: { first: "Real" } } };
+    expect(resolvePlaceholder(s, "vars.name.first")).toBe("Real");
+  });
+  it("misses stay misses: non-name suffixes, non-string parents, missing parents, bare suffix", () => {
+    expect(resolvePlaceholder(scope, "vars.lead_name.middle")).toBeUndefined();
+    expect(resolvePlaceholder(scope, "vars.n.first")).toBeUndefined();
+    expect(resolvePlaceholder(scope, "vars.missing.first")).toBeUndefined();
+    expect(resolvePlaceholder(scope, "first")).toBeUndefined();
+  });
+  it("renders through templates and collapseEmpty tidies an empty .last", () => {
+    expect(
+      renderTemplate("Hi {{vars.lead_name.first}}, family {{vars.lead_name.last}}", scope)
+    ).toBe("Hi Mary, family Jane de la Cruz");
+    expect(
+      renderTemplate("Dear {{vars.solo.first}} {{vars.solo.last}},", scope, {
+        collapseEmpty: true
+      })
+    ).toBe("Dear Cher,");
+  });
+  it("hasUnresolvedPlaceholders sees name parts exactly as rendering does", () => {
+    expect(hasUnresolvedPlaceholders("{{vars.lead_name.first}}", scope)).toBe(false);
+    expect(hasUnresolvedPlaceholders("{{vars.solo.last}}", scope)).toBe(true);
+    expect(hasUnresolvedPlaceholders("{{vars.missing.first}}", scope)).toBe(true);
   });
 });
 
