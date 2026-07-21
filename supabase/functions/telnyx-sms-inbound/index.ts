@@ -42,7 +42,7 @@ import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts"
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
 import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
-import { parseRouting } from "../_shared/ai_flows/routing.ts";
+import { parseRouting, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { withResumeMarkerVar } from "../_shared/ai_flows/branching.ts";
 import {
   matchLateClaimReply,
@@ -484,6 +484,67 @@ async function persistOfferReplyJob(args: {
   }
 }
 
+/** The run-row shape the live 1/2 reply paths read and gate their writes on. */
+type LiveOfferRun = {
+  id: string;
+  context: Record<string, unknown> | null;
+  revision: number;
+  updated_at: string;
+};
+
+/**
+ * The sender's most recent LIVE offer run, across BOTH offer shapes:
+ * single-offer runs match on routing.offered == sender, and BROADCAST runs
+ * (route_to_team agentNames — routing.offered stays unset while the offer is
+ * live) match when routing.offered_all contains the sender. Spans
+ * awaiting_agent AND queued statuses for the same sweep-race reason the
+ * bare-digit path documents. When both shapes match, the newest run wins —
+ * a human's digit answers their newest offer.
+ */
+async function findLiveOfferRunFor(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  businessId: string,
+  from: string
+): Promise<{ run: LiveOfferRun; broadcast: boolean } | null> {
+  const baseQuery = () =>
+    supabase
+      .from("ai_flow_runs")
+      .select("id, context, revision, updated_at")
+      .eq("business_id", businessId)
+      .in("status", ["awaiting_agent", "queued"])
+      .order("updated_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+  const [singleRes, broadcastRes] = await Promise.all([
+    baseQuery().eq("context->routing->>offered", from),
+    baseQuery().filter("context->routing->offered_all", "cs", JSON.stringify([from]))
+  ]);
+  const single = (singleRes.data as LiveOfferRun | null) ?? null;
+  const broadcast = (broadcastRes.data as LiveOfferRun | null) ?? null;
+  if (single && broadcast) {
+    return Date.parse(single.updated_at) >= Date.parse(broadcast.updated_at)
+      ? { run: single, broadcast: false }
+      : { run: broadcast, broadcast: true };
+  }
+  if (single) return { run: single, broadcast: false };
+  if (broadcast) return { run: broadcast, broadcast: true };
+  return null;
+}
+
+/**
+ * Broadcast raced-claim guard: on a broadcast run, another offeree's claim may
+ * already be in flight (the webhook stamped them into routing.offered /
+ * last_event='claim') or finalized (claimed_by) while this sender's reply was
+ * in transit. Their digit lost the race and must not overwrite the winner.
+ */
+function broadcastClaimConflict(routing: OfferRouting, from: string): boolean {
+  if (routing.claimed_by && routing.claimed_by !== from) return true;
+  if (routing.last_event === "claim" && routing.reply_from !== from) return true;
+  if (routing.offered && routing.offered !== from) return true;
+  return false;
+}
+
 type LiveClaimArgs = {
   // deno-lint-ignore no-explicit-any
   supabase: any;
@@ -519,27 +580,33 @@ type LiveClaimArgs = {
 async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response | null> {
   const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
 
-  const { data: offerRow } = await supabase
-    .from("ai_flow_runs")
-    .select("id, context, revision")
-    .eq("business_id", businessId)
-    .in("status", ["awaiting_agent", "queued"])
-    .eq("context->routing->>offered", from)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const offer = offerRow as
-    | { id: string; context: Record<string, unknown> | null; revision: number }
-    | null;
-  if (!offer) return null;
+  const found = await findLiveOfferRunFor(supabase, businessId, from);
+  if (!found) return null;
+  const offer = found.run;
 
   const prevRouting = parseRouting(offer.context?.routing);
   // Only "1" claims. Any other comma'd digit (e.g. "2, can't take it" = pass)
   // falls through so it's never mis-recorded as a claim.
   if (digit !== "1") return null;
+  // Broadcast: a competing offeree's claim already in flight wins; this "1"
+  // gets the raced correction so the sender learns they lost.
+  if (found.broadcast && broadcastClaimConflict(prevRouting, from)) {
+    return await consumeRacedOfferReply({
+      ...args,
+      telemetryDecision: OFFER_REPLY_DECISION.claim_timeframe_raced
+    });
+  }
   prevRouting.last_event = "claim";
   prevRouting.reply_from = from;
   prevRouting.claim_timeframe = timeframe;
+  // Broadcast: stamp the claimer into routing.offered/offered_name so the
+  // worker's shared claim finalization sees them exactly like a single-offer
+  // claim (offered_all stays intact — the worker reads the LOSING offerees
+  // off it to text them a courtesy notice).
+  if (found.broadcast) {
+    prevRouting.offered = from;
+    prevRouting.offered_name = prevRouting.offered_names?.[from] ?? "";
+  }
   // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed by the
   // worker) belongs to THAT reply — never let it ride along with this claim.
   delete prevRouting.pass_reason;
@@ -612,24 +679,37 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
   const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
   if (digit !== "2") return null;
 
-  const { data: offerRow } = await supabase
-    .from("ai_flow_runs")
-    .select("id, context, revision")
-    .eq("business_id", businessId)
-    .in("status", ["awaiting_agent", "queued"])
-    .eq("context->routing->>offered", from)
-    .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const offer = offerRow as
-    | { id: string; context: Record<string, unknown> | null; revision: number }
-    | null;
-  if (!offer) return null;
+  const found = await findLiveOfferRunFor(supabase, businessId, from);
+  if (!found) return null;
+  const offer = found.run;
 
   const prevRouting = parseRouting(offer.context?.routing);
+  // Broadcast: someone else's claim already in flight — this pass changes
+  // nothing (the sender didn't want the lead and it's taken). Log and stop.
+  if (found.broadcast && broadcastClaimConflict(prevRouting, from)) {
+    return await consumeRacedOfferReply({
+      ...args,
+      telemetryDecision: OFFER_REPLY_DECISION.reject_raced,
+      textBack: false
+    });
+  }
   prevRouting.last_event = "reject";
   prevRouting.reply_from = from;
   prevRouting.pass_reason = timeframe;
+  // Broadcast run (offered_all present — regardless of which lookup shape
+  // matched): retire just this passer; the offer stays live for the rest
+  // (the worker re-parks with the remaining shared deadline, or falls back
+  // to the owner when this was the last offeree). A passer who had a still-
+  // pending claim (offered stamped to them) is retracting it — clear the
+  // pointer so their pass never blocks a competing offeree's "1" and they
+  // can't re-claim the lead they just passed on.
+  if ((prevRouting.offered_all ?? []).length > 0) {
+    prevRouting.offered_all = (prevRouting.offered_all ?? []).filter((p) => p !== from);
+    if (prevRouting.offered === from) {
+      delete prevRouting.offered;
+      delete prevRouting.offered_name;
+    }
+  }
   const nextContext = { ...(offer.context ?? {}), routing: prevRouting };
   // Same optimistic revision gate as the claim paths: if a first-to-claim
   // yank (or the worker) touched the run first, this stale snapshot must not
@@ -1886,18 +1966,12 @@ serve(async (req: Request) => {
           smsFromE164;
         const canAck = Boolean(telnyxApiKey && ackProfile && from);
 
-        const { data: offerRow } = await supabase
-          .from("ai_flow_runs")
-          .select("id, context, revision")
-          .eq("business_id", businessId)
-          .in("status", ["awaiting_agent", "queued"])
-          .eq("context->routing->>offered", from)
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-        const offer = offerRow as
-          | { id: string; context: Record<string, unknown> | null; revision: number }
-          | null;
+        // Matches the sender's newest live offer across BOTH shapes: a
+        // single offer (routing.offered) or a broadcast fan-out
+        // (routing.offered_all — route_to_team agentNames).
+        const found = await findLiveOfferRunFor(supabase, businessId, from);
+        const offer = found?.run ?? null;
+        const isBroadcast = found?.broadcast === true;
         // Agent offers: "1" claims, "2" passes — universal on every flow. Any
         // other digit falls through to the owner-approval check and then the
         // normal customer path.
@@ -1906,8 +1980,50 @@ serve(async (req: Request) => {
         if (offer && (bareClaim || barePass)) {
           const claimed = bareClaim;
           const prevRouting = parseRouting(offer.context?.routing);
+          // Broadcast: a competing offeree's claim already in flight wins.
+          // A losing claim gets the correction text; a pass on a taken lead
+          // is just logged.
+          if (isBroadcast && broadcastClaimConflict(prevRouting, from)) {
+            return await consumeRacedOfferReply({
+              supabase,
+              businessId,
+              from,
+              ackTo: to,
+              eventId,
+              envelope,
+              telnyxApiKey,
+              messagingProfileId,
+              smsFromE164,
+              digit: replyBody,
+              timeframe: "",
+              telemetryDecision: claimed
+                ? OFFER_REPLY_DECISION.claim_raced
+                : OFFER_REPLY_DECISION.reject_raced,
+              textBack: claimed
+            });
+          }
           prevRouting.last_event = claimed ? "claim" : "reject";
           prevRouting.reply_from = from;
+          if (isBroadcast && claimed) {
+            // Stamp the claimer into offered/offered_name so the worker's
+            // shared claim finalization sees a normal claim; offered_all
+            // stays intact — the worker texts the losing offerees off it.
+            prevRouting.offered = from;
+            prevRouting.offered_name = prevRouting.offered_names?.[from] ?? "";
+          }
+          // Broadcast run (offered_all present — even when this sender
+          // matched via a pending-claim `offered` stamp): a pass retires just
+          // this passer, and a passer retracting a still-pending claim loses
+          // the `offered` pointer so they can't re-claim what they passed on.
+          if (!claimed && (prevRouting.offered_all ?? []).length > 0) {
+            prevRouting.offered_all = (prevRouting.offered_all ?? []).filter(
+              (p) => p !== from
+            );
+            if (prevRouting.offered === from) {
+              delete prevRouting.offered;
+              delete prevRouting.offered_name;
+            }
+          }
           // A pass_reason stamped by an earlier "2, <reason>" (not yet consumed
           // by the worker) belongs to THAT reply — a bare digit carries none, so
           // clear it or the worker would attribute the old text to this reply.

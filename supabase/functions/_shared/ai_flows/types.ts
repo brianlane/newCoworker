@@ -737,6 +737,14 @@ export type FlowStep =
        * silently to a different teammate.
        */
       agentRef?: ContactRef;
+      /**
+       * BROADCAST mode: offer the lead to ALL of these roster members at the
+       * same time, sharing one claim deadline — first "1" wins, a "2" retires
+       * just that teammate, everyone passing (or the deadline lapsing) falls
+       * back to the owner. The list IS the offer set: broadcast never
+       * escalates into rotation. Mutually exclusive with agentName/agentRef.
+       */
+      agentNames?: string[];
       /** After-hours claim-deadline extension; see RouteOfferWindow. */
       offerWindow?: RouteOfferWindow;
       /**

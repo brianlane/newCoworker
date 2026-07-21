@@ -49,7 +49,8 @@ export type LateClaimMatch = {
  * - A run claimed by someone else never matches; claimed by the sender is
  *   the "mine" re-ack.
  * - A fresh claim needs routing.step_index (the worker's rewind stamp).
- * - live: the sender IS routing.offered and post-route steps haven't run.
+ * - live: the sender IS routing.offered (or one of the broadcast offerees in
+ *   routing.offered_all) and post-route steps haven't run.
  * - late: post-route steps already ran (status done, or current_step moved
  *   past the route step) and the sender was ever offered the lead.
  * - yank: the offer is live with another teammate; the sender is in
@@ -95,9 +96,20 @@ export function matchLateClaimReply(args: {
     const stepIndex = routing.step_index ?? -1;
     if (stepIndex < 0) continue;
     const offered = routing.offered ?? "";
+    // Broadcast fan-out (route_to_team agentNames): the live offerees are in
+    // offered_all (routing.offered stays unset until a claim is consumed).
+    const offeredAll = routing.offered_all ?? [];
+    // offered_log covers the gap between a broadcast pass (webhook removes
+    // the passer from offered_all) and the worker retiring them into tried —
+    // everyone actually TEXTED an offer stays eligible here.
+    const offeredLog = routing.offered_log ?? [];
     const tried = routing.tried ?? [];
     const everOffered =
-      offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
+      offered === from ||
+      row.awaiting_agent_e164 === from ||
+      tried.includes(from) ||
+      offeredAll.includes(from) ||
+      offeredLog.includes(from);
     if (!everOffered) continue;
     // Did the steps AFTER route_to_team already run? They did if the run
     // completed (status "done") OR the worker advanced current_step past the
@@ -110,13 +122,14 @@ export function matchLateClaimReply(args: {
       continue;
     }
     // Still a LIVE offer parked at the route step (later steps not run yet).
-    if (offered === from) {
+    // A broadcast offeree (offered_all) counts as live exactly like a single
+    // offeree: any "1" form claims their own live offer.
+    if (offered === from || offeredAll.includes(from)) {
       if (!live) live = { kind: "live", row, stepIndex };
       continue;
     }
     // First-to-claim yank (see doc above): bare "1" only, offered_log only,
     // and never when the flow opted out.
-    const offeredLog = routing.offered_log ?? [];
     if (
       !yank &&
       timeframe === "" &&
