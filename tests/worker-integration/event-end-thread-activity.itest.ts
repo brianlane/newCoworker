@@ -336,6 +336,52 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     expect(run.last_error).toContain("Telnyx messaging is not configured");
   });
 
+  it("an earlier teammate text never consumes the invitee's gate (per-recipient marker)", async () => {
+    const biz = await seedBusiness(db, "IT event-end teammate first");
+    const lead = "+17805550209";
+    const teammate = "+14165550111";
+    await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
+    // Telnyx configured (fake API) so the teammate heads-up SEND SUCCEEDS
+    // and execution actually reaches the invitee step — the shape Bugbot
+    // flagged: a run-level marker would be consumed by the teammate send.
+    const { error: cfgErr } = await db.from("business_telnyx_settings").insert({
+      business_id: biz,
+      telnyx_messaging_profile_id: "itest-profile",
+      telnyx_sms_from_e164: "+14385550001"
+    });
+    if (cfgErr) throw new Error(cfgErr.message);
+    const def = noShowDefinition() as { steps: unknown[] };
+    def.steps = [
+      {
+        id: "s_team",
+        type: "send_sms",
+        to: teammate,
+        body: "Heads up: {{vars.invitee_first_name}} no-showed."
+      },
+      ...def.steps
+    ];
+    const flowId = await createFlow(db, biz, def as never);
+    await seedInboundActivity(db, biz, lead, minutesAgo(142));
+    const runId = await enqueueNoShowRun(db, flowId, biz, lead, {
+      startsAt: minutesAgo(150),
+      endsAt: minutesAgo(120)
+    });
+
+    const sendsBefore = fakeApp.telnyxSends.length;
+    await tickWorker();
+
+    // The teammate heads-up went out; the invitee recovery did NOT.
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    const steps = await getSteps(db, runId);
+    expect(steps.find((s) => s.step_index === 0)?.status).toBe("done");
+    const recovery = steps.find((s) => s.step_index === 1);
+    expect(recovery?.status).toBe("skipped");
+    expect((recovery?.result as { skipped?: string })?.skipped).toBe("event_end_thread_active");
+    const sends = fakeApp.telnyxSends.slice(sendsBefore);
+    expect(sends.map((s) => s.body.to)).toEqual([teammate]);
+  });
+
   it("activity from BEFORE the event started does not suppress (old nudges are not a live thread)", async () => {
     const biz = await seedBusiness(db, "IT event-end stale activity");
     const lead = "+17805550204";

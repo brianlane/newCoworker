@@ -834,7 +834,6 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     if (
       step.type === "send_sms" &&
       !scope.testMode &&
-      scope.vars[EVENT_END_THREAD_VAR] !== "1" &&
       scope.trigger.channel === "calendar" &&
       flowHasEventEndTrigger(def) &&
       // A step whose `when` guard is unmet skips inside runStep anyway.
@@ -845,13 +844,21 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       const sinceIso = eventEndActivityAnchorIso(scope.trigger);
       const target = renderTemplate(step.to ?? "", scope).trim();
       // Only a concrete lead number is gated — teammate/group/agent sends
-      // are internal notifications with their own semantics.
-      if (sinceIso && isE164(target)) {
-        // The marker rides scope.vars into every later context persist, so
-        // re-claims and later sends never re-pay the check.
-        scope.vars[EVENT_END_THREAD_VAR] = "1";
+      // are internal notifications with their own semantics. The marker is
+      // per RECIPIENT, so an earlier send to a different number (a teammate
+      // heads-up before the invitee text) never consumes the invitee's gate.
+      const markerVar = `${EVENT_END_THREAD_VAR}:${target}`;
+      if (sinceIso && isE164(target) && scope.vars[markerVar] !== "1") {
+        // Markers ride scope.vars into every later context persist, so
+        // re-claims and repeat sends never re-pay the checks.
+        scope.vars[markerVar] = "1";
+        if (scope.vars[EVENT_END_RUN_VAR] !== "1" && scope.vars[EVENT_END_RUN_VAR] !== "0") {
+          scope.vars[EVENT_END_RUN_VAR] = (await runFiredByEventEnd(supabase, run, def))
+            ? "1"
+            : "0";
+        }
         if (
-          (await runFiredByEventEnd(supabase, run, def)) &&
+          scope.vars[EVENT_END_RUN_VAR] === "1" &&
           (await threadActiveSince(supabase, run.business_id, target, sinceIso))
         ) {
           appendActionTaken(
@@ -1365,10 +1372,19 @@ const BOOKING_PRECHECK_VAR = "__booking_precheck";
 const LEAD_DEDUPE_VAR = "__lead_dedupe";
 
 /**
- * Marker var: the event_end thread-activity gate already ran for this run —
- * re-claims and later sends never re-pay the lookup. Stamped success or fail.
+ * Marker var PREFIX for the event_end thread-activity gate: stamped per
+ * RECIPIENT (`__event_end_thread_check:<e164>`), not per run — a flow that
+ * texts a teammate before the invitee must still gate the invitee's send
+ * (Bugbot Medium on PR #795, round 6). Re-claims and repeat sends to the
+ * same number never re-pay the lookup.
  */
 const EVENT_END_THREAD_VAR = "__event_end_thread_check";
+
+/**
+ * Run-level cache of runFiredByEventEnd ("1"/"0") so multi-recipient flows
+ * pay the dedupe-key lookup once.
+ */
+const EVENT_END_RUN_VAR = "__event_end_run";
 
 /** Skip reason recorded on steps suppressed by the thread-activity gate. */
 const EVENT_END_THREAD_SKIP = "event_end_thread_active";

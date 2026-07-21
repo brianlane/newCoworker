@@ -6,11 +6,12 @@
  *   - channel_settings: per-tenant RCS agent resolution (tier gate + enable
  *     flag + approved agent id, fail-safe to null).
  */
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import {
   inboundSmsBody,
   isRcsInboundPayload,
   rcsInboundAgentId,
+  telnyxApiBase,
   telnyxSendSms
 } from "../supabase/functions/_shared/telnyx_sms_compliance";
 import {
@@ -65,6 +66,29 @@ describe("isRcsInboundPayload / rcsInboundAgentId", () => {
     expect(rcsInboundAgentId({ to: "+15550001111" })).toBeNull();
     expect(rcsInboundAgentId({})).toBeNull();
     expect(rcsInboundAgentId({ to: [null, "str", { agent_id: "" }] })).toBeNull();
+  });
+});
+
+describe("telnyxApiBase (test-seam env override)", () => {
+  afterEach(() => {
+    delete process.env.TELNYX_API_BASE;
+    delete (globalThis as { Deno?: unknown }).Deno;
+  });
+
+  it("defaults to the real host and trims a trailing slash from an override", () => {
+    expect(telnyxApiBase()).toBe("https://api.telnyx.com");
+    process.env.TELNYX_API_BASE = "http://127.0.0.1:8978/";
+    expect(telnyxApiBase()).toBe("http://127.0.0.1:8978");
+  });
+
+  it("reads the override via the Deno global when present (edge runtime)", () => {
+    (globalThis as { Deno?: unknown }).Deno = {
+      env: { get: (name: string) => (name === "TELNYX_API_BASE" ? "http://fake:1" : undefined) }
+    };
+    expect(telnyxApiBase()).toBe("http://fake:1");
+    // A Deno global WITHOUT the var still falls back to the real host.
+    (globalThis as { Deno?: unknown }).Deno = { env: { get: () => undefined } };
+    expect(telnyxApiBase()).toBe("https://api.telnyx.com");
   });
 });
 
